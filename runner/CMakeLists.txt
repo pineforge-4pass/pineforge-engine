@@ -623,6 +623,12 @@ if(PINEFORGE_BUILD_TESTS)
         set(_pf_report_memory_timeout 2060)
     elseif(PINEFORGE_ENABLE_SANITIZERS)
         set(_pf_report_memory_timeout 1660)
+    elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        # Debug without sanitizers took 152.7 s with three rows in parallel
+        # (2026-10-29), 7 s under the release deadline: 2.6x gives 400 s.
+        set(_pf_report_memory_timeout 460)
+        target_compile_definitions(test_native_live_report_cli PRIVATE
+            PINEFORGE_REPORT_MEMORY_DEBUG_BUDGET=1)
     endif()
     set_tests_properties(test_native_live_report_memory PROPERTIES
         TIMEOUT ${_pf_report_memory_timeout} SKIP_RETURN_CODE 77)

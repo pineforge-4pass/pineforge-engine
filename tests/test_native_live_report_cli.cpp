@@ -1172,7 +1172,15 @@ void report_memory(Fixture& fixture) {
     // sanitizer budgets are 2.6x the solo times, rounded: 2000/1600 s; keep the
     // uninstrumented 160 s budget. CTest adds 60 s under sanitizers (2060/1660 s),
     // or the existing 20 s (180 s).
-    constexpr auto budget = std::chrono::seconds(kUnderTsan ? 2000 : kUnderAsan ? 1600 : 160);
+    // An unoptimised build without sanitizers (CMake defines the macro for
+    // Debug) took 152.7 s with three rows in parallel: 400 s, ctest 460 s.
+#if defined(PINEFORGE_REPORT_MEMORY_DEBUG_BUDGET)
+    constexpr int plain_budget_seconds = 400;
+#else
+    constexpr int plain_budget_seconds = 160;
+#endif
+    constexpr auto budget = std::chrono::seconds(
+        kUnderTsan ? 2000 : kUnderAsan ? 1600 : plain_budget_seconds);
     const auto deadline = Clock::now() + budget;
     std::uint64_t previous_n = 0, previous_peak = 0, largest_n = 0, largest_peak = 0;
     double last_seconds = 0;
