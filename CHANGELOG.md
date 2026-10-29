@@ -24,6 +24,7 @@ unchanged except for two additive diagnostics keys, described below.
   on every report path. The path-sink report route (named or unnamed)
   previously omitted it and could drop the diagnostic when the compounded
   return overflowed; metric values are unchanged.
+- Strategies that reversed on an entry id the other side had used before kept the wrong position: the reversal's new lot was erased from its entry, so later percentage exits were sized from zero units and closed nothing, the position stayed open, later entries could exceed the pyramiding limit, and the closed-trade rows for those exits were missing. Affected releases: v1.1.0 through v1.7.0. Fixed in 1.8.0. Release 1.0.0 handles percentage exits after a reversal differently for an older, unrelated reason, so it is not a safe version to stay on either.
 
 ### Compatibility and migration
 
