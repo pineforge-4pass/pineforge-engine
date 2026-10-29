@@ -211,7 +211,7 @@ struct PlacementSnapshot {
     bool immediately = false;
     bool opening = false;
     // A terminal Applied fill of an origin-free limit with no protection or
-    // replacement definition. Only the narrow filled-limit exception needs
+    // replacement definition. Only K1's narrow filled-limit exception needs
     // this receipt. A new incarnation clears it even on a copied lifecycle.
     bool filled_exit = false;
     bool deferred_cohort = false;
@@ -322,7 +322,7 @@ struct PlacementSnapshot {
     // position this entry opposes earlier on the entry's own script bar.
     // Recorded once, at the entry() call; both admission halves read it.
     bool close_first_entry = false;
-    // A reversal the placement half refused at its signal;
+    // A reversal the placement half refused at its signal (rule 5);
     // it stays placed so the script's later close of the held id is an
     // ordinary close, and drops at its fill.
     bool signal_price_refused = false;
@@ -3113,7 +3113,7 @@ private:
         std::vector<std::uint64_t> first_reissues;
         std::vector<const PlacementSnapshot*> origin_pins; // Rebuilt each sweep; not state.
         std::vector<std::uint64_t> doomed;
-        // Filled-limit legs that supersession can release (incarnation,
+        // K1 legs that supersession can release (incarnation,
         // row, read-through high water, released flag); released incarnations sorted.
         struct HeldLeg {
             std::uint64_t incarnation = 0;
@@ -3129,7 +3129,7 @@ private:
         // the fields the test reads never change once a row is placed, and a
         // row that could supersede the leg is newer than every row it covers.
         std::vector<std::pair<std::uint64_t, std::uint64_t>> unsuperseded;
-        // Exact first-reissue lookup over immutable identity/age/stop
+        // K3's exact first-reissue lookup over immutable identity/age/stop
         // fields. New candidates read all rows; unresolved old candidates
         // read only rows above reissue_high_water. A pinned first witness
         // needs no more reads. A run begin clears this derived memo.
@@ -3141,7 +3141,7 @@ private:
         std::vector<std::size_t> known_candidates;
         std::vector<std::size_t> unresolved_candidates;
         // Anchored legs may be remembered after newer incarnations. They
-        // are new peers too, even below the high water. Kept until a first-reissue
+        // are new peers too, even below the high water. Kept until a K3
         // pass consumes them (quiet-bar returns must not discard them).
         std::vector<std::uint64_t> adopted_reissues;
         // release_closed_cohort_origins()'s working sets --

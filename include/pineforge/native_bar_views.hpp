@@ -145,7 +145,7 @@ std::uint64_t native_run_spec_digest(
 /// when count() == 0. The consumer exclusively owns the provider from applied
 /// configure to detachment at public run exit. Immutable borrowed input lives
 /// through that exit; destruction must not read it. Calls are serialized, with
-/// no concurrent/reentrant walks. Factories, policy and storage are separate.
+/// no concurrent/reentrant walks. Concrete factories, policy and storage live outside this interface.
 /// Every operation exposes the same complete logical path. Whole-input fallback
 /// is decided before emitting any aggregated prefix; no mixed prefix/suffix.
 class NativeLowerPathSource {
