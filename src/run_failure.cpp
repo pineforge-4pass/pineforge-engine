@@ -4,6 +4,7 @@
 // beside BacktestEngine::last_error_.
 
 #include <pineforge/run_failure.hpp>
+#include <pineforge/detail/run_quota.hpp>
 
 #include "native_execution_consumer.hpp"
 
@@ -192,6 +193,12 @@ RunFailureValue make_run_failure(RunFailureCode code, const RunFailureArgs& args
             switch (declared->kind) {
             case RunFailureArgKind::integer:
                 if (arg.type != RunFailureArg::Type::integer) return invariant();
+                if ((code == RunFailureCode::run_resource_quota_exceeded
+                     || code == RunFailureCode::run_descriptor_limit_exceeded)
+                    && (arg.integer < 0
+                        || static_cast<std::uint64_t>(arg.integer) > detail::kRunQuotaMax)) {
+                    return invariant();
+                }
                 break;
             case RunFailureArgKind::number:
                 // An integer or a finite number: never text, a boolean or a null.
@@ -306,6 +313,8 @@ bool run_failure_code_retryable(RunFailureCode code) noexcept {
 }
 
 RunFailureValue classify_run_failure(const std::exception& error) noexcept {
+    const auto quota = detail::run_quota_failure();
+    if (quota.code != RunFailureCode::none) return quota;
     if (const auto* info = dynamic_cast<const RunFailureInfo*>(&error)) {
         return info->run_failure();
     }
@@ -322,18 +331,25 @@ RunFailureInfo::~RunFailureInfo() = default;
 
 void note_run_failure(BacktestEngine& engine, std::string text, RunFailureCode code,
                       const RunFailureArgs& args) {
+    const auto quota = detail::run_quota_failure();
+    if (quota.code != RunFailureCode::none) {
+        NativeExecutionConsumer::note_failure_record(engine, "run quota refused", quota);
+        return;
+    }
     NativeExecutionConsumer::note_failure_record(engine, std::move(text),
                                                  make_run_failure(code, args));
 }
 
 void note_run_failure(BacktestEngine& engine, const char* text, RunFailureCode code,
                       const RunFailureArgs& args) {
-    NativeExecutionConsumer::note_failure_record(engine, std::string(text ? text : ""),
-                                                 make_run_failure(code, args));
+    note_run_failure(engine, std::string(text ? text : ""), code, args);
 }
 
 void note_run_failure(BacktestEngine& engine, std::string text, const RunFailureValue& value) {
-    NativeExecutionConsumer::note_failure_record(engine, std::move(text), value);
+    const auto quota = detail::run_quota_failure();
+    NativeExecutionConsumer::note_failure_record(
+        engine, quota.code != RunFailureCode::none ? "run quota refused" : std::move(text),
+        quota.code != RunFailureCode::none ? quota : value);
 }
 
 void note_run_failure(BacktestEngine& engine, const char* entrypoint,
@@ -341,14 +357,13 @@ void note_run_failure(BacktestEngine& engine, const char* entrypoint,
     std::string text = entrypoint ? entrypoint : "";
     text += ": ";
     text += error.what();
-    NativeExecutionConsumer::note_failure_record(engine, std::move(text),
-                                                 classify_run_failure(error));
+    note_run_failure(engine, std::move(text), classify_run_failure(error));
 }
 
 void note_run_failure_unknown(BacktestEngine& engine, const char* entrypoint) {
     std::string text = entrypoint ? entrypoint : "";
     text += ": unknown C++ exception";
-    NativeExecutionConsumer::note_failure_record(
+    note_run_failure(
         engine, std::move(text),
         RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr});
 }
@@ -358,14 +373,20 @@ void clear_run_failure(BacktestEngine& engine) noexcept {
 }
 
 const char* run_failure_code_of(const BacktestEngine& engine) noexcept {
+    const auto quota = detail::run_quota_failure();
+    if (quota.code != RunFailureCode::none) return run_failure_code_name(quota.code);
     return NativeExecutionConsumer::failure_code_of(engine);
 }
 
 const char* run_failure_args_of(const BacktestEngine& engine) noexcept {
+    const auto quota = detail::run_quota_failure();
+    if (quota.code != RunFailureCode::none) return quota.args ? quota.args->c_str() : "{}";
     return NativeExecutionConsumer::failure_args_of(engine);
 }
 
 RunFailureValue run_failure_value_of(const BacktestEngine& engine) noexcept {
+    const auto quota = detail::run_quota_failure();
+    if (quota.code != RunFailureCode::none) return quota;
     return NativeExecutionConsumer::failure_value_of(engine);
 }
 

@@ -2,10 +2,12 @@
 #include "service.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <deque>
 #include <set>
 #include <stdexcept>
+#include <type_traits>
 #include <unistd.h>
 
 namespace pineforge::live {
@@ -42,6 +44,144 @@ struct RetryDelivery {
 struct QueuedDelivery {
     StoredEvent event;
     std::string request_id;
+};
+
+constexpr std::size_t delivery_capacity = 256;
+
+// One producer and one consumer, with an extra sentinel slot. A slot is owned by
+// its producer until the release publication, and by its consumer until release
+// of the read index. Neither side waits for the other's progress or holds a lock.
+template<class Value> class DeliveryChannel {
+    static_assert(std::atomic<std::size_t>::is_always_lock_free,
+                  "delivery channels require lock-free indices");
+    static_assert(std::is_nothrow_move_assignable<Value>::value,
+                  "delivery channel publication must not throw");
+public:
+    bool room() const {
+        return next(write_.load(std::memory_order_relaxed)) != read_.load(std::memory_order_acquire);
+    }
+
+    bool push(Value&& value) {
+        const auto write = write_.load(std::memory_order_relaxed);
+        const auto after = next(write);
+        if (after == read_.load(std::memory_order_acquire)) return false;
+        slots_[write] = std::move(value);
+        write_.store(after, std::memory_order_release);
+        return true;
+    }
+
+    bool pop(Value& value) {
+        const auto read = read_.load(std::memory_order_relaxed);
+        if (read == write_.load(std::memory_order_acquire)) return false;
+        value = std::move(slots_[read]);
+        read_.store(next(read), std::memory_order_release);
+        return true;
+    }
+private:
+    static std::size_t next(std::size_t index) { return (index + 1) % (delivery_capacity + 1); }
+    std::array<Value, delivery_capacity + 1> slots_{};
+    std::atomic<std::size_t> read_{0}, write_{0};
+};
+
+struct SendWebhook {
+    std::uint64_t key = 0;
+    const HttpOptions* options = nullptr; // Immutable target storage lives until the owner is joined.
+    StoredEvent event; // Owned bytes, never a reference into the scheduler's queues.
+};
+
+// D is the delivery/ledger scheduler; T is the independent curl owner.
+class WebhookOwner {
+    static_assert(std::atomic<bool>::is_always_lock_free && std::atomic<std::int64_t>::is_always_lock_free,
+                  "transport stop/deadline publication must be lock-free");
+public:
+    WebhookOwner(const std::atomic<bool>& cancelling, const std::atomic<std::int64_t>& drain_until)
+        : cancelling_(cancelling), drain_until_(drain_until), thread_([this] {
+            try { run(); }
+            catch (...) {
+                error_ = std::current_exception();
+                failed_.store(true, std::memory_order_release);
+            }
+        }) {}
+
+    ~WebhookOwner() { stop_and_join(); }
+    WebhookOwner(const WebhookOwner&) = delete;
+    WebhookOwner& operator=(const WebhookOwner&) = delete;
+
+    // D alone owns credits. Reserve both command space and a result credit BEFORE
+    // the started-row transaction; release only after SQL finish and retry policy.
+    void reserve() {
+        check();
+        if (credits_ == delivery_capacity || !commands_.room())
+            throw std::runtime_error("webhook transport credit exhausted");
+        ++credits_;
+    }
+
+    void submit(SendWebhook&& command) {
+        if (!commands_.push(std::move(command)))
+            throw std::runtime_error("reserved webhook command space unavailable");
+    }
+
+    bool take(CompletedWebhook& result) {
+        check();
+        return results_.pop(result);
+    }
+
+    void release() { --credits_; }
+    bool idle() const { return credits_ == 0; }
+
+    void check() const {
+        if (failed_.load(std::memory_order_acquire)) std::rethrow_exception(error_);
+    }
+
+    void finish() {
+        stop_and_join();
+        check(); // Also observe failures racing a cancellation or normal drain.
+    }
+private:
+    bool stopping() const {
+        const auto deadline = drain_until_.load();
+        return stop_.load(std::memory_order_acquire) || cancelling_.load() ||
+            (deadline && clock_time() >= deadline);
+    }
+
+    void stop_and_join() {
+        stop_.store(true, std::memory_order_release);
+        if (thread_.joinable()) thread_.join();
+    }
+
+    void run() {
+        // T alone constructs, adds, polls and destroys curl. It never calls a
+        // ledger method, a scheduler callback, or a mutex shared with D.
+        WebhookMulti transport;
+        while (!stopping()) {
+            // Interleave bounded add batches with curl progress.
+            for (unsigned count = 0; count < 16; ++count) {
+                SendWebhook command;
+                if (stopping() || !commands_.pop(command)) break;
+                if (stopping()) return; // Cancellation must not submit queued sends.
+                transport.add(command.key, *command.options, command.event);
+            }
+            if (stopping()) return;
+            const auto deadline = drain_until_.load();
+            const auto remaining = deadline ? std::max<std::int64_t>(0, deadline - clock_time()) : 20;
+            for (auto& completed : transport.poll(static_cast<int>(std::min<std::int64_t>(20, remaining)))) {
+                if (stopping()) return;
+                // At most 256 reserved keys can have commands, handles or results.
+                // A full result ring is a broken invariant, never a wait behind SQL.
+                if (!results_.push(std::move(completed)))
+                    throw std::runtime_error("reserved webhook result space unavailable");
+            }
+        }
+    }
+
+    const std::atomic<bool>& cancelling_;
+    const std::atomic<std::int64_t>& drain_until_;
+    DeliveryChannel<SendWebhook> commands_; // D -> T
+    DeliveryChannel<CompletedWebhook> results_; // T -> D
+    std::size_t credits_ = 0; // D only, including its unpublished start reservation.
+    std::atomic<bool> stop_{false}, failed_{false};
+    std::exception_ptr error_; // T writes once, D reads after failed_'s acquire or join.
+    std::thread thread_; // Declared last: every referenced field exists before T starts.
 };
 }
 
@@ -89,7 +229,9 @@ void DeliveryWorker::finish(bool cancel) {
 }
 
 void DeliveryWorker::run() {
-    WebhookMulti transport;
+    // Declared before all scheduler scopes: exceptional unwinding releases every
+    // ledger scope before the owner's destructor stops and joins T.
+    WebhookOwner transport(cancelling_, drain_until_);
     ControlDirectory controls(control_dir_, false, false);
     std::map<std::uint64_t, ActiveDelivery> active;
     std::map<std::string, std::size_t> in_flight;
@@ -106,6 +248,7 @@ void DeliveryWorker::run() {
         ~ResetQueue() { bytes = 0; }
     } reset{queue_bytes_};
     const auto should_stop = [&] {
+        transport.check();
         if (stopped_ && stopped_()) {
             limit_drain();
             return true;
@@ -114,7 +257,7 @@ void DeliveryWorker::run() {
         return cancelling_ || (deadline && clock_time() >= deadline);
     };
     const auto room = [&](const StoredEvent& event) {
-        return outstanding < 256 && queue_bytes_ + event.payload.size() <= 8 * 1024 * 1024;
+        return outstanding < delivery_capacity && queue_bytes_ + event.payload.size() <= 8 * 1024 * 1024;
     };
     const auto enqueue = [&](const StoredEvent& event, const std::string& request_id) {
         pending[*event.target_id].push_back({event, request_id});
@@ -125,12 +268,17 @@ void DeliveryWorker::run() {
         const auto& target = *event.target_id;
         const auto options = targets_.find(target);
         if (options == targets_.end()) throw std::runtime_error("stored action refers to an unavailable webhook target");
+        if (next_key == UINT64_MAX) throw std::runtime_error("webhook transport key exhausted");
+        transport.reserve();
         const auto key = ++next_key;
+        SendWebhook command{key, &options->second, event};
         auto attempt = ledger_.start_attempt(event, wall_time(), request_id);
+        // Active covers unpublished/submitted commands, curl handles and results
+        // waiting for SQL. Publishing a result never releases an event's credit.
         active.emplace(key, ActiveDelivery{std::move(attempt), retry});
-        transport.add(key, options->second, event);
         ++in_flight[target];
         active_ids.insert(event.id);
+        transport.submit(std::move(command));
     };
     while (!should_stop()) {
         // Read the finish request before this iteration's ledger scans. finish() is called after the last
@@ -139,7 +287,7 @@ void DeliveryWorker::run() {
         // action committed in between be skipped by a run that went on to exit 0.
         const bool finish_requested = finishing_.load();
         const auto deadline = drain_until_.load();
-        if (deadline && clock_time() >= deadline) return;
+        if (deadline && clock_time() >= deadline) return transport.finish();
         if (deadline) {
             for (const auto& retry : retries) { --outstanding; queue_bytes_ -= retry.event.payload.size(); }
             retries.clear();
@@ -166,7 +314,7 @@ void DeliveryWorker::run() {
         }
         bool exhausted = false;
         for (unsigned scanned = 0; scanned < 256; ++scanned) {
-            if (should_stop()) return;
+            if (should_stop()) return transport.finish();
             if (redeliver_) {
                 if (redelivery_index == redeliver_->size()) { exhausted = true; break; }
                 const auto& event = redeliver_->at(redelivery_index);
@@ -183,7 +331,7 @@ void DeliveryWorker::run() {
         }
         bool requests_exhausted = redeliver_.has_value();
         if (!redeliver_) for (unsigned scanned = 0; scanned < 256; ++scanned) {
-            if (should_stop()) return;
+            if (should_stop()) return transport.finish();
             const auto next = ledger_.next_redelivery_event(requested_order, requested_after);
             if (!next) { requests_exhausted = true; break; }
             if (!room(next->event)) break;
@@ -199,7 +347,7 @@ void DeliveryWorker::run() {
                     (first == pending.end() || position->second.front().event.ordinal < first->second.front().event.ordinal))
                     first = position;
             if (first == pending.end()) break;
-            if (should_stop()) return;
+            if (should_stop()) return transport.finish();
             start(first->second.front().event, 0, first->second.front().request_id);
             first->second.pop_front();
         }
@@ -213,10 +361,15 @@ void DeliveryWorker::run() {
                 position = retries.erase(position);
             } else ++position;
         }
-        if (finish_requested && exhausted && requests_exhausted && !waiting && active.empty() && retries.empty()) return;
-        const auto remaining = drain_until_ ? std::max<std::int64_t>(0, drain_until_ - clock_time()) : 20;
-        for (const auto& completed : transport.poll(static_cast<int>(std::min<std::int64_t>(20, remaining)))) {
-            if (should_stop()) return;
+        if (finish_requested && exhausted && requests_exhausted && !waiting && active.empty() && retries.empty()) {
+            if (outstanding || !transport.idle()) throw std::runtime_error("webhook delivery drain lost active work");
+            return transport.finish();
+        }
+        bool completed_any = false;
+        CompletedWebhook completed;
+        while (transport.take(completed)) {
+            completed_any = true;
+            if (should_stop()) return transport.finish();
             const auto found = active.find(completed.key);
             if (found == active.end()) throw std::runtime_error("unknown delivery result");
             const auto& attempt = found->second.attempt;
@@ -243,8 +396,16 @@ void DeliveryWorker::run() {
             }
             if (!retrying) { --outstanding; queue_bytes_ -= attempt.event.payload.size(); }
             active.erase(found);
+            transport.release();
+        }
+        if (!completed_any) {
+            const auto deadline = drain_until_.load();
+            const auto remaining = deadline ? std::max<std::int64_t>(0, deadline - clock_time()) : 20;
+            // D's idle wait owns no resource T needs; T keeps its own poll cadence.
+            std::this_thread::sleep_for(std::chrono::milliseconds(std::min<std::int64_t>(20, remaining)));
         }
     }
+    transport.finish();
 }
 
 }
