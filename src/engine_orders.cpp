@@ -236,6 +236,7 @@ bool internal::closed_row_all_finite(const Trade& trade) noexcept {
 void BacktestEngine::record_close_trade(Trade trade) {
     validate_close_trade_counters(&trade, 1);
     const double trade_pnl = trade.pnl;
+    if (report_replay_state()) record_report_replay_close(trades_.size());
     trades_.push_back(std::move(trade));
     if (stream_observe_actions_) stream_observe_exit(trades_.size() - 1);
     const double previous_net_profit = net_profit_sum_;

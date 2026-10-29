@@ -62,7 +62,11 @@ namespace pineforge {
 namespace metrics { struct ScratchCurveRegion; }
 enum class PositionSide { FLAT, LONG, SHORT };
 namespace report_sink { class ScratchCurveWriter; }
-namespace report { class SelectedReportStream; }
+namespace report {
+class SelectedReportStream;
+class ReportReplay;
+enum class EquityBasis : std::uint8_t;
+}
 // Physical emulator lot entry/exit in execution order; no range-end report rows. A reversal may produce several exits followed by an entry.
 struct StreamOrderAction {
     uint64_t sequence = 0;
@@ -853,7 +857,9 @@ public:
     // registered execution observer). A refusal preserves the pending mode.
     // Configuration takes effect at the next run begin.
     int set_equity_report_mode(ReportMode mode);
-    ReportMode equity_report_mode() const { return active_equity_report_mode_; }
+    ReportMode equity_report_mode() const {
+        return active_equity_report_mode_;
+    }
     std::int64_t equity_logical_point_count() const {
         return active_equity_report_mode_ == ReportMode::SUMMARY_ONLY
                 || metrics_streaming_.no_curve
@@ -1659,6 +1665,15 @@ protected:
         }
     }
 
+    int report_equity_month_key(std::int64_t time_ms) const {
+        // An out-of-domain no-curve attempt is unpublishable: the monthly
+        // fold requests whole-report recovery. Avoid invoking the legacy
+        // int month-key expression speculatively on that attempt.
+        if (metrics_streaming_.no_curve && !metrics::monthly_replay_time_supported_v1(time_ms))
+            return 0;
+        return metrics::equity_month_key(time_ms, chart_timezone_);
+    }
+
     // Record one equity point per SCRIPT bar. ``script_bar_ts`` must be the
     // script-bar open timestamp captured BEFORE dispatch — current_bar_.timestamp
     // is overwritten by the magnifier sub-bar walk (engine_run.cpp), which would
@@ -1679,7 +1694,7 @@ protected:
             if (!equity_curve_.empty()) {
                 const auto& held = equity_curve_.back();
                 summary_equity_fold_.replace_last(
-                    held, metrics::equity_month_key(held.time_ms, chart_timezone_));
+                    held, report_equity_month_key(held.time_ms));
                 auto& prefix = summary_broker_equity_prefix_;
                 const double eq = held.equity;
                 if (eq > prefix[0]) prefix[0] = prefix[1] = eq;
@@ -1690,7 +1705,7 @@ protected:
                 if (ru > prefix[3]) prefix[3] = ru;
             }
             summary_equity_fold_.fold(
-                p, metrics::equity_month_key(p.time_ms, chart_timezone_),
+                p, report_equity_month_key(p.time_ms),
                 true, position_side_ != PositionSide::FLAT);
             if (equity_curve_.empty()) equity_curve_.push_back(p);
             else equity_curve_.back() = p;
@@ -1701,7 +1716,7 @@ protected:
         }
         if (metrics_streaming_.fold) {
             metrics_streaming_.fold->append(
-                p, metrics::equity_month_key(p.time_ms, chart_timezone_));
+                p, report_equity_month_key(p.time_ms));
             ++metrics_streaming_.points;
             metrics_streaming_.receipt.stop_boundary.completed_marks = metrics_streaming_.points;
             metrics_streaming_.receipt.stop_boundary.kind =
@@ -2229,6 +2244,8 @@ public:
     // to the configuration of the attempt it describes.
     metrics::MetricsStreamingStatusV1 set_metrics_streaming_v1(
         metrics::StreamingSharpeV1, metrics::MetricsNeedMaskV1);
+    // The receipt also observes the final metric equity mark when nonempty;
+    // this observation never participates in the planned extent's identity.
     metrics::MetricsStreamingStatusV1 metrics_extent_receipt_v1(
         metrics::MetricsExtentReceiptV1*) const;
     metrics::MetricsStreamingStatusV1 admit_metrics_plain_v1(
@@ -2782,6 +2799,13 @@ private:
     void retire_report_sink_output_row();
     void write_report_sink_hashes() const;
     void retire_report_sink_hashes();
+    void begin_report_replay();
+    void finish_report_replay(const ReportC* out) const;
+    void record_report_replay_close(std::size_t global);
+    void record_report_replay_point(const pf_equity_point_t& point);
+    void write_report_replay_equity(const pf_equity_point_t& point) const;
+    void write_report_replay_trade(std::size_t global, bool terminal) const;
+    void retire_report_replay_trades(std::size_t global_end);
 
 public:
     // The C descriptor is copied only after the lifecycle/shape checks. The
@@ -2816,12 +2840,36 @@ public:
     int report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const noexcept;
     int report_sink_summary_v1(pf_report_sink_summary_v1* out) const noexcept;
     int report_sink_diagnostics_v1(pf_report_sink_diagnostics_v1* out) const noexcept;
+    int set_report_replay_v1(const char* path, const char* run_id);
+    double raw_net_profit_sum() const noexcept { return net_profit_sum_; }
+    double report_pointvalue() const noexcept;
     // Codegen opts in only for modules that do not read closedtrades.*.
     // L6B1 still retains every row; L8c consumes this policy at sealing.
     void set_trade_history_streamable(bool streamable);
     bool trade_history_streamable() const { return report_sink_state_.trade_history_streamable; }
 
 protected:
+    // A private configuration tag uses the existing pending scalar, never
+    // object padding or a public recorder mode. The setter admits only the
+    // three public values; begin strips the tag before activating the mode.
+    // OFF hooks perform no registry lookup, lock, allocation or replay call.
+    static constexpr std::uint32_t report_replay_flag = UINT32_C(0x80000000);
+    ReportMode pending_equity_report_mode() const noexcept {
+        return static_cast<ReportMode>(
+            static_cast<std::uint32_t>(pending_equity_report_mode_) & ~report_replay_flag);
+    }
+    ReportMode with_report_replay_flag(ReportMode mode) const noexcept {
+        return static_cast<ReportMode>(static_cast<std::uint32_t>(mode)
+            | (static_cast<std::uint32_t>(pending_equity_report_mode_) & report_replay_flag));
+    }
+    report::ReportReplay* report_replay_state() const noexcept {
+        if (!(static_cast<std::uint32_t>(pending_equity_report_mode_) & report_replay_flag))
+            return nullptr;
+        return find_report_replay();
+    }
+    report::ReportReplay* find_report_replay() const noexcept;
+    void amend_report_replay_point(std::int64_t time, report::EquityBasis basis,
+                                  double term) const;
     // Begin-only source binder input. Backends copy the owner, not this
     // reference; no byte pointer is exposed to a strategy or a hot callback.
     const std::shared_ptr<detail::ScratchSlab>& scratch_tables_for_run() const noexcept {
@@ -2914,9 +2962,11 @@ inline constexpr std::size_t kReportSinkHeldEquityPoints = 1;
 } // inline namespace engine_script_run_v19
 } // namespace pineforge
 
-// first-stage proposed C entry points, declared here because pineforge.h and the
-// runtime-export inventory belong to the supervisor's subsequent ABI slice.
-// No existing export calls these stubs. mode: 0=OFF, 1=ON (default);
+// Optional metrics C entry points, implemented in engine_report.cpp and
+// declared here independently of pineforge.h's static-runtime inventory.
+// Native modules advertise their certified execution adapter separately via
+// strategy_metrics_only_capability_v1 (native_module.hpp).
+// mode: 0=OFF, 1=ON (default);
 // metrics_needed is the OR of kMetricsNeed*V1. The getter is an additive
 // diagnostic transport; it does not extend pf_report_t.
 extern "C" PF_API std::int32_t strategy_set_metrics_streaming_v1(

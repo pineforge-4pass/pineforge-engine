@@ -20,6 +20,17 @@ ABI number in `strategy_library_incompatible`'s message. The report keys are
 unchanged except for two additive diagnostics keys, described below.
 
 - Monthly Sharpe/Sortino month keys for timestamps beyond about 34,800 years from the epoch no longer overflow; in-range results are unchanged.
+- The report's annualization diagnostic now uses the engine's initial capital
+  on every report path. The path-sink report route (named or unnamed)
+  previously omitted it and could drop the diagnostic when the compounded
+  return overflowed; metric values are unchanged.
+- Strategies that reversed on an entry id the other side had used before kept the wrong position: the reversal's new lot was erased from its entry, so later percentage exits were sized from zero units and closed nothing, the position stayed open, later entries could exceed the pyramiding limit, and the closed-trade rows for those exits were missing. Affected releases: v1.1.0 through v1.7.0. Fixed in 1.8.0. Release 1.0.0 handles percentage exits after a reversal differently for an older, unrelated reason, so it is not a safe version to stay on either. For strategies that reverse on a reused entry id, the per-bar state hash values change (the fix changes position bookkeeping); compare state hashes only between runs of one release, as before.
+- In-process callers can again iterate the report's trades and equity curve on
+  the default path, as well as the outputs rows, and take their length. Rows
+  decode lazily; trades and equity also support `[i]` (new for sink trades).
+  The first read freezes the report spool, which then accepts no more rows.
+  Iterate before the report's resources close; afterwards iteration raises
+  `ValueError`.
 
 ### Compatibility and migration
 
@@ -132,6 +143,27 @@ unchanged except for two additive diagnostics keys, described below.
   with unique ids. The gap to 1.6.3 is **not** closed. The engine's own
   per-record sink parse and the dense-script close path are separate work, not in
   this release.
+
+### Metrics-only `run_json` request
+
+- **`--metrics-only[=auto|legacy]` prints the report without its per-bar and per-trade arrays.**
+  The document is the ordinary document without `trades`, `equity_curve`,
+  `elapsed_seconds` and the two scratch-arena byte counters; every other key
+  keeps its name, value and order. A bare option means `auto`. With `auto`, a
+  native module that certifies itself takes the engine's no-curve metrics route
+  (Sharpe, Sortino, the monthly ratios, the equity summary and the trade
+  statistics are computed as the run goes), which saves at least 12 bytes of
+  resident memory per bar (the bound the acceptance test asserts); the document
+  is byte for byte the one `legacy` prints. A module certifies itself through one new optional export,
+  `strategy_metrics_only_capability_v1`; a module without it, `legacy`, or a
+  result the runner cannot accept keeps the actual equity curve, as before. The
+  option is refused together with, among others, an explicit report sink, a
+  phase stream, selected-window options, outputs, a benchmark run or symbol
+  feeds. Without the option nothing changes.
+- **The reference-run scripts read the renamed range-provenance member.** They
+  read a tape's `metrics.json` range-provenance member as `rangeProvenance`
+  first; the member's previous name is still accepted until the next minor
+  release, and the label the scripts print names the member they read.
 
 ### Native live report stream
 

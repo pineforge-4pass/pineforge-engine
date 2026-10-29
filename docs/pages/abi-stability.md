@@ -76,13 +76,34 @@ Four layers:
    plus acceptance of the current header stamp. Dynamic-loader resolution
    and initializers precede this function-based stamp check.
 
+### Report replay accessors
+
+The append-only nonvirtual function
+`strategy_net_profit_sum(pf_strategy_t)` returns the raw
+`BacktestEngine::net_profit_sum_` value used by the opt-in report replay
+extension. A null handle returns `NaN`. The function leaves
+`PF_ABI_VERSION` unchanged at 5 and appends no fields to any existing C struct,
+including `pf_report_t`, `pf_trade_t`, `pf_equity_point_t`, or report sink
+receipts. It reads the accumulator directly before or after report retrieval,
+without summing report rows or using the Pine shadow accessor.
+`strategy_report_pointvalue` exposes the effective report operand and returns
+`NaN` on NULL. `strategy_set_report_replay_v1(s, path, run_id)` copies the
+companion configuration while idle; NULL path disables it. Both strings are
+bounded to 64 KiB before allocation. Setter results are 0 (accepted), -1
+(invalid argument), -2 (streaming), or -3 (active call or retired history).
+Consumers feature-probe the exports before requesting the opt-in `replay`
+namespace or separate `pf-report-replay/v1` companion. The C++ implementation
+adds no virtual method. Its private report sidecar follows the existing
+report-sink output hash waiver; trading state and broker hashes are unchanged.
+
 ## Symbol inventory
 
 The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
 
-A built strategy `.so` exposes 110 compiled-strategy `PF_API` declarations
-(94 runtime implementations plus sixteen generated exports) plus 43 native-host
-declarations: 153 `PF_API` exports in total; a script that declares
+The stable inventory contains 117 compiled-strategy `PF_API` declarations
+(97 implementations in `src/c_abi.cpp` plus twenty generated declarations)
+and 43 native-host declarations. A module supplies the generated symbols it
+supports; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
 module that records outputs its three outputs exports. `nm -gU` also reports libc++'s
 `std::piecewise_construct`; no project-internal C++ symbol is exported. The grouped table below is a guide,
@@ -99,6 +120,9 @@ not the complete inventory:
 | `strategy_set_input` | @ref pf_config |
 | `strategy_set_override` | @ref pf_config |
 | `strategy_set_magnifier_volume_weighted` | @ref pf_config |
+| `strategy_metrics_only_capability_v1` | Optional native module certification probe |
+| `strategy_set_metrics_streaming_v1` | Optional metrics preference (`engine.hpp`, runtime) |
+| `strategy_metrics_extent_receipt_v1` | Optional metrics route receipt (`engine.hpp`, runtime) |
 | `strategy_set_trace_enabled` | @ref pf_config |
 | `strategy_set_trade_start_time` | @ref pf_config |
 | `strategy_stream_begin` | @ref pf_streaming |
@@ -138,9 +162,59 @@ not the complete inventory:
 | `strategy_set_report_sink_fd_v1` | Report sink borrowed stream configuration |
 | `strategy_report_sink_receipt_v1` | Report sink counts, digest and completion |
 | `strategy_report_sink_summary_v1` | Report-only T-row folds and nonfinite validation |
+| `strategy_net_profit_sum` | Raw whole-lot realized P&L |
+| `strategy_report_pointvalue` | Effective replay pointvalue |
+| `strategy_set_report_replay_v1` | Separate opt-in replay companion configuration |
+
+The optional metrics group is separate from those stable inventory counts.
+`strategy_set_metrics_streaming_v1` and `strategy_metrics_extent_receipt_v1`
+are implemented in `engine_report.cpp`. The new module-owned export has this
+signature:
+
+```cpp
+extern "C" int32_t strategy_metrics_only_capability_v1(void) noexcept;
+```
+
+Every `PINEFORGE_EXPORT_NATIVE_STRATEGY(Host)` expansion defines it. A loader
+must call the probe: **0** (`MetricsStreamingStatusV1::Ok`) means that exact
+host certifies the adapter, and **-1** (`NotImplemented`) means it does not.
+A missing symbol, unknown declaration or throwing declaration reader keeps
+the actual curve. The probe takes no strategy handle or caller-supplied proof,
+allocates no handle, and does not change preferences or run state.
+`scripts/check_c_abi_runtime.py` pins the macro's nine definitions and its one
+optional declaration separately from the 94 `c_abi.cpp` implementations.
+
+Certification is an explicit specialization of
+`pineforge::native_module::MetricsPlainHostV1<Host>`. Its static
+`declaration()` returns `std::optional<MetricsPlainDeclarationV1>`; the
+unspecialized trait returns `std::nullopt`. Certification is not inherited
+by subclasses. It attests the actual builtin presenter, marks and scheduler,
+absence of security/lower-timeframe/magnifier sites, the declared calculation
+trigger, one final metric point per passthrough input bar without an anchor,
+and deterministic whole-run replay on a fresh handle with identical settings
+and frozen input. The wrapper refuses private tail/probe setter overrides.
+
+An On request that omits both Returns and Curve can prepare this adapter
+inside `run_backtest` or `run_backtest_full`, after the native spec is staged.
+Admission uses the staged spec and invocation, and native begin checks the
+actual run shape again before dropping any curve point. In particular,
+selected windows and intrabar paths remain on the curve route. The planned
+extent uses the input count and endpoint times only under the certified
+one-point-per-input schedule. Attempt tokens are fresh, input generation
+hashes the frozen bar words, the view binds that generation and extent to the
+native spec digest, and preparation receives the same four identity words.
+
+An Ok capability does not promise Streaming for every request. Read the
+versioned extent receipt after execution; a `LegacyRerun` attempt publishes
+an empty report and requires the loader to discard it and run a fresh
+authoritative handle with streaming Off. Preserve the original failure and
+stop boundary when recovering a stopped run. Existing request defaults
+(On, need mask `0x7f`), signatures, `PF_ABI_VERSION` and report/receipt layouts
+are unchanged. Uncertified hosts and Off requests do not call admission or
+preparation.
 
 Sixteen per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 94 runtime implementations, including the
+functions. The remaining 97 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.

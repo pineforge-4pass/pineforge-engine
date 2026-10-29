@@ -2970,6 +2970,406 @@ class CiFileLoading(unittest.TestCase):
                 self.assertEqual(code, 1, output)
 
 
+class RunnerGroupAllowlist(unittest.TestCase):
+    """Run the real entry point over copies of the tracked workflows and mirror."""
+
+    REPOSITORY = 'pineforge-4pass/pineforge-engine'
+    MIRROR = '.github/runner-group-allowlist.txt'
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.tree = Path(directory.name)
+        self.workflows = self.tree / '.github/workflows'
+        self.workflows.mkdir(parents=True)
+        for path in sorted((ROOT / '.github/workflows').glob('*')):
+            if path.suffix in ('.yml', '.yaml'):
+                shutil.copyfile(path, self.workflows / path.name)
+        self.mirror = self.tree / self.MIRROR
+        shutil.copyfile(ROOT / self.MIRROR, self.mirror)
+
+    def reference(self, name, repository=None):
+        repository = self.REPOSITORY if repository is None else repository
+        return f'{repository}/.github/workflows/{name}@refs/heads/main'
+
+    def entries(self):
+        return [line for line in self.mirror.read_text().splitlines()
+                if line.strip() and not line.lstrip().startswith('#')]
+
+    def write_entries(self, entries):
+        self.mirror.write_text('\n'.join(entries) + '\n')
+
+    def omit(self, *names):
+        omitted = {self.reference(name) for name in names}
+        self.assertTrue(omitted <= set(self.entries()))
+        self.write_entries([line for line in self.entries() if line not in omitted])
+
+    def run_stage(self, repository=REPOSITORY):
+        argv = ['ci_preflight.py', '--check-runner-allowlist']
+        if repository is not None:
+            argv += ['--repository', repository]
+        output = io.StringIO()
+        with mock.patch.object(ci_preflight, 'ROOT', self.tree), \
+             mock.patch.object(sys, 'argv', argv), \
+             contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            try:
+                code = ci_preflight.main()
+            except SystemExit as error:
+                # On the previous implementation argparse returns 2 for the
+                # absent stage. The regression asserts the actual policy row,
+                # so an unrecognised flag can never count as a refusal.
+                code = error.code
+        return code, output.getvalue().splitlines()
+
+    def missing(self, name, label):
+        return (f'{name}: label "{label}" requires mirror line "{self.reference(name)}"; '
+                'the org runner group must contain it before merge')
+
+    @staticmethod
+    def failures(lines):
+        return [line for line in lines
+                if not line.startswith(('advisory:', 'runner allowlist:'))]
+
+    def change_docs_runner(self, runner, extra=''):
+        path = self.workflows / 'docs-post.yml'
+        original = (ROOT / '.github/workflows/docs-post.yml').read_text()
+        changed = in_job(original, 'authz', f'    runs-on: {GKE_2}\n',
+                         f'    runs-on: {runner}\n' + extra)
+        self.assertNotEqual(changed, original)
+        path.write_text(changed)
+
+    def assert_incident(self):
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines), [self.missing('docs-post.yml', GKE_2)], lines)
+        self.assertEqual(code, 1, lines)
+
+    def test_incident_docs_post_requires_its_exact_group_reference(self):
+        self.omit('docs-post.yml')
+        self.assert_incident()
+
+    def test_the_same_real_docs_post_with_its_reference_is_clean(self):
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines), [], lines)
+        self.assertEqual(code, 0, lines)
+        self.assertNotIn(self.missing('docs-post.yml', GKE_2), lines)
+
+    def test_reusable_workflow_needs_its_own_reference_even_when_caller_is_listed(self):
+        workflow = (self.workflows / 'native-live.yml').read_text()
+        self.assertIn('workflow_call', ci_preflight._events(workflow))
+        self.assertIn('uses: ./.github/workflows/native-live.yml',
+                      (self.workflows / 'ci-post.yml').read_text())
+        self.omit('native-live.yml')
+        code, lines = self.run_stage()
+        self.assertCountEqual(self.failures(lines),
+                              [self.missing('native-live.yml', label)
+                               for label in (GKE_4, GKE_16, GKE_8)])
+        self.assertEqual(code, 1, lines)
+
+    def test_matrix_include_and_axis_resolve_the_runner_in_a_real_workflow(self):
+        self.omit('docs-post.yml')
+        label = 'gke-7cpu-14gb-arm64'
+        for runner, matrix in (
+                ('${{ matrix.runner }}',
+                 '    strategy:\n      matrix:\n        include:\n'
+                 f'          - runner: {label}\n'),
+                ('${{ matrix.runner }}',
+                 '    strategy:\n      matrix:\n'
+                 f'        runner: [ubuntu-24.04, {label}]\n'),
+                ('${{ matrix.platform.runner }}',
+                 '    strategy:\n      matrix:\n        platform:\n'
+                 f'          - os: ubuntu-24.04\n            runner: {label}\n'),
+                ('${{ fromJSON(matrix.platform.runner) }}',
+                 '    strategy:\n      matrix:\n        platform:\n'
+                 '          - os: ubuntu-24.04\n'
+                 f'            runner: \'["self-hosted","{label}"]\'\n')):
+            with self.subTest(matrix=matrix):
+                self.change_docs_runner(runner, matrix)
+                code, lines = self.run_stage()
+                self.assertEqual(self.failures(lines),
+                                 [self.missing('docs-post.yml', label)], lines)
+                self.assertEqual(code, 1, lines)
+
+    def test_runner_sequences_expressions_and_environment_cannot_hide_labels(self):
+        self.omit('docs-post.yml')
+        label = 'gkp-7cpu-14gb-arm64'
+        for runner, extra in (
+                (label, ''),
+                (f"'{label}'", ''),
+                (f'["self-hosted", "{label}"]', ''),
+                (f"[self-hosted, '{label}']", ''),
+                (f'\n      - self-hosted\n      - {label}', ''),
+                (f'\n      group: gke-runners\n      labels: [self-hosted, {label}]', ''),
+                ("${{ '" + label + "' }}", ''),
+                ('${{ env.RUNNER }}', f'    env:\n      RUNNER: {label}\n'),
+                ('${{ matrix.runner }}',
+                 '    strategy:\n      matrix:\n        include:\n'
+                 f'          - runner: {label}\n'),
+                ('${{ matrix.runner }}',
+                 '    strategy:\n      matrix:\n        include:\n'
+                 f'          - runner: [self-hosted, {label}]\n'),
+                ('[self-hosted, "${{ matrix.runner }}"]',
+                 '    strategy:\n      matrix:\n'
+                 f'        runner: [{label}]\n'),
+                ('${{ fromJSON(matrix.runner) }}',
+                 '    strategy:\n      matrix:\n        include:\n'
+                 f'          - runner: \'["self-hosted","{label}"]\'\n'),
+                ("${{ github.event_name == 'push' && '" + label
+                 + "' || 'ubuntu-24.04' }}", ''),
+                ('gkp-${{ matrix.cpu }}cpu-${{ matrix.gb }}gb-${{ matrix.arch }}',
+                 '    strategy:\n      matrix:\n        cpu: [7]\n'
+                 '        gb: [14]\n        arch: [arm64]\n')):
+            with self.subTest(runner=runner):
+                self.change_docs_runner(runner, extra)
+                code, lines = self.run_stage()
+                self.assertEqual(self.failures(lines),
+                                 [self.missing('docs-post.yml', label)], lines)
+                self.assertEqual(code, 1, lines)
+
+    def test_excluded_matrix_runners_do_not_require_membership(self):
+        self.omit('docs-post.yml')
+        label = 'gke-7cpu-14gb-amd64'
+        self.change_docs_runner(
+            '${{ matrix.runner }}',
+            '    strategy:\n      matrix:\n'
+            f'        runner: [ubuntu-24.04, {label}]\n'
+            f'        exclude:\n          - runner: {label}\n')
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines), [], lines)
+        self.assertEqual(code, 0, lines)
+
+    def test_workflow_environment_and_job_override_resolve_from_real_files(self):
+        self.omit('docs-post.yml')
+        label = 'gke-7cpu-14gb-amd64'
+        self.change_docs_runner('${{ env.RUNNER }}')
+        path = self.workflows / 'docs-post.yml'
+        original = path.read_text()
+        path.write_text(original.replace('\njobs:\n',
+                                         f'\nenv:\n  RUNNER: {label}\n\njobs:\n', 1))
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines), [self.missing('docs-post.yml', label)], lines)
+        self.assertEqual(code, 1, lines)
+        overridden = in_job(path.read_text(), 'authz', '    steps:\n',
+                            '    env:\n      RUNNER: ubuntu-24.04\n    steps:\n')
+        self.assertNotEqual(overridden, path.read_text())
+        path.write_text(overridden)
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines), [], lines)
+        self.assertEqual(code, 0, lines)
+
+    def test_unresolved_runner_is_refused_even_with_a_mirror_entry(self):
+        self.change_docs_runner('${{ needs.choose.outputs.runner }}')
+        code, lines = self.run_stage()
+        self.assertIn('docs-post.yml: job authz runs-on cannot be resolved from literal '
+                      'labels, env or a static matrix', lines)
+        self.assertEqual(code, 1, lines)
+
+    def test_unused_environment_and_matrix_values_are_not_runner_labels(self):
+        self.omit('ci.yml')
+        path = self.workflows / 'ci.yml'
+        original = path.read_text()
+        changed = in_job(original, 'authz', '    steps:\n',
+                         f'    env:\n      UNUSED_RUNNER: {GKE_2}\n'
+                         '    strategy:\n      matrix:\n'
+                         f'        unused_runner: [{GKE_2}]\n    steps:\n')
+        self.assertNotEqual(changed, original)
+        path.write_text(changed)
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines), [], lines)
+        self.assertEqual(code, 0, lines)
+
+    def test_hosted_and_pf_gcp_workflows_need_no_mirror_entry(self):
+        self.omit('ci.yml')
+        path = self.workflows / 'ci.yml'
+        original = path.read_text()
+        for runner in ('ubuntu-24.04', PR_RUNNER, POST_RUNNER, RELEASE_RUNNER):
+            with self.subTest(runner=runner):
+                path.write_text(in_job(original, 'authz', '    runs-on: ubuntu-24.04\n',
+                                       f'    runs-on: {runner}\n'))
+                code, lines = self.run_stage()
+                self.assertEqual(self.failures(lines), [], lines)
+                self.assertEqual(code, 0, lines)
+
+    def test_real_tree_mirror_preserves_the_live_group_and_only_two_advisories(self):
+        expected_names = ('ci-post.yml', 'ci.yml', 'corpus-parity-subset.yml',
+                          'corpus-parity.yml', 'docs-post.yml', 'gke-pr.yml',
+                          'native-live.yml', 'promote-baseline.yml', 'release-ruleset-probe.yml')
+        self.assertEqual(self.entries(), [self.reference(name) for name in expected_names])
+        code, lines = self.run_stage(repository=None)
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.failures(lines), [], lines)
+        self.assertEqual(ci_preflight.RUNNER_ALLOWLIST_REPOSITORY, self.REPOSITORY)
+        self.assertEqual([line for line in lines if line.startswith('advisory:')], [
+            f'advisory: ci.yml: mirror line "{self.reference("ci.yml")}" has no gke/gkp job',
+            'advisory: corpus-parity-subset.yml: mirror line "'
+            + self.reference('corpus-parity-subset.yml') + '" names a missing workflow file',
+        ])
+
+    def test_malformed_mirror_line_is_its_own_finding(self):
+        line = self.reference('docs-post.yml').replace('/.github/workflows/', '/workflows/')
+        self.write_entries(sorted([*self.entries(), line]))
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines),
+                         [f'{self.MIRROR}: malformed mirror line "{line}"'], lines)
+        self.assertEqual(code, 1, lines)
+
+    def test_other_ref_is_its_own_finding(self):
+        line = self.reference('docs-post.yml').replace('refs/heads/main', 'refs/heads/topic')
+        self.write_entries(sorted([*self.entries(), line]))
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines),
+                         [f'{self.MIRROR}: ref must be refs/heads/main: "{line}"'], lines)
+        self.assertEqual(code, 1, lines)
+
+    def test_duplicate_mirror_line_is_its_own_finding(self):
+        line = self.reference('docs-post.yml')
+        self.write_entries(sorted([*self.entries(), line]))
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines),
+                         [f'{self.MIRROR}: duplicate mirror line "{line}"'], lines)
+        self.assertEqual(code, 1, lines)
+
+    def test_other_repository_is_its_own_finding(self):
+        line = self.reference('docs-post.yml', 'outside/engine')
+        self.write_entries(sorted([*self.entries(), line]))
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines),
+                         [f'{self.MIRROR}: line is for another repository "{line}"'], lines)
+        self.assertEqual(code, 1, lines)
+
+    def test_unsorted_mirror_is_its_own_finding(self):
+        self.write_entries(list(reversed(self.entries())))
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines),
+                         [f'{self.MIRROR}: mirror entries must be sorted'], lines)
+        self.assertEqual(code, 1, lines)
+
+    def test_missing_mirror_file_is_its_own_finding(self):
+        self.mirror.rename(self.mirror.with_suffix('.saved'))
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines), [f'{self.MIRROR}: mirror file is missing'], lines)
+        self.assertEqual(code, 1, lines)
+
+    def test_comments_and_blank_lines_do_not_affect_mirror_order(self):
+        self.mirror.write_text('# Live group entries\n\n' + '\n\n'.join(self.entries()) + '\n')
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines), [], lines)
+        self.assertEqual(code, 0, lines)
+
+    def test_repository_identity_must_be_known_and_the_argument_is_used(self):
+        for repository in ('', 'unknown', 'owner/repo/extra'):
+            with self.subTest(repository=repository):
+                code, lines = self.run_stage(repository)
+                self.assertEqual(self.failures(lines),
+                                 [f'{self.MIRROR}: cannot derive repository identity '
+                                  '(expected owner/repo)'], lines)
+                self.assertEqual(code, 1, lines)
+        entries = self.entries()
+        self.write_entries([line.replace(self.REPOSITORY + '/', 'other/engine/', 1)
+                            for line in entries])
+        code, lines = self.run_stage(repository='other/engine')
+        self.assertEqual(self.failures(lines), [], lines)
+        self.assertEqual(code, 0, lines)
+
+    def test_workflow_file_reference_matching_is_case_sensitive(self):
+        self.omit('docs-post.yml')
+        self.write_entries(sorted([*self.entries(), self.reference('DOCS-POST.yml')]))
+        self.assert_incident()
+
+    def mutant(self, before, after):
+        source = inspect.getsource(ci_preflight.runner_allowlist_findings)
+        self.assertEqual(source.count(before), 1)
+        namespace = dict(vars(ci_preflight))
+        exec(compile(source.replace(before, after, 1), '<runner-allowlist-mutant>', 'exec'),
+             namespace)
+        return namespace['runner_allowlist_findings']
+
+    def test_removing_the_missing_reference_check_breaks_the_incident_control(self):
+        self.omit('docs-post.yml')
+        self.assert_incident()
+        mutant = self.mutant('if reference not in entries:', 'if False:')
+        with mock.patch.object(ci_preflight, 'runner_allowlist_findings', mutant):
+            with self.assertRaises(AssertionError):
+                self.assert_incident()
+
+    def test_case_insensitive_reference_matching_breaks_the_case_control(self):
+        self.omit('docs-post.yml')
+        self.write_entries(sorted([*self.entries(), self.reference('DOCS-POST.yml')]))
+        self.assert_incident()
+        mutant = self.mutant(
+            'if reference not in entries:',
+            'if reference.lower() not in {entry.lower() for entry in entries}:')
+        with mock.patch.object(ci_preflight, 'runner_allowlist_findings', mutant):
+            with self.assertRaises(AssertionError):
+                self.assert_incident()
+
+    def test_skipping_workflow_call_files_breaks_the_reusable_control(self):
+        self.test_reusable_workflow_needs_its_own_reference_even_when_caller_is_listed()
+        mutant = self.mutant(
+            'for name, workflow in sorted(workflows.items()):',
+            'for name, workflow in sorted(workflows.items()):\n'
+            "        if 'workflow_call' in (_events(workflow) or set()):\n"
+            '            continue')
+        with mock.patch.object(ci_preflight, 'runner_allowlist_findings', mutant):
+            with self.assertRaises(AssertionError):
+                code, lines = self.run_stage()
+                self.assertCountEqual(self.failures(lines),
+                                      [self.missing('native-live.yml', label)
+                                       for label in (GKE_4, GKE_16, GKE_8)])
+                self.assertEqual(code, 1, lines)
+
+    def test_stage_is_binding_fast_parallel_and_its_real_result_is_in_the_summary(self):
+        plan = check_commands(ROOT, tier='fast')
+        self.assertIn('runner-allowlist', [entry[0] for entry in plan])
+        entry = next(entry for entry in plan if entry[0] == 'runner-allowlist')
+        self.assertEqual(entry, ('runner-allowlist', [
+            sys.executable, str(ROOT / 'scripts/ci_preflight.py'),
+            '--check-runner-allowlist',
+        ]))
+        self.assertIs(entry.parallel, True)
+        self.assertNotIn('runner-allowlist',
+                         [entry[0] for entry in check_commands(ROOT, tier='slow')])
+        output = self.tree / 'preflight-logs'
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = run_checks([entry], output, source=ROOT)
+        summary = json.loads((output / 'preflight-summary.json').read_text())
+        self.assertEqual(code, 0, summary)
+        self.assertEqual([(row['name'], row['status'], row['exitCode'], row['advisory'])
+                          for row in summary['stages']],
+                         [('runner-allowlist', 'passed', 0, False)])
+        self.assertIn('advisory: ci.yml:', (output / 'runner-allowlist.log').read_text())
+
+    def test_complete_stage_inventory_and_tier_counts(self):
+        expected = [
+            'shellcheck-version', 'actionlint-runner-labels', 'runner-allowlist', 'workflow-lint',
+            'ci-workflow-contract', 'docs-workflow-contract', 'docs-workflow-contract-tests',
+            'source-guard-c-abi', 'source-guard-native-source', 'source-guard-broker-hash',
+            'source-guard-pending-mirror', 'source-guard-native-versions',
+            'source-guard-native-c-surface', 'source-guard-aggregate-versions',
+            'source-guard-adapter-spec-shadowing', 'source-guard-dangling-comment-names',
+            'source-guard-run-failure-codes', 'source-guard-run-failure-diff',
+            'source-guard-selected-window-ownership', 'source-guard-market-admission',
+            'source-guard-cancellation', 'source-guard-cr150-source-bounds',
+            'cr150-source-gate-tests', 'rng-draw-order-tests', 'rng-draw-order', 'verifier-tests',
+            'preflight-tests', 'unittest-shards-tests', 'verifier-paths-tests',
+            'native-c-surface-tests', 'kernel-residuals-tests', 'corpus-parity-identity-tests',
+            'corpus-parity-subset-cover-tests', 'report-schema-key-tests',
+            'selected-window-ownership-tests', 'report-outputs-key-tests', 'release-version-tests',
+            'release-gate-tests', 'run-failure-diff-tests', 'run-json-harness-tests',
+            'docs-only-tests', 'design-inventory-tests', 'design-inventory',
+            'detached-comments-tests', 'detached-comments', 'native-tempdir-tests',
+            'dangling-comment-names-tests', 'doc-anchors-tests', 'doc-anchors',
+            'doc-lint-tests', 'doc-lint', 'doc-reverts-tests', 'doc-reverts',
+            'kernel-seam-rows-tests', 'kernel-seam-rows', 'doc-pine-coverage',
+            'doc-pine-coverage-tests', 'duplicate-test-names-tests', 'duplicate-test-names',
+        ]
+        self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
+        # main() prepends actionlint-version to all/fast/github-only.
+        self.assertEqual(len(expected) + 1, 60)
+        self.assertEqual(len(check_commands(ROOT, tier='fast')), 55)
+        self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
+        self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
+
+
 class PreflightFailures(unittest.TestCase):
     def gke(self):
         return (ROOT / '.github/workflows/gke-pr.yml').read_text()
@@ -4421,7 +4821,7 @@ exit "$lookup_exit"
                     self.assertFalse({entry[0] for entry in fast} & slow_names)
                     self.assertEqual(sorted(fast + slow), sorted(all_stages))
                     self.assertEqual(len({entry[0] for entry in fast + slow}), len(all_stages))
-                    self.assertTrue({'doc-lint', 'doc-anchors', 'doc-reverts',
+                    self.assertTrue({'doc-lint', 'doc-anchors', 'doc-reverts', 'runner-allowlist',
                                      'ci-workflow-contract', 'preflight-tests'} <=
                                     {entry[0] for entry in fast})
                     self.assertTrue({name for name, _ in ci_verify.source_guard_commands(ROOT)} <=
@@ -4431,7 +4831,7 @@ exit "$lookup_exit"
             check_commands(ROOT, tier='missing')
 
     def test_github_only_preflight_runs_only_workflow_contract_stages(self):
-        expected = {'shellcheck-version', 'actionlint-runner-labels', 'workflow-lint',
+        expected = {'shellcheck-version', 'actionlint-runner-labels', 'runner-allowlist', 'workflow-lint',
                     'ci-workflow-contract', 'docs-workflow-contract', 'docs-workflow-contract-tests'}
         plan = check_commands(ROOT, tier='github-only')
         self.assertEqual({name for name, _ in plan}, expected)
@@ -6620,7 +7020,7 @@ finally:
 
     def test_only_audited_stages_opt_into_the_parallel_group(self):
         expected = {
-            'preflight-tests', 'cr150-source-gate-tests',
+            'preflight-tests', 'cr150-source-gate-tests', 'runner-allowlist',
             'rng-draw-order', 'rng-draw-order-tests', 'native-c-surface-tests',
             'selected-window-ownership-tests', 'release-gate-tests',
             'run-failure-diff-tests', 'design-inventory', 'design-inventory-tests',
@@ -6632,9 +7032,10 @@ finally:
             self.assertEqual({entry[0] for entry in plan
                               if getattr(entry, 'parallel', False)}, expected)
             self.assertTrue(all(len(entry) == 2 for entry in plan))
-        for tier in ('slow', 'github-only'):
-            self.assertFalse(any(getattr(entry, 'parallel', False)
-                                 for entry in check_commands(ROOT, tier=tier)))
+        self.assertFalse(any(getattr(entry, 'parallel', False)
+                             for entry in check_commands(ROOT, tier='slow')))
+        self.assertEqual({entry[0] for entry in check_commands(ROOT, tier='github-only')
+                          if getattr(entry, 'parallel', False)}, {'runner-allowlist'})
 
     def test_parallel_failure_crash_and_serial_default_keep_logs_and_declared_order(self):
         caller = threading.get_ident()

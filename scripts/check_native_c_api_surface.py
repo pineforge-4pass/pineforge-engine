@@ -235,7 +235,7 @@ C_V1_EXCLUSIONS: dict[str, tuple[str, str, tuple[tuple[str, str], ...]]] = {
         ("@declarations", r"\bpf_native_instrument\w*|\b\w*instrument_feed\w*"),
         ("pf_native_subscription_v1", r"\b\w*instrument\w*"))),
     "inherited_statistics": ("engine.hpp", "double max_contracts_held_all() const", (
-        ("@declarations", r"\bstrategy_\w*(?:max_contracts_held|capital_held|open_profit"
+        ("@declarations", r"\bstrategy_(?!net_profit_sum\b)\w*(?:max_contracts_held|capital_held|open_profit"
                           r"|gross_profit|gross_loss|net_profit|runup|drawdown)\w*"),)),
     "hook_views": ("native_host.hpp", "struct NativeExecutionTermsFacts", (
         ("pf_native_terms_view_v1", r"\b\w*(?:definition|allowance)\w*"),

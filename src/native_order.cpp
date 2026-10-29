@@ -378,7 +378,7 @@ bool checked_sub_cap(double before, double deduct, double* after, bool* exhauste
 
 // A group deduction binary64 cannot take off what it is taken from: `deduct`
 // is below `before`, and fl(before - deduct) is `before` again -- at most half
-// an ulp of it (R5 lane K-ULP5). The deduction is absorbed: the units stay as
+// an ulp of it. The deduction is absorbed: the units stay as
 // they are, which is the exact binary64 result of the subtraction, and the
 // event that records it deducts nothing.
 bool absorbed_deduction(double before, double deduct) noexcept {
@@ -389,8 +389,8 @@ bool absorbed_deduction(double before, double deduct) noexcept {
 // A deferred recipient's pending total is the binary64 sum of the fills
 // deducted into it, in commit order. A delta the total absorbs is not added
 // (absorbed_pending_delta); a total below half an ulp of a later delta rounds
-// into it, as the addition does; only a sum that overflows is unrepresentable
-// (R5 lane K-ULP5; until then both absorbing sums stopped the run too).
+// into it, as the addition does; overflowing sums are refused as
+// unrepresentable.
 bool pending_sum(double total, double delta, double* out) noexcept {
     if (!std::isfinite(total) || !std::isfinite(delta) || total < 0.0 || !(delta > 0.0)) {
         return false;
@@ -719,7 +719,7 @@ native_matching::GridThreshold matcher_grid(const ActivationGrid& grid) noexcept
 }
 
 // A buy activation needs the print at or above its level, a sell one at or
-// below. Under an activation grid (L8b) the test is the matcher's own: the
+// below. Under an activation grid the test is the matcher's own: the
 // level itself, or a print inside the tick-quantized region the matcher
 // reported, so a hit it accepted is never refused here.
 bool stop_price_reached(bool is_buy, double level, double reached,
@@ -924,11 +924,11 @@ inline bool names_run(const RequestHandle& handle, const RunIdentity& run) noexc
 // does. The working book is in strictly increasing priority order
 // (LiveRequest::priority), so a long book is bisected down to a short run and
 // the run is walked up to the first row not older than the one asked for
-// (R5 lane PERF-K3). WorkingRequestCore::commit and the direct forms keep that
+// by the caller. WorkingRequestCore::commit and the direct forms keep that
 // order: a push and an erase-push append a row born under a fresh number of
 // the request sequence, which usable_incarnation makes larger than every one
 // the run took before; a keep_handle re-price takes such a number too and
-// moves its row to the back (R5 lane V19-D); an erase keeps the rest in
+// moves its row to the back; an erase keeps the rest in
 // order; an update rewrites a row in place under its own priority.
 template <bool ByPriority>
 inline std::size_t book_position(const std::vector<LiveRequest>& live, uint64_t key) noexcept {
@@ -961,7 +961,7 @@ inline std::size_t book_position(const std::vector<LiveRequest>& live, uint64_t 
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// CR-221 O1-E2. The command journal, the group-effect keys and the long
+// The command journal, the group-effect keys and the long
 // deferred chains' id lists keep a fixed resident part and write the rest to
 // run-owned scratch files: detail::ScratchFile, an unlinked close-on-exec file
 // read and written by position. A store that outgrows its resident part spills;
@@ -1663,7 +1663,7 @@ struct WorkingRequestCore::JournalStore {
     // throwing phase of the command that needs the room (make_room, from
     // reserve_plan and seal_direct), and nothing changes; the event stays
     // resident, so every later command that must page past it is refused the
-    // same way. This bound is documented, not lifted (lane b1 round 4, N-02):
+    // same way. The per-event byte limit applies only when paging is required:
     // an event the journal never pages is never refused, so a journal that
     // stays within kMaxResident events behaves exactly as before.
     static constexpr std::size_t kSpillPageBytes = 32768;
@@ -2037,7 +2037,7 @@ struct WorkingRequestCore::ChainSegments {
 
 #include "native_order_book.hpp"
 
-// What the stores know about the core (E02--E05). The core keeps no copy of
+// What the stores know about the core. The core keeps no copy of
 // it: the spilled count is the book spill's, the journal's length the
 // journal's, the keys' base and count the key log's.
 std::size_t WorkingRequestCore::spilled_count() const noexcept {
@@ -2060,7 +2060,7 @@ std::size_t WorkingRequestCore::group_effect_receipt_count() const noexcept {
     return receipt_store_ ? static_cast<std::size_t>(receipt_store_->log.size()) : 0;
 }
 
-// ---- the working book's tiers (E02) ---------------------------------------
+// ---- the working book's resident and spilled tiers ------------------------
 
 void WorkingRequestCore::forget_repriced(uint64_t incarnation) noexcept {
     const auto it = std::lower_bound(
@@ -2688,7 +2688,7 @@ PreparedMutation WorkingRequestCore::finish_mutation(MutationPlan plan) {
     return PreparedMutation(std::move(impl));
 }
 
-// The direct forms (R5 lane L3) do what a plan's prepare and install do, in
+// The direct forms do what a plan's prepare and install do, in
 // the order they do it, without the plan: begin_plan's checks where the
 // prepare_* makes them, then seal_plan's reservation and epoch, then commit's
 // appends, row change, receipt and counters, then commit's epoch. Every event
@@ -3140,7 +3140,7 @@ bool WorkingRequestCore::authenticate_receipt_outcome(const CommandEvent& event,
     return false;
 }
 
-// The chain walk of a request that resolves its units (E04). Two passes and
+// The chain walk of a request that resolves its units. Two passes and
 // no vector of every id: back from the tail the receipts are checked link by
 // link (their ids go inline for a short chain; for a longer one they are
 // written in blocks into an external list, backward into their final places so
@@ -3389,7 +3389,7 @@ bool WorkingRequestCore::trail_level_ok(double best, double offset, bool is_buy,
     if (!valid_trail_offset(offset) || !std::isfinite(best)) return false;
     // Shared with the matcher: finite, zero riding the best, positive strictly
     // beyond it, and a whole tick count from a best on the run's ladder
-    // naming that ladder point (R5 lane E16). The core re-validates an
+    // naming that ladder point. The core re-validates an
     // activation the matcher reported, so a second spelling here would refuse
     // a hit the matcher just booked.
     double level = 0.0;
@@ -4344,7 +4344,7 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
     canonicalize_owner(staged, identity_, scratch_directory());
     const TriggerState retained = live_[live_index].trigger_state;
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
-    // A replace that keeps the handle or carries a binding (R5 lane V19-D)
+    // A replace that keeps the handle or carries a binding
     // takes its own path; a plain one is the path below, unchanged -- as is
     // a keep_binding replace of a request that cannot carry one.
     if (options.keep_handle || (options.keep_binding && starts_unbound_close(staged))) {
@@ -4387,7 +4387,7 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
 }
 
 // prepare_replace for a replace that keeps the handle or carries a binding
-// (ReplaceOptions::keep_handle / keep_binding, R5 lane V19-D), from the point
+// (ReplaceOptions::keep_handle / keep_binding), from the point
 // the checks have passed: the successor definition, its live row and the
 // ReplacedEvent. A re-price that keeps the handle keeps the request's
 // lineage and takes the number a successor would have been issued as its
@@ -4609,8 +4609,8 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
     canonicalize_owner(staged, identity_, scratch_directory());
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     if constexpr (Kept) {
-        // A replace that keeps the handle or carries a binding (R5 lane
-        // V19-D): the successor row kept_successor makes, and a re-price that
+        // A replace that keeps the handle or carries a binding uses
+        // the successor row kept_successor makes, and a re-price that
         // keeps the handle takes a number no handle is issued under.
         LiveRequest live = kept_successor(live_index, staged_target, std::move(staged), ordinal,
                                           incarnation, context, options);
@@ -4681,7 +4681,7 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
 
 // A plain replace compiles to apply_replace_as<false>, the code it had before
 // the options existed; a replace that keeps the handle or carries a binding
-// (ReplaceOptions::keep_handle / keep_binding, R5 lane V19-D) to
+// (ReplaceOptions::keep_handle / keep_binding) to
 // apply_replace_as<true>, kept out of line so it perturbs neither.
 CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace(
         const RequestHandle& target, const Request& request, const CommandContext& context,
@@ -5004,7 +5004,7 @@ bool WorkingRequestCore::effective_host_units(const PendingAdjustments& pending,
     if (resolved_units == 0.0 || computed_exhausted) {
         computed_after = 0.0;
     } else if (absorbed_deduction(resolved_units, computed_deduction)) {
-        // Absorbed (K-ULP5): the resolved units stand and nothing is deducted.
+        // Absorbed: the resolved units stand and nothing is deducted.
         computed_deduction = 0.0;
     } else if (computed_deduction > 0.0) {
         if (!checked_sub_cap(resolved_units, computed_deduction, &computed_after,
@@ -5321,7 +5321,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
     const native_matching::GridThreshold grid = matcher_grid(activation_grid);
     // The run's own tick ladder, which is a separate fact from whether prints
     // are tested on it: a trailing level spelled a whole number of ticks away
-    // names a ladder point under either mode (R5 lane E16).
+    // names a ladder point under either mode.
     const double ladder_tick = activation_grid.ladder_tick;
     MutationPlan plan = begin_plan();
 
@@ -6131,7 +6131,7 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
     // The plan form's event is final only inside install_execution, after
     // settlement, and that install cannot throw: a journal codec's store
     // write there would have no phase to fail in. So with a codec bound the
-    // plan form is refused (1.7.0), before anything moves -- not even a
+    // plan form is refused before anything moves -- not even a
     // spilled target is brought back; check_execution and apply_execution,
     // which write before they publish, serve such a core.
     if (journal_ && journal_->codec) {
@@ -6597,7 +6597,7 @@ InstallResult WorkingRequestCore::install_execution(PreparedExecution&& prepared
     return commit(impl.terminal);
 }
 
-// prepare_execution's checks, as values (R5 lane L3): the same tests in the
+// prepare_execution's checks, as values: the same tests in the
 // same order, answering what the token's events and retained row are made of.
 Preparation<WorkingRequestCore::ExecutionValues> WorkingRequestCore::execution_values(
         const RequestHandle& target,
@@ -7140,7 +7140,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_group_effect(
         const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
         PendingDeferred after;
         PendingAdjustments before = live.pending;
-        // A fill the pending total absorbs (K-ULP5) joins no chain: the total,
+        // A fill the pending total absorbs joins no chain: the total,
         // its count and its tail stay, and the event defers nothing.
         bool absorbed = false;
         if (const auto* pending = std::get_if<PendingDeferred>(&live.pending)) {
@@ -7200,7 +7200,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_group_effect(
     double after_q = before_q;
     bool exhausted = false;
     // A deduction binary64 cannot take off the remaining units is absorbed
-    // (K-ULP5): the units stand, the event records a deduction of 0, and the
+    // without changing the units; the event records a deduction of 0, and the
     // row is not touched.
     const bool absorbed = absorbed_deduction(before_q, deduct);
     if (!absorbed && !checked_sub_cap(before_q, deduct, &after_q, &exhausted)) {
@@ -7531,7 +7531,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
         bool exhausted = deduct == source;
         if (deduct > 0.0 && !exhausted) {
             if (absorbed_deduction(source, deduct)) {
-                // Absorbed (K-ULP5): the owner's units stand, nothing deducted.
+                // Absorbed: the owner's units stand, nothing deducted.
                 deduct = 0.0;
             } else if (!checked_sub_cap(source, deduct, &after, &exhausted)) {
                 return PreparationError{CoreFailure::UnrepresentableReservation, applied, child};

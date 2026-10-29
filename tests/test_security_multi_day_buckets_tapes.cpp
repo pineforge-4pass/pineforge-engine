@@ -192,7 +192,7 @@ struct Lane {
     const char* timezone;
     const char* session;
     const char* type;
-    std::int64_t range_start_ms;  // metrics.json wsProvenance.returnedRange.from
+    std::int64_t range_start_ms;  // metrics.json rangeProvenance.returnedRange.from
     std::int64_t compare_from_ms;
 };
 

@@ -41,6 +41,10 @@ from ci_verifier_classes import verifier_class_tier
 from run_unittest_shards import default_shard_count
 
 ACTIONLINT_VERSION = '1.7.12'
+# File-only policy needs an identity even in an exported tree with no git remote.
+# --repository overrides this canonical repository; the mirror test pins both.
+RUNNER_ALLOWLIST_REPOSITORY = 'pineforge-4pass/pineforge-engine'
+RUNNER_ALLOWLIST_FILE = '.github/runner-group-allowlist.txt'
 # Pin the exact ordered names extracted from the CMake slow-label list.
 # Verifier and command-after slices inherit slow labels; their covers do not.
 PR_SLOW_ROWS = (
@@ -503,7 +507,7 @@ SLOW_PREFLIGHT_STAGES = frozenset((
     'verifier-tests', 'kernel-residuals-tests', 'unittest-shards-tests', 'run-json-harness-tests',
 ))
 GITHUB_ONLY_PREFLIGHT_STAGES = frozenset((
-    'shellcheck-version', 'actionlint-runner-labels', 'workflow-lint',
+    'shellcheck-version', 'actionlint-runner-labels', 'runner-allowlist', 'workflow-lint',
     'ci-workflow-contract', 'docs-workflow-contract', 'docs-workflow-contract-tests',
 ))
 ADMIT_RULE_STAGES = (
@@ -2223,8 +2227,10 @@ def _matrix_rows(body: str) -> list[dict[str, str]] | None:
         if key in ('include', 'exclude'):
             rows = []
             for line in children:
-                item = re.fullmatch(r'          - ([A-Za-z_]\w*): ([^{}\[\]]+)', line)
-                follow = re.fullmatch(r'            ([A-Za-z_]\w*): ([^{}\[\]]+)', line)
+                # release.yml includes a literal runner label array. Keep its
+                # value intact for the same runner reader used for runs-on.
+                item = re.fullmatch(r'          - ([A-Za-z_]\w*): ([^{}]+)', line)
+                follow = re.fullmatch(r'            ([A-Za-z_]\w*): ([^{}]+)', line)
                 if item:
                     rows.append({item.group(1): item.group(2).strip().strip('\'"')})
                 elif follow and rows and follow.group(1) not in rows[-1]:
@@ -2251,7 +2257,9 @@ def _matrix_rows(body: str) -> list[dict[str, str]] | None:
                 elif not values or _indent(line) != 12:
                     return None
                 else:
-                    values[-1] += ' ' + line.strip()
+                    # Retain field boundaries for matrix.platform.runner and
+                    # other dotted references read through _job_values.
+                    values[-1] += '\n' + line.strip()
             if not values or any('${{' in part for part in values):
                 return None
             axes[key] = values
@@ -2272,6 +2280,196 @@ def _matrix_rows(body: str) -> list[dict[str, str]] | None:
         else:
             rows.append(included.copy())
     return rows
+
+
+def _resolved_runner_values(workflow: str, body: str) -> tuple[list[str], bool]:
+    """Resolve static runner possibilities with the existing job/matrix readers.
+
+    This is deliberately not a general Actions expression evaluator. Unknown
+    output/vars/input references fail closed in the allowlist stage. Conditions
+    may select either literal branch; job ifs never excuse group membership.
+    """
+    def key_values(text: str, key: str) -> list[str]:
+        block = _job_block(text, key)[1:]
+        if block and all(line.strip().startswith('- ') for line in block):
+            return [line.strip()[2:] for line in block]
+        return _job_values(text, key)
+
+    def combine(values: list[str], stack: tuple[str, ...]) -> list[str] | None:
+        resolved = [resolve(value, stack) for value in values]
+        return (None if any(value is None for value in resolved)
+                else [label for value in resolved for label in value])
+
+    def interpolate(value: str, stack: tuple[str, ...]) -> list[str] | None:
+        value = value.strip()
+        if _ACTION_YAML_QUOTED.fullmatch(value):
+            value = value[1:-1]
+        possibilities, end = [''], 0
+        for match in re.finditer(r'\$\{\{(.*?)\}\}', value):
+            choices = expression(match.group(1), stack)
+            if choices is None or len(possibilities) * len(choices) > 256:
+                return None
+            possibilities = [prefix + value[end:match.start()] + choice
+                             for prefix in possibilities for choice in choices]
+            end = match.end()
+        return [prefix + value[end:] for prefix in possibilities]
+
+    def context_values(values: list[str], stack: tuple[str, ...]) -> list[str] | None:
+        # Preserve JSON strings until fromJSON explicitly decodes them.
+        expanded = [interpolate(value, stack) for value in values]
+        return (None if any(value is None for value in expanded)
+                else [item for value in expanded for item in value])
+
+    matrix: list[dict[str, str]] | None = None
+    matrix_read = False
+
+    def expression(value: str, stack: tuple[str, ...]) -> list[str] | None:
+        nonlocal matrix, matrix_read
+        value = value.strip()
+        if value in stack or len(stack) >= 16:
+            return None
+        stack = (*stack, value)
+        if _ACTION_YAML_QUOTED.fullmatch(value):
+            return [value[1:-1].replace("''", "'")]
+        context = re.fullmatch(r'(matrix|env)\.([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)', value)
+        if context:
+            kind, key = context.groups()
+            if kind == 'matrix':
+                axis, *fields = key.split('.')
+                if not matrix_read:
+                    matrix, matrix_read = _matrix_rows(body), True
+                if matrix is None or any(axis not in row for row in matrix):
+                    return None
+                values = [row[axis] for row in matrix]
+                for field in fields:
+                    nested = [_job_values(item, field) for item in values]
+                    if any(len(items) != 1 for items in nested):
+                        return None
+                    values = [items[0] for items in nested]
+                return context_values(values, stack)
+            for owner in (body, workflow):
+                environment = '\n'.join(_job_block(owner, 'env')[1:])
+                values = _job_values(environment, key)
+                if values:
+                    return context_values(values, stack) if len(values) == 1 else None
+            return None
+        decoded = re.fullmatch(r'fromJSON\((.*)\)', value, re.IGNORECASE)
+        if decoded:
+            encoded = expression(decoded.group(1), stack)
+            if encoded is None:
+                return None
+            values = []
+            for item in encoded:
+                try:
+                    parsed = json.loads(item)
+                except ValueError:
+                    return None
+                if isinstance(parsed, str):
+                    values.append(parsed)
+                elif isinstance(parsed, list) and all(isinstance(label, str) for label in parsed):
+                    values.extend(parsed)
+                else:
+                    return None
+            return values
+        branches = re.fullmatch(r'[^&|]+\s*&&\s*(.+?)\s*\|\|\s*(.+)', value)
+        if branches:
+            left = expression(branches.group(1), stack)
+            right = expression(branches.group(2), stack)
+            return None if left is None or right is None else left + right
+        return None
+
+    def resolve(value: str, stack: tuple[str, ...]) -> list[str] | None:
+        value = value.strip()
+        if _ACTION_YAML_QUOTED.fullmatch(value):
+            value = value[1:-1]
+        if value.startswith('['):
+            parsed = _runner_value(value)
+            parts = parsed if isinstance(parsed, list) else _admit_flow_parts(value)
+            return None if parts is None else combine(parts, stack)
+        matches = list(re.finditer(r'\$\{\{(.*?)\}\}', value))
+        if matches:
+            possibilities = interpolate(value, stack)
+            return None if possibilities is None else combine(possibilities, stack)
+        return [value] if re.fullmatch(r'[A-Za-z0-9_.-]+', value) else None
+
+    runners = key_values(body, 'runs-on')
+    if not runners:
+        return [], bool(_job_values(body, 'uses'))
+    mapping = '\n'.join(_job_block(body, 'runs-on')[1:])
+    if mapping and _job_values(mapping, 'labels'):
+        runners = key_values(mapping, 'labels')
+    resolved = combine(runners, ())
+    # Keep visible labels in an unsupported expression in its missing-entry
+    # diagnostic too; the separate unresolved finding still refuses the job.
+    visible = [label for value in runners for label in _RUNNER_GROUP_LABEL.findall(value)]
+    return list(dict.fromkeys((resolved or []) + visible)), resolved is not None
+
+
+_RUNNER_GROUP_LABEL = re.compile(
+    r'(?<![\w.-])(?:gke|gkp)-\d+cpu-\d+gb-[A-Za-z0-9_]+(?![\w.-])', re.IGNORECASE)
+_REPOSITORY_ID = r'[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*'
+_RUNNER_GROUP_REFERENCE = re.compile(
+    r'(' + _REPOSITORY_ID + r')/\.github/workflows/([A-Za-z0-9_][A-Za-z0-9_.-]*\.yml)@([^\s@]+)')
+
+
+def runner_allowlist_findings(workflows: dict[str, str], mirror_text: str | None,
+                              repository: str) -> list[str]:
+    """Bind every GKE/GKP job's own workflow reference to the committed mirror."""
+    mirror = RUNNER_ALLOWLIST_FILE
+    if not re.fullmatch(_REPOSITORY_ID, repository):
+        return [f'{mirror}: cannot derive repository identity (expected owner/repo)']
+    if mirror_text is None:
+        return [f'{mirror}: mirror file is missing']
+    findings = []
+    lines = [line for line in mirror_text.splitlines()
+             if line.strip() and not line.lstrip().startswith('#')]
+    entries: dict[str, str] = {}
+    seen = set()
+    for line in lines:
+        if line in seen:
+            findings.append(f'{mirror}: duplicate mirror line "{line}"')
+        seen.add(line)
+        match = _RUNNER_GROUP_REFERENCE.fullmatch(line)
+        if not match:
+            findings.append(f'{mirror}: malformed mirror line "{line}"')
+            continue
+        owner_repo, name, ref = match.groups()
+        if ref != 'refs/heads/main':
+            findings.append(f'{mirror}: ref must be refs/heads/main: "{line}"')
+            continue
+        if owner_repo != repository:
+            findings.append(f'{mirror}: line is for another repository "{line}"')
+            continue
+        entries[line] = name
+    if lines != sorted(lines):
+        findings.append(f'{mirror}: mirror entries must be sorted')
+    labels_by_file: dict[str, set[str]] = {}
+    unresolved_files: set[str] = set()
+    for name, workflow in sorted(workflows.items()):
+        workflow = _universal_newlines(workflow)
+        labels: set[str] = set()
+        if _unparsed(workflow):
+            findings.append(f'{name}: cannot parse jobs for runner allowlist')
+            unresolved_files.add(name)
+        for job, body in _jobs(workflow).items():
+            values, resolved = _resolved_runner_values(workflow, body)
+            labels.update(label for value in values for label in _RUNNER_GROUP_LABEL.findall(value))
+            if not resolved:
+                unresolved_files.add(name)
+                findings.append(f'{name}: job {job} runs-on cannot be resolved from literal '
+                                'labels, env or a static matrix')
+        labels_by_file[name] = labels
+        reference = f'{repository}/.github/workflows/{name}@refs/heads/main'
+        if reference not in entries:
+            findings.extend(f'{name}: label "{label}" requires mirror line "{reference}"; '
+                            'the org runner group must contain it before merge'
+                            for label in sorted(labels))
+    for reference, name in sorted(entries.items()):
+        if name not in workflows:
+            findings.append(f'advisory: {name}: mirror line "{reference}" names a missing workflow file')
+        elif not labels_by_file.get(name) and name not in unresolved_files:
+            findings.append(f'advisory: {name}: mirror line "{reference}" has no gke/gkp job')
+    return findings
 
 
 def _input_condition_skips(body: str, inputs: dict[str, str]) -> bool:
@@ -2394,7 +2592,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         for job, body in jobs.items():
             runs_on, uses = _job_values(body, 'runs-on'), _job_values(body, 'uses')
             gke_pin = GKE_JOB_RUNNERS.get(name, {}).get(job)
-            has_gke = bool(_GKE_ROUTE.search(' '.join(runs_on)))
+            resolved_runners, _ = _resolved_runner_values(workflow, body)
+            has_gke = bool(_GKE_ROUTE.search(' '.join(runs_on + resolved_runners)))
             raw_runners = _job_values(body, 'runs-on', unquote=False)
             if has_gke and (len(raw_runners) != 1
                             or not _GKE_SCALE_LABEL.fullmatch(raw_runners[0])):
@@ -3724,6 +3923,10 @@ def check_commands(source: Path, output: Path | None = None,
         ('actionlint-runner-labels',
          [sys.executable, str(source / 'scripts/ci_preflight.py'),
           '--check-actionlint-runner-labels']),
+        CheckCommand('runner-allowlist',
+                     [sys.executable, str(source / 'scripts/ci_preflight.py'),
+                      '--check-runner-allowlist'],
+                     parallel=True),
         # Require the config explicitly: absent/malformed config and undeclared
         # literal self-hosted labels are actionlint findings, including in new
         # workflows. A missing workflows directory must not lint another tree.
@@ -3999,6 +4202,9 @@ def main() -> int:
     parser.add_argument('--self-test-docs-workflow', action='store_true')
     parser.add_argument('--check-ci-workflow', action='store_true')
     parser.add_argument('--check-actionlint-runner-labels', action='store_true')
+    parser.add_argument('--check-runner-allowlist', action='store_true')
+    parser.add_argument('--repository', default=RUNNER_ALLOWLIST_REPOSITORY,
+                        help='owner/repo identity for the file-only runner-group mirror check')
     parser.add_argument('--rules-only', action='store_true',
                         help='run the data-only admission rules over a fetched .github tree')
     parser.add_argument('--workflows-dir', type=Path,
@@ -4021,6 +4227,33 @@ def main() -> int:
         if not findings:
             print('actionlint runner labels: all literal self-hosted labels declared')
         return 1 if findings else 0
+    if args.check_runner_allowlist:
+        findings = []
+        try:
+            mirror_text = read_ci_text(ROOT / RUNNER_ALLOWLIST_FILE, findings)
+        except FileNotFoundError:
+            mirror_text = None
+        except OSError as error:
+            print(f'{RUNNER_ALLOWLIST_FILE}: cannot read mirror: {error}')
+            return 1
+        workflows = {}
+        try:
+            directory = ROOT / '.github/workflows'
+            if not directory.is_dir():
+                raise FileNotFoundError('workflow directory is missing')
+            for path in sorted(directory.iterdir()):
+                if path.suffix in ('.yml', '.yaml'):
+                    workflows[path.name] = read_ci_text(path, findings)
+        except OSError as error:
+            print(f'.github/workflows: cannot read workflow files: {error}')
+            return 1
+        findings += runner_allowlist_findings(workflows, mirror_text, args.repository)
+        for finding in findings:
+            print(finding)
+        failed = any(not finding.startswith('advisory:') for finding in findings)
+        if not failed:
+            print('runner allowlist: all gke/gkp workflow references declared')
+        return 1 if failed else 0
     if args.check_ci_workflow:
         workflows = ROOT / '.github/workflows'
         named = ('ci.yml', 'native-live.yml', 'promote-baseline.yml', 'corpus-parity.yml',

@@ -25,6 +25,15 @@ namespace metrics {
 // An unrepresentable local civil time raises report_result_invalid.
 std::int64_t equity_month_key(std::int64_t time_ms, const std::string& chart_timezone);
 
+// Outside this domain the legacy libc fallback computes its month key in
+// int, with possible signed overflow. Monthly replay never claims that
+// domain or changes that expression; the engine keeps/recovers the curve.
+inline bool monthly_replay_time_supported_v1(std::int64_t time_ms) {
+    constexpr std::int64_t span_seconds = std::int64_t{1} << 40;
+    const auto seconds = time_ms / 1000; // same truncation as the legacy key
+    return seconds > -span_seconds && seconds < span_seconds;
+}
+
 // Streaming ratios. A fold owns a fixed-size prefix, one editable held point,
 // and an ordered packed return replay. Its fallback result is an internal
 // routing decision, never a run failure; scratch I/O failures remain typed.
@@ -44,6 +53,9 @@ constexpr MetricsNeedMaskV1 kMetricsNeedEquitySummaryV1 = 1ULL << 4;
 constexpr MetricsNeedMaskV1 kMetricsNeedTradeStatsV1 = 1ULL << 5;
 constexpr MetricsNeedMaskV1 kMetricsNeedCurveV1 = 1ULL << 6;
 constexpr MetricsNeedMaskV1 kMetricsNeedAllV1 = (1ULL << 7) - 1;
+
+// Closed month ends only; the current bucket and editable tail are scalars.
+constexpr std::size_t kMetricsMonthEndLimitV1 = 4096;
 
 // Fixed-width, versioned diagnostic PODs; no change to pf_report_t.
 // Empty extents have empty=1 and count=0; endpoint words are not observations.
@@ -107,16 +119,24 @@ struct MetricsExtentReceiptV1 {
     std::uint32_t plain_subset = 0;
     std::uint32_t replay_attempts = 0;
     std::uint64_t authoritative_attempt = 0;
+    // Observed final metric mark, independent of the plan and its witness.
+    // Valid is exactly 1 when a mark was observed; empty extents leave it 0.
+    double actual_last_equity = 0.0;
+    std::uint32_t actual_last_equity_valid = 0;
 };
 static_assert(sizeof(MetricsExtentV1) == 32, "streaming-ratio extent POD");
 static_assert(sizeof(MetricsExtentPlanV1) == 72, "streaming-ratio plan POD");
 static_assert(sizeof(MetricsStopBoundaryV1) == 24, "streaming-ratio stop POD");
-static_assert(sizeof(MetricsExtentReceiptV1) == 232, "streaming-ratio receipt POD");
+static_assert(sizeof(MetricsExtentReceiptV1) == 248, "streaming-ratio receipt POD");
+static_assert(offsetof(MetricsExtentReceiptV1, actual_last_equity) == 232,
+              "streaming-ratio final equity offset");
+static_assert(offsetof(MetricsExtentReceiptV1, actual_last_equity_valid) == 240,
+              "streaming-ratio final equity validity offset");
 
 // The engine uses actual extent for Sharpe; only Sortino consumes the plan.
 // On is the default; explicit Off plus a Sharpe need selects the exact curve
-// route. A mask without SharpeBar permits skipping Sharpe. Returns/curve and
-// monthly needs retain the curve under either switch setting. A mismatch or
+// route. A mask without SharpeBar permits skipping Sharpe. Returns/Curve
+// needs retain the curve under either switch setting. A mismatch or
 // failed recovery proof chooses the exact curve route, never a new run
 // failure or a changed report domain. An admitted no-curve route uses the
 // ordered scratch replay and reports OrderedReplay.
@@ -196,6 +216,21 @@ public:
 MetricsStreamingStatusV1 make_streaming_equity_ratios_v1(
     const MetricsStreamingConfigV1&, const MetricsExtentPlanV1&,
     MetricsRatioTraceSinkV1, std::unique_ptr<StreamingEquityRatiosV1>&);
+
+// Separate companion, preserving the existing result/receipt and virtual
+// interface layouts. Explicit monthly needs enable it at construction for
+// no-curve folds. The engine also enables it for bar-only needs because its
+// completed equity summary includes monthly fields under every scalar mask.
+// Enable before the first append; foreign fold implementations are refused.
+struct MetricsMonthlyResultV1 {
+    double sharpe_monthly = std::numeric_limits<double>::quiet_NaN();
+    double sortino_monthly = std::numeric_limits<double>::quiet_NaN();
+    std::uint32_t complete = 0;
+    std::uint32_t reserved = 0;
+};
+MetricsStreamingStatusV1 enable_streaming_monthly_replay_v1(StreamingEquityRatiosV1&);
+MetricsStreamingStatusV1 streaming_monthly_result_v1(
+    const StreamingEquityRatiosV1&, MetricsMonthlyResultV1&);
 
 struct EquityReturnSummary {
     std::size_t count = 0;

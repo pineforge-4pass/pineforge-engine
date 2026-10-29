@@ -12,7 +12,7 @@ TV's Open row where it was previously simply absent.
 
 run_strategy.py therefore bounds the feed (``ohlcv_end_ms``) to
 TradingView's RANGE END, read from the tape's metrics.json — the bars
-opening at or before ``to`` as 00:00 UTC (``wsProvenance.requestedRange.to``
+opening at or before ``to`` as 00:00 UTC (``rangeProvenance.requestedRange.to``
 when the tape records it, else the ``to`` date) — and writes the
 range-end close rows, each marked "open" in the CSV's trailing ``Engine
 range-end`` column. Not the tape's last trade row: a first cut did that
@@ -57,6 +57,7 @@ from pathlib import Path
 from unittest import mock
 
 import run_strategy
+import symbol_calendar
 from run_strategy import (
     ENGINE_RANGE_END_COLUMN,
     ENGINE_RANGE_END_OPEN,
@@ -132,7 +133,7 @@ WS_METRICS_F_1D = {
     "symbol": "NYSE:F", "interval": "1D",
     "from": "2025-04-01", "to": "2026-05-01",
     "deepBacktesting": True, "tapeChannel": "ws-report-v1",
-    "wsProvenance": {
+    "rangeProvenance": {
         "schemaVersion": 1,
         "requestedRange": {"from": 1743465600000, "to": RANGE_TO_MS},
         "returnedRange": {"from": 1743514200000, "to": _utc_ms(2026, 4, 30, 13, 30)},
@@ -165,10 +166,59 @@ class MetricsRangeEndTests(unittest.TestCase):
         m["to"] = "2026-04-15"
         self.assertEqual(_tv_metrics_range_end_ms(m), RANGE_TO_MS)
 
+    def test_range_provenance_members_and_sources(self) -> None:
+        requested = {"requestedRange": {"to": RANGE_TO_MS}}
+        old_member = "wsProvenance"
+        new_result = (RANGE_TO_MS, "metrics.json rangeProvenance.requestedRange.to")
+        old_result = (RANGE_TO_MS, f"metrics.json {old_member}.requestedRange.to")
+        cases = [
+            ("new member", {"rangeProvenance": requested}, new_result),
+            ("old member", {old_member: requested}, old_result),
+            ("both members", {"rangeProvenance": requested,
+                              old_member: {"requestedRange": {"to": LAST_EXIT}}}, new_result),
+            ("neither member", {}, None),
+            ("empty new dict", {"rangeProvenance": {}, old_member: requested}, None),
+            ("invalid new range", {"rangeProvenance": {"requestedRange": None},
+                                   old_member: requested}, None),
+            ("neither member is a dict", {"rangeProvenance": [], old_member: "invalid"}, None),
+        ]
+        cases.extend(
+            (f"new member {value!r}", {"rangeProvenance": value, old_member: requested}, old_result)
+            for value in (None, False, True, 0, "", "invalid", [], [1])
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            _write_tape(d / "tv_trades.csv", ASIAN_BOX_TAPE)
+            for name, metrics, expected in cases:
+                with self.subTest(case=name):
+                    self.assertEqual(_tv_metrics_range_end(metrics), expected)
+                    self.assertEqual(_tv_metrics_range_end_ms(metrics),
+                                     None if expected is None else expected[0])
+                    if expected is not None:
+                        _write_metrics(d / "metrics.json", metrics)
+                        self.assertEqual(_load_tv_range_end(d, TZ8), expected)
+                        kwargs: dict = {}
+                        why = _apply_range_end_regime(d, TZ8, kwargs)
+                        self.assertEqual(kwargs, {"ohlcv_end_ms": RANGE_TO_MS})
+                        self.assertIn(f"({expected[1]})", why)
+
+    def test_selected_range_dict_keeps_integer_and_date_rules(self) -> None:
+        for value in (True, False, None, "1777593600000", 1777593600000.0):
+            with self.subTest(value=value):
+                metrics = {"rangeProvenance": {"requestedRange": {"to": value}},
+                           "to": "2026-04-15"}
+                self.assertEqual(_tv_metrics_range_end(metrics),
+                                 (_utc_ms(2026, 4, 15), "metrics.json to"))
+        for value in (0, -1):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    _tv_metrics_range_end({"rangeProvenance": {"requestedRange": {"to": value}}}),
+                    (value, "metrics.json rangeProvenance.requestedRange.to"))
+
     def test_no_range(self) -> None:
         self.assertIsNone(_tv_metrics_range_end_ms({"symbol": "NYSE:F", "interval": "1D"}))
         self.assertIsNone(_tv_metrics_range_end_ms({"to": "May 1, 2026"}))
-        self.assertIsNone(_tv_metrics_range_end_ms({"wsProvenance": {"requestedRange": {"to": "x"}}}))
+        self.assertIsNone(_tv_metrics_range_end_ms({"rangeProvenance": {"requestedRange": {"to": "x"}}}))
         self.assertIsNone(_tv_metrics_range_end_ms(None))  # type: ignore[arg-type]
 
     def test_rule_matches_every_lanes_returned_range(self) -> None:
@@ -196,6 +246,47 @@ class MetricsRangeEndTests(unittest.TestCase):
         # bar (13:30 UTC, which exists on TV) are outside.
         self.assertGreater(_utc_ms(2026, 5, 1, 0, 15), RANGE_TO_MS)
         self.assertGreater(_utc_ms(2026, 5, 1, 13, 30), RANGE_TO_MS)
+
+
+class CalendarProvenanceTests(unittest.TestCase):
+    def test_range_provenance_members(self) -> None:
+        new_range = {"from": _utc_ms(2025, 4, 1), "to": RANGE_TO_MS}
+        old_range = {"from": _utc_ms(2025, 4, 2), "to": LAST_EXIT}
+        new_provenance = {"symbol": "NYSE:F", "returnedRange": new_range}
+        old_provenance = {"symbol": "NASDAQ:AAPL", "returnedRange": old_range}
+        old_member = "wsProvenance"
+        cases = [
+            ("new member", {"rangeProvenance": new_provenance}, "NYSE:F", new_range),
+            ("old member", {old_member: old_provenance}, "NASDAQ:AAPL", old_range),
+            ("both members", {"rangeProvenance": new_provenance, old_member: old_provenance},
+             "NYSE:F", new_range),
+            ("neither member", {}, None, None),
+            ("empty new dict", {"rangeProvenance": {}, old_member: old_provenance}, None, None),
+            ("neither member is a dict", {"rangeProvenance": [], old_member: "invalid"}, None, None),
+        ]
+        cases.extend(
+            (f"new member {value!r}", {"rangeProvenance": value, old_member: old_provenance},
+             "NASDAQ:AAPL", old_range)
+            for value in (None, False, True, 0, "", "invalid", [], [1])
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "strategy.pine").write_text('strategy("calendar")\n', encoding="utf-8")
+            _write_tape(d / "tv_trades.csv", [
+                (1, "Entry long", "2025-04-01 00:00",
+                 "d|250401-0000|250401-0000~250402-0000", "10"),
+            ])
+            for name, metrics, expected_symbol, expected_range in cases:
+                with self.subTest(case=name):
+                    _write_metrics(d / "metrics.json",
+                                   {"interval": "15", "tapeChannel": "ws-report-v1", **metrics})
+                    doc = symbol_calendar.calendar_document(d)
+                    self.assertEqual(doc["symbol"], expected_symbol)
+                    self.assertEqual(doc["source"]["returnedRange"], expected_range)
+                    self.assertEqual(doc["source"]["interval"], "15")
+                    self.assertEqual(doc["source"]["channel"], "ws-report-v1")
+                    self.assertEqual(doc["sessions"],
+                                     [[_utc_ms(2025, 4, 1), _utc_ms(2025, 4, 2)]])
 
 
 class LoadTvRangeEndTests(unittest.TestCase):
@@ -442,7 +533,7 @@ WS_OPEN_TAPE = [
 ]
 
 WS_METRICS_ETH = {**BROWSER_METRICS, "tapeChannel": "ws-report-v1",
-                  "wsProvenance": {"schemaVersion": 1,
+                  "rangeProvenance": {"schemaVersion": 1,
                                    "requestedRange": {"from": 1743465600000, "to": RANGE_TO_MS},
                                    "returnedRange": {"from": 1743465600000, "to": RANGE_TO_MS},
                                    "rangeProof": "covered"}}
@@ -640,7 +731,7 @@ class RangeEndRegimeTests(unittest.TestCase):
             self.assertIn("tape unmarked (ws-report-v1 shape)", why)
             self.assertIn("range-end regime", why)
             self.assertIn("2026-05-01 00:00 UTC", why)
-            self.assertIn("wsProvenance.requestedRange.to", why)
+            self.assertIn("rangeProvenance.requestedRange.to", why)
             self.assertIn("rows written", why)
 
     def test_unmarked_browser_metrics_tape_is_bounded_at_the_to_date(self) -> None:
@@ -695,7 +786,7 @@ class RangeEndRegimeTests(unittest.TestCase):
 
     def test_sources_are_named(self) -> None:
         self.assertEqual(_tv_metrics_range_end(WS_METRICS_ETH),
-                         (RANGE_TO_MS, "metrics.json wsProvenance.requestedRange.to"))
+                         (RANGE_TO_MS, "metrics.json rangeProvenance.requestedRange.to"))
         self.assertEqual(_tv_metrics_range_end(BROWSER_METRICS),
                          (RANGE_TO_MS, "metrics.json to"))
         self.assertIsNone(_tv_metrics_range_end({"strategy": "x"}))
@@ -761,7 +852,7 @@ class RangeEndRowSymmetryTests(unittest.TestCase):
             self.assertEqual(_FakeStrategy.calls[0]["ohlcv_end_ms"], RANGE_TO_MS)
             self.assertEqual(printed.count("range-end: tape unmarked"), 1)
             self.assertIn("feed bounded at TV's range end 2026-05-01 00:00 UTC "
-                          "(metrics.json wsProvenance.requestedRange.to)", printed)
+                          "(metrics.json rangeProvenance.requestedRange.to)", printed)
 
     def test_ws_tape_range_end_rows_carry_their_entry_incarnation(self) -> None:
         # CSV-writer pin (round-4b F3 companion, NOT the F3 pin itself):
@@ -803,7 +894,7 @@ class RangeEndRowSymmetryTests(unittest.TestCase):
 
     def test_unmarked_tape_with_browser_metrics_is_bounded_at_the_to_date(self) -> None:
         # A tape with no Open rows beside a dates-only metrics.json (no
-        # wsProvenance): bounded at `to` as UTC midnight, the rows written.
+        # rangeProvenance): bounded at `to` as UTC midnight, the rows written.
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             feed, out = self._probe(d, WS_OPEN_TAPE, BROWSER_METRICS)
