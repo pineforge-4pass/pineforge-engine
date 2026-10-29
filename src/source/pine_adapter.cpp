@@ -2354,6 +2354,9 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
     for (auto at = held.begin(); at != held.end();) {
         const auto current = at++;
         auto& cohort = *current;
+        // The flip cleared every held cohort before this opening was credited,
+        // so the reversal's cohort can only hold the new credit.
+        if (cohort.first == reversal.source_id) continue;
         if (cohort_opened_on_side(cohort.second, prior_long)) {
             if (position_tail_summary_) {
                 for (const auto& origin : cohort.second.live_units_by_origin)
@@ -26087,7 +26090,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     }
     const bool current_debit_observed =
         current_debited_applied_ordinals_.erase(event.ordinal) != 0;
-    if (!current_debit_observed && event.closed_trade_count > 0)
+    if (!flipped_position && !current_debit_observed && event.closed_trade_count > 0)
         consume_closed_trade_rows(event,
             placement_snapshot ? &*placement_snapshot : nullptr);
     // The margin call's units have left their cohorts: the exits' queue
