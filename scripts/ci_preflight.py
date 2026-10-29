@@ -3742,6 +3742,10 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/check_market_admission_schema.py')]),
         ('source-guard-cancellation',
          [sys.executable, str(source / 'scripts/check_cancellation_hash_coverage.py')]),
+        ('source-guard-engine-layout-stamp',
+         [sys.executable, str(source / 'scripts/check_engine_layout_stamp.py'), '--root', str(source)]),
+        ('source-guard-engine-layout-stamp-tests',
+         [sys.executable, str(source / 'scripts/check_engine_layout_stamp.py'), '--self-test']),
         # CR-150 / C4: a new growable container in the scanned engine, inline
         # header or generated C++ needs a manifest entry whose bound names only
         # declared fixed inputs; the existing sites are listed OPEN, never PASS

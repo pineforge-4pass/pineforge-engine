@@ -3,6 +3,8 @@
 #include <pineforge/engine.hpp>
 #include "native_execution_consumer.hpp"
 #include <cstddef>
+#include <cstring>
+#include <limits>
 
 // Real expressions shared by the library's fingerprint and the standalone
 // measurement program. Expected measurements live only in the fingerprint.
@@ -80,14 +82,48 @@
     V(consumer_run_failure, offsetof(NativeExecutionConsumer, run_failure_)) \
     V(consumer_failure_code, offsetof(NativeExecutionConsumer, run_failure_.code)) \
     V(consumer_failure_args, offsetof(NativeExecutionConsumer, run_failure_.args)) \
-    V(consumer_failure_text, offsetof(NativeExecutionConsumer, run_failure_.text))
+    V(consumer_failure_text, offsetof(NativeExecutionConsumer, run_failure_.text)) \
+    V(open_report_source_size, sizeof(OpenReportRowSource)) \
+    V(open_report_source_alignment, alignof(OpenReportRowSource)) \
+    V(engine_pyramid_entries, offsetof(BacktestEngine, pyramid_entries_)) \
+    V(engine_fold_exit_trail_peak, offsetof(BacktestEngine, fold_exit_trail_peak_)) \
+    V(engine_commission_type, offsetof(BacktestEngine, commission_type_)) \
+    V(engine_commission_value, offsetof(BacktestEngine, commission_value_)) \
+    V(engine_syminfo, offsetof(BacktestEngine, syminfo_)) \
+    V(engine_syminfo_pointvalue, offsetof(BacktestEngine, syminfo_.pointvalue)) \
+    V(engine_lot_excursion_hook, offsetof(BacktestEngine, lot_excursion_hook_)) \
+    V(engine_account_currency_fx, offsetof(BacktestEngine, account_currency_fx_)) \
+    V(engine_account_currency_fx_timestamps, offsetof(BacktestEngine, account_currency_fx_timestamps_)) \
+    V(engine_account_currency_fx_rates, offsetof(BacktestEngine, account_currency_fx_rates_)) \
+    V(engine_current_bar_timestamp, offsetof(BacktestEngine, current_bar_.timestamp)) \
+    V(pyramid_entry_size, sizeof(PyramidEntry)) \
+    V(pyramid_entry_alignment, alignof(PyramidEntry)) \
+    V(pyramid_entry_price, offsetof(PyramidEntry, price)) \
+    V(pyramid_entry_time, offsetof(PyramidEntry, time)) \
+    V(pyramid_entry_qty, offsetof(PyramidEntry, qty)) \
+    V(pyramid_entry_id, offsetof(PyramidEntry, entry_id)) \
+    V(pyramid_entry_bar_index, offsetof(PyramidEntry, entry_bar_index)) \
+    V(pyramid_entry_comment, offsetof(PyramidEntry, entry_comment)) \
+    V(pyramid_entry_max_runup, offsetof(PyramidEntry, max_runup)) \
+    V(pyramid_entry_max_drawdown, offsetof(PyramidEntry, max_drawdown)) \
+    V(pyramid_entry_skip_high, offsetof(PyramidEntry, skip_entry_bar_high)) \
+    V(pyramid_entry_skip_low, offsetof(PyramidEntry, skip_entry_bar_low)) \
+    V(pyramid_entry_commission, offsetof(PyramidEntry, entry_commission_account)) \
+    V(pyramid_entry_incarnation, offsetof(PyramidEntry, entry_incarnation))
+
+// Calls through BacktestEngine in the live report reader and its snapshot
+// fallback. These slots require runtime checks: sizeof/offsetof cannot see a
+// virtual inserted before an existing method.
+#define PINEFORGE_ENGINE_LAYOUT_VIRTUALS(V) \
+    V(slot_present_report, &BacktestEngine::present_report) \
+    V(slot_report_presenter_supports_non_full, &BacktestEngine::report_presenter_supports_non_full)
 
 // These polymorphic implementation classes are deliberately not standard
 // layout. GCC and Clang's supported offsetof extension measures their actual
 // ABI layout without constructing an engine or dereferencing a null pointer.
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Winvalidoffsetof"
+#pragma GCC diagnostic ignored "-Winvalid-offsetof"
 #endif
 namespace pineforge {
 inline namespace engine_script_run_v19 {
@@ -96,6 +132,40 @@ struct EngineLayoutProbe {
     static constexpr std::size_t name = expression;
     PINEFORGE_ENGINE_LAYOUT_VALUES(PINEFORGE_LAYOUT_VALUE)
 #undef PINEFORGE_LAYOUT_VALUE
+
+#if defined(__linux__)
+    template<class Member>
+    static std::size_t virtual_slot(Member member) noexcept {
+        // Linux Itanium member-function pointers contain a function/offset
+        // word and a this-adjustment word. No engine or vtable is constructed.
+        struct Representation {
+            std::ptrdiff_t function;
+            std::ptrdiff_t adjustment;
+        } raw{};
+        static_assert(sizeof member == sizeof raw, "Unsupported member-function pointer ABI");
+        std::memcpy(&raw, &member, sizeof raw);
+        constexpr auto invalid = std::numeric_limits<std::size_t>::max();
+        std::ptrdiff_t byte_offset;
+#if defined(__aarch64__)
+        // AArch64 uses the ARM variant: the virtual flag is in the low bit
+        // of the adjustment; the function word is the untagged byte offset.
+        if (raw.adjustment != 1) return invalid;
+        byte_offset = raw.function;
+#else
+        // Standard Itanium encoding: function = 1 + vtable byte offset.
+        if (raw.adjustment != 0 || raw.function <= 0 || raw.function % 2 != 1)
+            return invalid;
+        byte_offset = raw.function - 1;
+#endif
+        if (byte_offset < 0 || byte_offset % sizeof(void*) != 0) return invalid;
+        return static_cast<std::size_t>(byte_offset) / sizeof(void*);
+    }
+
+#define PINEFORGE_LAYOUT_VIRTUAL(name, member) \
+    static std::size_t name() noexcept { return virtual_slot(member); }
+    PINEFORGE_ENGINE_LAYOUT_VIRTUALS(PINEFORGE_LAYOUT_VIRTUAL)
+#undef PINEFORGE_LAYOUT_VIRTUAL
+#endif
 };
 }
 }
