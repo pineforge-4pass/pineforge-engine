@@ -242,11 +242,10 @@ void backward_scan_stops_at_published_base() {
     // would also admit sealed keys and make this exact occupancy too large.
     CHECK(ledger.cache_size() == population - published);
     CHECK(ledger.cache_size() <= ledger.cache_rows());
-    bool refused = false;
-    try { (void)ledger.entry_price_at(published - 1); }
-    catch (const coded<std::logic_error>&) { refused = true; }
-    CHECK(refused);
-    CHECK(ledger.cache_size() == population - published);
+    CHECK(same_bits(ledger.entry_price_at(published - 1), prices[published - 1]));
+    // The next descending window adds min(window,published) sealed rows to
+    // the population-published live keys, all in distinct default-cache slots.
+    CHECK(ledger.cache_size() == population - published + std::min(kWindow, published));
 }
 
 void sliding_lookback(bool newest_first, Size lookback) {
@@ -422,10 +421,7 @@ void scan_window_and_lazy_strings_follow_mutations() {
         CHECK(ledger.cache_size() <= ledger.cache_rows());
         same_trade(ledger.read(65), expected[65]);
         CHECK(ledger.cache_size() <= ledger.cache_rows());
-        bool refused = false;
-        try { (void)ledger.entry_price_at(65); }
-        catch (const coded<std::logic_error>&) { refused = true; }
-        CHECK(refused);
+        CHECK(same_bits(ledger.entry_price_at(65), expected[65].entry_price));
         CHECK(ledger.cache_size() <= ledger.cache_rows());
         same_numeric_fields(ledger, 96, expected[96]);
         CHECK(ledger.cache_size() <= ledger.cache_rows());

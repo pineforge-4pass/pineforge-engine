@@ -1,12 +1,14 @@
 // Compile this same workload with PINEFORGE_CLOSED_TEXT_READER=0 for the
 // strict owning-reader experiment, or =1 for the normal comparison reader.
 // Mutants are separate compilations, never runtime selections.
+#include <pineforge/pineforge.h>
 #include <pineforge/native_host.hpp>
 #include <pineforge/trade_ledger.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/detail/scratch_file.hpp>
 
 #include "global_allocation_replacement.hpp"
+#include "../src/retired_trade_history_read.hpp"
 
 #include <array>
 #include <cstdint>
@@ -777,8 +779,13 @@ namespace {
 template<Field F> void boundaries(Reader& host, bool retired, const Trade& live) {
     const auto& bytes = field<F>(live);
     // Three appended rows, seal(1): base-1=0, base=1, end=3.
-    invariant([&] { (void)host.equals<F>(0, View{}); }, retired);
-    invariant([&] { (void)ledger_equals<F>(host.ledger(), 0, View{}); }, retired);
+    if (retired) {
+        invariant([&] { (void)host.equals<F>(0, View{}); }, retired);
+        invariant([&] { (void)ledger_equals<F>(host.ledger(), 0, View{}); }, retired);
+    } else {
+        EXPECT(host.equals<F>(0, View{}));
+        EXPECT(ledger_equals<F>(host.ledger(), 0, View{}));
+    }
     EXPECT(host.equals<F>(1, bytes));
     EXPECT(ledger_equals<F>(host.ledger(), 1, bytes));
     invariant([&] { (void)ledger_equals<F>(host.ledger(), 3, View{}); });
@@ -795,8 +802,14 @@ template<Field F> void boundaries(Reader& host, bool retired, const Trade& live)
 
 template<Field F> void fully_published(Reader& host, bool retired) {
     // Three appends followed by seal(3): base=end=3, base-1=2.
-    invariant([&] { (void)host.equals<F>(2, View{}); }, retired);
-    invariant([&] { (void)ledger_equals<F>(host.ledger(), 2, View{}); }, retired);
+    if (retired) {
+        invariant([&] { (void)host.equals<F>(2, View{}); }, retired);
+        invariant([&] { (void)ledger_equals<F>(host.ledger(), 2, View{}); }, retired);
+    } else {
+        const auto live = tiny_trade();
+        EXPECT(host.equals<F>(2, field<F>(live)));
+        EXPECT(ledger_equals<F>(host.ledger(), 2, field<F>(live)));
+    }
     invariant([&] { (void)ledger_equals<F>(host.ledger(), 3, View{}); });
     EXPECT(host.equals<F>(3, View{}));
     EXPECT(!host.equals<F>(3, "x"));
@@ -852,6 +865,357 @@ void refusals_and_retiring_copies() {
     }
 }
 
+bool double_bytes(double actual, double expected) {
+    return std::memcmp(&actual, &expected, sizeof actual) == 0;
+}
+
+bool numeric_bytes(const Trade& actual, const Trade& expected) {
+    return actual.entry_time == expected.entry_time
+        && actual.exit_time == expected.exit_time
+        && double_bytes(actual.entry_price, expected.entry_price)
+        && double_bytes(actual.exit_price, expected.exit_price)
+        && double_bytes(actual.qty, expected.qty)
+        && double_bytes(actual.pnl, expected.pnl)
+        && double_bytes(actual.pnl_pct, expected.pnl_pct)
+        && actual.is_long == expected.is_long
+        && actual.entry_bar_index == expected.entry_bar_index
+        && actual.exit_bar_index == expected.exit_bar_index
+        && actual.exit_from_bracket == expected.exit_from_bracket
+        && double_bytes(actual.max_runup, expected.max_runup)
+        && double_bytes(actual.max_drawdown, expected.max_drawdown)
+        && double_bytes(actual.commission, expected.commission)
+        && actual.entry_incarnation == expected.entry_incarnation
+        && actual.open_at_end == expected.open_at_end
+        && actual.close_cause == expected.close_cause;
+}
+
+bool trade_bytes(const Trade& actual, const Trade& expected, bool numeric = false) {
+    return numeric_bytes(actual, expected)
+        && actual.entry_id == (numeric ? std::string{} : expected.entry_id)
+        && actual.exit_id == (numeric ? std::string{} : expected.exit_id)
+        && actual.entry_comment == (numeric ? std::string{} : expected.entry_comment)
+        && actual.exit_comment == (numeric ? std::string{} : expected.exit_comment);
+}
+
+std::array<Trade, 3> sealed_oracle(bool wide) {
+    // Input rows, never read back to construct expected values. Distinct
+    // numbers include signed zero; binary fractions make bit checks exact.
+    std::array<Trade, 3> rows{{
+        {101, 203, 32.0, 34.25, 2.0, -0.0, -0.0, true, 7, 13,
+         "oak-entry", std::string("oak\0entry", 9), "oak-close", "oak-exit",
+         false, 8.0, 4.0, 0.125, 1011, false, execution::CloseCause::Script},
+        {307, 409, 64.0, 61.5, 4.0, 17.5, 6.25, false, 19, 23,
+         "elm-entry", std::string("elm\0entry", 9), "elm-close", "elm-exit",
+         true, 128.0, 64.0, 0.375, 2027, false, execution::CloseCause::Bracket},
+        {503, 607, 128.0, 129.75, 8.0, -23.25, -3.125, true, 29, 31,
+         "ash-entry", std::string("ash\0entry", 9), "ash-close", "ash-exit",
+         false, 64.0, 32.0, 0.625, 3041, false, execution::CloseCause::Liquidation}
+    }};
+    if (wide) {
+        // Each field has L=tail+1=64*168+1 bytes before its original suffix.
+        // Thus L>128 and L>tail: owning/equality reads must handle scratch.
+        for (Size i = 0; i < rows.size(); ++i) {
+            for (const Field f : {Field::EntryId, Field::ExitId,
+                                  Field::EntryComment, Field::ExitComment}) {
+                std::string* text = nullptr;
+                switch (f) {
+                case Field::EntryId: text = &rows[i].entry_id; break;
+                case Field::ExitId: text = &rows[i].exit_id; break;
+                case Field::EntryComment: text = &rows[i].entry_comment; break;
+                case Field::ExitComment: text = &rows[i].exit_comment; break;
+                }
+                text->insert(0, kTail + 1, static_cast<char>('a' + 4 * i + static_cast<Size>(f)));
+            }
+        }
+    }
+    return rows;
+}
+
+Trade different_text(Trade value) {
+    // Same-length mismatch in the final byte, after entry_comment's NUL.
+    for (auto* text : {&value.entry_id, &value.exit_id,
+                       &value.entry_comment, &value.exit_comment})
+        text->back() ^= 1;
+    return value;
+}
+
+struct SealedRead {
+    const TradeLedger& ledger;
+    Size index, capacity, prepare_index;
+    bool wide;
+    const char* phase;
+};
+
+// Catch each accessor independently so the base run identifies every missing
+// read path, rather than terminating after the first sealed at() exception.
+template<class Action>
+void sealed_expect(const SealedRead& row, const char* expression, int line, Action action) {
+    ++checks;
+    try {
+        (void)row.ledger.read(row.prepare_index);
+        if (action()) return;
+        ++failures;
+        std::printf("FAIL %s:%d: %s cache=%zu row=%zu wide=%d phase=%s value mismatch\n",
+                    __FILE__, line, expression, row.capacity, row.index, row.wide, row.phase);
+    } catch (const std::exception& error) {
+        ++failures;
+        std::printf("FAIL %s:%d: %s cache=%zu row=%zu wide=%d phase=%s exception: %s\n",
+                    __FILE__, line, expression, row.capacity, row.index, row.wide,
+                    row.phase, error.what());
+    }
+}
+#define SEALED_EXPECT(expression) \
+    sealed_expect(row, #expression, __LINE__, [&] { return bool(expression); })
+
+bool c_text_bytes(const char* actual, const std::string& expected) {
+    // These three C fields contain no NUL; entry_comment covers embedded NUL
+    // through the owning and comparison APIs instead.
+    return actual && std::strlen(actual) == expected.size()
+        && std::memcmp(actual, expected.data(), expected.size()) == 0;
+}
+
+struct SealedReader : Reader {
+    SealedReader() { syminfo_.pointvalue = 2.0; }
+    void engine_reads(const SealedRead& row, const Trade& expected) const {
+        const auto i = static_cast<int>(row.index);
+        SEALED_EXPECT(trade_bytes(closed_trade(row.index), expected));
+        SEALED_EXPECT(double_bytes(closed_trade_profit(i), expected.pnl));
+        SEALED_EXPECT(double_bytes(closed_trade_profit_percent(i), expected.pnl_pct));
+        SEALED_EXPECT(double_bytes(closed_trade_commission(i), expected.commission));
+        SEALED_EXPECT(closed_trade_entry_bar_index(i) == expected.entry_bar_index);
+        SEALED_EXPECT(closed_trade_exit_bar_index(i) == expected.exit_bar_index);
+        SEALED_EXPECT(closed_trade_entry_incarnation(i) == expected.entry_incarnation);
+        SEALED_EXPECT(double_bytes(closed_trade_entry_price(i), expected.entry_price));
+        SEALED_EXPECT(double_bytes(closed_trade_exit_price(i), expected.exit_price));
+        SEALED_EXPECT(closed_trade_entry_time(i) == expected.entry_time);
+        SEALED_EXPECT(closed_trade_exit_time(i) == expected.exit_time);
+        SEALED_EXPECT(double_bytes(closed_trade_size(i), expected.qty));
+        SEALED_EXPECT(double_bytes(closed_trade_max_runup(i), expected.max_runup));
+        SEALED_EXPECT(double_bytes(closed_trade_max_drawdown(i), expected.max_drawdown));
+        // Independent cost = input entry price * input quantity * pointvalue(2).
+        const double cost = expected.entry_price * expected.qty * 2.0;
+        SEALED_EXPECT(double_bytes(closed_trade_max_runup_percent(i),
+                                   expected.max_runup / cost * 100.0));
+        SEALED_EXPECT(double_bytes(closed_trade_max_drawdown_percent(i),
+                                   expected.max_drawdown / cost * 100.0));
+        SEALED_EXPECT(closed_trade_direction(i) == (expected.is_long ? "long" : "short"));
+        SEALED_EXPECT(closed_trade_entry_id(i) == expected.entry_id);
+        SEALED_EXPECT(closed_trade_exit_id(i) == expected.exit_id);
+        SEALED_EXPECT(closed_trade_entry_comment(i) == expected.entry_comment);
+        SEALED_EXPECT(closed_trade_exit_comment(i) == expected.exit_comment);
+        SEALED_EXPECT(closed_trade_entry_id_equals(i, expected.entry_id));
+        SEALED_EXPECT(closed_trade_exit_id_equals(i, expected.exit_id));
+        SEALED_EXPECT(closed_trade_entry_comment_equals(i, expected.entry_comment));
+        SEALED_EXPECT(closed_trade_exit_comment_equals(i, expected.exit_comment));
+        const auto other = different_text(expected);
+        SEALED_EXPECT(!closed_trade_entry_id_equals(i, other.entry_id));
+        SEALED_EXPECT(!closed_trade_exit_id_equals(i, other.exit_id));
+        SEALED_EXPECT(!closed_trade_entry_comment_equals(i, other.entry_comment));
+        SEALED_EXPECT(!closed_trade_exit_comment_equals(i, other.exit_comment));
+        SEALED_EXPECT(closed_trade_close_cause(i) == static_cast<int>(expected.close_cause));
+    }
+    void negative_reads() const {
+        EXPECT(closed_trade_entry_id(-1).empty());
+        EXPECT(closed_trade_exit_id(-1).empty());
+        EXPECT(closed_trade_entry_comment(-1).empty());
+        EXPECT(closed_trade_exit_comment(-1).empty());
+        EXPECT(closed_trade_direction(-1).empty());
+        EXPECT(closed_trade_entry_id_equals(-1, View{}));
+        EXPECT(closed_trade_exit_id_equals(-1, View{}));
+        EXPECT(closed_trade_entry_comment_equals(-1, View{}));
+        EXPECT(closed_trade_exit_comment_equals(-1, View{}));
+        EXPECT(!closed_trade_entry_id_equals(-1, "oak-entry"));
+        EXPECT(!closed_trade_exit_id_equals(-1, "oak-exit"));
+        EXPECT(!closed_trade_entry_comment_equals(-1, "oak-entry"));
+        EXPECT(!closed_trade_exit_comment_equals(-1, "oak-close"));
+        EXPECT(double_bytes(closed_trade_profit(-1), 0.0));
+        EXPECT(closed_trade_entry_incarnation(-1) == 0);
+        EXPECT(closed_trade_entry_time(-1) == 0);
+        EXPECT(closed_trade_exit_time(-1) == 0);
+    }
+};
+
+void sealed_ledger_reads(const SealedRead& row, const Trade& expected) {
+    const auto& ledger = row.ledger;
+    const auto i = row.index;
+    SEALED_EXPECT(trade_bytes(ledger.at(i), expected));
+    SEALED_EXPECT(trade_bytes(ledger[i], expected));
+    SEALED_EXPECT(trade_bytes(ledger.numeric_at(i), expected, true));
+    SEALED_EXPECT(double_bytes(ledger.pnl_at(i), expected.pnl));
+    SEALED_EXPECT(double_bytes(ledger.pnl_pct_at(i), expected.pnl_pct));
+    SEALED_EXPECT(double_bytes(ledger.commission_at(i), expected.commission));
+    SEALED_EXPECT(ledger.entry_bar_index_at(i) == expected.entry_bar_index);
+    SEALED_EXPECT(ledger.exit_bar_index_at(i) == expected.exit_bar_index);
+    SEALED_EXPECT(ledger.entry_incarnation_at(i) == expected.entry_incarnation);
+    SEALED_EXPECT(double_bytes(ledger.entry_price_at(i), expected.entry_price));
+    SEALED_EXPECT(double_bytes(ledger.exit_price_at(i), expected.exit_price));
+    SEALED_EXPECT(ledger.entry_time_at(i) == expected.entry_time);
+    SEALED_EXPECT(ledger.exit_time_at(i) == expected.exit_time);
+    SEALED_EXPECT(double_bytes(ledger.qty_at(i), expected.qty));
+    SEALED_EXPECT(double_bytes(ledger.max_runup_at(i), expected.max_runup));
+    SEALED_EXPECT(double_bytes(ledger.max_drawdown_at(i), expected.max_drawdown));
+    SEALED_EXPECT(ledger.is_long_at(i) == expected.is_long);
+    SEALED_EXPECT(ledger.entry_id_at(i) == expected.entry_id);
+    SEALED_EXPECT(ledger.exit_id_at(i) == expected.exit_id);
+    SEALED_EXPECT(ledger.entry_comment_at(i) == expected.entry_comment);
+    SEALED_EXPECT(ledger.exit_comment_at(i) == expected.exit_comment);
+    SEALED_EXPECT(ledger.entry_id_equals(i, expected.entry_id));
+    SEALED_EXPECT(ledger.exit_id_equals(i, expected.exit_id));
+    SEALED_EXPECT(ledger.entry_comment_equals(i, expected.entry_comment));
+    SEALED_EXPECT(ledger.exit_comment_equals(i, expected.exit_comment));
+    const auto other = different_text(expected);
+    SEALED_EXPECT(!ledger.entry_id_equals(i, other.entry_id));
+    SEALED_EXPECT(!ledger.exit_id_equals(i, other.exit_id));
+    SEALED_EXPECT(!ledger.entry_comment_equals(i, other.entry_comment));
+    SEALED_EXPECT(!ledger.exit_comment_equals(i, other.exit_comment));
+}
+
+void sealed_c_reads(SealedReader& host, const SealedRead& row, const Trade& expected) {
+    const auto handle = static_cast<BacktestEngine*>(&host);
+    const auto i = static_cast<int>(row.index);
+    SEALED_EXPECT(c_text_bytes(strategy_closed_trade_entry_id(handle, i), expected.entry_id));
+    SEALED_EXPECT(c_text_bytes(strategy_closed_trade_exit_id(handle, i), expected.exit_id));
+    SEALED_EXPECT(c_text_bytes(strategy_closed_trade_exit_comment(handle, i), expected.exit_comment));
+    SEALED_EXPECT(strategy_closed_trade_entry_incarnation(handle, i) == expected.entry_incarnation);
+    SEALED_EXPECT(strategy_closed_trade_close_cause(handle, i) == static_cast<int>(expected.close_cause));
+}
+#undef SEALED_EXPECT
+
+template<class Action> void typed_retired(Action action) {
+    bool caught = false;
+    try { action(); }
+    catch (const detail::RetiredTradeHistoryRead& error) {
+        caught = true;
+        const auto failure = classify_run_failure(error);
+        EXPECT(failure.code == RunFailureCode::engine_invariant);
+        EXPECT(!failure.args || *failure.args == "{}");
+    }
+    EXPECT(caught);
+}
+
+void sealed_controls(SealedReader& host, const std::array<Trade, 3>& oracle) {
+    auto& ledger = host.ledger();
+    invariant([&] { ledger.replace(0, oracle[2]); });
+    bool modified = false;
+    invariant([&] { ledger.modify(1, [&](Trade&) { modified = true; }); });
+    EXPECT(!modified);
+    EXPECT(trade_bytes(ledger.read(0), oracle[0]));
+    EXPECT(trade_bytes(ledger.read(1), oracle[1]));
+    // The end is the independent initial population, 3 appended rows.
+    EXPECT(ledger.size() == oracle.size());
+#define END_REFUSES(accessor) invariant([&] { (void)ledger.accessor(oracle.size()); })
+    END_REFUSES(at);
+    END_REFUSES(numeric_at);
+    END_REFUSES(pnl_at);
+    END_REFUSES(pnl_pct_at);
+    END_REFUSES(commission_at);
+    END_REFUSES(entry_bar_index_at);
+    END_REFUSES(exit_bar_index_at);
+    END_REFUSES(entry_incarnation_at);
+    END_REFUSES(entry_price_at);
+    END_REFUSES(exit_price_at);
+    END_REFUSES(entry_time_at);
+    END_REFUSES(exit_time_at);
+    END_REFUSES(qty_at);
+    END_REFUSES(max_runup_at);
+    END_REFUSES(max_drawdown_at);
+    END_REFUSES(is_long_at);
+    END_REFUSES(entry_id_at);
+    END_REFUSES(exit_id_at);
+    END_REFUSES(entry_comment_at);
+    END_REFUSES(exit_comment_at);
+#undef END_REFUSES
+    invariant([&] { (void)ledger.entry_id_equals(oracle.size(), View{}); });
+    invariant([&] { (void)ledger.exit_id_equals(oracle.size(), View{}); });
+    invariant([&] { (void)ledger.entry_comment_equals(oracle.size(), View{}); });
+    invariant([&] { (void)ledger.exit_comment_equals(oracle.size(), View{}); });
+    host.negative_reads();
+    const auto handle = static_cast<BacktestEngine*>(&host);
+    EXPECT(strategy_closed_trade_entry_id(handle, 3) == nullptr);
+    EXPECT(strategy_closed_trade_exit_id(handle, 3) == nullptr);
+    EXPECT(strategy_closed_trade_exit_comment(handle, 3) == nullptr);
+
+    SealedReader retiring;
+    auto& retired = retiring.ledger();
+    retired.set_scratch_directory(".");
+    retired.set_cache_rows(ledger.cache_rows());
+    detail::TradeLedgerStorageProbe::retire(retired);
+    for (const auto& value : oracle) retired.push_back(value);
+    (void)retired.read(0); // A cached prefix must still throw its specific type.
+    (void)retired.read(1);
+    retired.seal(2);
+    EXPECT(retired.base() == 2 && retired.size() == oracle.size());
+    for (const Size i : {Size{0}, Size{1}}) {
+#define RETIRED_REFUSES(accessor) typed_retired([&] { (void)retired.accessor(i); })
+        RETIRED_REFUSES(read);
+        RETIRED_REFUSES(at);
+        RETIRED_REFUSES(numeric_at);
+        RETIRED_REFUSES(pnl_at);
+        RETIRED_REFUSES(pnl_pct_at);
+        RETIRED_REFUSES(commission_at);
+        RETIRED_REFUSES(entry_bar_index_at);
+        RETIRED_REFUSES(exit_bar_index_at);
+        RETIRED_REFUSES(entry_incarnation_at);
+        RETIRED_REFUSES(entry_price_at);
+        RETIRED_REFUSES(exit_price_at);
+        RETIRED_REFUSES(entry_time_at);
+        RETIRED_REFUSES(exit_time_at);
+        RETIRED_REFUSES(qty_at);
+        RETIRED_REFUSES(max_runup_at);
+        RETIRED_REFUSES(max_drawdown_at);
+        RETIRED_REFUSES(is_long_at);
+        RETIRED_REFUSES(entry_id_at);
+        RETIRED_REFUSES(exit_id_at);
+        RETIRED_REFUSES(entry_comment_at);
+        RETIRED_REFUSES(exit_comment_at);
+#undef RETIRED_REFUSES
+        typed_retired([&] { (void)retired.entry_id_equals(i, View{}); });
+        typed_retired([&] { (void)retired.exit_id_equals(i, View{}); });
+        typed_retired([&] { (void)retired.entry_comment_equals(i, View{}); });
+        typed_retired([&] { (void)retired.exit_comment_equals(i, View{}); });
+    }
+}
+
+void sealed_reads() {
+    for (const bool wide : {false, true}) {
+        const auto oracle = sealed_oracle(wide);
+        for (const Size capacity : {Size{1}, Size{3}}) {
+            SealedReader host;
+            auto& ledger = host.ledger();
+            ledger.set_scratch_directory(".");
+            ledger.set_cache_rows(capacity);
+            for (const auto& value : oracle) ledger.push_back(value);
+            (void)ledger.read(0); // Warm key 0 before sealing can spill a block.
+            ledger.seal(2);
+            EXPECT(ledger.base() == 2 && ledger.size() == oracle.size());
+            for (const Size i : {Size{0}, Size{1}}) {
+                const SealedRead row{ledger, i, capacity, i, wide, "warm"};
+                sealed_ledger_reads(row, oracle[i]);
+                host.engine_reads(row, oracle[i]);
+                sealed_c_reads(host, row, oracle[i]);
+            }
+            sealed_controls(host, oracle);
+            // Append C displacers at [3,3+C). With C=1 or 3, key
+            // 3+(i%C) has the same cache slot as i. Reading it immediately
+            // before EVERY assertion evicts that row, including C ABI reads.
+            for (Size j = 0; j < capacity; ++j) {
+                auto displacer = oracle[2];
+                displacer.entry_id = "displacer-entry-" + std::to_string(j);
+                displacer.exit_id = "displacer-exit-" + std::to_string(j);
+                displacer.pnl = 1000.0 + static_cast<double>(j);
+                ledger.push_back(displacer);
+            }
+            for (const Size i : {Size{0}, Size{1}}) {
+                const SealedRead row{ledger, i, capacity, oracle.size() + i % capacity,
+                                     wide, "evicted"};
+                sealed_ledger_reads(row, oracle[i]);
+                host.engine_reads(row, oracle[i]);
+                sealed_c_reads(host, row, oracle[i]);
+            }
+        }
+    }
+}
+
 template<class Action> void run(const char* label, Action action) {
     try { action(); }
     catch (const Stop&) {}
@@ -872,6 +1236,7 @@ int main() {
     run("mutations and counts", mutations_and_counts);
     run("collisions", collisions);
     run("refusals and retiring copies", refusals_and_retiring_copies);
+    run("sealed reads", sealed_reads);
     std::printf("test_closed_trade_text_reads: reader=%d mutant=%d "
                 "%zu checks, %zu failures\n",
                 PINEFORGE_CLOSED_TEXT_READER, PINEFORGE_CLOSED_TEXT_MUTANT,

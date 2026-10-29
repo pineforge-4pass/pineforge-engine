@@ -683,7 +683,7 @@ void restarts_and_reuse(Directory& directory) {
     }
     invariant([&] { streamed.native_closed_rows_amended(base - 1); });
     invariant([&] { streamed.clear_phase(base - 1); });
-    invariant([&] { (void)streamed.ledger()[base - 1]; });
+    require(streamed.ledger()[base - 1].entry_id == ((base - 1) % 2 == 0 ? "entry-a" : "entry-b"), "sealed entry id changed");
     invariant([&] { streamed.ledger().resize(base - 1); });
     invariant([&] { streamed.consumer().seal_closed_rows(streamed, base - 1, 0, 0.0, 0.0); });
     // Shrink to the base itself: the running digest must become the sealed

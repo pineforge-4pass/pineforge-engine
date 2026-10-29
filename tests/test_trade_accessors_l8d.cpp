@@ -107,15 +107,15 @@ void present(Probe& probe, int index, const Trade& expected, int cause) {
     CHECK(probe.closed_trade_close_cause(index) == cause);
 }
 
-void internal_read_still_fails(const Probe& probe, int index) {
-    try {
-        (void)probe.get_report_trade(index);
-        CHECK(false);
-    } catch (const std::exception& error) {
-        CHECK(dynamic_cast<const pineforge::RunFailureInfo*>(&error) != nullptr);
-        CHECK(pineforge::classify_run_failure(error).code ==
-              pineforge::RunFailureCode::engine_invariant);
-    }
+void internal_read_matches(const Probe& probe, int index, const Trade& expected) {
+    const auto actual = probe.get_report_trade(index);
+    CHECK(actual.entry_incarnation == expected.entry_incarnation);
+    CHECK(actual.entry_id == expected.entry_id);
+    CHECK(actual.exit_id == expected.exit_id);
+    CHECK(actual.exit_comment == expected.exit_comment);
+    CHECK(actual.open_at_end == expected.open_at_end);
+    CHECK(actual.exit_from_bracket == expected.exit_from_bracket);
+    CHECK(actual.close_cause == expected.close_cause);
 }
 
 void resident_window() {
@@ -155,9 +155,9 @@ void resident_window() {
     CHECK(probe.base() == 2);
     CHECK(probe.trade_count() == 4);
     CHECK(probe.report_trade_count() == 6);
-    absent(probe.handle(), 0);
-    absent(probe.handle(), 1); // base-1 must not reach TradeLedger::at().
-    internal_read_still_fails(probe, 1);
+    present(probe, 0, closed[0], causes[0]);
+    present(probe, 1, closed[1], causes[1]); // Sealing preserves retained bytes.
+    internal_read_matches(probe, 1, closed[1]);
     present(probe, 2, closed[2], causes[2]); // base is a global index.
     present(probe, 3, closed[3], causes[3]);
     present(probe, 4, range_end[0], 6);
@@ -168,8 +168,8 @@ void resident_window() {
     CHECK(probe.base() == 4);
     CHECK(probe.trade_count() == 4);
     CHECK(probe.report_trade_count() == 6);
-    for (int i = 0; i < 4; ++i) absent(probe.handle(), i);
-    internal_read_still_fails(probe, 3);
+    for (int i = 0; i < 4; ++i) present(probe, i, closed[i], causes[i]);
+    internal_read_matches(probe, 3, closed[3]);
     present(probe, 4, range_end[0], 6);
     present(probe, 5, range_end[1], 6);
 
@@ -180,7 +180,7 @@ void resident_window() {
     CHECK(probe.base() == 4);
     CHECK(probe.trade_count() == 5);
     CHECK(probe.report_trade_count() == 7);
-    absent(probe.handle(), 3);
+    present(probe, 3, closed[3], causes[3]);
     present(probe, 4, next, 5);
     present(probe, 5, range_end[0], 6);
     present(probe, 6, range_end[1], 6);
@@ -195,7 +195,7 @@ void empty_windows() {
     probe.seal(1);
     CHECK(probe.base() == 1);
     CHECK(probe.report_trade_count() == 1);
-    absent(probe.handle(), 0); // Fully retired, with no range-end suffix.
+    present(probe, 0, row(0), 1); // Fully sealed, with no range-end suffix.
     absent(probe.handle(), 1);
 
     Probe range_only;

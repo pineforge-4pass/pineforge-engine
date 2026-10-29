@@ -154,10 +154,10 @@ void global_window() {
     ledger.seal(3);
     matches(ledger, expected, 3);
     const TradeLedger& read = ledger;
-    invariant([&] { (void)ledger[2]; });
-    invariant([&] { (void)read[2]; });
-    invariant([&] { (void)ledger.at(2); });
-    invariant([&] { (void)read.at(2); });
+    same_trade(ledger[2], expected[2]);
+    same_trade(read[2], expected[2]);
+    same_trade(ledger.at(2), expected[2]);
+    same_trade(read.at(2), expected[2]);
     invariant([&] { (void)ledger.at(9); });
     invariant([&] { (void)read.at(9); });
     invariant([&] { (void)ledger[9]; });

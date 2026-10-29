@@ -530,13 +530,7 @@ void ledger_mutations_and_all_fields() {
     same_numeric_fields(ledger, 5, expected[5]);
     ledger.seal(7);
     same_trade(ledger.read(5), expected[5]);
-    bool refused = false;
-    try { (void)ledger.pnl_at(5); }
-    catch (const coded<std::logic_error>& error) {
-        refused = true;
-        CHECK(classify_run_failure(error).code == RunFailureCode::engine_invariant);
-    }
-    REQUIRE(refused);
+    CHECK(same_bits(ledger.pnl_at(5), expected[5].pnl));
     TradeLedger moved(std::move(ledger));
     for (std::size_t i = moved.base(); i < expected.size(); ++i) {
         same_numeric_fields(moved, i, expected[i]);
