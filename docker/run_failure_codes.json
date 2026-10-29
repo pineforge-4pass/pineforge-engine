@@ -1152,6 +1152,56 @@
    "retryable": true,
    "since": "1.4.0"
   },
+  "run_descriptor_limit_exceeded": {
+   "args": {
+    "limit": {
+     "kind": "integer"
+    },
+    "peak": {
+     "kind": "integer"
+    },
+    "process_role": {
+     "kind": "vocab",
+     "values": [
+      "host",
+      "compiler",
+      "worker",
+      "finalizer",
+      "converter",
+      "reaper"
+     ]
+    },
+    "requested": {
+     "kind": "integer"
+    },
+    "soft_nofile": {
+     "kind": "integer"
+    },
+    "stage": {
+     "kind": "vocab",
+     "values": [
+      "admission",
+      "transpile",
+      "compile",
+      "execution",
+      "assembly",
+      "finalizer",
+      "converter",
+      "publication"
+     ]
+    },
+    "used": {
+     "kind": "integer"
+    }
+   },
+   "class": "resource",
+   "description": "Descriptor admission exceeded the finite run allowance or the process soft NOFILE limit. used includes committed and pending descriptors before the denied additional requested count; peak is the preceding high water. Counters are host-owned nonnegative integers at most 2^53-1.",
+   "english": [
+    "run quota refused"
+   ],
+   "retryable": false,
+   "since": "1.9.0"
+  },
   "run_mode_unsupported": {
    "args": {
     "feature": {
@@ -1236,6 +1286,59 @@
    "retryable": false,
    "since": "1.4.0"
   },
+  "run_quota_configuration_invalid": {
+   "args": {
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "missing_limit",
+      "malformed_limit",
+      "counter_overflow",
+      "protocol",
+      "containment_unavailable",
+      "unmanaged_path",
+      "unknown_bound",
+      "unsupported_route"
+     ]
+    },
+    "setting": {
+     "kind": "vocab",
+     "values": [
+      "scratch_bytes",
+      "scratch_files",
+      "output_bytes",
+      "descriptors",
+      "compiler",
+      "facts",
+      "workdir",
+      "channel",
+      "profile",
+      "protocol"
+     ]
+    },
+    "stage": {
+     "kind": "vocab",
+     "values": [
+      "admission",
+      "transpile",
+      "compile",
+      "execution",
+      "assembly",
+      "finalizer",
+      "converter",
+      "publication"
+     ]
+    }
+   },
+   "class": "input",
+   "description": "The finite host run contract is missing, malformed, overflowing, unauthenticated or unsupported. An unset limit refuses with missing_limit; explicit decimal zero is literal zero capacity. There is no implicit unlimited mode. Limits, extents, deltas and reportable counters must fit 2^53-1.",
+   "english": [
+    "run quota configuration invalid",
+    "run quota refused"
+   ],
+   "retryable": false,
+   "since": "1.9.0"
+  },
   "run_request_invalid": {
    "args": {
     "option": {
@@ -1281,6 +1384,69 @@
    ],
    "retryable": false,
    "since": "1.4.0"
+  },
+  "run_resource_quota_exceeded": {
+   "args": {
+    "artifact": {
+     "kind": "vocab",
+     "values": [
+      "workdir",
+      "compiler",
+      "table",
+      "ledger",
+      "arena",
+      "curve",
+      "sink",
+      "spool",
+      "column_index",
+      "column_data",
+      "json",
+      "stdout",
+      "conversion",
+      "diagnostic"
+     ]
+    },
+    "limit": {
+     "kind": "integer"
+    },
+    "peak": {
+     "kind": "integer"
+    },
+    "requested": {
+     "kind": "integer"
+    },
+    "resource": {
+     "kind": "vocab",
+     "values": [
+      "scratch_bytes",
+      "scratch_files",
+      "output_bytes"
+     ]
+    },
+    "stage": {
+     "kind": "vocab",
+     "values": [
+      "admission",
+      "transpile",
+      "compile",
+      "execution",
+      "assembly",
+      "finalizer",
+      "converter",
+      "publication"
+     ]
+    },
+    "used": {
+     "kind": "integer"
+    }
+   },
+   "class": "resource",
+   "description": "An atomic reservation exceeded a finite run resource allowance before growth. used is committed plus pending before the denied delta; requested is additional capacity, not the desired total; peak is the preceding high water. Produced output is never refunded by deleting an artifact. Counters are host-owned nonnegative integers at most 2^53-1.",
+   "english": [
+    "run quota refused"
+   ],
+   "retryable": false,
+   "since": "1.9.0"
   },
   "scratch_capacity_exceeded": {
    "args": {

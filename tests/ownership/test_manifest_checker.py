@@ -444,7 +444,9 @@ class ManifestCheckerTests(unittest.TestCase):
 
     def test_catalog_code_missing_from_manifest_is_rejected(self):
         rows = self.doc["catalog"]["codes"]
-        for code in ("outputs_limit", "scratch_capacity_exceeded", "scratch_io_failed"):
+        for code in ("outputs_limit", "scratch_capacity_exceeded", "scratch_io_failed",
+                     "run_descriptor_limit_exceeded", "run_quota_configuration_invalid",
+                     "run_resource_quota_exceeded"):
             with self.subTest(code=code):
                 self.doc["catalog"]["codes"] = [row for row in rows if row["code"] != code]
                 self.reject("catalog-set", f"missing {code}")
@@ -453,7 +455,9 @@ class ManifestCheckerTests(unittest.TestCase):
         self.copy_tree()
         path = self.root / "src/run_failure_registry.inc"
         text = path.read_text(encoding="utf-8")
-        for code in ("outputs_limit", "scratch_capacity_exceeded", "scratch_io_failed"):
+        for code in ("outputs_limit", "scratch_capacity_exceeded", "scratch_io_failed",
+                     "run_descriptor_limit_exceeded", "run_quota_configuration_invalid",
+                     "run_resource_quota_exceeded"):
             with self.subTest(code=code):
                 changed_text, changed = re.subn(
                     r'^\s*\{"' + re.escape(code) + r'",[^\n]*\n', "", text, flags=re.M)
