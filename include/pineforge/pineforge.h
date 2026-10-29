@@ -1444,6 +1444,20 @@ PF_API double strategy_current_equity(pf_strategy_t s);
  *  #strategy_current_equity's invalid-handle sentinel so a failed query is
  *  not mistaken for a capital value. */
 PF_API double strategy_initial_capital(pf_strategy_t s);
+/** Raw whole-lot realized P&L, excluding initial capital and report-only
+ *  terminal rows. Reads the engine accumulator directly, including before
+ *  report retrieval; independent of report sorting and global-exit recuts.
+ *  Nonvirtual, additive accessor; ABI version unchanged. NaN when @p s is NULL. */
+PF_API double strategy_net_profit_sum(pf_strategy_t s);
+/** Effective symbol pointvalue used by the engine report. NaN on NULL. */
+PF_API double strategy_report_pointvalue(pf_strategy_t s);
+/** Opt in to the separate pf-report-replay/v1 companion before a run.
+ *  Copies @p path and @p run_id (at most 64 KiB each; NULL run ID means empty).
+ *  NULL path disables.
+ *  Does not modify primary sink descriptors or existing C layouts.
+ *  Returns 0 on success, -1 for invalid arguments, -2 during streaming,
+ *  -3 during an active call or after ledger retirement. Check the result. */
+PF_API int strategy_set_report_replay_v1(pf_strategy_t s, const char* path, const char* run_id);
 /** Task 9: total SCRIPT bars dispatched by the most recent run() (mirrors
  *  `pf_report_t::script_bars_processed`, engine_report.cpp) -- includes a
  *  stream's warmup leg and every realtime tick-driven bar dispatched

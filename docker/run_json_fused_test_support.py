@@ -152,9 +152,32 @@ def report_args(report, sink, *, window_anchor=False):
             {"initial_capital": 10000.}, {"input_tf": "1"}, sink)
 
 
+@contextmanager
+def _consume_before_column_close(runner, consume, document):
+    """Observe the real prepared artifact before its source spools close."""
+    assert consume is not None
+    prepare = runner._prepare_stream_report
+    calls = 0
+
+    def prepare_and_consume(source, *args, **kwargs):
+        nonlocal calls
+        artifact = prepare(source, *args, **kwargs)
+        assert source is document
+        assert calls == 0
+        calls += 1
+        consume(artifact, document)
+        return artifact
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(runner, "_prepare_stream_report", prepare_and_consume)
+        yield
+    assert calls == 1
+
+
 def assemble(runner, sink, library, report, *, outputs=False, window_anchor=False,
-             before_prepare=None, after_verify=None, configure=None, consume=None):
-    """The real verify -> outputs -> report -> private artifact path, LF included."""
+             before_prepare=None, after_verify=None, configure=None, consume=None,
+             consume_before_close=False):
+    """Run real assembly; opt-in column consumers observe the pre-close window."""
     outcome = Outcome()
     target = sink if runner is run_json else reference_sink(runner, sink)
     native = clone_report(runner, report)
@@ -173,16 +196,22 @@ def assemble(runner, sink, library, report, *, outputs=False, window_anchor=Fals
                 document["outputs"] = block
             if before_prepare is not None:
                 before_prepare(document)
-            artifact = runner._prepare_report_json(
-                document, resources,
-                types.SimpleNamespace(profile="unjailed", spill_dir=target.directory),
-                target)
+            # _prepare_report_json closes fused columns before returning.
+            # Opt in to observing its real artifact just before that close;
+            # ordinary consumers still run after all preparation checks.
+            observation = (_consume_before_column_close(runner, consume, document)
+                           if consume_before_close else nullcontext())
+            with observation:
+                artifact = runner._prepare_report_json(
+                    document, resources,
+                    types.SimpleNamespace(profile="unjailed", spill_dir=target.directory),
+                    target)
             if consume is None:
                 chunks = []
                 while chunk := artifact.read(65536):
                     chunks.append(chunk.encode("ascii") if isinstance(chunk, str) else chunk)
                 outcome.report = b"".join(chunks)
-            else:
+            elif not consume_before_close:
                 consume(artifact, document)
     except Exception as error:
         outcome.error = error

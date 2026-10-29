@@ -148,11 +148,91 @@ class SourceCloneVolatile(unittest.TestCase):
                 for src, _, diagnostic in caught.exception.args[0]),
                 str(caught.exception))
 
+    @staticmethod
+    def make_ccache_source(parent):
+        # The compile steps of the sanitizer jobs write ccache temporary files
+        # into an in-repo .ccache (CCACHE_DIR) while the guards clone the tree.
+        source = parent / "source"
+        ordinary = {
+            "README.txt": b"ordinary source text\n",
+            "subdir/payload.bin": b"\x00\x01\x7f\x80\xff\n",
+        }
+        churn = {
+            ".ccache/tmp/stderr.tmp.v2ZCBg.tmp": b"compiler diagnostics\n",
+            ".ccache/0/a/object.o": b"cached object\n",
+            "subdir/.ccache/tmp/stdout.tmp.k3Qd9a.tmp": b"nested churn\n",
+        }
+        for relative, data in {**ordinary, **churn}.items():
+            path = source / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        return source, ordinary
+
+    @staticmethod
+    def ccache_directories(source):
+        return sorted(
+            (path for path in source.rglob(".ccache") if path.is_dir()),
+            key=lambda path: len(path.parts), reverse=True)
+
+    def vanishing_ccache_copy(self, source):
+        calls = []
+        removed = []
+
+        def copy_file(src, dst):
+            calls.append(Path(src))
+            if len(calls) == 1:
+                # A concurrent compile removes its temporary files after
+                # copytree listed them; the removal is deterministic here.
+                for directory in self.ccache_directories(source):
+                    shutil.rmtree(directory)
+                    removed.append(directory)
+            return shutil.copy2(src, dst)
+
+        return copy_file, calls, removed
+
+    def test_vanishing_ccache_dir_is_survived(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            source, ordinary = self.make_ccache_source(parent)
+            original = self.ccache_directories(source)
+            self.assertEqual(len(original), 2)
+            copy_file, calls, removed = self.vanishing_ccache_copy(source)
+            destination = parent / "clone"
+            source_clone.clone_source_tree(
+                source, destination, copy_function=copy_file)
+            self.assertGreater(len(calls), 0, "the vanishing copy function never ran")
+            self.assertEqual(set(removed), set(original))
+            self.assertEqual(self.ccache_directories(source), [])
+            self.assert_ordinary_files(destination, ordinary)
+            self.assertEqual(self.ccache_directories(destination), [])
+
+    def test_control_the_pre_ccache_list_fails_the_same_race(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            source, _ = self.make_ccache_source(parent)
+            copy_file, calls, removed = self.vanishing_ccache_copy(source)
+            with self.assertRaises(
+                    shutil.Error,
+                    msg="the race harness does not reproduce the failure") as caught:
+                shutil.copytree(
+                    source, parent / "clone",
+                    ignore=shutil.ignore_patterns(
+                        "__pycache__", "*.pyc", ".pytest_cache",
+                        "pytest-cache-files-*"),
+                    copy_function=copy_file)
+            self.assertTrue(any(
+                ".ccache" in src and "[Errno 2]" in diagnostic
+                for src, _, diagnostic in caught.exception.args[0]),
+                str(caught.exception))
+
     def test_ordinary_files_are_not_ignored(self):
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory)
             source = parent / "source"
             near_names = {
+                "ccache-notes.md": b"ccache documentation\n",
+                "my.ccache.txt": b"ordinary notes\n",
+                "ccache_data/entry": b"ordinary directory data\n",
                 "pytest_cache_notes.md": b"cache documentation\n",
                 "my-pytest-cache-files.txt": b"ordinary notes\n",
                 "cache.py": b"VALUE = 7\n",

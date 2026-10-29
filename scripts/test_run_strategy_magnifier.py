@@ -78,7 +78,7 @@ METRICS = {
     "symbol": "BINANCE:ETHUSDT.P", "interval": "15",
     "from": "2026-01-29", "to": "2026-02-01",
     "deepBacktesting": True, "tapeChannel": "ws-report-v1",
-    "wsProvenance": {
+    "rangeProvenance": {
         "schemaVersion": 1,
         "requestedRange": {"from": RANGE_START, "to": RANGE_END},
         "returnedRange": {"from": RANGE_START, "to": RANGE_END},
