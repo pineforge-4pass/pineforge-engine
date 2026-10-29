@@ -8008,3 +8008,9 @@ endforeach()
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
 endif()
+
+# CR-507: the container entrypoint refuses a mounted strategy.cpp the host did not vouch for.
+# Appended after every line-pinned row.
+add_test(NAME test_entrypoint_cpp_attest
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_entrypoint_cpp_attest.py
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
