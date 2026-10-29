@@ -7,6 +7,7 @@
 #include <iterator>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace pineforge {
 
@@ -128,7 +129,7 @@ public:
     size_type cache_size() const;
     void clear();
     void reserve(size_type);
-    size_type size() const;
+    size_type size() const noexcept { return logical_end_; }
     size_type base() const;
     // Cached fixed descriptors plus explicitly materialized legacy values.
     // No retained string payload belongs to the normal descriptor window.
@@ -190,6 +191,16 @@ public:
     std::string entry_comment_at(size_type global) const;
     std::string exit_comment_at(size_type global) const;
     std::string exit_id_at(size_type global) const;
+    // Same checked unsealed-row contract as the owning text getters. Compare
+    // exact bytes (including NUL); empty fields equal an empty rhs. Return a
+    // plain bool: no pointer escapes. Warm reads allocate no owning strings;
+    // oversized text uses fixed stack chunks and consumes the whole extent,
+    // even on mismatch, so later I/O errors propagate. As with existing const
+    // reads, all access to the same ledger requires external synchronization.
+    bool entry_id_equals(size_type global, std::string_view rhs) const;
+    bool exit_id_equals(size_type global, std::string_view rhs) const;
+    bool entry_comment_equals(size_type global, std::string_view rhs) const;
+    bool exit_comment_equals(size_type global, std::string_view rhs) const;
     void replace(size_type global, const Trade&);
     void modify(size_type global, const std::function<void(Trade&)>&);
 
@@ -233,6 +244,7 @@ private:
     std::array<std::uint64_t, 2> scratch_storage_bytes() const;
     struct State;
     std::unique_ptr<State> state_;
+    size_type logical_end_ = 0;
 };
 
 } // inline namespace engine_script_run_v19
