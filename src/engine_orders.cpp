@@ -644,10 +644,13 @@ struct TradeLedger::State {
             }
             return numeric_window.records[row];
         }
-        // Reverse span includes global through the first retained row (0 or first).
+        // A reverse span stops at the sealed base, so a scan never admits sealed
+        // keys; only a read that itself starts below the base of a non-retiring
+        // ledger extends the span down to row 0.
         const size_type retained = retain_predecessor ? 1 : 0;
+        const size_type span_floor = (retiring || global >= first) ? first : 0;
         const auto count = std::min(kNumericWindowRows - retained,
-                                    descending ? global - (retiring ? first : 0) + 1 : resident_first - global);
+                                    descending ? global - span_floor + 1 : resident_first - global);
         const auto window_first = descending ? global - (count - 1) : global - retained;
         if (retain_predecessor) {
             const auto row = numeric_window.count - 1;
