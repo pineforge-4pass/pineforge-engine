@@ -7,12 +7,64 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace pineforge::live {
 
 void refuse_legacy_ledger(const std::string& path, const std::string& legacy_identity);
+
+inline constexpr std::uint64_t kDefaultReportCheckpointInterval = 1024;
+
+struct LedgerOptions {
+    // First boundary; later boundaries double: K, 2K, 4K, ...
+    std::uint64_t report_checkpoint_interval = kDefaultReportCheckpointInterval;
+};
+
+enum class CheckpointFailureCode {
+    missing_integrity,
+    integrity_mismatch,
+    previous_hash_mismatch,
+    payload_hash_mismatch,
+    invalid_payload,
+    write_failed,
+};
+
+const char* checkpoint_failure_code_name(CheckpointFailureCode code) noexcept;
+
+class CheckpointFailure final : public std::runtime_error {
+public:
+    CheckpointFailure(CheckpointFailureCode code, std::uint64_t cursor,
+                      const std::string& message)
+        : std::runtime_error(message), code_(code), cursor_(cursor) {}
+    CheckpointFailureCode code() const noexcept { return code_; }
+    std::uint64_t cursor() const noexcept { return cursor_; }
+
+private:
+    CheckpointFailureCode code_;
+    std::uint64_t cursor_;
+};
+
+enum class CheckpointWriteFailureReason { budget, build, io };
+const char* checkpoint_write_failure_reason_name(CheckpointWriteFailureReason reason) noexcept;
+
+struct CheckpointDiagnostic {
+    CheckpointFailureCode code;
+    std::uint64_t cursor = 0;
+    std::string message;
+    std::uint64_t count = 0;
+    std::optional<CheckpointWriteFailureReason> reason = std::nullopt;
+    std::uint64_t budget_count = 0;
+    std::uint64_t build_count = 0;
+    std::uint64_t io_count = 0;
+};
+
+struct ReportReadStats {
+    std::uint64_t checkpoint_rows = 0;
+    // Includes the report snapshot read to verify a checkpoint's witness.
+    std::uint64_t delta_rows = 0;
+};
 
 // Pending deployment-policy decision; this release keeps both defaults unlimited.
 inline constexpr bool service_requires_ledger_budget = false;
@@ -74,7 +126,9 @@ struct DeliveryScan {
 class Ledger {
 public:
     Ledger(const std::string& path, const std::string& deployment_identity,
-           std::uint64_t max_bytes = 0);
+           std::uint64_t max_bytes = 0, LedgerOptions options = {});
+    Ledger(const std::string& path, const std::string& deployment_identity,
+           LedgerOptions options);
     ~Ledger();
     Ledger(const Ledger&) = delete;
     Ledger& operator=(const Ledger&) = delete;
@@ -91,6 +145,11 @@ public:
                       const std::string& report_json = {});
     void verify_report(std::uint64_t cursor, const std::string& report_json,
                        const std::function<std::string()>& legacy_report = {});
+    std::optional<std::uint64_t> verified_report_checkpoint(std::uint64_t target) const;
+    void verify_report_checkpoint(std::uint64_t cursor, const std::string& report_json) const;
+    // Startup retry after replay has populated legacy reports or digests.
+    void checkpoint_recovered_report(std::uint64_t cursor) noexcept;
+    std::optional<CheckpointDiagnostic> checkpoint_diagnostic() const;
 
 #ifdef PINEFORGE_LIVE_LEGACY_TEST_API
     void set_byte_budget(std::uint64_t max_bytes);
@@ -135,7 +194,11 @@ public:
     std::vector<StoredEvent> redelivery_events(const std::string& target,
                                               std::uint64_t from, bool failed_only) const;
     std::string status_json(std::uint64_t* steps = nullptr) const;
-    std::string report_json(std::optional<std::uint64_t> cursor = std::nullopt) const;
+    std::string report_json(std::optional<std::uint64_t> cursor = std::nullopt,
+                            ReportReadStats* stats = nullptr) const;
+    std::string report_json_full(std::optional<std::uint64_t> cursor = std::nullopt,
+                                 ReportReadStats* stats = nullptr) const;
+    std::optional<CheckpointDiagnostic> checkpoint_diagnostic() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

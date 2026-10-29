@@ -1518,8 +1518,8 @@ variants already include a visible link to <https://pineforge.dev> on every
 page rendered by the theme, including source listings.
 
 The only job of `ci.yml` is `authz`; PR proof work lives in `gke-pr`.
-Admission checks the live PR, then reads the payload-bound compare list with
-the base tree's [`scripts/ci_docs_only.py`](../scripts/ci_docs_only.py).
+Admission checks the live PR, reads the payload-bound compare list once and fails closed at 300 files;
+the base tree's [`scripts/ci_docs_only.py`](../scripts/ci_docs_only.py) classifies the paths.
 A changed path is documentation when it is a Markdown file (`*.md`) or lies
 under `docs/`, unless it lies under `.github/`, `benchmarks/`, `scripts/` or
 `tests/`, is a CMake file or a git control file such as `.gitattributes`, or is

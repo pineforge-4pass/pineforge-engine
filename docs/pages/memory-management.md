@@ -123,6 +123,33 @@ byte-equal): 191.0 B per bar for a module with 63 B per bar of stdout and
 These report bounds also exclude input mappings, strategy histories and the
 other stores listed on this page.
 
+The native live runner keeps the cumulative JSON document, the accumulator's
+raw equity curve and ratio workspace, and the engine's own arrays resident in
+every mode, including the default stream and runs without JSONL output.
+This is O(report) memory that grows with equity points and trades, the cost of
+one builder of the cumulative document. The numbers come from
+`test_native_live_report_memory`: it drives the real runner's default cumulative
+stream and default ratio interval on seeded inputs and always prints
+`mem n=<N> peak_rss_kib=<K>` for each completed size. On Linux it reads the
+runner's `/proc/<pid>/status` `VmHWM` at the final committed input before
+releasing stdin EOF, then includes any later peak from `wait4` for that exact
+child at exit; macOS skips with a printed reason. The row measures 1,000 and
+10,000 inputs and adds 100,000 only when the smaller run's measured time projects
+within the 180 s timeout, printing the omission reason otherwise. A peak below
+2 GiB and growth below 4 KiB per additional input between the two largest sizes
+are deliberate sanity ceilings, not measured baselines. Measured on the lab 10-28
+with the default stream and default ratio interval, on a native test host that
+records one equity point per bar: peak RSS 22,880 KiB at 1,000 inputs and
+40,024 KiB at 10,000 inputs, about 1.9 KiB per additional input. These are the
+runner's own `VmHWM` readings for one fixture, including the accumulator curve,
+retained cumulative document and engine arrays. The native market example,
+which records no equity points, read 22,472 KiB and 29,828 KiB (about 0.82 KiB
+per additional input), consistent with the per-bar equity series being the
+difference (the two hosts differ in other ways too).
+The row omitted 100,000 inputs because its cumulative-stream projection assumes
+output volume quadratic in the input count, exceeding the 180 s timeout. These
+two points do not establish a flat memory bound.
+
 For the plain `.bin` input route the input file is mapped, 48 B per bar of file
 payload (`_map_bar_file` docker/run_json.py:2793-2816), and the touched pages
 count toward resident size as the run reads them. A read of the source sites

@@ -176,7 +176,7 @@ reason stays there; metrics, summary, trade and curve keys remain unchanged.
 The digest still has exactly 135 scalar leaves.
 The public writer's canonical-result validation and selected-window placement
 checks retain their existing scopes; `report_shape` is unchanged. The native
-runner's `native_report_json` (`runner/report.hpp:105`) exposes the separate
+runner's `native_report_json` (`runner/report.hpp:108`) exposes the separate
 native report format and has no existing diagnostics object designated
 outside this digest. It keeps undefined metrics as the string "NaN" in its
 own format, outside revision 3. The runner and C ABI carry no named reason;

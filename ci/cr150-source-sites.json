@@ -44002,6 +44002,260 @@
    "cls": "decl",
    "spelling": "std :: string",
    "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "curve",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "struct LiveReportAccumulator :: State #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: deque < pf_equity_point_t >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "trade_rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "struct LiveReportAccumulator :: State #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < TradeC >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "ratio_curve",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "struct LiveReportAccumulator :: State #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < pf_equity_point_t >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "state_",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "const auto fallback = [ & ] #1",
+    "const auto suffix = [ ] ( auto & to , const auto * rows , std :: size_t n , std :: size_t start , std :: uint64_t & counter ) #1",
+    "+ + i ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "const auto fallback = [ & ] #1",
+    "+ + i ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "all",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "if ( ! state . owner ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "longs",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "if ( ! state . owner ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "shorts",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "if ( ! state . owner ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "+ + i ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "curve",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "+ + i ) #2",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "curve . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "+ + i ) #2"
+   ],
+   "cls": "grow",
+   "spelling": "rows . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "ratio_curve",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "if ( ( ! state . have_ratios || boundary ) && ( ! state . have_ratios || state . ratios_cursor ! = input_index ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "ratio_curve . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "for ( const auto & row : rows ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "for ( const auto & s : engine . security_eval_states_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "+ + i ) #4"
+   ],
+   "cls": "grow",
+   "spelling": "rows . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "+ + i ) #5"
+   ],
+   "cls": "grow",
+   "spelling": "rows . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report_patch.hpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge :: report #1",
+    "template < class Row > struct ReportArrayPatch #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < Row >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report_patch.hpp",
+   "symbol": "chart_timezone",
+   "scope": [
+    "namespace pineforge :: report #1",
+    "struct LiveReportPatch #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
   }
  ]
 }

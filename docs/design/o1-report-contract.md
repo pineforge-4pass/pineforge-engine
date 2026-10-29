@@ -590,10 +590,10 @@ See the [JSON field types and presence table](../pages/report-schema.md#report_s
 Native C++ mode selection and envelope reads implement the runtime admission,
 capture metadata and completion checks described above. The envelope adds
 **zero** new `PF_API` declarations/definitions.
-`include/pineforge/pineforge.h` has 103 public declarations.
-`scripts/check_c_abi_runtime.py` pins 114 declarations across its four
-`RUNTIME_HEADERS` and 94 runtime implementations; `scripts/test_ci_verify.py`
-pins the same 114/94.
+`include/pineforge/pineforge.h` has 104 public declarations.
+`scripts/check_c_abi_runtime.py` pins 115 declarations across its four
+`RUNTIME_HEADERS` and 95 runtime implementations; `scripts/test_ci_verify.py`
+pins the same 115/95.
 The separate native-C inventory remains 43 declarations / 43 implementations.
 There is no ABI-4 struct/count bump, README symbol-table change or update to
 legacy ctypes report strides.
