@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <numeric>
 #include <string>
 #include <unordered_map>
@@ -105,6 +106,12 @@ inline std::size_t ring_slot(long long bar, long long K) {
     long long m = bar % K;
     if (m < 0) m += K;
     return static_cast<std::size_t>(m);
+}
+
+std::size_t mode_table_capacity(int length) {
+    const std::size_t required =
+        length > 0 ? static_cast<std::size_t>(length) * 2 + 1 : 8;
+    return std::max<std::size_t>(8, required);
 }
 
 }  // namespace
@@ -412,7 +419,49 @@ double AllTimeMin::compute(double src) {
 
 // --- Median ---
 
-Median::Median(int length) : length_(length) {}
+Median::Median(int length)
+    : length_(length),
+      scratch_(length > 0 ? static_cast<std::size_t>(length) : 0) {}
+
+double Median::calculate() {
+    const int n = static_cast<int>(buffer_.size());
+    if (n <= 0) return na<double>();
+
+    std::copy(buffer_.begin(), buffer_.end(), scratch_.begin());
+    auto first = scratch_.begin();
+    auto last = first + n;
+
+    // std::sort was the old operation for recompute() after a NaN input.
+    // Signed zero is also kept on that path because +0 and -0 compare equal
+    // while still carrying different result bits.
+    bool preserve_sort = false;
+    for (int i = 0; i < n; ++i) {
+        if (is_na(scratch_[i]) || scratch_[i] == 0.0) {
+            preserve_sort = true;
+            break;
+        }
+    }
+    if (preserve_sort) {
+        std::sort(first, last);
+    } else if (n % 2 == 1) {
+        const int middle = n / 2;
+        std::nth_element(first, first + middle, last);
+        return scratch_[middle];
+    } else {
+        const int lower_index = n / 2 - 1;
+        const int upper_index = n / 2;
+        std::nth_element(first, first + lower_index, last);
+        const double lower = scratch_[lower_index];
+        std::nth_element(first, first + upper_index, last);
+        const double upper = scratch_[upper_index];
+        return (lower + upper) / 2.0;
+    }
+
+    if (n % 2 == 1) {
+        return scratch_[n / 2];
+    }
+    return (scratch_[n / 2 - 1] + scratch_[n / 2]) / 2.0;
+}
 
 double Median::compute(double src) {
     if (is_na(src)) {
@@ -428,16 +477,7 @@ double Median::compute(double src) {
         return na<double>();
     }
 
-    // Copy and sort
-    std::vector<double> sorted(buffer_.begin(), buffer_.end());
-    std::sort(sorted.begin(), sorted.end());
-
-    int n = (int)sorted.size();
-    if (n % 2 == 1) {
-        return sorted[n / 2];
-    } else {
-        return (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0;
-    }
+    return calculate();
 }
 
 // --- HighestBars ---
@@ -737,22 +777,122 @@ VWAPBandsResult AnchoredVWAP::compute_bands(double src, double volume, bool anch
 }
 
 // --- Mode ---
-double Mode::compute(double src) {
-    if (is_na(src)) return na<double>();
-    buffer_.push_back(src);
-    if ((int)buffer_.size() > length_) buffer_.pop_front();
-    if ((int)buffer_.size() < length_) return na<double>();
-    std::unordered_map<double, int> counts;
-    for (auto v : buffer_) counts[v]++;
+Mode::Mode(int length)
+    : length_(length), counts_(mode_table_capacity(length)) {}
+
+void Mode::add_count(double value) {
+    if (counts_.empty()) return;
+
+    const std::size_t slot_count = counts_.size();
+    const bool value_is_na = is_na(value);
+    std::size_t slot = std::hash<double>{}(value) % slot_count;
+    std::size_t first_deleted = slot_count;
+    for (std::size_t probe = 0; probe < slot_count; ++probe) {
+        CountEntry& entry = counts_[slot];
+        if (entry.state == 1) {
+            if (!value_is_na && !is_na(entry.value) && entry.value == value) {
+                ++entry.count;
+                return;
+            }
+        } else if (entry.state == 2) {
+            if (first_deleted == slot_count) first_deleted = slot;
+        } else {
+            const std::size_t target =
+                first_deleted == slot_count ? slot : first_deleted;
+            CountEntry& inserted = counts_[target];
+            inserted.value = value;
+            inserted.count = 1;
+            inserted.state = 1;
+            return;
+        }
+        slot = slot + 1 == slot_count ? 0 : slot + 1;
+    }
+
+    // The table has more than twice the number of slots a valid window can
+    // hold. This branch is only a defensive reuse of a deleted slot.
+    if (first_deleted != slot_count) {
+        CountEntry& inserted = counts_[first_deleted];
+        inserted.value = value;
+        inserted.count = 1;
+        inserted.state = 1;
+    }
+}
+
+void Mode::remove_count(double value) {
+    if (counts_.empty()) return;
+
+    const std::size_t slot_count = counts_.size();
+    const bool value_is_na = is_na(value);
+    std::size_t slot = std::hash<double>{}(value) % slot_count;
+    for (std::size_t probe = 0; probe < slot_count; ++probe) {
+        CountEntry& entry = counts_[slot];
+        if (entry.state == 0) return;
+        if (entry.state == 1
+            && ((value_is_na && is_na(entry.value))
+                || (!value_is_na && !is_na(entry.value) && entry.value == value))) {
+            if (--entry.count == 0) entry.state = 2;
+            return;
+        }
+        slot = slot + 1 == slot_count ? 0 : slot + 1;
+    }
+}
+
+double Mode::current_mode() const {
+    // compute() does not retain an na input, but recompute() deliberately
+    // leaves one in the window before returning na. In that exceptional state
+    // preserve the former unordered_map iteration and NaN-key behavior.
+    for (double value : buffer_) {
+        if (is_na(value)) {
+            std::unordered_map<double, int> counts;
+            for (double held : buffer_) ++counts[held];
+            int max_count = 0;
+            double mode_value = na<double>();
+            for (auto& entry : counts) {
+                if (entry.second > max_count
+                    || (entry.second == max_count
+                        && (is_na(mode_value) || entry.first < mode_value))) {
+                    max_count = entry.second;
+                    mode_value = entry.first;
+                }
+            }
+            return mode_value;
+        }
+    }
+
     int max_count = 0;
     double mode_val = na<double>();
-    for (auto& [val, cnt] : counts) {
-        if (cnt > max_count || (cnt == max_count && (is_na(mode_val) || val < mode_val))) {
-            max_count = cnt;
-            mode_val = val;
+    for (const CountEntry& entry : counts_) {
+        if (entry.state != 1) continue;
+        if (entry.count > max_count
+            || (entry.count == max_count
+                && (is_na(mode_val) || entry.value < mode_val))) {
+            max_count = entry.count;
+            mode_val = entry.value;
+        }
+    }
+
+    // std::unordered_map keeps the first key representation for equal +0/-0
+    // values. Recover that representation from the oldest-to-newest window
+    // order while retaining the numeric tie rule above.
+    if (!is_na(mode_val) && mode_val == 0.0) {
+        for (double value : buffer_) {
+            if (value == 0.0) return value;
         }
     }
     return mode_val;
+}
+
+double Mode::compute(double src) {
+    if (is_na(src)) return na<double>();
+    buffer_.push_back(src);
+    if ((int)buffer_.size() > length_) {
+        const double leaving = buffer_.front();
+        buffer_.pop_front();
+        remove_count(leaving);
+    }
+    if (!buffer_.empty()) add_count(src);
+    if ((int)buffer_.size() < length_) return na<double>();
+    return current_mode();
 }
 
 // --- Range ---
@@ -836,12 +976,7 @@ double Median::recompute(double src) {
     if (is_na(src)) return na<double>();
     if ((int)buffer_.size() < length_) return na<double>();
 
-    std::vector<double> sorted(buffer_.begin(), buffer_.end());
-    std::sort(sorted.begin(), sorted.end());
-
-    int n = (int)sorted.size();
-    if (n % 2 == 1) return sorted[n / 2];
-    return (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0;
+    return calculate();
 }
 
 // --- OBV ---
@@ -956,22 +1091,14 @@ VWAPBandsResult AnchoredVWAP::recompute_bands(double src, double volume, bool an
 // --- Mode ---
 double Mode::recompute(double src) {
     if (buffer_.empty()) return compute(src);
+    const double replaced = buffer_.back();
+    remove_count(replaced);
     buffer_.back() = src;
+    add_count(src);
 
     if (is_na(src)) return na<double>();
     if ((int)buffer_.size() < length_) return na<double>();
-
-    std::unordered_map<double, int> counts;
-    for (auto v : buffer_) counts[v]++;
-    int max_count = 0;
-    double mode_val = na<double>();
-    for (auto& [val, cnt] : counts) {
-        if (cnt > max_count || (cnt == max_count && (is_na(mode_val) || val < mode_val))) {
-            max_count = cnt;
-            mode_val = val;
-        }
-    }
-    return mode_val;
+    return current_mode();
 }
 
 // --- Range ---
