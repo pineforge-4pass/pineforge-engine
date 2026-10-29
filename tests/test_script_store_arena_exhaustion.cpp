@@ -255,6 +255,131 @@ bool check_case(const char* name, std::uint64_t arena_bytes = kArenaBytes) {
     }
     return false;
 }
+
+std::shared_ptr<MapStoreHolder> commit_script_store() {
+    pineforge::detail::o1::Shape shape;
+    // Retain more than an arena chunk of dirty pages until the final commit.
+    // Large map preparation may spill; its measured extent sizes the arena.
+    shape.resident_pages = pineforge::detail::o1::kMaxResidentPages;
+    return std::make_shared<MapStoreHolder>(
+        pineforge::detail::make_script_scratch_backing(), shape);
+}
+
+enum class CommitStep { setup, put, commit, complete };
+
+struct CommitDriveResult {
+    std::exception_ptr failure;
+    CommitStep step = CommitStep::setup;
+    std::uint64_t completed = 0;
+    pineforge::detail::o1::Stats before_commit{}, after_commit{};
+    ScratchArenaStats exhausted{};
+};
+
+template<class Growth>
+CommitDriveResult drive_commit(const std::shared_ptr<MapStoreHolder>& holder,
+                               std::uint64_t count, const std::string& payload) {
+    CommitDriveResult result;
+    auto& store = *holder->store;
+    auto transaction = store.begin();
+    // Construct inside the fresh transaction so no pre-existing page needs a
+    // write-through undo image. Keep the owner alive until after rollback:
+    // array cleanup then sees a dead root instead of a poisoned transaction.
+    std::unique_ptr<Growth> growth;
+    try {
+        growth = std::make_unique<Growth>(holder);
+        result.step = CommitStep::put;
+        for (std::uint64_t index = 0; index < count; ++index) {
+            growth->grow(index, payload);
+            ++result.completed;
+        }
+        result.before_commit = store.stats();
+        result.step = CommitStep::commit;
+        transaction->commit();
+        result.step = CommitStep::complete;
+        result.after_commit = store.stats();
+    } catch (...) {
+        result.failure = std::current_exception();
+        if (const auto* arena = ScratchArena::attached())
+            result.exhausted = arena->stats();
+        transaction->rollback();
+    }
+    if (!result.failure) growth->verify(count, payload);
+    return result;
+}
+
+template<class Growth>
+bool check_commit_case(const char* name) {
+    try {
+        require(ScratchArena::attached() == nullptr,
+                "commit sizing control starts without an attached arena");
+        const std::string payload(kPayloadBytes, 'v');
+        CommitDriveResult control;
+        std::uint64_t page_bytes = 0, count = 0;
+        {
+            auto holder = commit_script_store();
+            require(holder->backing->kind() == ScratchBackingKind::disk,
+                    "commit sizing control uses the production disk backing");
+            page_bytes = holder->backing->page_size();
+            require(page_bytes == payload.size()
+                        && ScratchArena::kChunkBytes % page_bytes == 0,
+                    "commit workload adds one backing page of payload per growth");
+            count = ScratchArena::kChunkBytes / page_bytes;
+            require(holder->store->stats().bytes_resident > count * page_bytes,
+                    "the fixed resident workspace exceeds the retained payload");
+            control = drive_commit<Growth>(holder, count, payload);
+            require(!control.failure && control.step == CommitStep::complete
+                        && control.completed == count,
+                    "the identical disk sequence completes every put and its commit");
+        }
+        // Cover every write made during construction and puts, but refuse the
+        // next whole arena chunk needed only by commit's dirty-page flush.
+        const auto pages_per_chunk = ScratchArena::kChunkBytes / page_bytes;
+        const auto chunks = control.before_commit.pages_spilled == 0 ? 1
+            : (control.before_commit.pages_spilled + pages_per_chunk - 1)
+                / pages_per_chunk;
+        const auto arena_bytes = chunks * ScratchArena::kChunkBytes;
+        require(control.before_commit.bytes_backing <= arena_bytes
+                    && control.after_commit.bytes_backing > arena_bytes,
+                "disk stats prove only commit crosses the derived arena boundary");
+        std::printf("%s: disk control completed %llu puts and commit; "
+                    "before=%llu, committed=%llu, arena=%llu bytes\n", name,
+                    static_cast<unsigned long long>(count),
+                    static_cast<unsigned long long>(control.before_commit.bytes_backing),
+                    static_cast<unsigned long long>(control.after_commit.bytes_backing),
+                    static_cast<unsigned long long>(arena_bytes));
+        std::fflush(stdout);
+
+        CommitDriveResult exhausted;
+        {
+            ArenaAttachment attachment(arena_bytes);
+            auto* arena = ScratchArena::attached();
+            require(arena != nullptr && arena->stats().bytes_supplied == arena_bytes,
+                    "commit witness attaches the disk-derived arena size");
+            auto holder = commit_script_store();
+            exhausted = drive_commit<Growth>(holder, count, payload);
+            require(exhausted.failure != nullptr
+                        && exhausted.step == CommitStep::commit
+                        && exhausted.completed == count,
+                    "every put returns before the marked commit alone throws");
+            require(exhausted.before_commit.bytes_backing
+                        == control.before_commit.bytes_backing
+                        && exhausted.before_commit.bytes_live
+                            == control.before_commit.bytes_live,
+                    "arena and disk complete the identical put phase");
+            require(exhausted.exhausted.bytes_used == arena_bytes
+                        && exhausted.exhausted.high_water == arena_bytes
+                        && exhausted.exhausted.chunks_free == 0,
+                    "commit exhausts the attached arena without disk fallback");
+        }
+        typed_exhaustion(exhausted.failure);
+        return true;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "%s: %s\n", name, error.what());
+    } catch (...) {
+        std::fprintf(stderr, "%s: unexpected non-standard exception\n", name);
+    }
+    return false;
+}
 } // namespace
 
 int main() {
@@ -264,5 +389,10 @@ int main() {
     failures += check_case<ArrayGrowth>("array element growth") ? 0 : 1;
     failures += check_case<MapPayloadGrowth>("map insert payload") ? 0 : 1;
     failures += check_case<MapGrowth>("map insert", 0) ? 0 : 1;
+    failures += check_commit_case<ObjectGrowth>("object store commit") ? 0 : 1;
+    failures += check_commit_case<StringGrowth>("string value commit") ? 0 : 1;
+    failures += check_commit_case<ArrayGrowth>("array element growth commit") ? 0 : 1;
+    failures += check_commit_case<MapPayloadGrowth>("map insert payload commit") ? 0 : 1;
+    failures += check_commit_case<MapGrowth>("map insert commit") ? 0 : 1;
     return failures == 0 ? 0 : 1;
 }
