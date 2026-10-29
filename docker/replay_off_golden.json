@@ -1,17 +1,17 @@
 {
-  "source": "pineforge-engine main 95f4fd1f408bf0ded941ecc4144b278a026a677f, default (no replay switch), unjailed, wall clock fixed at 1.0, run id replay-off-golden, first recorded when VERSION was 1.7.0; re-recorded on tag v1.8.0 (9836309e3) with the build-identity mask extended to the engine major, minor and patch numbers and the sink header engine version, so the digests no longer depend on VERSION: the six byte counts grew by exactly the bytes the extended mask adds (102 in each default JSON, 11 in each sink stream). default_json digests are taken after the build identity (the engine version string, commit, major, minor and patch inside the fingerprint token and plain provenance, the sink header engine version, and the token and digest values derived from them) is masked as scripts/check_replay_off_golden.py describes",
+  "source": "pineforge-engine main 95f4fd1f408bf0ded941ecc4144b278a026a677f, default (no replay switch), unjailed, wall clock fixed at 1.0, run id replay-off-golden, first recorded when VERSION was 1.7.0; re-recorded on tag v1.8.0 (9836309e3) with the build-identity mask extended to the engine major, minor and patch numbers and the sink header engine version, so the digests no longer depend on VERSION: the six byte counts grew by exactly the bytes the extended mask adds (102 in each default JSON, 11 in each sink stream). default_json digests are taken after the build identity (the engine version string, commit, major, minor and patch inside the fingerprint token and plain provenance, the sink header engine version, and the token and digest values derived from them) is masked as scripts/check_replay_off_golden.py describes. The three primary_sink digests were re-recorded after v1.9.0 because the sink trailer sha256 covers the header and so moved with VERSION; it is now replaced by the SHA-256 of the masked stream (the byte counts are unchanged), so a release bump no longer moves them",
   "scenarios": {
     "fifo": {
       "default_json": {"sha256": "d8c77d7c35e7e962301d3da4f26418263305356efe179bd77ed1ce92704087a5", "bytes": 9288},
-      "primary_sink": {"sha256": "0d9248209e98566e11cdfa2a01d8546f6683ca0814aa0d10a417b256f46fd6f3", "bytes": 1565}
+      "primary_sink": {"sha256": "ca6c9c652cd934e643ac5491e68ce51ee5e3d15ac46efe5bb20902bd43a0e4d4", "bytes": 1565}
     },
     "any": {
       "default_json": {"sha256": "583147793c4ce4df4d3ba908f0651612145d5dbad0d9152020ca2d31f03ffcc0", "bytes": 8939},
-      "primary_sink": {"sha256": "0037d808ad1b93612089a4be892b71f2fd636569803c33c06e033b34ca125c9a", "bytes": 1451}
+      "primary_sink": {"sha256": "08b864cbeaf3b2c9cb02055d172b54ddc6b360f8791d4e9c6437f8169e02bea7", "bytes": 1451}
     },
     "ordinary": {
       "default_json": {"sha256": "42c766c21c33f6a0bf3427a368fc55bfe213bd7a96fbe47f60fcf439010ef50a", "bytes": 8950},
-      "primary_sink": {"sha256": "848828b8b336b006a5b7f0e6064bea7421e525a2fb795f52114e3894a3969696", "bytes": 1464}
+      "primary_sink": {"sha256": "98772d936839414e78c18ea70a2cfd62e3cca1769f1a4c596ff3cd0bc6f0b076", "bytes": 1464}
     }
   }
 }

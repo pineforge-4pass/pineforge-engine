@@ -61,9 +61,16 @@ def primary(version="1.7.0", *, price=128, run_id="replay-off-golden", edit=None
     if edit is not None:
         header = edit(header)
     # The identical version-looking body string must remain compared.
-    return (header + b"\n" + compact(["T", price, "1.7.0"]) + b"\n"
-            + compact({"trailer": "pf-report-sink", "version": 1, "counts": {"T": 1}})
-            + b"\n")
+    # The trailer carries the SHA-256 of every line before it, header included,
+    # exactly as the real writer and docker/pf_sink.py define it.
+    before = header + b"\n" + compact(["T", price, "1.7.0"]) + b"\n"
+    return before + trailer_line(before)
+
+
+def trailer_line(before, digest=None):
+    digest = hashlib.sha256(before).hexdigest() if digest is None else digest
+    return compact({"trailer": "pf-report-sink", "version": 1, "counts": {"T": 1},
+                    "sha256": digest}) + b"\n"
 
 
 class ReplayOffGoldenTests(unittest.TestCase):
@@ -146,15 +153,49 @@ class ReplayOffGoldenTests(unittest.TestCase):
             with self.subTest(version=version):
                 self.assertEqual(baseline, self.masked_primary(primary(version)))
         header, newline, body = original.partition(b"\n")
-        self.assertEqual(baseline, header.replace(b'"engine":"1.7.0"',
-                                                 b'"engine":"<build-identity>"') + newline + body)
+        masked_before = (header.replace(b'"engine":"1.7.0"', b'"engine":"<build-identity>"')
+                         + newline + body[:body.rindex(b"\n", 0, len(body) - 1) + 1])
+        self.assertEqual(baseline, masked_before + trailer_line(masked_before))
         for changes in ({"price": 129}, {"run_id": "different-run"}):
             with self.subTest(non_identity=changes):
                 self.assertNotEqual(baseline, self.masked_primary(primary(**changes)))
-        changed_body = original.replace(b'["T",128,"1.7.0"]', b'["T",128,"1.8.0"]')
-        self.assertNotEqual(baseline, self.masked_primary(changed_body))
+        before = original[:original.rindex(b"\n", 0, len(original) - 1) + 1]
+        changed = before.replace(b'["T",128,"1.7.0"]', b'["T",128,"1.8.0"]')
+        self.assertNotEqual(baseline, self.masked_primary(changed + trailer_line(changed)))
         changed_schema = lambda data: data.replace(b'"version":1', b'"version":2')
         self.assertNotEqual(baseline, self.masked_primary(primary(edit=changed_schema)))
+
+    def test_release_bump_leaves_the_sink_digest_unchanged(self):
+        # The trailer sha256 covers the header, so a VERSION bump changes the
+        # produced trailer even though no body byte moved. The masked stream
+        # must not move; the measured trailer really does differ.
+        old, new = primary("1.8.0"), primary("1.9.0")
+        self.assertNotEqual(old.splitlines()[-1], new.splitlines()[-1])
+        self.assertEqual(self.masked_primary(old), self.masked_primary(new))
+        self.assertEqual(hashlib.sha256(self.masked_primary(old)).hexdigest(),
+                         hashlib.sha256(self.masked_primary(primary("99.0.7"))).hexdigest())
+
+    def test_sink_trailer_digest_stays_checked_and_tracks_the_body(self):
+        original = primary()
+        before = original[:original.rindex(b"\n", 0, len(original) - 1) + 1]
+        baseline = self.masked_primary(original)
+        # The masked trailer is a real digest of the masked bytes, not a constant.
+        masked_before = baseline[:baseline.rindex(b"\n", 0, len(baseline) - 1) + 1]
+        self.assertIn(hashlib.sha256(masked_before).hexdigest().encode("ascii"), baseline)
+        self.assertNotIn(hashlib.sha256(before).hexdigest().encode("ascii"), baseline)
+        # A body byte that moved changes the masked stream through that digest.
+        moved = before.replace(b'["T",128,"1.7.0"]', b'["T",129,"1.7.0"]')
+        self.assertNotEqual(baseline, self.masked_primary(moved + trailer_line(moved)))
+        # A trailer that does not match the bytes before it is refused.
+        for broken in (trailer_line(before, "0" * 64), trailer_line(before, "xyz")):
+            with self.subTest(trailer=broken):
+                with self.assertRaisesRegex(RuntimeError, "sink trailer sha256"):
+                    self.masked_primary(before + broken)
+        for malformed in (before + b"not-json\n",
+                          before + compact({"trailer": "pf-report-sink", "version": 1}) + b"\n"):
+            with self.subTest(malformed=malformed[-40:]):
+                with self.assertRaisesRegex(RuntimeError, "sink trailer sha256"):
+                    self.masked_primary(malformed)
 
     def test_sink_missing_or_duplicate_header_engine_is_refused(self):
         for replacement in (b"", b'"engine":"1.7.0","engine":"1.8.0",',
