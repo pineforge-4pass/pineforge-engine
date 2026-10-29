@@ -722,12 +722,42 @@ jobs:
     with:
       mode: full
 
+  macos-window-plan-link:
+    name: "macOS link: window-plan shared library"
+    needs: [authz]
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Configure the kernel and window-plan bridge
+        run: |
+          cmake -S . -B build-window-plan \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPINEFORGE_BUILD_TESTS=OFF \
+            -DPINEFORGE_BUILD_TUTORIAL=OFF \
+            -DPINEFORGE_BUILD_SOURCE_LAYER=OFF
+      - name: Link the window-plan shared library
+        run: cmake --build build-window-plan --target pineforge_window_plan --parallel 2
+      - name: Verify the Mach-O library and C exports
+        shell: bash
+        run: |
+          set -euo pipefail
+          library=build-window-plan/lib/libpineforge_window_plan.dylib
+          file "$library" | grep -E 'Mach-O.*dynamically linked shared library'
+          otool -L "$library"
+          nm -gU "$library" | awk '{print $NF}' > build-window-plan/exports.txt
+          grep -Fx '_pf_selected_plan_version' build-window-plan/exports.txt
+          grep -Fx '_pf_plan_selected_primary_v1' build-window-plan/exports.txt
+
   # Advisory aggregate context covering every GitHub Actions lane. The merge
   # ruleset requires pineforge/verify and pineforge/parity, posted by the
   # maintainers, rather than this build context.
   build-gate:
     name: build
-    needs: [authz, changes, preflight, build, build-debug, build-release-gate, build-debug-gate, build-arm, sanitizers, sanitizers-gate, native-live, kernel-only, kernel-only-gate, corpus-parity-subset, preflight-slow, corpus-parity]
+    needs: [authz, changes, preflight, build, build-debug, build-release-gate, build-debug-gate, build-arm, sanitizers, sanitizers-gate, native-live, kernel-only, kernel-only-gate, corpus-parity-subset, preflight-slow, corpus-parity, macos-window-plan-link]
     if: always()
     # The aggregate runs inline Python and shell on the light pool class.
     runs-on: gke-2cpu-4gb-amd64
@@ -761,6 +791,7 @@ jobs:
           PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
           SLOW_PREFLIGHT_RESULT: ${{ needs.preflight-slow.result }}
           FULL_PARITY_RESULT: ${{ needs.corpus-parity.result }}
+          WINDOW_PLAN_LINK_RESULT: ${{ needs.macos-window-plan-link.result }}
         run: |
           printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
             "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
@@ -783,4 +814,5 @@ jobs:
             && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \
             && passed "$SANITIZER_GATE_RESULT" && passed "$KERNEL_GATE_RESULT" \
             && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT" \
-            && [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT"
+            && [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT" \
+            && [[ "$WINDOW_PLAN_LINK_RESULT" == "success" ]]
