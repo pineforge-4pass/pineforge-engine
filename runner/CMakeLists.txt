@@ -191,6 +191,13 @@ if(PINEFORGE_BUILD_TESTS)
         target_compile_options(${native_test} PRIVATE -UNDEBUG)
         add_test(NAME ${native_test} COMMAND ${native_test})
     endforeach()
+    add_executable(test_native_live_transport_progress_under_ledger_stall
+        ${PROJECT_SOURCE_DIR}/tests/test_native_live_transport_progress_under_ledger_stall.cpp)
+    target_link_libraries(test_native_live_transport_progress_under_ledger_stall PRIVATE pineforge_live_support)
+    target_compile_options(test_native_live_transport_progress_under_ledger_stall PRIVATE -UNDEBUG)
+    add_test(NAME test_native_live_transport_progress_under_ledger_stall
+        COMMAND test_native_live_transport_progress_under_ledger_stall)
+    set_tests_properties(test_native_live_transport_progress_under_ledger_stall PROPERTIES TIMEOUT 180)
     add_executable(test_native_live_report_cli ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_cli.cpp)
     target_link_libraries(test_native_live_report_cli PRIVATE pineforge_live_startup ${CMAKE_DL_LIBS})
     target_compile_options(test_native_live_report_cli PRIVATE -UNDEBUG -ffp-contract=off)
