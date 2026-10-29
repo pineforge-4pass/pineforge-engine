@@ -27,7 +27,8 @@
  *     strategy_closed_trade_entry_id, strategy_closed_trade_exit_id,
  *     strategy_closed_trade_exit_comment, strategy_closed_trade_close_cause,
  *     strategy_position_size, strategy_current_equity,
- *     strategy_initial_capital,
+ *     strategy_initial_capital, strategy_net_profit_sum,
+ *     strategy_report_pointvalue, strategy_set_report_replay_v1,
  *     strategy_script_bars_processed),
  *     pf_version_get/pf_version_string,
  *     pf_abi_version, strategy_execution_contract,
@@ -511,6 +512,29 @@ PF_API double strategy_position_size(pf_strategy_t s) {
 PF_API double strategy_current_equity(pf_strategy_t s) {
     if (!s) return std::numeric_limits<double>::quiet_NaN();
     return static_cast<const pineforge::BacktestEngine*>(s)->live_current_equity();
+}
+
+PF_API double strategy_net_profit_sum(pf_strategy_t s) {
+    if (!s) return std::numeric_limits<double>::quiet_NaN();
+    return static_cast<const pineforge::BacktestEngine*>(s)->raw_net_profit_sum();
+}
+
+PF_API double strategy_report_pointvalue(pf_strategy_t s) {
+    if (!s) return std::numeric_limits<double>::quiet_NaN();
+    return static_cast<const pineforge::BacktestEngine*>(s)->report_pointvalue();
+}
+
+PF_API int strategy_set_report_replay_v1(pf_strategy_t s, const char* path, const char* run_id) {
+    try {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->set_report_replay_v1(path, run_id);
+    } catch (const std::exception& error) {
+        note_cabi_refusal(s, &error);
+        return -1;
+    } catch (...) {
+        note_cabi_refusal(s, nullptr);
+        return -1;
+    }
 }
 
 /* ABI v4 live-runtime surface (task 9): total SCRIPT bars dispatched by the

@@ -1,8 +1,8 @@
 #pragma once
 
-// Declarations only. DESIGN.md revision 6, section 2.2:337-378.
+// Declarations only for borrowed feeds and lower-path sources.
 // This separate namespace is the side channel; native_run_spec_v3 and
-// native_host.hpp keep their existing layouts (2.2:339-345; 6:1328-1329).
+// native_host.hpp keep their existing layouts.
 #include <pineforge/bar.hpp>
 #include <pineforge/native_run_spec.hpp>
 
@@ -15,29 +15,29 @@
 namespace pineforge {
 inline namespace native_bar_views_v1 {
 
-/// Borrowed OHLCV span, exactly the layout specified in 2.2:347-348.
+/// Borrowed OHLCV span: a bar pointer and a row count.
 /// The caller owns the bars. No owning vector or copied bar is introduced.
 struct NativeBarView {
     const Bar* data;
     std::size_t size;
 };
 
-/// Borrowed instrument feed, exactly 2.2:349. bars.size is also the number
+/// Borrowed instrument feed. bars.size is also the number
 /// of close_ms entries. Validation still checks the same bars, close times,
-/// ordering and column lengths as today's vector feed (2.2:361-363).
+/// ordering and column lengths as the owned vector feed.
 /// The borrowed-feed caller keeps both arrays alive until replacement,
-/// clearing or strategy_free (6:1321-1327).
+/// clearing or strategy_free.
 struct NativeInstrumentFeedView {
     NativeBarView bars;
     const std::int64_t* close_ms;
 };
 
-/// RESOLVED V2: completed below with the protocol approved by CORE-TOP's
-/// rev 6 amendment (10-18 19:24), proposal plus required changes 1-9.
-/// DESIGN coordinates use the baseline identified in the contract map.
+/// Lower-path source protocol, defined below. Calls are serialized, and the
+/// borrowed input remains valid through the public run exit.
+/// The source interface supports full walks and windowed segment access.
 class NativeLowerPathSource;
 
-/// Effective feed data (DESIGN 2.2:354-375; RESOLVED V1). Owned feeds keep
+/// Effective feed data from owned vectors or a borrowed view. Owned feeds keep
 /// their independently observable close count for validation and the digest's
 /// missing-close zero fallback. A borrowed feed has close_count == bars.size.
 struct NativeInstrumentFeedReadView {
@@ -46,7 +46,7 @@ struct NativeInstrumentFeedReadView {
     std::size_t close_count;
 };
 
-/// Explicit read context (RESOLVED V1, required changes 1-4). Zero feed count
+/// Explicit read context for feeds and lower paths. Zero feed count
 /// means owned vectors for every feed; the table pointer is then ignored.
 /// Otherwise the nonnull table count equals the spec's metadata count, and
 /// slot i binds entry i. Null slot: use owned vectors. Nonnull slot: present
@@ -69,7 +69,7 @@ struct NativeInstrumentFeedReadView {
 /// digests for identity. A detached Ready binding is never admitted: that is
 /// engine_invariant. A lower-path source bound at stream_begin is likewise
 /// engine_invariant. Staging/query are private consumer members, not functions
-/// taking a public host (required changes 1-2).
+/// taking a public host.
 struct NativeBarViews {
     const NativeInstrumentFeedView* const* instrument_feeds = nullptr;
     std::size_t instrument_feed_count = 0;
@@ -77,10 +77,10 @@ struct NativeBarViews {
     NativeBarView lower_segment{nullptr, 0};
 };
 
-/// Common accessor (DESIGN 2.2:355-375). Always select a nonnull override,
+/// Common accessor for effective feed data. Always select a nonnull override,
 /// including a present-empty one; otherwise expose owned data and its actual
 /// close count. No padding/copying. The caller MUST pass its slot or nullptr
-/// explicitly: no default argument (required change 3).
+/// explicitly: no default argument.
 NativeInstrumentFeedReadView native_instrument_feed_view(
     const NativeInstrumentFeed& owned,
     const NativeInstrumentFeedView* borrowed) noexcept;
@@ -97,19 +97,19 @@ NativeInstrumentFeedReadView native_instrument_feed_view(
 ///
 /// Also route the adapter's projection validation through this overload,
 /// using the context built from its store. The host stages after lending feed
-/// bytes and before projection (required change 5). Pending state is not read
+/// bytes and before projection. Pending state is not read
 /// through the consumer's active query. Context-free v3 APIs stay unchanged.
 NativeRunSpecValidation normalize_native_run_spec(
     NativeRunSpec& spec, const NativeBarViews& views) noexcept;
 
 /// The same feed-only validation over effective data, retaining all existing
-/// refusal ordering and typed catches (DESIGN 2.2:361-363).
+/// refusal ordering and typed catches.
 NativeRunSpecValidation validate_native_instrument_feeds(
     const std::vector<NativeInstrumentFeed>& feeds,
     const NativeBarViews& views) noexcept;
 
 /// The same feeds-first, auxiliary-feed, then subscription judgement over
-/// effective data, also at both begin declarations (DESIGN 2.2:361-363).
+/// effective data, also at both begin declarations.
 NativeRunSpecValidation validate_native_timeframe_subscriptions(
     const std::vector<NativeTimeframeSubscription>& subscriptions,
     const std::string& input_tf,
@@ -119,7 +119,7 @@ NativeRunSpecValidation validate_native_timeframe_subscriptions(
     const NativeBarViews& views) noexcept;
 
 /// Same count, metadata, ordered OHLCV/timestamp/close/columns fold and feed
-/// NaN canonicalization (DESIGN 2.2:364-375). Valid live descriptors are a
+/// NaN canonicalization. Valid live descriptors are a
 /// precondition; owned close lengths remain total, missing closes fold zero.
 std::uint64_t native_instrument_feeds_digest(
     const std::vector<NativeInstrumentFeed>& feeds,
@@ -130,7 +130,7 @@ std::uint64_t native_instrument_feeds_digest(
 /// May re-walk a source and propagate exceptions; never invent a failure hash.
 /// The one-argument v3 form remains the owned-value API.
 ///
-/// DESIGN 5 timing amendment (required change 8): configure takes immutable
+/// Configure takes immutable
 /// feed/lower component digests eagerly after normalization succeeds and
 /// before its first member write. Lower-walk exceptions propagate unchanged;
 /// nothing is published, and they are NOT converted into validation refusals.
@@ -140,12 +140,12 @@ std::uint64_t native_instrument_feeds_digest(
 std::uint64_t native_run_spec_digest(
     const NativeRunSpec& spec, const NativeBarViews& views);
 
-/// Four-operation source (DESIGN 2.2:350-351; 5:1237-1262, as amended).
+/// Four-operation source for full-path and windowed access.
 /// Null source means owned-vector fallback; a nonnull source is present even
 /// when count() == 0. The consumer exclusively owns the provider from applied
 /// configure to detachment at public run exit. Immutable borrowed input lives
 /// through that exit; destruction must not read it. Calls are serialized, with
-/// no concurrent/reentrant walks. Concrete factories/policy/storage stay L16's.
+/// no concurrent/reentrant walks. Concrete factories, policy and storage live outside this interface.
 /// Every operation exposes the same complete logical path. Whole-input fallback
 /// is decided before emitting any aggregated prefix; no mixed prefix/suffix.
 class NativeLowerPathSource {
@@ -157,7 +157,7 @@ public:
 
     virtual ~NativeLowerPathSource() noexcept = default;
 
-    /// Fixed lifetime row count, including zero (required change 7). The
+    /// Fixed lifetime row count, including zero. The
     /// first call may walk or use the construction pre-scan; subsequent calls
     /// return the cached scalar in O(1). No segment/look-ahead invalidation.
     /// Operational failure throws. Overflow throws coded std::overflow_error,
@@ -174,7 +174,7 @@ public:
     /// bounds give an empty view; reversed bounds are coded engine_invariant
     /// / std::logic_error. Each bound is non-decreasing across calls; windows
     /// may repeat OR overlap, including overlap rows. A decreasing bound is
-    /// the same invariant error (required change 6). Repeats return the same
+    /// the same invariant error. Repeats return the same
     /// active storage. Replace a window only after its script bar finishes.
     /// Prepare look-ahead here; failures expose no partial new segment.
     virtual NativeBarView segment(
@@ -201,10 +201,10 @@ std::uint64_t native_intrabar_path_digest(
     const IntrabarPath& path,
     const NativeLowerPathSource* source);
 
-// RESOLVED V1/V2 reader and guard work remains L15a/L15b/L16's implementation:
-// the contract map lists all reads, including projection validation (change 5).
-// Add this header/source and its namespace check to the native ownership guard,
-// and pin the context spec-digest sibling block beside the existing fold.
+// Route feed readers, including projection validation, through these views.
+// Keep header/source ownership and this namespace in the native source guard;
+// cover indirect count/hash readers too, and pin the context spec-digest
+// sibling block beside the existing fold.
 
 } // inline namespace native_bar_views_v1
 } // namespace pineforge

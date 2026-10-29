@@ -449,19 +449,28 @@ double VWMA::compute(double src, double vol) {
 // ============================================================================
 
 ALMA::ALMA(int length, double offset, double sigma, bool floor)
-    : length_(length), offset_(offset), sigma_(sigma), floor_(floor) {}
+    : length_(length), offset_(offset), sigma_(sigma), floor_(floor) {
+    if (length_ <= 0) return;
+
+    weights_.resize(static_cast<std::size_t>(length_));
+    double m = offset_ * (length_ - 1);
+    if (floor_) m = std::floor(m);
+    double s = length_ / sigma_;
+    for (int i = 0; i < length_; i++) {
+        // Keep this expression in the same order as the former per-call
+        // calculation; only its lifetime changes.
+        weights_[i] = std::exp(-((i - m) * (i - m)) / (2.0 * s * s));
+    }
+}
 
 double ALMA::compute(double src) {
     buffer_.push_back(src);
     if ((int)buffer_.size() > length_) buffer_.pop_front();
     int sz = (int)buffer_.size();
     if (sz < length_) return na<double>();
-    double m = offset_ * (length_ - 1);
-    if (floor_) m = std::floor(m);
-    double s = length_ / sigma_;
     double norm = 0, sum = 0;
     for (int i = 0; i < length_; i++) {
-        double w = std::exp(-((i - m) * (i - m)) / (2.0 * s * s));
+        double w = weights_[i];
         norm += w;
         sum += buffer_[i] * w;
     }
@@ -597,12 +606,9 @@ double ALMA::recompute(double src) {
     int sz = (int)buffer_.size();
     if (sz < length_) return na<double>();
 
-    double m = offset_ * (length_ - 1);
-    if (floor_) m = std::floor(m);
-    double s = length_ / sigma_;
     double norm = 0, sum = 0;
     for (int i = 0; i < length_; i++) {
-        double w = std::exp(-((i - m) * (i - m)) / (2.0 * s * s));
+        double w = weights_[i];
         norm += w;
         sum += buffer_[i] * w;
     }

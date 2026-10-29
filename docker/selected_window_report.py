@@ -607,11 +607,13 @@ def _finite_actual(value: Any) -> bool:
 
 
 def check_selected_curve(curve: Sequence[Mapping[str, Any]], start_ms: int,
-                         window_script_bars: int, initial_capital: Any) -> None:
-    """The serialized selected curve is the native selected curve, unchanged: exactly three
-    fields per point (time_ms, equity, open_profit) and no other, M + 1 points, position 0 the
-    anchor at T with open profit 0 and an equity that is a finite number, position i >= 1 the
-    window bar i - 1. Nothing is added, dropped or recomputed.
+                         window_script_bars: int, initial_capital: Any, *,
+                         report_replay: bool = False) -> None:
+    """The serialized selected curve has exactly the three primary fields
+    (time_ms, equity, open_profit), plus the four Q members when replay is
+    negotiated. There are M + 1 points, position 0 the anchor at T with open
+    profit 0 and finite equity, position i >= 1 the window bar i - 1.
+    Nothing is dropped or recomputed.
 
     `initial_capital` is the effective strategy setting of the run's provenance, read as the
     provenance holds it. The native anchor derives from the engine's own initial capital, so a
@@ -626,11 +628,47 @@ def check_selected_curve(curve: Sequence[Mapping[str, Any]], start_ms: int,
     if len(curve) != window_script_bars + 1:
         raise _invariant(f"the selected curve has {len(curve)} points, the plan says "
                          f"{window_script_bars + 1}")
+    if report_replay:
+        _check_selected_replay_curve(curve, start_ms, initial_capital)
+        return
     for position, point in enumerate(curve):
         if set(point) != {"time_ms", "equity", "open_profit"}:
             raise _invariant(f"point {position} of the selected curve does not have exactly "
                              "time_ms, equity and open_profit")
     _check_selected_anchor(curve[0], start_ms, initial_capital)
+
+
+def _check_selected_replay_curve(curve: Sequence[Mapping[str, Any]], start_ms: int,
+                                 initial_capital: Any) -> None:
+    # The native companion reader checks Q before the ordinal join; check the
+    # final assembled points too, retaining the anchor without random access
+    # to a streamed array. No field is projected away to bypass validation.
+    fields = {"time_ms", "equity", "open_profit", "settlement_count",
+              "net_profit_sum", "equity_basis", "equity_term"}
+    anchor = None
+    for position, point in enumerate(curve):
+        if position == 0:
+            anchor = point
+        if set(point) != fields:
+            raise _invariant(f"point {position} of the selected curve does not have exactly "
+                             "time_ms, equity and open_profit with the four replay members")
+        count, net = point["settlement_count"], point["net_profit_sum"]
+        term, basis = point["equity_term"], point["equity_basis"]
+        if not _finite_actual(term):
+            raise _invariant(f"point {position} of the selected curve has an invalid replay term")
+        if position == 0:
+            valid = (basis == "anchor" and count is None and net is None
+                     and term == 0.0 and math.copysign(1.0, term) > 0.0)
+        else:
+            valid = (basis in ("kernel_open", "range_end", "terminal_quote")
+                     and type(count) is int and 0 <= count <= I53_MAX
+                     and _finite_actual(net)
+                     and (net != 0.0 or math.copysign(1.0, net) > 0.0))
+        if not valid:
+            raise _invariant(f"point {position} of the selected curve has invalid replay history")
+    if anchor is None:
+        raise _invariant("the selected curve has no anchor")
+    _check_selected_anchor(anchor, start_ms, initial_capital)
 
 
 def check_selected_sink_curve(anchor: Optional[Mapping[str, Any]], equity_points: int,

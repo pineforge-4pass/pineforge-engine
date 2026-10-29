@@ -7,6 +7,7 @@
 #include <pineforge/timeframe.hpp>
 #include "multi_day_periods.hpp"
 #include "../engine_internal.hpp"
+#include "../report_replay.hpp"
 #include "../timezone.hpp"
 #include "../native_execution_consumer.hpp"
 #include "../scratch_table_binders.hpp"
@@ -2218,6 +2219,7 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
             double range_end_pnl = 0.0;
             for (const auto& row : range_end_trades_) range_end_pnl += row.pnl;
             last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
+            amend_report_replay_point(last.time_ms, report::EquityBasis::range_end, range_end_pnl);
         }
     }
     if (!report_terminal_quote_eligible()) return;
@@ -2249,6 +2251,7 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
     for (int index = 0; index < out->trades_len; ++index) out->net_profit += out->trades[index].pnl;
     last.time_ms = report_quote_time_ms_;
     last.equity = initial_capital_ + out->net_profit;
+    amend_report_replay_point(last.time_ms, report::EquityBasis::terminal_quote, out->net_profit);
 }
 
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {
@@ -2273,6 +2276,7 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
         auto& last = *last_equity_point();
         last.open_profit = 0.0;
         last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
+        amend_report_replay_point(last.time_ms, report::EquityBasis::range_end, range_end_pnl);
         // Restore the fold before the held point, then fold its replacement.
         // Debug checks all four resulting doubles against a complete walk.
         // The sink-off helper keeps the existing walk and initial seed.
@@ -2412,6 +2416,12 @@ void source::PineStrategyHost::order_global_exit_children(
         previous_rank = rank;
     }
     if (ordered) return;
+    auto* const replay = report_replay_state();
+    std::unique_ptr<::pineforge::detail::ScratchSequence<report::ReplayTrade>> replay_rows;
+    if (replay) {
+        replay_rows = std::make_unique<::pineforge::detail::ScratchSequence<report::ReplayTrade>>();
+        replay_rows->set_directory(replay->scratch_directory());
+    }
     const auto visit_children = [&](const auto& visit) {
         for (std::size_t rank = 0; rank < adapter_.exit_rank_keys_.size(); ++rank)
             for (std::size_t child = 0; child < count; ++child)
@@ -2427,11 +2437,33 @@ void source::PineStrategyHost::order_global_exit_children(
         const auto phase = adapter_.exit_phase_value(source);
         return scratch_trade_header(row, source, phase);
     };
+    const auto annotate = [&](std::size_t lot, std::size_t child, double transaction_qty,
+                              bool fifo, bool fees, double exit_fee, double transaction_fee) {
+        if (!replay) return;
+        const Trade whole = trades_.numeric_at(first + lot);
+        auto row = replay->trade(first + lot);
+        row.parent = event.ordinal;
+        row.slice = row_count - 1;
+        row.child = child;
+        row.transaction_qty = transaction_qty;
+        row.whole_qty = whole.qty;
+        row.whole_pnl = whole.pnl;
+        row.whole_commission = whole.commission;
+        row.whole_runup = whole.max_runup;
+        row.whole_drawdown = whole.max_drawdown;
+        row.whole_exit_fee = exit_fee;
+        row.transaction_fee = transaction_fee;
+        row.marked = true;
+        row.fifo = fifo;
+        row.fees = fees;
+        replay_rows->push_back(row);
+    };
     // The rule the adapter runs under, not the host's live copy a body writes.
     if (run.close_entries_rule_any) {
         visit_children([&](std::size_t lot) {
             const Trade row = trades_[first + lot];
             emit_row(header_for(first + lot, row), row);
+            if (replay) annotate(lot, lot, row.qty, false, false, 0.0, 0.0);
             return true;
         });
     } else {
@@ -2448,7 +2480,7 @@ void source::PineStrategyHost::order_global_exit_children(
                     double wanted = transaction;
                     while (wanted > internal::kQtyEpsilon && lot < count) {
                         const double taken = std::min(left, wanted);
-                        visit(lot, taken, transaction);
+                        visit(lot, child, taken, transaction);
                         left = tv_money_round(left - taken);
                         wanted = tv_money_round(wanted - taken);
                         if (left <= internal::kQtyEpsilon) {
@@ -2462,11 +2494,12 @@ void source::PineStrategyHost::order_global_exit_children(
         };
         // Complete the exact quantity pass before calculating any replacement
         // money, as the old slice-vector pass did.
-        if (!visit_slices([](std::size_t, double, double) {})) return;
-        visit_slices([&](std::size_t lot, double qty, double transaction) {
+        if (!visit_slices([](std::size_t, std::size_t, double, double) {})) return;
+        visit_slices([&](std::size_t lot, std::size_t child, double qty, double transaction) {
             const Trade& whole = trades_[first + lot];
             const double share = qty / whole.qty;
             double commission = 0.0;
+            double replay_exit_fee = 0.0, replay_transaction_fee = 0.0;
             if (fees) {
                 const double exit_fee = calc_commission_at(whole.exit_price, whole.qty, 1.0);
                 const double entry_part =
@@ -2475,6 +2508,10 @@ void source::PineStrategyHost::order_global_exit_children(
                     tv_money_round(calc_commission_at(whole.exit_price, transaction, 1.0));
                 const double exit_part = tv_money_round(transaction_fee * qty / transaction);
                 commission = tv_money_round(entry_part + exit_part);
+                if (replay) {
+                    replay_exit_fee = exit_fee;
+                    replay_transaction_fee = transaction_fee;
+                }
             }
             auto header = header_for(first + lot, whole);
             Trade row{};
@@ -2495,6 +2532,8 @@ void source::PineStrategyHost::order_global_exit_children(
             header[14] = scratch_word(row.max_drawdown);
             header[15] = scratch_word(row.commission);
             emit_row(header, whole);
+            if (replay) annotate(lot, child, transaction, true, fees,
+                                 replay_exit_fee, replay_transaction_fee);
         });
     }
     // settlement safety guard (an invariant), not Pine parity. Validate all
@@ -2522,6 +2561,17 @@ void source::PineStrategyHost::order_global_exit_children(
         scratch_trade_scalars(scratch_read_trade(scratch, handle), row);
         tally(row.pnl, 1);
     });
+    if (replay) {
+        if (replay_rows->size() != row_count)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                          "recut replay rows differ from replacement rows");
+        replay->resize_trades(first + row_count);
+        for (std::size_t i = 0; i < row_count; ++i) {
+            auto annotation = replay_rows->at(i);
+            annotation.slices = row_count;
+            replay->replace(first + i, annotation);
+        }
+    }
     adapter_.invalidate_exit_group(first, trades_.size() - first); trades_.resize(first);
     scratch_walk(scratch, scratch_row, [&](::pineforge::detail::ScratchHandle handle, const TradeScratchKey&) {
         const auto header = scratch_read_trade(scratch, handle);
@@ -2607,6 +2657,8 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
             auto handle = scratch_find(scratch, {scratch_permutation, cycle, 0, 0});
             if (handle == ::pineforge::detail::scratch_no_handle) continue;
             const Trade row = trades[cycle];
+            auto* const replay = report_replay_state();
+            const auto saved_replay = replay ? replay->trade(cycle) : report::ReplayTrade{};
             std::size_t current = cycle;
             for (;;) {
                 std::array<std::uint64_t, 2> mapping{};
@@ -2621,6 +2673,8 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
                     adapter.set_exit_phase(current, phase);
                 ++adapter.exit_group_work_.replacements; if (source == cycle) trades.replace(current, row);
                 else trades.replace(current, trades[source]);
+                if (replay)
+                    replay->replace(current, source == cycle ? saved_replay : replay->trade(source));
                 require_trade_scratch(scratch.erase(handle), scratch);
                 if (source == cycle) break;
                 current = source;

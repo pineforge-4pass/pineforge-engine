@@ -98,6 +98,58 @@ reader's struct is 16 bytes too small. **ABI version 5** requires rebuilding
 strategy libraries for the 1.8.0 native order layouts; it preserves the C
 report and trade layouts.
 
+## Report replay extension {#report_replay}
+
+The `docker/run_json.py --report-replay` option adds one top-level
+`replay` object to the ordinary JSON route. The object is additive and keeps
+this key order:
+
+| Key | JSON type | Meaning |
+| --- | --- | --- |
+| `initial_capital` | finite number | Effective capital operand used by the run's equity expressions. |
+| `pointvalue` | finite number | Effective symbol point value used by the run. |
+| `net_profit_sum` | finite number | Final raw whole-lot realized P&L, excluding capital and terminal report rows. |
+
+The namespace is absent when the option is absent. An enabled
+zero-trade run carries a genuine `net_profit_sum` of `0.0`; a consumer must
+not treat a missing namespace as zero. The three leaves are validated as
+finite numbers alongside the existing report result values.
+
+The sink option
+`docker/run_json.py --report-replay-sink PATH` negotiates a separate
+`pf-report-replay/v1` companion stream. Its S record is exactly
+`["S", initial_capital, pointvalue, net_profit_sum]`, with one completed S
+record per run. The companion has its own count, SHA-256, trailer, and EOF
+verification. A sink-bound companion must carry a transport-only
+`base_sha256` binding to the verified primary sink receipt. The existing
+`pf-report-sink/v1` reader and primary bytes remain unchanged; an injected S
+record is rejected by that reader.
+
+Each annotated trade also has `settlement_index` and `recut`; each equity
+point has `settlement_count`, `net_profit_sum`, `equity_basis` and
+`equity_term`. The companion carries one R per T and one Q per E. See
+[settlement and equity replay](report-replay-rq.md) for the fixed layouts,
+applicability, source operands, exact binary64 fold and unavailable verdict.
+The primary sink's schema, descriptors, counts and receipt stay independent.
+
+The C ABI carrier is the append-only nonvirtual accessor
+`strategy_net_profit_sum(pf_strategy_t)`. It returns the raw realized
+accumulator and does not grow `pf_report_t`, `pf_trade_t`,
+`pf_equity_point_t`, or any existing receipt layout. `PF_ABI_VERSION` remains
+5, unchanged by this extension. `strategy_report_pointvalue` returns the engine's effective pointvalue.
+Before running, `strategy_set_report_replay_v1(s, path, run_id)` installs the
+separate companion; a NULL path disables it. These exports are feature-probed,
+and enabling replay on a library without them fails library admission.
+Array JSON uses a private companion during assembly; its file is removed
+after output. `--report-replay-sink PATH` retains the caller's companion.
+For a named or fd primary sink, supply that persistent companion path.
+The jailed profile's existing prohibition on report paths also applies to
+the companion; this path-based replay interface uses the unjailed profile.
+
+The OFF path maintains no replay counter or history and writes no companion.
+The two-build C4 check compares complete OFF JSON and primary bytes against
+the pre-change build; parsed-object equality is insufficient.
+
 ## Versioned report modes {#report_modes_v1}
 
 The full contract is

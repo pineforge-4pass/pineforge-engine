@@ -41,6 +41,14 @@ void print_ratio(double value) {
                     return out.str();
                  }()) << "}";
 }
+void print_endpoint(const MetricsExtentReceiptV1& receipt) {
+    std::cout << "{\"valid\":" << receipt.actual_last_equity_valid << ",\"equity\":";
+    if (receipt.actual_last_equity_valid == 1)
+        print_ratio(receipt.actual_last_equity);
+    else
+        std::cout << "null";
+    std::cout << "}";
+}
 void print_trace(const std::vector<mt::Trace>& trace) {
     std::cout << "[";
     bool first = true;
@@ -96,6 +104,8 @@ void report() {
                   << ",\"admitted_view\":" << a.planned.admitted_view
                   << ",\"spec_identity\":" << a.planned.spec_identity << "},\"actual_extent\":";
         print_extent(a.actual_extent);
+        std::cout << ",\"actual_endpoint\":";
+        if (a.candidate) print_endpoint(a.candidate->receipt); else std::cout << "null";
         std::cout << ",\"witness\":" << quote(a.candidate
             ? (a.candidate->receipt.witness == MetricsExtentWitnessV1::Match ? "match"
                : a.candidate->receipt.witness == MetricsExtentWitnessV1::Mismatch ? "mismatch"
@@ -166,6 +176,8 @@ void report() {
                       << ",\"stage\":" << quote(trial.stage)
                       << ",\"actual_extent\":";
             print_extent(trial.planned.extent);
+            std::cout << ",\"actual_endpoint\":";
+            if (trial.result) print_endpoint(trial.result->receipt); else std::cout << "null";
             std::cout << ",\"provider_reads\":" << trial.provider_reads
                       << ",\"legacy_sharpe\":";
             print_ratio(trial.old.sharpe);
@@ -195,7 +207,9 @@ void report() {
             ++rerun;
             std::cout << "{\"route\":" << quote(mt::route_name(a.replay_receipt->route))
                       << ",\"attempts\":" << a.replay_receipt->replay_attempts
-                      << ",\"sharpe\":";
+                      << ",\"actual_endpoint\":";
+            print_endpoint(*a.replay_receipt);
+            std::cout << ",\"sharpe\":";
             print_ratio(a.replay_report->metrics.equity.sharpe_bar);
             std::cout << ",\"sortino\":";
             print_ratio(a.replay_report->metrics.equity.sortino_bar);

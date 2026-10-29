@@ -37,7 +37,7 @@
 #include <array>
 namespace pineforge::source {
 
-// A2: Pine entry ids and from_entry values are source strings, never a
+// Pine entry ids and from_entry values are source strings, never a
 // kernel-owned identifier type.
 using SourceId = std::string;
 
@@ -49,19 +49,19 @@ class PositionTailSummary;
 struct CommandScratchRun;
 }
 
-// R5 lane V19-E: v4 folds the adapter's live state -- the placement rows it
+// The v4 digest folds the adapter's live state -- the placement rows it
 // still holds, compact records of the erased ones, the pending queues -- and
 // running digests of its append-only logs, each element folded once, so the
 // extension costs what is live per read, not what the run has done.
-// O1W extends this retirement representation inside v19: terminal exit fills
+// This retirement representation also covers terminal exit fills, which
 // fold conditionally, and wholly settled bracket families use the explicit
 // pineforge-settled-bracket-families/v1 subdomain (native-feature-parity.md).
 inline constexpr char kSourceAdapterDomain[] = "pineforge-source-adapter/v4";
 
 // The adapter's forced-close vocabulary. These strings are TradingView report
 // shape, so they are written and read entirely inside the source layer: the
-// kernel records execution::CloseCause instead of decoding them (R5 lane L12,
-// 2.ii l).
+// kernel records execution::CloseCause instead of decoding them; the source
+// layer supplies the corresponding report labels.
 inline constexpr char kMarginCallLabel[] = "__margin_call__";
 inline constexpr char kIntradayLossComment[] = "Close Position (Max intraday Loss)";
 // The published C contract matched this PREFIX, not the whole comment, so the
@@ -105,7 +105,7 @@ struct StrategyOverrides {
 };
 
 // One installed feed of another symbol as the adapter folds it (hash_state):
-// its key and its sizes. Its bars are never staged (AR-R4): the host hands
+// its key and its sizes. Its bars are never staged here: the host hands
 // them to the projected spec for its configure.
 struct StagedInstrumentFeed {
     std::string instrument{};
@@ -125,8 +125,8 @@ struct StagedConfiguration {
     std::vector<std::int64_t> account_fx_effective_from_ms{};
     std::vector<double> account_fx_per_quote{};
     std::optional<double> quantity_grid{};
-    // Other symbols' feeds the host installed for its request sites (lane
-    // XSYM-D), by key and size; the host lends their bars to the spec.
+    // Other symbols' feeds the host installed for its request sites,
+    // by key and size; the host lends their bars to the spec.
     std::vector<StagedInstrumentFeed> instrument_feeds{};
 };
 
@@ -296,7 +296,7 @@ struct PlacementSnapshot {
     std::uint64_t close_callsite_token = 0;
     std::uint32_t close_batch_calls = 0;
     SourceId close_first_id{};
-    // Retired with the reservation model (lane W3B-ENG-GRID): nothing sets
+    // Retired with the reservation model: nothing sets
     // these six any more, and each keeps its default so the v4 placement
     // fold keeps its layout.
     double close_first_target = 0.0;
@@ -331,7 +331,7 @@ struct PlacementSnapshot {
     std::uint64_t projection_predecessor = 0;
     // The source_sequence of the oldest row reached by following
     // projection_predecessor from this one (this row's own when it has
-    // none), fixed when the row is remembered. R5 lane V19-E: the chain's
+    // none), fixed when the row is remembered. The chain's
     // older rows may since have been erased, and this is what the terminal
     // explicit-market policy read by walking them.
     std::uint64_t chain_origin_sequence = 0;
@@ -374,7 +374,7 @@ struct PlacementSnapshot {
     // Immutable source command observation used by the public admission
     // journal/mirror. It never owns or drives matching.
     MarketAdmissionDraft market_admission{};
-    // L4c policy receipts. They are immutable placement/live facts owned by
+    // Source order policy receipts. They are immutable placement/live facts owned by
     // the adapter, never a second executable pending-order representation.
     OrderBirth birth{};
     compat::pine::HistoricalBirthReach birth_reach =
@@ -411,7 +411,7 @@ struct PlacementSnapshot {
 class PlacementTable;
 
 namespace detail {
-// R5 lane V19-E: the tombstone audit of the placement table. A build whose
+// The tombstone audit of the placement table. A build whose
 // every TU is compiled with -DPINEFORGE_PLACEMENT_AUDIT=1 (CMAKE_CXX_FLAGS)
 // keeps every erased row aside instead of freeing it, and records every read
 // that would have reached one: a lookup of an erased incarnation, and a
@@ -581,7 +581,7 @@ PoocCloseFillViewSwitches& pooc_close_fill_view_switches() noexcept;
 // outlived it. A row lives in a heap node of its own, so a reference to it
 // survives every insert and every erase of another row.
 //
-// R5 lane V19-E: a row is erased once the request it describes is no longer
+// A row is erased once the request it describes is no longer
 // working and nothing can read it again (PineExecutionAdapter::
 // erase_retired_rows), so the table holds what is live, not everything the
 // run ever placed. What later logic still consults of an erased row is kept
@@ -977,7 +977,7 @@ public:
         digest_ = (digest_ ^ handle.incarnation) * 1099511628211ULL;
     }
     const std::vector<native_order::RequestHandle>& members() const noexcept { return items_; }
-    // R5 lane V19-E: a running digest of the members' incarnations, each
+    // A running digest of the members' incarnations, each
     // folded once, when it was appended (the v4 extension fold's view).
     std::uint64_t digest() const noexcept { return digest_; }
     static OriginRoster from_retired(std::size_t count, std::uint64_t digest);
@@ -1011,8 +1011,8 @@ public:
             bytes += sizeof(decltype(positions_)::value_type) + 2 * sizeof(void*)
                 + row.second.capacity() * sizeof(std::size_t);
         // The per-run session key inside each handle is a shared run-level
-        // object, not per-row storage: not counted (compile fix by CR150-CX,
-        // the lane called a std::string member the type does not have).
+        // object rather than per-row storage. This estimate counts only
+        // the handle slots and the incarnation-to-position index above.
         return bytes;
     }
 
@@ -1027,7 +1027,7 @@ private:
 // accepted leg and only removed when cancelled, so the list retains every
 // historical leg while removals target the few live ones near its tail.
 //
-// R5 lane V19-E: the list is still every leg the family placed, in order --
+// The list is still every leg the family placed, in order --
 // strategy.exit's bracket cancel asks the kernel to cancel each of them, and a
 // leg that no longer works leaves a NotWorking receipt in the command history
 // -- but its settled prefix, the members whose placement rows were erased,
@@ -1040,7 +1040,7 @@ private:
 // it answered for is kept in consumed_ while that origin can still be asked
 // about.
 //
-// R5 lane V19-D: an erased member behind one whose row the table still holds
+// An erased member behind one whose row the table still holds
 // is parked the same way, in a run between the two handles it sits between
 // (Parked: its place, count, digest and varint deltas), so the handles left
 // are the members whose rows are retained. An early member a pin keeps (a
@@ -1178,7 +1178,7 @@ public:
         return out;
     }
     // The members whose rows the table still holds, in roster order, from the
-    // first one onward (V19-D parks the erased ones among them).
+    // first one onward (erased members between them are parked separately).
     const std::vector<native_order::RequestHandle>& working_tail() const noexcept { return hot_; }
     bool empty() const noexcept { return settled_count_ == 0 && parked_.empty() && hot_.empty(); }
     std::size_t size() const noexcept { return settled_count_ + parked_count_ + hot_.size(); }
@@ -1197,9 +1197,9 @@ public:
         return std::find(hot_.begin(), hot_.end(), handle) != hot_.end();
     }
 
-    // R5 lane V19-E: moves the working tail's leading members whose rows
+    // Moves the working tail's leading members whose rows
     // were erased into the settled prefix, each folded once into the running
-    // digest. R5 lane V19-D: the parked runs before them join it too, and
+    // digest. The parked runs before them join it too, and
     // every later member whose row was erased is parked in place.
     template<class Erased>
     void settle(Erased&& erased) {
@@ -1283,7 +1283,7 @@ public:
     }
     // The settled prefix as the v4 extension fold reads it: its count, and
     // its running digest -- with every parked run's place, count and digest
-    // folded after it while any is parked (R5 lane V19-D).
+    // folded after it while any is parked.
     std::size_t settled_count() const noexcept { return settled_count_; }
     // The run identity is enough to reproduce a settled member's non-working
     // cancel outcome after its incarnation bytes have been dropped.
@@ -1539,7 +1539,7 @@ struct SourceDayLedger {
     std::int64_t intraday_loss_day = std::numeric_limits<std::int64_t>::min();
     double intraday_start_equity = std::numeric_limits<double>::quiet_NaN();
     // The script bar whose open captured intraday_start_equity: fills at that
-    // open point precede the day (lane W8A-SIGSTATE-1 R4).
+    // open point precede the day.
     std::int64_t intraday_start_script_bar = std::numeric_limits<std::int64_t>::min();
     double intraday_realized = 0.0;
     std::uint64_t observed_applied_ordinal = 0;
@@ -1596,9 +1596,9 @@ void bind_id_pair_scratch_tables(source::PineExecutionAdapter&,
 
 namespace pineforge::source {
 
-// Read-only view facade for Appendix C's later C projection. L2 does
-// not wire the C ABI; this only exposes named truthful sources to native
-// fixture tests and keeps observer reads side-effect-free.
+// Read-only view facade for the C pending-order projection. This
+// exposes named source values to native fixture tests while keeping
+// observer reads side-effect-free; C ABI wiring is separate.
 class PendingIntentView {
 public:
     int size() const noexcept;
@@ -1633,7 +1633,7 @@ public:
         std::string comment{};
         std::uint64_t queue_sequence = 0;
     };
-    // Keep the legacy host's construction surface valid until L3a. A null
+    // Keep the legacy host's construction surface valid. A null
     // host means this compatibility carrier has no lowering authority.
     explicit PineExecutionAdapter(
             compat::pine::CapAttachment attachment = compat::pine::CapAttachment::None);
@@ -1653,13 +1653,13 @@ public:
     void set_configuration(const PineStrategyConfig& config) noexcept;
     void set_staged_configuration(const StagedConfiguration& staged);
     void set_begin_mode(bool is_stream, bool bar_magnifier = false) noexcept;
-    void set_id_tables_directory(const std::string& directory); // All L19l tables, after reset.
+    void set_id_tables_directory(const std::string& directory); // Source-id tables, after reset.
     void set_auxiliary_tables_directory(const std::string& directory); // Same binding.
     void fixture_use_memory_auxiliary_tables();
     void fixture_cohort_implicit_spill_interval(std::size_t calls) noexcept {
         cohorts_by_id_.fixture_implicit_spill_interval(calls);
     }
-    // Test seam (forwarder missing in round 4: the fixtures call it on the adapter).
+    // Test seam: forwards the spill predicate from the adapter to its cohort table.
     void fixture_spill_predicate(bool (*predicate)(const std::string&)) noexcept {
         cohorts_by_id_.fixture_spill_predicate(predicate);
     }
@@ -1760,7 +1760,7 @@ public:
                const std::string& oca_name = {}, int oca_type = 0);
 
     native_order::ExecutionTerms resolve_terms(const NativeExecutionTermsFacts&) const;
-    // R5 lane R4d. anchor_relative_exits runs at the end of a source
+    // anchor_relative_exits runs at the end of a source
     // evaluation: every queued relative strategy.exit whose parent entry is a
     // live kernel request is submitted as that parent's anchored bracket
     // child. resolve_anchored_level is the kernel's once-per-arm level hook:
@@ -1781,7 +1781,7 @@ public:
     const AnchoredRelativeStats& anchored_relative_stats() const noexcept {
         return anchored_relative_stats_;
     }
-    // R5 R2 classification, answered for the command a default-sized MARKET
+    // Sizing classification, answered for the command a default-sized MARKET
     // entry on this side would write at the CURRENT execution point: true when
     // the core's native_order::Sized names the whole conversion, so the units
     // that settle are the core's and only the source lot floor and the source
@@ -1792,13 +1792,13 @@ public:
     // financial commit. Host held-units publication must follow validation.
     void preflight_id_pair_precommit(const NativePrecommitView&) const;
     NativePrecommitVerdict validate_precommit(const NativePrecommitView&) const;
-    // R5: the three policy answers the kernel's margin model asks of its
+    // The three policy answers the kernel's margin model asks of its
     // host. `margin_check_allowed` is TradingView's scheduling -- the kernel
     // offers its own check points and the adapter admits only the ones
     // TradingView would also check at; `resolve_margin_requirement` is
     // TradingView's money (its fee-adjusted equity basis and its
     // ten-significant-digit requirement); `resolve_margin_call_units` is its
-    // sizing (the lot-floored 4x restore and the family R whole-drop band).
+    // sizing (the lot-floored 4x restore and the whole-drop band).
     // TradingView's margin money at one mark: the requirement (on its
     // ten-significant-digit ladder where a lot is worth under one unit of
     // account) against its fee-adjusted live equity. One implementation, read
@@ -1921,7 +1921,7 @@ public:
     void attach_execution_adapter() noexcept;
     bool calc_on_order_fills() const noexcept { return config_.calc_on_order_fills; }
     bool process_orders_on_close() const noexcept { return config_.process_orders_on_close; }
-    // Read-only L4c fixture observations.  They expose callback coordinates
+    // Read-only fixture observations. They expose callback coordinates
     // already owned by the adapter; no test path can mutate the native book.
     bool fixture_coof_recalc_active() const noexcept { return coof_recalc_active_; }
     bool fixture_coof_cursor_is_bar_close() const noexcept {
@@ -2019,8 +2019,8 @@ private:
         PineExecutionAdapter&, const std::shared_ptr<::pineforge::detail::ScratchSlab>&);
     bool partial_exit_sibling_live(const PlacementSnapshot&,
                                   native_order::RequestHandle) const;
-    // L8c calls this once for [trades_.base(), global_end), in forward
-    // order, before retiring that prefix. scratch_directory is L6b-4's
+    // Called once for [trades_.base(), global_end), in forward
+    // order, before retiring that prefix. scratch_directory is the
     // already-resolved directory. This is the only dependency binding.
     void preserve_position_tail_before_seal(
         std::size_t global_end, const std::string& scratch_directory);
@@ -2033,7 +2033,7 @@ private:
     // Derived acceleration of the same closed-row source and current live
     // maps. Every successful certificate proves equality to ordered replay;
     // a cache miss, invalidation or complete discard changes only work.
-    // No independent broker state and no new H leaf (see the R11 proof).
+    // No independent broker state and no new H leaf.
     std::shared_ptr<detail::PositionTailSummary> position_tail_summary_;
     void observe_position_tail_rows();
     void begin_position_tail_summary();
@@ -2057,7 +2057,7 @@ private:
         static CohortFacts restore_record(const Record&, bool arena_backed = false);
         bool spillable() const noexcept;
         bool held() const noexcept;
-        // R5 lane V19-E: the sides (bit 0 long, bit 1 short) of the openings
+        // The sides (bit 0 long, bit 1 short) of the openings
         // in `origins` whose placement rows were erased, so a question about
         // every origin the cohort ever accepted still covers them.
         std::uint8_t erased_opening_sides = 0;
@@ -2084,7 +2084,7 @@ private:
         bool execute_at_open = false;
     };
 
-    // A36/A28: a sell-side stop that is already marketable at the open, while
+    // A sell-side stop that is already marketable at the open, while
     // a buy-side open-marketable stop of the same flat pair is still live,
     // is held out of kernel matching (legacy opposing-stop pass-0 deferral)
     // and admitted after the bar path so later-path same-direction legs can
@@ -2123,7 +2123,7 @@ private:
         SourceId replacement_key;
         bool opening = false;
         // A same-id MARKET reissue booked as a transaction of its own units
-        // (R1) and the held opposite units it left out, which the round-8
+        // and the held opposite units it left out, which the
         // short-seed book puts back.
         bool staged_reversal = false;
         double staged_reversal_held_units = 0.0;
@@ -2155,7 +2155,7 @@ private:
         double loss_ticks = std::numeric_limits<double>::quiet_NaN();
     };
 
-    // R5 lane R4d: one relative leg of a queued strategy.exit, spelled as the
+    // One relative leg of a queued strategy.exit, spelled as the
     // kernel's anchored bracket child: the host-sized book close exit()
     // submits at the parent's fill, placed ahead of it (FromOwnerFill under
     // WaitForApplied{parent, PendingUntilArmed, AfterArmPrint, Book}). Until
@@ -2255,10 +2255,10 @@ private:
         const SourceId& replacement_key = {});
     void remember(const native_order::RequestHandle&, PlacementSnapshot&&);
     void retire(native_order::RequestHandle) noexcept;
-    // R5 lane V19-E: erases the placement rows no reader can reach again
+    // Erases the placement rows no reader can reach again
     // (pine_adapter.cpp explains the rule); run at every bar open.
     void erase_retired_rows(const NativeDecisionContext&);
-    // R5 lane V19-FIX: takes out of the kernel's cohort rosters every origin
+    // Takes out of the kernel's cohort rosters every origin
     // that can no longer be bound, before retiring the adapter's prefix.
     void retire_origin_prefixes();
     void release_closed_cohort_origins();
@@ -2478,7 +2478,7 @@ private:
     // positions meets exactly the pending origins a reverse walk of the whole
     // roster meets, in the same order.
     std::vector<std::size_t> live_origin_positions(const CohortFacts&) const;
-    // R5 lane PERF-P7: lookups over the bookkeeping the adapter retains for
+    // Lookups over the bookkeeping the adapter retains for
     // the whole run -- every origin a cohort ever accepted, every leg an exit
     // family ever placed -- answered from an index the native consumer keeps
     // for this adapter (its host cache; pine_adapter.cpp), since the adapter
@@ -2564,7 +2564,7 @@ private:
     // a query (NativeStrategyHost::native_sized_units) and floored by the
     // source.  The source's money band and affordability gates consume the
     // number before any request exists, which is why it is computed here at
-    // all; the arithmetic itself exists once, in the core (R5 N11).
+    // all; the arithmetic itself exists once, in the core.
     double default_sizing_units(const PineSizingSnapshot&) const;
     // The three pieces of the default quantity the source keeps as its own
     // policy: the money the percentage is taken of (with its equity mark and
@@ -2574,7 +2574,7 @@ private:
     bool default_sizing_reserves_percent_fee() const noexcept;
     // A percent-of-equity default quantity under a cash commission (per
     // order or per contract) takes its percentage of strategy.equity and
-    // leaves out the fee its own order pays (R5 lane PAR-CASHFEE).
+    // leaves out the fee its own order pays.
     bool default_sizing_reserves_cash_fee() const noexcept;
     double default_sizing_lot_floor(double units) const noexcept;
     // A typed quantity (qty_type cash / percent_of_equity) names money, not
@@ -2621,14 +2621,14 @@ private:
     // broker-state hash (pine_state_hash.cpp), so removing it would move
     // hash values.
     std::uint64_t terminal_receipt_cursor_ = 0;
-    // Retired (R5 lane PERF-L4): the receipt-reader binding PineStrategyHost
-    // installed at every begin, which since lane PERF-P4 only marked "this
-    // host is a PineStrategyHost". The readers ask the host's
+    // Retired receipt-reader bindings that PineStrategyHost installed
+    // at every begin. They only identified the host as a
+    // PineStrategyHost. The readers ask the host's
     // PineStrategyHost view instead, so nothing reads or writes these two
     // slots; they keep this class's layout, which is part of
-    // PineStrategyHost's and so of the generated script's ABI. Scheduled:
-    // both slots and ReceiptHighWaterReader go at the next engine_script_run
-    // epoch, the layout change that epoch licenses (R5 lane H-DOCGATES).
+    // PineStrategyHost's and so of the generated script's ABI. Removing
+    // both slots and ReceiptHighWaterReader requires an engine_script_run
+    // epoch change because it alters that ABI's layout.
     ReceiptHighWaterReader event_high_water_reader_ = nullptr;
     ReceiptHighWaterReader terminal_receipt_high_water_reader_ = nullptr;
     bool is_declined_market_reversal(
@@ -2649,8 +2649,8 @@ private:
     // null) retires every leg of the lifecycle of each exit it withdrew --
     // the live requests in `cancelled` (incarnation, Cancelled event ordinal)
     // and every other exit row it names -- so no later margin call revives
-    // one (R5 lane B-ADAPTER, V19D-P1, for the dormant ones; R5 lane V19-FIX
-    // for the rest).
+    // one, including dormant rows and the other rows of the withdrawn
+    // lifecycle.
     void retire_cancelled_exits(
         const SourceId* id,
         const std::vector<std::pair<std::uint64_t, std::uint64_t>>& cancelled);
@@ -2805,7 +2805,7 @@ private:
     std::vector<PendingMarginRevival> pending_margin_revivals_;
     std::vector<native_order::RequestHandle> live_handles_;
     std::vector<native_order::RequestHandle> first_open_newborns_;
-    // R5 lane V19-E: the dropped-close receipts were a log no decision reads;
+    // The dropped-close receipts were a log no decision reads;
     // v4 keeps their count and a running digest, each folded once
     // (fold_dropped_close, pine_state_hash.cpp).
     std::uint64_t dropped_close_count_ = 0;
@@ -2874,7 +2874,7 @@ private:
     bool coof_open_stop_next_waypoint_ = false;
     // Whether the recalculating fill booked the forced_execution_price the
     // adapter set on its request (a fill AT a path point), not the matcher's
-    // own price (R5 lane PAR-ORDERS-2). It sits in the padding before the
+    // own price. It sits in the padding before the
     // next 8-byte member, so the class layout does not move.
     bool coof_fill_forced_ = false;
     std::uint64_t coof_market_entry_recalc_incarnation_ = 0;
@@ -2885,7 +2885,7 @@ private:
     NativeDecisionContext coof_context_{};
     Bar coof_script_bar_{};
     bool coof_script_bar_valid_ = false;
-    // R5 lane V19-E: the per-script-bar POOC close basis was a log no
+    // The per-script-bar POOC close basis was a log no
     // decision reads (the first basis each bar); v4 keeps the last bar key,
     // the count and a running digest of the first basis of each new bar.
     std::int64_t pooc_close_basis_last_bar_ = std::numeric_limits<std::int64_t>::min();
@@ -2906,7 +2906,7 @@ private:
     NativePathPhase position_open_phase_ = NativePathPhase::None;
     bool position_open_priced_ = false;
     std::int64_t last_margin_call_script_bar_ = std::numeric_limits<std::int64_t>::min();
-    // R5: the driver point ordinal whose kernel margin check the adapter's
+    // The driver point ordinal whose kernel margin check the adapter's
     // own scheduling admitted. The kernel offers its check points at every
     // bar; exactly the one TradingView also checks at is let through, and
     // only for the driver point it was armed on.
@@ -2916,12 +2916,12 @@ private:
     // compared for equality with the current point's, so from the first point
     // after the one it names it can never match again: it carries no
     // information across any observation boundary the hash identifies. Folding
-    // it would move every adapter state hash (and R1's pinned hash-neutrality
+    // it would move every adapter state hash (and the pinned hash-neutrality
     // evidence in tests/test_adapter_report_relower.cpp) for a value that is
     // dead by the time the next one is taken.
     std::uint64_t kernel_margin_path_point_ = std::numeric_limits<std::uint64_t>::max();
     // The driver point ordinal at which the adapter re-sizes a RESTING kernel
-    // liquidation from the post-exit book (ab9714be pine_scheduler.cpp:267-282,
+    // liquidation from the post-exit book (matching
     // the legacy cancel-and-reschedule after a priced bracket leg of this
     // script bar fills). A point named here is admitted only while a slice
     // actually rests, because the legacy broker did nothing at all when none
@@ -2951,9 +2951,9 @@ private:
     // placed again behind its orders, or a one-unit call the close's fill
     // would not restore, tried again there.
     std::int64_t close_margin_open_bar_ = std::numeric_limits<std::int64_t>::min();
-    // Retired by lane W5B-ENG-MARGIN-RESIDUAL: ab9714be deferred a carried
-    // process_orders_on_close short's checkpoint behind its bar's close market
-    // fills (pine_scheduler.cpp:260 before :278); TradingView checks it over
+    // Retired checkpoint deferral: a carried
+    // process_orders_on_close short used to wait behind its bar's close market
+    // fills; TradingView checks its checkpoint over
     // the bar's path before the script instead. Never set now, and kept as
     // the constant it folds into the broker-state hash.
     std::int64_t pooc_close_checkpoint_deferred_ms_ = std::numeric_limits<std::int64_t>::min();
@@ -3030,7 +3030,7 @@ private:
     void require_exit_rank_key(const SourceId&) const;
     void note_exit_rank_key(const SourceId&);
     void note_exit_rank_transients();
-    // R5 lane V19-E: the exit phases of the trades before exit_phase_final_
+    // The exit phases of the trades before exit_phase_final_
     // are final (a same-bar exit sort reorders only its own bar's rows) and
     // folded once into exit_phase_digest_; a write below the mark refolds.
     std::size_t exit_phase_final_ = 0;
@@ -3091,14 +3091,14 @@ private:
     // folds retained_.bar_magnifier; this copy is the host-kind-free query
     // for qualify_short_seed_plan.
     bool bar_magnifier_ = false;
-    // R5 lane V19-D: the bound host's PineStrategyHost view (pine_view_of),
+    // The bound host's PineStrategyHost view (pine_view_of),
     // kept with the host it was taken from. It was a thread_local memo, and a
     // strategy module is dlopen'd, where every thread_local read is a dynamic
     // TLS lookup. Not state: a function of host_.
     mutable const NativeStrategyHost* pine_view_host_ = nullptr;
     mutable PineStrategyHost* pine_view_ = nullptr;
     PineStrategyHost* pine_view_of(NativeStrategyHost* host) const noexcept;
-    // R5 lane V19-E: erase_retired_rows()'s working sets, kept so that a bar
+    // erase_retired_rows()'s working sets, kept so that a bar
     // that erases nothing allocates nothing once they have grown (a quiet bar
     // must not allocate: tests/test_adapter_quiet_bar.cpp). Not state: every
     // sweep empties the working sets first; only the derived memos described
@@ -3144,7 +3144,7 @@ private:
         // are new peers too, even below the high water. Kept until a K3
         // pass consumes them (quiet-bar returns must not discard them).
         std::vector<std::uint64_t> adopted_reissues;
-        // R5 lane V19-FIX: release_closed_cohort_origins()'s working sets --
+        // release_closed_cohort_origins()'s working sets --
         // the chain roots of the working requests, the openings of the open
         // lots and those no roster holds as a root, the origins leaving a
         // roster (cohort, incarnation), and the handle a lot is looked up by
@@ -3221,18 +3221,18 @@ private:
     bool ledger_records_configured_ = false;  // the pyramiding records'
     bool pooc_fee_configured_ = false;      // pooc_fee_units()'s
     void refresh_configuration_scopes(const PineStrategyConfig& config) noexcept;
-    // R5 lane W6: after a source evaluation, queue this bar's marketable
+    // After a source evaluation, queue this bar's marketable
     // flat entries in TradingView's order at their shared fill point.
     void order_same_point_entries();
     double pending_opposite_market_units(bool is_long, std::int64_t script_open_ms, const SourceId& id) const;
-    // R5 lane W6B-ENG-PAIRS: the configurations those flat-pair rules cover,
+    // The configurations those flat-pair rules cover,
     // and whether a pair's opposite member fills next at the same price.
     bool same_point_pair_scope() const;
     bool same_point_two_leg_book(const SourceId& id, std::int64_t script_open_ms) const;
     bool same_point_pair_fill_follows(const PlacementSnapshot& filled,
                                       const native_order::RequestHandle& filled_handle,
                                       double price) const;
-    // Item 3: a flat market-and-priced pair at a process_orders_on_close close.
+    // A flat market-and-priced pair at a process_orders_on_close close.
     bool fill_pooc_close_pair(double raw_close, const NativeDecisionContext& context);
     void finish_admission_bar();
     void on_bar_close_policy(const Bar&, const NativeDecisionContext&);

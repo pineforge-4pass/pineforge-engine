@@ -43,6 +43,11 @@
                  "trades.max_drawdown", "trades.commission", "summary.net_pnl", "summary.avg_trade", "summary.best_trade",
                  "summary.worst_trade", "summary.max_drawdown", "report.document",
                  "summary.win_rate_pct", "equity_curve.equity", "equity_curve.open_profit",
+                 "replay.initial_capital", "replay.pointvalue", "replay.net_profit_sum",
+                 "trades.recut.transaction_qty", "trades.recut.whole_qty", "trades.recut.whole_pnl",
+                 "trades.recut.whole_commission", "trades.recut.whole_max_runup", "trades.recut.whole_max_drawdown",
+                 "trades.recut.whole_exit_fee", "trades.recut.transaction_fee",
+                 "equity_curve.net_profit_sum", "equity_curve.equity_term",
                  "metrics.all.percent_profitable", "metrics.all.net_profit", "metrics.all.net_profit_pct",
                  "metrics.all.gross_profit", "metrics.all.gross_profit_pct", "metrics.all.gross_loss",
                  "metrics.all.gross_loss_pct", "metrics.all.profit_factor", "metrics.all.avg_trade",
@@ -248,6 +253,21 @@
     {"id": "report.docker/pineforge_sink_finalize.py._check_equity", "file": "docker/pineforge_sink_finalize.py", "anchor": "_check_equity", "producer": "report_result_invalid", "stage": null, "fields": [
       {"field": "equity_curve.equity", "reasons": ["nonfinite"]},
       {"field": "equity_curve.open_profit", "reasons": ["nonfinite"]}
+    ]},
+    {"id": "report._replay_finite", "file": "docker/run_json.py", "anchor": "_replay_finite", "producer": "report_result_invalid", "stage": null, "fields": [
+      {"field": "replay.initial_capital", "reasons": ["nonfinite"]},
+      {"field": "replay.pointvalue", "reasons": ["nonfinite"]},
+      {"field": "replay.net_profit_sum", "reasons": ["nonfinite"]},
+      {"field": "trades.recut.transaction_qty", "reasons": ["nonfinite"]},
+      {"field": "trades.recut.whole_qty", "reasons": ["nonfinite"]},
+      {"field": "trades.recut.whole_pnl", "reasons": ["nonfinite"]},
+      {"field": "trades.recut.whole_commission", "reasons": ["nonfinite"]},
+      {"field": "trades.recut.whole_max_runup", "reasons": ["nonfinite"]},
+      {"field": "trades.recut.whole_max_drawdown", "reasons": ["nonfinite"]},
+      {"field": "trades.recut.whole_exit_fee", "reasons": ["nonfinite"]},
+      {"field": "trades.recut.transaction_fee", "reasons": ["nonfinite"]},
+      {"field": "equity_curve.net_profit_sum", "reasons": ["nonfinite"]},
+      {"field": "equity_curve.equity_term", "reasons": ["nonfinite"]}
     ]},
     {"id": "report.build_report_dict", "file": "docker/run_json.py", "anchor": "build_report_dict", "producer": "report_result_invalid", "stage": null, "fields": [
       {"field": "trades.pnl", "reasons": ["nonfinite"]}, {"field": "summary.max_drawdown", "reasons": ["nonfinite"]}
