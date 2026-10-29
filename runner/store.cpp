@@ -11,6 +11,7 @@
 #include <cerrno>
 #include <chrono>
 #include <filesystem>
+#include <iterator>
 #include <limits>
 #include <mutex>
 #include <new>
@@ -615,6 +616,37 @@ void migrate_delivery_state(sqlite3* db) {
         "THEN last_error_log ELSE MAX(last_error_log,excluded.last_error_log) END; END;");
 }
 
+// Every table the ledger open creates, by the layout stage that added it. The
+// tables up to the end of a stage form a layout some runner wrote; stages 3
+// and 4 are the layouts written before redelivery requests and before
+// integrity digests.
+struct LedgerTable {
+    const char* name;
+    unsigned stage;
+};
+constexpr LedgerTable ledger_tables[] = {
+    {"metadata", 1}, {"inputs", 1}, {"events", 1},
+    {"routing_configuration", 2}, {"event_routes", 2}, {"delivery_log", 2},
+    {"report_snapshots", 3}, {"redelivery_requests", 4}, {"report_integrity", 5},
+    {"delivery_totals", 6}, {"delivery_targets", 6}, {"delivery_state", 6},
+    {"report_checkpoints", 7},
+};
+
+// Admit every written layout, and each one without report_integrity: the open
+// creates the missing tables and one verified replay populates the digests.
+bool supported_layout(std::uint64_t table_count) {
+    std::uint64_t tables = 0;
+    bool integrity = false;
+    for (std::size_t i = 0; i < std::size(ledger_tables); ++i) {
+        ++tables;
+        integrity = integrity || std::string_view(ledger_tables[i].name) == "report_integrity";
+        if (i + 1 < std::size(ledger_tables) && ledger_tables[i + 1].stage == ledger_tables[i].stage)
+            continue;
+        if (table_count == tables || (integrity && table_count == tables - 1)) return true;
+    }
+    return false;
+}
+
 } // namespace
 
 const char* checkpoint_failure_code_name(CheckpointFailureCode code) noexcept {
@@ -964,9 +996,7 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity,
         Statement q(impl_->db, "INSERT INTO metadata VALUES(1,1,?)");
         q.bind(1, deployment_identity);
         q.done();
-    } else if (table_count != 3 && table_count != 6 && table_count != 7 && table_count != 8 &&
-               table_count != 9 && table_count != 10 && table_count != 11 &&
-               table_count != 12 && table_count != 13) {
+    } else if (!supported_layout(table_count)) {
         throw std::runtime_error("native ledger is not an empty or supported ledger database");
     }
     {

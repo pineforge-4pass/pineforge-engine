@@ -1710,17 +1710,33 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
             'BASE_SHA': '${{ ' + identity_output + '.outputs.base_sha }}',
             'HEAD_SHA': '${{ ' + identity_output + '.outputs.head_sha }}',
         }
+        if job == 'admit':
+            endpoint_lines = {'endpoint = f"repos/{repo}/compare/{base}...{head}"'}
+            unreadable = 'compare response has no readable files list'
+            truncated = 'PR changes 300+ files: admission by compare is truncated'
+        else:
+            endpoint_lines = {
+                'endpoint = (f"repos/{os.environ[\'REPO\']}/compare/"',
+                'f"{os.environ[\'BASE_SHA\']}...{os.environ[\'HEAD_SHA\']}")',
+            }
+            unreadable = 'second compare response is unreadable'
+            truncated = 'second compare response is truncated at 300 files'
         required_lines = {
+            'rows = response.get("files")',
             'if not isinstance(rows, list):',
+            f'raise SystemExit("{unreadable}")',
+            'if len(rows) >= 300:',
+            f'raise SystemExit("{truncated}")',
             'if not isinstance(row, dict):',
             'if row.get("status") == "renamed" and "previous_filename" not in row:',
             'if "previous_filename" in row:',
-            'if len(paths) >= 3000:',
-            'if len(rows) < 100:',
-            'page += 1',
             'if not paths:',
-        }
+        } | endpoint_lines
         if (not reader or not required_lines <= reader_lines
+                or any(token in reader for token in (
+                    'while True:', 'page = ', 'page +=', 'per_page=', '--paginate',
+                    'if len(paths) >= 3000:'))
+                or reader.count('["gh", "api", endpoint]') != 1
                 or _step_values(reader, 'shell') != ['python3 {0}']
                 or any(_job_values(reader_env, key) != [value] for key, value in bindings.items())
                 or 'check=True' not in reader or '...{' not in reader):
