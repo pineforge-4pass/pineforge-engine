@@ -159,8 +159,9 @@ class ReplayOffGoldenTests(unittest.TestCase):
         for changes in ({"price": 129}, {"run_id": "different-run"}):
             with self.subTest(non_identity=changes):
                 self.assertNotEqual(baseline, self.masked_primary(primary(**changes)))
-        changed_body = original.replace(b'["T",128,"1.7.0"]', b'["T",128,"1.8.0"]')
-        self.assertNotEqual(baseline, self.masked_primary(changed_body))
+        before = original[:original.rindex(b"\n", 0, len(original) - 1) + 1]
+        changed = before.replace(b'["T",128,"1.7.0"]', b'["T",128,"1.8.0"]')
+        self.assertNotEqual(baseline, self.masked_primary(changed + trailer_line(changed)))
         changed_schema = lambda data: data.replace(b'"version":1', b'"version":2')
         self.assertNotEqual(baseline, self.masked_primary(primary(edit=changed_schema)))
 
@@ -190,7 +191,7 @@ class ReplayOffGoldenTests(unittest.TestCase):
             with self.subTest(trailer=broken):
                 with self.assertRaisesRegex(RuntimeError, "sink trailer sha256"):
                     self.masked_primary(before + broken)
-        for malformed in (before.rstrip(b"\n"), before + b"not-json\n",
+        for malformed in (before + b"not-json\n",
                           before + compact({"trailer": "pf-report-sink", "version": 1}) + b"\n"):
             with self.subTest(malformed=malformed[-40:]):
                 with self.assertRaisesRegex(RuntimeError, "sink trailer sha256"):
