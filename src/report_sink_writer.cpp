@@ -486,6 +486,58 @@ LineWriter::LineWriter(const pf_report_sink_v1& sink) : state_(std::make_unique<
 LineWriter::LineWriter(const pf_report_sink_fd_v1& sink) : state_(std::make_unique<State>(sink)) {}
 LineWriter::~LineWriter() = default;
 
+void LineWriter::begin_companion(std::string_view header_text) {
+    auto& state = *state_;
+    try {
+        if (state.phase != State::Phase::configured || state.borrowed)
+            throw WriterError(WriterFailure::invalid_state, "invalid companion writer state");
+        state.scratch.clear();
+        state.scratch.append(header_text);
+        // Caller path follows symlinks (no O_NOFOLLOW). Same-file refusal
+        // covers path primaries only; an fd primary may alias this target.
+        int descriptor;
+        do { descriptor = ::open(state.path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600); }
+        while (descriptor < 0 && errno == EINTR);
+        if (descriptor < 0) state.io_error("companion open failed", errno);
+        state.descriptor = descriptor;
+        state.uncached();
+        state.phase = State::Phase::writing;
+        state.line();
+    } catch (...) { state.fail(); throw; }
+}
+
+void LineWriter::companion_record(std::string_view record_text) {
+    auto& state = *state_;
+    try {
+        state.require_writing();
+        state.scratch.clear();
+        state.scratch.append(record_text);
+        state.line();
+    } catch (...) { state.fail(); throw; }
+}
+
+void LineWriter::finish_companion(std::string_view counts, std::string_view base_sha256) {
+    auto& state = *state_;
+    if (state.phase == State::Phase::complete) return;
+    try {
+        state.require_writing();
+        const auto digest = state.hash.hex_digest();
+        auto& line = state.scratch;
+        line.clear();
+        line.append("{\"trailer\":\"pf-report-replay\",\"version\":1,\"counts\":");
+        line.append(counts);
+        line.append(",\"sha256\":"); wire_string(line, digest);
+        if (!base_sha256.empty()) {
+            line.append(",\"base_sha256\":"); wire_string(line, base_sha256);
+        }
+        line.append('}');
+        state.line(false);
+        state.flush();
+        state.synchronize();
+        state.phase = State::Phase::complete;
+    } catch (...) { state.fail(); throw; }
+}
+
 void LineWriter::write_header(const RecordSet& records) {
     auto& state = *state_;
     try {

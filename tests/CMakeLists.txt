@@ -7927,6 +7927,44 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
         "-Wl,--wrap=_ZnamRKSt9nothrow_t")
 endif()
 # --- CR-150 resident-command-scratch end ---
+# --- CR-150 core-cr150-replay begin ---
+# Test-only strategy orders for the real-library JSON replay test. The module
+# links the actual runtime; it supplies no replay accessor or replay option.
+if(UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(replay_strategy MODULE replay_strategy.cpp)
+    target_link_libraries(replay_strategy PRIVATE pineforge)
+    target_compile_options(replay_strategy PRIVATE -ffp-contract=off -UNDEBUG)
+    if(APPLE)
+        target_link_options(replay_strategy PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(replay_strategy PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    set_target_properties(replay_strategy PROPERTIES PREFIX "" SUFFIX ".so")
+endif()
+# --- CR-150 core-cr150-replay end ---
+
+# --- CR-150 core-cr150-replay-rq begin ---
+# The base-compatible fixture is also a real strategy module for run_json.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    target_include_directories(test_replay_rq_fixture PRIVATE ${PROJECT_SOURCE_DIR}/src)
+endif()
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(replay_rq_strategy MODULE test_replay_rq_fixture.cpp)
+    target_compile_definitions(replay_rq_strategy PRIVATE PINEFORGE_REPLAY_RQ_MODULE=1)
+    target_include_directories(replay_rq_strategy PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(replay_rq_strategy PRIVATE -ffp-contract=off -UNDEBUG)
+    target_link_libraries(replay_rq_strategy PRIVATE pineforge)
+    if(APPLE)
+        target_link_options(replay_rq_strategy PRIVATE "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(replay_rq_strategy PRIVATE "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    set_target_properties(replay_rq_strategy PROPERTIES PREFIX "" SUFFIX ".so")
+endif()
+# --- CR-150 core-cr150-replay-rq end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

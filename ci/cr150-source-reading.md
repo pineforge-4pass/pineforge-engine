@@ -1,4 +1,104 @@
-# CR-150/C4 source gate: re-emit (reading file for the reviewer)
+# Source gate: review record
+
+## Replay merge source read (2026-10-29)
+
+Main contributes 3,605 site identities and 1,483 groups: 1,299 unreviewed,
+184 pending, zero bounded. Replay adds 43 identities and 18 unreviewed
+groups. The merged static inventory therefore has **3,648 identities and
+1,501 groups: 1,317 unreviewed, 184 pending, zero bounded**.
+These are counts of the reviewed manifests, not an executed gate verdict.
+No scanner, scan scope, state, fixed-input proof or codegen pin is relaxed.
+
+Main independently allocated group IDs that the replay branch had used.
+Main's IDs are retained. Replay's former U1524–U1533 become U1580–U1589;
+former U1535–U1542 become U1590–U1597. The YAML and TSV use the same mapping,
+including the constructor cross-references. The removed U1534 remains absent.
+The single original header equity push is retained in main's canonical
+inventory position, under `if (summary)`; the automatic merge had also
+appended that same identity at the end, which was a duplicate, not a new site.
+
+The 43 replay identities remain 31 in the replay implementation, three in
+its header, seven writer grows and two source-host recut operations.
+U0056 retains main's one inline summary push and its existing pending
+history debt; U1414 retains 62 original grows plus five companion-trailer
+grows at `src/report_sink_writer.cpp:527-533`. New U1593 covers the two
+companion record appends at :495 and :514 in that same writer. The registry
+remains U1597, with one declaration and three grows, one node per configured
+live engine and no fixed bound on that population.
+
+The recut scratch owner and annotation append remain at
+`src/source/pine_strategy_host.cpp:2422` and :2459, with the replacement-count
+check at :2565-2568. Main's cache invalidation is retained immediately after
+annotation replacement. Sealing invokes replay retirement at
+`src/native_execution_consumer.cpp:14096`. The original layout pins remain
+valid by hand derivation: report state is `360 + 3*sizeof(std::string)` bytes,
+and the next capture-policy member immediately follows it.
+
+The following two replay sections record the pre-merge snapshots and use
+their former group IDs and totals. Their bounds and operation reviews still
+apply through the mapping above. The source gate and all executable checks
+are reserved for the supervisor's verification hosts.
+
+## Replay layout repair: pre-merge source read (2026-10-28)
+
+The original header summary push returns to U0056; its relocated U1534 group
+and identity are removed. U1542 reviews the library registry's declaration
+and three grow identities: install, configuration copy and allocation-free
+node transfer. The registry contains one node per opted-in live engine,
+erases on destruction/clear, and has no nodes or lookup calls on OFF point
+paths. Its engine population has no fixed cap, so it remains OPEN.
+The relocated report-state move also adds one string assignment identity to
+each of U1525 and U1526. All other replay identities keep their scopes.
+
+Net change from the preceding inventory: six sites, zero groups. Expected
+current accounting is **3577 sites, 1483 groups, 1295 unreviewed, 188 pending,
+zero bounded**. The ceiling and the real-tree test pin stay unchanged.
+This is a manual read; neither the gate nor its tests were run here.
+
+The interrupted manifest edit was audited against HEAD, this inventory and
+the source. Every TSV row has 14 columns; neither the YAML IDs nor the TSV
+IDs repeat. U0056 restores the original header identity; U1542 replaces the
+removed relocated-push group without changing the OPEN ceiling. U1525/U1526
+include the two relocated string assignments. The companion-open comment
+moved the five trailer appends to report_sink_writer.cpp:527-533; both U1414
+reviews now cite that range. The remaining changed rows agree on identities,
+operation counts and source positions. No checker or bounded claim changed.
+
+## Initial replay incremental source read (2026-10-28)
+
+The supplied CLOUD preflight for implementation tree `a6936abc1` reported
+39 findings: 38 new identities and one stale header identity. This update is
+a manual source read, not a gate execution or a flat-memory verdict. The
+checker, scan scope, codegen pin, fixed inputs and existing states are unchanged.
+The exact new scopes/operations/ordinals are appended in the JSON inventory;
+only the moved summary push is removed. The TSV updates U0056 and U1414 and
+adds U1524–U1541, with source evidence for each group.
+
+The 18 new groups stay `unreviewed`/OPEN. The reviewed ceiling rises from
+1277 to 1295; `pending-flat-memory` stays 188 and `bounded` stays zero.
+The expected totals from this static accounting are 1483 groups/entries and
+3571 sites; these are expectations for the supervisor's run, not measured
+results. No blanket exemption or bounded claim was added.
+
+Replay trades, Q operands and recut replacements use `ScratchSequence`:
+one fixed 64 KiB window per sequence, checked logical extents, and typed
+scratch IO refusals. `ReportReplay::retire` consumes only an R prefix already
+written and is called by native sealing; `write_q` consumes its emitted Q.
+An empty sequence clears its backing file. Partial prefix retirement advances
+an offset; it does **not** compact the file, so logical scratch can still be
+O(T + Q) until clearing or run destruction. The recut temporary is destroyed at
+function return. There is no new history-sized RAM directory.
+
+Configuration strings have the setter's 64 KiB path/run-ID admission; the
+scratch-directory length retains the existing admission and has no new proof.
+The writer's existing `Line` is a checked 1 MiB array and its IO window is
+64 KiB. R/Q line temporaries have fixed field counts and numeric/enum operands.
+The moved summary vector push retains one point by pushing only when empty;
+the FULL recorder and the R01 OPEN debt remain. These forms are outside the
+gate's deliberately narrow scalar-vector proof, so none is marked bounded.
+
+The earlier top block and review sections below describe their original
+snapshot; the replay accounting above is a separate incremental review.
 
 ## Top block
 

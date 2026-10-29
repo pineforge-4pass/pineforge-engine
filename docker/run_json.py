@@ -2958,6 +2958,15 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     ]
     lib.run_backtest_full.restype = None
 
+    for name in ("strategy_net_profit_sum", "strategy_report_pointvalue"):
+        if hasattr(lib, name):
+            getattr(lib, name).argtypes = [ctypes.c_void_p]
+            getattr(lib, name).restype = ctypes.c_double
+    if hasattr(lib, "strategy_set_report_replay_v1"):
+        lib.strategy_set_report_replay_v1.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+        lib.strategy_set_report_replay_v1.restype = ctypes.c_int
+
     _bind_scratch_tables(lib)  # optional unless the host selects the jailed profile
 
     if hasattr(lib, "strategy_get_last_error"):
@@ -4178,7 +4187,14 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
                       applied_runtime: dict[str, object] | None = None,
                       trade_entry_incarnations=None,
                       window_anchor: bool = False,
-                      initial_capital=None) -> dict:
+                      initial_capital=None, replay=None, replay_rows=None) -> dict:
+    if replay is not None or replay_rows is not None:
+        return _annotate_replay_report(
+            _canonical_report_dict(
+                report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
+                applied_inputs, applied_overrides, applied_runtime,
+                trade_entry_incarnations, window_anchor, initial_capital),
+            replay, replay_rows)
     # window_anchor: the curve's first point is the selected-window anchor. It
     # remains the fallback proof when the runtime lacks strategy_initial_capital.
     def trade_at(i):
@@ -4304,6 +4320,8 @@ def _validate_report_result(out: dict, *, validate_summary: bool = True,
     after native computation has distinguished absence from computed NaN.
     Sink read-back validates one trade/point at a time, deferring its first refusal until assembly.
     Keep the equity guard here for the ownership checker; equity_only skips small-field checks."""
+    if "replay" in out:
+        _validate_replay_result(out, equity_only=equity_only)
     if not equity_only:
         for trade in out["trades"]:
             for key, field in (
@@ -4976,6 +4994,9 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
                 apply_scratch_tables(lib, st, default_scratch_manifest(fed_count))
                 args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args)
+            if getattr(args, "report_replay", False) or getattr(args, "report_replay_sink", None):
+                args._replay_capture = binary_inputs.enter_context(
+                    _ReplayCapture(lib, st, args, sink))
         except BaseException:
             try:
                 lib.strategy_free(st)
@@ -5082,12 +5103,13 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             for i in range(report.trades_len):
                 trade_entry_incarnations(i)
         engine_initial_capital = _read_strategy_initial_capital(lib, state)
+        replay_options = _read_report_replay(lib, state, args, sink)
         builder = _build_sink_report if sink is not None else build_report_dict
         out = builder(
             report, args.ohlcv, fed_count, plan["fed_first_data_ms"], plan["fed_last_data_ms"],
             elapsed, inputs, overrides, applied_runtime,
             sink if sink is not None else trade_entry_incarnations,
-            window_anchor=True, initial_capital=engine_initial_capital)
+            window_anchor=True, initial_capital=engine_initial_capital, **replay_options)
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
@@ -5136,7 +5158,8 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
                 plan["window_script_bars"], initial_capital)
         elif sink is None:
             swr.check_selected_curve(out["equity_curve"], request.start_ms,
-                                     plan["window_script_bars"], initial_capital)
+                                     plan["window_script_bars"], initial_capital,
+                                     report_replay=bool(replay_options))
         # Fd mode trusts the native selected presentation and the checked
         # observation/counts. No E point is available for a Python anchor
         # recheck: the stream goes directly to the trusted finalizer.
@@ -5359,6 +5382,10 @@ def _main(argv, binary_inputs) -> int:
                          "emit summary JSON without report files and close N after capture.")
     ap.add_argument("--report-sink-format", type=int, choices=(1, 2), default=1,
                     help="Sink wire format (default 1); format 2 requires the external transcoder.")
+    ap.add_argument("--report-replay", action="store_true",
+                    help="Include authoritative settlement and equity replay operands.")
+    ap.add_argument("--report-replay-sink", type=Path, default=None, metavar="PATH",
+                    help="Write the separate pf-report-replay/v1 companion; enables replay.")
     ap.add_argument("--run-id", default="",
                     help="Caller run identifier copied into the report sink header (default empty).")
     ap.add_argument("--spill-dir", type=Path, default=None, metavar="DIR",
@@ -5550,6 +5577,10 @@ def _main(argv, binary_inputs) -> int:
                 apply_scratch_tables(lib, st, default_scratch_manifest(n))
                 args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args, body=body)
+            if body and (getattr(args, "report_replay", False)
+                         or getattr(args, "report_replay_sink", None)):
+                args._replay_capture = binary_inputs.enter_context(
+                    _ReplayCapture(lib, st, args, sink))
         except BaseException:
             try:
                 lib.strategy_free(st)
@@ -5679,12 +5710,13 @@ def _main(argv, binary_inputs) -> int:
             for i in range(report.trades_len):
                 trade_entry_incarnations(i)
         engine_initial_capital = _read_strategy_initial_capital(lib, state)
+        replay_options = _read_report_replay(lib, state, args, sink)
         builder = _build_sink_report if sink is not None else build_report_dict
         out = builder(
             report, args.ohlcv, n, first_ts, last_ts,
             elapsed, inputs, overrides, applied_runtime,
             sink if sink is not None else trade_entry_incarnations,
-            initial_capital=engine_initial_capital)
+            initial_capital=engine_initial_capital, **replay_options)
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
@@ -6918,6 +6950,10 @@ def _check_bench_run(lib, state):
 
 class _JSONRecordArray:
     """A repeatable iterator factory, never a retained list of report rows."""
+    # An empty sink iterator still reads and checks its header on consumption.
+    # Keep construction and iteration identical for every array length.
+    # Replay-only empty values are handled after canonical report assembly.
+
     def __init__(self, records, length=None, item=None):
         self.records = records
         self.length, self.item = length, item
@@ -7572,11 +7608,14 @@ def _sink_summary(report, sink, *, records=None):
 
 def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
                        applied_inputs, applied_overrides, applied_runtime, sink,
-                       window_anchor=False, initial_capital=None):
+                       window_anchor=False, initial_capital=None, replay=None, replay_rows=None):
     if report.trades or report.trades_len or report.equity_curve or report.equity_curve_len:
         raise _engine_invariant("a report with a sink must contain summary scalars only")
-    # Reuse the unchanged producer for its small fields and exact key order.
-    # The C ABI supplied no arrays, so this cannot walk native report rows.
+    if replay is not None or replay_rows is not None:
+        return _build_replay_sink_report(
+            report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
+            applied_inputs, applied_overrides, applied_runtime, sink,
+            window_anchor, initial_capital, replay, replay_rows)
     out = build_report_dict(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
                             applied_inputs, applied_overrides, applied_runtime,
                             window_anchor=window_anchor,
@@ -7599,7 +7638,6 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
         out.pop("trades")
         out.pop("equity_curve")
         return out
-
     # verify() already checked E in record/field order and retained only its
     # endpoints. Validate the small fields first, exactly where the old E
     # validation pass began, then surface its first refusal before diagnostics.
@@ -8148,6 +8186,352 @@ def _discard_stdout() -> None:
         os.dup2(devnull, fd)
     finally:
         os.close(devnull)
+
+
+def read_replay_values(lib, state, initial_capital, pointvalue):
+    """Read raw N exactly once; capital/pointvalue are actual engine operands."""
+    accessor = lib.strategy_net_profit_sum
+    if hasattr(accessor, "argtypes"):
+        accessor.argtypes, accessor.restype = [ctypes.c_void_p], ctypes.c_double
+    return {"initial_capital": initial_capital, "pointvalue": pointvalue,
+            "net_profit_sum": float(accessor(state))}
+
+
+def _replay_array_length(array, sink, tag):
+    """Length of a report array: resident, or the verified count of a spooled stream."""
+    try:
+        return len(array)
+    except TypeError:
+        if sink is None:
+            raise
+        return sink.counts[tag]
+
+
+def _annotate_replay_report(out, replay, replay_rows, sink=None):
+    """Add the opt-in operands after the canonical POD report is assembled."""
+    if replay is not None:
+        out["replay"] = {key: replay[key] for key in
+                         ("initial_capital", "pointvalue", "net_profit_sum")}
+    if replay_rows is not None:
+        replay_rows.join(out, sink)
+    for key, tag in (("trades", "T"), ("equity_curve", "E")):
+        if key in out and _replay_array_length(out[key], sink, tag) == 0:
+            out[key] = []
+    return out
+
+
+def _build_replay_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
+                              applied_inputs, applied_overrides, applied_runtime, sink,
+                              window_anchor, initial_capital, replay, replay_rows):
+    if replay is not None:
+        for key in ("initial_capital", "pointvalue", "net_profit_sum"):
+            _replay_finite(replay[key], "replay." + key)
+    out = _build_sink_report(
+        report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
+        applied_inputs, applied_overrides, applied_runtime, sink,
+        window_anchor=window_anchor, initial_capital=initial_capital)
+    if replay_rows is not None and "trades" in out:
+        # The fused path hands back already encoded JSON columns, which hold
+        # no rows to annotate: replay reads the verified sink records instead.
+        if isinstance(out["trades"], _JSONColumn):
+            out["trades"] = _JSONRecordArray(
+                lambda: (_sink_trade(row) for row in sink.records("T")), sink.counts["T"])
+        if isinstance(out.get("equity_curve"), _JSONColumn):
+            out["equity_curve"] = _JSONRecordArray(
+                lambda: (row.as_dict() for row in sink.records("E")), sink.counts["E"])
+    return _annotate_replay_report(
+        out, replay, replay_rows if "trades" in out else None, sink)
+
+
+def _replay_finite(value, field):
+    if type(value) not in (int, float) or not math.isfinite(value):
+        # Keep the producer's field vocabulary explicit, as for the canonical
+        # report guard. The ownership manifest registers this closed domain.
+        for operand, owned_field in (
+                ("S1", "replay.initial_capital"),
+                ("S2", "replay.pointvalue"),
+                ("S3", "replay.net_profit_sum"),
+                ("R8", "trades.recut.transaction_qty"),
+                ("R9", "trades.recut.whole_qty"),
+                ("R10", "trades.recut.whole_pnl"),
+                ("R11", "trades.recut.whole_commission"),
+                ("R12", "trades.recut.whole_max_runup"),
+                ("R13", "trades.recut.whole_max_drawdown"),
+                ("R14", "trades.recut.whole_exit_fee"),
+                ("R15", "trades.recut.transaction_fee"),
+                ("Q4", "equity_curve.net_profit_sum"),
+                ("Q6", "equity_curve.equity_term")):
+            if field == owned_field:
+                raise RunFailure(f"the report result {field} is not finite", "report_result_invalid",
+                                 {"field": owned_field, "reason": "nonfinite"})
+        raise _engine_invariant("unknown replay result field: " + field)
+
+
+def _validate_replay_result(out, *, equity_only=False):
+    # Called once only for an annotated report. The old OFF row/point
+    # validation loops perform no replay field lookup or extra iteration.
+    if not equity_only:
+        for key, value in out["replay"].items():
+            _replay_finite(value, "replay." + key)
+        for trade in out["trades"]:
+            marker = trade.get("recut")
+            if marker is not None:
+                for key in ("transaction_qty", "whole_qty", "whole_pnl", "whole_commission",
+                            "whole_max_runup", "whole_max_drawdown", "whole_exit_fee", "transaction_fee"):
+                    if marker[key] is not None:
+                        _replay_finite(marker[key], "trades.recut." + key)
+    for point in out.get("equity_curve", ()):
+        for key in ("net_profit_sum", "equity_term"):
+            if key in point and point[key] is not None:
+                _replay_finite(point[key], "equity_curve." + key)
+
+
+def _replay_record_finite(record):
+    row = record.as_dict()
+    if record.tag == "S":
+        for key, value in row.items():
+            _replay_finite(value, "replay." + key)
+    elif record.tag == "R" and row["parent_id"] is not None:
+        for key in ("transaction_qty", "whole_qty", "whole_pnl", "whole_commission",
+                    "whole_max_runup", "whole_max_drawdown", "whole_exit_fee", "transaction_fee"):
+            if row[key] is not None:
+                _replay_finite(row[key], "trades.recut." + key)
+    elif record.tag == "Q":
+        for key in ("net_profit_sum", "equity_term"):
+            if row[key] is not None:
+                _replay_finite(row[key], "equity_curve." + key)
+
+
+class _ReplayCapture:
+    """Run-owned companion; joins re-read verified records in bounded memory."""
+    def __init__(self, lib, state, args, sink):
+        if getattr(args, "profile", "unjailed") == "jailed":
+            raise _request_invalid("the jailed profile does not admit replay companion paths", "arguments")
+        names = ("strategy_net_profit_sum", "strategy_report_pointvalue",
+                 "strategy_initial_capital", "strategy_set_report_replay_v1")
+        for name in names:
+            if not hasattr(lib, name):
+                raise StrategyLibraryError("the strategy library has no report replay API",
+                                           {"reason": "symbol_missing", "missing": name})
+        self.named = getattr(args, "report_replay_sink", None) is not None
+        if not self.named and sink is not None and (
+                sink.named or getattr(sink, "fd_mode", False)):
+            raise _request_invalid(
+                "a named or fd primary requires --report-replay-sink PATH for exact replay", "arguments")
+        self.run_id = getattr(args, "run_id", "")
+        self.closed, self.sha256, self.counts = False, "", {}
+        self.scalars = None
+        self.primary_path = (sink.path if sink is not None
+                             and not getattr(sink, "fd_mode", False) else None)
+        if self.named:
+            self.path = os.path.abspath(os.fspath(args.report_replay_sink))
+        else:
+            directory = _disk_report_directory(getattr(args, "spill_dir", None))
+            try:
+                fd, self.path = tempfile.mkstemp(
+                    prefix="pineforge-report-replay-", suffix=".jsonl", dir=directory)
+            except OSError as error:
+                raise RunFailure("replay companion open failed", "report_sink_failed",
+                                 {"reason": "sink_io"}) from error
+            os.close(fd)
+        try:
+            if self.primary_path is not None and (
+                    os.path.realpath(self.primary_path) == os.path.realpath(self.path)
+                    or (os.path.exists(self.path) and os.path.exists(self.primary_path)
+                        and os.path.samefile(self.path, self.primary_path))):
+                raise _request_invalid("primary and replay sinks must be separate files", "arguments")
+            if lib.strategy_set_report_replay_v1(
+                    state, os.fsencode(self.path), self.run_id.encode("utf-8")) != 0:
+                _check_bench_run(lib, state)
+                raise _engine_invariant("the fresh strategy refused report replay")
+        except BaseException:
+            self.close()
+            raise
+
+    def verify(self, lib, state, sink):
+        from pf_sink import ReplaySinkReader, ReplaySinkFormatError
+        if sink is not None and getattr(sink, "fd_mode", False):
+            receipt = ReportSinkReceiptC()
+            receipt.struct_size, receipt.version = ctypes.sizeof(receipt), 1
+            if lib.strategy_report_sink_receipt_v1(state, ctypes.byref(receipt)) != 0 or receipt.complete != 1:
+                raise _engine_invariant("the primary receipt is incomplete for replay binding")
+            sink.sha256 = bytes(receipt.sha256_hex).decode("ascii")
+        try:
+            with ReplaySinkReader(self.path, primary_path=self.primary_path) as reader:
+                for record in reader:
+                    _replay_record_finite(record)
+                    if record.tag == "S":
+                        self.scalars = record.as_dict()
+                if reader.header["run_id"] != self.run_id:
+                    raise _engine_invariant("the replay run id differs from the request")
+                if sink is not None and reader.trailer.get("base_sha256") != sink.sha256:
+                    raise _engine_invariant("the replay companion is not bound to the primary")
+                if sink is not None and (
+                        reader.counts.get("R") != sink.counts["T"]
+                        or reader.counts.get("Q") != sink.counts["E"]):
+                    raise _engine_invariant("the replay companion does not cover the primary")
+                self.sha256, self.counts = reader.sha256, reader.counts
+        except ReplaySinkFormatError as error:
+            raise _engine_invariant("the engine's replay companion is invalid: " + str(error)) from error
+        expected = read_replay_values(
+            lib, state, _read_strategy_initial_capital(lib, state),
+            float(lib.strategy_report_pointvalue(state)))
+        for key, value in expected.items():
+            _replay_finite(value, "replay." + key)
+            if struct.pack(">d", float(value)) != struct.pack(">d", float(self.scalars[key])):
+                raise _engine_invariant("replay S differs from its engine accessor: " + key)
+
+    def records(self, tag):
+        from pf_sink import ReplaySinkReader, ReplaySinkFormatError
+        try:
+            with ReplaySinkReader(self.path) as reader:
+                for record in reader:
+                    _replay_record_finite(record)
+                    if record.tag == tag:
+                        yield record
+                if reader.sha256 != self.sha256:
+                    raise _engine_invariant("the replay companion changed after verification")
+        except ReplaySinkFormatError as error:
+            raise _engine_invariant("the engine's replay companion is invalid: " + str(error)) from error
+
+    def join(self, out, sink=None):
+        trades, points = out["trades"], out["equity_curve"]
+        trade_count = _replay_array_length(trades, sink, "T")
+        point_count = _replay_array_length(points, sink, "E")
+        if trade_count != self.counts.get("R") or point_count != self.counts.get("Q"):
+            raise _engine_invariant("replay R/Q coverage differs from the JSON arrays")
+
+        def joined_trades():
+            annotations = self.records("R")
+            try:
+                for trade in trades:
+                    record = next(annotations, None)
+                    if record is None:
+                        raise _engine_invariant("replay R coverage is incomplete")
+                    row = record.as_dict()
+                    if row["n"] != trade["n"] or (row["settlement_index"] is None) != trade["open_at_end"]:
+                        raise _engine_invariant("replay R is associated with another trade")
+                    yield dict(trade, settlement_index=row["settlement_index"],
+                               recut=None if row["parent_id"] is None else
+                               {key: row[key] for key in record.fields[2:]})
+                if next(annotations, None) is not None:
+                    raise _engine_invariant("replay R coverage exceeds the JSON trades")
+            finally:
+                annotations.close()
+
+        def joined_points():
+            annotations = self.records("Q")
+            try:
+                for index, point in enumerate(points):
+                    record = next(annotations, None)
+                    if record is None:
+                        raise _engine_invariant("replay Q coverage is incomplete")
+                    row = record.as_dict()
+                    if row["point_index"] != index or row["time_ms"] != point["time_ms"]:
+                        raise _engine_invariant("replay Q is associated with another equity point")
+                    yield dict(point, **{key: row[key] for key in record.fields[2:]})
+                if next(annotations, None) is not None:
+                    raise _engine_invariant("replay Q coverage exceeds the JSON points")
+            finally:
+                annotations.close()
+        out["trades"] = _JSONRecordArray(joined_trades, trade_count)
+        out["equity_curve"] = _JSONRecordArray(joined_points, point_count)
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            if not self.named:
+                try:
+                    os.unlink(self.path)
+                except FileNotFoundError:
+                    pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+
+def _read_report_replay(lib, state, args, sink):
+    capture = getattr(args, "_replay_capture", None)
+    if capture is None:
+        return {}
+    capture.verify(lib, state, sink)
+    return {"replay": capture.scalars, "replay_rows": capture}
+
+
+def _report_wire(value):
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8") + b"\n"
+
+
+def _report_descriptor(tag, columns):
+    return {"type": tag, "fields": [column[0] for column in columns],
+            "types": [column[1] for column in columns], "units": [column[2] for column in columns]}
+
+
+def write_replay_sink(path, *, run_id, initial_capital, pointvalue, net_profit_sum,
+                      base_sha256=None, records=None):
+    """Serialize supplied replay operands; native runs use their C++ writer."""
+    from pf_sink import REPLAY_COLUMNS, _replay_record
+    tags = ("S",) if records is None else ("S", "Q", "R")
+    counts = {tag: 0 for tag in tags}
+    header = {"schema": "pf-report-replay", "version": 1, "run_id": run_id,
+              "engine": "pineforge",
+              "records": [_report_descriptor(tag, REPLAY_COLUMNS[tag]) for tag in tags]}
+    digest = hashlib.sha256()
+    with open(path, "wb") as stream:
+        def emit(value):
+            line = _report_wire(value)
+            digest.update(line)
+            stream.write(line)
+        emit(header)
+        scalars = ["S", initial_capital, pointvalue, net_profit_sum]
+        _replay_record(scalars, counts)
+        emit(scalars)
+        counts["S"] = 1
+        for row in () if records is None else records:
+            record = _replay_record(row, counts)
+            if record.tag == "S":
+                raise ValueError("supplied records must not repeat S")
+            emit(row)
+            counts[record.tag] += 1
+        trailer = {"trailer": "pf-report-replay", "version": 1, "counts": counts,
+                   "sha256": digest.hexdigest()}
+        if base_sha256 is not None:
+            trailer["base_sha256"] = base_sha256
+        stream.write(_report_wire(trailer))
+
+
+def write_report_sinks(*, primary_path, replay_path, run_id,
+                       initial_capital, pointvalue, net_profit_sum,
+                       primary_records=(), replay_records=None):
+    """Write supplied primary rows, optionally accompanied by replay operands."""
+    from pf_sink import _E, _T, RecordParser
+    header = {"schema": "pf-report-sink", "version": 1, "run_id": run_id,
+              "engine": "pineforge",
+              "records": [_report_descriptor("E", _E), _report_descriptor("T", _T)]}
+    parser, counts, digest = RecordParser(header), {"E": 0, "T": 0}, hashlib.sha256()
+    with open(primary_path, "wb") as stream:
+        line = _report_wire(header)
+        stream.write(line)
+        digest.update(line)
+        for row in primary_records:
+            line = _report_wire(row)
+            record = parser.parse(line)
+            counts[record.tag] += 1
+            stream.write(line)
+            digest.update(line)
+        stream.write(_report_wire({"trailer": "pf-report-sink", "version": 1,
+                                  "counts": counts, "sha256": digest.hexdigest()}))
+    if replay_path is not None:
+        write_replay_sink(replay_path, run_id=run_id, initial_capital=initial_capital,
+                          pointvalue=pointvalue, net_profit_sum=net_profit_sum,
+                          base_sha256=digest.hexdigest(), records=replay_records)
+
+
+# Keep the canonical builder stable when callers instrument its public seam.
+_canonical_report_dict = build_report_dict
 
 
 if __name__ == "__main__":

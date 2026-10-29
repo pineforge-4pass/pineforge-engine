@@ -62,7 +62,11 @@ namespace pineforge {
 namespace metrics { struct ScratchCurveRegion; }
 enum class PositionSide { FLAT, LONG, SHORT };
 namespace report_sink { class ScratchCurveWriter; }
-namespace report { class SelectedReportStream; }
+namespace report {
+class SelectedReportStream;
+class ReportReplay;
+enum class EquityBasis : std::uint8_t;
+}
 // Physical emulator lot entry/exit in execution order; no range-end report rows. A reversal may produce several exits followed by an entry.
 struct StreamOrderAction {
     uint64_t sequence = 0;
@@ -853,7 +857,9 @@ public:
     // registered execution observer). A refusal preserves the pending mode.
     // Configuration takes effect at the next run begin.
     int set_equity_report_mode(ReportMode mode);
-    ReportMode equity_report_mode() const { return active_equity_report_mode_; }
+    ReportMode equity_report_mode() const {
+        return active_equity_report_mode_;
+    }
     std::int64_t equity_logical_point_count() const {
         return active_equity_report_mode_ == ReportMode::SUMMARY_ONLY
                 || metrics_streaming_.no_curve
@@ -2782,6 +2788,13 @@ private:
     void retire_report_sink_output_row();
     void write_report_sink_hashes() const;
     void retire_report_sink_hashes();
+    void begin_report_replay();
+    void finish_report_replay(const ReportC* out) const;
+    void record_report_replay_close(std::size_t global);
+    void record_report_replay_point(const pf_equity_point_t& point);
+    void write_report_replay_equity(const pf_equity_point_t& point) const;
+    void write_report_replay_trade(std::size_t global, bool terminal) const;
+    void retire_report_replay_trades(std::size_t global_end);
 
 public:
     // The C descriptor is copied only after the lifecycle/shape checks. The
@@ -2816,12 +2829,36 @@ public:
     int report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const noexcept;
     int report_sink_summary_v1(pf_report_sink_summary_v1* out) const noexcept;
     int report_sink_diagnostics_v1(pf_report_sink_diagnostics_v1* out) const noexcept;
+    int set_report_replay_v1(const char* path, const char* run_id);
+    double raw_net_profit_sum() const noexcept { return net_profit_sum_; }
+    double report_pointvalue() const noexcept;
     // Codegen opts in only for modules that do not read closedtrades.*.
     // L6B1 still retains every row; L8c consumes this policy at sealing.
     void set_trade_history_streamable(bool streamable);
     bool trade_history_streamable() const { return report_sink_state_.trade_history_streamable; }
 
 protected:
+    // A private configuration tag uses the existing pending scalar, never
+    // object padding or a public recorder mode. The setter admits only the
+    // three public values; begin strips the tag before activating the mode.
+    // OFF hooks perform no registry lookup, lock, allocation or replay call.
+    static constexpr std::uint32_t report_replay_flag = UINT32_C(0x80000000);
+    ReportMode pending_equity_report_mode() const noexcept {
+        return static_cast<ReportMode>(
+            static_cast<std::uint32_t>(pending_equity_report_mode_) & ~report_replay_flag);
+    }
+    ReportMode with_report_replay_flag(ReportMode mode) const noexcept {
+        return static_cast<ReportMode>(static_cast<std::uint32_t>(mode)
+            | (static_cast<std::uint32_t>(pending_equity_report_mode_) & report_replay_flag));
+    }
+    report::ReportReplay* report_replay_state() const noexcept {
+        if (!(static_cast<std::uint32_t>(pending_equity_report_mode_) & report_replay_flag))
+            return nullptr;
+        return find_report_replay();
+    }
+    report::ReportReplay* find_report_replay() const noexcept;
+    void amend_report_replay_point(std::int64_t time, report::EquityBasis basis,
+                                  double term) const;
     // Begin-only source binder input. Backends copy the owner, not this
     // reference; no byte pointer is exposed to a strategy or a hot callback.
     const std::shared_ptr<detail::ScratchSlab>& scratch_tables_for_run() const noexcept {
