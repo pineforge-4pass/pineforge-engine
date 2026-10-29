@@ -644,3 +644,19 @@ if(PINEFORGE_BUILD_TESTS)
         test_native_live_report_storage_stop_first_input test_native_live_report_ratio_body_replay
         PROPERTIES TIMEOUT 180)
 endif()
+
+if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
+    set(_pf_layout_proof_command ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/native_live_startup_e2e.py $<TARGET_FILE:pineforge-live>
+        $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_market_example>
+        $<TARGET_FILE:live_contract_absent> $<TARGET_FILE:live_contract_unknown>
+        $<TARGET_FILE:live_contract_native_no_export> $<TARGET_FILE:live_contract_native_stub>
+        $<TARGET_FILE:test_native_live_report_cli>)
+    add_test(NAME native_live_engine_layout_e2e
+        COMMAND ${_pf_layout_proof_command} engine-layout)
+    add_test(NAME native_live_opaque_report_e2e
+        COMMAND ${_pf_layout_proof_command} opaque-report)
+    set_tests_properties(native_live_engine_layout_e2e native_live_opaque_report_e2e
+        PROPERTIES TIMEOUT 180)
+    add_dependencies(test_native_live_report_cli live_contract_native_stub)
+endif()

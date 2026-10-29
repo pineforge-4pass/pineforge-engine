@@ -1195,6 +1195,19 @@ int main(int argc, char** argv) {
         require(argc == 4, "expected runner, native module and test case");
         std::signal(SIGPIPE, SIG_IGN);
         const std::string test_case = argv[3];
+        if (test_case == "module-layout") {
+            // Probe in a C++ process so instrumented modules use its runtime.
+            std::unique_ptr<void, decltype(&dlclose)> library(
+                dlopen(argv[2], RTLD_NOW | RTLD_LOCAL), dlclose);
+            require(library != nullptr, "cannot open module for layout probe");
+            const auto stamp = reinterpret_cast<std::uint32_t (*)()>(
+                dlsym(library.get(), "strategy_stream_engine_layout_version"));
+            std::cout << Json::object({
+                {"has_stamp", Json::boolean(stamp != nullptr)},
+                {"version", stamp ? report_number(stamp()) : Json{}}
+            }).dump() << '\n';
+            return 0;
+        }
 #if !defined(__linux__)
         if (test_case == "memory") {
             std::cout << "SKIP report memory: runner VmHWM requires Linux /proc/<pid>/status\n";

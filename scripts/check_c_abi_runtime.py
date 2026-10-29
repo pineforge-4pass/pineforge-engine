@@ -44,7 +44,6 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_get_last_error",
     "strategy_stream_begin",
     "strategy_stream_api_version",
-    "strategy_stream_engine_layout_version",
     "strategy_stream_push_bar",
     "strategy_stream_order_actions_len",
     "strategy_stream_order_action_get",
@@ -128,6 +127,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_report_sink_receipt_v1",
     "strategy_set_scratch_tables_v1",
     "strategy_report_sink_summary_v1",
+    "strategy_stream_engine_layout_version",
 })
 
 # The headers under include/pineforge/ whose PF_API declarations are read as one
@@ -140,7 +140,6 @@ RUNTIME_HEADERS = (
     "selected_window.h",
     "report_sink.h",
 )
-
 EXPECTED_PUBLIC_DECLARATIONS = 115
 EXPECTED_RUNTIME_IMPLEMENTATIONS = 95
 
