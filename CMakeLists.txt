@@ -543,3 +543,11 @@ message(STATUS "  build live runner: ${PINEFORGE_BUILD_LIVE_RUNNER}")
 message(STATUS "  build src layer:   ${PINEFORGE_BUILD_SOURCE_LAYER}")
 message(STATUS "  build bench strat: ${PINEFORGE_BUILD_BENCH_STRATEGIES}")
 message(STATUS "")
+
+# The window-plan shared library links the kernel archive, which keeps a weak
+# reference to the optional capability a generated strategy module may define.
+# macOS refuses an undefined symbol in a shared library, so only this one
+# symbol may stay undefined; every other missing symbol is still a link error.
+if(APPLE)
+    target_link_options(pineforge_window_plan PRIVATE "-Wl,-U,_strategy_reads_trade_history")
+endif()
