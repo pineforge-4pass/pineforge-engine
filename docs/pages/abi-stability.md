@@ -100,8 +100,8 @@ report-sink output hash waiver; trading state and broker hashes are unchanged.
 
 The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
 
-The stable inventory contains 117 compiled-strategy `PF_API` declarations
-(97 implementations in `src/c_abi.cpp` plus twenty generated declarations)
+The stable inventory contains 118 compiled-strategy `PF_API` declarations
+(98 implementations in `src/c_abi.cpp` plus twenty generated declarations)
 and 43 native-host declarations. A module supplies the generated symbols it
 supports; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
@@ -214,7 +214,7 @@ are unchanged. Uncertified hosts and Off requests do not call admission or
 preparation.
 
 Sixteen per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 97 runtime implementations, including the
+functions. The remaining 98 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.
