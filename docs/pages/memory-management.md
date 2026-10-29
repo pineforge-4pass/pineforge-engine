@@ -79,8 +79,8 @@ Binary curve scratch on **disk** still costs **24 B per script bar**
 **6 MiB at 262,144 bars** and **48 MiB at 2,097,152 bars**, calculated payload
 sizes excluding other scratch and output.
 The sink's `E` output and the default route's JSON artifact also grow with
-the bar count: `_build_sink_report` docker/run_json.py:7609-7706 supplies lazy
-record arrays, and `_prepare_stream_report` docker/run_json.py:7470-7490
+the bar count: `_build_sink_report` docker/run_json.py:7701-7796 supplies lazy
+record arrays, and `_prepare_stream_report` docker/run_json.py:7562-7582
 serializes them to a temporary artifact.
 Lazy serialization bounds buffers, not output bytes.
 The test that checks the resident claim runs with a fixed minimal table
@@ -135,8 +135,8 @@ bytes.
 
 The sink-off jailed route buffers the whole report text before writing to
 stdout, so a serialization error publishes no partial report
-(`_prepare_report_json`, `docker/run_json.py:7495`; publication in
-`_write_report`, `docker/run_json.py:4791`). Its UTF-8 byte buffer uses about
+(`_prepare_report_json`, `docker/run_json.py:7585`; publication in
+`_write_report`, `docker/run_json.py:4773`). Its UTF-8 byte buffer uses about
 one byte of resident text per output byte, plus bounded encoding and
 read-back buffers, on top of the input mapping and the engine's storage:
 this is `O(output)` memory for the report the caller requested. Passing
@@ -210,8 +210,8 @@ measured jailed descriptor run carried no sha256 of the stream, so a caller has 
 the trailer against.
 
 The process entry reserves the caller's original stdout as a private report descriptor before argument parsing or
-strategy loading (`_ReportOutput` at `docker/run_json.py:7953`; `_host_main` at
-`docker/run_json.py:8113`). It redirects native fd 1 to fd 2, and writes the summary and every typed
+strategy loading (`_ReportOutput` at `docker/run_json.py:8041`; `_host_main` at
+`docker/run_json.py:8201`). It redirects native fd 1 to fd 2, and writes the summary and every typed
 failure through the saved descriptor. The native stream N stays on the descriptor supplied by the caller.
 Isolation holds only when the harness keeps stdout and stderr separate. If they name the same file
 (for example, with `2>&1`), the host writes one stderr line,
@@ -219,15 +219,15 @@ Isolation holds only when the harness keeps stdout and stderr separate. If they 
 publication through the saved descriptor.
 The host refuses a report descriptor that shares a number or open file with N, the phase descriptor, or
 arena fd 5, using `run_request_invalid` (`_validate_report_fd_separation` at
-`docker/run_json.py:8075`). The library can write the saved descriptor because it runs in this process.
+`docker/run_json.py:8163`). The library can write the saved descriptor because it runs in this process.
 The descriptor is non-inheritable, so exec'd children do not get it. Code that deliberately writes
 through that file description can still affect the report. This transport arrangement isolates
 ordinary native fd 1 output when the streams stay separate; it is not a security boundary.
 
 Imported library calls write reports and failures to the current Python stdout without reserving or
-redirecting descriptors (`_report_output` at `docker/run_json.py:8036`). Each call to the library entry
+redirecting descriptors (`_report_output` at `docker/run_json.py:8124`). Each call to the library entry
 gets its own publication guard, so repeated runs remain independent (`_LibraryReportRun` at
-`docker/run_json.py:7932`).
+`docker/run_json.py:8020`).
 
 **When the report is complete.** The verified trailer is the completion marker, and EOF alone is not.
 Read every record as provisional until the trailer's counts and sha256 equal what the reader counted and
@@ -252,7 +252,7 @@ from the closed list of the catalog (`report_sink_failed` at `docker/run_failure
 `arena_bytes`, `claimed_bytes`, `store` and `needed_bytes_lower_bound`, `sink_exhausted` carries
 `sink_bytes` and `cap_bytes`, and every other reason carries `reason` alone, a closed reader included.
 A write error while `run_json.py` prepares the report in scratch is raised as `RunFailure` with
-`scratch_io` (`docker/run_json.py:7486-7487`); it is not a write to the descriptor. `sink_peer_closed` is also raised when the descriptor setup itself
+`scratch_io` (`docker/run_json.py:7576-7577`); it is not a write to the descriptor. `sink_peer_closed` is also raised when the descriptor setup itself
 finds a closed peer (`EPIPE`, `ECONNRESET` or `ENOTCONN`, with the message "report sink fd setup
 failed"; `RunFailure` at `docker/run_json.py:6030-6037`). The descriptor then holds records without a
 verified trailer, and a caller treats it as absent. The engine writer loops a short write to completion,

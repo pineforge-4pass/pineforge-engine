@@ -31,6 +31,12 @@ unchanged except for two additive diagnostics keys, described below.
   previously omitted it and could drop the diagnostic when the compounded
   return overflowed; metric values are unchanged.
 - Strategies that reversed on an entry id the other side had used before kept the wrong position: the reversal's new lot was erased from its entry, so later percentage exits were sized from zero units and closed nothing, the position stayed open, later entries could exceed the pyramiding limit, and the closed-trade rows for those exits were missing. Affected releases: v1.1.0 through v1.7.0. Fixed in 1.8.0. Release 1.0.0 handles percentage exits after a reversal differently for an older, unrelated reason, so it is not a safe version to stay on either.
+- In-process callers can again iterate the report's trades and equity curve on
+  the default path, as well as the outputs rows, and take their length. Rows
+  decode lazily; trades and equity also support `[i]` (new for sink trades).
+  The first read freezes the report spool, which then accepts no more rows.
+  Iterate before the report's resources close; afterwards iteration raises
+  `ValueError`.
 
 ### Compatibility and migration
 
