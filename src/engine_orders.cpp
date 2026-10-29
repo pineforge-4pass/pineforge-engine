@@ -390,12 +390,18 @@ struct TradeLedger::State {
         std::array<char, kCacheStringBytes> strings{};
         // Generation bases are multiples of four. Bit 0 marks packed strings
         // ready; bit 1 is the reference bit. Neither adds entry storage.
+        [[gnu::always_inline]]
         bool strings_valid() const { return (generation & size_type{1}) != 0; }
     };
     static_assert(sizeof(CacheEntry) == kLedgerEntryBytes);
     size_type cache_rows = kDefaultCacheRows;
     mutable std::unique_ptr<CacheEntry[]> cache;
     mutable size_type cache_count = 0, cache_capacity = 0;
+    // Counts are at most kMaxCacheRows; max - (max >> 1) is the high bit.
+    // Reuse that bit as a modulo sentinel without adding cache storage.
+    static constexpr size_type kCacheModulo = std::numeric_limits<size_type>::max()
+        - (std::numeric_limits<size_type>::max() >> 1);
+    static_assert(kMaxCacheRows < kCacheModulo);
     mutable size_type cache_generation = 4;
     // A block can contain more rows than a deliberately small configured
     // cache. Keep the requested row available to the current accessor after
@@ -447,15 +453,18 @@ struct TradeLedger::State {
                                                                      : "value_above_maximum"}},
                                                "trade ledger: cache rows outside [1,1048576]");
     }
+    [[gnu::always_inline]]
     size_type cache_slot(size_type global) const {
         // Defaults/growth are powers of two. The public integer knob also
         // permits other final caps, which need the ordinary modulo fallback.
         const auto mask = cache_capacity - 1;
-        return (cache_capacity & mask) == 0 ? global & mask : global % cache_capacity;
+        return (cache_count & kCacheModulo) == 0 ? global & mask : global % cache_capacity;
     }
+    [[gnu::always_inline]]
     bool current(const CacheEntry& entry) const {
         return (entry.generation & ~size_type{3}) == cache_generation;
     }
+    [[gnu::always_inline]]
     CacheEntry* cached(size_type global) const {
         if (!cache) return nullptr;
         auto& entry = cache[cache_slot(global)];
@@ -475,7 +484,7 @@ struct TradeLedger::State {
     }
     void invalidate_cache() const {
         index.unmap(index_view);
-        cache_count = 0;
+        cache_count &= kCacheModulo;
         numeric_window.count = 0;
         numeric_direction = {};
         // Generations make publication/rewind/move invalidation O(1).
@@ -505,6 +514,7 @@ struct TradeLedger::State {
         cache_capacity = 0;
         cache = std::make_unique<CacheEntry[]>(capacity);
         cache_capacity = capacity;
+        cache_count = (capacity & (capacity - 1)) == 0 ? 0 : kCacheModulo;
     }
     void pack_strings(CacheEntry& entry) const {
         if (entry.strings_valid()) return;
@@ -811,14 +821,19 @@ struct TradeLedger::State {
         return block_result;
     }
     template<auto Member>
+    [[gnu::always_inline]]
     auto numeric_field(size_type global) const {
         check(global);
+        if (const auto* entry = cached(global)) return entry->record.*Member;
         return numeric_record(global).*Member;
     }
     template<StringExtent Record::*Member>
+    [[gnu::always_inline]]
     std::string string_field(size_type global) const {
         check(global);
-        const auto& entry = load(global);
+        auto* cached_entry = cached(global);
+        if (cached_entry) pack_strings(*cached_entry);
+        const auto& entry = cached_entry ? *cached_entry : load(global);
         const auto text = entry.record.*Member;
         if (!entry.strings_valid()) return get_string(text);
         size_type offset = 0;
@@ -831,9 +846,12 @@ struct TradeLedger::State {
         return std::string(entry.strings.data() + offset, static_cast<size_type>(text.length));
     }
     template<StringExtent Record::*Member>
+    [[gnu::always_inline]]
     bool string_equals(size_type global, std::string_view rhs) const {
         check(global);
-        const auto& entry = load(global);
+        auto* cached_entry = cached(global);
+        if (cached_entry) pack_strings(*cached_entry);
+        const auto& entry = cached_entry ? *cached_entry : load(global);
         const auto text = entry.record.*Member;
         if (!entry.strings_valid() || text.length > kCacheStringBytes)
             return string_equals_chunks(text, rhs);
@@ -855,11 +873,16 @@ struct TradeLedger::State {
     std::uint64_t record_offset(size_type global) const {
         return absolute_record_offset(global) - index_origin;
     }
+    [[noreturn, gnu::cold, gnu::noinline]]
+    static void throw_check_failure(bool retired) {
+        if (retired) throw detail::RetiredTradeHistoryRead();
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade ledger: row outside resident window");
+    }
+    [[gnu::always_inline]]
     void check(size_type global, bool mutable_row = false) const {
-        if (retiring && global < first) throw detail::RetiredTradeHistoryRead();
-        if (global >= end || (mutable_row && global < first))
-            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
-                                           "trade ledger: row outside resident window");
+        if (retiring && global < first) throw_check_failure(true);
+        if (global >= end || (mutable_row && global < first)) throw_check_failure(false);
     }
     size_type slot(size_type global) const {
         return (head + global - resident_first) % kResidentRows;
@@ -1213,7 +1236,9 @@ TradeLedger::size_type TradeLedger::cache_resident_bytes() const {
     return sizeof(TradeLedger) + sizeof(State)
         + state_->cache_capacity * kLedgerEntryBytes;
 }
-TradeLedger::size_type TradeLedger::cache_size() const { return state_->cache_count; }
+TradeLedger::size_type TradeLedger::cache_size() const {
+    return state_->cache_count & ~State::kCacheModulo;
+}
 
 void TradeLedger::reserve(size_type) {}
 
