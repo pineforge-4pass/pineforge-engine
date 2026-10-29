@@ -155,12 +155,12 @@ overrides or imported libraries, its receipt must bind those inputs too.
 
 The carried declaration fields are visible in `PineStrategyConfig` at
 `include/pineforge/source/pine_adapter.hpp:78`. Their `project` projection starts at
-`src/source/pine_adapter.cpp:2911`. The relevant rules are:
+`src/source/pine_adapter.cpp:2914`. The relevant rules are:
 
 | Declaration / native fact | Sizing consequence and evidence |
 | --- | --- |
-| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2830`). Do not assume this caps strategy.order or use it as an unconditional H. |
-| calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3011`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:76`. The native point budget is a callback bound, not a total fill bound. |
+| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2833`). Do not assume this caps strategy.order or use it as an unconditional H. |
+| calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3014`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:76`. The native point budget is a callback bound, not a total fill bound. |
 | max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:7770`. |
 | first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:888`. Count this source path; a native budget of 8 is not Pine's bound. |
 | process_orders_on_close | Adds a matching opportunity after calculation; projection at `src/source/pine_adapter.cpp:2823`. It does not impose an order/trade count. |
@@ -348,7 +348,7 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:573` |
 | Ordered consumed-cycle fold | 136*leaves + 2088*branches + 2096*savedPath | `include/pineforge/detail/id_pair_ordered_fold.hpp:161`, `:165`, `:172`, size assertion for `Leaf`, `Branch` and `Snapshot` at `:183` |
 | Successor-root rows | 16*R | `src/native_order.cpp:7984`, row assertion for `Row` at `:7981`, 64-row tail bound `kTailRows` at `:7986` |
-| Frozen external openings | **0 in this certified profile** | Stock source builds owned vectors at `src/source/pine_adapter.cpp:7032`, `:6995`, `:9669`; generic external owners are excluded below |
+| Frozen external openings | **0 in this certified profile** | Stock source builds owned vectors at `src/source/pine_adapter.cpp:7035`, `:6995`, `:9669`; generic external owners are excluded below |
 
 The AVL node is seven uint64 words = 56 bytes, then its value and exact key
 bytes. CohortFacts::Record is handle, cycle, origin_count, origin_digest and
