@@ -550,8 +550,8 @@ void success_case() {
     cr257::validate_trading(reference, driver);
     require(cr257::canonical(actual).bytes == cr257::canonical(reference).bytes,
             "GUARD: full report/trade bytes changed against independent memory reference");
-    // Separate recording-enabled twins: CR-257's complete canonical encoder
-    // intentionally refuses optional arrays, so compare their hash bits here.
+    // Separate recording-enabled twins: the complete canonical encoder in
+    // test_cr257_source_exit_scratch_io.cpp intentionally refuses optional arrays, so compare their hash bits here.
     // Match ingress phases for the hash comparison: the continuation includes
     // the stream scheduler's phase, unlike the economic report comparison.
     cr257::TradingHost recorded(driver);

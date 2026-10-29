@@ -7932,8 +7932,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 # --- CR-150 resident-command-scratch end ---
 # --- CR-150 perf-nopartial begin ---
-# One lane-owned executable. Reuse CR-257's syscall accounting and
-# independent reference; keep its extra translation units to resolve the
+# One lane-owned executable. Reuse the pread/pwrite accounting and the
+# independent memory reference of test_cr257_source_exit_scratch_io.cpp; keep its extra translation units to resolve the
 # imported (renamed, uncalled) harness entry without replacing any provider.
 if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_sources(test_perf_nopartial_success PRIVATE
