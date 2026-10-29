@@ -1,6 +1,7 @@
 """CLI contract for native runner startup/identity. Python orchestrates only."""
 import json
 import hashlib
+import base64
 import os
 import sqlite3
 import subprocess
@@ -11,8 +12,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from native_live_receipts import receipts_by_sequence
+from generate_native_live_opaque_report_golden import (
+    GOLDEN, INPUT_COUNT, MAIN_REVISION, capture, fixture_digest, write_fixture,
+)
 
-(runner, legacy_library, native_example, absent, unknown, no_export, stub) = sys.argv[1:]
+(runner, legacy_library, native_example, absent, unknown, no_export, stub) = sys.argv[1:8]
 
 
 def ledger_bound(path):
@@ -95,6 +99,115 @@ def base_cmd(strategy, warmup, ledger, config=None, extra=None):
 
 def receipts_match_ledger_order(received_bytes, event_rows):
     return list(received_bytes) == [row[4] for row in event_rows]
+
+
+def module_layout(probe, module):
+    result = subprocess.run([probe, runner, module, 'module-layout'],
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
+    return json.loads(result.stdout)
+
+
+def engine_layout_proof(probe):
+    assert module_layout(probe, native_example) == {'has_stamp': True, 'version': 1}, (
+        'the normally linked native example must export the current engine layout stamp')
+    with tempfile.TemporaryDirectory(prefix='pineforge-engine-layout-') as temporary:
+        root = Path(temporary)
+        write_fixture(root)
+        _, _, output = capture(runner, native_example, root, interval=2)
+        lines = output.splitlines(keepends=True)
+        deltas = [json.loads(line) for line in lines[:-1]]
+        summary = json.loads(lines[-1])
+        assert summary['inputs_committed'] == summary['inputs_processed'] == INPUT_COUNT
+        assert len(deltas) == INPUT_COUNT + 1, 'expected each commit plus the EOF ratio refresh'
+        for cursor, delta in enumerate(deltas[:-1], 1):
+            assert delta['schema_version'] == 'pineforge-native-report-delta/v1'
+            assert delta['input_cursor'] == cursor
+            # Only cumulative_report's accumulator branch supplies this marker.
+            assert delta['ratios_as_of_input'] == cursor // 2 * 2, (
+                'the Strategy loader must select the accumulator', cursor, delta)
+        assert deltas[-1]['schema_version'] == 'pineforge-native-report-delta/v1'
+        assert deltas[-1]['input_cursor'] == deltas[-1]['ratios_as_of_input'] == INPUT_COUNT
+        with sqlite3.connect(root / 'ledger.sqlite3') as db:
+            stored = db.execute('SELECT input_cursor,payload FROM report_snapshots '
+                                'ORDER BY input_cursor').fetchall()
+        assert [cursor for cursor, _ in stored] == list(range(INPUT_COUNT + 1))
+        for cursor, payload in stored:
+            assert json.loads(payload)['ratios_as_of_input'] == cursor // 2 * 2
+            if cursor:
+                assert lines[cursor - 1] == (
+                    b'{"input_cursor":' + str(cursor).encode() + b',' +
+                    payload.encode()[1:] + b'\n'), 'stdout must mirror the committed delta bytes'
+    print('native engine layout: stamped module uses interval accumulator and EOF refresh')
+
+
+def opaque_report_proof(probe):
+    assert module_layout(probe, stub) == {'has_stamp': False, 'version': None}, (
+        'the int-handle module must export no engine layout stamp')
+    with tempfile.TemporaryDirectory(prefix='pineforge-opaque-report-') as temporary:
+        root = Path(temporary)
+        default = root / 'default'
+        interval = root / 'interval'
+        default.mkdir()
+        interval.mkdir()
+        for directory in (default, interval):
+            write_fixture(directory)
+        deployment, rows, output = capture(runner, stub, default)
+        _, interval_rows, interval_output = capture(runner, stub, interval, interval=2)
+        for stream in (output, interval_output):
+            documents = [json.loads(line) for line in stream.splitlines()]
+            deltas, summary = documents[:-1], documents[-1]
+            assert summary['inputs_committed'] == summary['inputs_processed'] == INPUT_COUNT
+            assert len(deltas) == INPUT_COUNT, 'opaque reports must have no EOF ratio patch'
+            for cursor, delta in enumerate(deltas, 1):
+                assert delta['schema_version'] == 'pineforge-native-report-delta/v1'
+                assert delta['input_cursor'] == cursor
+                assert 'ratios_as_of_input' not in delta and 'ratio_context' not in delta, (
+                    'the opaque module must take fill_report even at K=2', delta)
+                report = delta['fields']['report']
+                profit = 1.25 * cursor * (cursor + 1) / 2
+                assert report['net_profit'] == profit and report['trades_len'] == cursor
+                assert delta['arrays']['trades']['items'][-1]['pnl'] == 1.25 * cursor
+                assert delta['arrays']['equity_curve']['items'][-1]['equity'] == (
+                    10000 + profit + 0.5 * cursor)
+                assert delta['fields']['state_hash'] == str(cursor + 1)
+        for ledger in (rows, interval_rows):
+            snapshots = json.loads(ledger)['report_snapshots']
+            assert [cursor for cursor, _ in snapshots] == list(range(INPUT_COUNT + 1))
+            assert all('ratios_as_of_input' not in json.loads(payload)
+                       for _, payload in snapshots)
+        assert GOLDEN.is_file(), (
+            f'missing main-runner golden: {GOLDEN}; on the lab run '
+            'tests/generate_native_live_opaque_report_golden.py with --main-source, '
+            '--main-runner and --stub, then commit the golden; do not use the fix runner')
+        golden = json.loads(GOLDEN.read_text())
+        assert golden['source_revision'] == MAIN_REVISION
+        assert golden['fixture_sha256'] == fixture_digest(default)
+        assert golden['stub_source_sha256'] == hashlib.sha256(
+            (Path(__file__).parent / 'test_live_contract_plugins.cpp').read_bytes()).hexdigest()
+        reference_deployment = golden['deployment'].encode('ascii')
+        assert len(reference_deployment) == 64 and all(
+            byte in b'0123456789abcdef' for byte in reference_deployment)
+        for key, actual in (('ledger_base64', rows), ('jsonl_base64', output)):
+            expected = base64.b64decode(golden[key], validate=True)
+            assert reference_deployment in expected
+            # Identity includes the module binary and varies across toolchains.
+            # Rebind only that identity in the golden; actual bytes stay intact.
+            expected = expected.replace(reference_deployment, deployment.encode('ascii'))
+            assert actual == expected, f'opaque fill_report bytes differ from main: {key}'
+    print('opaque layout: changing fill_report bytes match main; K=2 has no ratio marker')
+
+
+if len(sys.argv) > 8:
+    assert len(sys.argv) == 10, 'expected module probe and layout proof case'
+    probe, proof = sys.argv[8:]
+    if proof == 'engine-layout':
+        engine_layout_proof(probe)
+    elif proof == 'opaque-report':
+        opaque_report_proof(probe)
+    else:
+        raise AssertionError(f'unknown layout proof: {proof}')
+    sys.exit(0)
 
 
 with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
