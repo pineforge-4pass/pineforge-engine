@@ -21,11 +21,11 @@ struct LiveReportAccumulator::State {
     double capital = 0.0, net_prefix = 0.0;
     std::unique_ptr<metrics::TradeStatsAccumulator> all, longs, shorts;
     metrics::EquityMetricsFold equity_fold;
-    // Raw engine points, including its held point. A presented tail is used
-    // only in a value copy of the fold and during a batch ratio computation.
+    // Raw engine points, including its held point. Presentation is confined
+    // to a value copy of the fold and the contiguous ratio workspace.
     std::deque<pf_equity_point_t> curve;
     // Reuse the presentation suffix and the batch ratio workspace on each
-    // read. Their lengths are the suffix and the ratio-boundary series.
+    // read. The workspace carries the raw prefix and a presented held point.
     std::vector<TradeC> trade_rows;
     std::vector<pf_equity_point_t> ratio_curve;
     pf_equity_stats_t ratios{};
@@ -207,9 +207,14 @@ report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
         if (i < old_points) {
             state.equity_fold.replace_last(point, key);
             state.curve[i] = point;
+            // Restore the previous presented tail before it becomes prefix.
+            state.ratio_curve[i] = point;
+            ++state.work.ratio_points_supplied;
         } else {
             state.equity_fold.fold(point, key);
             state.curve.push_back(point);
+            state.ratio_curve.push_back(point);
+            ++state.work.ratio_points_supplied;
         }
         ++state.work.equity_rows_folded;
         patch.equity.rows.push_back(point);
@@ -245,7 +250,11 @@ report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
         throw coded<std::logic_error>(RunFailureCode::report_shape_unsupported,
             {{"shape", "live_report_tail"}},
             "live report presentation must preserve its suffix and held-point views");
-    if (!patch.equity.rows.empty()) patch.equity.rows.back() = tail;
+    if (!patch.equity.rows.empty()) {
+        patch.equity.rows.back() = tail;
+        state.ratio_curve.back() = tail;
+        ++state.work.ratio_points_supplied;
+    }
 
     // Retain the prefix BEFORE the last closed row. Its report replacement
     // never needs a subtraction or a reassociated partial sum.
@@ -284,13 +293,6 @@ report::LiveReportPatch NativeExecutionConsumer::fill_live_report_patch(
         && (!state.have_ratios || state.ratios_cursor != input_index)) {
         // Use precisely the batch routine, including both generated-return
         // passes and their validation/NaN rules. Its cost is accounted apart.
-        state.ratio_curve.resize(state.curve.size());
-        std::size_t point_index = 0;
-        for (const auto& point : state.curve) {
-            state.ratio_curve[point_index++] = point;
-            ++state.work.ratio_points_supplied;
-        }
-        if (!state.ratio_curve.empty()) state.ratio_curve.back() = tail;
         if (input_index == 0) ++state.work.warmup_ratio_recomputations;
         else ++state.work.ratio_recomputations;
         // A mutable pointer would select the structural-source template.

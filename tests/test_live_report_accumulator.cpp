@@ -309,18 +309,22 @@ struct TailHost : Host {
     }
 };
 
-void replacement_tails() {
+void replacement_tails(std::uint64_t interval = 1) {
     const auto bars = tape(12);
     auto config = l2_fixture::report_spec("live-report-replacements");
     config.input_tf = config.script_tf = "1D";
     config.report_policy = NativeReportPolicy::KernelRecorded;
+    if (interval > 1) config.chart_timezone = "America/New_York";
     TailHost actual, reference;
     REQUIRE(actual.configure_native(config).status == NativeSetupStatus::Applied);
     REQUIRE(reference.configure_native(config).status == NativeSetupStatus::Applied);
     REQUIRE(actual.stream_begin(bars.data(), 3, "1D", "1D"));
     REQUIRE(reference.stream_begin(bars.data(), 3, "1D", "1D"));
-    LiveReportAccumulator carried;
+    LiveReportAccumulator carried(interval);
     ReportDeltas deltas(true), expected_deltas(true);
+    Json last_ratios;
+    std::uint64_t as_of = 0;
+    bool finite_boundary = false;
     int next_bar = 3;
     for (std::uint64_t i = 0; i < 16; ++i) {
         if (i == 0 || i == 4) {
@@ -338,14 +342,53 @@ void replacement_tails() {
             actual.replace_held(value, 0.31 * static_cast<double>(i));
             reference.replace_held(value, 0.31 * static_cast<double>(i));
         }
+        const auto before = carried.work();
         const auto patch = carried.update(actual, i);
         BatchReport batch(reference);
         const auto hash = actual.stream_state_hash();
-        assert(deltas.update(patch, "replaced", i, hash)
-            == expected_deltas.update(batch.c(), "replaced", i, hash));
-        assert(deltas.json() == native_report_document(batch.c(), "replaced", i, hash).dump());
+        auto expected = native_report_document(batch.c(), "replaced", i, hash);
+        if (interval == 1) {
+            assert(deltas.update(patch, "replaced", i, hash)
+                == expected_deltas.update(batch.c(), "replaced", i, hash));
+        } else {
+            // The independent batch report stages the whole raw curve and
+            // presents only its current tail, even after deferred boundaries.
+            if (i % interval == 0) {
+                last_ratios = ratios(expected);
+                as_of = i;
+                finite_boundary |= i != 0 && std::isfinite(batch.value.metrics.equity.sharpe_bar);
+            }
+            set_ratios(expected, last_ratios);
+            expected.members["ratios_as_of_input"] = report_number(as_of);
+            expected.members["ratio_context"] = Json::object({
+                {"chart_timezone", Json::string(config.chart_timezone)}});
+            deltas.update(patch, "replaced", i, hash);
+            assert(patch.ratios_as_of_input == as_of);
+            assert(carried.work().ratio_points_supplied - before.ratio_points_supplied
+                <= patch.equity.rows.size() + 1);
+        }
+        assert(deltas.json() == expected.dump());
     }
     assert(carried.work().fallback_report_reads == 0);
+    if (interval > 1) {
+        assert(finite_boundary);
+        // Refresh the skipped final boundary at the same cursor, then repeat
+        // it: the held tail must not accumulate presentation or recomputation.
+        BatchReport batch(reference);
+        const auto hash = actual.stream_state_hash();
+        auto expected = native_report_document(batch.c(), "replaced", 15, hash);
+        expected.members["ratios_as_of_input"] = report_number(15);
+        expected.members["ratio_context"] = Json::object({
+            {"chart_timezone", Json::string(config.chart_timezone)}});
+        const auto refreshed = carried.update(actual, 15, true);
+        deltas.update(refreshed, "replaced", 15, hash);
+        assert(deltas.json() == expected.dump());
+        const auto recomputations = carried.work().ratio_recomputations;
+        const auto repeated = carried.update(actual, 15, true);
+        deltas.update(repeated, "replaced", 15, hash);
+        assert(deltas.json() == expected.dump());
+        assert(carried.work().ratio_recomputations == recomputations);
+    }
     // HostRecorded has no equity observations: all zero-length patches and
     // batch NaN rules still need to serialize exactly.
     Host empty;
@@ -376,7 +419,11 @@ void growth() {
 
 int main(int argc, char** argv) {
     assert(argc == 2);
-    if (std::string(argv[1]) == "equivalence") { exactness(); replacement_tails(); }
+    if (std::string(argv[1]) == "equivalence") {
+        exactness();
+        replacement_tails();
+        replacement_tails(7);
+    }
     else if (std::string(argv[1]) == "commit-retry") {
         exercise(32, 1, "UTC", true, false, true);
         exercise(32, 3, "UTC", true, false, true);

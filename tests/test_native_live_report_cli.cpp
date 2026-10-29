@@ -39,10 +39,28 @@ extern "C" PF_API uint32_t strategy_stream_engine_layout_version(void) { return 
 #include <unistd.h>
 #include <vector>
 
+extern char** environ;
+
 using namespace pineforge::live;
 namespace fs = std::filesystem;
 
 namespace {
+
+#if defined(__SANITIZE_ADDRESS__)
+constexpr bool kUnderAsan = true;
+#elif defined(__has_feature)
+constexpr bool kUnderAsan = __has_feature(address_sanitizer);
+#else
+constexpr bool kUnderAsan = false;
+#endif
+
+#if defined(__SANITIZE_THREAD__)
+constexpr bool kUnderTsan = true;
+#elif defined(__has_feature)
+constexpr bool kUnderTsan = __has_feature(thread_sanitizer);
+#else
+constexpr bool kUnderTsan = false;
+#endif
 
 void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
@@ -98,10 +116,32 @@ class Runner {
     }
 
 public:
-    Runner(std::vector<std::string> command, const fs::path& errors) : errors_(errors) {
+    Runner(std::vector<std::string> command, const fs::path& errors, bool measure_rss = false)
+        : errors_(errors) {
         std::vector<char*> argv;
         for (auto& argument : command) argv.push_back(argument.data());
         argv.push_back(nullptr);
+        std::string asan_options;
+        std::vector<char*> environment;
+        if (measure_rss && kUnderAsan) {
+            // Quarantined freed allocations distort the live-retention slope.
+            // Append only this setting, preserving caller leak/error options;
+            // the last quarantine_size_mb wins if the caller already set it.
+            asan_options = "ASAN_OPTIONS=";
+            if (const auto* inherited = std::getenv("ASAN_OPTIONS"); inherited && *inherited) {
+                asan_options += inherited;
+                asan_options += ':';
+            }
+            asan_options += "quarantine_size_mb=0";
+            for (auto** entry = environ; *entry; ++entry) {
+                if (std::string(*entry).rfind("ASAN_OPTIONS=", 0) != 0)
+                    environment.push_back(*entry);
+            }
+            environment.push_back(asan_options.data());
+            environment.push_back(nullptr);
+        }
+        // Assemble the child-only environment before fork; the parent keeps
+        // its original sanitizer settings and the child only needs execve.
         int intake[2], stdout_pipe[2];
         require(pipe(intake) == 0, "stdin pipe failed");
         require(pipe(stdout_pipe) == 0, "stdout pipe failed");
@@ -116,7 +156,7 @@ public:
                 _exit(126);
             close(intake[0]); close(intake[1]);
             close(stdout_pipe[0]); close(stdout_pipe[1]); close(error_fd);
-            execv(argv[0], argv.data());
+            execve(argv[0], argv.data(), environment.empty() ? environ : environment.data());
             _exit(127);
         }
         close(intake[0]); close(stdout_pipe[1]); close(error_fd);
@@ -1198,24 +1238,31 @@ void layout_one_report_and_replay(Fixture& fixture) {
 
 void report_memory(Fixture& fixture) {
     using Clock = std::chrono::steady_clock;
-    const auto deadline = Clock::now() + std::chrono::seconds(160);
+    // Solo measurements on the accumulator head (2026-10-29): release 82.5 s,
+    // TSAN 759.8 s, ASan+UBSan 606.4 s. The same row ran 1.57x slower under
+    // parallel ctest load in release (129 s against 82.5 s solo), so the
+    // sanitizer budgets are 2.6x the solo times, rounded: 2000/1600 s; keep the
+    // uninstrumented 160 s budget. CTest adds 60 s under sanitizers (2060/1660 s),
+    // or the existing 20 s (180 s).
+    constexpr auto budget = std::chrono::seconds(kUnderTsan ? 2000 : kUnderAsan ? 1600 : 160);
+    const auto deadline = Clock::now() + budget;
     std::uint64_t previous_n = 0, previous_peak = 0, largest_n = 0, largest_peak = 0;
     double last_seconds = 0;
     for (const std::uint64_t count : {1000, 10000, 100000}) {
         // Cumulative stdout and default exact ratios both have quadratic total
-        // work. Use the measured 10k time to keep this row within its 180s
-        // timeout; two completed sizes still test resident growth.
+        // work. Use the measured 10k time to keep this row within its build's
+        // deadline; two completed sizes still test resident growth.
         const auto remaining = std::chrono::duration<double>(deadline - Clock::now()).count();
         if (count == 100000 && last_seconds * 100 > remaining) {
             std::cout << "memory: 100000 inputs omitted; projected cumulative-stream time exceeds "
-                         "the 180 s row timeout; using 1000 and 10000\n" << std::flush;
+                         "the " << budget.count() << " s work deadline; using 1000 and 10000\n" << std::flush;
             break;
         }
         const auto name = "memory-" + std::to_string(count);
         const auto status = fixture.temporary.path / (name + ".status");
         const auto started = Clock::now();
         Runner child(fixture.command(fixture.temporary.path / (name + ".sqlite"), status, "--report-jsonl", 0),
-                     fixture.temporary.path / (name + ".stderr"));
+                     fixture.temporary.path / (name + ".stderr"), /*measure_rss=*/true);
         wait_ready(status, 0, child);
         std::uint32_t seed = 12345;
         for (std::uint64_t cursor = 1; cursor <= count; ++cursor) {
