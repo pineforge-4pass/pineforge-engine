@@ -613,6 +613,19 @@ if(PINEFORGE_BUILD_TESTS)
         test_native_live_report_interval_ratio_recovery PROPERTIES TIMEOUT 180)
     add_test(NAME test_native_live_report_memory COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> memory)
+    # Match report_memory's build-kind budgets. Solo measurements on the
+    # accumulator head (2026-10-29): TSAN 759.8 s, ASan+UBSan 606.4 s; the row ran 1.57x slower
+    # under parallel ctest load in release, so the work deadlines are 2.6x the
+    # solo times, 2000/1600 s, plus 60 s for CTest.
+    # Uninstrumented builds retain the 160 s deadline / 180 s timeout.
+    set(_pf_report_memory_timeout 180)
+    if(PINEFORGE_LIVE_TSAN)
+        set(_pf_report_memory_timeout 2060)
+    elseif(PINEFORGE_ENABLE_SANITIZERS)
+        set(_pf_report_memory_timeout 1660)
+    endif()
+    set_tests_properties(test_native_live_report_memory PROPERTIES
+        TIMEOUT ${_pf_report_memory_timeout} SKIP_RETURN_CODE 77)
     add_executable(test_native_live_report_curve_staging_work
         ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_curve_staging_work.cpp)
     target_include_directories(test_native_live_report_curve_staging_work PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -627,10 +640,9 @@ if(PINEFORGE_BUILD_TESTS)
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> ratio-marker-replay)
     add_test(NAME test_native_live_report_historical_ratio_export COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> historical-ratio-export)
-    set_tests_properties(test_native_live_report_memory test_native_live_report_storage_stop_refresh
+    set_tests_properties(test_native_live_report_storage_stop_refresh
         test_native_live_report_ratio_marker_replay test_native_live_report_historical_ratio_export
         PROPERTIES TIMEOUT 180)
-    set_tests_properties(test_native_live_report_memory PROPERTIES SKIP_RETURN_CODE 77)
     add_library(native_live_report_example MODULE
         ${PROJECT_SOURCE_DIR}/tests/native_live_report_strategy.cpp)
     target_link_libraries(native_live_report_example PRIVATE PineForge::pineforge)
