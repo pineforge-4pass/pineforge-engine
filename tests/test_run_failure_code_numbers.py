@@ -15,19 +15,19 @@ V170_ADDITIONS = {
     "scratch_configuration_invalid": 68,
     "scratch_io_failed": 69,
 }
-V180_ADDITIONS = {
-    "run_descriptor_limit_exceeded": 70,
-    "run_quota_configuration_invalid": 71,
-    "run_resource_quota_exceeded": 72,
-}
+# Every code added after 1.8.0 shares `since` 1.9.0, so the generator numbers
+# the group by name.
 V190_ADDITIONS = {
-    "diagnostic_budget_exceeded": 73,
-    "report_budget_exceeded": 74,
-    "report_channel_failed": 75,
-    "run_deadline_exceeded": 76,
-    "run_isolation_unavailable": 77,
-    "run_process_refused": 78,
-    "run_producer_failed": 79,
+    "diagnostic_budget_exceeded": 70,
+    "report_budget_exceeded": 71,
+    "report_channel_failed": 72,
+    "run_deadline_exceeded": 73,
+    "run_descriptor_limit_exceeded": 74,
+    "run_isolation_unavailable": 75,
+    "run_process_refused": 76,
+    "run_producer_failed": 77,
+    "run_quota_configuration_invalid": 78,
+    "run_resource_quota_exceeded": 79,
 }
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -74,7 +74,6 @@ def test_run_failure_code_numbers_stable():
     assert len(set(current.values())) == len(current)
     assert all(value > 64 for name, value in current.items() if name not in released)
     assert {name: current.get(name) for name in V170_ADDITIONS} == V170_ADDITIONS
-    assert {name: current.get(name) for name in V180_ADDITIONS} == V180_ADDITIONS
     assert {name: current.get(name) for name in V190_ADDITIONS} == V190_ADDITIONS
     assert set(current.values()) == set(range(80))
     header = (ROOT / HEADER).read_text()
@@ -87,7 +86,6 @@ def test_run_failure_generator_appends_after_released_numbers():
     generated = numbers(registry.render_codes_header(catalogue))
     assert {name: generated.get(name) for name in released} == released
     assert {name: generated.get(name) for name in V170_ADDITIONS} == V170_ADDITIONS
-    assert {name: generated.get(name) for name in V180_ADDITIONS} == V180_ADDITIONS
     assert {name: generated.get(name) for name in V190_ADDITIONS} == V190_ADDITIONS
     for path, rendered in registry.generated(catalogue).items():
         assert (ROOT / path).read_text(encoding="utf-8") == rendered, str(path)
