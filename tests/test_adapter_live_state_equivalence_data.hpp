@@ -427,42 +427,51 @@
 // configuration still passes with the old value when the two captures are reverted (job rj-20261023t182901-ced80d,
 // on the pre-picks tree):
 //   reversals seed 837832: 11651815776502670583 -> 7945713857493298121
+// Pins the behaviour of the reversal-bookkeeping fix (credited-cohort skip in
+// the purge, no closed-trade debit on a flip), harvested on a CLOUD build.
+// A reversal on an id with opposite-side history preserves its newly credited
+// opening: the purge skips the credited cohort, and the closed-trade debit
+// is skipped on a position flip. Entries are no longer admitted past the
+// pyramiding cap; closed-row counts differ. The same-glue OLD harvest
+// reproduced the committed pins.
+// Re-harvested with PINEFORGE_V19E_HARVEST: 25 of 108 rows change,
+// all flagged reversal_on_reused_id; every other row is retained byte for byte.
 constexpr std::uint64_t kTranscriptDigests[] = {
-    5812684589312154871ull,  // reversals seed 104729, 124 trades, 397 commands, 444 rows placed
-    4683315889309806675ull,  // reversals seed 209458, 124 trades, 379 commands, 418 rows placed
-    11192938340988648442ull,  // reversals seed 314187, 220 trades, 710 commands, 708 rows placed
+    12661738067797988009ull,  // reversals seed 104729, 113 trades, 388 commands, 427 rows placed
+    11278941354291081133ull,  // reversals seed 209458, 123 trades, 379 commands, 415 rows placed
+    14161106893492562438ull,  // reversals seed 314187, 231 trades, 722 commands, 738 rows placed
     9447733487864338841ull,  // reversals seed 418916, 106 trades, 372 commands, 373 rows placed
-    16125481158763653444ull,  // reversals seed 523645, 104 trades, 417 commands, 380 rows placed
+    17822224365617586369ull,  // reversals seed 523645, 104 trades, 418 commands, 382 rows placed
     6599795193700557484ull,  // reversals seed 628374, 132 trades, 411 commands, 403 rows placed
-    4925702266421634684ull,  // reversals seed 733103, 138 trades, 387 commands, 412 rows placed
-    7945713857493298121ull,  // reversals seed 837832, 89 trades, 401 commands, 369 rows placed
-    385235826901295142ull,  // reversals seed 942561, 98 trades, 408 commands, 367 rows placed
-    2560334546094961294ull,  // reversals seed 1047290, 137 trades, 390 commands, 399 rows placed
+    6150921584491978938ull,  // reversals seed 733103, 137 trades, 387 commands, 411 rows placed
+    15679087732340717486ull,  // reversals seed 837832, 89 trades, 401 commands, 368 rows placed
+    2423920378663385545ull,  // reversals seed 942561, 99 trades, 408 commands, 363 rows placed
+    12585670643144239366ull,  // reversals seed 1047290, 137 trades, 390 commands, 398 rows placed
     10245107961889113516ull,  // reversals seed 1152019, 141 trades, 392 commands, 444 rows placed
-    10671261055934450290ull,  // reversals seed 1256748, 117 trades, 401 commands, 373 rows placed
-    5536466409891028260ull,  // reversals seed 1361477, 100 trades, 409 commands, 390 rows placed
-    5402302340520265648ull,  // reversals seed 1466206, 156 trades, 387 commands, 440 rows placed
+    3589971298951121609ull,  // reversals seed 1256748, 119 trades, 405 commands, 380 rows placed
+    5451159105016532808ull,  // reversals seed 1361477, 96 trades, 409 commands, 385 rows placed
+    10097469201518996692ull,  // reversals seed 1466206, 154 trades, 387 commands, 435 rows placed
     1616424144157930691ull,  // reversals seed 1570935, 69 trades, 344 commands, 269 rows placed
-    7511139969801259153ull,  // reversals seed 1675664, 120 trades, 404 commands, 439 rows placed
-    1601257824703151799ull,  // reversals seed 1780393, 177 trades, 669 commands, 628 rows placed
-    1890500574835062377ull,  // reversals seed 1885122, 127 trades, 396 commands, 402 rows placed
-    7085816489193635920ull,  // reversals seed 1989851, 171 trades, 429 commands, 451 rows placed
-    6023548670256492480ull,  // reversals seed 2094580, 92 trades, 384 commands, 350 rows placed
+    333669427024790972ull,  // reversals seed 1675664, 118 trades, 404 commands, 436 rows placed
+    9326889037921890283ull,  // reversals seed 1780393, 176 trades, 668 commands, 627 rows placed
+    16157662191262207287ull,  // reversals seed 1885122, 126 trades, 396 commands, 401 rows placed
+    17916942874076346951ull,  // reversals seed 1989851, 169 trades, 429 commands, 453 rows placed
+    8226435249272520348ull,  // reversals seed 2094580, 92 trades, 384 commands, 349 rows placed
     16692781169495489153ull,  // reversals seed 2199309, 123 trades, 401 commands, 391 rows placed
     16272109601722490480ull,  // reversals seed 2304038, 162 trades, 409 commands, 437 rows placed
     4049421656702198461ull,  // reversals seed 2408767, 138 trades, 418 commands, 419 rows placed
-    13178968189170620141ull,  // reversals seed 2513496, 102 trades, 393 commands, 399 rows placed
-    17670434204484139401ull,  // reversals seed 2618225, 105 trades, 412 commands, 400 rows placed
-    1633357297523434718ull,  // reversals seed 2722954, 139 trades, 398 commands, 445 rows placed
+    13197585223457270218ull,  // reversals seed 2513496, 103 trades, 396 commands, 387 rows placed
+    4274666793823747545ull,  // reversals seed 2618225, 109 trades, 420 commands, 395 rows placed
+    15241907188250697695ull,  // reversals seed 2722954, 136 trades, 388 commands, 436 rows placed
     11406439758950114475ull,  // reversals seed 2827683, 45 trades, 340 commands, 197 rows placed
-    16858162214369946201ull,  // reversals seed 2932412, 92 trades, 366 commands, 327 rows placed
-    10003877012992753894ull,  // reversals seed 3037141, 114 trades, 405 commands, 409 rows placed
+    18380490005371171114ull,  // reversals seed 2932412, 93 trades, 366 commands, 328 rows placed
+    9623034011134361393ull,  // reversals seed 3037141, 114 trades, 405 commands, 403 rows placed
     9350461461386796741ull,  // reversals seed 3141870, 66 trades, 347 commands, 260 rows placed
     1186645452882449094ull,  // reversals seed 3246599, 156 trades, 467 commands, 537 rows placed
-    5914138696329396694ull,  // reversals seed 3351328, 106 trades, 414 commands, 363 rows placed
-    8146859408863277364ull,  // reversals seed 3456057, 87 trades, 373 commands, 351 rows placed
-    9379975246217913177ull,  // reversals seed 3560786, 153 trades, 403 commands, 452 rows placed
-    14545178887694502241ull,  // reversals seed 3665515, 136 trades, 393 commands, 424 rows placed
+    11438538209788565327ull,  // reversals seed 3351328, 106 trades, 414 commands, 364 rows placed
+    14835054349967226282ull,  // reversals seed 3456057, 87 trades, 373 commands, 349 rows placed
+    18181121331596760881ull,  // reversals seed 3560786, 154 trades, 403 commands, 453 rows placed
+    7254576292415988846ull,  // reversals seed 3665515, 136 trades, 393 commands, 423 rows placed
     7086626550256878961ull,  // reversals seed 3770244, 34 trades, 321 commands, 226 rows placed
     10094645971911037415ull,  // brackets seed 104730, 84 trades, 472 commands, 586 rows placed
     16256026640831797918ull,  // brackets seed 209459, 79 trades, 588 commands, 642 rows placed

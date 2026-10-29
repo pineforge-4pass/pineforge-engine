@@ -1,0 +1,5 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    list(APPEND TEST_SOURCES test_metrics_monthly_replay)
+    pineforge_add_unit_test(test_metrics_monthly_replay)
+    set_tests_properties(test_metrics_monthly_replay PROPERTIES RUN_SERIAL TRUE)
+endif()

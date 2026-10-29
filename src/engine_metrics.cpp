@@ -65,10 +65,11 @@ inline int64_t month_key_local(int64_t ts_ms) {   // call ONLY under ScopedTimez
 // called twice: once for the plain left-fold mean/count, then again for the
 // variance/downside fold. This preserves the old vector walk's operation order
 // without retaining either the month-end values or the returns.
-template <class Generate>
-void sharpe_sortino_generated(Generate generate, double rf_period, double ann,
-                              double* sharpe, double* sortino,
-                              const char* sharpe_field, const char* sortino_field) {
+template <class Generate, class Check>
+void sharpe_sortino_generated_checked(Generate generate, double rf_period, double ann,
+                                      double* sharpe, double* sortino,
+                                      const char* sharpe_field, const char* sortino_field,
+                                      Check check) {
     *sharpe = kNaN;
     *sortino = kNaN;
     std::size_t n = 0;
@@ -82,25 +83,35 @@ void sharpe_sortino_generated(Generate generate, double rf_period, double ann,
         ++n;
     });
     if (n < 2) return;
-    report::finite_value(rf_period, sharpe_field);
-    report::finite_value(ann, sharpe_field);
-    if (sum_failure) report::finite_value(kNaN, sum_failure);
-    report::finite_value(sum, sharpe_field);
-    const double mean = report::finite_value(sum / (double)n, sharpe_field);
+    check(rf_period, sharpe_field);
+    check(ann, sharpe_field);
+    if (sum_failure) check(kNaN, sum_failure);
+    check(sum, sharpe_field);
+    const double mean = check(sum / (double)n, sharpe_field);
     double var = 0.0, down = 0.0;
     generate([&](double value) {
-        report::finite_value(value, sharpe_field);
-        const double delta = report::finite_value(value - mean, sharpe_field);
-        var = report::finite_value(var + delta * delta, sharpe_field);
-        const double d = std::min(0.0, report::finite_value(value - rf_period, sortino_field));
-        down = report::finite_value(down + d * d, sortino_field);
+        check(value, sharpe_field);
+        const double delta = check(value - mean, sharpe_field);
+        var = check(var + delta * delta, sharpe_field);
+        const double d = std::min(0.0, check(value - rf_period, sortino_field));
+        down = check(down + d * d, sortino_field);
     });
-    const double sd = report::finite_value(std::sqrt(var / (double)(n - 1)), sharpe_field);
-    const double dd = report::finite_value(std::sqrt(down / (double)n), sortino_field);
+    const double sd = check(std::sqrt(var / (double)(n - 1)), sharpe_field);
+    const double dd = check(std::sqrt(down / (double)n), sortino_field);
     if (sd > 0.0)
-        *sharpe = report::finite_value((mean - rf_period) / sd * ann, sharpe_field);
+        *sharpe = check((mean - rf_period) / sd * ann, sharpe_field);
     if (dd > 0.0)
-        *sortino = report::finite_value((mean - rf_period) / dd * ann, sortino_field);
+        *sortino = check((mean - rf_period) / dd * ann, sortino_field);
+}
+
+template <class Generate>
+void sharpe_sortino_generated(Generate generate, double rf_period, double ann,
+                              double* sharpe, double* sortino,
+                              const char* sharpe_field, const char* sortino_field) {
+    sharpe_sortino_generated_checked(generate, rf_period, ann, sharpe, sortino,
+        sharpe_field, sortino_field, [](double value, const char* field) {
+            return report::finite_value(value, field);
+        });
 }
 
 // Emit the exact return sequence produced by the former month_end vector:
@@ -323,12 +334,95 @@ private:
     mutable std::size_t pending_count_ = 0;
 };
 
+// The prefix excludes the editable held point. Store only the last equity of
+// each closed chart-civil month, never bar points or provisional returns.
+// Strictly increasing keys bound storage by observed months even on malformed
+// clocks. A reversed key, unsupported timestamp, allocation failure or full
+// month budget requests whole-report recovery, never bucket coalescing.
+class MonthEndReplay {
+public:
+    void fold(const pf_equity_point_t& point, int key) {
+        if (!available_) return;
+        if (!monthly_replay_time_supported_v1(point.time_ms)) {
+            available_ = false;
+            return;
+        }
+        if (!have_current_) {
+            have_current_ = true;
+            current_key_ = key;
+        } else if (key != current_key_) {
+            if (key < current_key_ || !close_month()) {
+                available_ = false;
+                return;
+            }
+            current_key_ = key;
+        }
+        current_end_ = point.equity;
+    }
+
+    bool can_finish(bool have_held, const pf_equity_point_t& held, int key) const {
+        return available_ && (!have_held
+            || (monthly_replay_time_supported_v1(held.time_ms)
+                && (!have_current_ || key >= current_key_)));
+    }
+
+    template<class Emit>
+    void generate(bool have_held, const pf_equity_point_t& held, int key, Emit emit) const {
+        bool have_previous = false;
+        double previous = 0.0;
+        const auto month_end = [&](double value) {
+            if (have_previous && previous > 0.0)
+                emit(value / previous - 1.0);
+            previous = value;
+            have_previous = true;
+        };
+        for (std::size_t i = 0; i < count_; ++i) month_end(closed_[i]);
+        // A held point in the current month replaces its end. A new held
+        // month closes the current end first. Neither is committed at finish.
+        if (have_current_ && (!have_held || key != current_key_))
+            month_end(current_end_);
+        if (have_held) month_end(held.equity);
+    }
+
+    std::size_t state_size_bytes() const {
+        return sizeof(*this) + capacity_ * sizeof(double);
+    }
+
+private:
+    bool close_month() {
+        if (count_ == kMetricsMonthEndLimitV1) return false;
+        if (count_ == capacity_) {
+            const auto next_capacity = capacity_ == 0 ? std::size_t{8}
+                : std::min(capacity_ * 2, kMetricsMonthEndLimitV1);
+            try {
+                auto next = std::make_unique<double[]>(next_capacity);
+                if (count_ != 0)
+                    std::memcpy(next.get(), closed_.get(), count_ * sizeof(double));
+                closed_.swap(next);
+                capacity_ = next_capacity;
+            } catch (const std::bad_alloc&) {
+                return false;
+            }
+        }
+        closed_[count_++] = current_end_;
+        return true;
+    }
+
+    std::unique_ptr<double[]> closed_;
+    std::size_t count_ = 0, capacity_ = 0;
+    double current_end_ = 0.0;
+    int current_key_ = 0;
+    bool have_current_ = false, available_ = true;
+};
+static_assert(sizeof(MonthEndReplay) <= 64, "bounded monthly replay metadata");
+
 struct Prefix {
     MetricsExtentV1 extent;
     std::uint64_t m = 0;
     double previous_equity = 0.0;
     std::uint64_t point_witness = 1469598103934665603ULL;
     PackedReturnStream returns;
+    std::unique_ptr<MonthEndReplay> months;
 
     void fold(const pf_equity_point_t& point, int month) {
         if (extent.empty) {
@@ -344,6 +438,7 @@ struct Prefix {
         ++extent.count;
         extent.last_time_ms = point.time_ms;
         previous_equity = point.equity;
+        if (months) months->fold(point, month);
         fold_detail::witness_word(point_witness, static_cast<std::uint64_t>(point.time_ms));
         fold_detail::witness_double(point_witness, point.equity);
         fold_detail::witness_double(point_witness, point.open_profit);
@@ -360,8 +455,20 @@ class Fold final : public StreamingEquityRatiosV1 {
 public:
     Fold(MetricsStreamingConfigV1 config, MetricsExtentPlanV1 plan,
          MetricsRatioTraceSinkV1 sink)
-        : config_(config), plan_(plan), sink_(sink) {}
+        : config_(config), plan_(plan), sink_(sink) {
+        // Existing curve providers and standalone bar-only folds keep their
+        // established capture, fixed-state and trace contracts.
+        if (!config.curve_available && (config.metrics_needed & kMetricsNeedMonthlyRatiosV1))
+            prefix_.months = std::make_unique<MonthEndReplay>();
+    }
+    MetricsStreamingStatusV1 enable_months() {
+        if (have_held_) return MetricsStreamingStatusV1::Busy;
+        if (!prefix_.months) prefix_.months = std::make_unique<MonthEndReplay>();
+        return MetricsStreamingStatusV1::Ok;
+    }
+    MetricsMonthlyResultV1 monthly_result() const { return monthly_result_; }
     MetricsStreamingStatusV1 append(const pf_equity_point_t& point, int month) override {
+        monthly_result_ = {};
         if (have_held_) prefix_.fold(held_, held_month_);
         held_ = point;
         held_month_ = month;
@@ -372,13 +479,18 @@ public:
             std::int64_t index, const pf_equity_point_t& point, int month) override {
         // Deliberately not assert(): this invariant also binds Release.
         if (!have_held_ || index != prefix_.extent.count) std::abort();
+        monthly_result_ = {};
         held_ = point;
         held_month_ = month;
         return MetricsStreamingStatusV1::Ok;
     }
-    std::size_t state_size_bytes() const override { return sizeof(*this); }
+    std::size_t state_size_bytes() const override {
+        return sizeof(*this) + (prefix_.months ? prefix_.months->state_size_bytes() : 0);
+    }
     MetricsStreamingStatusV1 finish(
             MetricsStreamingResultV1& out, MetricsRatioCurveV1 curve) const override {
+        monthly_result_ = {}; // a failed scratch replay must not publish a stale result
+        MetricsMonthlyResultV1 monthly;
         auto actual = prefix_.extent;
         if (have_held_) {
             if (actual.empty) {
@@ -403,6 +515,10 @@ public:
         auto& receipt = out.receipt;
         receipt.extent_plan = plan_;
         receipt.actual_extent = actual;
+        if (have_held_) {
+            receipt.actual_last_equity = held_.equity;
+            receipt.actual_last_equity_valid = 1;
+        }
         receipt.actual_attempt = config_.attempt;
         receipt.actual_input_generation = config_.input_generation;
         receipt.actual_admitted_view = config_.admitted_view;
@@ -421,23 +537,54 @@ public:
         auto reason = MetricsRouteReasonV1::None;
         if (need & kMetricsNeedCurveV1) reason = MetricsRouteReasonV1::CurveNeeded;
         else if (need & kMetricsNeedReturnsV1) reason = MetricsRouteReasonV1::ReturnsNeeded;
-        else if (need & kMetricsNeedMonthlyRatiosV1) reason = MetricsRouteReasonV1::CurveNeeded;
+        else if (((need & kMetricsNeedMonthlyRatiosV1) || prefix_.months)
+                 && (!prefix_.months
+                     || !prefix_.months->can_finish(have_held_, held_, held_month_)))
+            reason = MetricsRouteReasonV1::CurveNeeded;
         else if (sharpe && config_.streaming_sharpe == StreamingSharpeV1::Off)
             reason = MetricsRouteReasonV1::SharpeSwitchOff;
         else if (sortino && !plan_.present) reason = MetricsRouteReasonV1::NoExtentProof;
         else if (sortino && receipt.mismatch_fields) reason = MetricsRouteReasonV1::ExtentMismatch;
         else if (sortino && config_.deterministic_replay != 1)
             reason = MetricsRouteReasonV1::NoRecoveryProof;
+        else if (prefix_.months && config_.deterministic_replay != 1)
+            reason = MetricsRouteReasonV1::NoRecoveryProof;
 
         double rf = kNaN, ann = kNaN;
         const bool enabled = operands(actual, rf, ann) && total_returns >= 2;
-        if (reason == MetricsRouteReasonV1::None && enabled && (sharpe || sortino)) {
+        if (reason == MetricsRouteReasonV1::None && prefix_.months) {
+            const auto month_returns = [this](auto emit) {
+                prefix_.months->generate(have_held_, held_, held_month_, emit);
+            };
+            try {
+                // Same arithmetic body as the actual-curve route. Defer only
+                // numeric failure until the report's monthly stage, after
+                // the scalar/input checks and before bar-ratio failure.
+                sharpe_sortino_generated_checked(month_returns, 0.02 / 12.0, std::sqrt(12.0),
+                    &monthly.sharpe_monthly, &monthly.sortino_monthly,
+                    "metrics.equity.sharpe_monthly", "metrics.equity.sortino_monthly",
+                    [&](double value, const char* field) {
+                        if (!std::isfinite(value)) {
+                            out.failure_code = "report_result_invalid";
+                            out.failure_field = field;
+                            out.failure_reason = "nonfinite";
+                            throw Nonfinite{};
+                        }
+                        return value;
+                    });
+            } catch (const Nonfinite&) {
+            }
+            monthly.complete = 1;
+        }
+        if (reason == MetricsRouteReasonV1::None && !out.failure_code
+            && enabled && (sharpe || sortino)) {
             // The packed stream is the authoritative source. `legacy` makes
             // the same two sequential passes and the same left-fold
             // operations as the former vector generator.
             legacy(generate, actual, out, sink_);
         }
         if (reason == MetricsRouteReasonV1::None) {
+            monthly_result_ = monthly;
             receipt.route = MetricsRatioRouteV1::Streaming;
             receipt.route_reason = MetricsRouteReasonV1::OrderedReplay;
             return MetricsStreamingStatusV1::Ok;
@@ -460,9 +607,14 @@ public:
             actual = {};
             actual.count = curve.count;
             actual.empty = curve.count == 0;
+            receipt.actual_last_equity = 0.0;
+            receipt.actual_last_equity_valid = 0;
             if (curve.count > 0) {
                 actual.first_time_ms = curve.read(curve.context, 0).time_ms;
-                actual.last_time_ms = curve.read(curve.context, curve.count - 1).time_ms;
+                const auto last = curve.read(curve.context, curve.count - 1);
+                actual.last_time_ms = last.time_ms;
+                receipt.actual_last_equity = last.equity;
+                receipt.actual_last_equity_valid = 1;
             }
             receipt.mismatch_fields = fold_detail::extent_mismatch_v1(plan_, config_, actual);
             receipt.witness = !plan_.present ? MetricsExtentWitnessV1::NotEvaluated
@@ -498,6 +650,7 @@ private:
     pf_equity_point_t held_{};
     int held_month_ = 0;
     bool have_held_ = false;
+    mutable MetricsMonthlyResultV1 monthly_result_;
 };
 static_assert(sizeof(Fold) <= report_sink::kScratchWindowBytes + 4096,
               "streaming-ratio state is one bounded scratch batch plus scalars");
@@ -513,6 +666,20 @@ MetricsStreamingStatusV1 make_streaming_equity_ratios_v1(
         || (config.metrics_needed & ~kMetricsNeedAllV1))
         return MetricsStreamingStatusV1::InvalidArgument;
     out = std::make_unique<streaming_v1::Fold>(config, plan, sink);
+    return MetricsStreamingStatusV1::Ok;
+}
+
+MetricsStreamingStatusV1 enable_streaming_monthly_replay_v1(StreamingEquityRatiosV1& fold) {
+    auto* replay = dynamic_cast<streaming_v1::Fold*>(&fold);
+    return replay ? replay->enable_months() : MetricsStreamingStatusV1::NotImplemented;
+}
+
+MetricsStreamingStatusV1 streaming_monthly_result_v1(
+        const StreamingEquityRatiosV1& fold, MetricsMonthlyResultV1& out) {
+    out = {};
+    const auto* replay = dynamic_cast<const streaming_v1::Fold*>(&fold);
+    if (!replay) return MetricsStreamingStatusV1::NotImplemented;
+    out = replay->monthly_result();
     return MetricsStreamingStatusV1::Ok;
 }
 

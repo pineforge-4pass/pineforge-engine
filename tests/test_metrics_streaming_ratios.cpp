@@ -204,6 +204,7 @@ bool candidate(const mt::PointSource& points, MetricsExtentPlanV1 planned,
     a.provider_reads = provider.reads;
     STREAM_CHECK(got.receipt.route == required);
     STREAM_CHECK(mt::same_extent(got.receipt.actual_extent, a.actual_extent));
+    STREAM_CHECK(mt::same_endpoint(got.receipt, points));
     STREAM_CHECK(got.receipt.eligible_returns == a.old.m);
     const bool matching = planned.present && mt::same_extent(planned.extent, a.actual_extent)
         && planned.attempt == cfg.attempt
@@ -236,7 +237,75 @@ bool candidate(const mt::PointSource& points, MetricsExtentPlanV1 planned,
     STREAM_CHECK(mt::same(got.downside_sum, again.downside_sum));
     STREAM_CHECK(got.receipt.eligible_returns == again.receipt.eligible_returns);
     STREAM_CHECK(got.receipt.route == again.receipt.route);
+    STREAM_CHECK(mt::same_endpoint(again.receipt, points));
     return true;
+}
+
+void endpoint_observation_rows() {
+    const auto points = mt::equities({100., 97., 101.});
+    if (row("final-equity-observation-does-not-bind-plan")) {
+        const auto planned = mt::plan(points);
+        const auto cfg = mt::config();
+        if (candidate(points, planned, cfg, MetricsRatioRouteV1::Streaming)) {
+            const auto before = *active->candidate;
+            auto changed = points;
+            changed.point = [points](std::int64_t i) {
+                auto point = points[i];
+                if (i == points.count - 1) point.equity *= 1.25;
+                return point;
+            };
+            if (candidate(changed, planned, cfg, MetricsRatioRouteV1::Streaming)) {
+                const auto& after = active->candidate->receipt;
+                STREAM_CHECK(!mt::same(before.receipt.actual_last_equity, after.actual_last_equity));
+                STREAM_CHECK(std::memcmp(&before.receipt.extent_plan, &after.extent_plan,
+                                         sizeof planned) == 0);
+                STREAM_CHECK(before.receipt.actual_admitted_view == after.actual_admitted_view);
+                STREAM_CHECK(before.receipt.actual_spec_identity == after.actual_spec_identity);
+                STREAM_CHECK(before.receipt.actual_input_generation == after.actual_input_generation);
+                STREAM_CHECK(before.receipt.actual_attempt == after.actual_attempt);
+                STREAM_CHECK(before.receipt.mismatch_fields == 0 && after.mismatch_fields == 0);
+                STREAM_CHECK(after.witness == MetricsExtentWitnessV1::Match);
+                auto invalid = after;
+                invalid.actual_last_equity = mt::nan;
+                invalid.actual_last_equity_valid = 0;
+                STREAM_CHECK(fold_detail::extent_mismatch_v1(
+                    invalid.extent_plan, cfg, invalid.actual_extent) == 0);
+            }
+        }
+    }
+    for (bool empty : {false, true}) {
+        if (!row(empty ? "final-equity-empty-actual-curve-overrides-held"
+                       : "final-equity-actual-curve-overrides-held"))
+            continue;
+        const auto actual = empty ? mt::equities({}) : points;
+        auto cfg = mt::config();
+        cfg.metrics_needed |= kMetricsNeedCurveV1;
+        std::unique_ptr<StreamingEquityRatiosV1> fold;
+        if (!implemented(make_streaming_equity_ratios_v1(cfg, mt::plan(actual), {}, fold)))
+            continue;
+        // The final authoritative provider deliberately differs from the held
+        // observation. The receipt must follow that provider, including empty.
+        for (std::int64_t i = 0; i < points.count; ++i) {
+            auto point = points[i];
+            point.equity *= 2.;
+            implemented(fold->append(point, equity_stats_reference::month_key_utc(point.time_ms)));
+        }
+        Provider provider{actual};
+        MetricsStreamingResultV1 got;
+        if (implemented(fold->finish(got, provider.view()))) {
+            active->candidate = got;
+            active->planned = got.receipt.extent_plan;
+            active->actual_extent = mt::extent(actual);
+            active->old = mt::legacy(actual);
+            active->reference_available = true;
+            active->provider_reads = provider.reads;
+            STREAM_CHECK(got.receipt.route == MetricsRatioRouteV1::LegacyActualCurve);
+            STREAM_CHECK(mt::same_extent(got.receipt.actual_extent, mt::extent(actual)));
+            STREAM_CHECK(mt::same_endpoint(got.receipt, actual));
+            STREAM_CHECK(got.receipt.mismatch_fields == 0);
+            STREAM_CHECK(got.receipt.witness == MetricsExtentWitnessV1::Match);
+        }
+    }
 }
 
 struct ConcurrentTrials {
@@ -731,6 +800,7 @@ void stop_rows() {
                 STREAM_CHECK(replay.receipt.replay_attempts == 1);
                 STREAM_CHECK(mt::same_run(old, replay.authoritative));
                 STREAM_CHECK(replay.authoritative.curve.size() == old.curve.size());
+                STREAM_CHECK(mt::same_endpoint(replay.receipt, old.points()));
                 STREAM_CHECK(replay.receipt.stop_boundary.completed_marks == stop.second);
             }
         }
@@ -791,6 +861,7 @@ void stop_rows() {
                 STREAM_CHECK(unreplayable.executions == 1 && unreplayable.publications == 1);
                 STREAM_CHECK(unreplayable.receipt.route == MetricsRatioRouteV1::LegacyActualCurve);
                 STREAM_CHECK(mt::same_run(result, unreplayable.authoritative));
+                STREAM_CHECK(mt::same_endpoint(unreplayable.receipt, result.points()));
             }
         }
         if (name == "cooperative-cancel-prefix") {
@@ -1259,6 +1330,7 @@ void curve_route_rows() {
             if (implemented(next.metrics_extent_receipt_v1(&receipt))) {
                 STREAM_CHECK(receipt.route == MetricsRatioRouteV1::LegacyActualCurve);
                 STREAM_CHECK(mt::same_extent(receipt.actual_extent, active->actual_extent));
+                STREAM_CHECK(mt::same_endpoint(receipt, metric_points));
             }
         }
     }
@@ -1286,8 +1358,10 @@ void live_rows() {
             BacktestEngine::free_report(reinterpret_cast<ReportC*>(&a));
             BacktestEngine::free_report(reinterpret_cast<ReportC*>(&b));
             MetricsExtentReceiptV1 receipt;
-            if (implemented(next.metrics_extent_receipt_v1(&receipt)))
+            if (implemented(next.metrics_extent_receipt_v1(&receipt))) {
                 STREAM_CHECK(receipt.route == MetricsRatioRouteV1::LegacyActualCurve);
+                STREAM_CHECK(mt::same_endpoint(receipt, mt::capture(old).points()));
+            }
         }
         STREAM_CHECK(old.stream_end(partial_end)); STREAM_CHECK(next.stream_end(partial_end));
     }
@@ -1383,8 +1457,10 @@ void terminal_quote_rows() {
         STREAM_CHECK(mt::same(got.metrics.equity.sortino_bar, active->old.sortino));
         if (configured) {
             MetricsExtentReceiptV1 receipt;
-            if (implemented(next.metrics_extent_receipt_v1(&receipt)))
+            if (implemented(next.metrics_extent_receipt_v1(&receipt))) {
                 STREAM_CHECK(receipt.route == MetricsRatioRouteV1::LegacyActualCurve);
+                STREAM_CHECK(mt::same_endpoint(receipt, control.points()));
+            }
         }
     }
 }
@@ -1649,6 +1725,7 @@ void loaded_module_rows() {
 
 void run_suite() {
     domains();
+    endpoint_observation_rows();
     exact_rows();
     wrong_plans();
     switches_and_needs();

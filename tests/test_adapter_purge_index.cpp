@@ -77,7 +77,14 @@ int main() {
     }
     // The streams are not trivial, the index answered, the reference scanned.
     CHECK(trades > runs * 20);
-    CHECK(answered > static_cast<std::uint64_t>(runs) * 20);
+    // The P0 reversal bookkeeping fix preserves the credited cohort and skips
+    // closed-trade debits on a flip, changing the purge-driven lookup population.
+    // Guard aggregate index use and distinguish it from the reference scan.
+    // Measured on the fixed engine over the 36 configurations: 294 indexed
+    // answers (per run 0..33, five runs answer none); the previous floor of
+    // 20 per run was calibrated on the engine that erased credited cohorts
+    // (1881 answers). The aggregate floor of 5 per run leaves ~40% headroom.
+    CHECK(answered > runs * 5 && answered > reference_answered);
     CHECK(reference_answered == 0);
     std::printf("test_adapter_purge_index: %ld configurations, %ld commands, %ld trades, "
                 "%llu indexed answers; %d checks, %d failures\n",

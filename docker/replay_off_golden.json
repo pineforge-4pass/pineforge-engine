@@ -1,0 +1,17 @@
+{
+  "source": "pineforge-engine main 95f4fd1f408bf0ded941ecc4144b278a026a677f, default (no replay switch), unjailed, wall clock fixed at 1.0, run id replay-off-golden; the same digests were measured on main 165449786bbf68e8b474f17abe924c938d351cd6; default_json digests are taken after the build identity (the two engine strings inside the fingerprint token and plain provenance, and the token and digest values derived from them) is masked as scripts/check_replay_off_golden.py describes",
+  "scenarios": {
+    "fifo": {
+      "default_json": {"sha256": "bce6dd88125b289d6c5a6210336ff7a82b1b56b731eb8a67d3f12d18940219e9", "bytes": 9186},
+      "primary_sink": {"sha256": "dfa2679110fbbf9f24f43c902e2e3a2fc33a1d804a202b8554632206d790686e", "bytes": 1554}
+    },
+    "any": {
+      "default_json": {"sha256": "dfb18cecb8c2d6d4d4fce14796e4ed822f99533b8c218a9b222010dcba6dc423", "bytes": 8837},
+      "primary_sink": {"sha256": "64852f4bb3b132efdd085a9a9c092de7b89224d7bf69bbefe4b779a851e81b14", "bytes": 1440}
+    },
+    "ordinary": {
+      "default_json": {"sha256": "8d86996e004714f1ae9cc079be28dc9a2f2657c80b8b47e7c08d9a51b5ed7b35", "bytes": 8848},
+      "primary_sink": {"sha256": "7c7f414f108b930471026d66174c219304454ffb19232f5d77ea962a7c1455ce", "bytes": 1453}
+    }
+  }
+}

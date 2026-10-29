@@ -863,6 +863,144 @@ void cumulative_reports() {
     CHECK(LedgerView(path).report_json() == "{\"input_cursor\":1}");
 }
 
+std::string table_count(const std::string& path) {
+    return scalar_text(path, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'");
+}
+
+// The open's refusal text, or empty when the ledger opens.
+std::string open_refusal(const std::string& path, const std::string& identity) {
+    try { Ledger ledger(path, identity); }
+    catch (const std::exception& error) { return error.what(); }
+    return "";
+}
+
+// A ledger written before integrity digests, prepared as the report end-to-end
+// test does: the current layout without report_integrity. It opens, export
+// refuses until one verified replay populates the digests, and the replay
+// restores the digests and the export the ledger had.
+void pre_integrity_ledger() {
+    TempDir temp;
+    const auto path = temp.file("pre-integrity.sqlite");
+    const std::vector<std::string> reports{"{\"input_cursor\":0}", "{\"input_cursor\":1}", "{\"input_cursor\":2}"};
+    {
+        Ledger ledger(path, "pre-integrity");
+        ledger.verify_report(0, reports[0]);
+        ledger.commit_input(0, "{}", 1, {{"first", "{}"}}, reports[1]);
+        ledger.commit_input(1, "{}", 2, {}, reports[2]);
+    }
+    const auto exported = LedgerView(path).report_json();
+    const auto digests = source_rows(path, "SELECT input_cursor,digest FROM report_integrity ORDER BY input_cursor");
+    CHECK(digests.size() == reports.size());
+    execute_sql(path, "DROP TABLE report_integrity;");
+    CHECK(table_count(path) == "11");
+    CHECK(throws([&] { LedgerView(path).report_json(); }));
+    std::unique_ptr<Ledger> resumed;
+    try { resumed = std::make_unique<Ledger>(path, "pre-integrity"); }
+    catch (const std::exception& error) { std::fprintf(stderr, "11-table ledger refused: %s\n", error.what()); }
+    CHECK(resumed);
+    if (!resumed) return;
+    CHECK(table_count(path) == "12");
+    CHECK(throws([&] { LedgerView(path).report_json(); }));
+    for (std::uint64_t cursor = 0; cursor < reports.size(); ++cursor)
+        resumed->verify_report(cursor, reports[cursor]);
+    CHECK(source_rows(path, "SELECT input_cursor,digest FROM report_integrity ORDER BY input_cursor") == digests);
+    CHECK(LedgerView(path).report_json() == exported);
+    resumed.reset();
+    CHECK(open_refusal(path, "pre-integrity").empty());
+}
+
+// Each table layout a runner wrote, built with that runner's own statements,
+// opens and leaves the current layout. Any other table count is refused and
+// keeps its tables: a written layout plus unrelated tables would otherwise open.
+void ledger_layouts() {
+    TempDir temp;
+    const char* const first =
+        "CREATE TABLE metadata (singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
+        "schema_version INTEGER NOT NULL CHECK(schema_version=1),identity TEXT NOT NULL);"
+        "CREATE TABLE inputs (input_index INTEGER PRIMARY KEY CHECK(input_index>=0),"
+        "canonical_json TEXT NOT NULL,state_hash TEXT NOT NULL);"
+        "CREATE TABLE events (ordinal INTEGER PRIMARY KEY CHECK(ordinal>0),"
+        "input_index INTEGER NOT NULL REFERENCES inputs(input_index),"
+        "input_position INTEGER NOT NULL CHECK(input_position>=0),"
+        "event_id TEXT NOT NULL UNIQUE,payload TEXT NOT NULL,"
+        "attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts BETWEEN 0 AND 4294967295),"
+        "acknowledged INTEGER NOT NULL DEFAULT 0 CHECK(acknowledged IN (0,1)),"
+        "last_error TEXT NOT NULL DEFAULT '',UNIQUE(input_index,input_position));"
+        "CREATE INDEX pending_events ON events(ordinal) WHERE acknowledged=0;"
+        "INSERT INTO metadata VALUES(1,1,'layouts');"
+        "INSERT INTO inputs VALUES(0,'{}','1');"
+        "INSERT INTO events(ordinal,input_index,input_position,event_id,payload) VALUES(1,0,0,'first','{}');";
+    const char* const routing =
+        "CREATE TABLE IF NOT EXISTS routing_configuration (singleton INTEGER PRIMARY KEY CHECK(singleton=1),document TEXT NOT NULL);"
+        "CREATE TABLE IF NOT EXISTS event_routes (ordinal INTEGER PRIMARY KEY REFERENCES events(ordinal),"
+        "target_id TEXT,delivery_id TEXT NOT NULL);"
+        "CREATE TABLE IF NOT EXISTS delivery_log (log_id INTEGER PRIMARY KEY,event_id TEXT NOT NULL REFERENCES events(event_id),"
+        "target_id TEXT NOT NULL,delivery_id TEXT NOT NULL,attempt INTEGER NOT NULL CHECK(attempt>0),"
+        "phase TEXT NOT NULL CHECK(phase IN ('started','completed')),started_at INTEGER NOT NULL,ended_at INTEGER,"
+        "http_status INTEGER NOT NULL DEFAULT 0,error_category TEXT NOT NULL DEFAULT '',success INTEGER NOT NULL DEFAULT 0 CHECK(success IN (0,1)),"
+        "UNIQUE(event_id,attempt,phase));"
+        "CREATE INDEX IF NOT EXISTS delivery_results ON delivery_log(event_id,phase,log_id);"
+        "CREATE TRIGGER IF NOT EXISTS delivery_log_no_update BEFORE UPDATE ON delivery_log BEGIN SELECT RAISE(ABORT,'delivery log is append-only'); END;"
+        "CREATE TRIGGER IF NOT EXISTS delivery_log_no_delete BEFORE DELETE ON delivery_log BEGIN SELECT RAISE(ABORT,'delivery log is append-only'); END;"
+        "INSERT INTO event_routes(ordinal,target_id,delivery_id) SELECT ordinal,'default',event_id FROM events "
+        "WHERE ordinal NOT IN (SELECT ordinal FROM event_routes);";
+    const char* const reports =
+        "CREATE TABLE IF NOT EXISTS report_snapshots (input_cursor INTEGER PRIMARY KEY CHECK(input_cursor>=0),payload TEXT NOT NULL);"
+        "CREATE TRIGGER IF NOT EXISTS report_no_update BEFORE UPDATE ON report_snapshots BEGIN SELECT RAISE(ABORT,'reports are immutable'); END;"
+        "CREATE TRIGGER IF NOT EXISTS report_no_delete BEFORE DELETE ON report_snapshots BEGIN SELECT RAISE(ABORT,'reports are immutable'); END;";
+    const char* const redelivery =
+        "ALTER TABLE events ADD COLUMN created_at_ms INTEGER NOT NULL DEFAULT 0;"
+        "ALTER TABLE delivery_log ADD COLUMN request_id TEXT NOT NULL DEFAULT '';"
+        "CREATE TABLE IF NOT EXISTS redelivery_requests (request_order INTEGER PRIMARY KEY,request_id TEXT NOT NULL UNIQUE,"
+        "target_id TEXT NOT NULL,from_ordinal INTEGER NOT NULL,through_ordinal INTEGER NOT NULL,"
+        "failed_only INTEGER NOT NULL CHECK(failed_only IN (0,1)),snapshot_log INTEGER NOT NULL,"
+        "selected INTEGER NOT NULL,accepted_at INTEGER NOT NULL);"
+        "CREATE TRIGGER IF NOT EXISTS redelivery_no_update BEFORE UPDATE ON redelivery_requests BEGIN SELECT RAISE(ABORT,'requests are immutable'); END;"
+        "CREATE TRIGGER IF NOT EXISTS redelivery_no_delete BEFORE DELETE ON redelivery_requests BEGIN SELECT RAISE(ABORT,'requests are immutable'); END;"
+        "CREATE INDEX IF NOT EXISTS delivery_request_results ON delivery_log(request_id,event_id,phase);";
+    const char* const integrity =
+        "CREATE TABLE IF NOT EXISTS report_integrity (input_cursor INTEGER PRIMARY KEY REFERENCES report_snapshots(input_cursor),digest TEXT NOT NULL);"
+        "CREATE TRIGGER IF NOT EXISTS report_integrity_no_update BEFORE UPDATE ON report_integrity BEGIN SELECT RAISE(ABORT,'report integrity is immutable'); END;"
+        "CREATE TRIGGER IF NOT EXISTS report_integrity_no_delete BEFORE DELETE ON report_integrity BEGIN SELECT RAISE(ABORT,'report integrity is immutable'); END;";
+    // The first runner's tables, then webhook routing, cumulative reports,
+    // redelivery requests and integrity digests; the current runner adds the
+    // delivery summaries.
+    const std::vector<std::pair<const char*, const char*>> stages{
+        {"3", first}, {"6", routing}, {"7", reports}, {"8", redelivery}, {"9", integrity}};
+    for (std::size_t written = 1; written <= stages.size(); ++written) {
+        const auto* tables = stages[written - 1].first;
+        const auto path = temp.file(std::string(tables) + "-tables.sqlite");
+        for (std::size_t stage = 0; stage < written; ++stage) execute_sql(path, stages[stage].second);
+        CHECK(table_count(path) == tables);
+        const auto refusal = open_refusal(path, "layouts");
+        if (!refusal.empty()) std::fprintf(stderr, "%s-table layout refused: %s\n", tables, refusal.c_str());
+        CHECK(refusal.empty());
+        CHECK(table_count(path) == "12");
+        CHECK(open_refusal(path, "layouts").empty());
+    }
+    const auto current = temp.file("12-tables.sqlite");
+    { Ledger ledger(current, "layouts"); }
+    CHECK(table_count(current) == "12");
+    CHECK(open_refusal(current, "layouts").empty());
+
+    const std::string unsupported = "native ledger is not an empty or supported ledger database";
+    const char* const unrelated = "CREATE TABLE unrelated (value TEXT);";
+    const auto refused = [&](const char* tables, const std::vector<const char*>& statements) {
+        const auto path = temp.file(std::string("refused-") + tables + ".sqlite");
+        for (const auto* statement : statements) execute_sql(path, statement);
+        CHECK(table_count(path) == tables);
+        CHECK(open_refusal(path, "layouts") == unsupported);
+        CHECK(table_count(path) == tables);
+    };
+    refused("4", {first, unrelated});
+    refused("5", {first, unrelated, "CREATE TABLE other (value TEXT);"});
+    refused("10", {first, routing, reports, redelivery, integrity, unrelated});
+    execute_sql(current, unrelated);
+    CHECK(table_count(current) == "13");
+    CHECK(open_refusal(current, "layouts") == unsupported);
+    CHECK(table_count(current) == "13");
+}
+
 void ledger_transactions() {
     TempDir temp;
     const auto path = temp.file("orders.sqlite");
@@ -1156,6 +1294,8 @@ int main(int argc, char** argv) {
             delivery_summary_migration();
             ledger_transactions();
             cumulative_reports();
+            pre_integrity_ledger();
+            ledger_layouts();
             incremental_reports();
             crash_recovery(argv[0]);
             native_http();
