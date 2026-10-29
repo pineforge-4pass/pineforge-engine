@@ -50,8 +50,7 @@
 
 // Include order is load-bearing: pineforge.h BEFORE engine.hpp keeps the
 // per-strategy declarations visible so definitions here are prototype-checked.
-// engine.hpp defines PINEFORGE_NO_STRATEGY_DECLS, which suppresses them. The
-// two v1 headers follow pineforge.h for the same reason.
+// engine.hpp defines PINEFORGE_NO_STRATEGY_DECLS, which suppresses them; the two v1 headers follow pineforge.h likewise.
 #include <pineforge/pineforge.h>
 #include <pineforge/execution_observer.h>
 #include <pineforge/selected_window.h>
