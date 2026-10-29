@@ -1,4 +1,4 @@
-"""CR-507: the container entrypoint must not compile a mounted /in/strategy.cpp unless the host vouches for it.
+"""The container entrypoint must not compile a mounted /in/strategy.cpp unless the host vouches for it.
 
 The entrypoint compiles `/in/strategy.cpp` unchanged when no `/in/strategy.pine` is mounted. A caller that
 can choose those bytes therefore chooses native code that runs in the engine's process. The host vouches

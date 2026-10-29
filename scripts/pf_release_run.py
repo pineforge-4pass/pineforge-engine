@@ -77,7 +77,7 @@ def run_release(
     ]
 
     env = {
-        # The release harness generated this file itself; vouch for exactly these bytes (CR-507).
+        # The release harness generated this file itself; vouch for exactly these bytes.
         "PINEFORGE_STRATEGY_CPP_SHA256": hashlib.sha256(generated_cpp.read_bytes()).hexdigest(),
         "PINEFORGE_INPUTS": json.dumps(inputs or {}),
         "PINEFORGE_OVERRIDES": json.dumps(overrides or {}),

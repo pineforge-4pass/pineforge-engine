@@ -209,7 +209,7 @@ elif [[ -f "${SRC_CPP}" ]]; then
             || { echo "[pineforge] cannot snapshot strategy.cpp into the work dir" >&2; exit 3; }
         SRC="${GEN}"
     fi
-    # CR-507: a mounted strategy.cpp is native code run in this process. Compile it only when the
+    # A mounted strategy.cpp is native code run in this process. Compile it only when the
     # host vouches for these exact bytes (PINEFORGE_STRATEGY_CPP_SHA256, set in the container's
     # environment, which the mount's author does not control), or on the explicit local opt-out.
     # The digest is taken over the frozen copy that g++ then reads, so there is no gap between

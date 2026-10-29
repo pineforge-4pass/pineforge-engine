@@ -7988,7 +7988,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND
 endif()
 # --- CR-150 core-cr150-replay-rq end ---
 
-# CR-507: the container entrypoint refuses a mounted strategy.cpp the host did not vouch for.
+# The container entrypoint refuses a mounted strategy.cpp the host did not vouch for.
 # Placed before the PR fast-row registration, which must stay the last block of this file.
 add_test(NAME test_entrypoint_cpp_attest
     COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_entrypoint_cpp_attest.py
