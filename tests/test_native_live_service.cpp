@@ -23,8 +23,10 @@
 
 namespace pineforge::live {
 std::atomic<bool> stop_on_completed_poll{false};
-bool discard_completed_poll = false;
-std::size_t returned_completions = 0;
+std::atomic<bool> discard_completed_poll{false};
+std::atomic<std::size_t> completion_batch_size{0};
+std::atomic<std::size_t> returned_completions{0};
+// The transport owner writes these receipts; snapshots below follow worker.finish(), which joins that owner.
 std::vector<std::pair<std::string, std::string>> polled_receipts;
 
 struct StopPollWebhookMulti::Impl {
@@ -41,6 +43,8 @@ void StopPollWebhookMulti::add(std::uint64_t key, const HttpOptions&, const Stor
 
 std::vector<CompletedWebhook> StopPollWebhookMulti::poll(int) {
     std::vector<CompletedWebhook> completed;
+    // The stop row requires one explicit four-result batch even when add/poll run independently of SQL.
+    if (impl_->keys.size() < completion_batch_size.load()) return completed;
     for (const auto key : impl_->keys) completed.push_back({key, {204, true, false, ""}});
     impl_->keys.clear();
     returned_completions += completed.size();
@@ -73,6 +77,7 @@ void completed_poll_stop(const fs::path& root) {
     DeliveryOptions settings;
     settings.max_in_flight = 4;
     discard_completed_poll = true;
+    completion_batch_size = 4;
     {
         StopPollDeliveryWorker worker(ledger, settings, {{"main", HttpOptions{}}}, std::nullopt,
             [] { return stop_on_completed_poll.load(); });
@@ -87,6 +92,7 @@ void completed_poll_stop(const fs::path& root) {
     const auto original = polled_receipts;
     stop_on_completed_poll = false;
     discard_completed_poll = false;
+    completion_batch_size = 0;
     {
         StopPollDeliveryWorker worker(ledger, settings, {{"main", HttpOptions{}}});
         worker.finish();
