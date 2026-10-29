@@ -3,6 +3,7 @@
 #include <deque>
 #include <vector>
 #include <string>
+#include <string_view>
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
@@ -1748,6 +1749,22 @@ protected:
     std::string closed_trade_exit_id(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return std::string();
         return trades_.exit_id_at(idx);
+    }
+    bool closed_trade_entry_id_equals(int idx, std::string_view rhs) const {
+        if (idx < 0 || idx >= static_cast<int>(trades_.size())) return rhs.empty();
+        return trades_.entry_id_equals(static_cast<std::size_t>(idx), rhs);
+    }
+    bool closed_trade_exit_id_equals(int idx, std::string_view rhs) const {
+        if (idx < 0 || idx >= static_cast<int>(trades_.size())) return rhs.empty();
+        return trades_.exit_id_equals(static_cast<std::size_t>(idx), rhs);
+    }
+    bool closed_trade_entry_comment_equals(int idx, std::string_view rhs) const {
+        if (idx < 0 || idx >= static_cast<int>(trades_.size())) return rhs.empty();
+        return trades_.entry_comment_equals(static_cast<std::size_t>(idx), rhs);
+    }
+    bool closed_trade_exit_comment_equals(int idx, std::string_view rhs) const {
+        if (idx < 0 || idx >= static_cast<int>(trades_.size())) return rhs.empty();
+        return trades_.exit_comment_equals(static_cast<std::size_t>(idx), rhs);
     }
     uint64_t closed_trade_entry_incarnation(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return 0;

@@ -7,6 +7,8 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- Closed-trade text equality can compare bytes without owning strings, count reads are inline, and field reads probe the cache once; rebuild C++ consumers and relink strategies with matching headers and archive.
+
 **[1.8.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.8.0)**,
 paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.8.0).
 A minor release. It speeds up the `run_json` wrapper (the wrapper only, not the
