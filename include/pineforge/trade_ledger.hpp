@@ -1,5 +1,4 @@
 #pragma once
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -7,6 +6,7 @@
 #include <iterator>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace pineforge {
 
@@ -120,10 +120,10 @@ public:
     size_type resident_base() const;
     bool empty() const;
 
-    // read() spans the retained source; a read below base() on an explicitly
-    // retiring sink run refuses with coded logic_error engine_invariant.
-    // at()/[] retain the checked
-    // unsealed-window contract for existing settlement callers.
+    // read()/at()/[] span the retained source, including sealed rows on a
+    // non-retiring ledger. An explicitly retiring ledger refuses reads below
+    // base() with a coded std::logic_error (engine_invariant).
+    // Writers still reject sealed rows below the publication boundary.
     // Hits allocate only the owning strings already required by read().
     // Direct-mapped eviction above cache_rows(), or oversized strings, retains
     // the existing scratch path; a history loop can still cost O(T).
@@ -131,12 +131,12 @@ public:
     Trade operator[](size_type global) const;
     Trade at(size_type global) const;
     Trade back() const;
-    // Same checked unsealed-row contract as at(). numeric_at() returns every
+    // Same retained-row read contract as at(). numeric_at() returns every
     // numeric field and flag with empty strings, reading only the descriptor.
     // entry_id_at() returns only that string and shares the field read cache.
     Trade numeric_at(size_type global) const;
     std::string entry_id_at(size_type global) const;
-    // Pine field reads use the same check(global,true) as at(). A numeric
+    // Pine field reads use the same check(global) as at(). A numeric
     // hit loads just its Record member, without constructing/copying a Trade
     // or any string. A string hit copies only the requested packed bytes.
     // Misses retain the numeric record and all strings fitting the allowance.
@@ -157,6 +157,16 @@ public:
     std::string entry_comment_at(size_type global) const;
     std::string exit_comment_at(size_type global) const;
     std::string exit_id_at(size_type global) const;
+    // Same checked retained-row contract as the owning text getters. Compare
+    // exact bytes (including NUL); empty fields equal an empty rhs. Return a
+    // plain bool: no pointer escapes. Warm reads allocate no owning strings;
+    // oversized text uses fixed stack chunks and consumes the whole extent,
+    // even on mismatch, so later I/O errors propagate. As with existing const
+    // reads, all access to the same ledger requires external synchronization.
+    bool entry_id_equals(size_type global, std::string_view rhs) const;
+    bool exit_id_equals(size_type global, std::string_view rhs) const;
+    bool entry_comment_equals(size_type global, std::string_view rhs) const;
+    bool exit_comment_equals(size_type global, std::string_view rhs) const;
     void replace(size_type global, const Trade&);
     void modify(size_type global, const std::function<void(Trade&)>&);
 

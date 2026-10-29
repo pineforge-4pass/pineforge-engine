@@ -405,9 +405,9 @@ inline Sample run(const std::string& directory, const std::string& name, int pop
                         "retained first closed trade changed");
                 if (sink_on && host.base() != 0) {
                     require(strategy_closed_trade_close_cause(
-                                static_cast<BacktestEngine*>(&host), 0) == -1
+                                static_cast<BacktestEngine*>(&host), 0) == static_cast<int>(execution::CloseCause::Script)
                                 && run_failure_value_of(host).code == RunFailureCode::none,
-                            "legacy sealed metadata sentinel/failure behavior changed");
+                            "retained sealed metadata value/failure behavior changed");
                 }
             }
             if (sink_on) {

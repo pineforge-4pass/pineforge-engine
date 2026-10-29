@@ -7,6 +7,18 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+### Closed-trade reads
+
+- C++ callers can compare closed-trade ids and comments in place, including
+  embedded NUL bytes, without allocating owning strings. Oversized fields use
+  fixed stack chunks.
+- Non-retiring ledgers serve sealed closed-trade rows from retained storage.
+  Numeric, text and C string accessors return the stored row after sealing;
+  writes to sealed rows and reads of physically retired history still refuse.
+- Range checks and cache hits cost less on the closed-trade read path. Class
+  layouts and `PF_ABI_VERSION` 5 are unchanged; existing 1.8.0 strategy modules
+  require no rebuild for these changes.
+
 **[1.8.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.8.0)**,
 paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.8.0).
 A minor release. It speeds up the `run_json` wrapper (the wrapper only, not the
