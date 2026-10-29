@@ -6533,9 +6533,9 @@ class _ReportSink:
         if not self.named:
             try:
                 self._equity_spool = _JSONColumn(
-                    self._spool_resources, self.directory)
+                    self._spool_resources, self.directory, indexed=True)
                 self._trades_spool = _JSONColumn(
-                    self._spool_resources, self.directory)
+                    self._spool_resources, self.directory, indexed=True)
             except Exception as error:
                 self._remember_spool_failure(error, open_failure=True)
                 self._equity_spool = self._trades_spool = None
@@ -7213,20 +7213,56 @@ class _JSONColumn(_JSONRecordArray):
     # Some serializer callers supply only .file via object.__new__.
     length = 0
 
-    def __init__(self, resources, directory):
-        super().__init__(lambda: iter(self), 0)
+    def __init__(self, resources, directory, *, indexed=False):
+        super().__init__(lambda: iter(self), 0, self._item_at if indexed else None)
         self.file = _json_temporary(resources, directory)
         self.empty = True
+        # One cursor: the next row number and its byte offset, never a row.
+        self._cursor_index = self._cursor_offset = 0
 
     def __len__(self):
         return self.length
 
     def __iter__(self):
+        """Decode rows lazily, with a fresh independent iterator on each call.
+
+        The first read freezes the report spool, after which it accepts no
+        more rows. Iterate before the report's resources are closed;
+        afterwards iteration raises ValueError, even for an empty column.
+        A single row larger than one 64 KiB window is decoded again after
+        each further window, taking time proportional to its size times the
+        number of windows (bounded by the sink's 1 MiB record cap).
+        Indexed columns support [i], which costs O(i) from the cursor;
+        callers should iterate.
+        """
+        if self.file.closed:
+            raise ValueError(
+                "a report column cannot be iterated after the report resources were closed")
+        return (value for value, _ in self._iter_rows())
+
+    def _item_at(self, index):
+        if index < self._cursor_index:
+            self._cursor_index = self._cursor_offset = 0
+        # The decoder lives only for this call. Retaining its generator would
+        # also retain the last yielded row and a private encoded window.
+        for value, offset in self._iter_rows(self._cursor_offset):
+            self._cursor_index += 1
+            self._cursor_offset = offset
+            if self._cursor_index == index + 1:
+                return value
+        raise ValueError("invalid JSON report column: row count differs")
+
+    def _iter_rows(self, offset=0):
+        """Yield each decoded row and the byte offset following its separator."""
+        if self.file.closed:
+            raise ValueError(
+                "a report column cannot be iterated after the report resources were closed")
+
         def invalid_constant(token):
             raise ValueError(f"invalid JSON report column: non-JSON number {token}")
 
         decoder = json.JSONDecoder(parse_constant=invalid_constant)
-        buffer, position, offset = "", 0, 0
+        buffer, position = "", 0
         eof = needs_value = False
         while True:
             while position < len(buffer) and buffer[position] in " \t\r\n":
@@ -7250,7 +7286,7 @@ class _JSONColumn(_JSONRecordArray):
                         if buffer[delimiter] == ",":
                             position = delimiter + 1
                             needs_value = True
-                            yield value
+                            yield value, offset - len(buffer) + position
                             del value
                             continue
                         # A window can end in "1e-" or "1.", for which
@@ -7259,7 +7295,7 @@ class _JSONColumn(_JSONRecordArray):
                                 or buffer[delimiter] not in ".eE"):
                             raise ValueError("invalid JSON report column: expected comma")
                     elif eof:
-                        yield value
+                        yield value, offset
                         return
                     # A successful decode at a window's end can still be a
                     # number prefix. Confirm its separator or EOF first.
@@ -7287,6 +7323,8 @@ class _JSONColumn(_JSONRecordArray):
         self.length += 1
 
     def append_ascii(self, data, *, row_count=1):
+        if not data and row_count == 0:
+            return
         try:
             if not self.empty:
                 self.file.write_ascii(b",")

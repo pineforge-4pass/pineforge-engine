@@ -22,7 +22,10 @@ unchanged except for two additive diagnostics keys, described below.
 - Monthly Sharpe/Sortino month keys for timestamps beyond about 34,800 years from the epoch no longer overflow; in-range results are unchanged.
 - In-process callers can again iterate the report's trades and equity curve on
   the default path, as well as the outputs rows, and take their length. Rows
-  are decoded lazily from the report spool without holding a list.
+  decode lazily; trades and equity also support `[i]` (new for sink trades).
+  The first read freezes the report spool, which then accepts no more rows.
+  Iterate before the report's resources close; afterwards iteration raises
+  `ValueError`.
 
 ### Compatibility and migration
 

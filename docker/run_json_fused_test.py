@@ -13,9 +13,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import random
 import re
 import subprocess
 import sys
+import time
 import tracemalloc
 import types
 
@@ -440,6 +442,361 @@ def test_fused_column_iteration_rejects_malformed_spool(tmp_path, payload):
         document["trades"].append_ascii(payload)
         with pytest.raises(ValueError, match="invalid JSON report column"):
             list(document["trades"])
+
+
+def _sink_column_rows(sink):
+    """Read the independent row oracle before any report spool is frozen."""
+    assert not sink._trades_spool.file.reading
+    assert not sink._equity_spool.file.reading
+    rows = {
+        "trades": [run_json._sink_trade(row) for row in sink.records("T")],
+        "equity_curve": [row.as_dict() for row in sink.records("E")],
+    }
+    assert not sink._trades_spool.file.reading
+    assert not sink._equity_spool.file.reading
+    return rows
+
+
+def test_fused_columns_reject_iteration_after_resources_close(tmp_path):
+    columns = []
+    for count in (0, 1):
+        captured = []
+        with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
+            assert isinstance(sink._spool_resources, ExitStack)
+            outcome = support.assemble(
+                run_json, sink, library, report, before_prepare=captured.append)
+            assert outcome.failure is None, outcome.failure
+            for key in ("trades", "equity_curve"):
+                column = captured[0][key]
+                assert len(column) == count
+                assert not column.file.closed
+                columns.append(column)
+        # _sink_case closes the real sink, which closes its owning ExitStack.
+        assert sink.closed
+    for column in columns:
+        assert column.file.closed
+        with pytest.raises(
+                ValueError, match="iterated after the report resources were closed") as caught:
+            list(column)
+        assert type(caught.value) is ValueError
+        assert str(caught.value) == (
+            "a report column cannot be iterated after the report resources were closed")
+
+
+@pytest.mark.parametrize("trade_count,equity_count", (
+    (0, 0), (0, 4097), (1, 1), (4097, 4097),
+), ids=("empty", "no-trades-with-equity", "one", "many"))
+@pytest.mark.parametrize("bulk", (False, True), ids=("record-equity", "bulk-equity"))
+def test_fused_report_columns_match_sink_rows(
+        tmp_path, monkeypatch, trade_count, equity_count, bulk):
+    monkeypatch.setattr(run_json, "_BULK_E_ENABLED", bulk)
+    expected = {}
+
+    def before_prepare(document):
+        expected.update(_sink_column_rows(sink))
+        for key in ("trades", "equity_curve"):
+            _assert_decoded_rows(list(document[key]), expected[key])
+            assert document[key].file.reading
+
+    with _sink_case(
+            tmp_path, _iteration_rows(trade_count, equity_count=equity_count)
+    ) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report, before_prepare=before_prepare)
+        assert outcome.failure is None, outcome.failure
+        serialized = json.loads(outcome.report)
+        for key, count in (("trades", trade_count), ("equity_curve", equity_count)):
+            assert len(expected[key]) == count
+            _assert_decoded_rows(serialized[key], expected[key])
+
+
+@pytest.mark.parametrize("kind", ("ascii", "batch"))
+@pytest.mark.parametrize("count", (0, 1), ids=("empty", "one"))
+def test_fused_column_zero_row_appends_preserve_spool(tmp_path, kind, count):
+    captured, expected, spools = [], {}, {}
+    batch = run_json._BulkEquity(b"", 0, None, None)
+    assert run_json._bulk_equity(b"") is None
+    assert run_json._bulk_equity_ascii(batch) == b""
+
+    def before_prepare(document):
+        captured.append(document)
+        expected.update(_sink_column_rows(sink))
+        keys = ("trades", "equity_curve") if kind == "ascii" else ("equity_curve",)
+        for key in keys:
+            column = document[key]
+            file = column.file
+            assert file.base == 0 and file.size == file.used < file.window
+            before = file.buffer[:file.used]
+            length, empty = len(column), column.empty
+            assert not file.reading
+            if kind == "ascii":
+                column.append_ascii(b"", row_count=0)
+            else:
+                sink._append_equity_batch(batch)
+                assert not sink._equity_spool_failed
+                assert sink._spool_failure is None
+            assert len(column) == length
+            assert file.size == file.used == len(before)
+            assert file.buffer[:file.used] == before
+            assert column.empty is empty
+            assert not file.reading
+            spools[key] = before
+
+    with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report, before_prepare=before_prepare)
+        assert outcome.failure is None, outcome.failure
+        serialized = json.loads(outcome.report)
+        for key in ("trades", "equity_curve"):
+            _assert_decoded_rows(serialized[key], expected[key])
+        for key, before in spools.items():
+            column = captured[0][key]
+            assert column.file.read_at(0, column.file.window).encode("ascii") == before
+            _assert_decoded_rows(list(column), expected[key])
+
+
+@pytest.mark.parametrize("trade_count,equity_count", (
+    (0, 0), (0, 257), (1, 1), (257, 257),
+), ids=("empty", "no-trades-with-equity", "one", "many"))
+@pytest.mark.parametrize("bulk", (False, True), ids=("record-equity", "bulk-equity"))
+def test_fused_report_column_index_contract(
+        tmp_path, monkeypatch, trade_count, equity_count, bulk):
+    monkeypatch.setattr(run_json, "_BULK_E_ENABLED", bulk)
+    captured, expected = [], {}
+
+    def before_prepare(document):
+        captured.append(document)
+        expected.update(_sink_column_rows(sink))
+        for key in ("trades", "equity_curve"):
+            column, rows = document[key], expected[key]
+            assert type(column) is run_json._JSONColumn
+            assert isinstance(column, run_json._JSONRecordArray)
+            length = len(rows)
+            assert len(column) == length
+            for index in (None, 0.0, "0", slice(None), slice(0, 1)):
+                with pytest.raises(TypeError) as caught:
+                    column[index]
+                assert type(caught.value) is TypeError
+                assert str(caught.value) == "a streamed array has no random access"
+            invalid = [length, -length - 1]
+            if not length:
+                invalid.extend((0, -1, length - 1))
+            invalid.extend(index for index in (False, True) if int(index) >= length)
+            for index in invalid:
+                normalized = index + length if index < 0 else index
+                with pytest.raises(IndexError) as caught:
+                    column[index]
+                assert type(caught.value) is IndexError
+                assert caught.value.args == (normalized,)
+                assert type(caught.value.args[0]) is type(normalized)
+            if length:
+                for index in (0, -1, length - 1, False):
+                    _assert_decoded_rows(column[index], rows[index])
+                if length > 1:
+                    _assert_decoded_rows(column[True], rows[True])
+                rng = random.Random(0)
+                walks = (
+                    range(length), range(length - 1, -1, -1),
+                    [rng.randrange(length) for _ in range(32)],
+                    [length // 2] * 3,
+                )
+                for walk in walks:
+                    for index in walk:
+                        _assert_decoded_rows(column[index], rows[index])
+            assert not any(isinstance(value, (list, dict, tuple, set))
+                           for value in vars(column).values())
+
+    with _sink_case(
+            tmp_path, _iteration_rows(trade_count, equity_count=equity_count)
+    ) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report, before_prepare=before_prepare)
+        assert outcome.failure is None, outcome.failure
+        serialized = json.loads(outcome.report)
+        for key in ("trades", "equity_curve"):
+            _assert_decoded_rows(serialized[key], expected[key])
+            _assert_decoded_rows(
+                [captured[0][key][index] for index in range(len(expected[key]))],
+                serialized[key])
+
+
+@pytest.mark.parametrize("count", (0, 1), ids=("empty", "one"))
+def test_fused_output_columns_keep_random_access_disabled(tmp_path, count):
+    rows = _mixed() if count else [["K", 50.]]
+    captured = []
+    with _sink_case(tmp_path, rows, outputs=True) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report, outputs=True,
+            configure=_configure_outputs, before_prepare=captured.append)
+        assert outcome.failure is None, outcome.failure
+        block = captured[0]["outputs"]
+        columns = [block["bars"]["open_ms"], block["bars"]["close_ms"], block["events"]]
+        columns.extend(entry["values"] for entry in block["series"])
+        for column in columns:
+            assert type(column) is run_json._JSONColumn
+            assert isinstance(column, run_json._JSONRecordArray)
+            assert len(column) == count
+            for index in (0, -1, len(column), False, True, slice(None)):
+                with pytest.raises(TypeError) as caught:
+                    column[index]
+                assert type(caught.value) is TypeError
+                assert str(caught.value) == "a streamed array has no random access"
+
+
+@pytest.mark.parametrize("key", ("trades", "equity_curve"))
+@pytest.mark.parametrize("count", (1, 4097), ids=("one", "many"))
+def test_fused_column_index_interleaves_iteration_and_serialization(
+        tmp_path, monkeypatch, key, count):
+    captured = []
+
+    def before_prepare(document):
+        expected = _sink_column_rows(sink)[key]
+        column = document[key]
+        iterator = iter(column)
+        seen = [next(iterator)]
+        for index in (count // 2, 0, count - 1):
+            _assert_decoded_rows(column[index], expected[index])
+            assert column.file.position == 0
+        read, reads = column.file.read, 0
+        sentinel = object()
+
+        def interleaved_read(size=-1):
+            nonlocal reads
+            chunk = read(min(size, 8191) if size >= 0 else 8191)
+            if chunk:
+                position = column.file.position
+                indexes = (count - 1, 0, count // 2)
+                index = indexes[reads % len(indexes)]
+                _assert_decoded_rows(column[index], expected[index])
+                reads += 1
+                for _ in range(512):
+                    row = next(iterator, sentinel)
+                    if row is sentinel:
+                        break
+                    seen.append(row)
+                assert column.file.position == position
+            return chunk
+
+        with monkeypatch.context() as patch, ExitStack() as resources:
+            patch.setattr(column.file, "read", interleaved_read)
+            artifact = run_json._prepare_report_json(
+                document, resources,
+                types.SimpleNamespace(profile="unjailed", spill_dir=str(tmp_path)), sink)
+            chunks = []
+            while chunk := artifact.read(65536):
+                chunks.append(chunk.encode("ascii"))
+            during = b"".join(chunks)
+        assert reads > 0
+        if count > 1:
+            assert reads > 3
+        position = column.file.position
+        seen.extend(iterator)
+        for index in (0, count - 1, 0):
+            _assert_decoded_rows(column[index], expected[index])
+        assert column.file.position == position
+        captured.append((expected, seen, during, document))
+
+    with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report, before_prepare=before_prepare)
+        assert outcome.failure is None, outcome.failure
+        expected, seen, during, document = captured[0]
+        assert during == outcome.report
+        serialized = json.loads(outcome.report)[key]
+        _assert_decoded_rows(serialized, expected)
+        _assert_decoded_rows(seen, serialized)
+        _assert_decoded_rows(document[key][-1], serialized[-1])
+
+
+def test_fused_column_forward_index_timing(tmp_path, capsys):
+    count, factor = 25000, 8
+    rows = [_point(0)] + [_trade(index + 1) for index in range(count)]
+    captured, sink_rows = [], {}
+
+    def before_prepare(document):
+        captured.append(document)
+        sink_rows.update(_sink_column_rows(sink))
+
+    with _sink_case(tmp_path, rows) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report, before_prepare=before_prepare)
+        assert outcome.failure is None, outcome.failure
+        column = captured[0]["trades"]
+        expected = json.loads(outcome.report)["trades"]
+        assert len(column) == len(expected) == count
+        _assert_decoded_rows(expected, sink_rows["trades"])
+        _assert_decoded_rows(column[0], expected[0])
+        _assert_decoded_rows(column[-1], expected[-1])
+        sequential, indexed = [], []
+        for _ in range(3):
+            start = time.perf_counter()
+            for row in column:
+                pass
+            sequential.append(time.perf_counter() - start)
+            start = time.perf_counter()
+            for index in range(len(column)):
+                column[index]
+            indexed.append(time.perf_counter() - start)
+        sequential_time, indexed_time = min(sequential), min(indexed)
+        ratio = indexed_time / sequential_time
+        with capsys.disabled():
+            print(
+                f"JSON column forward walk: iteration={sequential_time:.6f}s "
+                f"indexing={indexed_time:.6f}s ratio={ratio:.3f} limit={factor}",
+                flush=True)
+        assert indexed_time < factor * sequential_time
+        _assert_decoded_rows(column[count // 2], expected[count // 2])
+        assert not any(isinstance(value, (list, dict, tuple, set))
+                       for value in vars(column).values())
+
+
+@pytest.mark.parametrize("count", (0, 1), ids=("empty", "one"))
+def test_fused_report_column_truthiness(tmp_path, count):
+    captured = []
+    with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report, before_prepare=captured.append)
+        assert outcome.failure is None, outcome.failure
+        serialized = json.loads(outcome.report)
+        for key in ("trades", "equity_curve"):
+            assert bool(captured[0][key]) is bool(serialized[key]) is bool(count)
+
+
+@pytest.mark.parametrize("key", ("trades", "equity_curve"))
+@pytest.mark.parametrize("count", (0, 1, 4097), ids=("empty", "one", "many"))
+def test_fused_column_iterators_are_fresh_and_independent(tmp_path, key, count):
+    captured = []
+    with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report, before_prepare=captured.append)
+        assert outcome.failure is None, outcome.failure
+        column, expected = captured[0][key], json.loads(outcome.report)[key]
+        assert type(column) is run_json._JSONColumn
+        assert isinstance(column, run_json._JSONRecordArray)
+        left, right = iter(column), iter(column)
+        assert left is not right
+        _assert_decoded_rows(list(left), expected)
+        _assert_decoded_rows(list(right), expected)
+        left, right = iter(column), iter(column)
+        assert left is not right
+        left_rows, right_rows = [], []
+        for _ in expected:
+            left_rows.append(next(left))
+            right_rows.append(next(right))
+        sentinel = object()
+        assert next(left, sentinel) is next(right, sentinel) is sentinel
+        _assert_decoded_rows(left_rows, expected)
+        _assert_decoded_rows(right_rows, expected)
+        if count:
+            _assert_decoded_rows(next(iter(column)), expected[0])
+            _assert_decoded_rows(next(iter(column)), expected[0])
+        else:
+            assert next(iter(column), sentinel) is sentinel
+            assert next(iter(column), sentinel) is sentinel
+        # Init-bypassing callers supply only .file, including for an empty spool.
+        bare = object.__new__(run_json._JSONColumn)
+        bare.file = column.file
+        _assert_decoded_rows(list(bare), expected)
 
 
 def test_fused_frozen_oracle_uses_frozen_pf_sink(tmp_path, monkeypatch, frozen):
