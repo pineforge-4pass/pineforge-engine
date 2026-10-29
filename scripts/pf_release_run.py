@@ -20,6 +20,7 @@ the volume_weighted flag — pass dist already normalized).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -76,6 +77,8 @@ def run_release(
     ]
 
     env = {
+        # The release harness generated this file itself; vouch for exactly these bytes (CR-507).
+        "PINEFORGE_STRATEGY_CPP_SHA256": hashlib.sha256(generated_cpp.read_bytes()).hexdigest(),
         "PINEFORGE_INPUTS": json.dumps(inputs or {}),
         "PINEFORGE_OVERRIDES": json.dumps(overrides or {}),
         "PINEFORGE_INPUT_TF": input_tf or "",

@@ -33,6 +33,7 @@ echo "timestamp,open,high,low,close,volume" > "$indir/ohlcv.csv"
 out="$(PATH="$work/bin:$PATH" \
      PINEFORGE_PREFIX="$work/prefix" \
      PINEFORGE_IN_DIR="$indir" \
+     PINEFORGE_ALLOW_UNATTESTED_CPP=1 \
      bash "$ENTRY" 2>/dev/null)"
 
 echo "$out" | grep -q '"marker": "indir"' || { echo "FAIL: did not run from PINEFORGE_IN_DIR"; exit 1; }

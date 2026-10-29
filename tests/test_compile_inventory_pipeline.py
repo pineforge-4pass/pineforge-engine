@@ -318,6 +318,9 @@ class Box:
             "REAL_RUN_JSON": str(ROOT / "docker" / "run_json.py"),
             "PINEFORGE_PREFIX": str(self.prefix),
             "PINEFORGE_IN_DIR": str(self.indir),
+            # CR-507: a mounted strategy.cpp is refused unless the host vouches for it; these tests
+            # exercise the unchanged local-trust path (tests/test_entrypoint_cpp_attest.py has the gate).
+            "PINEFORGE_ALLOW_UNATTESTED_CPP": "1",
         })
         env.update(extra or {})
         return env
