@@ -43,12 +43,13 @@ with `requested=R` is refused again at `limit=used+R-1`, including after another
 refusal. At `used+R` it is admitted, and database/WAL/SHM growth is bounded by
 `R`. The reservation remains an upper bound on physical growth.
 
-A refusal cancels delivery and stops the advanced strategy instance. It is
-latched under the mutex so another writer cannot add rows during shutdown.
+A required-write refusal cancels delivery and stops the advanced strategy
+instance. It is latched under the mutex so another writer cannot add rows
+during shutdown.
 Restart replays the committed prefix. Finite budgets disable the implicit
-checkpoint on close, retaining the durable WAL for recovery. Checkpoints
-during admitted commits are included in admission. Initialization can fail
-before status publication starts. A running service's
+checkpoint on close, retaining the durable WAL for recovery. SQLite WAL
+checkpoint copies during admitted commits are included in admission.
+Initialization can fail before status publication starts. A running service's
 `storage_below_budget` readiness field becomes false on a storage stop.
 
 The physical bound uses these quantities:
@@ -59,7 +60,7 @@ The physical bound uses these quantities:
 | `C0`, `C1` | Logical page counts before BEGIN and after the cached SQL changes. |
 | `Q` | This ledger's resident page count after all SQL changes and release of unreferenced clean pages. |
 | `D` | `min(C1, Q)` when the cache observer is available and auto-vacuum is off; otherwise `C1`. |
-| `E` | Optional `extra_payload_bytes` margin supplied by another writer; zero for the current writers. |
+| `E` | `extra_payload_bytes`: the serialized cumulative report checkpoint length for a scheduled boundary input; zero for other writes. |
 | `A` | Zero when `E=0`, otherwise `floor(8*E/(P-64)) + 4` additional pages. |
 | `K` | `ceil(65536/(P+24))` extra WAL frames for sector padding. |
 | `F` | `D + A + K` accounted frames. |
@@ -109,7 +110,45 @@ The frame term is `(2 + 48/P)` times `F*P`: **2.01171875 at 4 KiB**,
 with earlier checkpoint debt and SHM added separately. It is not a fixed
 multiple of actual file growth: WAL/freelist reuse can make growth zero, and
 referenced clean pages are included. The optional extra-payload margin is
-additive; a writer must still put its SQL changes in the admitted transaction.
+additive. Scheduled report checkpoints are prepared from the input
+transaction's report state before its admission. The input is refused before
+growth if its cached pages plus that margin do not fit. A refused boundary
+input leaves database, WAL and SHM byte-identical, including repeated refusals.
+Charging the cumulative payload to the boundary input is intended
+(`Ledger::commit_input`, `runner/store.cpp:1093`). A boundary input can therefore
+hit a storage stop when the input alone would fit, up to the cumulative
+payload's reservation earlier than strictly necessary. This cost buys the
+guarantee that no input commits with a checkpoint admitted without room in its
+reservation.
+
+The report checkpoint uses its own transaction after the input commits.
+The writer mutex stays held between these transactions. That second
+transaction admits its actual cached pages with `E=0`, against the smaller
+of the configured budget and the first admission's `used + requested`.
+It cannot spend beyond the original reservation. The extra-payload formula
+alone does not prove that every possible checkpoint tree update will fit
+this remaining ceiling. If that admission refuses, the checkpoint rolls back,
+the `write_failed` diagnostic and its `count` are published, and the run
+continues without latching a required-write storage stop. The committed input
+remains durable and full report reconstruction remains available.
+The additive diagnostic `reason` is `budget` for a refused admission, `build`
+for preparation or allocation failure, or `io` for database setup/write failure.
+`reason` names the most recent failure, while `budget_count`, `build_count`
+and `io_count` are cumulative since the ledger was opened and `count` is their
+sum. The same fields appear in the status file and stderr diagnostic JSON.
+Checkpoint verification failures have null `reason` and zero reason counts.
+
+Startup and recovery checkpoints also admit their actual cached pages before
+COMMIT, using the configured budget without an input reservation. They are
+optional on refusal and publish the same diagnostic. This is intended for both
+startup and post-replay checkpoints (`Ledger::checkpoint_recovered_report`,
+`runner/store.cpp:1219`; the post-replay call is `checkpoint_recovered_report`,
+`runner/main.cpp:1039`): with a large budget, either can spend most of the
+remaining headroom on an O(report) payload before the first live input. The run
+can stop sooner, never over budget. Opening files already
+over a newly supplied finite budget refuses with `LedgerBudgetExceeded` before
+opening SQLite or attempting a checkpoint. Preparation failures skip the
+optional checkpoint; the input's admission then has no checkpoint payload.
 
 For sizing, assume no earlier checkpoint debt, no extra payload, an existing
 32 KiB SHM file, and a WAL-index bound of 64 KiB:
@@ -170,7 +209,11 @@ persist each page size with `VACUUM`, select no auto-vacuum, and check the
 reopened size. Limits one byte below admission refuse with all three files
 unchanged byte for byte, including two consecutive retries after the first
 refusal. Writers also commit at the exact admission limit within their
-reservation. A separate row releases a 32 MiB unrelated SQLite allocation
+reservation. The production-default checkpoint row shows that the observed
+request belongs to the contract's allowed set, is no larger than the
+logical-page (FULL) request, and admits at `used + request` with growth at most
+`request`; it does not pin the estimator to the resident-page count.
+A separate row releases a 32 MiB unrelated SQLite allocation
 and warms different clean pages between refusals against a ledger with
 12.8 MB of historical payload. The small routing write's headroom, excluding
 checkpoint debt, must stay below one historical record's size. The independent

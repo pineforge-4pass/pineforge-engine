@@ -95,6 +95,10 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME test_native_live_startup COMMAND test_native_live_startup)
     add_test(NAME native_live_help COMMAND pineforge-live --help)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME native_live_checkpoint_e2e COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/native_live_checkpoint_e2e.py $<TARGET_FILE:pineforge-live>
+        $<TARGET_FILE:native_market_example>)
+    set_tests_properties(native_live_checkpoint_e2e PROPERTIES TIMEOUT 180)
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_library(native_live_service_example MODULE ${PROJECT_SOURCE_DIR}/tests/native_live_service_strategy.cpp)
         target_link_libraries(native_live_service_example PRIVATE PineForge::pineforge)
@@ -203,9 +207,27 @@ if(PINEFORGE_BUILD_TESTS)
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> summary-only)
     add_test(NAME test_native_live_report_options COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> options)
+    add_test(NAME test_native_live_report_default_recovery COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> default-recovery)
     set_tests_properties(test_native_live_report_first_commit test_native_live_report_summary_only
-        test_native_live_report_options PROPERTIES TIMEOUT 180)
+        test_native_live_report_options test_native_live_report_default_recovery PROPERTIES TIMEOUT 180)
     set_tests_properties(test_native_live_websocket PROPERTIES SKIP_RETURN_CODE 77)
+    add_executable(test_native_live_checkpoint
+        ${PROJECT_SOURCE_DIR}/tests/test_native_live_checkpoint.cpp)
+    target_link_libraries(test_native_live_checkpoint PRIVATE pineforge_live_legacy_test_support)
+    target_compile_options(test_native_live_checkpoint PRIVATE -UNDEBUG)
+    add_test(NAME test_native_live_checkpoint COMMAND test_native_live_checkpoint)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(test_native_live_checkpoint_measurement
+            ${PROJECT_SOURCE_DIR}/tests/test_native_live_checkpoint_measurement.cpp)
+        target_link_libraries(test_native_live_checkpoint_measurement PRIVATE
+            pineforge_live_legacy_test_support)
+        target_compile_options(test_native_live_checkpoint_measurement PRIVATE -UNDEBUG)
+        add_test(NAME test_native_live_checkpoint_measurement
+            COMMAND test_native_live_checkpoint_measurement)
+        set_tests_properties(test_native_live_checkpoint_measurement PROPERTIES
+            LABELS "slow;diagnostic" RUN_SERIAL TRUE)
+    endif()
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME native_live_routing_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_routing_e2e.py $<TARGET_FILE:pineforge-live>

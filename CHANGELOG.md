@@ -89,10 +89,10 @@ unchanged except for two additive diagnostics keys, described below.
   row and up to three partial-index entries per action, plus per-target rows
   and indexes.
 - The ledger open derives the table layouts it accepts from one list of the
-  ledger's tables: every layout a runner has written, each also without
-  `report_integrity`; any other table count is refused as before. A ledger
-  without integrity digests, including one that already has the delivery
-  summaries, opens and needs one verified `run` replay before export.
+  ledger's tables, including report checkpoints: every layout a runner has
+  written, each also without `report_integrity`; any other table count is
+  refused. A ledger without integrity digests, including one that already has
+  the delivery summaries, opens and needs one verified `run` replay before export.
 
 ### Run profile in the report diagnostics
 
@@ -157,6 +157,38 @@ unchanged except for two additive diagnostics keys, described below.
   read a tape's `metrics.json` range-provenance member as `rangeProvenance`
   first; the member's previous name is still accepted until the next minor
   release, and the label the scripts print names the member they read.
+
+### Native live report checkpoints
+
+The live runner now writes immutable cumulative report checkpoints at K, 2K,
+4K, ... committed inputs. `--checkpoint-interval K` sets the first/base interval
+(default 1024). For fixed K and bounded per-input report growth, geometric
+checkpoints use linear payload storage. Report export starts at the nearest
+verified checkpoint P, reading its witness snapshot and C-P tail deltas for
+cursor C; the tail approaches half the history just before the next doubling.
+The runner README gives the exact report-row and stored-payload bounds.
+
+Checkpoint preparation precedes input admission, which reserves its serialized
+cumulative payload. Its separate insert transaction runs after the input
+commit and admits its pages within that reservation. A failed checkpoint records
+a typed diagnostic and counter and leaves that input durable so the service can
+continue. An old ledger gets its first checkpoint
+during open/startup recovery, before new inputs; this initial reconstruction
+reads the full history. Each boundary still builds an O(T) document for a
+report of size T.
+
+Default export and restart verify the report chain only from the nearest
+checkpoint onward. `report --verify-full` re-verifies the whole committed chain.
+A payload or integrity witness failure falls back to full report
+reconstruction; startup failures are published on stderr and in the service
+status file's `checkpoint_diagnostic` field.
+That diagnostic adds `reason` (`budget`, `build`, `io`) and separate `budget_count`, `build_count` and `io_count` fields while retaining every existing key and the total `count`.
+
+The checkpoint contains report state only. The engine has no state restore
+entry point, so restart recovery still replays committed strategy inputs and
+validates their state hashes and actions. The diagnostic measurement row prints
+the lab's file, WAL, RSS, descriptor and timing values; this release does not
+claim those unmeasured values in its documentation.
 
 ### Native live report stream
 

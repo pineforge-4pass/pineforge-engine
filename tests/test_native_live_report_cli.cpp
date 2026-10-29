@@ -148,6 +148,18 @@ public:
             pull();
         }
     }
+    void crash() {
+        require(kill(pid_, SIGKILL) == 0, "cannot kill runner: " + errors());
+        int status = 0;
+        pid_t waited;
+        do { waited = waitpid(pid_, &status, 0); } while (waited < 0 && errno == EINTR);
+        require(waited == pid_, "waitpid after kill failed");
+        pid_ = -1;
+        close(input_); input_ = -1;
+        close(output_); output_ = -1;
+        require(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL,
+                "expected SIGKILL, actual wait status=" + std::to_string(status) + ": " + errors());
+    }
     std::string finish(int expected = 0) {
         close(input_);
         input_ = -1;
@@ -325,6 +337,86 @@ std::vector<std::string> exercise(Fixture& fixture, const std::string& name, con
     return reports;
 }
 
+void default_stream_survives_kill(Fixture& fixture) {
+    constexpr std::uint64_t killed_at = 7;
+    const auto uninterrupted_ledger = fixture.temporary.path / "uninterrupted.sqlite";
+    const auto resumed_ledger = fixture.temporary.path / "resumed.sqlite";
+    const auto command = [&](const fs::path& ledger, const fs::path& status, std::uint64_t from) {
+        auto arguments = fixture.command(ledger, status, "--report-jsonl", from);
+        arguments.insert(arguments.end(), {"--checkpoint-interval", "2"});
+        return arguments;
+    };
+    const auto cumulative_line = [](Runner& child, std::uint64_t expected_cursor) {
+        const auto line = child.line();
+        const auto document = parse_json(line);
+        require(document.at("schema_version").text() == "pineforge-native-report/v1",
+                "wrong default stream schema: actual=" + line + " expected=pineforge-native-report/v1");
+        const auto& input_cursor = document.at("input_cursor");
+        require(input_cursor.kind == Json::Kind::Number,
+                "default stream cursor is not a JSON integer: actual=" + input_cursor.dump());
+        const auto cursor = input_cursor.integer<std::uint64_t>();
+        require(cursor >= 1 && cursor == expected_cursor,
+                "wrong default stream cursor: actual=" + input_cursor.dump() +
+                " expected=" + std::to_string(expected_cursor) + " (>=1)");
+        return line;
+    };
+    const auto same_report = [](const std::string& actual, const std::string& expected,
+                                std::uint64_t cursor) {
+        require(actual == expected, "report bytes differ at cursor=" + std::to_string(cursor) +
+                " actual=" + actual + " expected=" + expected);
+    };
+    std::vector<std::string> uninterrupted;
+    {
+        const auto status = fixture.temporary.path / "uninterrupted.status";
+        Runner child(command(uninterrupted_ledger, status, 0),
+                     fixture.temporary.path / "uninterrupted.stderr");
+        wait_ready(status, 0, child);
+        child.quiet();
+        for (std::size_t index = 0; index < fixture.inputs.size(); ++index) {
+            child.send(fixture.inputs[index] + "\n");
+            uninterrupted.push_back(cumulative_line(child, index + 1));
+            child.quiet();
+        }
+        check_summary(child.finish(), fixture.inputs.size(), fixture.inputs.size());
+    }
+    {
+        const auto status = fixture.temporary.path / "interrupted.status";
+        Runner child(command(resumed_ledger, status, 0),
+                     fixture.temporary.path / "interrupted.stderr");
+        wait_ready(status, 0, child);
+        child.quiet();
+        for (std::uint64_t index = 0; index < killed_at; ++index) {
+            child.send(fixture.inputs[index] + "\n");
+            same_report(cumulative_line(child, index + 1), uninterrupted[index], index + 1);
+            child.quiet();
+        }
+        child.crash();
+    }
+    {
+        const auto status = fixture.temporary.path / "resumed.status";
+        Runner child(command(resumed_ledger, status, killed_at),
+                     fixture.temporary.path / "resumed.stderr");
+        wait_ready(status, killed_at, child);
+        child.quiet();
+        ReportReadStats stats;
+        same_report(LedgerView(resumed_ledger.string()).report_json(killed_at, &stats),
+                    uninterrupted[killed_at - 1], killed_at);
+        require(stats.checkpoint_rows == 1, "recovered export did not use a checkpoint: actual=" +
+                std::to_string(stats.checkpoint_rows) + " expected=1");
+        // With K=2, cursor 7 has checkpoint 4 and three tail deltas.
+        require(stats.delta_rows == 4, "wrong witness/tail row count: actual=" +
+                std::to_string(stats.delta_rows) + " expected=4");
+        for (std::size_t index = killed_at; index < fixture.inputs.size(); ++index) {
+            child.send(fixture.inputs[index] + "\n");
+            same_report(cumulative_line(child, index + 1), uninterrupted[index], index + 1);
+            child.quiet();
+        }
+        check_summary(child.finish(), fixture.inputs.size(), fixture.inputs.size() - killed_at);
+    }
+    same_report(LedgerView(resumed_ledger.string()).report_json_full(),
+                uninterrupted.back(), fixture.inputs.size());
+}
+
 void options_are_strict(Fixture& fixture) {
     for (const std::string option : {"--report-jsonl=unsupported", "--report-jsonl=", "--report-jsonl=DELTA"}) {
         Runner child({fixture.runner, "run", option}, fixture.temporary.path / "invalid.stderr");
@@ -354,6 +446,8 @@ int main(int argc, char** argv) {
             exercise(fixture, "off", "");
         } else if (test_case == "options") {
             options_are_strict(fixture);
+        } else if (test_case == "default-recovery") {
+            default_stream_survives_kill(fixture);
         } else {
             throw std::runtime_error("unknown test case");
         }
