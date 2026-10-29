@@ -1,9 +1,9 @@
 {
   "schema": "pineforge-run-failure-catalog-diff/v1",
   "from": {
-    "version": "1.7.0",
-    "tag": "v1.7.0",
-    "catalogSha256": "400961b4f134c550841fc7d04d4fe82026de133f33512ff1b41604302d6deddd"
+    "version": "1.8.0",
+    "tag": "v1.8.0",
+    "catalogSha256": "97fe2b5206c1167f859b6d0cf065443a2511ffef739d0f02aa227cc35cc4c75f"
   },
   "to": {
     "version": null,
@@ -16,78 +16,7 @@
   },
   "metadataChanges": [],
   "added": [],
-  "changed": [
-    {
-      "code": "engine_invariant",
-      "collection": "codes",
-      "fields": [
-        {
-          "path": "args.reason",
-          "beforePresent": false,
-          "afterPresent": true,
-          "before": null,
-          "after": {
-            "kind": "vocab",
-            "optional": true,
-            "values": [
-              "order_key_hash_collision"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "code": "strategy_library_incompatible",
-      "collection": "codes",
-      "fields": [
-        {
-          "path": "english",
-          "beforePresent": true,
-          "afterPresent": true,
-          "before": [
-            "--outputs: event {index} could not be read",
-            "--outputs: series slot {slot} could not be read",
-            "--outputs: the bar times could not be read",
-            "--outputs: the library lacks {export}, which recording needs; rebuild.",
-            "--outputs: the library returned no outputs manifest: {error}",
-            "--outputs: the library's outputs API version is {version}, the harness reads 1; rebuild.",
-            "--outputs: the outputs manifest is not JSON: {error}",
-            "--outputs: the outputs manifest is not a JSON object",
-            "--outputs: the outputs manifest lists no output {index}, which an event names",
-            "--outputs: the outputs manifest names series slot {slot}, which the library does not record",
-            "--outputs: the outputs manifest's {key} is not a list of entries with {fields}",
-            "cannot load the strategy library: {error}",
-            "checked settings API mismatch: the strategy library must export strategy_settings_api_version() == 1, strategy_create_checked, strategy_set_input_checked and strategy_set_override_checked, or none of them; rebuild.",
-            "pineforge ABI mismatch: .so reports {abi}, harness expects 4; rebuild.",
-            "strategy .so predates pf_abi_version (ABI v1); rebuild it against the current pineforge runtime (pf_report_t grew).",
-            "the strategy library has no strategy_set_syminfo_metadata, so syminfo.mincontract cannot be applied",
-            "the strategy library has no {export}",
-            "the strategy library has no {setter}, so syminfo.{key} cannot be applied"
-          ],
-          "after": [
-            "--outputs: event {index} could not be read",
-            "--outputs: series slot {slot} could not be read",
-            "--outputs: the bar times could not be read",
-            "--outputs: the library lacks {export}, which recording needs; rebuild.",
-            "--outputs: the library returned no outputs manifest: {error}",
-            "--outputs: the library's outputs API version is {version}, the harness reads 1; rebuild.",
-            "--outputs: the outputs manifest is not JSON: {error}",
-            "--outputs: the outputs manifest is not a JSON object",
-            "--outputs: the outputs manifest lists no output {index}, which an event names",
-            "--outputs: the outputs manifest names series slot {slot}, which the library does not record",
-            "--outputs: the outputs manifest's {key} is not a list of entries with {fields}",
-            "cannot load the strategy library: {error}",
-            "checked settings API mismatch: the strategy library must export strategy_settings_api_version() == 1, strategy_create_checked, strategy_set_input_checked and strategy_set_override_checked, or none of them; rebuild.",
-            "pineforge ABI mismatch: .so reports {abi}, harness expects 5; rebuild.",
-            "strategy .so predates pf_abi_version (ABI v1); rebuild it against the current pineforge runtime (pf_report_t grew).",
-            "the strategy library has no strategy_set_syminfo_metadata, so syminfo.mincontract cannot be applied",
-            "the strategy library has no {export}",
-            "the strategy library has no {setter}, so syminfo.{key} cannot be applied"
-          ]
-        }
-      ]
-    }
-  ],
+  "changed": [],
   "removed": [],
   "deprecated": []
 }
