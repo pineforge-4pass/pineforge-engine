@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "../runner/report.hpp"
+#include "live_report_document_oracle.hpp"
 
 #include <cassert>
 #include <cstddef>
@@ -92,7 +93,8 @@ void equivalence_and_open_boundary() {
         ReportInput current(input, input % 3 != 1, input + 1);
         const auto delta = stream.update(current.report, "seeded", input, 9000 + input);
         full.update(current.report, "seeded", input, 9000 + input);
-        assert(full.full_json(current.report, "seeded", input, 9000 + input) == full.json());
+        assert(native_report_document(current.report, "seeded", input, 9000 + input).dump() == full.full_json());
+        assert(full.full_json() == full.json());
         apply_delta_for_test(applied, parse_json(delta));
         assert(applied.dump() == full.json());
     }
