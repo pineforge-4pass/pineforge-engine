@@ -191,6 +191,7 @@ if(PINEFORGE_BUILD_TESTS)
         target_compile_options(${native_test} PRIVATE -UNDEBUG)
         add_test(NAME ${native_test} COMMAND ${native_test})
     endforeach()
+    set_tests_properties(test_native_live_service PROPERTIES TIMEOUT 180)
     add_executable(test_native_live_transport_progress_under_ledger_stall
         ${PROJECT_SOURCE_DIR}/tests/test_native_live_transport_progress_under_ledger_stall.cpp)
     target_link_libraries(test_native_live_transport_progress_under_ledger_stall PRIVATE pineforge_live_support)
@@ -624,7 +625,7 @@ if(PINEFORGE_BUILD_TESTS)
     # accumulator head (2026-10-29): TSAN 759.8 s, ASan+UBSan 606.4 s; the row ran 1.57x slower
     # under parallel ctest load in release, so the work deadlines are 2.6x the
     # solo times, 2000/1600 s, plus 60 s for CTest.
-    # Uninstrumented builds retain the 160 s deadline / 180 s timeout.
+    # Release retains the 160 s deadline / 180 s timeout; plain Debug uses 400/460 s.
     set(_pf_report_memory_timeout 180)
     if(PINEFORGE_LIVE_TSAN)
         set(_pf_report_memory_timeout 2060)

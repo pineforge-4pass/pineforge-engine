@@ -80,10 +80,20 @@ one SQLite transaction. Append-only `pineforge-native-report-delta/v1` rows
 contain changed scalar fields and appended/replaced array suffixes, not
 historical full-report copies. With the default ratio interval, export folds
 these rows through the selected cursor into byte-identical canonical report JSON.
+
+The accumulator and ratio-interval scheduling described below apply only to
+modules whose optional `strategy_stream_engine_layout_version()` export matches
+`PF_STREAM_ENGINE_LAYOUT_VERSION`. A module without a matching stamp keeps the
+public-report path: full `strategy_stream_fill_report` snapshots and exact
+ratios at every input, even for K > 1. It adds neither `ratios_as_of_input` nor
+`ratio_context` and emits no terminal interval refresh. The runner prints no
+warning about a missing or mismatched stamp.
+
 The runner-owned accumulator carries trade-stat folds and the equity series
-needed for exact ratios. Every mode, including the default and runs without
-JSONL output, keeps the cumulative JSON document, the accumulator's raw curve
-and ratio workspace, and the engine's own arrays resident. Memory grows with
+needed for exact ratios. For modules with the matching stamp, every mode,
+including the default and runs without JSONL output, keeps the cumulative JSON
+document, the accumulator's raw curve and ratio workspace, and the engine's own
+arrays resident. Memory grows with
 equity points and trades: O(report), the cost of one builder of the cumulative
 document. Cumulative stdout, legacy report verification and checkpoint equality
 serialize that same fold of the ledger's suffix patches. Peak RSS numbers come
@@ -99,22 +109,24 @@ native market example, which records no equity points, read 22,472 KiB and
 equity series being the difference (the two hosts differ in other ways too).
 The row omitted 100,000 inputs because its
 cumulative-stream projection assumes output volume quadratic in the input
-count, exceeding the 180 s timeout. These two points do not establish a flat
-memory bound.
+count, exceeding the work deadline for that build. These two points do not
+establish a flat memory bound.
 
 `--ratio-interval K` takes a positive integer and defaults to 1. **K = 1 (the
 default) is unchanged behaviour:** every input's cumulative report and delta
 carry the same exact four ratios as the batch routine. Closed-trade statistics,
 net profit, equity high-water, drawdown/run-up and the other scalar metrics are
-carried in report row order. Ordinary live reports materialize and fold only new
-rows and replacement tails, including the current open-lot rows. Security
-diagnostics still replace their current array. Selected, sink and whole-array
-presentation routes retain their existing report reader.
+carried in report row order. For modules with the matching stamp, ordinary live
+reports materialize and fold only new rows and replacement tails, including the
+current open-lot rows. Security diagnostics still replace their current array.
+Selected, sink and whole-array presentation routes retain their existing report
+reader.
 
-K > 1 is an opt-in trade of per-input freshness for work for exactly these
-`report.metrics.equity` fields: `sharpe_monthly`, `sharpe_bar`, `sortino_bar` and
-`sortino_monthly`. They are recomputed by the same batch routine when the
-committed-message cursor is divisible by K, at the final input and at export.
+For modules with the matching stamp, K > 1 is an opt-in trade of per-input
+freshness for work for exactly these `report.metrics.equity` fields:
+`sharpe_monthly`, `sharpe_bar`, `sortino_bar` and `sortino_monthly`. They are
+recomputed by the same batch routine when the committed-message cursor is
+divisible by K, at the final input and at export.
 Cursor 0 initializes the warmup ratios. Between boundaries the four values
 retain their last computation, and every interval-mode
 delta and cumulative document adds `ratios_as_of_input`, the committed-message
@@ -179,9 +191,11 @@ plus the rejected checkpoint probe; its counters describe the full path.
 Failed writes or changes to K can leave missing boundaries; the fixed-K
 geometric bound then does not apply. The existing JSON parser limit also
 applies: a checkpoint payload over 1 MiB is refused as `invalid_payload` and
-export reconstructs from the individual report rows. That fallback can return
-a larger report when each stored row fits the parser limit; no checkpoint
-read bound is claimed for it.
+export reconstructs from the individual report rows. Such payloads are still
+written and their bytes count against the storage budget, but they can never be
+read back. Each export and restart that encounters one reconstructs from the
+individual report rows. That fallback can return a larger report when each
+stored row fits the parser limit; no checkpoint read bound is claimed for it.
 
 This avoids quadratic report storage under bounded per-input report growth.
 If cumulative payload bytes satisfy `B(c) <= H + b*c`, the geometric
@@ -223,17 +237,22 @@ Existing full-report rows remain immutable and readable; when recovery verifies
 one, it compares it with the recomputed cumulative document. New inputs use
 deltas. Strategy-state recovery remains full replay work.
 
-The batch `fill_report` and C exports are unchanged. Delta output costs
+The batch `fill_report` and existing C exports retain their behaviour;
+`strategy_stream_engine_layout_version` is additive. Delta output costs
 O(new/replaced rows) per input and avoids quadratic output as history grows.
 Plain `--report-jsonl` and `--report-jsonl=full` keep the
 O(cumulative document) output cost per input, which can be quadratic over a
 growing run. The O(report) resident retention described above applies to every
-mode; the memory measurement row covers the default cumulative stream with
-the default ratio interval. It measures 1,000 and 10,000 inputs, adding 100,000
-when the measured smaller run projects within its 180 s timeout, and prints
-the reason when that largest size is omitted. Its deliberate sanity ceilings
-are a peak below 2 GiB and growth below 4 KiB per additional input between the
-two largest completed sizes; these are ceilings, not measured baselines.
+mode for modules with the matching stamp; the memory measurement row covers
+the default cumulative stream with the default ratio interval. It measures
+1,000 and 10,000 inputs, adding 100,000 when the measured smaller run projects
+within the remaining work deadline for
+its build kind, and prints the reason when that largest size is omitted.
+The work deadline / CTest timeout pairs are Release 160/180 s, plain Debug
+400/460 s, thread sanitizer 2000/2060 s and address sanitizer 1600/1660 s.
+Its deliberate sanity ceilings are a peak below 2 GiB and growth below 4 KiB
+per additional input between the two largest completed sizes; these are
+ceilings, not measured baselines.
 Array suffix replacement assumes at most one provisional trailing element for
 equity points and broker hashes. The runner never enables tracing and refuses
 nonempty `trace`: traces can contain several records per bucket, so enabling
@@ -354,12 +373,14 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   An interrupted request may have been
   accepted by its receiver; restart uses the same delivery ID. Receiver
   idempotency remains mandatory. Signal during recovery stops before intake.
-  Cancellation also discards completions already returned by the last transport
-  poll if the worker observes the stop before recording them. Even an HTTP 2xx
-  received in that poll can therefore leave an unfinished ledger attempt. The
-  next run sends that action again with the same `Idempotency-Key`; the receiver
-  must deduplicate it. The ledger never records a synthetic completion for the
-  abandoned attempt.
+  Cancellation also discards unrecorded completions queued in the result ring,
+  a result just taken by the delivery worker, and unprocessed results in the
+  batch returned by the curl owner's last transport poll when the stop is
+  observed before they are recorded. Up to 256 results can be abandoned in
+  total. Even an HTTP 2xx among those results can therefore leave an unfinished
+  ledger attempt. The next run sends that action again with the same
+  `Idempotency-Key`; the receiver must deduplicate it. The ledger never records
+  a synthetic completion for the abandoned attempt.
 - Run/offline-redelivery exits: **0** normal completion or graceful signal
   stop; **1** fatal initialization, input, storage-I/O or internal failure;
   **2** offline redelivery with selected failed/pending actions; **3** run or
