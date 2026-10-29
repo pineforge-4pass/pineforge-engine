@@ -46,6 +46,9 @@ def merge_fields(destination, changes):
 def apply_delta(document, delta):
     assert delta["schema_version"] == "pineforge-native-report-delta/v1"
     merge_fields(document, delta["fields"])
+    for name in ("ratios_as_of_input", "ratio_context"):
+        if name in delta:
+            document[name] = delta[name]
     for name, patch in delta["arrays"].items():
         owner = document if name == "closed_trades" else document.setdefault("report", {})
         values = owner.setdefault(name, [])

@@ -123,6 +123,34 @@ byte-equal): 191.0 B per bar for a module with 63 B per bar of stdout and
 These report bounds also exclude input mappings, strategy histories and the
 other stores listed on this page.
 
+The native live runner keeps the cumulative JSON document, the accumulator's
+raw equity curve and ratio workspace, and the engine's own arrays resident in
+every mode, including the default stream and runs without JSONL output.
+This is O(report) memory that grows with equity points and trades, the cost of
+one builder of the cumulative document. The numbers come from
+`test_native_live_report_memory`: it drives the real runner's default cumulative
+stream and default ratio interval on seeded inputs and always prints
+`mem n=<N> peak_rss_kib=<K>` for each completed size. On Linux it reads the
+runner's `/proc/<pid>/status` `VmHWM` at the final committed input before
+releasing stdin EOF, then includes any later peak from `wait4` for that exact
+child at exit; macOS skips with a printed reason. The row measures 1,000 and
+10,000 inputs and adds 100,000 only when the smaller run's measured time projects
+within the remaining work deadline for its build kind, printing the omission
+reason otherwise. A peak below 2 GiB and growth below 4 KiB per additional input
+between the two largest sizes are deliberate sanity ceilings, not measured
+baselines. Measured on the lab 10-28
+with the default stream and default ratio interval, on a native test host that
+records one equity point per bar: peak RSS 22,880 KiB at 1,000 inputs and
+40,024 KiB at 10,000 inputs, about 1.9 KiB per additional input. These are the
+runner's own `VmHWM` readings for one fixture, including the accumulator curve,
+retained cumulative document and engine arrays. The native market example,
+which records no equity points, read 22,472 KiB and 29,828 KiB (about 0.82 KiB
+per additional input), consistent with the per-bar equity series being the
+difference (the two hosts differ in other ways too).
+The row omitted 100,000 inputs because its cumulative-stream projection assumes
+output volume quadratic in the input count, exceeding the work deadline for
+that build. These two points do not establish a flat memory bound.
+
 For the plain `.bin` input route the input file is mapped, 48 B per bar of file
 payload (`_map_bar_file` docker/run_json.py:2793-2816), and the touched pages
 count toward resident size as the run reads them. A read of the source sites
@@ -243,8 +271,8 @@ trailer, 7 internal error, 8 `sink_exhausted` (the stream exceeds `--max-bytes`;
 `sink_exhausted` at `docker/pineforge_sink_finalize.py:100-109`). Its output is provisional until
 exit 0, and a consumer must discard everything it received on exit 3 to 8 (`PROVISIONAL` at
 `docker/pineforge_sink_finalize.py:24-26`). The failure catalog maps exit 8 to `report_sink_failed`
-with `reason` `sink_exhausted` (`sink_exhausted` at `docker/run_failure_codes.json:1025`). A sink failure carries code `report_sink_failed` and a `reason`
-from the closed list of the catalog (`report_sink_failed` at `docker/run_failure_codes.json:965`):
+with `reason` `sink_exhausted` (`sink_exhausted` at `docker/run_failure_codes.json:1103`). A sink failure carries code `report_sink_failed` and a `reason`
+from the closed list of the catalog (`report_sink_failed` at `docker/run_failure_codes.json:1043`):
 `arena_exhausted`, `arena_io`, `arena_backing`, `scratch_io`, `sink_io`, `sink_peer_closed` and
 `sink_exhausted`. Only some reasons carry sizes: `arena_exhausted` carries `high_water_bytes`,
 `arena_bytes`, `claimed_bytes`, `store` and `needed_bytes_lower_bound`, `sink_exhausted` carries

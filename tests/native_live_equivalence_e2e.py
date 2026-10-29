@@ -22,7 +22,8 @@ an independent direct-engine control.
 """
 
 import argparse
-from collections import Counter
+from collections import Counter, deque
+from contextlib import closing
 import csv
 import ctypes
 from datetime import datetime, timezone
@@ -600,6 +601,49 @@ class MockReceiver:
             return boundary
 
 
+def print_pending_evidence(output, attempts, effects):
+    try:
+        ledger_path = output / "orders.sqlite3"
+        if not ledger_path.is_file():
+            return
+        try:
+            ledger_uri = ledger_path.resolve().as_uri() + "?mode=ro"
+            with closing(sqlite3.connect(ledger_uri, uri=True)) as ledger:
+                ledger.row_factory = sqlite3.Row
+                events = ledger.execute(
+                    "SELECT ordinal,event_id,input_index,input_position,attempts,last_error "
+                    "FROM events WHERE acknowledged=0 ORDER BY ordinal").fetchall()
+                if not events:
+                    return
+                print(f"PENDING_EVENT_EVIDENCE ledger={ledger_path}", file=sys.stderr, flush=True)
+                for row in events:
+                    event = dict(row)
+                    event["delivery_log"] = [dict(delivery) for delivery in ledger.execute(
+                        "SELECT attempt,phase,http_status,error_category,success,started_at,ended_at "
+                        "FROM delivery_log WHERE event_id=? ORDER BY log_id", (event["event_id"],))]
+                    receipts = [attempt for attempt in attempts if attempt["event_id"] == event["event_id"]]
+                    # The receiver stores its chosen status before writing the response.
+                    # A recorded 200 proves acceptance, not that curl observed the 200.
+                    event["receiver"] = {
+                        "received": bool(receipts), "receive_count": len(receipts),
+                        "recorded_http_statuses": [receipt["status"] for receipt in receipts],
+                        "status_recorded_before_response": True,
+                        "effect_recorded": any(effect["event_id"] == event["event_id"] for effect in effects)}
+                    print(json.dumps(event, indent=2), file=sys.stderr, flush=True)
+        except sqlite3.Error as error:
+            print(f"PENDING_EVENT_EVIDENCE read failed: {error}", file=sys.stderr, flush=True)
+        print(f"RUNNER_STDERR_TAIL path={output / 'runner.stderr.log'} last=40",
+              file=sys.stderr, flush=True)
+        try:
+            with (output / "runner.stderr.log").open(encoding="utf-8", errors="replace") as log:
+                tail = "".join(deque(log, maxlen=40))
+            print(tail, end="" if tail.endswith("\n") else "\n", file=sys.stderr, flush=True)
+        except OSError as error:
+            print(f"RUNNER_STDERR_TAIL read failed: {error}", file=sys.stderr, flush=True)
+    except Exception as error:
+        print(f"PENDING_EVENT_EVIDENCE failed: {error}", file=sys.stderr, flush=True)
+
+
 def tape_files(output, rows, split):
     with (output / "warmup.csv").open("w", newline="") as destination:
         writer = csv.DictWriter(destination, fieldnames=list(rows[0]))
@@ -637,6 +681,7 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
               "library_sha256": strategy.sha256, "fail_first": fail_first, "restart": restart}
     process = None
     receiver = None
+    attempts, effects = [], []
     try:
         rows = chart_rows(rows, timeframe)
         bars = chart_bar_array(strategy, rows)
@@ -678,9 +723,10 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
             "--syminfo", "mintick=0.01", "--syminfo", "pointvalue=1", "--syminfo", "qty_step=0.001",
             "--webhook-routes", str(receiver.routes), "--allow-insecure-http"]
         write_json(output / "command.json", command)
-        with (output / "runner.log").open("w") as log:
+        with (output / "runner.log").open("w") as log, \
+                (output / "runner.stderr.log").open("w") as stderr_log:
             receiver.begin_invocation(command)
-            process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
+            process = subprocess.Popen(command, stdout=log, stderr=stderr_log, env=receiver.environment)
             if fail_first:
                 result["initial_runner_returncode"] = process.wait()
                 if result["initial_runner_returncode"] != 0:
@@ -688,7 +734,7 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
                 command = receiver.redelivery_command(runner, output / "orders.sqlite3")
                 result["redelivery_command"] = command
                 receiver.begin_invocation(command)
-                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
+                process = subprocess.Popen(command, stdout=log, stderr=stderr_log, env=receiver.environment)
             if restart:
                 if not receiver.accepted.wait(120):
                     raise RuntimeError("accepted-effect crash window not reached")
@@ -702,7 +748,7 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
                 receiver.release_ack.set()
                 restart_invocation = receiver.begin_invocation(command)
                 result["crash_receipt"]["restart_invocation"] = restart_invocation
-                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
+                process = subprocess.Popen(command, stdout=log, stderr=stderr_log, env=receiver.environment)
             result["runner_returncode"] = process.wait()
         redelivery = receiver.redelivery
         attempts, effects = receiver.finish(output)
@@ -725,7 +771,8 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
         if restart:
             crashed_effect = receipts_by_sequence(effects)[crash_action]
             require_replay_after_restart(attempts, crashed_effect["event_id"], restart_invocation)
-        with sqlite3.connect(output / "orders.sqlite3") as ledger:
+        ledger_uri = (output / "orders.sqlite3").resolve().as_uri() + "?mode=ro"
+        with sqlite3.connect(ledger_uri, uri=True) as ledger:
             ledger_hashes = [row[0] for row in ledger.execute("SELECT state_hash FROM inputs ORDER BY input_index")]
             pending = ledger.execute("SELECT COUNT(*) FROM events WHERE acknowledged=0").fetchone()[0]
         result["replay_hash_difference"] = first_difference(modeled["hashes"], ledger_hashes)
@@ -744,7 +791,9 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
             process.kill()
             process.wait()
         if receiver is not None:
-            receiver.finish(output)
+            attempts, effects = receiver.finish(output)
+        if result.get("pending_events") != 0:
+            print_pending_evidence(output, attempts, effects)
         write_json(output / "result.json", result)
     print(f'{result["status"]} case={strategy.path.stem} scenario={scenario} tf={timeframe} split={split} '
           f'actions={result.get("actions", 0)}/{result.get("expected_actions", 0)} '

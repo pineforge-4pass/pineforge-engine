@@ -8,14 +8,394 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "97fe2b5206c1167f859b6d0cf065443a2511ffef739d0f02aa227cc35cc4c75f"
+    "catalogSha256": "811f5e5bccacc6fe7d33544bcb3ff04a231fc9843b37613cdc72b180a53cd21f"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
     "after": "pineforge-run-failure-catalog/v1"
   },
-  "metadataChanges": [],
-  "added": [],
+  "metadataChanges": [
+    {
+      "path": "classes.resource",
+      "beforePresent": true,
+      "afterPresent": true,
+      "before": "Machine memory or scratch storage; retryability is specified per code.",
+      "after": "Machine memory, scratch storage, host process or transport availability and budgets, including an unavailable producer; retryability is specified per code."
+    }
+  ],
+  "added": [
+    {
+      "code": "diagnostic_budget_exceeded",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "cap_bytes": {
+            "kind": "integer"
+          },
+          "requested_bytes": {
+            "kind": "integer"
+          },
+          "used_bytes": {
+            "kind": "integer"
+          }
+        },
+        "class": "resource",
+        "description": "The diagnostics exceed their admitted byte budget.",
+        "english": [
+          "The diagnostics exceed their admitted byte budget."
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
+    {
+      "code": "report_budget_exceeded",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "cap_bytes": {
+            "kind": "integer"
+          },
+          "channel": {
+            "kind": "vocab",
+            "values": [
+              "json",
+              "aggregate"
+            ]
+          },
+          "requested_bytes": {
+            "kind": "integer"
+          },
+          "used_bytes": {
+            "kind": "integer"
+          }
+        },
+        "class": "resource",
+        "description": "The report exceeds its admitted byte budget.",
+        "english": [
+          "The report exceeds its admitted byte budget."
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
+    {
+      "code": "report_channel_failed",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "channel": {
+            "kind": "vocab",
+            "values": [
+              "report",
+              "sink",
+              "candidate",
+              "diagnostic",
+              "status"
+            ]
+          },
+          "reason": {
+            "kind": "vocab",
+            "values": [
+              "setup",
+              "io",
+              "peer_closed",
+              "deadline",
+              "protocol"
+            ]
+          }
+        },
+        "class": "resource",
+        "description": "A report transport could not complete.",
+        "english": [
+          "A report transport could not complete."
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
+    {
+      "code": "run_deadline_exceeded",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "stage": {
+            "kind": "vocab",
+            "values": [
+              "prepare",
+              "compile",
+              "run",
+              "finalize",
+              "publish"
+            ]
+          }
+        },
+        "class": "resource",
+        "description": "The admitted channel lifetime expired.",
+        "english": [
+          "The admitted channel lifetime expired."
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
+    {
+      "code": "run_descriptor_limit_exceeded",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "limit": {
+            "kind": "integer"
+          },
+          "peak": {
+            "kind": "integer"
+          },
+          "process_role": {
+            "kind": "vocab",
+            "values": [
+              "host",
+              "compiler",
+              "worker",
+              "finalizer",
+              "converter",
+              "reaper"
+            ]
+          },
+          "requested": {
+            "kind": "integer"
+          },
+          "soft_nofile": {
+            "kind": "integer"
+          },
+          "stage": {
+            "kind": "vocab",
+            "values": [
+              "admission",
+              "transpile",
+              "compile",
+              "execution",
+              "assembly",
+              "finalizer",
+              "converter",
+              "publication"
+            ]
+          },
+          "used": {
+            "kind": "integer"
+          }
+        },
+        "class": "resource",
+        "description": "Descriptor admission exceeded the finite run allowance or the process soft NOFILE limit. used includes committed and pending descriptors before the denied additional requested count; peak is the preceding high water. Counters are host-owned nonnegative integers at most 2^53-1.",
+        "english": [
+          "run quota refused"
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
+    {
+      "code": "run_isolation_unavailable",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "reason": {
+            "kind": "vocab",
+            "values": [
+              "platform",
+              "policy",
+              "descriptor"
+            ]
+          }
+        },
+        "class": "unsupported",
+        "description": "The requested report isolation is unavailable.",
+        "english": [
+          "The requested report isolation is unavailable."
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
+    {
+      "code": "run_process_refused",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "operation": {
+            "kind": "vocab",
+            "values": [
+              "fork",
+              "vfork",
+              "clone",
+              "clone3"
+            ]
+          }
+        },
+        "class": "resource",
+        "description": "The native process attempted forbidden process creation.",
+        "english": [
+          "The native process attempted forbidden process creation."
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
+    {
+      "code": "run_producer_failed",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "exit_status": {
+            "kind": "integer",
+            "optional": true
+          },
+          "reason": {
+            "kind": "vocab",
+            "values": [
+              "exit",
+              "signal",
+              "claim"
+            ]
+          },
+          "signal": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        "class": "resource",
+        "description": "The native report producer did not complete successfully.",
+        "english": [
+          "The native report producer did not complete successfully."
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
+    {
+      "code": "run_quota_configuration_invalid",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "reason": {
+            "kind": "vocab",
+            "values": [
+              "missing_limit",
+              "malformed_limit",
+              "counter_overflow",
+              "protocol",
+              "containment_unavailable",
+              "unmanaged_path",
+              "unknown_bound",
+              "unsupported_route"
+            ]
+          },
+          "setting": {
+            "kind": "vocab",
+            "values": [
+              "scratch_bytes",
+              "scratch_files",
+              "output_bytes",
+              "descriptors",
+              "compiler",
+              "facts",
+              "workdir",
+              "channel",
+              "profile",
+              "protocol"
+            ]
+          },
+          "stage": {
+            "kind": "vocab",
+            "values": [
+              "admission",
+              "transpile",
+              "compile",
+              "execution",
+              "assembly",
+              "finalizer",
+              "converter",
+              "publication"
+            ]
+          }
+        },
+        "class": "input",
+        "description": "The finite host run contract is missing, malformed, overflowing, unauthenticated or unsupported. An unset limit refuses with missing_limit; explicit decimal zero is literal zero capacity. There is no implicit unlimited mode. Limits, extents, deltas and reportable counters must fit 2^53-1.",
+        "english": [
+          "run quota configuration invalid",
+          "run quota refused"
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    },
+    {
+      "code": "run_resource_quota_exceeded",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "artifact": {
+            "kind": "vocab",
+            "values": [
+              "workdir",
+              "compiler",
+              "table",
+              "ledger",
+              "arena",
+              "curve",
+              "sink",
+              "spool",
+              "column_index",
+              "column_data",
+              "json",
+              "stdout",
+              "conversion",
+              "diagnostic"
+            ]
+          },
+          "limit": {
+            "kind": "integer"
+          },
+          "peak": {
+            "kind": "integer"
+          },
+          "requested": {
+            "kind": "integer"
+          },
+          "resource": {
+            "kind": "vocab",
+            "values": [
+              "scratch_bytes",
+              "scratch_files",
+              "output_bytes"
+            ]
+          },
+          "stage": {
+            "kind": "vocab",
+            "values": [
+              "admission",
+              "transpile",
+              "compile",
+              "execution",
+              "assembly",
+              "finalizer",
+              "converter",
+              "publication"
+            ]
+          },
+          "used": {
+            "kind": "integer"
+          }
+        },
+        "class": "resource",
+        "description": "An atomic reservation exceeded a finite run resource allowance before growth. used is committed plus pending before the denied delta; requested is additional capacity, not the desired total; peak is the preceding high water. Produced output is never refunded by deleting an artifact. Counters are host-owned nonnegative integers at most 2^53-1.",
+        "english": [
+          "run quota refused"
+        ],
+        "retryable": false,
+        "since": "1.9.0"
+      }
+    }
+  ],
   "changed": [],
   "removed": [],
   "deprecated": []

@@ -17,7 +17,7 @@ if(PINEFORGE_ENABLE_SANITIZERS)
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address,undefined)
 endif()
-add_library(pineforge_live_support STATIC store.cpp transport.cpp routing.cpp delivery.cpp service.cpp)
+add_library(pineforge_live_support STATIC store.cpp ratio_report.cpp transport.cpp routing.cpp delivery.cpp service.cpp)
 target_compile_features(pineforge_live_support PUBLIC cxx_std_17)
 target_include_directories(pineforge_live_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 if(TARGET SQLite3::SQLite3)
@@ -79,12 +79,6 @@ if(PINEFORGE_BUILD_TESTS)
     target_include_directories(test_live_json PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_options(test_live_json PRIVATE -UNDEBUG)
     add_test(NAME test_live_json COMMAND test_live_json)
-    add_executable(test_live_report ${PROJECT_SOURCE_DIR}/tests/test_live_report.cpp)
-    target_include_directories(test_live_report PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
-    target_link_libraries(test_live_report PRIVATE PineForge::pineforge)
-    target_compile_options(test_live_report PRIVATE -UNDEBUG)
-    add_test(NAME test_live_report COMMAND test_live_report)
     add_executable(test_live_identity ${PROJECT_SOURCE_DIR}/tests/test_live_identity.cpp)
     target_link_libraries(test_live_identity PRIVATE pineforge_live_support)
     target_compile_options(test_live_identity PRIVATE -UNDEBUG)
@@ -95,6 +89,10 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME test_native_live_startup COMMAND test_native_live_startup)
     add_test(NAME native_live_help COMMAND pineforge-live --help)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME native_live_checkpoint_e2e COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/native_live_checkpoint_e2e.py $<TARGET_FILE:pineforge-live>
+        $<TARGET_FILE:native_market_example>)
+    set_tests_properties(native_live_checkpoint_e2e PROPERTIES TIMEOUT 180)
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_library(native_live_service_example MODULE ${PROJECT_SOURCE_DIR}/tests/native_live_service_strategy.cpp)
         target_link_libraries(native_live_service_example PRIVATE PineForge::pineforge)
@@ -174,7 +172,7 @@ if(PINEFORGE_BUILD_TESTS)
     add_dependencies(test_native_example_selected native_selected_example)
     add_test(NAME test_native_example_selected
         COMMAND test_native_example_selected $<TARGET_FILE:native_selected_example>)
-    add_library(pineforge_live_legacy_test_support STATIC store.cpp transport.cpp)
+    add_library(pineforge_live_legacy_test_support STATIC store.cpp ratio_report.cpp transport.cpp)
     target_compile_features(pineforge_live_legacy_test_support PUBLIC cxx_std_17)
     target_include_directories(pineforge_live_legacy_test_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(pineforge_live_legacy_test_support PUBLIC PINEFORGE_LIVE_LEGACY_TEST_API)
@@ -193,9 +191,17 @@ if(PINEFORGE_BUILD_TESTS)
         target_compile_options(${native_test} PRIVATE -UNDEBUG)
         add_test(NAME ${native_test} COMMAND ${native_test})
     endforeach()
+    set_tests_properties(test_native_live_service PROPERTIES TIMEOUT 180)
+    add_executable(test_native_live_transport_progress_under_ledger_stall
+        ${PROJECT_SOURCE_DIR}/tests/test_native_live_transport_progress_under_ledger_stall.cpp)
+    target_link_libraries(test_native_live_transport_progress_under_ledger_stall PRIVATE pineforge_live_support)
+    target_compile_options(test_native_live_transport_progress_under_ledger_stall PRIVATE -UNDEBUG)
+    add_test(NAME test_native_live_transport_progress_under_ledger_stall
+        COMMAND test_native_live_transport_progress_under_ledger_stall)
+    set_tests_properties(test_native_live_transport_progress_under_ledger_stall PROPERTIES TIMEOUT 180)
     add_executable(test_native_live_report_cli ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_cli.cpp)
-    target_link_libraries(test_native_live_report_cli PRIVATE pineforge_live_support)
-    target_compile_options(test_native_live_report_cli PRIVATE -UNDEBUG)
+    target_link_libraries(test_native_live_report_cli PRIVATE pineforge_live_startup ${CMAKE_DL_LIBS})
+    target_compile_options(test_native_live_report_cli PRIVATE -UNDEBUG -ffp-contract=off)
     add_dependencies(test_native_live_report_cli pineforge-live native_market_example)
     add_test(NAME test_native_live_report_first_commit COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> first-commit)
@@ -203,9 +209,27 @@ if(PINEFORGE_BUILD_TESTS)
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> summary-only)
     add_test(NAME test_native_live_report_options COMMAND test_native_live_report_cli
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> options)
+    add_test(NAME test_native_live_report_default_recovery COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> default-recovery)
     set_tests_properties(test_native_live_report_first_commit test_native_live_report_summary_only
-        test_native_live_report_options PROPERTIES TIMEOUT 180)
+        test_native_live_report_options test_native_live_report_default_recovery PROPERTIES TIMEOUT 180)
     set_tests_properties(test_native_live_websocket PROPERTIES SKIP_RETURN_CODE 77)
+    add_executable(test_native_live_checkpoint
+        ${PROJECT_SOURCE_DIR}/tests/test_native_live_checkpoint.cpp)
+    target_link_libraries(test_native_live_checkpoint PRIVATE pineforge_live_legacy_test_support)
+    target_compile_options(test_native_live_checkpoint PRIVATE -UNDEBUG)
+    add_test(NAME test_native_live_checkpoint COMMAND test_native_live_checkpoint)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(test_native_live_checkpoint_measurement
+            ${PROJECT_SOURCE_DIR}/tests/test_native_live_checkpoint_measurement.cpp)
+        target_link_libraries(test_native_live_checkpoint_measurement PRIVATE
+            pineforge_live_legacy_test_support)
+        target_compile_options(test_native_live_checkpoint_measurement PRIVATE -UNDEBUG)
+        add_test(NAME test_native_live_checkpoint_measurement
+            COMMAND test_native_live_checkpoint_measurement)
+        set_tests_properties(test_native_live_checkpoint_measurement PROPERTIES
+            LABELS "slow;diagnostic" RUN_SERIAL TRUE)
+    endif()
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME native_live_routing_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_routing_e2e.py $<TARGET_FILE:pineforge-live>
@@ -559,4 +583,114 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         set_tests_properties(native_live_genuine_retry_e2e ${_pf_equivalence_rows}
             PROPERTIES ENVIRONMENT "${_pf_genuine_retry_environment}")
     endif()
+endif()
+
+# Keep the live-only reader out of the installed batch/kernel archives.
+# Reuse the runtime's compile options, including its floating-point rules.
+add_library(pineforge_live_report STATIC ${PROJECT_SOURCE_DIR}/src/live_report.cpp)
+target_link_libraries(pineforge_live_report PUBLIC PineForge::pineforge)
+get_target_property(_pf_live_report_compile_options pineforge COMPILE_OPTIONS)
+target_compile_options(pineforge_live_report PRIVATE ${_pf_live_report_compile_options})
+target_link_libraries(pineforge_live_startup PUBLIC pineforge_live_report)
+target_compile_options(pineforge_live_support PRIVATE -ffp-contract=off)
+
+if(PINEFORGE_BUILD_TESTS)
+    target_compile_options(pineforge_live_legacy_test_support PRIVATE -ffp-contract=off)
+    add_executable(test_live_report ${PROJECT_SOURCE_DIR}/tests/test_live_report.cpp)
+    target_include_directories(test_live_report PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+    target_link_libraries(test_live_report PRIVATE PineForge::pineforge)
+    target_compile_options(test_live_report PRIVATE -UNDEBUG)
+    add_test(NAME test_live_report COMMAND test_live_report)
+    add_executable(test_live_report_accumulator
+        ${PROJECT_SOURCE_DIR}/tests/test_live_report_accumulator.cpp)
+    target_include_directories(test_live_report_accumulator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_live_report_accumulator PRIVATE pineforge_live_support pineforge_live_report)
+    target_compile_options(test_live_report_accumulator PRIVATE -UNDEBUG -ffp-contract=off)
+    add_test(NAME test_live_report_accumulator_equivalence
+        COMMAND test_live_report_accumulator equivalence)
+    add_test(NAME test_live_report_accumulator_growth
+        COMMAND test_live_report_accumulator growth)
+    add_test(NAME test_live_ratio_export
+        COMMAND test_live_report_accumulator export)
+    add_test(NAME test_native_live_report_exact_ratio_recovery COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> exact-ratio-recovery)
+    add_test(NAME test_native_live_report_interval_ratio_recovery COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> interval-ratio-recovery)
+    set_tests_properties(test_native_live_report_exact_ratio_recovery
+        test_native_live_report_interval_ratio_recovery PROPERTIES TIMEOUT 180)
+    add_test(NAME test_native_live_report_memory COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> memory)
+    # Match report_memory's build-kind budgets. Solo measurements on the
+    # accumulator head (2026-10-29): TSAN 759.8 s, ASan+UBSan 606.4 s; the row ran 1.57x slower
+    # under parallel ctest load in release, so the work deadlines are 2.6x the
+    # solo times, 2000/1600 s, plus 60 s for CTest.
+    # Release retains the 160 s deadline / 180 s timeout; plain Debug uses 400/460 s.
+    set(_pf_report_memory_timeout 180)
+    if(PINEFORGE_LIVE_TSAN)
+        set(_pf_report_memory_timeout 2060)
+    elseif(PINEFORGE_ENABLE_SANITIZERS)
+        set(_pf_report_memory_timeout 1660)
+    elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        # Debug without sanitizers took 152.7 s with three rows in parallel
+        # (2026-10-29), 7 s under the release deadline: 2.6x gives 400 s.
+        set(_pf_report_memory_timeout 460)
+        target_compile_definitions(test_native_live_report_cli PRIVATE
+            PINEFORGE_REPORT_MEMORY_DEBUG_BUDGET=1)
+    endif()
+    set_tests_properties(test_native_live_report_memory PROPERTIES
+        TIMEOUT ${_pf_report_memory_timeout} SKIP_RETURN_CODE 77)
+    add_executable(test_native_live_report_curve_staging_work
+        ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_curve_staging_work.cpp)
+    target_include_directories(test_native_live_report_curve_staging_work PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_native_live_report_curve_staging_work PRIVATE pineforge_live_support pineforge_live_report)
+    target_compile_options(test_native_live_report_curve_staging_work PRIVATE -UNDEBUG -ffp-contract=off)
+    add_test(NAME test_native_live_report_curve_staging_work
+        COMMAND test_native_live_report_curve_staging_work)
+    set_tests_properties(test_native_live_report_curve_staging_work PROPERTIES TIMEOUT 180)
+    add_test(NAME test_native_live_report_storage_stop_refresh COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> storage-stop-refresh)
+    add_test(NAME test_native_live_report_ratio_marker_replay COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> ratio-marker-replay)
+    add_test(NAME test_native_live_report_historical_ratio_export COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> historical-ratio-export)
+    set_tests_properties(test_native_live_report_storage_stop_refresh
+        test_native_live_report_ratio_marker_replay test_native_live_report_historical_ratio_export
+        PROPERTIES TIMEOUT 180)
+    add_library(native_live_report_example MODULE
+        ${PROJECT_SOURCE_DIR}/tests/native_live_report_strategy.cpp)
+    target_link_libraries(native_live_report_example PRIVATE PineForge::pineforge)
+    target_compile_options(native_live_report_example PRIVATE -fvisibility=hidden -ffp-contract=off -UNDEBUG)
+    set_target_properties(native_live_report_example PROPERTIES PREFIX "")
+    add_dependencies(test_native_live_report_cli native_live_report_example)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        add_test(NAME native_live_ratio_interval_e2e COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/tests/native_live_ratio_interval_e2e.py $<TARGET_FILE:pineforge-live>
+            $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:native_live_example>)
+    endif()
+    add_test(NAME test_live_report_accumulator_commit_retry
+        COMMAND test_live_report_accumulator commit-retry)
+    add_test(NAME test_native_live_report_storage_stop_first_input COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_report_example> storage-stop-first-input)
+    add_test(NAME test_native_live_report_ratio_body_replay COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> ratio-body-replay)
+    set_tests_properties(test_live_report_accumulator_commit_retry
+        test_native_live_report_storage_stop_first_input test_native_live_report_ratio_body_replay
+        PROPERTIES TIMEOUT 180)
+endif()
+
+if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
+    set(_pf_layout_proof_command ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/native_live_startup_e2e.py $<TARGET_FILE:pineforge-live>
+        $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_market_example>
+        $<TARGET_FILE:live_contract_absent> $<TARGET_FILE:live_contract_unknown>
+        $<TARGET_FILE:live_contract_native_no_export> $<TARGET_FILE:live_contract_native_stub>
+        $<TARGET_FILE:test_native_live_report_cli>)
+    add_test(NAME native_live_engine_layout_e2e
+        COMMAND ${_pf_layout_proof_command} engine-layout)
+    add_test(NAME native_live_opaque_report_e2e
+        COMMAND ${_pf_layout_proof_command} opaque-report)
+    set_tests_properties(native_live_engine_layout_e2e native_live_opaque_report_e2e
+        PROPERTIES TIMEOUT 180)
+    add_dependencies(test_native_live_report_cli live_contract_native_stub)
 endif()

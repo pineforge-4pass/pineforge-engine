@@ -72,13 +72,19 @@ codes it tested the text alone, so a script stopped by an empty
   their code at the throw or the refusal. `runtime.error` is
   `strategy_runtime_error` whatever its message.
 - **An argument never carries a value the script computed while it ran.** An
-  argument comes only from a literal the transpiler emitted (a call's
-  spelling, its line, a literal symbol, an input title), from a closed engine
-  vocabulary (a field, a reason, a limit), or from a value the run request
-  supplied (a row of its OHLCV, its timeframes). An index, a size, a computed
-  symbol or timeframe, the bar a failure happened on and any text a script
-  built are not arguments, so a failing run cannot carry results out through
-  them.
+  argument, apart from the trusted resource measurements below, comes only
+  from a literal the transpiler emitted (a call's spelling, its line, a
+  literal symbol, an input title), from a closed engine vocabulary (a field,
+  a reason, a limit), or from a value the run request supplied (a row of its
+  OHLCV, its timeframes). Script-computed indexes, sizes, symbols or
+  timeframes, the bar a failure happened on and any text a script built are
+  not arguments, so a failing run cannot carry results out through them.
+- **Resource measurements are an explicit allowance.** Like the existing
+  sink-exhaustion arguments, admitted caps, trusted planned representation
+  sizes, accepted byte counts and overflow probes are measured boundary
+  facts. The supervisor or finalizer produces these arguments; they are
+  never parsed from a strategy's message or accepted as arbitrary
+  script-computed values.
 - **Cancellation progress is engine-owned.** Q7's `run_aborted` witnesses
   are the count of fully completed input bars and a boolean start witness.
   They are produced by the run boundary, never read from script output.
@@ -97,9 +103,23 @@ codes it tested the text alone, so a script stopped by an empty
 
 The tables below list the catalog at this tree.
 
-The catalog contains 69 named failure codes: 38 first released in 1.4.0,
-26 first released in 1.5.0, and 5 added in 1.7.0. The C++ registry also
-contains one unnamed `none` sentinel, giving 70 registry entries.
+The catalog contains 79 named failure codes: 38 first released in 1.4.0,
+26 first released in 1.5.0, 5 added in 1.7.0, and 10 added in 1.9.0
+(3 run-quota codes and 7 report-channel codes). One unnamed `none` sentinel
+gives 80 registry entries; existing numbers stay fixed.
+
+The run-quota additions are `run_descriptor_limit_exceeded` (74),
+`run_quota_configuration_invalid` (78), and `run_resource_quota_exceeded`
+(79). Their finite contract is described [below](#run_failure_codes_quota).
+
+The seven new codes describe the planned supervised report channel. The
+harness does not emit them yet, and their registration declares no
+report-channel capability. Their closed vocabularies and measurement rules
+are described [after the tables](#run_failure_codes_report_channel).
+The registrations are `diagnostic_budget_exceeded` (70),
+`report_budget_exceeded` (71), `report_channel_failed` (72),
+`run_deadline_exceeded` (73), `run_isolation_unavailable` (75),
+`run_process_refused` (76), and `run_producer_failed` (77).
 
 The 1.7.0 additions are `report_mode_unsupported`, `report_sink_failed`,
 `scratch_capacity_exceeded`, `scratch_configuration_invalid`, and
@@ -129,7 +149,7 @@ in addition to its six released 1.4.0 reasons.
 | `engine_fault` | A PineForge bug; terminal. |
 | `input` | The run request's own data or options; terminal. |
 | `no_data` | PineForge lacks data the script reads; terminal. |
-| `resource` | Machine memory or scratch storage; retryability is specified per code. |
+| `resource` | Machine memory, scratch storage, host process or transport availability and budgets, including an unavailable producer; retryability is specified per code. |
 | `strategy` | The script or its own declaration; terminal. |
 | `strategy_limit` | A TradingView or PineForge resource cap the script reached; terminal. |
 | `symbol_feeds` | Other symbols' bars installed through the symbol-feed setters; terminal. |
@@ -142,6 +162,7 @@ in addition to its six released 1.4.0 reasons.
 | --- | --- | --- | --- | --- |
 | `chart_bars_rejected` | `input` | no | `field` (vocab, 6 values, optional), `index` (integer, optional), `reason` (vocab, 12 values) | The run's chart bars (the request's OHLCV) were refused. |
 | `chart_bars_unreadable` | `input` | no | `reason` (vocab, 9 values) | The harness could not read the run's OHLCV file. |
+| `diagnostic_budget_exceeded` | `resource` | no | `cap_bytes` (integer), `requested_bytes` (integer), `used_bytes` (integer) | The diagnostics exceed their admitted byte budget. |
 | `engine_command_value_invalid` | `engine_fault` | no | `field` (string), `reason` (vocab, 3 values), `stage` (vocab, 7 values) | The engine derived an invalid command value (non-finite, invalid text or an overflowing finite value) from its own book, equity, margin, sizing, fee, slippage or settlement state: an engine fault, never a strategy failure. stage names where it was derived. |
 | `engine_invariant` | `engine_fault` | no | `reason` (vocab, 1 values, optional) | An engine invariant failed: a PineForge bug. |
 | `engine_unclassified_error` | `engine_fault` | no | none | An error no coded site reported: a PineForge bug. |
@@ -162,6 +183,8 @@ in addition to its six released 1.4.0 reasons.
 | `recalc_cap` | `strategy_limit` | no | none | The script's calc_on_order_fills recalculation loop reached its cap. |
 | `recorded_request_missing` | `no_data` | no | none | No recorded series is installed for a request the script reads. |
 | `recorded_request_refused` | `input` | no | `reason` (vocab, 5 values) | A recorded request series was refused. |
+| `report_budget_exceeded` | `resource` | no | `cap_bytes` (integer), `channel` (vocab, 2 values), `requested_bytes` (integer), `used_bytes` (integer) | The report exceeds its admitted byte budget. |
+| `report_channel_failed` | `resource` | no | `channel` (vocab, 5 values), `reason` (vocab, 5 values) | A report transport could not complete. |
 | `report_mode_unsupported` | `unsupported` | no | `contract` (string), `mode` (string) | The requested report mode cannot be provided for this run. Two causes: the host has no provider bridge for the mode and contract (run_json), or the native kernel refuses a SUMMARY_ONLY run that configures a selected window or an execution observer without a report sink at begin, because that capture has no exact trade rows. Remedy for the second cause: drop the window or the observer, or select FULL; bounded capture uses STREAMED with a sink. |
 | `report_platform_unavailable` | `engine_fault` | no | `field` (vocab, 6 values) | The runner cannot establish an execution-platform fact its report contract requires. A pre-load backstop for an image that claimed results-digest support, raised before any strategy code loads. |
 | `report_post_execution_failed` | `engine_fault` | no | `phase` (vocab, 3 values), `reason` (vocab, 4 values) | The engine could not finish producing the result after strategy execution completed: a deadline or an otherwise unclassified failure in result assembly, the results digest or serialization. An engine fault, never a strategy failure; a specific typed engine fault keeps its own code. |
@@ -175,9 +198,16 @@ in addition to its six released 1.4.0 reasons.
 | `request_unsupported` | `unsupported` | no | `line` (integer, optional), `reason` (vocab, 2 values) | A request shape PineForge does not support. |
 | `results_digest_unsupported` | `unsupported` | no | `requested` (string) | The runner does not support the requested results digest. The first selected-window build declares no digest. |
 | `run_aborted` | `engine_fault` | yes | `bars_count` (integer, optional), `strategy_started` (boolean, optional) | The run was aborted on request. Cooperative SIGTERM stops after the in-flight input bar completes, leaves no sink trailer, and exits 1. bars_count is the nonnegative number of fully completed input bars, mirrored as top-level bars.count, matching the runner's bars_processed population; strategy_started is a boolean mirrored at the top level. Both are optional for legacy abort raisers. There is no cancelled class: the abort path has exactly two internal callers, the orchestrator's hand-off at the service limit (the run is restarted with the same run id) and an operator stop. The abort line itself carries no retry semantics: it has no retryable field, and a retry is APP's decision from which caller stopped the run. On the abort path bars_count is diagnostic only and is never billed. No live-counter descriptor is used (fd 6 is not used). |
+| `run_deadline_exceeded` | `resource` | no | `stage` (vocab, 5 values) | The admitted channel lifetime expired. |
+| `run_descriptor_limit_exceeded` | `resource` | no | `limit` (integer), `peak` (integer), `process_role` (vocab, 6 values), `requested` (integer), `soft_nofile` (integer), `stage` (vocab, 8 values), `used` (integer) | Descriptor admission exceeded the finite run allowance or the process soft NOFILE limit. used includes committed and pending descriptors before the denied additional requested count; peak is the preceding high water. Counters are host-owned nonnegative integers at most 2^53-1. |
+| `run_isolation_unavailable` | `unsupported` | no | `reason` (vocab, 3 values) | The requested report isolation is unavailable. |
 | `run_mode_unsupported` | `unsupported` | no | `feature` (vocab, 11 values) | A feature the requested run mode does not support. |
 | `run_options_rejected` | `input` | no | `input_tf` (timeframe, optional), `option` (vocab, 11 values), `script_tf` (timeframe, optional) | The run's own options (timeframes, intrabar path, magnifier, path order) were refused. |
+| `run_process_refused` | `resource` | no | `operation` (vocab, 4 values) | The native process attempted forbidden process creation. |
+| `run_producer_failed` | `resource` | no | `exit_status` (integer, optional), `reason` (vocab, 3 values), `signal` (integer, optional) | The native report producer did not complete successfully. |
+| `run_quota_configuration_invalid` | `input` | no | `reason` (vocab, 8 values), `setting` (vocab, 10 values), `stage` (vocab, 8 values) | The finite host run contract is missing, malformed, overflowing, unauthenticated or unsupported. An unset limit refuses with missing_limit; explicit decimal zero is literal zero capacity. There is no implicit unlimited mode. Limits, extents, deltas and reportable counters must fit 2^53-1. |
 | `run_request_invalid` | `input` | no | `option` (vocab, 25 values) | The harness command line or one of its JSON options is invalid. |
+| `run_resource_quota_exceeded` | `resource` | no | `artifact` (vocab, 14 values), `limit` (integer), `peak` (integer), `requested` (integer), `resource` (vocab, 3 values), `stage` (vocab, 8 values), `used` (integer) | An atomic reservation exceeded a finite run resource allowance before growth. used is committed plus pending before the denied delta; requested is additional capacity, not the desired total; peak is the preceding high water. Produced output is never refunded by deleting an artifact. Counters are host-owned nonnegative integers at most 2^53-1. |
 | `scratch_capacity_exceeded` | `resource` | no | `resource` (vocab, 10 values) | The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying. |
 | `scratch_configuration_invalid` | `input` | no | `reason` (vocab, 3 values), `stage` (vocab, 1 values) | The command-scratch byte cap from the environment or the caller is malformed: not a positive decimal, out of uint64_t range, or zero. |
 | `scratch_io_failed` | `resource` | no | none | The engine could not create, resize, read or write command scratch or the storage of one of its auxiliary tables (the disk id table, the id-pair store or the placement table). Command scratch also raises this code when the default-directory policy fails a directory query or refuses memory-backed default candidates, or when an explicit memory-backed command directory is refused. Native runs create command scratch at begin, so these failures are resource failures before any strategy callback. The run has no successful completion. Report-sink scratch files, the curve writer and the position-tail facade do not raise this code: they raise report_sink_failed with reason scratch_io. |
@@ -290,6 +320,35 @@ configure refusal above) keeps its own text and carries that failure's code:
 `run_aborted` after an abort whose report was cleared, `engine_invariant` when
 nothing was recorded. A consumer reads the code and its arguments, never the
 English.
+
+## The hosted report-channel codes {#run_failure_codes_report_channel}
+
+These seven codes have `since: 1.9.0` and `retryable: false`. They are
+registered before any producer uses them. Every argument below is required
+unless marked optional; the fixed English is listed in the codes table.
+
+| Code | Closed vocabularies and measurements |
+| --- | --- |
+| `report_budget_exceeded` | `channel`: `json`, `aggregate`; `cap_bytes`, `used_bytes`, `requested_bytes`: integers. |
+| `diagnostic_budget_exceeded` | `cap_bytes`, `used_bytes`, `requested_bytes`: integers. |
+| `report_channel_failed` | `channel`: `report`, `sink`, `candidate`, `diagnostic`, `status`; `reason`: `setup`, `io`, `peer_closed`, `deadline`, `protocol`. |
+| `run_isolation_unavailable` | `reason`: `platform`, `policy`, `descriptor`. |
+| `run_process_refused` | `operation`: `fork`, `vfork`, `clone`, `clone3`. |
+| `run_deadline_exceeded` | `stage`: `prepare`, `compile`, `run`, `finalize`, `publish`. |
+| `run_producer_failed` | `reason`: `exit`, `signal`, `claim`; optional integers `exit_status`, `signal`. |
+
+For a runtime byte-budget overflow, `used_bytes` is the accepted allowance
+consumed and `requested_bytes=1` is the trusted overflow probe. The observed
+lower bound is `used_bytes+1`, with no claim about unread native output. For
+an admission refusal, `used_bytes=0` and `requested_bytes` is the trusted
+planned representation size.
+
+The `resource` class includes host process and transport availability and
+budgets, including an unavailable producer. This classification establishes
+neither blame nor refund eligibility. Existing `report_sink_failed` remains
+`engine_fault`, including exhaustion; its arguments and the finalizer's
+exit-8 receipt mapping are unchanged. Registration changes no existing
+code, argument or exit status.
 
 ## The selected-window and report-contract codes {#run_failure_codes_selected_window}
 
@@ -565,3 +624,42 @@ Two live order keys whose 64-bit hashes collide are refused with
 `reason` is a closed vocabulary with only `order_key_hash_collision`;
 other invariant failures keep `{}`. The English remains
 `Pine live source key collision`.
+
+## Finite run quota contract {#run_failure_codes_quota}
+
+The quota service and its native and Python clients share one attempt.
+`PF_RUN_SCRATCH_BYTES`, `PF_RUN_SCRATCH_FILES`, `PF_RUN_OUTPUT_BYTES` and
+`PF_RUN_DESCRIPTOR_LIMIT` are host inputs parsed once as ASCII decimal.
+Unset means `missing_limit`, malformed means `malformed_limit`, and values
+above 9007199254740991 mean `counter_overflow`. Explicit zero admits zero
+capacity. These helpers define admission; their presence does not establish
+that every producer or launcher in a build uses them.
+
+`run_resource_quota_exceeded` and `run_descriptor_limit_exceeded` are terminal
+resource failures with `retryable: false`. Their snapshot is taken before
+the denied reservation: `used = committed + reserved`, `requested` is the
+extra capacity, and `peak` includes earlier pending reservations. The receipt
+keeps `committed` and `reserved` separately. Bytes, files, output and
+descriptors are checked in that order before adding any of the deltas.
+Partial realization remains charged; cancel returns only the unrealized
+portion. Successful shrink or last-close releases storage; already produced
+output stays charged for the whole attempt, including repetitions.
+
+The required `stage` vocabulary is `admission`, `transpile`, `compile`,
+`execution`, `assembly`, `finalizer`, `converter`, `publication`. Resource
+artifacts are `workdir`, `compiler`, `table`, `ledger`, `arena`, `curve`,
+`sink`, `spool`, `column_index`, `column_data`, `json`, `stdout`, `conversion`,
+`diagnostic`. Descriptor `process_role` is `host`, `compiler`, `worker`,
+`finalizer`, `converter`, `reaper`; `soft_nofile` is the host-recorded soft
+process limit. All reported counters are nonnegative integers at most
+9007199254740991.
+
+`run_quota_configuration_invalid` is a terminal input failure. Its required
+`reason` is `missing_limit`, `malformed_limit`, `counter_overflow`, `protocol`,
+`containment_unavailable`, `unmanaged_path`, `unknown_bound`, `unsupported_route`.
+Its required `setting` is `scratch_bytes`, `scratch_files`, `output_bytes`,
+`descriptors`, `compiler`, `facts`, `workdir`, `channel`, `profile`, `protocol`.
+A missing authenticated channel forbids growth. Tickets retain their original
+attempt; teardown and a later attempt cannot rewrite a refusal or refund
+capacity into a different owner. Backing identity requires host confirmation
+from a descriptor before the ledger accepts a file's realization.

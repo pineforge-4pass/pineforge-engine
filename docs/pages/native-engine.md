@@ -4554,7 +4554,7 @@ Nor is there a build-level one. The two source sets are disjoint:
 `PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:91`) holds all six
 `src/compat/pine/` units and all fourteen `src/source/` ones, and
 `PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:118`) holds the kernel's own
-forty-five, which are what `add_library` (`CMakeLists.txt:172`) compiles into
+forty-five, which are what `add_library` (`CMakeLists.txt:173`) compiles into
 `pineforge_kernel`. `libpineforge.a` still carries both sets when
 `PINEFORGE_BUILD_SOURCE_LAYER` is ON, which is the default; the kernel archive
 exists either way. The installed-header closure is clean too, which the
@@ -4745,6 +4745,21 @@ duplicate keys fail; every listed key is required; there are **no**
 environment defaults for spec fields. Omitted CLI clock/symbol flags take the
 file. Explicit `--input-tf`, `--script-tf`, `--timezone`, `--session`,
 `--chart-timezone`, or `--symbol` must equal the file.
+
+Live report export uses immutable cumulative checkpoints at K, 2K, 4K, ...
+committed inputs; `--checkpoint-interval K` selects the positive first
+interval, default 1024. The input admission includes the serialized checkpoint
+payload; the checkpoint then uses its own admitted transaction after the input
+commit. A checkpoint failure is optional and published as a diagnostic.
+Startup and recovery checkpoints use the same byte budget. Export starts at
+the nearest verified checkpoint Q and reads C-Q tail deltas at cursor C,
+plus one checkpoint and its witness snapshot. Missing or failed checkpoints
+use full reconstruction. Export and restart verify the report chain only from
+the checkpoint; `report --verify-full` verifies every committed report row.
+Checkpoints do not serialize strategy state: restart still replays the committed
+strategy inputs because the stream ABI has no state restore operation. See the
+[runner guide](../../runner/README.md) for the geometric read/storage bounds,
+checkpoint validation and preparation costs.
 
 `input_mode` is the CLI `--mode` (`bars` or `ticks`), not a JSON key.
 Timestamps in the spec, warmup CSV, and JSONL are Unix milliseconds.
