@@ -384,6 +384,7 @@ class Strategy {
     decltype(&report_free) free_report = nullptr;
     int contract = 1;
     bool has_configure_native = false;
+    bool has_current_engine_layout = false;
     Strategy() = default;
     ~Strategy() { release(); }
     Strategy(const Strategy &) = delete;
@@ -406,6 +407,10 @@ class Strategy {
             if (symbol<decltype(&strategy_stream_api_version)>("strategy_stream_api_version")() !=
                 1)
                 throw std::runtime_error("native stream extension version mismatch");
+            auto engine_layout = optional_symbol<decltype(&strategy_stream_engine_layout_version)>(
+                "strategy_stream_engine_layout_version");
+            has_current_engine_layout =
+                engine_layout && engine_layout() == PF_STREAM_ENGINE_LAYOUT_VERSION;
             free = symbol<decltype(&strategy_free)>("strategy_free");
             error = symbol<decltype(error)>("strategy_get_last_error");
             tick = symbol<decltype(tick)>("strategy_stream_push_tick");
@@ -737,10 +742,22 @@ std::string cumulative_report(Strategy& strategy, const std::string& deployment,
                               const std::function<void(const std::string&)>& verify = {},
                               bool final_input = false,
                               const std::function<void(const std::string&)>& commit = {}) {
-    const auto patch = accumulator.update(
-        *static_cast<const pineforge::BacktestEngine*>(strategy.state), cursor, final_input);
-    const auto state_hash = strategy.hash(strategy.state);
-    auto result = deltas.update(patch, deployment, cursor, state_hash, commit);
+    std::string result;
+    if (strategy.has_current_engine_layout) {
+        const auto patch = accumulator.update(
+            *static_cast<const pineforge::BacktestEngine*>(strategy.state), cursor, final_input);
+        const auto state_hash = strategy.hash(strategy.state);
+        result = deltas.update(patch, deployment, cursor, state_hash, commit);
+    } else {
+        pf_report_t report{};
+        struct Release {
+            Strategy& strategy;
+            pf_report_t& report;
+            ~Release() { strategy.free_report(&report); }
+        } release{strategy, report};
+        strategy.check(strategy.fill_report(strategy.state, &report));
+        result = deltas.update(report, deployment, cursor, strategy.hash(strategy.state), commit);
+    }
     if (verify) verify(result);
     return result;
 }
@@ -1181,7 +1198,7 @@ int run(Config c) {
         // commit. Refresh last, without a ledger write. A refused input has
         // advanced the engine, so only its committed document is usable.
         const auto final_cursor = ledger.input_count();
-        if (c.ratio_interval <= 1) return;
+        if (!strategy.has_current_engine_layout || c.ratio_interval <= 1) return;
         const auto final_report = storage_stop ? report_deltas.final_ratio_refresh()
             : report_accumulator.ratios_as_of_input() != final_cursor
                 ? cumulative_report(strategy, deployment, final_cursor,

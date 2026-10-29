@@ -13,7 +13,8 @@
  *     security-feed and symbol-data setters (including the borrowed feed
  *     export), the strategy_stream_*
  *     lifecycle, the strategy_outputs_* readers, native stream bar
- *     input/action polling/fingerprint/API-version exports, the live-runtime
+ *     input/action polling/fingerprint/API-version exports,
+ *     strategy_stream_engine_layout_version, the live-runtime
  *     surface (strategy_request_abort, strategy_last_run_status,
  *     strategy_set_realtime_tail, strategy_set_probe_suppress_tail_logic,
  *     strategy_set_path_order, strategy_last_bar_dual_entry_path,
@@ -823,6 +824,10 @@ PF_API int strategy_stream_begin(pf_strategy_t s,
 }
 
 PF_API int strategy_stream_api_version(void) { return 1; }
+
+PF_API uint32_t strategy_stream_engine_layout_version(void) {
+    return PF_STREAM_ENGINE_LAYOUT_VERSION;
+}
 
 PF_API int strategy_stream_push_bar(pf_strategy_t s, const pf_bar_t* bar) {
     return pf_cabi_int(s, [&] {

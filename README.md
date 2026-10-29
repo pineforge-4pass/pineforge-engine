@@ -568,6 +568,7 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 | `strategy_set_trade_start_time` | Suppress historical order placement before a time |
 | `strategy_stream_begin` / `_push_tick` / `_push_ticks` / `_advance_time` / `_end` / `_fill_report` | Warm on OHLCV, then run realtime on ordered trades |
 | `strategy_stream_api_version` / `_push_bar` / `_order_actions_len` / `_order_action_get` / `_order_actions_clear` / `_state_hash` | Native live extension v1: confirmed input bars, physical fill events and observable replay state |
+| `strategy_stream_engine_layout_version` | Optional declaration of direct engine handles and their exact C++ layout; other modules keep C ABI report snapshots |
 | `strategy_set_chart_timezone` / `strategy_set_syminfo_timezone` / `strategy_set_syminfo_session` | Chart and exchange time |
 | `strategy_set_syminfo_mintick` / `_pointvalue` / `_metadata` / `_type` / `_string` | Symbol tick size, point value, numeric metadata, instrument class, string members |
 | `strategy_set_native_security_feed` / `strategy_set_aux_security_feed` | Feed `request.security()` from a native higher-timeframe series / an auxiliary bar-aligned feed |

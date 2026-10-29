@@ -809,6 +809,19 @@ PF_API int strategy_stream_begin(pf_strategy_t s,
  *  this symbol before using the confirmed-bar/action API in older modules. */
 PF_API int strategy_stream_api_version(void);
 
+/** Exact C++ engine layout accepted by the live report accumulator.
+ *  Bump whenever that layout changes, independently of #PF_ABI_VERSION. */
+#define PF_STREAM_ENGINE_LAYOUT_VERSION 1u
+
+/** Optional module declaration that its strategy handles point directly to
+ *  a BacktestEngine with the returned #PF_STREAM_ENGINE_LAYOUT_VERSION.
+ *  The engine runtime exports this with its streaming implementation.
+ *  Modules with opaque or wrapped handles must omit it or return 0.
+ *  Absence or a different version requires using #strategy_stream_fill_report;
+ *  stream ABI and execution-capabilities versions alone do not prove layout.
+ *  This query reads no strategy state and changes no report or hash. */
+PF_API uint32_t strategy_stream_engine_layout_version(void);
+
 /** One physical emulator lot action. is_long describes the position side:
  *  buy = is_entry == is_long. A reversal is exits followed by an entry.
  *  price/time are emulator reference values, not external broker fills.

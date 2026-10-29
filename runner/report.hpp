@@ -201,7 +201,8 @@ public:
         : document_(retain_document ? std::make_unique<Json>(Json::object({})) : nullptr) {}
 
     std::string update(const pf_report_t& report, const std::string& deployment,
-                       std::uint64_t cursor, std::uint64_t state_hash) {
+                       std::uint64_t cursor, std::uint64_t state_hash,
+                       const std::function<void(const std::string&)>& commit = {}) {
         if (report.trace_len != 0)
             throw std::runtime_error("cumulative report deltas require tracing to remain disabled");
         std::map<std::string, std::size_t> starts;
@@ -236,25 +237,27 @@ public:
         }
         Json closed;
         closed.kind = Json::Kind::Array;
+        auto closed_trade_high_water = closed_trade_high_water_;
+        std::size_t closed_trade_visits = 0;
         if (closed_trade_high_water_ > 0) {
             if (closed_trade_high_water_ > static_cast<std::size_t>(report.trades_len)
                 || report.trades[closed_trade_high_water_ - 1].open_at_end)
                 throw std::runtime_error("cumulative report closed-trade prefix regressed");
-            ++closed_trade_visits_;
+            ++closed_trade_visits;
             closed.items.push_back(report_trade(report.trades[closed_trade_high_water_ - 1]));
         }
         for (std::size_t index = closed_trade_high_water_;
              index < static_cast<std::size_t>(report.trades_len); ++index) {
-            ++closed_trade_visits_;
+            ++closed_trade_visits;
             // fill_trades_section emits closed rows before range-end open rows,
             // so a closed row after this open suffix is unreachable by design.
             if (report.trades[index].open_at_end)
                 break;
             closed.items.push_back(report_trade(report.trades[index]));
-            ++closed_trade_high_water_;
+            ++closed_trade_high_water;
         }
         arrays.members["closed_trades"] = Json::object({
-            {"offset", report_number(std::min(starts["trades"], closed_trade_high_water_))},
+            {"offset", report_number(std::min(starts["trades"], closed_trade_high_water))},
             {"items", std::move(closed)}});
         const auto& curve = arrays.at("equity_curve").at("items").items;
         auto next = Json::object({{"schema_version", Json::string("pineforge-native-report/v1")},
@@ -264,6 +267,12 @@ public:
             {"open_profit", curve.empty() ? Json{} : curve.back().at("open_profit")}, {"report", std::move(fields)}});
         auto delta = Json::object({{"schema_version", Json::string("pineforge-native-report-delta/v1")},
             {"fields", changed_report_fields(scalars_, next)}, {"arrays", std::move(arrays)}});
+        auto payload = delta.dump();
+        // Match the carried-patch path: a refused commit must leave the
+        // retained document and its prefix counters at the committed input.
+        if (commit) commit(payload);
+        closed_trade_high_water_ = closed_trade_high_water;
+        closed_trade_visits_ += closed_trade_visits;
         scalars_ = std::move(next);
         if (document_)
             apply_report_delta(*document_, delta);
@@ -273,7 +282,7 @@ public:
         array_sizes_["trace"] = static_cast<std::size_t>(report.trace_len);
         array_sizes_["trace_names"] = static_cast<std::size_t>(report.trace_names_len);
         array_sizes_["broker_state_hash"] = static_cast<std::size_t>(report.broker_state_hash_len);
-        return delta.dump();
+        return payload;
     }
     std::string update(const pineforge::report::LiveReportPatch& patch,
                        const std::string& deployment, std::uint64_t cursor,
