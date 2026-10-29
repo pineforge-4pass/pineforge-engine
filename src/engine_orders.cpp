@@ -500,7 +500,7 @@ struct TradeLedger::State {
         return load(global).record.*Member;
     }
     template<StringExtent Record::*Member>
-    [[gnu::always_inline]]
+    // Owning read; the compiler decides inlining of its string construction.
     std::string string_field(size_type global) const {
         check(global);
         const auto* cached_entry = cached(global);
