@@ -97,9 +97,9 @@ codes it tested the text alone, so a script stopped by an empty
 
 The tables below list the catalog at this tree.
 
-The catalog contains 69 named failure codes: 38 first released in 1.4.0,
-26 first released in 1.5.0, and 5 added in 1.7.0. The C++ registry also
-contains one unnamed `none` sentinel, giving 70 registry entries.
+The catalog contains 72 named failure codes: 38 first released in 1.4.0,
+26 first released in 1.5.0, 5 added in 1.7.0, and 3 scheduled for 1.9.0.
+One unnamed `none` sentinel gives 73 registry entries; existing numbers stay fixed.
 
 The 1.7.0 additions are `report_mode_unsupported`, `report_sink_failed`,
 `scratch_capacity_exceeded`, `scratch_configuration_invalid`, and
@@ -175,9 +175,12 @@ in addition to its six released 1.4.0 reasons.
 | `request_unsupported` | `unsupported` | no | `line` (integer, optional), `reason` (vocab, 2 values) | A request shape PineForge does not support. |
 | `results_digest_unsupported` | `unsupported` | no | `requested` (string) | The runner does not support the requested results digest. The first selected-window build declares no digest. |
 | `run_aborted` | `engine_fault` | yes | `bars_count` (integer, optional), `strategy_started` (boolean, optional) | The run was aborted on request. Cooperative SIGTERM stops after the in-flight input bar completes, leaves no sink trailer, and exits 1. bars_count is the nonnegative number of fully completed input bars, mirrored as top-level bars.count, matching the runner's bars_processed population; strategy_started is a boolean mirrored at the top level. Both are optional for legacy abort raisers. There is no cancelled class: the abort path has exactly two internal callers, the orchestrator's hand-off at the service limit (the run is restarted with the same run id) and an operator stop. The abort line itself carries no retry semantics: it has no retryable field, and a retry is APP's decision from which caller stopped the run. On the abort path bars_count is diagnostic only and is never billed. No live-counter descriptor is used (fd 6 is not used). |
+| `run_descriptor_limit_exceeded` | `resource` | no | `limit` (integer), `peak` (integer), `process_role` (vocab, 6 values), `requested` (integer), `soft_nofile` (integer), `stage` (vocab, 8 values), `used` (integer) | Descriptor admission exceeded the finite run allowance or the process soft NOFILE limit. used includes committed and pending descriptors before the denied additional requested count; peak is the preceding high water. Counters are host-owned nonnegative integers at most 2^53-1. |
 | `run_mode_unsupported` | `unsupported` | no | `feature` (vocab, 11 values) | A feature the requested run mode does not support. |
 | `run_options_rejected` | `input` | no | `input_tf` (timeframe, optional), `option` (vocab, 11 values), `script_tf` (timeframe, optional) | The run's own options (timeframes, intrabar path, magnifier, path order) were refused. |
+| `run_quota_configuration_invalid` | `input` | no | `reason` (vocab, 8 values), `setting` (vocab, 10 values), `stage` (vocab, 8 values) | The finite host run contract is missing, malformed, overflowing, unauthenticated or unsupported. An unset limit refuses with missing_limit; explicit decimal zero is literal zero capacity. There is no implicit unlimited mode. Limits, extents, deltas and reportable counters must fit 2^53-1. |
 | `run_request_invalid` | `input` | no | `option` (vocab, 25 values) | The harness command line or one of its JSON options is invalid. |
+| `run_resource_quota_exceeded` | `resource` | no | `artifact` (vocab, 14 values), `limit` (integer), `peak` (integer), `requested` (integer), `resource` (vocab, 3 values), `stage` (vocab, 8 values), `used` (integer) | An atomic reservation exceeded a finite run resource allowance before growth. used is committed plus pending before the denied delta; requested is additional capacity, not the desired total; peak is the preceding high water. Produced output is never refunded by deleting an artifact. Counters are host-owned nonnegative integers at most 2^53-1. |
 | `scratch_capacity_exceeded` | `resource` | no | `resource` (vocab, 10 values) | The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying. |
 | `scratch_configuration_invalid` | `input` | no | `reason` (vocab, 3 values), `stage` (vocab, 1 values) | The command-scratch byte cap from the environment or the caller is malformed: not a positive decimal, out of uint64_t range, or zero. |
 | `scratch_io_failed` | `resource` | no | none | The engine could not create, resize, read or write command scratch or the storage of one of its auxiliary tables (the disk id table, the id-pair store or the placement table). Command scratch also raises this code when the default-directory policy fails a directory query or refuses memory-backed default candidates, or when an explicit memory-backed command directory is refused. Native runs create command scratch at begin, so these failures are resource failures before any strategy callback. The run has no successful completion. Report-sink scratch files, the curve writer and the position-tail facade do not raise this code: they raise report_sink_failed with reason scratch_io. |
@@ -565,3 +568,42 @@ Two live order keys whose 64-bit hashes collide are refused with
 `reason` is a closed vocabulary with only `order_key_hash_collision`;
 other invariant failures keep `{}`. The English remains
 `Pine live source key collision`.
+
+## Finite run quota contract {#run_failure_codes_quota}
+
+The quota service and its native and Python clients share one attempt.
+`PF_RUN_SCRATCH_BYTES`, `PF_RUN_SCRATCH_FILES`, `PF_RUN_OUTPUT_BYTES` and
+`PF_RUN_DESCRIPTOR_LIMIT` are host inputs parsed once as ASCII decimal.
+Unset means `missing_limit`, malformed means `malformed_limit`, and values
+above 9007199254740991 mean `counter_overflow`. Explicit zero admits zero
+capacity. These helpers define admission; their presence does not establish
+that every producer or launcher in a build uses them.
+
+`run_resource_quota_exceeded` and `run_descriptor_limit_exceeded` are terminal
+resource failures with `retryable: false`. Their snapshot is taken before
+the denied reservation: `used = committed + reserved`, `requested` is the
+extra capacity, and `peak` includes earlier pending reservations. The receipt
+keeps `committed` and `reserved` separately. Bytes, files, output and
+descriptors are checked in that order before adding any of the deltas.
+Partial realization remains charged; cancel returns only the unrealized
+portion. Successful shrink or last-close releases storage; already produced
+output stays charged for the whole attempt, including repetitions.
+
+The required `stage` vocabulary is `admission`, `transpile`, `compile`,
+`execution`, `assembly`, `finalizer`, `converter`, `publication`. Resource
+artifacts are `workdir`, `compiler`, `table`, `ledger`, `arena`, `curve`,
+`sink`, `spool`, `column_index`, `column_data`, `json`, `stdout`, `conversion`,
+`diagnostic`. Descriptor `process_role` is `host`, `compiler`, `worker`,
+`finalizer`, `converter`, `reaper`; `soft_nofile` is the host-recorded soft
+process limit. All reported counters are nonnegative integers at most
+9007199254740991.
+
+`run_quota_configuration_invalid` is a terminal input failure. Its required
+`reason` is `missing_limit`, `malformed_limit`, `counter_overflow`, `protocol`,
+`containment_unavailable`, `unmanaged_path`, `unknown_bound`, `unsupported_route`.
+Its required `setting` is `scratch_bytes`, `scratch_files`, `output_bytes`,
+`descriptors`, `compiler`, `facts`, `workdir`, `channel`, `profile`, `protocol`.
+A missing authenticated channel forbids growth. Tickets retain their original
+attempt; teardown and a later attempt cannot rewrite a refusal or refund
+capacity into a different owner. Backing identity requires host confirmation
+from a descriptor before the ledger accepts a file's realization.
