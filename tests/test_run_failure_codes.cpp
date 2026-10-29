@@ -1201,27 +1201,9 @@ RunFailureArg sample_arg(const ArgSpec& spec, std::string& json_value) {
     return RunFailureArg(spec.name.c_str(), text);
 }
 
-void check_code_args(RunFailureCode code, const std::string& name, const Json* args) {
+void check_code_arg_specs(RunFailureCode code, const std::string& name,
+                         std::vector<ArgSpec> specs) {
     const std::string at = "catalog " + name + ": ";
-    std::vector<ArgSpec> specs;
-    if (args != nullptr) {
-        for (const auto& [arg_name, arg] : args->object) {
-            ArgSpec spec;
-            spec.name = arg_name;
-            const Json* kind = arg.find("kind");
-            const Json* optional = arg.find("optional");
-            const Json* values = arg.find("values");
-            spec.kind = kind ? kind->string : "";
-            spec.optional = optional && optional->boolean;
-            if (values) {
-                for (const Json& value : values->array) spec.values.push_back(value.string);
-            }
-            CHECK_EQ(at + arg_name + " has a kind", spec.kind.empty() ? "none" : "kind", "kind");
-            CHECK_EQ(at + arg_name + " vocab has values",
-                     spec.kind == "vocab" && spec.values.empty() ? "empty" : "ok", "ok");
-            specs.push_back(std::move(spec));
-        }
-    }
     std::sort(specs.begin(), specs.end(),
               [](const ArgSpec& l, const ArgSpec& r) { return l.name < r.name; });
 
@@ -1337,6 +1319,30 @@ void check_code_args(RunFailureCode code, const std::string& name, const Json* a
             expect(spec.name + " as a null", with({arg, nullptr}), invariant, "{}");
         }
     }
+}
+
+void check_code_args(RunFailureCode code, const std::string& name, const Json* args) {
+    const std::string at = "catalog " + name + ": ";
+    std::vector<ArgSpec> specs;
+    if (args != nullptr) {
+        for (const auto& [arg_name, arg] : args->object) {
+            ArgSpec spec;
+            spec.name = arg_name;
+            const Json* kind = arg.find("kind");
+            const Json* optional = arg.find("optional");
+            const Json* values = arg.find("values");
+            spec.kind = kind ? kind->string : "";
+            spec.optional = optional && optional->boolean;
+            if (values) {
+                for (const Json& value : values->array) spec.values.push_back(value.string);
+            }
+            CHECK_EQ(at + arg_name + " has a kind", spec.kind.empty() ? "none" : "kind", "kind");
+            CHECK_EQ(at + arg_name + " vocab has values",
+                     spec.kind == "vocab" && spec.values.empty() ? "empty" : "ok", "ok");
+            specs.push_back(std::move(spec));
+        }
+    }
+    check_code_arg_specs(code, name, std::move(specs));
 }
 
 // ---------------------------------------------------------------------------
@@ -1831,6 +1837,96 @@ void chain_vocabulary_rows() {
               {{"pruner", "median"}, {"capability", "x"}}, invariant, "{}");
 }
 
+// The hosted report-channel contract, independent of the catalog and generator.
+// These are registry-only calls: no strategy or harness starts emitting a code.
+void report_channel_vocabulary_rows() {
+    using Code = RunFailureCode;
+    const struct {
+        Code code;
+        const char* name;
+        RunFailureClass cls;
+        std::vector<ArgSpec> args;
+    } rows[] = {
+        {Code::diagnostic_budget_exceeded, "diagnostic_budget_exceeded",
+         RunFailureClass::resource,
+         {{"cap_bytes", "integer", false, {}},
+          {"requested_bytes", "integer", false, {}},
+          {"used_bytes", "integer", false, {}}}},
+        {Code::report_budget_exceeded, "report_budget_exceeded", RunFailureClass::resource,
+         {{"cap_bytes", "integer", false, {}},
+          {"channel", "vocab", false, {"json", "aggregate"}},
+          {"requested_bytes", "integer", false, {}},
+          {"used_bytes", "integer", false, {}}}},
+        {Code::report_channel_failed, "report_channel_failed", RunFailureClass::resource,
+         {{"channel", "vocab", false, {"report", "sink", "candidate", "diagnostic", "status"}},
+          {"reason", "vocab", false, {"setup", "io", "peer_closed", "deadline", "protocol"}}}},
+        {Code::run_deadline_exceeded, "run_deadline_exceeded", RunFailureClass::resource,
+         {{"stage", "vocab", false, {"prepare", "compile", "run", "finalize", "publish"}}}},
+        {Code::run_isolation_unavailable, "run_isolation_unavailable", RunFailureClass::unsupported,
+         {{"reason", "vocab", false, {"platform", "policy", "descriptor"}}}},
+        {Code::run_process_refused, "run_process_refused", RunFailureClass::resource,
+         {{"operation", "vocab", false, {"fork", "vfork", "clone", "clone3"}}}},
+        {Code::run_producer_failed, "run_producer_failed", RunFailureClass::resource,
+         {{"exit_status", "integer", true, {}},
+          {"reason", "vocab", false, {"exit", "signal", "claim"}},
+          {"signal", "integer", true, {}}}},
+    };
+    CHECK_EQ("report-channel registry count including none",
+             std::to_string(pineforge::kRunFailureCodeCount), "77");
+    for (const auto& row : rows) {
+        const std::string at = std::string("report-channel ") + row.name;
+        CHECK_EQ(at + " name", code_name(row.code), row.name);
+        CHECK(pineforge::run_failure_code_class(row.code) == row.cls);
+        CHECK(!pineforge::run_failure_code_retryable(row.code));
+        // Required/optional presence, kinds, every closed-list member, values
+        // outside each list, duplicate/unknown args and canonical JSON, all
+        // against the contract literals above rather than catalog-derived data.
+        check_code_arg_specs(row.code, row.name, row.args);
+    }
+
+    for (const char* channel : {"json", "aggregate"}) {
+        wv_expect(std::string("report overflow ") + channel, Code::report_budget_exceeded,
+                  {{"used_bytes", 4096}, {"requested_bytes", 1}, {"channel", channel},
+                   {"cap_bytes", 4096}},
+                  Code::report_budget_exceeded,
+                  std::string(R"({"cap_bytes":4096,"channel":")") + channel
+                      + R"(","requested_bytes":1,"used_bytes":4096})");
+    }
+    wv_expect("diagnostic overflow", Code::diagnostic_budget_exceeded,
+              {{"used_bytes", 4096}, {"requested_bytes", 1}, {"cap_bytes", 4096}},
+              Code::diagnostic_budget_exceeded,
+              R"({"cap_bytes":4096,"requested_bytes":1,"used_bytes":4096})");
+    wv_expect("report admission size", Code::report_budget_exceeded,
+              {{"channel", "aggregate"}, {"cap_bytes", 4096}, {"used_bytes", 0},
+               {"requested_bytes", std::numeric_limits<std::int64_t>::max()}},
+              Code::report_budget_exceeded,
+              R"({"cap_bytes":4096,"channel":"aggregate","requested_bytes":9223372036854775807,"used_bytes":0})");
+    for (const char* channel : {"report", "sink", "candidate", "diagnostic", "status"}) {
+        for (const char* reason : {"setup", "io", "peer_closed", "deadline", "protocol"}) {
+            wv_expect(std::string("report transport ") + channel + "/" + reason,
+                      Code::report_channel_failed, {{"reason", reason}, {"channel", channel}},
+                      Code::report_channel_failed,
+                      std::string(R"({"channel":")") + channel + R"(","reason":")" + reason
+                          + R"("})");
+        }
+    }
+    // The two integer witnesses are independently optional for every reason.
+    for (const char* reason : {"exit", "signal", "claim"}) {
+        const std::string at = std::string("producer ") + reason;
+        wv_expect(at, Code::run_producer_failed, {{"reason", reason}}, Code::run_producer_failed,
+                  std::string(R"({"reason":")") + reason + R"("})");
+        wv_expect(at + " with exit", Code::run_producer_failed,
+                  {{"reason", reason}, {"exit_status", 7}}, Code::run_producer_failed,
+                  std::string(R"({"exit_status":7,"reason":")") + reason + R"("})");
+        wv_expect(at + " with signal", Code::run_producer_failed,
+                  {{"signal", 9}, {"reason", reason}}, Code::run_producer_failed,
+                  std::string(R"({"reason":")") + reason + R"(","signal":9})");
+        wv_expect(at + " with both", Code::run_producer_failed,
+                  {{"signal", 9}, {"reason", reason}, {"exit_status", 7}}, Code::run_producer_failed,
+                  std::string(R"({"exit_status":7,"reason":")") + reason + R"(","signal":9})");
+    }
+}
+
 void registry_rows() {
     std::ifstream in(PINEFORGE_RUN_FAILURE_CATALOG, std::ios::binary);
     CHECK_EQ("catalog readable", in ? "open" : "missing", "open");
@@ -1914,6 +2010,7 @@ int main() {
     registry_rows();
     window_vocabulary_rows();
     chain_vocabulary_rows();
+    report_channel_vocabulary_rows();
     std::printf("test_run_failure_codes: %d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
