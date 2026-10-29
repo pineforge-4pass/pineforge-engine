@@ -3463,7 +3463,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
     def test_real_tree_mirror_preserves_the_live_group_and_only_two_advisories(self):
         expected_names = ('ci-post.yml', 'ci.yml', 'corpus-parity-subset.yml',
                           'corpus-parity.yml', 'docs-post.yml', 'gke-pr.yml',
-                          'native-live.yml', 'promote-baseline.yml', 'release-ruleset-probe.yml')
+                          'native-live.yml', 'promote-baseline.yml', 'release-ruleset-probe.yml',
+                          'release.yml')
         self.assertEqual(self.entries(), [self.reference(name) for name in expected_names])
         code, lines = self.run_stage(repository=None)
         self.assertEqual(code, 0, lines)
