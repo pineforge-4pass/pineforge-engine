@@ -8,7 +8,7 @@ version number follows semantic versioning over the surfaces the
 ## Unreleased
 
 - Closed-trade reads serve retained sealed rows from backing storage; policy-erased history still refuses with its typed error.
-- Closed-trade text equality can compare bytes without owning strings, count reads are inline, and field reads probe the cache once; rebuild C++ consumers and relink strategies with matching headers and archive.
+- Closed-trade text equality can compare bytes without owning strings and the closed-trade count is read inline; rebuild C++ consumers and relink strategies with matching headers and archive.
 
 1.9 needs a module rebuild (ABI 6).
 
