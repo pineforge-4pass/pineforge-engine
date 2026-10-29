@@ -60,15 +60,38 @@ def worker(runner_path, library, shape, primary):
     return runner.main(argv)
 
 
+def _mask_engine_version_numbers(data, engine, location):
+    # Match the scalar engine object, allowing braces inside JSON strings.
+    # Same-named members in trades or runtime are not build identity.
+    blocks = list(re.finditer(rb'"engine":\{(?:[^{}"]|"(?:[^"\\]|\\.)*")*\}', data))
+    if len(blocks) != 1:
+        raise RuntimeError(f"engine provenance not found exactly once in the {location}")
+    block = blocks[0].group()
+    for key in ("major", "minor", "patch"):
+        prefix = f'"{key}":'.encode("ascii")
+        if len(re.findall(rb'"%s"\s*:' % key.encode("ascii"), block)) != 1:
+            raise RuntimeError(f"engine {key} not found exactly once in the {location}")
+        needle = prefix + json.dumps(engine[key]).encode("ascii")
+        # A delimiter keeps major:1 from matching the prefix of major:10.
+        block, count = re.subn(re.escape(needle) + rb"(?=[,}])",
+                               lambda _: prefix + b'"<build-identity>"', block)
+        if count != 1:
+            raise RuntimeError(f"engine {key} not found exactly once in the {location}")
+    match = blocks[0]
+    return data[:match.start()] + block + data[match.end():]
+
+
 def mask_build_identity(text, document):
-    """The report names the build that produced it only inside fingerprint.token
-    (base64 of the canonical provenance JSON, whose engine block holds
-    version_string, a git describe, and commit_sha, the short commit) and in
-    fingerprint.digest (sha256 of those bytes). Two builds of different commits
-    can never share those two values. They are replaced by a fixed token in the
-    raw bytes, and the decoded provenance with only the two engine strings
-    blanked is appended in canonical form, so everything else the fingerprint
-    carries is still compared. Every other byte is compared as produced."""
+    """Mask only engine build identity and its derived fingerprint values.
+
+    The engine's version_string, commit_sha and major/minor/patch numbers
+    appear in plain fingerprint.provenance and in the base64 token. The token
+    and its sha256 digest are replaced in the raw report. Decoded provenance
+    with those five members masked, and a hash of the token's own bytes with
+    the same masking, are appended so every other value and byte spelling
+    remains compared. The sink header's version is handled separately by
+    mask_sink_build_identity. Every other byte is compared as produced.
+    """
     fingerprint = document.get("fingerprint")
     if not isinstance(fingerprint, dict):
         raise RuntimeError("default report has no fingerprint")
@@ -81,35 +104,55 @@ def mask_build_identity(text, document):
     provenance = json.loads(token_bytes)
     engine = provenance.get("engine")
     if (not isinstance(engine, dict) or "version_string" not in engine
-            or "commit_sha" not in engine):
+            or "commit_sha" not in engine
+            or any(type(engine.get(key)) is not int for key in ("major", "minor", "patch"))):
         raise RuntimeError("fingerprint provenance has no engine identity")
     masked = text
-    # The report also carries the same provenance as a plain object next to the
-    # token: its engine block names the build twice more, as plain members.
+    # The report also carries plain provenance next to the token. Replace
+    # its engine identity without reserializing any surrounding byte.
     for key in ("version_string", "commit_sha"):
         needle = f'"{key}":{json.dumps(engine[key])}'.encode("utf-8")
         if masked.count(needle) != 1:
             raise RuntimeError(f"engine {key} not found exactly once in the raw report")
         masked = masked.replace(needle, f'"{key}":"<build-identity>"'.encode("utf-8"))
+    masked = _mask_engine_version_numbers(masked, engine, "raw report")
     engine["version_string"] = engine["commit_sha"] = "<build-identity>"
     for value in (token, digest):
         needle = json.dumps(value).encode("utf-8")
         if masked.count(needle) != 1:
             raise RuntimeError("fingerprint value not found exactly once in the raw report")
         masked = masked.replace(needle, b'"<build-identity>"')
-    # The token's own bytes (spelling, key order, separators) with only the two
-    # engine strings replaced, and the digest scheme, so neither is hidden.
+    # The token's own bytes (spelling, key order, separators) with only engine
+    # build identity replaced, and the digest scheme, so neither is hidden.
     spelled = token_bytes
     for key in ("version_string", "commit_sha"):
         spelled, count = re.subn(rb'("%s":)"[^"]*"' % key.encode("ascii"),
                                  rb'\1"<build-identity>"', spelled)
         if count != 1:
             raise RuntimeError(f"engine {key} not found exactly once in the token bytes")
+    spelled = _mask_engine_version_numbers(spelled, engine, "token bytes")
+    for key in ("major", "minor", "patch"):
+        engine[key] = "<build-identity>"
     return (masked + b"\nprovenance-without-build-identity "
             + json.dumps(provenance, sort_keys=True, separators=(",", ":")).encode("utf-8")
             + b"\ntoken-bytes-without-build-identity-sha256 "
             + hashlib.sha256(spelled).hexdigest().encode("ascii")
             + b"\ndigest-scheme sha256: length " + str(len(digest)).encode("ascii") + b"\n")
+
+
+def mask_sink_build_identity(data):
+    """Replace exactly one engine version in the header, retaining every body byte."""
+    header, newline, body = data.partition(b"\n")
+    document = json.loads(header)
+    if (not newline or not isinstance(document, dict)
+            or document.get("schema") != "pf-report-sink"
+            or not isinstance(document.get("engine"), str)
+            or len(re.findall(rb'"engine"\s*:', header)) != 1):
+        raise RuntimeError("sink header engine not found exactly once")
+    needle = b'"engine":' + json.dumps(document["engine"], ensure_ascii=False).encode("utf-8")
+    if header.count(needle) != 1:
+        raise RuntimeError("sink header engine not found exactly once")
+    return header.replace(needle, b'"engine":"<build-identity>"') + newline + body
 
 
 def measure(runner, library, shape, directory):
@@ -144,7 +187,7 @@ def measure(runner, library, shape, directory):
             data = primary.read_bytes()
             assert data.endswith(b"\n") and b'"pf-report-sink"' in data
             assert b'"pf-report-replay"' not in data
-            results["primary_sink"] = data
+            results["primary_sink"] = mask_sink_build_identity(data)
     return results
 
 
