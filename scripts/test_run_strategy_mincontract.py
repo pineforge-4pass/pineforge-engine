@@ -79,7 +79,8 @@ class TradingViewReadoutTests(unittest.TestCase):
                 d = FIXTURES / name
                 metrics = json.loads((d / "metrics.json").read_text(encoding="utf-8"))
                 self.assertEqual(metrics["tapeChannel"], "ws-report-v1")
-                self.assertEqual(metrics["wsProvenance"]["rangeProof"], "covered")
+                provenance, _ = run_strategy._metrics_range_provenance(metrics)
+                self.assertEqual(provenance["rangeProof"], "covered")
                 self.assertEqual(metrics["tvTradesCsvHash"],
                                  hashlib.sha256((d / "tv_trades.csv").read_bytes()).hexdigest())
                 scripts.add((d / "strategy.pine").read_bytes())

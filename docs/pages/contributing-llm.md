@@ -93,7 +93,7 @@ finding to report, not a step to take.
    `static_assert`s in `src/c_abi.cpp` pin the layouts — if one fails on your
    branch, find what changed in the C++ representation. Adding a runtime
    `PF_API` export means the implementation, the declaration,
-   `EXPECTED_RUNTIME` check_c_abi_runtime.py:29, the ctypes harnesses and the
+   `EXPECTED_RUNTIME` check_c_abi_runtime.py:35, the ctypes harnesses and the
    README table, all in one commit. *Enforced:*
    `scripts/check_c_abi_runtime.py`.
 

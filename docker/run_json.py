@@ -3053,7 +3053,7 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     # refuses --outputs by name on a library that lacks them.
     _bind_outputs(lib)
     _bind_report_sink(lib)
-
+    _bind_metrics_streaming(lib)
     lib.strategy_free.argtypes = [ctypes.c_void_p]
     lib.report_free.argtypes   = [ctypes.POINTER(ReportC)]
     return lib
@@ -5310,7 +5310,7 @@ def _legacy_abbreviations(argv, legacy_long, all_long):
 def _main(argv, binary_inputs) -> int:
     # Host startup only: freeze the profile before any library/handle/run.
     environment_profile = os.environ.get("PINEFORGE_RUN_JSON_PROFILE", "unjailed")
-    ap = _ArgumentParser(description=__doc__,
+    ap = _MetricsArgumentParser(description=__doc__,
                          formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--so",        type=Path, default=None, help="strategy.so path")
     ap.add_argument("--ohlcv", type=Path, default=None, help="OHLCV CSV path")
@@ -5434,20 +5434,19 @@ def _main(argv, binary_inputs) -> int:
                     help="FULL uses the legacy report route, identical to omitting this option. "
                          "SUMMARY_ONLY and STREAMED require a pineforge-report/v1 provider "
                          "bridge and are refused before execution by this host.")
+    pre_metrics_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
+    ap._legacy_usage = ap.format_usage()
+    ap.add_argument("--metrics-only", nargs="?", const="auto", choices=("auto", "legacy"),
+                    default=None, help="Omit trade/curve arrays and volatile counters; bare = auto.")
     all_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
     argv = _legacy_abbreviations(argv, legacy_long, all_long)
     argv = _legacy_abbreviations(argv, pre_profile_long, all_long)
+    argv = _legacy_abbreviations(argv, pre_metrics_long, all_long)
     if not argv:
-        # With no request, both the library and chart are missing. Preserve
-        # the legacy aggregate refusal now that --ohlcv has alternatives.
         ap.error("the following arguments are required: --so, --ohlcv")
     args = ap.parse_args(argv)
     if args.profile not in ("unjailed", "jailed"):
         raise _request_invalid("PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed", "arguments")
-
-    # Validate both required inputs together: chart data may now come from
-    # CSV, binary, or the index. Checking only --so inside argparse would hide
-    # the missing chart and change the empty request's existing error code.
     missing = []
     if args.so is None:
         missing.append("--so")
@@ -5456,6 +5455,7 @@ def _main(argv, binary_inputs) -> int:
         missing.append("--ohlcv")
     if missing:
         ap.error("the following arguments are required: " + ", ".join(missing))
+    _validate_metrics_only_options(args)
     if args.report_mode in ("SUMMARY_ONLY", "STREAMED"):
         # report_mode.h declares data, not a C provider bridge. This ctypes
         # host has only the legacy run/report API; neither ABI 4 nor the v1
@@ -5547,21 +5547,19 @@ def _main(argv, binary_inputs) -> int:
     # Other symbols' bars, read once before the first state (None without
     # --symbol-feeds).
     symbol_feeds = None
-
-    def _make_state(*, body=False):
-        """Create + fully configure a fresh strategy state — everything EXCEPT the
-        timed run_backtest_full call. Mirrors scripts/run_strategy.py's setup so the
-        engine behaves identically to the ctypes validation harness. The handle is
-        checked before anything is set on it; a state that fails to configure is
-        freed before its failure propagates."""
+    metrics = _MetricsOnlyRun(lib, args, checked) if args.metrics_only is not None else None
+    def _make_state(*, body=False, metrics_legacy=False):
+        """Fully configure a fresh handle outside the timed run_backtest_full call.
+        Match the validation harness's setup and free a state whose
+        configuration fails before propagating its failure."""
         nonlocal syminfo_applied
         st = create_strategy(lib, checked)
         sink = None
         try:
             apply_settings(lib, st, inputs, overrides, checked)
             if args.syminfo:
-                # A replacement apply_syminfo may return None (or another non-dict).
-                r = apply_syminfo(lib, st, args.syminfo)
+                r = (metrics.apply_syminfo(st) if metrics is not None
+                     else apply_syminfo(lib, st, args.syminfo))
                 syminfo_applied = r if isinstance(r, dict) else {}
             if symbol_feeds:
                 install_symbol_feeds(lib, st, symbol_feeds)
@@ -5581,6 +5579,8 @@ def _main(argv, binary_inputs) -> int:
                          or getattr(args, "report_replay_sink", None)):
                 args._replay_capture = binary_inputs.enter_context(
                     _ReplayCapture(lib, st, args, sink))
+            if metrics is not None:
+                metrics.configure(st, legacy=metrics_legacy)
         except BaseException:
             try:
                 lib.strategy_free(st)
@@ -5640,32 +5640,33 @@ def _main(argv, binary_inputs) -> int:
     report = ReportC()
     binding = None
     state, sink = _make_state(body=True)
+    if metrics is not None:
+        metrics.own(state, sink, report)
     try:
-        # The last state owns CSV copies. Borrowed binary views stay alive
-        # through native cleanup and the outer input stack's cleanup.
         _release_copied_feeds(symbol_feeds)
         started = time.time()
         settings_receipt = _release_settings_receipt(lib, state, checked)
         if phases is not None:
             binding = _observer_binding(lib, state, phases.writer)
             binding.attach()
-        _run(state, report)
+        if metrics is None:
+            _run(state, report)
+        else:
+            state, sink, report, settings_receipt = metrics.execute(
+                _run, _make_state, settings_receipt, abort)
         elapsed = time.time() - started
         if binding is not None:
             binding.raise_if_failed()  # the callback's exception, before any report access
-        failure = run_failure(lib, state)
+        failure = metrics.failure if metrics is not None else run_failure(lib, state)
         if failure is not None:
-            # Unchanged without --run-phase-fd; with it, an out_of_memory or unclassified engine
-            # failure after the acknowledged boundary is report_post_execution_failed.
+            # Phase transport classifies failures after the acknowledged boundary.
             if getattr(sink, "fd_mode", False):
                 raise RunFailure(*_post_boundary_engine_failure(failure, phases))
             write_failure(*_post_boundary_engine_failure(failure, phases))
             return 1
         if phases is not None:
             _require_result_assembly(phases)
-        # The report spells the first and last bar as UTC dates (fmt_utc).
-        # Checked after the run, so the engine's own refusal of the same tape
-        # keeps its line.
+        # Check UTC dates after the run so the engine's refusal keeps its line.
         for ts in (first_ts, last_ts):
             try:
                 fmt_utc(ts)
@@ -5717,6 +5718,8 @@ def _main(argv, binary_inputs) -> int:
             elapsed, inputs, overrides, applied_runtime,
             sink if sink is not None else trade_entry_incarnations,
             initial_capital=engine_initial_capital, **replay_options)
+        if metrics is not None:
+            metrics.add_annualization(out)
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
@@ -5728,9 +5731,7 @@ def _main(argv, binary_inputs) -> int:
         if outputs_block is not None:
             out["outputs"] = outputs_block
         try:
-            # The frozen helpers' regex readers never see the C++: the release
-            # reader below owns every declared value, and only the digest of
-            # the file is taken here.
+            # The release reader owns declarations; provenance takes the file digest.
             provenance = build_provenance(
                 engine_version(lib),
                 None,
@@ -5741,9 +5742,10 @@ def _main(argv, binary_inputs) -> int:
                 source_feed_sha256=source_feed_sha256,
             )
             provenance["codegen"]["generated_cpp_sha256"] = (
-                _sha256_file(args.generated_cpp) if args.generated_cpp else None)
-            cpp_text = ""
-            if args.generated_cpp:
+                (metrics.cpp_digest if metrics is not None else _sha256_file(args.generated_cpp))
+                if args.generated_cpp else None)
+            cpp_text = metrics.cpp_source() if metrics is not None else ""
+            if args.generated_cpp and metrics is None:
                 with open(args.generated_cpp, encoding="utf-8", errors="replace") as source:
                     cpp_text = source.read()
             provenance = normalize_release_provenance(
@@ -5751,14 +5753,14 @@ def _main(argv, binary_inputs) -> int:
             out["fingerprint"] = build_fingerprint(provenance)
         except Exception:
             out["fingerprint"] = None
+        if metrics is not None:
+            _metrics_only_document(out)
         _advance(phases, "serialization")  # phase records only: the report gains no field
-        # Serialized whole before any byte is written (the same JSON encoder), so
-        # a failure while it is built never follows half a report.
+        # Serialize whole before publishing any byte.
         try:
             buffer = _prepare_report_json(out, binary_inputs, args, sink)
         except ValueError as error:
-            # Match only the encoder's allow_nan=False refusal, including the
-            # versions that append repr(value); other ValueErrors keep their code.
+            # Match only the encoder's allow_nan=False refusal.
             if (_boundary_phase(phases) is None and str(error) in (
                 "Out of range float values are not JSON compliant",
                 "Out of range float values are not JSON compliant: nan",
@@ -5772,19 +5774,19 @@ def _main(argv, binary_inputs) -> int:
         if output_files is not None:
             output_files.close()  # detect column close errors before report publication
     except Exception as error:
-        # Without --run-phase-fd the writer above types its non-finite refusal;
-        # other errors keep their existing classification.
+        # Preserve classification outside phase transport.
         classified = _post_boundary_failure(error, phases)
         if classified is None:
             raise
         raise classified from error
     finally:
         detach_error = _detach_observer(binding)  # None without --run-phase-fd
-        _free_sink_run(lib, state, report, sink)
+        if metrics is None:
+            _free_sink_run(lib, state, report, sink)
+        else:
+            metrics.close()
         if detach_error is not None and sys.exc_info()[1] is None:
             raise _typed_failure(detach_error) or detach_error
-    # A closed pipe or a full disk while the report is written: a failure line now would
-    # follow part of a report, so none is written (see _write_report).
     status = _write_report(buffer, phases)
     if status:
         return status
@@ -5958,6 +5960,7 @@ def _validate_sink_options(args):
 
 def _new_report_sink(lib, state, args, *, body=True):
     _refuse_jailed_path_sink(args)
+    _validate_metrics_only_options(args)
     jailed = getattr(args, "profile", "unjailed") == "jailed"
     if getattr(args, "report_sink_fd", None) is not None:
         names = ("pf_report_sink_version", "strategy_set_report_sink_fd_v1",
@@ -5972,7 +5975,7 @@ def _new_report_sink(lib, state, args, *, body=True):
         return _FdReportSink(lib, state, fd=args.report_sink_fd,
                              run_id=getattr(args, "run_id", ""),
                              owner=args._sink_fd_owner)
-    if jailed:
+    if jailed or getattr(args, "metrics_only", None) is not None:
         return None
     names = ("pf_report_sink_version", "strategy_set_report_sink_v1",
              "strategy_report_sink_receipt_v1")
@@ -5984,8 +5987,7 @@ def _new_report_sink(lib, state, args, *, body=True):
         return None  # old modules keep their existing report ABI
     if not all(present) or int(lib.pf_report_sink_version()) != 1:
         raise _engine_invariant("the strategy library has an incompatible report sink ABI")
-    # Only the body run may create/truncate the caller's sink. Bench states
-    # use their own temporary paths, unlinked at close.
+    # Only the body run may create/truncate the caller's sink.
     return _ReportSink(lib, state, directory=getattr(args, "spill_dir", None),
                        run_id=getattr(args, "run_id", ""),
                        path=getattr(args, "report_sink", None) if body else None)
@@ -8532,6 +8534,352 @@ def write_report_sinks(*, primary_path, replay_path, run_id,
 
 # Keep the canonical builder stable when callers instrument its public seam.
 _canonical_report_dict = build_report_dict
+
+
+class _MetricsArgumentParser(_ArgumentParser):
+    _metrics_requested = False
+
+    def parse_args(self, args=None, namespace=None):
+        tokens = list(sys.argv[1:] if args is None else args)
+        self._metrics_requested = False
+        for token in tokens:
+            if token == "--":
+                break
+            if not isinstance(token, str):
+                continue
+            name = token.partition("=")[0]
+            if name.startswith("--") and "--metrics-only".startswith(name):
+                matches = self._get_option_tuples(token)
+                if len(matches) == 1 and matches[0][1] == "--metrics-only":
+                    self._metrics_requested = True
+                    break
+        return super().parse_args(tokens, namespace)
+
+    def print_usage(self, file=None):
+        if not self._metrics_requested and hasattr(self, "_legacy_usage"):
+            self._print_message(self._legacy_usage, sys.stdout if file is None else file)
+        else:
+            super().print_usage(file)
+
+    def _get_option_tuples(self, option_string):
+        matches = super()._get_option_tuples(option_string)
+        # Formerly ambiguous prefixes (notably --m) retain their exact
+        # refusal text; formerly unique ones are expanded before parsing.
+        previous = [match for match in matches if match[1] != "--metrics-only"]
+        return previous if len(previous) > 1 else matches
+
+
+class MetricsExtentV1(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_int64) for name in
+                ("count", "first_time_ms", "last_time_ms")] + [
+        ("empty", ctypes.c_uint32), ("reserved", ctypes.c_uint32)]
+
+
+class MetricsExtentPlanV1(ctypes.Structure):
+    _fields_ = [("extent", MetricsExtentV1)] + [
+        (name, ctypes.c_uint64) for name in
+        ("attempt", "input_generation", "admitted_view", "spec_identity")] + [
+        ("present", ctypes.c_uint32), ("reserved", ctypes.c_uint32)]
+
+
+class MetricsStopBoundaryV1(ctypes.Structure):
+    _fields_ = [("completed_marks", ctypes.c_int64), ("input_index", ctypes.c_int64),
+                ("kind", ctypes.c_uint32), ("reserved", ctypes.c_uint32)]
+
+
+class MetricsExtentReceiptV1(ctypes.Structure):
+    _fields_ = [("struct_size", ctypes.c_uint32), ("version", ctypes.c_uint32),
+                ("extent_plan", MetricsExtentPlanV1), ("actual_extent", MetricsExtentV1)] + [
+        (name, ctypes.c_uint64) for name in
+        ("actual_attempt", "actual_input_generation", "actual_admitted_view",
+         "actual_spec_identity", "eligible_returns", "mismatch_fields",
+         "failed_plain_inputs", "metrics_needed")] + [
+        ("stop_boundary", MetricsStopBoundaryV1)] + [
+        (name, ctypes.c_uint32) for name in
+        ("witness", "route", "route_reason", "streaming_sharpe", "plain_subset",
+         "replay_attempts")] + [("authoritative_attempt", ctypes.c_uint64),
+                               ("actual_last_equity", ctypes.c_double),
+                               ("actual_last_equity_valid", ctypes.c_uint32)]
+
+
+for _pod, _size in ((MetricsExtentV1, 32), (MetricsExtentPlanV1, 72),
+                    (MetricsStopBoundaryV1, 24), (MetricsExtentReceiptV1, 248)):
+    if ctypes.sizeof(_pod) != _size:
+        raise RuntimeError(f"unsupported native metrics layout: {_pod.__name__}")
+
+
+def _bind_metrics_streaming(lib) -> None:
+    signatures = {
+        "strategy_set_metrics_streaming_v1": (
+            ctypes.c_int32, [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint64]),
+        "strategy_metrics_extent_receipt_v1": (
+            ctypes.c_int32, [ctypes.c_void_p, ctypes.POINTER(MetricsExtentReceiptV1)]),
+    }
+    for name, (restype, argtypes) in signatures.items():
+        if hasattr(lib, name):
+            function = getattr(lib, name)
+            function.restype, function.argtypes = restype, argtypes
+
+
+def _metrics_only_supported(lib) -> bool:
+    """The module must certify its run adapter, plain inputs and recovery.
+
+    The module's own capability export answers: Ok (0) only for a host that
+    certified itself. Binding the preference/receipt exports alone certifies
+    nothing; never declare a module plain from Python. A missing export, any
+    other status or a failing call means no.
+    """
+    try:
+        probe = lib.strategy_metrics_only_capability_v1
+    except AttributeError:
+        return False
+    try:
+        probe.restype = ctypes.c_int32
+        probe.argtypes = []
+        return int(probe()) == 0
+    except Exception:
+        return False
+
+
+def _validate_metrics_only_options(args) -> None:
+    if getattr(args, "metrics_only", None) is None:
+        return
+    for name in (
+            "report_sink", "report_sink_fd", "run_phase_fd", "report_policy",
+            "window_start_ms", "window_end_ms", "preroll_bars", "fed_start_ms",
+            "request_feed_inventory", "report_shape", "curve_point_budget",
+            "results_digest", "symbol_feeds"):
+        if getattr(args, name, None) is not None:
+            label = "--" + name.replace("_", "-")
+            raise _request_invalid(f"error: --metrics-only cannot be combined with {label}",
+                                   "arguments", exit_status=2)
+    for name in ("outputs", "bench", "validate_window_only", "capabilities_json"):
+        if getattr(args, name, False):
+            label = "--" + name.replace("_", "-")
+            raise _request_invalid(f"error: --metrics-only cannot be combined with {label}",
+                                   "arguments", exit_status=2)
+
+
+def _metrics_only_document(out) -> None:
+    # Called once, after the ordinary report's validation and diagnostics.
+    for name in ("trades", "equity_curve", "elapsed_seconds"):
+        out.pop(name, None)
+    for name in ("scratch_arena_high_water_bytes", "scratch_arena_bytes"):
+        out["diagnostics"].pop(name, None)
+
+
+def _metrics_extent_receipt(lib, state):
+    getter = getattr(lib, "strategy_metrics_extent_receipt_v1", None)
+    if getter is None:
+        return None
+    # ctypes zero-initializes every reserved word, including nested PODs.
+    receipt = MetricsExtentReceiptV1()
+    receipt.struct_size, receipt.version = ctypes.sizeof(receipt), 1
+    try:
+        status = getter(state, ctypes.byref(receipt))
+    except Exception:
+        return None  # an unobserved speculative report cannot be published
+    if status != 0 or receipt.struct_size != 248 or receipt.version != 1:
+        return None
+    return receipt
+
+
+def _metrics_streaming_complete(receipt, report, failure, initial_capital=None) -> bool:
+    if (failure is not None or receipt.route != 1 or receipt.route_reason != 11
+            or receipt.streaming_sharpe != 1 or receipt.metrics_needed != 0x37
+            or receipt.plain_subset != 1 or receipt.failed_plain_inputs
+            or receipt.witness != 1 or receipt.mismatch_fields
+            or receipt.extent_plan.present != 1):
+        return False
+    plan, actual = receipt.extent_plan, receipt.actual_extent
+    for name in ("attempt", "input_generation", "admitted_view", "spec_identity"):
+        if getattr(plan, name) != getattr(receipt, "actual_" + name):
+            return False
+    for name in ("count", "empty", "first_time_ms", "last_time_ms"):
+        if getattr(plan.extent, name) != getattr(actual, name):
+            return False
+    # A curve-free annualization diagnostic needs the fold's own final mark
+    # and exported capital. The older first-mark proof requires a real curve.
+    if (actual.count > 0 and (not report.equity_curve or report.equity_curve_len <= 0)
+            and math.isfinite(report.metrics.equity.cagr)):
+        if (receipt.actual_last_equity_valid != 1
+                or not math.isfinite(receipt.actual_last_equity)
+                or initial_capital is None or not math.isfinite(initial_capital)
+                or initial_capital <= 0):
+            return False
+    return True
+
+
+class _MetricsSyminfoSnapshot:
+    """Record only validated setter values, using apply_syminfo's parser."""
+    def __init__(self, lib):
+        self.lib, self.calls = lib, []
+
+    def __getattr__(self, name):
+        function = getattr(self.lib, name)  # preserve missing-setter refusals
+
+        def record(_state, *values):
+            self.calls.append((function, values))
+        return record
+
+
+class _MetricsOnlyRun:
+    """Own at most two complete executions; publish only the authoritative one."""
+    def __init__(self, lib, args, checked):
+        self.lib, self.args, self.checked = lib, args, checked
+        self.active = None
+        self.streaming = False
+        self.failure = None
+        self.first_receipt = self.first_failure = self.first_status = None
+        self.recovery_receipt = None
+        self.annualization_endpoints = None
+        self.annualization_capital = None
+        self.syminfo = self.syminfo_applied = None
+        self.cpp_digest, self.cpp_text, self.cpp_error = None, "", None
+        if args.generated_cpp:
+            try:
+                raw = args.generated_cpp.read_bytes()
+                self.cpp_digest = hashlib.sha256(raw).hexdigest()
+                self.cpp_text = raw.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
+            except Exception as error:
+                self.cpp_error = error  # preserve best-effort fingerprint handling
+
+    def cpp_source(self):
+        if self.cpp_error is not None:
+            raise self.cpp_error
+        return self.cpp_text
+
+    def apply_syminfo(self, state):
+        if self.syminfo is None:
+            snapshot = _MetricsSyminfoSnapshot(self.lib)
+            self.syminfo_applied = apply_syminfo(snapshot, state, self.args.syminfo)
+            self.syminfo = snapshot
+        for function, values in self.syminfo.calls:
+            function(state, *values)
+        return self.syminfo_applied
+
+    def configure(self, state, *, legacy=False):
+        self.streaming = False
+        setter = getattr(self.lib, "strategy_set_metrics_streaming_v1", None)
+        if setter is None:
+            return  # older modules retain the actual curve under their default mask
+        candidate = (not legacy and self.args.metrics_only == "auto"
+                     and _metrics_only_supported(self.lib)
+                     and hasattr(self.lib, "strategy_metrics_extent_receipt_v1"))
+        status = setter(state, 1 if candidate else 0, 0x37 if candidate else 0x7f)
+        if status == 0:
+            self.streaming = candidate
+            return
+        if candidate:
+            status = setter(state, 0, 0x7f)
+        if status not in (0, -1):  # NotImplemented leaves the legacy defaults intact
+            _check_bench_run(self.lib, state)  # existing native-failure forwarding
+            raise _engine_invariant("the metrics preference could not be configured")
+
+    def own(self, state, sink, report):
+        self.active = state, sink, report
+
+    def close(self):
+        active, self.active = self.active, None
+        if active is not None:
+            state, sink, report = active
+            _free_sink_run(self.lib, state, report, sink)
+
+    def result(self, settings_receipt):
+        state, sink, report = self.active or (None, None, None)
+        return state, sink, report, settings_receipt
+
+    def add_annualization(self, out):
+        if self.annualization_endpoints is not None:
+            out["diagnostics"].update(_annualization_block(
+                self.annualization_endpoints, out["metrics"],
+                initial_capital=self.annualization_capital))
+
+    def execute(self, run, make_state, settings_receipt, abort):
+        state, sink, report = self.active
+        run(state, report)
+        self.failure = run_failure(self.lib, state)
+        if not self.streaming:
+            return self.result(settings_receipt)
+        failure = self.first_failure = self.failure
+        status_getter = getattr(self.lib, "strategy_last_run_status", None)
+        self.first_status = status_getter(state) if status_getter is not None else None
+        # Do not finalize again through a receipt getter after a latched
+        # scratch failure. Cancellation is invocation-wide and stays sticky.
+        if failure is not None and failure[1] in ("report_sink_failed", "run_aborted"):
+            return self.result(settings_receipt)
+        if abort is not None and abort.requested():
+            if failure is not None:
+                return self.result(settings_receipt)
+            raise abort.failure()
+        receipt = self.first_receipt = _metrics_extent_receipt(self.lib, state)
+        finalized_failure = run_failure(self.lib, state)
+        if finalized_failure is not None:
+            self.failure = finalized_failure
+            if finalized_failure[1] in ("report_sink_failed", "run_aborted"):
+                return self.result(settings_receipt)
+            failure = self.first_failure = finalized_failure
+            self.first_status = status_getter(state) if status_getter is not None else None
+        if receipt is not None:
+            if receipt.route == 2:  # admission retained the actual curve from bar one
+                return self.result(settings_receipt)
+            capital = _read_strategy_initial_capital(self.lib, state)
+            if _metrics_streaming_complete(receipt, report, failure, capital):
+                if (receipt.actual_extent.count > 0
+                        and (not report.equity_curve or report.equity_curve_len <= 0)
+                        and math.isfinite(report.metrics.equity.cagr)):
+                    # With validated exported capital the shared helper reads
+                    # only these three endpoint fields. No first mark is inferred.
+                    self.annualization_endpoints = (
+                        {"time_ms": receipt.actual_extent.first_time_ms},
+                        {"time_ms": receipt.actual_extent.last_time_ms,
+                         "equity": receipt.actual_last_equity},
+                    )
+                    self.annualization_capital = capital
+                return self.result(settings_receipt)
+        # LegacyRerun, an unavailable receipt or an invalid streaming proof:
+        # free report before state, then rebuild settings, trades/orders/lots,
+        # counters, outputs, caches and scratch regions on a fresh strategy.
+        # The loaded module, chart allocation, parsed inputs/overrides and
+        # captured syminfo/source values outlive both attempts.
+        self.close()
+        report = ReportC()
+        try:
+            state, sink = make_state(body=True, metrics_legacy=True)
+            self.own(state, sink, report)
+            recovered_settings = _release_settings_receipt(self.lib, state, self.checked)
+            if recovered_settings != settings_receipt:
+                raise _engine_invariant("the metrics recovery changed effective settings")
+            run(state, report)
+        except Exception:
+            if failure is not None:
+                self.failure = failure
+                return self.result(settings_receipt)
+            raise
+        recovered_failure = self.failure = run_failure(self.lib, state)
+        if recovered_failure is not None and recovered_failure[1] in ("report_sink_failed", "run_aborted"):
+            return self.result(recovered_settings)
+        # A failed authoritative attempt follows the ordinary failure writer.
+        # A failed speculative attempt may never turn into a successful report.
+        if failure is not None:
+            recovered_status = status_getter(state) if status_getter is not None else None
+            recovered = self.recovery_receipt = _metrics_extent_receipt(self.lib, state)
+            boundary = lambda r: (r.stop_boundary.completed_marks,
+                                  r.stop_boundary.input_index, r.stop_boundary.kind)
+            if (recovered_failure != failure or recovered_status != self.first_status
+                    or receipt is None or recovered is None
+                    or not receipt.stop_boundary.kind
+                    or not recovered.stop_boundary.kind
+                    or boundary(receipt) != boundary(recovered)):
+                # The current Off receipt cannot independently witness all
+                # native stops. Preserve the saved failure if proof is absent.
+                self.failure = failure
+        elif recovered_failure is None:
+            recovered = self.recovery_receipt = _metrics_extent_receipt(self.lib, state)
+            self.failure = run_failure(self.lib, state)
+            if self.failure is None and recovered is not None and recovered.route == 3:
+                raise _engine_invariant("the legacy metrics recovery requested another run")
+        return self.result(recovered_settings)
 
 
 if __name__ == "__main__":

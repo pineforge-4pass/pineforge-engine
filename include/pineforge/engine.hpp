@@ -1665,6 +1665,15 @@ protected:
         }
     }
 
+    int report_equity_month_key(std::int64_t time_ms) const {
+        // An out-of-domain no-curve attempt is unpublishable: the monthly
+        // fold requests whole-report recovery. Avoid invoking the legacy
+        // int month-key expression speculatively on that attempt.
+        if (metrics_streaming_.no_curve && !metrics::monthly_replay_time_supported_v1(time_ms))
+            return 0;
+        return metrics::equity_month_key(time_ms, chart_timezone_);
+    }
+
     // Record one equity point per SCRIPT bar. ``script_bar_ts`` must be the
     // script-bar open timestamp captured BEFORE dispatch — current_bar_.timestamp
     // is overwritten by the magnifier sub-bar walk (engine_run.cpp), which would
@@ -1685,7 +1694,7 @@ protected:
             if (!equity_curve_.empty()) {
                 const auto& held = equity_curve_.back();
                 summary_equity_fold_.replace_last(
-                    held, metrics::equity_month_key(held.time_ms, chart_timezone_));
+                    held, report_equity_month_key(held.time_ms));
                 auto& prefix = summary_broker_equity_prefix_;
                 const double eq = held.equity;
                 if (eq > prefix[0]) prefix[0] = prefix[1] = eq;
@@ -1696,7 +1705,7 @@ protected:
                 if (ru > prefix[3]) prefix[3] = ru;
             }
             summary_equity_fold_.fold(
-                p, metrics::equity_month_key(p.time_ms, chart_timezone_),
+                p, report_equity_month_key(p.time_ms),
                 true, position_side_ != PositionSide::FLAT);
             if (equity_curve_.empty()) equity_curve_.push_back(p);
             else equity_curve_.back() = p;
@@ -1707,7 +1716,7 @@ protected:
         }
         if (metrics_streaming_.fold) {
             metrics_streaming_.fold->append(
-                p, metrics::equity_month_key(p.time_ms, chart_timezone_));
+                p, report_equity_month_key(p.time_ms));
             ++metrics_streaming_.points;
             metrics_streaming_.receipt.stop_boundary.completed_marks = metrics_streaming_.points;
             metrics_streaming_.receipt.stop_boundary.kind =
@@ -2235,6 +2244,8 @@ public:
     // to the configuration of the attempt it describes.
     metrics::MetricsStreamingStatusV1 set_metrics_streaming_v1(
         metrics::StreamingSharpeV1, metrics::MetricsNeedMaskV1);
+    // The receipt also observes the final metric equity mark when nonempty;
+    // this observation never participates in the planned extent's identity.
     metrics::MetricsStreamingStatusV1 metrics_extent_receipt_v1(
         metrics::MetricsExtentReceiptV1*) const;
     metrics::MetricsStreamingStatusV1 admit_metrics_plain_v1(
@@ -2945,9 +2956,11 @@ inline constexpr std::size_t kReportSinkHeldEquityPoints = 1;
 } // inline namespace engine_script_run_v19
 } // namespace pineforge
 
-// first-stage proposed C entry points, declared here because pineforge.h and the
-// runtime-export inventory belong to the supervisor's subsequent ABI slice.
-// No existing export calls these stubs. mode: 0=OFF, 1=ON (default);
+// Optional metrics C entry points, implemented in engine_report.cpp and
+// declared here independently of pineforge.h's static-runtime inventory.
+// Native modules advertise their certified execution adapter separately via
+// strategy_metrics_only_capability_v1 (native_module.hpp).
+// mode: 0=OFF, 1=ON (default);
 // metrics_needed is the OR of kMetricsNeed*V1. The getter is an additive
 // diagnostic transport; it does not extend pf_report_t.
 extern "C" PF_API std::int32_t strategy_set_metrics_streaming_v1(
