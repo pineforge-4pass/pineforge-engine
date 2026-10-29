@@ -1,4 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
+#if defined(PINEFORGE_TEST_ENGINE_LAYOUT_STAMP_ONE)
+// The module fixture compiles the real runtime with its stamp symbol renamed,
+// then supplies this historical stamp. Its handles still point at real engines,
+// so accepting the old stamp fails a report assertion instead of crashing.
+#include <pineforge/pineforge.h>
+#undef strategy_stream_engine_layout_version
+extern "C" PF_API uint32_t strategy_stream_engine_layout_version(void) { return 1u; }
+#else
 #include "../runner/json.hpp"
 #include "../runner/store.hpp"
 #include "../runner/report.hpp"
@@ -1124,6 +1132,70 @@ void ratio_body_replay(Fixture& fixture) {
     }
 }
 
+void layout_one_report_and_replay(Fixture& fixture) {
+    std::unique_ptr<void, decltype(&dlclose)> library(
+        dlopen(fixture.library.c_str(), RTLD_NOW | RTLD_LOCAL), dlclose);
+    require(library != nullptr, "cannot open historical layout module");
+    const auto stamp = oracle_symbol<std::uint32_t (*)()>(
+        library.get(), "strategy_stream_engine_layout_version");
+    require(stamp() == 1u, "historical layout fixture must export stream layout version 1");
+
+    // One committed input is the supported boundary. Adding one more input
+    // is the smallest multi-entry ledger and must refuse before replay/output.
+    for (const std::uint64_t interval : {3u, 1u}) {
+        const auto batches = batch_documents(fixture, interval, 2);
+        for (const std::uint64_t count : {1u, 2u}) {
+            const auto name = "layout-one-" + std::to_string(interval) + "-" + std::to_string(count);
+            const auto ledger = fixture.temporary.path / (name + ".sqlite");
+            const auto status = fixture.temporary.path / (name + ".status");
+            const auto command = [&](std::uint64_t from) {
+                auto arguments = fixture.command(ledger, status, "--report-jsonl", from);
+                arguments.insert(arguments.end(), {"--ratio-interval", std::to_string(interval)});
+                return arguments;
+            };
+            {
+                Runner child(command(0), fixture.temporary.path / (name + "-seed.stderr"));
+                wait_ready(status, 0, child);
+                child.quiet();
+                for (std::uint64_t cursor = 1; cursor <= count; ++cursor) {
+                    child.send(fixture.inputs[cursor - 1] + "\n");
+                    const auto line = child.line();
+                    const auto document = parse_json(line);
+                    require(document.find("ratios_as_of_input") == nullptr &&
+                            document.find("ratio_context") == nullptr,
+                            "stream layout version 1 was given the live report accumulator");
+                    require(line == batches[cursor].dump(),
+                            "stream layout version 1 report differs from fill_report");
+                }
+                // The report path has no accumulator-only EOF refresh.
+                check_summary(child.finish(), count, count);
+            }
+            Json committed;
+            apply_delta(committed, stored_delta(ledger, 0));
+            for (std::uint64_t cursor = 1; cursor <= count; ++cursor)
+                apply_delta(committed, stored_delta(ledger, cursor));
+            require(committed.dump() == batches[count].dump(),
+                    "historical layout ledger differs from the full report oracle");
+            const auto snapshot = stored_delta(ledger, count);
+            fs::remove(status);
+            Runner replay(command(count), fixture.temporary.path / (name + "-replay.stderr"));
+            if (count == 1) {
+                wait_ready(status, count, replay);
+                check_summary(replay.finish(), count, 0);
+            } else {
+                require(replay.finish(1).empty(),
+                        "historical layout multi-entry replay printed stdout");
+                require(replay.errors() ==
+                        "pineforge-live: report_shape_unsupported: stream layout version 1 cannot replay a live ledger with more than one entry\n",
+                        "historical layout multi-entry replay changed its named refusal: " + replay.errors());
+                require(!fs::exists(status), "historical layout replay published readiness before refusal");
+            }
+            require(stored_delta(ledger, count) == snapshot,
+                    "historical layout replay changed a committed report");
+        }
+    }
+}
+
 void report_memory(Fixture& fixture) {
     using Clock = std::chrono::steady_clock;
     const auto deadline = Clock::now() + std::chrono::seconds(160);
@@ -1240,6 +1312,8 @@ int main(int argc, char** argv) {
             ratio_marker_replay(fixture);
         } else if (test_case == "ratio-body-replay") {
             ratio_body_replay(fixture);
+        } else if (test_case == "layout-one-report-and-replay") {
+            layout_one_report_and_replay(fixture);
         } else if (test_case == "memory") {
             report_memory(fixture);
         } else {
@@ -1252,3 +1326,4 @@ int main(int argc, char** argv) {
         return 1;
     }
 }
+#endif

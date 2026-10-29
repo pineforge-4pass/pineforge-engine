@@ -7,10 +7,11 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+1.9 needs a module rebuild (ABI 6).
+
 - Closed-trade reads serve retained sealed rows from backing storage; policy-erased history still refuses with its typed error.
 - Closed-trade text equality can compare bytes without owning strings and the closed-trade count is read inline; rebuild C++ consumers and relink strategies with matching headers and archive.
-
-1.9 needs a module rebuild (ABI 6).
+- A module stamped for the 1.8.0 engine layout (stream layout version 1) falls back to the report path on 1.9; its live ledgers with more than one entry fail replay closed.
 
 **[1.8.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.8.0)**,
 paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.8.0).

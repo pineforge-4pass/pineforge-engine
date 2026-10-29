@@ -385,6 +385,7 @@ class Strategy {
     int contract = 1;
     bool has_configure_native = false;
     bool has_current_engine_layout = false;
+    std::uint32_t engine_layout_version = 0;
     Strategy() = default;
     ~Strategy() { release(); }
     Strategy(const Strategy &) = delete;
@@ -409,8 +410,9 @@ class Strategy {
                 throw std::runtime_error("native stream extension version mismatch");
             auto engine_layout = optional_symbol<decltype(&strategy_stream_engine_layout_version)>(
                 "strategy_stream_engine_layout_version");
+            engine_layout_version = engine_layout ? engine_layout() : 0;
             has_current_engine_layout =
-                engine_layout && engine_layout() == PF_STREAM_ENGINE_LAYOUT_VERSION;
+                engine_layout_version == PF_STREAM_ENGINE_LAYOUT_VERSION;
             free = symbol<decltype(&strategy_free)>("strategy_free");
             error = symbol<decltype(error)>("strategy_get_last_error");
             tick = symbol<decltype(tick)>("strategy_stream_push_tick");
@@ -985,6 +987,15 @@ int run(Config c) {
     LedgerOptions ledger_options;
     ledger_options.report_checkpoint_interval = c.checkpoint_interval;
     Ledger ledger(c.ledger, deployment, c.max_ledger_bytes, ledger_options);
+    auto recorded = ledger.input_count();
+    // A single committed input has no subsequent prefix to carry forward.
+    // Older engine layouts cannot attest that multi-input report history.
+    if (strategy.engine_layout_version == 1u && recorded > 1) {
+        throw pineforge::coded<std::runtime_error>(
+            pineforge::RunFailureCode::report_shape_unsupported,
+            {{"shape", "stream_layout_v1_replay"}},
+            "report_shape_unsupported: stream layout version 1 cannot replay a live ledger with more than one entry");
+    }
     ServiceFile service(c.status_file, c.status_interval * 1000);
     ledger.bind_routing(c.routing.stored_document());
     // All modes fold the same carried patches. Only cumulative output, legacy
@@ -1017,7 +1028,6 @@ int run(Config c) {
     verify_report(0);
     Cursor cursor;
     cursor.bar_timestamp = warmup.back().timestamp;
-    auto recorded = ledger.input_count();
     std::optional<CheckpointDiagnostic> checkpoint_diagnostic;
     const auto note_checkpoint_diagnostic = [&](std::optional<CheckpointDiagnostic> diagnostic) {
         if (!diagnostic || (checkpoint_diagnostic &&

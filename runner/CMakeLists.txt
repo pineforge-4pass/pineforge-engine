@@ -205,6 +205,25 @@ if(PINEFORGE_BUILD_TESTS)
         $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_market_example> default-recovery)
     set_tests_properties(test_native_live_report_first_commit test_native_live_report_summary_only
         test_native_live_report_options test_native_live_report_default_recovery PROPERTIES TIMEOUT 180)
+    # A module whose engine-layout stamp is the 1.8.0 value (1): the runner must
+    # route it to the report path, never to the accumulator. It is the real
+    # example strategy with the runtime TU compiled in and only the stamp symbol
+    # renamed, so a real engine handle stands behind the historical stamp.
+    add_library(native_live_layout_one MODULE
+        ${PROJECT_SOURCE_DIR}/examples/native/native_market_strategy.cpp
+        ${PROJECT_SOURCE_DIR}/src/c_abi.cpp
+        ${PROJECT_SOURCE_DIR}/tests/test_native_live_report_cli.cpp)
+    target_link_libraries(native_live_layout_one PRIVATE PineForge::pineforge)
+    target_compile_options(native_live_layout_one PRIVATE
+        -fvisibility=hidden -ffp-contract=off -UNDEBUG)
+    target_compile_definitions(native_live_layout_one PRIVATE
+        PINEFORGE_TEST_ENGINE_LAYOUT_STAMP_ONE=1
+        strategy_stream_engine_layout_version=pf_test_current_engine_layout_version)
+    add_dependencies(test_native_live_report_cli native_live_layout_one)
+    add_test(NAME test_native_live_report_layout_one
+        COMMAND test_native_live_report_cli
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:native_live_layout_one>
+        layout-one-report-and-replay)
     set_tests_properties(test_native_live_websocket PROPERTIES SKIP_RETURN_CODE 77)
     add_executable(test_native_live_checkpoint
         ${PROJECT_SOURCE_DIR}/tests/test_native_live_checkpoint.cpp)

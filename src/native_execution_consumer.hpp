@@ -1793,6 +1793,7 @@ private:
     // The caches beside the lookups they replace, compared bit for bit by
     // tests/test_native_callback_caches.cpp.
     friend struct NativeExecutionConsumerProbe;
+    friend struct EngineLayoutProbe;
     uint64_t consumed_high_water_ = 0;
     // The attempt ledger, report presentation only, never a run input, hashed
     // or reset by a run. rows_current_: the retained rows belong to the latest

@@ -549,6 +549,7 @@ protected:
     // behaviour changed for this.
     friend class NativeExecutionConsumer;
     friend class NativeStrategyHost;
+    friend struct EngineLayoutProbe;
     // The terminal range-end row source rebuilds rows through the engine's
     // non-mutating close builder and reads the live lots.
     friend class OpenReportRowSource;

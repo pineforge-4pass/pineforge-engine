@@ -56,6 +56,7 @@
 #include <pineforge/execution_observer.h>
 #include <pineforge/selected_window.h>
 #include <pineforge/engine.hpp>
+#include "engine_layout_fingerprint.hpp"
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/detail/scratch_arena.hpp>

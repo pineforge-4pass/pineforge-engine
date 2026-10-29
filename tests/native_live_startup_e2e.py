@@ -109,7 +109,7 @@ def module_layout(probe, module):
 
 
 def engine_layout_proof(probe):
-    assert module_layout(probe, native_example) == {'has_stamp': True, 'version': 1}, (
+    assert module_layout(probe, native_example) == {'has_stamp': True, 'version': 2}, (
         'the normally linked native example must export the current engine layout stamp')
     with tempfile.TemporaryDirectory(prefix='pineforge-engine-layout-') as temporary:
         root = Path(temporary)
