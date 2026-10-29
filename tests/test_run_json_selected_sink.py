@@ -338,45 +338,57 @@ def test_selected_named_sink_yields_the_summary_projection(
 
 
 @pytest.mark.parametrize("bulk", [False, True], ids=["strict", "bulk"])
-def test_selected_validation_reads_only_the_first_equity_record(tmp_path, monkeypatch, bulk):
-    monkeypatch.setattr(run_json, "_BULK_E_ENABLED", bulk)
-    new_sink, equity_passes = run_json._new_report_sink, []
+def test_selected_validation_checks_the_first_equity_point_once(
+        tmp_path, monkeypatch, bulk):
+    """The selected-window check is called once with the first equity point.
 
-    def counting_sink(*args, **kwargs):
-        sink = new_sink(*args, **kwargs)
-        original = sink.records
+    This pins which point is checked and with what arguments, equal to the
+    previous release's reader; it does not count how many records are read.
+    """
+    from run_json_fused_test_support import load_frozen_copy, reference_imports
 
-        def records(tag=None):
-            yielded = 0
-            with contextlib.closing(original(tag)) as source:
-                try:
-                    for row in source:
-                        yielded += 1
-                        yield row
-                finally:
-                    if tag == "E":
-                        equity_passes.append(yielded)
+    reference = load_frozen_copy("selected_anchor_frozen")
+    assert ctypes.sizeof(reference.ReportC) == ctypes.sizeof(run_json.ReportC)
+    original_check = swr.check_selected_sink_curve
+    observations = []
+    for runner in (reference, run_json):
+        checked = []
 
-        sink.records = records
-        return sink
+        def check(anchor, equity_points, start_ms, window_bars, initial_capital):
+            assert type(anchor) is dict
+            checked.append((dict(anchor), equity_points, start_ms,
+                            window_bars, initial_capital))
+            return original_check(
+                anchor, equity_points, start_ms, window_bars, initial_capital)
 
-    monkeypatch.setattr(run_json, "_new_report_sink", counting_sink)
-    status, text, stderr, library, _ = invoke(tmp_path, monkeypatch)
-    assert library.installed and status == 0 and stderr == "", text
-    # Verification now folds the finite-result scan and both annualization
-    # endpoint reads into its strict-reader pass, bypassing sink.records().
-    # records("E") sees only the one-point anchor check and the writer's
-    # complete streaming pass, in that order. The bulk path of a concrete path
-    # sink writes the equity array from the raw sink bytes (verified and
-    # copied window by window) and never calls sink.records("E") for it, so
-    # only the anchor check remains observable there; the strict row keeps the
-    # original two passes.
-    count = library.counts["E"]
-    if bulk:
-        assert equity_passes == [1]
-    else:
-        assert equity_passes == [1, count]
-        assert equity_passes[-1] == count
+        with monkeypatch.context() as patch, reference_imports(runner):
+            # The existing native fixture assigns product ctypes pointers.
+            # Share its ABI allocation, as sinks.frozen does; all oracle
+            # parsing, assembly and validation functions remain frozen.
+            patch.setattr(runner, "ReportC", run_json.ReportC)
+            patch.setattr(runner, "EquityStatsC", run_json.EquityStatsC)
+            patch.setattr(runner, "_BULK_E_ENABLED", bulk)
+            patch.setattr(swr, "check_selected_sink_curve", check)
+            status, text, stderr, library, _ = invoke(
+                tmp_path, patch, runner=runner)
+        assert library.installed and status == 0 and stderr == "", text
+        # Observe the real semantic check, whether its first point came from
+        # the frozen scanner or the fused diagnostics cache.
+        assert len(checked) == 1
+        anchor, count, start_ms, window_bars, _ = checked[0]
+        assert count == library.counts["E"] == window_bars + 1
+        assert count > 1
+        first = library._curve[0]
+        assert anchor == {"time_ms": first.time_ms, "equity": first.equity,
+                          "open_profit": first.open_profit}
+        assert anchor["time_ms"] == start_ms
+        assert type(anchor["time_ms"]) is int
+        for field in ("equity", "open_profit"):
+            assert type(anchor[field]) is float
+        observations.append(checked)
+    assert observations[1] == observations[0]
+    for field in ("equity", "open_profit"):
+        assert observations[1][0][0][field].hex() == observations[0][0][0][field].hex()
 
 
 @pytest.mark.parametrize("fault", [

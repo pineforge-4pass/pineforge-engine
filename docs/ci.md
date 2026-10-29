@@ -259,8 +259,8 @@ registry-name or exclusion-name fields; the default exclusion still adds
 selected discovery and strict `ctest-exclusion` checks.
 
 **Slow-label bound, 2026-10-24:** `PINNED_SLOW_TEST_ROWS` in
-`scripts/ci_verify.py` pins all 62 source-labelled names: 43 from the
-`PINEFORGE_PR_SLOW_TESTS` loop and 19 direct CMake `LABELS` assignments; the four report slices replace one direct name (+3), and the report and command-after covers remain outside the slow set.
+`scripts/ci_verify.py` pins all 66 source-labelled names: 43 from the
+`PINEFORGE_PR_SLOW_TESTS` loop and 23 direct CMake `LABELS` assignments; the four report slices replace one direct name (+3), and the report and command-after covers remain outside the slow set.
 Every name listed by `ctest -N -L slow` must belong to that set; conditional
 registration may omit names. An unpinned name fails `ctest-exclusion` on
 plain and 1/1 runs, or `ctest-shard-discovery` for multiple shards, with the
@@ -1401,9 +1401,9 @@ fewer of the 43 than Release does. `live-sanitizers`, `live-tsan` and the
 parity subset keep their existing selections.
 
 **The slow-label inventory also includes rows with direct labels:**
-The timing list contains 43 names, and 19 additional names are pinned for
+The timing list contains 43 names, and 23 additional names are pinned for
 direct `LABELS` assignments in `tests/CMakeLists.txt` and
-`tests/cr150.d/*.cmake`, making 62 distinct pinned slow names.
+`tests/cr150.d/*.cmake`, making 66 distinct pinned slow names.
 `PINNED_SLOW_TEST_ROWS` bounds the discovered exclusion by those names,
 independent of the registered count; each profile may register a subset.
 
@@ -1518,8 +1518,8 @@ variants already include a visible link to <https://pineforge.dev> on every
 page rendered by the theme, including source listings.
 
 The only job of `ci.yml` is `authz`; PR proof work lives in `gke-pr`.
-Admission checks the live PR, then reads the payload-bound compare list with
-the base tree's [`scripts/ci_docs_only.py`](../scripts/ci_docs_only.py).
+Admission checks the live PR, reads the payload-bound compare list once and fails closed at 300 files;
+the base tree's [`scripts/ci_docs_only.py`](../scripts/ci_docs_only.py) classifies the paths.
 A changed path is documentation when it is a Markdown file (`*.md`) or lies
 under `docs/`, unless it lies under `.github/`, `benchmarks/`, `scripts/` or
 `tests/`, is a CMake file or a git control file such as `.gitattributes`, or is

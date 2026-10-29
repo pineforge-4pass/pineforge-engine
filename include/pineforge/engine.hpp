@@ -321,6 +321,41 @@ struct ReportEnvelopeV1 {
     ReportC report;
 };
 
+// Engine-side admission input only. CGI emits the versioned module
+// declaration alongside strategy.ids.freshPerBar; the loader binds that
+// declaration to the actual module/presenter/mark implementation. A missing
+// or unknown declaration, or an overridden presenter/mark, means PLAIN=no
+// and today's byte-identical curve route.
+struct MetricsPlainDeclarationV1 {
+    std::uint32_t struct_size = sizeof(MetricsPlainDeclarationV1);
+    std::uint32_t version = 1;
+    std::uint32_t builtin_presenter = 0;
+    std::uint32_t builtin_marks = 0;
+    std::uint32_t builtin_scheduler = 0;
+    std::uint32_t security_sites = 0;
+    std::uint32_t lower_tf_sites = 0;
+    std::uint32_t magnifier_declared = 0;
+    std::uint32_t calculation_trigger = 0; // NativeCalculationTrigger word
+    std::uint32_t calc_on_every_history_tick = 0;
+};
+struct MetricsPlainInputsV1 {
+    const MetricsPlainDeclarationV1* declaration = nullptr;
+    std::uint32_t module_contract_bound = 0;
+    std::uint32_t historical_batch = 0;
+    std::uint32_t equal_resolved_timeframes = 0;
+    std::uint32_t timeframe_undetected = 0;
+    std::uint32_t begin_bar_magnifier = 0;
+    std::uint32_t intrabar_none = 0;
+    std::uint32_t pending_selected_window = 0;
+    std::uint32_t admitted_selected_window = 0;
+    std::uint32_t realtime_tail = 0;
+    std::uint32_t probe_suppress_tail_logic = 0;
+    std::uint32_t builtin_host_marks = 0;
+    std::uint32_t feed_tolerant_passthrough = 0;
+    std::uint32_t calculation_trigger = 0;
+    std::uint32_t final_admitted_view_bound = 0;
+};
+
 static_assert(sizeof(ReportC) == sizeof(pf_report_t),
               "legacy C and C++ report sizes must match");
 static_assert(offsetof(ReportEnvelopeV1, report)
@@ -750,6 +785,65 @@ protected:
     std::optional<metrics::EquityRatioResult> summary_equity_ratios_;
     double summary_broker_equity_prefix_[4]{};
 
+    // Output-only streaming-ratio state, like the summary fold above: no broker decision
+    // reads it and report policy must not change continuation hashes. The
+    // fold witnesses its ordered FINAL points. Copies inherit preferences,
+    // never another attempt's admission, provider, fold or receipt.
+    struct MetricsStreamingStateV1 {
+        metrics::MetricsStreamingConfigV1 configuration;
+        metrics::MetricsStreamingConfigV1 prepared_configuration;
+        metrics::MetricsStreamingConfigV1 run_configuration;
+        metrics::MetricsExtentPlanV1 pending_plan;
+        bool pending_plain = false, prepared = false;
+        std::uint64_t pending_failed_plain_inputs = 0;
+        bool active = false, plain = false, no_curve = false;
+        std::int64_t points = 0;
+        std::unique_ptr<metrics::StreamingEquityRatiosV1> fold;
+        metrics::MetricsExtentReceiptV1 receipt;
+        metrics::MetricsStreamingResultV1 result;
+        bool receipt_final = false;
+        MetricsStreamingStateV1() = default;
+        MetricsStreamingStateV1(const MetricsStreamingStateV1& other) {
+            configuration.streaming_sharpe = other.configuration.streaming_sharpe;
+            configuration.metrics_needed = other.configuration.metrics_needed;
+        }
+        MetricsStreamingStateV1& operator=(const MetricsStreamingStateV1& other) {
+            if (this != &other) *this = MetricsStreamingStateV1(other);
+            return *this;
+        }
+        MetricsStreamingStateV1(MetricsStreamingStateV1&&) noexcept = default;
+        MetricsStreamingStateV1& operator=(MetricsStreamingStateV1&&) noexcept = default;
+    };
+    mutable MetricsStreamingStateV1 metrics_streaming_;
+    class MetricsStreamingAttemptV1 {
+        BacktestEngine& engine_;
+    public:
+        explicit MetricsStreamingAttemptV1(BacktestEngine& engine) : engine_(engine) {}
+        ~MetricsStreamingAttemptV1() {
+            // A refused preflight also consumes the external attempt binding.
+            // Construction inspects no plan/feed and changes no failure order.
+            auto& s = engine_.metrics_streaming_;
+            s.pending_plain = s.prepared = false;
+            s.pending_plan = {};
+            s.pending_failed_plain_inputs = 0;
+        }
+        MetricsStreamingAttemptV1(const MetricsStreamingAttemptV1&) = delete;
+        MetricsStreamingAttemptV1& operator=(const MetricsStreamingAttemptV1&) = delete;
+    };
+    void begin_metrics_streaming_v1(bool admitted_shape);
+    void sync_metrics_streaming_held_v1() const;
+    void finish_metrics_streaming_v1(
+        metrics::MetricsRatioCurveV1, pf_equity_stats_t* = nullptr) const;
+    template<class Source>
+    void observe_metrics_curve_v1(const Source& curve, std::int64_t count,
+                                  pf_equity_stats_t* equity = nullptr) const {
+        finish_metrics_streaming_v1(
+            {const_cast<Source*>(&curve), count,
+             [](void* context, std::int64_t index) {
+                 return (*static_cast<const Source*>(context))[index];
+             }}, equity);
+    }
+
 public:
     // Separate equity-mode helper; set_report_mode_v1 does not call it. The envelope owner must
     // first establish replay/presentation eligibility and all OTHER sequence
@@ -762,6 +856,7 @@ public:
     ReportMode equity_report_mode() const { return active_equity_report_mode_; }
     std::int64_t equity_logical_point_count() const {
         return active_equity_report_mode_ == ReportMode::SUMMARY_ONLY
+                || metrics_streaming_.no_curve
             ? summary_equity_fold_.first_pass().point_count
             : static_cast<std::int64_t>(equity_curve_.size());
     }
@@ -785,7 +880,8 @@ protected:
     // full-array refold. No history is reread. The prefix excludes the held
     // point, including when a host just rewrote last_equity_point().
     bool refold_summary_equity_tail() {
-        if (active_equity_report_mode_ != ReportMode::SUMMARY_ONLY) return false;
+        if (active_equity_report_mode_ != ReportMode::SUMMARY_ONLY
+            && !metrics_streaming_.no_curve) return false;
         max_equity_ = summary_broker_equity_prefix_[0];
         min_equity_ = summary_broker_equity_prefix_[1];
         max_drawdown_ = summary_broker_equity_prefix_[2];
@@ -1568,7 +1664,11 @@ protected:
     // is overwritten by the magnifier sub-bar walk (engine_run.cpp), which would
     // make the curve differ between magnifier on/off.
     void record_equity_point(int64_t script_bar_ts) {
-        const bool summary = active_equity_report_mode_ == ReportMode::SUMMARY_ONLY;
+        // M05/M06 may have edited the preceding held slot since its append.
+        // Consume that edit BEFORE either storage path releases the point.
+        sync_metrics_streaming_held_v1();
+        const bool summary = active_equity_report_mode_ == ReportMode::SUMMARY_ONLY
+            || metrics_streaming_.no_curve;
         if (summary ? equity_curve_.empty() : prepare_equity_point())
             first_bar_open_ = current_bar_.open;
         pf_equity_point_t p;
@@ -1599,6 +1699,15 @@ protected:
         } else {
             store_equity_point(p);
         }
+        if (metrics_streaming_.fold) {
+            metrics_streaming_.fold->append(
+                p, metrics::equity_month_key(p.time_ms, chart_timezone_));
+            ++metrics_streaming_.points;
+            metrics_streaming_.receipt.stop_boundary.completed_marks = metrics_streaming_.points;
+            metrics_streaming_.receipt.stop_boundary.kind =
+                metrics::MetricsStopBoundaryKindV1::CompletedMark;
+        }
+        metrics_streaming_.receipt_final = false;
         if (position_side_ != PositionSide::FLAT) ++bars_in_market_;
     }
 
@@ -2045,12 +2154,12 @@ public:
     // Pine plumbing: one owning row value answers all of it, and a host
     // that owns its report needs the row, not twenty wrappers. Range-end
     // report rows are NOT here — report_trade_count() / get_report_trade()
-    // below span both spaces. Index against closed_trade_count(); each read
-    // owns its exact value, including a row below the published base.
+    // below span both spaces. Index against closed_trade_count(); reads below
+    // base refuse with engine_invariant only on an admitted retiring sink run.
     std::size_t closed_trade_count() const noexcept { return trades_.size(); }
     Trade closed_trade(std::size_t i) const { return trades_.read(i); }
     // Newest first, preserving global indices across resident and external
-    // rows. Start cursor at closed_trade_count(); false means cursor == 0.
+    // rows. Start at closed_trade_count(); crossing a retired base refuses.
     bool previous_closed_trade(std::size_t& cursor, Trade& value) const {
         return trades_.previous(cursor, value);
     }
@@ -2113,6 +2222,24 @@ public:
     // folds, and return no resident TradeC array: trade rows are rebuilt one
     // at a time from the closed ledger and the terminal lot mark.
     int set_report_mode_v1(ReportMode mode);
+    // Streaming-ratio report-only routing and diagnostics.
+    // New engines default to streaming Sharpe On. Explicit Off keeps the
+    // exact curve route when SharpeBar is needed; Returns always keeps it.
+    // Preferences apply at the next begin; an existing receipt stays bound
+    // to the configuration of the attempt it describes.
+    metrics::MetricsStreamingStatusV1 set_metrics_streaming_v1(
+        metrics::StreamingSharpeV1, metrics::MetricsNeedMaskV1);
+    metrics::MetricsStreamingStatusV1 metrics_extent_receipt_v1(
+        metrics::MetricsExtentReceiptV1*) const;
+    metrics::MetricsStreamingStatusV1 admit_metrics_plain_v1(
+        const MetricsPlainInputsV1&, const metrics::MetricsExtentPlanV1&,
+        metrics::MetricsExtentReceiptV1*);
+    // Recovery is a separate host proof, never implied by PLAIN. A prepared
+    // no-curve adapter MUST resolve a LegacyRerun receipt before publication;
+    // that speculative attempt exposes no owning report until resolution.
+    metrics::MetricsStreamingStatusV1 prepare_metrics_streaming_v1(
+        const metrics::MetricsStreamingConfigV1&,
+        const metrics::MetricsExtentPlanV1&);
     // Initialize metadata.struct_size/version before reading. A successful
     // read assembles through fill_report; without an execution observer or selected generation, FULL and STREAMED present on every read; the first STREAMED read after a completed run writes the sink.
     // Release the owned payload with free_report(&out->report).
@@ -2786,3 +2913,14 @@ inline constexpr std::size_t kReportSinkHeldEquityPoints = 1;
 
 } // inline namespace engine_script_run_v19
 } // namespace pineforge
+
+// first-stage proposed C entry points, declared here because pineforge.h and the
+// runtime-export inventory belong to the supervisor's subsequent ABI slice.
+// No existing export calls these stubs. mode: 0=OFF, 1=ON (default);
+// metrics_needed is the OR of kMetricsNeed*V1. The getter is an additive
+// diagnostic transport; it does not extend pf_report_t.
+extern "C" PF_API std::int32_t strategy_set_metrics_streaming_v1(
+    void* strategy, std::uint32_t streaming_sharpe,
+    std::uint64_t metrics_needed) noexcept;
+extern "C" PF_API std::int32_t strategy_metrics_extent_receipt_v1(
+    const void* strategy, pineforge::metrics::MetricsExtentReceiptV1* out) noexcept;

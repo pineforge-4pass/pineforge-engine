@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -11,11 +12,13 @@ namespace pineforge {
 
 struct Trade;
 namespace metrics { class TradeStatsAccumulator; }
+namespace detail { struct TradeLedgerStorageProbe; }
+
 // The engine-side additions stay in this existing epoch (DESIGN 6:1344-1347).
 inline namespace engine_script_run_v19 {
 
-// Exact global row space. base() is the publication/fold boundary, NOT a
-// storage boundary: an unsealed exit-time group can have arbitrary length.
+// Exact global row space. base() is the publication/fold boundary; an
+// unsealed exit-time group can have arbitrary length and cannot be retired.
 // A kResidentRows descriptor window and an equally sized fixed byte tail of
 // the string payload stay in memory. All four string payloads and all older
 // mutable/sealed descriptors use the existing run-owned positional scratch
@@ -26,7 +29,8 @@ inline namespace engine_script_run_v19 {
 //
 // Reads own their values. No reference or contiguous pointer into an
 // evictable page escapes. Iteration visits [base(),size()) as before, now
-// by value; read()/visit()/previous() also read the sealed history.
+// by value; read()/visit()/previous() also read the sealed history, except
+// when a sink run explicitly admits physical history retirement.
 class TradeLedger {
 public:
     using size_type = std::size_t;
@@ -47,9 +51,10 @@ public:
         kRecordBytes + 2 * sizeof(size_type) + kCacheStringBytes;
     static constexpr size_type kDefaultCacheRows = 65536;
     static constexpr size_type kMaxCacheRows = 1048576;
-    // A run with a report sink installed keeps the cache inside the sink's
-    // fixed heap window: 128 x 312 = 39,936 B, under one 64 KiB scratch window.
-    static constexpr size_type kSinkCacheRows = 128;
+    // A report-sink run has the same declared constant cap as the default:
+    // 65,536 x 312 = 20,447,232 entry bytes, plus sizeof(TradeLedger)+sizeof(State).
+    // Allocation remains lazy and grows by powers of two up to this cap.
+    static constexpr size_type kSinkCacheRows = kDefaultCacheRows;
     using Visitor = std::function<bool(size_type, const Trade&)>;
 
     class const_iterator {
@@ -101,7 +106,7 @@ public:
     // Actual allocation: fixed base plus allocated capacity*kLedgerEntryBytes.
     // Allocated on the first read, at min(cache_rows(), the next power of two
     // >= max(64,size())). Further growth invalidates entries; capacity stays
-    // bounded by cache_rows() and independent of the number of bars.
+    // bounded by cache_rows(), not the bars (a retiring ledger: retained rows).
     size_type cache_resident_bytes() const;
     // Occupied decoded entries only; separate from resident_size()'s legacy
     // descriptor/materialization accounting.
@@ -116,7 +121,9 @@ public:
     size_type resident_base() const;
     bool empty() const;
 
-    // read() spans the whole exact source; at()/[] retain the checked
+    // read() spans the retained source; a read below base() on an explicitly
+    // retiring sink run refuses with coded logic_error engine_invariant.
+    // at()/[] retain the checked
     // unsealed-window contract for existing settlement callers.
     // Hits allocate only the owning strings already required by read().
     // Direct-mapped eviction above cache_rows(), or oversized strings, retains
@@ -180,7 +187,8 @@ public:
     // that can still be relabelled. Write T and advance the exact row, money,
     // metric and phase seeds before advancing this publication boundary.
     // Those predicates may pin every row; physical eviction is independent.
-    // Historical bytes remain readable independently of publication.
+    // Historical bytes remain readable unless the engine admitted retirement
+    // from an explicit no-history generated-module capability.
     void seal(size_type global_end);
 
     // Derived ordered percentage fold. No history-sized allocation or hash
@@ -232,6 +240,13 @@ public:
     static constexpr size_type kFoldReplayRows = 16;
 
 private:
+    friend class BacktestEngine;
+    friend struct detail::TradeLedgerStorageProbe;
+    // Run-begin policy and non-public storage census; neither changes this
+    // installed object's layout or the logical trade/hash representation.
+    void set_history_retirement(bool);
+    void check_history_read(size_type) const;
+    std::array<std::uint64_t, 2> scratch_storage_bytes() const;
     struct State;
     std::unique_ptr<State> state_;
 };

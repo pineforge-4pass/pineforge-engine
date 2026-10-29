@@ -324,6 +324,24 @@ def job_script(ci, job, step_name=None):
     return '\n'.join(script).rstrip('\n') + '\n'
 
 
+def announce_compare_fixture_paths(*paths):
+    """Refuse protected names before opening fixture or command inputs."""
+    forbidden = tuple(Path.home() / name for name in (
+        '.config/zsh/keys', '.ssh', '.aws', '.codex', '.config/pineforge'))
+    announced = []
+    for path in paths:
+        candidate = Path(path).absolute()
+        for resolved in (False, True):
+            if resolved:
+                candidate = candidate.resolve()
+            if (any(part.endswith('.env') for part in candidate.parts)
+                    or any(candidate == root or root in candidate.parents
+                           for root in forbidden)):
+                raise ValueError(f'refusing compare fixture path by name: {candidate}')
+        announced.append(str(candidate))
+    print('compare fixture follows: ' + ', '.join(announced), flush=True)
+
+
 def in_job(workflow, job, before, after):
     """Replace the first `before` inside job `job` (anywhere when job is None)."""
     start = 0 if job is None else workflow.index(f'\n  {job}:')
@@ -3522,9 +3540,9 @@ class PreflightFailures(unittest.TestCase):
         inventory = re.findall(
             r'pins all (\d+) source-labelled names: (\d+) from the\n'
             r'`PINEFORGE_PR_SLOW_TESTS` loop and (\d+) direct CMake', text)
-        self.assertEqual(inventory, [('62', '43', '19')])
-        self.assertIn('The timing list contains 43 names, and 19 additional names', text)
-        self.assertIn('making 62 distinct pinned slow names.', text)
+        self.assertEqual(inventory, [('66', '43', '23')])
+        self.assertIn('The timing list contains 43 names, and 23 additional names', text)
+        self.assertIn('making 66 distinct pinned slow names.', text)
 
     def test_floor_table_documentation_anchors_point_to_definition(self):
         source = (ROOT / 'scripts/ci_verify.py').read_text().splitlines()
@@ -5512,6 +5530,7 @@ exit "$lookup_exit"
         Only gh API transport is replaced; classifier subprocesses and workflow
         scripts execute unchanged. A reader failure stops the remaining work.
         """
+        announce_compare_fixture_paths(ROOT / '.github/workflows/gke-pr.yml')
         ci = self.gke()
         readers = (
             job_script(ci, 'admit', 'Read the payload-bound compare file list'),
@@ -5523,6 +5542,7 @@ exit "$lookup_exit"
         driver = r'''
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 from unittest import mock
@@ -5536,11 +5556,12 @@ def transport(argv, **kwargs):
         return run(argv, **kwargs)
     url = argv[2]
     requests.append(url)
-    assert url.startswith(fixture["endpoint"] + "?per_page=100&page="), "compare binding mismatch"
-    page = int(url.rsplit("=", 1)[1])
+    assert (url == fixture["endpoint"]
+            or re.fullmatch(re.escape(fixture["endpoint"]) + r"\?per_page=100&page=[1-9]\d*",
+                            url)), "compare binding mismatch"
     if fixture["files_response"] is None:
         raise subprocess.CalledProcessError(1, argv, stderr="compare API unavailable")
-    text = (json.dumps({"files": fixture["rows"][(page - 1) * 100:page * 100]})
+    text = (json.dumps({"files": fixture["rows"] if len(requests) == 1 else None})
             if fixture["files_response"] == "fixture" else fixture["files_response"])
     return subprocess.CompletedProcess(argv, 0, text, "")
 
@@ -5562,6 +5583,9 @@ finally:
             for index, reader in enumerate(readers):
                 output = root / f'class-{index}'
                 env['GITHUB_OUTPUT'] = str(output)
+                announce_compare_fixture_paths(
+                    root / 'transport.json', root / 'reader.py', root / 'requests.json',
+                    root / 'paths', output, ROOT / 'scripts/ci_docs_only.py', sys.executable)
                 (root / 'reader.py').write_text(reader)
                 (root / 'transport.json').write_text(json.dumps({
                     'endpoint': endpoint,
@@ -5587,6 +5611,7 @@ finally:
                 env[('SECOND' if index else 'ADMIT') + '_DOCS_ONLY'] = values['docs_only']
                 env[('SECOND' if index else 'ADMIT') + '_GITHUB_ONLY'] = values['github_only']
             env['GITHUB_OUTPUT'] = str(root / 'veto-output')
+            announce_compare_fixture_paths(root / 'paths', root / 'veto-output', sys.executable)
             checked = subprocess.run([sys.executable, '-c', veto], env=env,
                                      capture_output=True, text=True)
             if checked.returncode:
@@ -5707,17 +5732,18 @@ finally:
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(result.stdout, '')
 
-    def test_github_only_diff_reads_every_page_and_both_rename_paths(self):
+    def test_github_only_diff_reads_complete_compare_and_both_rename_paths(self):
         original = [{'filename': f'.github/workflows/check-{index}.yml', 'status': 'modified'}
-                    for index in range(101)]
+                    for index in range(205)]
+        endpoint = 'repos/pfrel/pineforge-engine/compare/' + 'b' * 40 + '...' + 'a' * 40
         baseline, requests = self.github_only_aggregate(original)
         self.assertEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
-        self.assertTrue(any(url.endswith('page=2') for url in requests))
+        self.assertEqual(requests, [endpoint, endpoint])
         changed = original[:-1] + [dict(original[-1], filename='scripts/ci_preflight.py')]
-        self.assertNotEqual(changed, original, 'the mutation must change the second API page')
+        self.assertNotEqual(changed, original, 'the mutation must change the last compare row')
         result, requests = self.github_only_aggregate(changed)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue(any(url.endswith('page=2') for url in requests))
+        self.assertEqual(requests, [endpoint, endpoint])
         rename = [{'filename': '.github/workflows/new.yml', 'status': 'renamed',
                    'previous_filename': '.github/workflows/old.yml'}]
         baseline, _ = self.github_only_aggregate(rename)
@@ -5758,7 +5784,7 @@ finally:
                 ('admit', 'run: python3 scripts/ci_docs_only.py --paths "$PATH_FILE" --github-output "$GITHUB_OUTPUT"',
                  'run: echo github_only=true >> "$GITHUB_OUTPUT"',
                  'gke-pr.yml admit must classify the complete path file with the base rule'),
-                ('result', 'if len(paths) >= 3000:', 'if False:',
+                ('result', 'if len(rows) >= 300:', 'if False:',
                  'gke-pr.yml result must read the immutable compare list independently'),
                 ('result', 'BASE_SHA: ${{ needs.admit.outputs.base_sha }}',
                  'BASE_SHA: ${{ github.event.pull_request.base.ref }}',
@@ -8464,6 +8490,269 @@ class PreflightSliceLoader(unittest.TestLoader):
         return self.suiteClass(cases[test_id] for test_id in selected)
 
 
+class GkeCompareReaderTests(unittest.TestCase):
+    """Execute both real compare steps; only the gh executable is a fixture."""
+
+    READERS = {
+        'admit': ('Read the payload-bound compare file list',
+                  'compare response has no readable files list',
+                  'PR changes 300+ files: admission by compare is truncated',
+                  'compare response is missing a rename origin'),
+        'result': ('Re-read the payload-bound compare list',
+                   'second compare response is unreadable',
+                   'second compare response is truncated at 300 files',
+                   'second compare response is missing a rename origin'),
+    }
+    ENDPOINT = 'repos/pfrel/pineforge-engine/compare/' + 'b' * 40 + '...' + 'a' * 40
+
+    def setUp(self):
+        workflow = ROOT / '.github/workflows/gke-pr.yml'
+        announce_compare_fixture_paths(workflow)
+        self.workflow = workflow.read_text(encoding='utf-8')
+
+    def reader(self, job):
+        return job_script(self.workflow, job, self.READERS[job][0])
+
+    @staticmethod
+    def rows(count):
+        return [{'filename': f'.github/workflows/check-{index}.yml', 'status': 'modified'}
+                for index in range(count)]
+
+    def run_reader(self, job, response, *, source=None, crash_transport=False):
+        # No inherited PATH: neither this reader nor its real classifier can
+        # accidentally find the machine's gh executable or call the network.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script, gh = root / 'reader.py', root / 'gh'
+            fixture, calls = root / 'fixture.json', root / 'calls.jsonl'
+            paths, output = root / 'paths', root / 'github-output'
+            announce_compare_fixture_paths(script, gh, fixture, calls, paths, output,
+                                           root / 'python3', sys.executable,
+                                           ROOT / 'scripts/ci_docs_only.py')
+            script.write_text(self.reader(job) if source is None else source, encoding='utf-8')
+            fixture.write_text(json.dumps({'endpoint': self.ENDPOINT, 'response': response,
+                                           'crash_transport': crash_transport}), encoding='utf-8')
+            gh.write_text(f'#!{sys.executable} -I\n' + r'''
+import json
+from pathlib import Path
+import re
+import sys
+
+root = Path(__file__).resolve().parent
+fixture = json.loads((root / "fixture.json").read_text(encoding="utf-8"))
+calls = root / "calls.jsonl"
+requests = calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+if len(sys.argv) != 3 or sys.argv[1] != "api":
+    raise SystemExit("unexpected fake gh arguments")
+endpoint = sys.argv[2]
+with calls.open("a", encoding="utf-8") as log:
+    log.write(json.dumps(endpoint) + "\n")
+if (endpoint != fixture["endpoint"]
+        and not re.fullmatch(re.escape(fixture["endpoint"]) + r"\?per_page=100&page=[1-9]\d*",
+                             endpoint)):
+    raise SystemExit("compare fixture payload binding mismatch")
+if fixture["crash_transport"]:
+    raise SystemExit(23)  # Deliberate crash control; the reader must fail.
+print(json.dumps(fixture["response"] if not requests else {"files": None}))
+''', encoding='utf-8')
+            gh.chmod(0o755)
+            (root / 'python3').symlink_to(sys.executable)
+            env = {'PATH': str(root), 'TMPDIR': str(root), 'PYTHONDONTWRITEBYTECODE': '1',
+                   'REPO': 'pfrel/pineforge-engine', 'BASE_SHA': 'b' * 40, 'HEAD_SHA': 'a' * 40,
+                   'PATH_FILE': str(paths), 'GITHUB_OUTPUT': str(output)}
+            result = subprocess.run([sys.executable, '-I', str(script)], cwd=ROOT, env=env,
+                                    capture_output=True, text=True, timeout=30)
+            requests = ([json.loads(line) for line in calls.read_text().splitlines()]
+                        if calls.exists() else [])
+            return (result, paths.read_bytes() if paths.exists() else None, requests,
+                    output.read_text() if output.exists() else '')
+
+    def assert_read(self, job, rows, *, source=None):
+        result, data, requests, output = self.run_reader(job, {'files': rows}, source=source)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        expected = []
+        for row in rows:
+            expected.append(row['filename'])
+            if 'previous_filename' in row:
+                expected.append(row['previous_filename'])
+        self.assertEqual(data, b'\0'.join(path.encode('utf-8') for path in expected) + b'\0')
+        self.assertEqual(requests, [self.ENDPOINT])
+        if job == 'result':
+            values = dict(line.split('=', 1) for line in output.splitlines())
+            self.assertEqual(values['github_only'], 'true')
+            self.assertEqual(values['docs_only'], 'false')
+
+    def assert_refused(self, job, response, message, *, source=None):
+        result, data, requests, output = self.run_reader(job, response, source=source)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(message, result.stderr)
+        self.assertIsNone(data, 'a failed reader must not publish a path file')
+        self.assertEqual(output, '', 'a failed reader must not publish classification')
+        self.assertEqual(requests, [self.ENDPOINT])
+
+    def test_205_files_are_read_once(self):
+        for job in self.READERS:
+            with self.subTest(job=job):
+                self.assert_read(job, self.rows(205))
+
+    def test_299_files_are_read_once(self):
+        for job in self.READERS:
+            with self.subTest(job=job):
+                self.assert_read(job, self.rows(299))
+
+    def test_50_file_control_is_read_once(self):
+        for job in self.READERS:
+            with self.subTest(job=job):
+                self.assert_read(job, self.rows(50))
+
+    def test_exactly_300_files_fail_closed(self):
+        for job, (_, _, message, _) in self.READERS.items():
+            with self.subTest(job=job):
+                self.assert_refused(job, {'files': self.rows(300)}, message)
+
+    def test_missing_null_and_non_list_files_fail_closed(self):
+        for job, (_, message, _, _) in self.READERS.items():
+            for response in ({}, {'files': None}, {'files': {}}, {'files': 'unreadable'}):
+                with self.subTest(job=job, response=response):
+                    self.assert_refused(job, response, message)
+
+    def test_rename_without_origin_fails_closed(self):
+        response = {'files': [{'filename': '.github/workflows/new.yml', 'status': 'renamed'}]}
+        for job, (_, _, _, message) in self.READERS.items():
+            with self.subTest(job=job):
+                self.assert_refused(job, response, message)
+
+    def test_299_renames_count_files_and_preserve_both_paths(self):
+        rows = [dict(row, status='renamed',
+                     previous_filename=f'.github/workflows/old-{index}.yml')
+                for index, row in enumerate(self.rows(299))]
+        for job in self.READERS:
+            with self.subTest(job=job):
+                self.assert_read(job, rows)
+
+    def test_reader_validation_controls(self):
+        for job in self.READERS:
+            prefix = 'compare response' if job == 'admit' else 'second compare response'
+            filename_message = ('compare response has an unreadable filename' if job == 'admit'
+                                else 'second compare filename is unreadable')
+            previous_message = ('compare response has an unreadable previous filename'
+                                if job == 'admit' else 'second previous filename is unreadable')
+            cases = [
+                ([], f'{prefix} has no changed paths'),
+                ([None], f'{prefix} has an unreadable file row'),
+            ]
+            for filename in (None, '', 'a/../b', 'a//b', 'a/./b', 'a\0b'):
+                cases.append(([{'filename': filename}], filename_message))
+                cases.append(([{'filename': '.github/workflows/new.yml', 'status': 'renamed',
+                                'previous_filename': filename}], previous_message))
+            for rows, message in cases:
+                with self.subTest(job=job, rows=rows):
+                    self.assert_refused(job, {'files': rows}, message)
+
+    def test_reader_and_transport_crashes_propagate(self):
+        for job in self.READERS:
+            with self.subTest(job=job, crash='reader'):
+                source = 'raise RuntimeError("deliberate compare reader crash")\n' + self.reader(job)
+                result, data, requests, output = self.run_reader(
+                    job, {'files': self.rows(50)}, source=source)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('deliberate compare reader crash', result.stderr)
+                self.assertIsNone(data)
+                self.assertEqual(requests, [])
+                self.assertEqual(output, '')
+            with self.subTest(job=job, crash='transport'):
+                result, data, requests, output = self.run_reader(
+                    job, {'files': self.rows(50)}, crash_transport=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('exit status 23', result.stderr)
+                self.assertIsNone(data)
+                self.assertEqual(requests, [self.ENDPOINT])
+                self.assertEqual(output, '')
+
+    def paged_reader(self, job, *, keep_cap=False):
+        """Restore the old loop around the real reader's request and validation."""
+        source = self.reader(job)
+        if 'while True:\n' in source:
+            return source  # The regression row also exercises the old main text.
+        start = source.index('paths = []\n')
+        body_start = start + len('paths = []\n')
+        stop = source.index('if not paths:\n', body_start)
+        body = source[body_start:stop]
+        if not keep_cap:
+            body, count = re.subn(
+                r'(?m)^if len\(rows\) >= 300:\n    raise SystemExit\([^\n]+\)\n', '', body)
+            self.assertEqual(count, 1)
+        endpoint = ('endpoint = f"repos/{repo}/compare/{base}...{head}?per_page=100&page={page}"'
+                    if job == 'admit' else
+                    'endpoint = (f"repos/{os.environ[\'REPO\']}/compare/"\n'
+                    '            f"{os.environ[\'BASE_SHA\']}...{os.environ[\'HEAD_SHA\']}"\n'
+                    '            f"?per_page=100&page={page}")')
+        body, count = re.subn(r'(?ms)^endpoint = .*?\n(?=(?:result|response) = )',
+                              lambda match: endpoint + '\n', body, count=1)
+        self.assertEqual(count, 1)
+        message = ('compare response is truncated at 3000 files' if job == 'admit'
+                   else 'second compare response is truncated')
+        body += (f'if len(paths) >= 3000:\n    raise SystemExit("{message}")\n'
+                 'if len(rows) < 100:\n    break\npage += 1\n')
+        return (source[:start] + 'page = 1\npaths = []\nwhile True:\n'
+                + ''.join('    ' + line + '\n' for line in body.splitlines()) + source[stop:])
+
+    def workflow_with_reader(self, job, source):
+        before = '\n'.join('          ' + line if line else ''
+                           for line in self.reader(job).splitlines())
+        after = '\n'.join('          ' + line if line else '' for line in source.splitlines())
+        return in_step(self.workflow, job, self.READERS[job][0], before, after)
+
+    def test_restored_paging_loop_makes_205_file_success_assertion_red(self):
+        for job, (_, message, _, _) in self.READERS.items():
+            with self.subTest(job=job):
+                source = self.paged_reader(job)
+                result, data, requests, output = self.run_reader(
+                    job, {'files': self.rows(205)}, source=source)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertEqual(requests, [self.ENDPOINT + f'?per_page=100&page={page}'
+                                            for page in (1, 2)])
+                self.assertIsNone(data)
+                self.assertEqual(output, '')
+
+    def test_exclusive_300_guard_makes_cap_refusal_assertion_red(self):
+        for job in self.READERS:
+            with self.subTest(job=job):
+                source = self.reader(job)
+                mutated = source.replace('if len(rows) >= 300:', 'if len(rows) > 300:', 1)
+                self.assertNotEqual(mutated, source)
+                # Demonstrate the wrong successful publication, not just a
+                # missing error substring or a setup failure.
+                self.assert_read(job, self.rows(300), source=mutated)
+
+    def test_preflight_refuses_old_paging_loop(self):
+        for job in self.READERS:
+            for keep_cap in (False, True):
+                with self.subTest(job=job, keep_cap=keep_cap):
+                    changed = self.workflow_with_reader(job, self.paged_reader(job, keep_cap=keep_cap))
+                    self.assertIn(
+                        f'gke-pr.yml {job} must read the immutable compare list independently',
+                        gke_admit_workflow_findings(changed))
+
+    def test_preflight_pins_single_request_cap_and_messages(self):
+        self.assertEqual(gke_admit_workflow_findings(self.workflow), [])
+        for job, (_, unreadable, truncated, _) in self.READERS.items():
+            source = self.reader(job)
+            for before, after in (
+                    ('if len(rows) >= 300:', 'if len(rows) > 300:'),
+                    ('rows = response.get("files")', 'rows = response.get("files", [])'),
+                    (unreadable, 'unreadable compare'),
+                    (truncated, 'truncated compare'),
+                    ('["gh", "api", endpoint]', '["gh", "api", "--paginate", endpoint]')):
+                with self.subTest(job=job, mutation=after):
+                    mutated = source.replace(before, after, 1)
+                    self.assertNotEqual(mutated, source)
+                    self.assertIn(
+                        f'gke-pr.yml {job} must read the immutable compare list independently',
+                        gke_admit_workflow_findings(self.workflow_with_reader(job, mutated)))
+
+
 class GkeAdmissionRuleTests(unittest.TestCase):
     """Red-first controls for the hosted admission and its fetched data rules."""
 
@@ -8667,6 +8956,85 @@ class GkeAdmissionRuleTests(unittest.TestCase):
             with mock.patch.object(ci_preflight, 'ROOT', Path(second)):
                 contradictory = admit_rule_findings(directory, run_actionlint=False)
             self.assertEqual(contradictory, normal)
+
+    def test_admission_accepts_the_release_matrix_runner_under_its_fetched_path(self) -> None:
+        # Admission names a fetched file by its repository path, so the one
+        # `runs-on: ${{ matrix.runner }}` that release.yml carries must be
+        # excused under `.github/workflows/release.yml`, not only as a bare name.
+        release = (ROOT / '.github/workflows/release.yml').read_text()
+        self.assertIn('runs-on: ${{ matrix.runner }}', release)
+        refusal = 'every runs-on must be a literal value'
+        with tempfile.TemporaryDirectory() as fetched:
+            directory = Path(fetched)
+            for relative in ('.github/workflows/gke-pr.yml', '.github/workflows/release.yml',
+                             '.github/actionlint.yaml',
+                             '.github/actions/setup-live-curl/action.yml'):
+                target = directory / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / relative, target)
+            self.assertEqual(admit_rule_findings(directory, run_actionlint=False), [])
+            # The excuse is for release.yml alone: the same line in another
+            # workflow is still refused, under the same fetched-path naming.
+            other = directory / '.github/workflows/other.yml'
+            other.write_text('name: other\non: workflow_dispatch\njobs:\n  job:\n'
+                             '    runs-on: ${{ matrix.runner }}\n    steps: []\n')
+            findings = admit_rule_findings(directory, run_actionlint=False)
+            self.assertTrue(any('other.yml' in finding and refusal in finding
+                                for finding in findings), findings)
+
+    def copy_repository_admission_inputs(self, directory: Path, *,
+                                        without_admission: bool = False) -> None:
+        ignore = shutil.ignore_patterns('gke-pr.yml') if without_admission else None
+        shutil.copytree(ROOT / '.github/workflows', directory / '.github/workflows',
+                        symlinks=True, ignore=ignore)
+        shutil.copytree(ROOT / '.github/actions', directory / '.github/actions',
+                        symlinks=True)
+        shutil.copyfile(ROOT / '.github/actionlint.yaml', directory / '.github/actionlint.yaml',
+                        follow_symlinks=False)
+
+    def test_real_repository_admission_inputs_are_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as fetched:
+            directory = Path(fetched)
+            self.copy_repository_admission_inputs(directory)
+            # The hosted admit job runs actionlint; these unit rows check the text rules.
+            self.assertEqual(admit_rule_findings(directory, run_actionlint=False), [])
+
+    def test_reverting_release_runner_exemption_rejects_real_repository_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as fetched:
+            directory = Path(fetched)
+            self.copy_repository_admission_inputs(directory)
+            release_path = '.github/workflows/release.yml'
+            release = (directory / release_path).read_text(encoding='utf-8')
+            runner = '    runs-on: ${{ matrix.runner }}'
+            self.assertIn(runner, _jobs(release)['prebuilt'])
+            lines = release.splitlines()
+            self.assertEqual(lines.count(runner), 1)
+            number = lines.index(runner) + 1
+
+            source = inspect.getsource(ci_preflight._admit_flow_findings)
+            guard = "Path(name).name == 'release.yml' and value == '${{ matrix.runner }}'"
+            self.assertEqual(source.count(guard), 1)
+            mutant = source.replace(
+                guard, "name == 'release.yml' and value == '${{ matrix.runner }}'", 1)
+            namespace = dict(admit_rule_findings.__globals__)
+            exec(compile(mutant, '<release-runner-exemption-reverted>', 'exec'), namespace)
+            # Rebind both real callers so the copied rule handles the fetched paths.
+            for checker in (admit_yaml_findings, admit_rule_findings):
+                exec(compile(inspect.getsource(checker),
+                             '<admission-with-reverted-release-exemption>', 'exec'), namespace)
+            findings = namespace['admit_rule_findings'](directory, run_actionlint=False)
+            self.assertEqual(findings, [
+                f'{release_path}:{number}: every runs-on must be a literal value'])
+            with self.assertRaisesRegex(AssertionError, 'every runs-on must be a literal value'):
+                self.assertEqual(findings, [])
+
+    def test_real_repository_inputs_without_admission_workflow_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as fetched:
+            directory = Path(fetched)
+            self.copy_repository_admission_inputs(directory, without_admission=True)
+            self.assertFalse((directory / '.github/workflows/gke-pr.yml').exists())
+            self.assertEqual(admit_rule_findings(directory, run_actionlint=False), [
+                'gke-pr.yml: admission workflow is missing'])
 
 
 if __name__ == '__main__':

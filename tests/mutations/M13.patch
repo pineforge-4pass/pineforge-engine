@@ -1,0 +1,14 @@
+diff --git a/src/native_order_book.hpp b/src/native_order_book.hpp
+--- a/src/native_order_book.hpp
++++ b/src/native_order_book.hpp
+@@ -601,9 +601,7 @@
+     }
+     void replacing(std::size_t at, uint64_t priority) noexcept {
+         assert(!resident[at].dormant);
+-        std::rotate(resident.begin() + static_cast<std::ptrdiff_t>(at),
+-                    resident.begin() + static_cast<std::ptrdiff_t>(at + 1), resident.end());
+-        resident.back() = active_meta(priority);
++        (void)at; (void)priority;
+     }
+     bool scan_spilled_closes() const noexcept {
+         return spilled_book_closes != 0;

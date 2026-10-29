@@ -1,0 +1,11 @@
+diff --git a/src/native_order_book.hpp b/src/native_order_book.hpp
+--- a/src/native_order_book.hpp
++++ b/src/native_order_book.hpp
+@@ -243,7 +243,6 @@
+         assert_aligned(core);
+         if (poison || !level_index || active_spilled != 0
+             || resident.size() != core.live_.size()) return false;
+-        if (failure) return false;
+         return class_guards_ok(core, context);
+     }
+     bool class_guards_ok(const WorkingRequestCore& core,

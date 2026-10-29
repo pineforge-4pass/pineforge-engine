@@ -1,0 +1,12 @@
+diff --git a/src/native_order_book.hpp b/src/native_order_book.hpp
+--- a/src/native_order_book.hpp
++++ b/src/native_order_book.hpp
+@@ -597,7 +597,7 @@
+     }
+     void erasing(std::size_t at) noexcept {
+         assert(!resident[at].dormant);
+-        resident.erase(resident.begin() + static_cast<std::ptrdiff_t>(at));
++        (void)at;
+     }
+     void replacing(std::size_t at, uint64_t priority) noexcept {
+         assert(!resident[at].dormant);

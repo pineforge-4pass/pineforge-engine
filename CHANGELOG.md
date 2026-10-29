@@ -5,7 +5,7 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
-## 1.8.0 — 2026-10-27
+## Unreleased
 
 **[1.8.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.8.0)**,
 paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.8.0).
@@ -70,6 +70,26 @@ unchanged except for two additive diagnostics keys, described below.
 - The release harness file `docker/run_json.py` changed (below). The hub image
   for this pair carries the 1.8.0 copy.
 
+### Live ledger resource control
+
+- Ledger writes now reserve payload and SQLite overhead before growth and
+  refuse a whole transaction with a typed storage-budget failure. Service and
+  ordinary runs keep their unlimited default in this release; requiring a
+  service budget remains a pending policy decision. The `--ledger-unbounded`
+  opt-out is available for that policy. Offline redelivery accepts the same
+  `--max-ledger-bytes` budget.
+- Delivery status uses transactional counters and oldest-pending indexes,
+  keeping status work independent of action and attempt history. Existing
+  ledgers acquire verified summaries in an automatic, one-way migration;
+  earlier runners cannot open the migrated database. The summaries add one
+  row and up to three partial-index entries per action, plus per-target rows
+  and indexes.
+- The ledger open derives the table layouts it accepts from one list of the
+  ledger's tables: every layout a runner has written, each also without
+  `report_integrity`; any other table count is refused as before. A ledger
+  without integrity digests, including one that already has the delivery
+  summaries, opens and needs one verified `run` replay before export.
+
 ### Run profile in the report diagnostics
 
 - **Two additive success keys.** Every executed success report of
@@ -112,6 +132,28 @@ unchanged except for two additive diagnostics keys, described below.
   with unique ids. The gap to 1.6.3 is **not** closed. The engine's own
   per-record sink parse and the dense-script close path are separate work, not in
   this release.
+
+### Native live report stream
+
+- **Delta JSONL is opt-in; the default stream is unchanged.**
+  `pineforge-live run --report-jsonl` continues to emit one cumulative
+  `pineforge-native-report/v1` document per committed input, with the same
+  bytes and field order. `--report-jsonl=full` is an explicit alias with
+  identical output. The new `--report-jsonl=delta` emits the ledger's
+  `pineforge-native-report-delta/v1` patch with an additional top-level integer
+  `input_cursor` as the first key of the line (the stored ledger row has no
+  such key), beginning at the same commit point as the cumulative stream.
+- **The runner no longer rescans the closed-trade prefix per input; delta
+  output is linear in the appended rows.** The native `fill_report` call still
+  rebuilds the engine's trade and equity/metrics report on each input; removing
+  that remaining term needs an engine-side carried report accumulator and a
+  separate batch-byte equivalence proof. The runner carries a closed-trade
+  high-water mark in every mode. Delta output costs O(new rows) per input,
+  avoiding quadratic output as history grows. Runs without a report stream
+  and runs with `--report-jsonl=delta` retain only scalar state and array
+  counts. Plain `--report-jsonl` and `--report-jsonl=full` retain the cumulative
+  document and keep the old O(cumulative document) output cost per input,
+  which can be quadratic over a growing run.
 
 ### Scratch placement (behaviour of 1.7.0 and later, restated)
 
@@ -187,6 +229,21 @@ unchanged except for two additive diagnostics keys, described below.
   UTF-8 text without NUL; the entrypoint adds no other limit, so a caller that
   needs an id must refuse an empty one itself. Unset, the run id keeps its
   empty default.
+
+### Isolated report channel
+
+- The JSON host reserves the caller's stdout before parsing or loading a
+  strategy, redirects native fd 1 to stderr, and writes the report and typed
+  failures through the saved descriptor. FD sink records stay on their
+  caller-supplied stream, and descriptor collisions with the report channel,
+  phase channel, or arena slot use the existing `run_request_invalid` failure.
+  Isolation holds only when the harness keeps stdout and stderr separate;
+  when they name the same file, the host emits one diagnostic and still runs.
+  The library can write the saved descriptor because it runs in this process;
+  the descriptor is non-inheritable, so exec'd children do not get it. This
+  isolates ordinary native fd 1 output without creating a security boundary.
+  Host report text is now encoded as UTF-8 rather than using Python stdout's
+  encoding; reports are ASCII, so no difference is expected.
 
 ### CI and release process
 
@@ -2378,7 +2435,9 @@ release either.
   the committed inputs, stored state hashes, actions and report rows, so a
   ledger written before 1.2.0 needs one verified `run` replay to fill in its
   reports and digests before it exports. `run --report-jsonl` mirrors each new
-  report to stdout; a closed pipe exits 1, not SIGPIPE, and loses no input.
+  cumulative report to stdout as before; `run --report-jsonl=full` is an
+  explicit alias, and `run --report-jsonl=delta` opts into delta output.
+  A closed pipe exits 1, not SIGPIPE, and loses no input.
   The runner keeps tracing off and refuses to export a nonempty trace. A
   confirmed-bar run's report is checked field by field against a batch
   backtest of the same bars; the one tested difference is that a batch seals a

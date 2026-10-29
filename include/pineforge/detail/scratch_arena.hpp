@@ -152,6 +152,9 @@ private:
     ScratchArena(int fd, std::uint64_t bytes);
     void open_region(Region& region, std::optional<std::uint64_t> max_bytes = std::nullopt);
     void release_region(Region& region) noexcept;
+    // Drop complete logical head chunks; surviving offsets are rebased by
+    // bytes. No allocation and no change to the shared backing's file size.
+    void release_prefix(Region& region, std::uint64_t bytes);
     void truncate(Region& region, std::uint64_t bytes);
     void ensure_size(Region& region, std::uint64_t bytes,
                      std::uint64_t needed_bytes_lower_bound = 0);

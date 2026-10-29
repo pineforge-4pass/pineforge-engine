@@ -203,6 +203,21 @@ public:
     // calls this store issued, backing_pages is the backing extent right now.
     ScratchStoreStats stats() const noexcept;
 
+    // Consume count fresh handle numbers without creating records: the same
+    // logical allocation state as count successful new-key puts followed by
+    // erasing those records. Live handles/bytes, count and ordered_digest stay
+    // unchanged; state_digest includes the advanced allocation counter.
+    // Joins an active transaction, whose rollback undoes the advance. When
+    // idle, a nonzero call begins and commits its own buffered transaction,
+    // making success reopenable. Zero is a no-op, but still requires a usable,
+    // non-rollback-only store and must not be called from a callback.
+    // Handle exhaustion returns programming_error at the same point as puts:
+    // the available prefix is consumed and the transaction is rollback-only.
+    // Failed implicit mutation/commit likewise leaves a transaction requiring
+    // rollback, under the existing put/commit status and I/O failure rules.
+    // Fixed workspace and work independent of count; no record/backing walk.
+    ScratchStatus advance_handles(std::uint64_t count) noexcept;
+
 private:
     struct State;
     State* state_ = nullptr; // one fixed workspace; out-of-line implementation

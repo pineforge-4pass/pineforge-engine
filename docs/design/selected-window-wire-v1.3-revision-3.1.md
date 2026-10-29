@@ -21,7 +21,7 @@ ownership rule unchanged.
 The proportional rule applies to **cagr**, and reaches calmar through it;
 **sharpe_bar and sortino_bar** keep one formula on every span. The complete
 annualized-field inventory of `compute_equity_stats`
-(`src/engine_metrics.cpp:442`), with exact public paths and reason keys, is
+(`src/engine_metrics.cpp:814`), with exact public paths and reason keys, is
 below. No field other than `cagr` and `calmar` receives an annualization
 reason, and `calmar` carries the same reason as the `cagr` it was computed from.
 
@@ -149,7 +149,7 @@ cases or to any other field; in particular `sharpe_bar` and `sortino_bar` have
 none on any span. If `cagr` took its compounded form,
 `diagnostics.annualization` is absent, whatever `calmar` is.
 
-`_annualization_diagnostics` (`docker/run_json.py:3982`) derives the span from
+`_annualization_diagnostics` (`docker/run_json.py:4090`) derives the span from
 the same first and last curve times. Under one day a finite `cagr` on a positive
 span is enough, since the kernel makes `cagr` null only in the existing
 domains. From one day on the writer repeats the kernel's arithmetic, `(pow(E/E0,
@@ -176,7 +176,7 @@ reason stays there; metrics, summary, trade and curve keys remain unchanged.
 The digest still has exactly 135 scalar leaves.
 The public writer's canonical-result validation and selected-window placement
 checks retain their existing scopes; `report_shape` is unchanged. The native
-runner's `native_report_json` (`runner/report.hpp:104`) exposes the separate
+runner's `native_report_json` (`runner/report.hpp:105`) exposes the separate
 native report format and has no existing diagnostics object designated
 outside this digest. It keeps undefined metrics as the string "NaN" in its
 own format, outside revision 3. The runner and C ABI carry no named reason;
