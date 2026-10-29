@@ -22,6 +22,9 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import ci_preflight  # noqa: E402
 import ci_verifier_classes as verifier_classes  # noqa: E402
 import run_unittest_shards as shards_runner  # noqa: E402
+# This module is an explicit preflight entry point. Import the regression
+# TestCase so unittest also runs it here, without a second CI registration.
+from test_check_replay_off_golden import ReplayOffGoldenTests  # noqa: E402,F401
 
 SCRIPT = ROOT / 'scripts' / 'run_unittest_shards.py'
 

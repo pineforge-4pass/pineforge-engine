@@ -1,17 +1,17 @@
 {
-  "source": "pineforge-engine main 95f4fd1f408bf0ded941ecc4144b278a026a677f, default (no replay switch), unjailed, wall clock fixed at 1.0, run id replay-off-golden; the same digests were measured on main 165449786bbf68e8b474f17abe924c938d351cd6; default_json digests are taken after the build identity (the two engine strings inside the fingerprint token and plain provenance, and the token and digest values derived from them) is masked as scripts/check_replay_off_golden.py describes",
+  "source": "pineforge-engine main 95f4fd1f408bf0ded941ecc4144b278a026a677f, default (no replay switch), unjailed, wall clock fixed at 1.0, run id replay-off-golden, first recorded when VERSION was 1.7.0; re-recorded on tag v1.8.0 (9836309e3) with the build-identity mask extended to the engine major, minor and patch numbers and the sink header engine version, so the digests no longer depend on VERSION: the six byte counts grew by exactly the bytes the extended mask adds (102 in each default JSON, 11 in each sink stream). default_json digests are taken after the build identity (the engine version string, commit, major, minor and patch inside the fingerprint token and plain provenance, the sink header engine version, and the token and digest values derived from them) is masked as scripts/check_replay_off_golden.py describes",
   "scenarios": {
     "fifo": {
-      "default_json": {"sha256": "bce6dd88125b289d6c5a6210336ff7a82b1b56b731eb8a67d3f12d18940219e9", "bytes": 9186},
-      "primary_sink": {"sha256": "dfa2679110fbbf9f24f43c902e2e3a2fc33a1d804a202b8554632206d790686e", "bytes": 1554}
+      "default_json": {"sha256": "d8c77d7c35e7e962301d3da4f26418263305356efe179bd77ed1ce92704087a5", "bytes": 9288},
+      "primary_sink": {"sha256": "0d9248209e98566e11cdfa2a01d8546f6683ca0814aa0d10a417b256f46fd6f3", "bytes": 1565}
     },
     "any": {
-      "default_json": {"sha256": "dfb18cecb8c2d6d4d4fce14796e4ed822f99533b8c218a9b222010dcba6dc423", "bytes": 8837},
-      "primary_sink": {"sha256": "64852f4bb3b132efdd085a9a9c092de7b89224d7bf69bbefe4b779a851e81b14", "bytes": 1440}
+      "default_json": {"sha256": "583147793c4ce4df4d3ba908f0651612145d5dbad0d9152020ca2d31f03ffcc0", "bytes": 8939},
+      "primary_sink": {"sha256": "0037d808ad1b93612089a4be892b71f2fd636569803c33c06e033b34ca125c9a", "bytes": 1451}
     },
     "ordinary": {
-      "default_json": {"sha256": "8d86996e004714f1ae9cc079be28dc9a2f2657c80b8b47e7c08d9a51b5ed7b35", "bytes": 8848},
-      "primary_sink": {"sha256": "7c7f414f108b930471026d66174c219304454ffb19232f5d77ea962a7c1455ce", "bytes": 1453}
+      "default_json": {"sha256": "42c766c21c33f6a0bf3427a368fc55bfe213bd7a96fbe47f60fcf439010ef50a", "bytes": 8950},
+      "primary_sink": {"sha256": "848828b8b336b006a5b7f0e6064bea7421e525a2fb795f52114e3894a3969696", "bytes": 1464}
     }
   }
 }
