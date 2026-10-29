@@ -216,6 +216,13 @@ def _assert_spool_crosses_windows(column, expected):
     assert position > 3 * window and crosses
 
 
+def _drain_report_artifact(artifact):
+    chunks = []
+    while chunk := artifact.read(65536):
+        chunks.append(chunk.encode("ascii") if isinstance(chunk, str) else chunk)
+    return b"".join(chunks)
+
+
 @pytest.mark.parametrize("trade_count,equity_count", (
     (0, 0), (0, 4097), (1, 1), (4097, 4097),
 ), ids=("empty", "no-trades-with-equity", "one", "many"))
@@ -223,22 +230,16 @@ def _assert_spool_crosses_windows(column, expected):
 def test_fused_report_columns_iterate_serialized_rows(
         tmp_path, monkeypatch, trade_count, equity_count, bulk):
     monkeypatch.setattr(run_json, "_BULK_E_ENABLED", bulk)
-    captured, before = [], {}
+    before = {}
 
     def before_prepare(document):
-        captured.append(document)
         for key, count in (("trades", trade_count), ("equity_curve", equity_count)):
             column = document[key]
             before[key] = list(column)
             assert len(column) == count
 
-    rows = _iteration_rows(trade_count, equity_count=equity_count)
-    with _sink_case(tmp_path, rows) as (sink, library, report):
-        outcome = support.assemble(
-            run_json, sink, library, report, before_prepare=before_prepare)
-        assert outcome.failure is None, outcome.failure
-        expected = json.loads(outcome.report)
-        document = captured[0]
+    def consume(artifact, document):
+        expected = json.loads(_drain_report_artifact(artifact))
         assert document["trades"] is sink._trades_spool
         assert document["equity_curve"] is sink._equity_spool
         assert expected["summary"]["total_trades"] == sink.counts["T"] == trade_count
@@ -252,6 +253,13 @@ def test_fused_report_columns_iterate_serialized_rows(
             _assert_column_iteration(document[key], expected[key])
             if count > 1:
                 _assert_spool_crosses_windows(document[key], expected[key])
+
+    rows = _iteration_rows(trade_count, equity_count=equity_count)
+    with _sink_case(tmp_path, rows) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report,
+            before_prepare=before_prepare, consume=consume, consume_before_close=True)
+        assert outcome.failure is None, outcome.failure
 
 
 @pytest.mark.parametrize("key", ("trades", "equity_curve"))
@@ -290,9 +298,7 @@ def test_fused_column_iteration_survives_serialization(tmp_path, monkeypatch, ke
 
         with monkeypatch.context() as patch, ExitStack() as resources:
             patch.setattr(column.file, "read", interleaved_read)
-            artifact = run_json._prepare_report_json(
-                document, resources,
-                types.SimpleNamespace(profile="unjailed", spill_dir=str(tmp_path)), sink)
+            artifact = run_json._prepare_stream_report(document, resources, str(tmp_path))
             chunks = []
             while chunk := artifact.read(65536):
                 chunks.append(chunk.encode("ascii"))
@@ -304,18 +310,22 @@ def test_fused_column_iteration_survives_serialization(tmp_path, monkeypatch, ke
         fast_rows.extend(fast)
         slow_rows.extend(slow)
         assert column.file.position == position
-        captured.append((document, fast_rows, slow_rows, during))
+        captured.append((fast_rows, slow_rows, during))
 
-    with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
-        outcome = support.assemble(
-            run_json, sink, library, report, before_prepare=before_prepare)
-        assert outcome.failure is None, outcome.failure
-        document, fast_rows, slow_rows, during = captured[0]
-        assert during == outcome.report
-        expected = json.loads(outcome.report)[key]
+    def consume(artifact, document):
+        serialized = _drain_report_artifact(artifact)
+        fast_rows, slow_rows, during = captured[0]
+        assert during == serialized
+        expected = json.loads(serialized)[key]
         _assert_decoded_rows(fast_rows, expected)
         _assert_decoded_rows(slow_rows, expected)
         _assert_column_iteration(document[key], expected)
+
+    with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report,
+            before_prepare=before_prepare, consume=consume, consume_before_close=True)
+        assert outcome.failure is None, outcome.failure
 
 
 @pytest.mark.parametrize("count", (0, 1, 32769), ids=("empty", "one", "many"))
@@ -332,13 +342,10 @@ def test_fused_output_columns_iterate_serialized_rows(tmp_path, count):
             event[-1] += "x" * (2 * run_json._BoundedJSONFile.window + 17)
         rows.append(event)
     rows.append(["K", 50.])
-    captured = []
-    with _sink_case(tmp_path, rows, outputs=True) as (sink, library, report):
-        outcome = support.assemble(
-            run_json, sink, library, report, outputs=True,
-            configure=_configure_outputs, before_prepare=captured.append)
-        assert outcome.failure is None, outcome.failure
-        actual, expected = captured[0]["outputs"], json.loads(outcome.report)["outputs"]
+
+    def consume(artifact, document):
+        actual = document["outputs"]
+        expected = json.loads(_drain_report_artifact(artifact))["outputs"]
         pairs = [(actual["bars"][key], expected["bars"][key])
                  for key in ("open_ms", "close_ms")]
         pairs.extend((entry["values"], reference["values"])
@@ -350,6 +357,12 @@ def test_fused_output_columns_iterate_serialized_rows(tmp_path, count):
             _assert_column_iteration(column, reference)
             if count > 1:
                 _assert_spool_crosses_windows(column, reference)
+
+    with _sink_case(tmp_path, rows, outputs=True) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report, outputs=True,
+            configure=_configure_outputs, consume=consume, consume_before_close=True)
+        assert outcome.failure is None, outcome.failure
 
 
 @pytest.mark.parametrize("number", (1e-7, 1.2345), ids=("exponent", "fraction"))
@@ -363,17 +376,19 @@ def test_fused_output_number_crossing_window_is_not_truncated(tmp_path, number, 
     values[0] = first
     rows = [["O", index, ordinary.bars.T0, ordinary.bars.T0 + 1, value, 1.]
             for index, value in enumerate(values)] + [["K", 50.]]
-    captured = []
-    with _sink_case(tmp_path, rows, outputs=True) as (sink, library, report):
-        outcome = support.assemble(
-            run_json, sink, library, report, outputs=True,
-            configure=_configure_outputs, before_prepare=captured.append)
-        assert outcome.failure is None, outcome.failure
-        expected = json.loads(outcome.report)["outputs"]["series"][0]["values"]
-        column = captured[0]["outputs"]["series"][0]["values"]
+
+    def consume(artifact, document):
+        expected = json.loads(_drain_report_artifact(artifact))["outputs"]["series"][0]["values"]
+        column = document["outputs"]["series"][0]["values"]
         start = padding * 4 + len(repr(first)) - len(repr(0.0))
         assert start < column.file.window < start + len(repr(number))
         _assert_column_iteration(column, expected)
+
+    with _sink_case(tmp_path, rows, outputs=True) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report, outputs=True,
+            configure=_configure_outputs, consume=consume, consume_before_close=True)
+        assert outcome.failure is None, outcome.failure
 
 
 def test_fused_column_iteration_keeps_bounded_memory(tmp_path, monkeypatch):
@@ -393,37 +408,41 @@ def test_fused_column_iteration_keeps_bounded_memory(tmp_path, monkeypatch):
             return self.inner.pread(fd, address, count, offset)
 
     peaks = []
+
+    def before_prepare(document):
+        probes = []
+        with monkeypatch.context() as patch:
+            for key in ("trades", "equity_curve"):
+                file = document[key].file
+                probe = ReadProbe(file.libc)
+                probes.append(probe)
+                patch.setattr(file, "libc", probe)
+            tracemalloc.start()
+            try:
+                for key, field in (("trades", "n"), ("equity_curve", "time_ms")):
+                    seen, previous = 0, None
+                    for row in document[key]:
+                        if previous is not None:
+                            assert row[field] > previous
+                        previous = row[field]
+                        seen += 1
+                    assert seen == count  # empty iteration must not prove flat memory
+                    assert len(document[key]) == seen
+                    assert not any(isinstance(value, (list, dict, tuple, set))
+                                   for value in vars(document[key]).values())
+                peaks.append(tracemalloc.get_traced_memory()[1])
+            finally:
+                tracemalloc.stop()
+        assert all(probe.calls and probe.largest == run_json._BoundedJSONFile.window
+                   for probe in probes)
+        if count > 256:
+            assert all(probe.calls > 3 for probe in probes)
+
     for count in (256, 12000):
         with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
-            sink.verify(library, 1, report)
-            document = run_json._build_sink_report(*support.report_args(report, sink))
-            probes = []
-            with monkeypatch.context() as patch:
-                for key in ("trades", "equity_curve"):
-                    file = document[key].file
-                    probe = ReadProbe(file.libc)
-                    probes.append(probe)
-                    patch.setattr(file, "libc", probe)
-                tracemalloc.start()
-                try:
-                    for key, field in (("trades", "n"), ("equity_curve", "time_ms")):
-                        seen, previous = 0, None
-                        for row in document[key]:
-                            if previous is not None:
-                                assert row[field] > previous
-                            previous = row[field]
-                            seen += 1
-                        assert seen == count  # empty iteration must not prove flat memory
-                        assert len(document[key]) == seen
-                        assert not any(isinstance(value, (list, dict, tuple, set))
-                                       for value in vars(document[key]).values())
-                    peaks.append(tracemalloc.get_traced_memory()[1])
-                finally:
-                    tracemalloc.stop()
-            assert all(probe.calls and probe.largest == run_json._BoundedJSONFile.window
-                       for probe in probes)
-            if count > 256:
-                assert all(probe.calls > 3 for probe in probes)
+            outcome = support.assemble(
+                run_json, sink, library, report, before_prepare=before_prepare)
+            assert outcome.failure is None, outcome.failure
     assert peaks[1] - peaks[0] <= 512 * 1024, peaks
 
 
@@ -459,19 +478,23 @@ def _sink_column_rows(sink):
 
 def test_fused_columns_reject_iteration_after_resources_close(tmp_path):
     columns = []
+
+    def consume(artifact, document):
+        _drain_report_artifact(artifact)
+        for key in ("trades", "equity_curve"):
+            column = document[key]
+            assert len(column) == count
+            assert not column.file.closed
+            columns.append(column)
+
     for count in (0, 1):
-        captured = []
         with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
             assert isinstance(sink._spool_resources, ExitStack)
             outcome = support.assemble(
-                run_json, sink, library, report, before_prepare=captured.append)
+                run_json, sink, library, report,
+                consume=consume, consume_before_close=True)
             assert outcome.failure is None, outcome.failure
-            for key in ("trades", "equity_curve"):
-                column = captured[0][key]
-                assert len(column) == count
-                assert not column.file.closed
-                columns.append(column)
-        # _sink_case closes the real sink, which closes its owning ExitStack.
+        # Preparation closes the spool ExitStack; _sink_case closes the sink.
         assert sink.closed
     for column in columns:
         assert column.file.closed
@@ -498,28 +521,30 @@ def test_fused_report_columns_match_sink_rows(
             _assert_decoded_rows(list(document[key]), expected[key])
             assert document[key].file.reading
 
+    def consume(artifact, document):
+        serialized = json.loads(_drain_report_artifact(artifact))
+        for key, count in (("trades", trade_count), ("equity_curve", equity_count)):
+            assert len(expected[key]) == count
+            _assert_decoded_rows(serialized[key], expected[key])
+
     with _sink_case(
             tmp_path, _iteration_rows(trade_count, equity_count=equity_count)
     ) as (sink, library, report):
         outcome = support.assemble(
-            run_json, sink, library, report, before_prepare=before_prepare)
+            run_json, sink, library, report,
+            before_prepare=before_prepare, consume=consume, consume_before_close=True)
         assert outcome.failure is None, outcome.failure
-        serialized = json.loads(outcome.report)
-        for key, count in (("trades", trade_count), ("equity_curve", equity_count)):
-            assert len(expected[key]) == count
-            _assert_decoded_rows(serialized[key], expected[key])
 
 
 @pytest.mark.parametrize("kind", ("ascii", "batch"))
 @pytest.mark.parametrize("count", (0, 1), ids=("empty", "one"))
 def test_fused_column_zero_row_appends_preserve_spool(tmp_path, kind, count):
-    captured, expected, spools = [], {}, {}
+    expected, spools = {}, {}
     batch = run_json._BulkEquity(b"", 0, None, None)
     assert run_json._bulk_equity(b"") is None
     assert run_json._bulk_equity_ascii(batch) == b""
 
     def before_prepare(document):
-        captured.append(document)
         expected.update(_sink_column_rows(sink))
         keys = ("trades", "equity_curve") if kind == "ascii" else ("equity_curve",)
         for key in keys:
@@ -542,17 +567,20 @@ def test_fused_column_zero_row_appends_preserve_spool(tmp_path, kind, count):
             assert not file.reading
             spools[key] = before
 
-    with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
-        outcome = support.assemble(
-            run_json, sink, library, report, before_prepare=before_prepare)
-        assert outcome.failure is None, outcome.failure
-        serialized = json.loads(outcome.report)
+    def consume(artifact, document):
+        serialized = json.loads(_drain_report_artifact(artifact))
         for key in ("trades", "equity_curve"):
             _assert_decoded_rows(serialized[key], expected[key])
         for key, before in spools.items():
-            column = captured[0][key]
+            column = document[key]
             assert column.file.read_at(0, column.file.window).encode("ascii") == before
             _assert_decoded_rows(list(column), expected[key])
+
+    with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report,
+            before_prepare=before_prepare, consume=consume, consume_before_close=True)
+        assert outcome.failure is None, outcome.failure
 
 
 @pytest.mark.parametrize("trade_count,equity_count", (
@@ -562,10 +590,9 @@ def test_fused_column_zero_row_appends_preserve_spool(tmp_path, kind, count):
 def test_fused_report_column_index_contract(
         tmp_path, monkeypatch, trade_count, equity_count, bulk):
     monkeypatch.setattr(run_json, "_BULK_E_ENABLED", bulk)
-    captured, expected = [], {}
+    expected = {}
 
     def before_prepare(document):
-        captured.append(document)
         expected.update(_sink_column_rows(sink))
         for key in ("trades", "equity_curve"):
             column, rows = document[key], expected[key]
@@ -606,30 +633,30 @@ def test_fused_report_column_index_contract(
             assert not any(isinstance(value, (list, dict, tuple, set))
                            for value in vars(column).values())
 
+    def consume(artifact, document):
+        serialized = json.loads(_drain_report_artifact(artifact))
+        for key in ("trades", "equity_curve"):
+            _assert_decoded_rows(serialized[key], expected[key])
+            _assert_decoded_rows(
+                [document[key][index] for index in range(len(expected[key]))],
+                serialized[key])
+
     with _sink_case(
             tmp_path, _iteration_rows(trade_count, equity_count=equity_count)
     ) as (sink, library, report):
         outcome = support.assemble(
-            run_json, sink, library, report, before_prepare=before_prepare)
+            run_json, sink, library, report,
+            before_prepare=before_prepare, consume=consume, consume_before_close=True)
         assert outcome.failure is None, outcome.failure
-        serialized = json.loads(outcome.report)
-        for key in ("trades", "equity_curve"):
-            _assert_decoded_rows(serialized[key], expected[key])
-            _assert_decoded_rows(
-                [captured[0][key][index] for index in range(len(expected[key]))],
-                serialized[key])
 
 
 @pytest.mark.parametrize("count", (0, 1), ids=("empty", "one"))
 def test_fused_output_columns_keep_random_access_disabled(tmp_path, count):
     rows = _mixed() if count else [["K", 50.]]
-    captured = []
-    with _sink_case(tmp_path, rows, outputs=True) as (sink, library, report):
-        outcome = support.assemble(
-            run_json, sink, library, report, outputs=True,
-            configure=_configure_outputs, before_prepare=captured.append)
-        assert outcome.failure is None, outcome.failure
-        block = captured[0]["outputs"]
+
+    def consume(artifact, document):
+        _drain_report_artifact(artifact)
+        block = document["outputs"]
         columns = [block["bars"]["open_ms"], block["bars"]["close_ms"], block["events"]]
         columns.extend(entry["values"] for entry in block["series"])
         for column in columns:
@@ -641,6 +668,12 @@ def test_fused_output_columns_keep_random_access_disabled(tmp_path, count):
                     column[index]
                 assert type(caught.value) is TypeError
                 assert str(caught.value) == "a streamed array has no random access"
+
+    with _sink_case(tmp_path, rows, outputs=True) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report, outputs=True,
+            configure=_configure_outputs, consume=consume, consume_before_close=True)
+        assert outcome.failure is None, outcome.failure
 
 
 @pytest.mark.parametrize("key", ("trades", "equity_curve"))
@@ -679,9 +712,7 @@ def test_fused_column_index_interleaves_iteration_and_serialization(
 
         with monkeypatch.context() as patch, ExitStack() as resources:
             patch.setattr(column.file, "read", interleaved_read)
-            artifact = run_json._prepare_report_json(
-                document, resources,
-                types.SimpleNamespace(profile="unjailed", spill_dir=str(tmp_path)), sink)
+            artifact = run_json._prepare_stream_report(document, resources, str(tmp_path))
             chunks = []
             while chunk := artifact.read(65536):
                 chunks.append(chunk.encode("ascii"))
@@ -694,35 +725,57 @@ def test_fused_column_index_interleaves_iteration_and_serialization(
         for index in (0, count - 1, 0):
             _assert_decoded_rows(column[index], expected[index])
         assert column.file.position == position
-        captured.append((expected, seen, during, document))
+        captured.append((expected, seen, during))
+
+    def consume(artifact, document):
+        expected, seen, during = captured[0]
+        column = document[key]
+        iterator, sentinel = iter(column), object()
+        chunks, drained_rows = [], []
+        reads = 0
+        while chunk := artifact.read(8191):
+            chunks.append(chunk.encode("ascii") if isinstance(chunk, str) else chunk)
+            position = column.file.position
+            for _ in range(512):
+                row = next(iterator, sentinel)
+                if row is sentinel:
+                    break
+                drained_rows.append(row)
+            _assert_decoded_rows(column[reads % count], expected[reads % count])
+            assert column.file.position == position
+            reads += 1
+        assert reads > 0
+        if count > 1:
+            assert reads > 3
+        position = column.file.position
+        drained_rows.extend(iterator)
+        assert column.file.position == position
+        raw = b"".join(chunks)
+        assert during == raw
+        serialized = json.loads(raw)[key]
+        _assert_decoded_rows(serialized, expected)
+        _assert_decoded_rows(seen, serialized)
+        _assert_decoded_rows(drained_rows, serialized)
+        _assert_decoded_rows(document[key][-1], serialized[-1])
 
     with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
         outcome = support.assemble(
-            run_json, sink, library, report, before_prepare=before_prepare)
+            run_json, sink, library, report,
+            before_prepare=before_prepare, consume=consume, consume_before_close=True)
         assert outcome.failure is None, outcome.failure
-        expected, seen, during, document = captured[0]
-        assert during == outcome.report
-        serialized = json.loads(outcome.report)[key]
-        _assert_decoded_rows(serialized, expected)
-        _assert_decoded_rows(seen, serialized)
-        _assert_decoded_rows(document[key][-1], serialized[-1])
 
 
 def test_fused_column_forward_index_timing(tmp_path, capsys):
     count, factor = 25000, 8
     rows = [_point(0)] + [_trade(index + 1) for index in range(count)]
-    captured, sink_rows = [], {}
+    sink_rows = {}
 
     def before_prepare(document):
-        captured.append(document)
         sink_rows.update(_sink_column_rows(sink))
 
-    with _sink_case(tmp_path, rows) as (sink, library, report):
-        outcome = support.assemble(
-            run_json, sink, library, report, before_prepare=before_prepare)
-        assert outcome.failure is None, outcome.failure
-        column = captured[0]["trades"]
-        expected = json.loads(outcome.report)["trades"]
+    def consume(artifact, document):
+        column = document["trades"]
+        expected = json.loads(_drain_report_artifact(artifact))["trades"]
         assert len(column) == len(expected) == count
         _assert_decoded_rows(expected, sink_rows["trades"])
         _assert_decoded_rows(column[0], expected[0])
@@ -749,28 +802,32 @@ def test_fused_column_forward_index_timing(tmp_path, capsys):
         assert not any(isinstance(value, (list, dict, tuple, set))
                        for value in vars(column).values())
 
+    with _sink_case(tmp_path, rows) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report,
+            before_prepare=before_prepare, consume=consume, consume_before_close=True)
+        assert outcome.failure is None, outcome.failure
+
 
 @pytest.mark.parametrize("count", (0, 1), ids=("empty", "one"))
 def test_fused_report_column_truthiness(tmp_path, count):
-    captured = []
+    def consume(artifact, document):
+        serialized = json.loads(_drain_report_artifact(artifact))
+        for key in ("trades", "equity_curve"):
+            assert bool(document[key]) is bool(serialized[key]) is bool(count)
+
     with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
         outcome = support.assemble(
-            run_json, sink, library, report, before_prepare=captured.append)
+            run_json, sink, library, report,
+            consume=consume, consume_before_close=True)
         assert outcome.failure is None, outcome.failure
-        serialized = json.loads(outcome.report)
-        for key in ("trades", "equity_curve"):
-            assert bool(captured[0][key]) is bool(serialized[key]) is bool(count)
 
 
 @pytest.mark.parametrize("key", ("trades", "equity_curve"))
 @pytest.mark.parametrize("count", (0, 1, 4097), ids=("empty", "one", "many"))
 def test_fused_column_iterators_are_fresh_and_independent(tmp_path, key, count):
-    captured = []
-    with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
-        outcome = support.assemble(
-            run_json, sink, library, report, before_prepare=captured.append)
-        assert outcome.failure is None, outcome.failure
-        column, expected = captured[0][key], json.loads(outcome.report)[key]
+    def consume(artifact, document):
+        column, expected = document[key], json.loads(_drain_report_artifact(artifact))[key]
         assert type(column) is run_json._JSONColumn
         assert isinstance(column, run_json._JSONRecordArray)
         left, right = iter(column), iter(column)
@@ -797,6 +854,12 @@ def test_fused_column_iterators_are_fresh_and_independent(tmp_path, key, count):
         bare = object.__new__(run_json._JSONColumn)
         bare.file = column.file
         _assert_decoded_rows(list(bare), expected)
+
+    with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report,
+            consume=consume, consume_before_close=True)
+        assert outcome.failure is None, outcome.failure
 
 
 def test_fused_frozen_oracle_uses_frozen_pf_sink(tmp_path, monkeypatch, frozen):
