@@ -768,6 +768,10 @@ class WorkflowEventFleets(unittest.TestCase):
                     runner = EXPECTED_LIGHT_GKE_JOBS.get(name, {}).get(job, 'ubuntu-24.04')
                     self.assertEqual(ci_preflight._job_values(body, 'runs-on'), [runner])
                     continue
+                if (name, job) == ('ci-post.yml', 'macos-window-plan-link'):
+                    self.assertEqual(ci_preflight._job_values(body, 'runs-on'), ['macos-15'])
+                    self.assertNotIn('PF_CI_LABELS', body)
+                    continue
                 checked += 1
                 self.assertEqual([json.loads(value) for value in ci_preflight._job_values(
                                      body, 'runs-on', unquote=False)],
@@ -2007,6 +2011,225 @@ class PostCTestShardPolicy(unittest.TestCase):
                             self.assertIn(f'{job} must build cold without an Actions cache',
                                           ci_preflight.pipeline_workflow_findings(
                                               changed, 'ci-post.yml', pr=False))
+
+
+class MacOSWindowPlanLinkPolicy(unittest.TestCase):
+    """Exercise the optional link job against both sides of policy admission."""
+
+    JOB = '''  macos-window-plan-link:
+    name: "macOS link: window-plan shared library"
+    needs: [authz]
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Configure the kernel and window-plan bridge
+        run: |
+          cmake -S . -B build-window-plan \\
+            -DCMAKE_BUILD_TYPE=Release \\
+            -DPINEFORGE_BUILD_TESTS=OFF \\
+            -DPINEFORGE_BUILD_TUTORIAL=OFF \\
+            -DPINEFORGE_BUILD_SOURCE_LAYER=OFF
+      - name: Link the window-plan shared library
+        run: cmake --build build-window-plan --target pineforge_window_plan --parallel 2
+      - name: Verify the Mach-O library and C exports
+        shell: bash
+        run: |
+          set -euo pipefail
+          library=build-window-plan/lib/libpineforge_window_plan.dylib
+          file "$library" | grep -E 'Mach-O.*dynamically linked shared library'
+          otool -L "$library"
+          nm -gU "$library" | awk '{print $NF}' > build-window-plan/exports.txt
+          grep -Fx '_pf_selected_plan_version' build-window-plan/exports.txt
+          grep -Fx '_pf_plan_selected_primary_v1' build-window-plan/exports.txt
+'''
+    RESULT = '          WINDOW_PLAN_LINK_RESULT: ${{ needs.macos-window-plan-link.result }}\n'
+    REQUIRE = '            && [[ "$WINDOW_PLAN_LINK_RESULT" == "success" ]]'
+    BODY_FINDING = 'ci-post.yml macos-window-plan-link must keep its exact link-only job'
+    GATE_FINDING = ('build-gate must keep the exact result policy: '
+                    'success or a classified docs-only skip')
+
+    def without_job(self):
+        post = (ROOT / '.github/workflows/ci-post.yml').read_text()
+        post = re.sub(r'^  macos-window-plan-link:\n.*?(?=^  [A-Za-z_][A-Za-z0-9_-]*:|\Z)',
+                      '', post, flags=re.MULTILINE | re.DOTALL)
+        return (post.replace(', macos-window-plan-link]', ']')
+                .replace(self.RESULT, '')
+                .replace(' \\\n' + self.REQUIRE, ''))
+
+    def with_job(self):
+        post = self.without_job() + '\n' + self.JOB
+        post = in_job(post, 'build-gate', ', corpus-parity]\n',
+                      ', corpus-parity, macos-window-plan-link]\n')
+        post = in_job(post, 'build-gate',
+                      '          FULL_PARITY_RESULT: ${{ needs.corpus-parity.result }}\n',
+                      '          FULL_PARITY_RESULT: ${{ needs.corpus-parity.result }}\n' + self.RESULT)
+        return in_job(post, 'build-gate', '&& passed "$FULL_PARITY_RESULT"\n',
+                      '&& passed "$FULL_PARITY_RESULT" \\\n' + self.REQUIRE + '\n')
+
+    def workflows(self, post):
+        sources = {path.name: path.read_text()
+                   for path in (ROOT / '.github/workflows').glob('*.yml')}
+        return {**sources, 'ci-post.yml': post}
+
+    def test_policy_only_landing_accepts_the_existing_workflow(self):
+        post = self.without_job()
+        self.assertNotIn('macos-window-plan-link', _jobs(post))
+        self.assertEqual(ci_preflight.runner_findings(self.workflows(post)), [])
+        self.assertEqual(ci_preflight.pipeline_workflow_findings(post, 'ci-post.yml', pr=False), [])
+
+    def test_exact_job_and_image_are_admitted(self):
+        post = self.with_job()
+        self.assertEqual(ci_preflight.workflow_fleet_findings(self.workflows(post)), [])
+        self.assertEqual(ci_preflight.runner_findings(self.workflows(post)), [])
+        self.assertEqual(ci_preflight.pipeline_workflow_findings(post, 'ci-post.yml', pr=False), [])
+
+    def test_real_workflow_keeps_the_admitted_contract(self):
+        post = (ROOT / '.github/workflows/ci-post.yml').read_text()
+        self.assertEqual(ci_preflight.runner_findings(self.workflows(post)), [])
+        self.assertEqual(ci_preflight.pipeline_workflow_findings(post, 'ci-post.yml', pr=False), [])
+
+    def test_base_admission_entry_accepts_only_the_exact_pair(self):
+        post = self.with_job()
+        with tempfile.TemporaryDirectory() as fetched:
+            directory = Path(fetched)
+            shutil.copytree(ROOT / '.github/workflows', directory / '.github/workflows')
+            shutil.copytree(ROOT / '.github/actions', directory / '.github/actions')
+            shutil.copyfile(ROOT / '.github/actionlint.yaml', directory / '.github/actionlint.yaml')
+            target = directory / '.github/workflows/ci-post.yml'
+            target.write_text(post)
+            self.assertEqual(admit_rule_findings(directory, run_actionlint=False), [])
+            target.write_text(post + '\n' + self.JOB.replace(
+                '  macos-window-plan-link:', '  another-link:', 1))
+            self.assertIn(f'ci-post.yml job another-link must run on {POST_RUNNER} for post-merge events',
+                          admit_rule_findings(directory, run_actionlint=False))
+            target.write_text(in_job(post, 'macos-window-plan-link',
+                                     'runs-on: macos-15', 'runs-on: macos-15-large'))
+            self.assertIn('ci-post.yml job macos-window-plan-link must run on macos-15 (hosted)',
+                          admit_rule_findings(directory, run_actionlint=False))
+
+    def test_image_does_not_admit_a_second_job_or_another_job_id(self):
+        post = self.with_job()
+        for changed in (post + '\n' + self.JOB.replace('  macos-window-plan-link:', '  another-link:', 1),
+                        post.replace('  macos-window-plan-link:', '  another-link:', 1)):
+            with self.subTest(workflow=changed):
+                self.assertNotEqual(changed, post)
+                self.assertIn(f'ci-post.yml job another-link must run on {POST_RUNNER} for post-merge events',
+                              ci_preflight.runner_findings(self.workflows(changed)))
+                self.assertIn('ci-post.yml must keep only its pinned full-event jobs',
+                              ci_preflight.pipeline_workflow_findings(changed, 'ci-post.yml', pr=False))
+
+    def test_job_pin_refuses_other_images_and_large_labels(self):
+        post = self.with_job()
+        for runner in ('macos-14', 'macos-26', 'macos-latest', 'macos-15-large',
+                       'macos-15-xlarge', 'ubuntu-24.04', '["macos-15"]',
+                       "${{ matrix.runner }}"):
+            with self.subTest(runner=runner):
+                changed = in_job(post, 'macos-window-plan-link', 'runs-on: macos-15',
+                                 'runs-on: ' + runner)
+                self.assertNotEqual(changed, post)
+                self.assertIn('ci-post.yml job macos-window-plan-link must run on macos-15 (hosted)',
+                              ci_preflight.runner_findings(self.workflows(changed)))
+                self.assertIn(self.BODY_FINDING,
+                              ci_preflight.pipeline_workflow_findings(changed, 'ci-post.yml', pr=False))
+
+    def test_pair_is_not_admitted_in_other_workflows_or_from_a_pr(self):
+        for name in ('ci.yml', 'docs.yml', 'other-post.yml'):
+            with self.subTest(workflow=name):
+                workflow = 'on: workflow_dispatch\njobs:\n' + self.JOB
+                self.assertIn(f'{name} job macos-window-plan-link must run on {POST_RUNNER} for post-merge events',
+                              ci_preflight.runner_findings({name: workflow}))
+        post = self.with_job()
+        caller = ('on: pull_request\njobs:\n  call:\n'
+                  '    uses: ./.github/workflows/ci-post.yml\n')
+        for workflows in ({'ci-post.yml': 'on: pull_request\njobs:\n' + self.JOB},
+                          {'ci-post.yml': post, 'caller.yml': caller}):
+            with self.subTest(workflows=workflows):
+                self.assertIn(f'ci-post.yml job macos-window-plan-link must run on {PR_RUNNER} for pull_request',
+                              ci_preflight.runner_findings(workflows))
+
+    def test_link_body_refuses_missing_proofs_or_extra_work(self):
+        post = self.with_job()
+        mutations = (
+            ('    needs: [authz]\n', '    needs: []\n'),
+            ('    permissions:\n      contents: read\n', '    permissions: write-all\n'),
+            ('    steps:\n', '    if: false\n    steps:\n'),
+            ('checkout@11d5960a326750d5838078e36cf38b85af677262', 'checkout@main'),
+            ('persist-credentials: false', 'persist-credentials: true'),
+            ('-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_BUILD_TYPE=Debug'),
+            ('-DPINEFORGE_BUILD_TESTS=OFF', '-DPINEFORGE_BUILD_TESTS=ON'),
+            ('-DPINEFORGE_BUILD_TUTORIAL=OFF', '-DPINEFORGE_BUILD_TUTORIAL=ON'),
+            ('-DPINEFORGE_BUILD_SOURCE_LAYER=OFF', '-DPINEFORGE_BUILD_SOURCE_LAYER=ON'),
+            (' --target pineforge_window_plan', ''),
+            ('--target pineforge_window_plan', '--target pineforge_window_plans'),
+            ('--parallel 2', '--parallel 2 || true'),
+            ('library=build-window-plan/lib/libpineforge_window_plan.dylib',
+             'library=build-window-plan/lib/libpineforge.dylib'),
+            ("          file \"$library\" | grep -E 'Mach-O.*dynamically linked shared library'\n", ''),
+            ('          otool -L "$library"\n', ''),
+            ('nm -gU "$library"', 'nm -g "$library"'),
+            ("          grep -Fx '_pf_selected_plan_version' build-window-plan/exports.txt\n", ''),
+            ("          grep -Fx '_pf_plan_selected_primary_v1' build-window-plan/exports.txt\n", ''),
+            ('    steps:\n', '    steps:\n      - run: ctest --test-dir build-window-plan\n'),
+            ('    steps:\n', '    steps:\n      - uses: actions/cache@main\n'),
+            ('    steps:\n', '    steps:\n      - uses: actions/upload-artifact@main\n'),
+            ('    steps:\n', '    env:\n      TOKEN: ${{ secrets.TOKEN }}\n    steps:\n'),
+        )
+        for before, after in mutations:
+            with self.subTest(before=before, after=after):
+                changed = in_job(post, 'macos-window-plan-link', before, after)
+                self.assertNotEqual(changed, post)
+                self.assertIn(self.BODY_FINDING,
+                              ci_preflight.pipeline_workflow_findings(changed, 'ci-post.yml', pr=False))
+
+    def test_job_and_step_timeouts_are_refused(self):
+        post = self.with_job()
+        for after in ('    timeout-minutes: 10\n    steps:\n',
+                      '    steps:\n      - run: "true"\n        timeout-minutes: 10\n'):
+            with self.subTest(declaration=after):
+                changed = in_job(post, 'macos-window-plan-link', '    steps:\n', after)
+                self.assertNotEqual(changed, post)
+                self.assertIn('ci-post.yml job macos-window-plan-link must declare no timeout-minutes (owner #827)',
+                              ci_preflight.runner_findings(self.workflows(changed)))
+
+    def test_aggregate_requires_the_link_result_even_for_docs_only(self):
+        post = self.with_job()
+        for before, after, finding in (
+                (', macos-window-plan-link]', ']',
+                 'build-gate must aggregate authz, every proof job, preflight and changes'),
+                (self.RESULT, '', 'build-gate must read the result of macos-window-plan-link'),
+                (self.REQUIRE, '            && passed "$WINDOW_PLAN_LINK_RESULT"', self.GATE_FINDING),
+                (self.REQUIRE, '            && [[ "$WINDOW_PLAN_LINK_RESULT" != "failure" ]]', self.GATE_FINDING),
+                (' \\\n' + self.REQUIRE, '', self.GATE_FINDING)):
+            with self.subTest(after=after):
+                changed = in_job(post, 'build-gate', before, after)
+                self.assertNotEqual(changed, post)
+                self.assertIn(finding,
+                              ci_preflight.pipeline_workflow_findings(changed, 'ci-post.yml', pr=False))
+
+    def test_aggregate_executes_every_link_outcome_on_full_events(self):
+        post = self.with_job()
+        step = ci_preflight._steps(_jobs(post)['build-gate'])[-1]
+        script = job_script(post, 'build-gate', ci_preflight._step_values(step, 'name')[0])
+        for event in ('push', 'schedule', 'workflow_dispatch'):
+            for docs_only in ('true', 'false'):
+                env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+                       'GITHUB_EVENT_NAME': event, 'AUTHZ_RESULT': 'success',
+                       'CHANGES_RESULT': 'success', 'DOCS_ONLY': docs_only,
+                       'PREFLIGHT_RESULT': 'success', 'SLOW_PREFLIGHT_RESULT': 'success',
+                       **{variable: 'skipped' if docs_only == 'true' else 'success'
+                          for variable in PROOF_JOBS.values()}}
+                for outcome in ('success', 'failure', 'cancelled', 'skipped', ''):
+                    with self.subTest(event=event, docs_only=docs_only, outcome=outcome):
+                        result = subprocess.run(
+                            ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
+                            env={**env, 'WINDOW_PLAN_LINK_RESULT': outcome},
+                            capture_output=True, text=True)
+                        self.assertEqual(result.returncode, 0 if outcome == 'success' else 1,
+                                         result.stdout + result.stderr)
 
 
 class PostLinuxBuildPolicy(unittest.TestCase):
@@ -4768,7 +4991,7 @@ exit "$lookup_exit"
 
     def test_ci_split_refuses_heavy_pr_reentry_and_lost_full_events(self):
         ci = self.ci_sources()[6]
-        self.assertEqual(set(_jobs(ci)), set(POST_CI_JOB_IDS))
+        self.assertEqual(set(_jobs(ci)) - {'macos-window-plan-link'}, set(POST_CI_JOB_IDS))
         for job in POST_CI_JOB_IDS:
             block = '  ' + job + ':' + _jobs(ci)[job]
             for before, after in ((block, ''), (f'  {job}:\n', f'  {job}-renamed:\n')):
@@ -5288,7 +5511,8 @@ exit "$lookup_exit"
                                           'sanitizers-gate': GKE_2,
                                           'kernel-only-gate': GKE_2,
                                           **EXPECTED_GKE_JOBS['ci-post.yml'],
-                                          'build-gate': GKE_2},
+                                          'build-gate': GKE_2,
+                                          'macos-window-plan-link': 'macos-15'},
                           'corpus-parity.yml': {'authz': GKE_4,
                                                  **EXPECTED_GKE_JOBS['corpus-parity.yml']},
                           'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
@@ -5805,6 +6029,9 @@ exit "$lookup_exit"
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
         passed = ('          passed() { [[ "$1" == "success" || '
                   '( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }\n')
+        gate_tail = ('            && [[ "$WINDOW_PLAN_LINK_RESULT" == "success" ]]\n'
+                     if 'macos-window-plan-link' in _jobs(original[6]) else
+                     '            && [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT"\n')
         mutations = (
             # (e) Neither an empty result nor a skipped matrix on push is the
             # PR's absent cell; accepting either must fail the exact gate pin.
@@ -5815,9 +6042,7 @@ exit "$lookup_exit"
             ('          BUILD_RESULT: ${{ needs.build.result }}\n',
              "          BUILD_RESULT: ${{ needs.build.result || 'success' }}\n"),
             ('          docs_only=false\n', '          docs_only=true\n'),
-            ('            && [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT"\n',
-             '            && [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT"\n'
-             '          true\n'),
+            (gate_tail, gate_tail + '          true\n'),
         )
         for before, after in mutations:
             with self.subTest(after=after):
@@ -5834,6 +6059,7 @@ exit "$lookup_exit"
                'CHANGES_RESULT': 'success', 'DOCS_ONLY': 'false',
                'PREFLIGHT_RESULT': 'success',
                'SLOW_PREFLIGHT_RESULT': 'success',
+               'WINDOW_PLAN_LINK_RESULT': 'success',
                **{variable: 'success' for variable in PROOF_JOBS.values()}}
         pr_script = job_script(self.gke(), 'legs', 'Require every proof leg')
         for variable in ('BUILD_RESULT', 'DEBUG_RESULT', 'PARITY_RESULT'):
@@ -5872,7 +6098,8 @@ exit "$lookup_exit"
         script.write_text(job_script(self.ci_sources()[6], 'build-gate',
                                      'Require every verification lane to have passed'))
         env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'AUTHZ_RESULT': 'success',
-               'GITHUB_EVENT_NAME': 'push', 'SLOW_PREFLIGHT_RESULT': 'success'}
+               'GITHUB_EVENT_NAME': 'push', 'SLOW_PREFLIGHT_RESULT': 'success',
+               'WINDOW_PLAN_LINK_RESULT': 'success'}
         lanes = list(PROOF_JOBS.values())
         vectors = set()
         for common in ('success', 'skipped'):
@@ -6239,6 +6466,8 @@ finally:
             script = job_script(self.ci_sources()[6], 'build-gate',
                                 'Require every verification lane to have passed')
             required = {'AUTHZ_RESULT', 'CHANGES_RESULT', 'PREFLIGHT_RESULT', 'SLOW_PREFLIGHT_RESULT'}
+            if 'macos-window-plan-link' in _jobs(self.ci_sources()[6]):
+                required.add('WINDOW_PLAN_LINK_RESULT')
             proof = {'BUILD_RESULT', 'PARITY_RESULT', 'ARM_BUILD_RESULT', 'SANITIZER_RESULT', 'NATIVE_RESULT',
                           'KERNEL_RESULT', 'FULL_PARITY_RESULT', 'DEBUG_BUILD_RESULT',
                           'RELEASE_GATE_RESULT', 'DEBUG_GATE_RESULT',

@@ -307,7 +307,7 @@ HOSTED_JOB_RUNNERS = {
     'ci.yml': {'authz': 'ubuntu-24.04'},
     'gke-pr.yml': {**dict.fromkeys(('admit', 'legs', 'result'), 'ubuntu-24.04'),
                    **GKE_JOB_RUNNERS['gke-pr.yml']},
-    'ci-post.yml': GKE_JOB_RUNNERS['ci-post.yml'],
+    'ci-post.yml': {**GKE_JOB_RUNNERS['ci-post.yml'], 'macos-window-plan-link': 'macos-15'},
     'docs-post.yml': GKE_JOB_RUNNERS['docs-post.yml'],
     'native-live.yml': GKE_JOB_RUNNERS['native-live.yml'],
     'corpus-parity.yml': GKE_JOB_RUNNERS['corpus-parity.yml'],
@@ -325,6 +325,38 @@ RELEASE_JOB_RUNNERS = {
 # Credential-bearing jobs outside the release pins and gated docs build retain
 # standard hosted labels. Existing hosted exceptions above are pinned separately.
 STANDARD_RUNNERS = ('ubuntu-24.04',)
+# Optional so the policy can land before the workflow that the base checker admits.
+# The exception is a workflow/job/image triple, never a standard macOS runner.
+WINDOW_PLAN_LINK_JOB = 'macos-window-plan-link'
+WINDOW_PLAN_LINK_BODY = '''    name: "macOS link: window-plan shared library"
+    needs: [authz]
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Configure the kernel and window-plan bridge
+        run: |
+          cmake -S . -B build-window-plan \\
+            -DCMAKE_BUILD_TYPE=Release \\
+            -DPINEFORGE_BUILD_TESTS=OFF \\
+            -DPINEFORGE_BUILD_TUTORIAL=OFF \\
+            -DPINEFORGE_BUILD_SOURCE_LAYER=OFF
+      - name: Link the window-plan shared library
+        run: cmake --build build-window-plan --target pineforge_window_plan --parallel 2
+      - name: Verify the Mach-O library and C exports
+        shell: bash
+        run: |
+          set -euo pipefail
+          library=build-window-plan/lib/libpineforge_window_plan.dylib
+          file "$library" | grep -E 'Mach-O.*dynamically linked shared library'
+          otool -L "$library"
+          nm -gU "$library" | awk '{print $NF}' > build-window-plan/exports.txt
+          grep -Fx '_pf_selected_plan_version' build-window-plan/exports.txt
+          grep -Fx '_pf_plan_selected_primary_v1' build-window-plan/exports.txt
+'''
 # Refuse paid labels everywhere, including pinned jobs, metadata and release matrices.
 _LARGER_RUNNER_LABEL = re.compile(
     r'(?<![\w.-])(?:pf-linux-(?:x64|arm64)-\d+|[\w.-]+-(?:larger|xlarge|large))(?![\w.-])')
@@ -999,6 +1031,27 @@ def _jobs(workflow: str) -> dict[str, str]:
                                  matches[index + 1].start() if index + 1 < len(matches)
                                  else len(text)]
             for index, match in enumerate(matches)}
+
+
+def _hosted_job_runners(name: str, workflow: str) -> dict[str, str]:
+    """Keep all mandatory pins; admit the optional helper only when declared."""
+    return {job: label for job, label in HOSTED_JOB_RUNNERS.get(name, {}).items()
+            if (name, job) != ('ci-post.yml', WINDOW_PLAN_LINK_JOB)
+            or job in _jobs(workflow)}
+
+
+def post_gate_step(*, window_plan_link: bool) -> str:
+    """The helper must succeed even when classified docs-only proofs skip."""
+    if not window_plan_link:
+        return POST_GATE_STEP
+    return POST_GATE_STEP.replace(
+        '          FULL_PARITY_RESULT: ${{ needs.corpus-parity.result }}\n',
+        '          FULL_PARITY_RESULT: ${{ needs.corpus-parity.result }}\n'
+        '          WINDOW_PLAN_LINK_RESULT: ${{ needs.macos-window-plan-link.result }}\n'
+    ).replace(
+        '&& passed "$FULL_PARITY_RESULT"\n',
+        '&& passed "$FULL_PARITY_RESULT" \\\n'
+        '            && [[ "$WINDOW_PLAN_LINK_RESULT" == "success" ]]\n')
 
 
 def _code(text: str) -> list[str]:
@@ -2159,7 +2212,7 @@ def workflow_fleet_findings(workflows: dict[str, str]) -> list[str]:
             findings.append(f'{name} must split pull_request and post-merge events into separate workflows')
         runner = POST_RUNNER if reachable & POST_EVENTS else PR_RUNNER
         event_class = 'post-merge events' if reachable & POST_EVENTS else 'pull_request'
-        fixed_hosted = {job: label for job, label in HOSTED_JOB_RUNNERS.get(name, {}).items()
+        fixed_hosted = {job: label for job, label in _hosted_job_runners(name, workflow).items()
                         if label == 'ubuntu-24.04' or (reachable & POST_EVENTS and 'pull_request' not in reachable)}
         if not reachable:
             findings.append(f'{name} must have a reachable event for fleet routing')
@@ -2559,8 +2612,10 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             findings.append(f'{name} is reachable from pull_request and must not contain GKE routing')
         if _LARGER_RUNNER_KEY.search(code):
             findings.append(f'{name} must not define a larger_runner key; use the GCP fleet or hosted exceptions')
-        timed = JOB_COMMANDS.get(name, {})
-        fixed_hosted = {job: label for job, label in HOSTED_JOB_RUNNERS.get(name, {}).items()
+        timed = dict(JOB_COMMANDS.get(name, {}))
+        if name == 'ci-post.yml' and WINDOW_PLAN_LINK_JOB in _jobs(workflow):
+            timed[WINDOW_PLAN_LINK_JOB] = None
+        fixed_hosted = {job: label for job, label in _hosted_job_runners(name, workflow).items()
                         if label == 'ubuntu-24.04' or name == 'gke-pr.yml'
                         or (routes[name] & POST_EVENTS and 'pull_request' not in routes[name])}
         if _LARGER_RUNNER_LABEL.search(code):
@@ -3355,10 +3410,15 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     if pr and _job_block(workflow, 'concurrency') != _code(CI_CONCURRENCY):
         findings.append('ci.yml must keep its exact draft and ready concurrency groups')
     jobs = _jobs(workflow)
+    window_plan_link = not pr and name == 'ci-post.yml' and WINDOW_PLAN_LINK_JOB in jobs
     proofs = PR_PROOF_JOBS if pr else PROOF_JOBS
     expected_jobs = {'authz', 'changes', 'preflight', *proofs, 'build-gate'}
     if not pr:
         expected_jobs.add('preflight-slow')
+    if window_plan_link:
+        expected_jobs.add(WINDOW_PLAN_LINK_JOB)
+        if _code(jobs[WINDOW_PLAN_LINK_JOB]) != _code(WINDOW_PLAN_LINK_BODY):
+            findings.append(f'{name} {WINDOW_PLAN_LINK_JOB} must keep its exact link-only job')
     findings += [f'{name} is missing job {job}' for job in sorted(expected_jobs - jobs.keys())]
     if set(jobs) - expected_jobs:
         findings.append(f'{name} must keep only its pinned {"PR" if pr else "full-event"} jobs')
@@ -3366,6 +3426,8 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     if not pr:
         named_jobs.update(POST_SHARDS)
         named_jobs.update(POST_LEG_GATES)
+    if window_plan_link:
+        named_jobs.add(WINDOW_PLAN_LINK_JOB)
     for job in expected_jobs - named_jobs:
         if _job_values(jobs.get(job, ''), 'name'):
             findings.append(f'{job} must keep its default check name')
@@ -3424,7 +3486,8 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     for job in dependencies:
         variable = (proofs[job] if job in proofs else
                     {'authz': 'AUTHZ_RESULT', 'changes': 'CHANGES_RESULT',
-                     'preflight': 'PREFLIGHT_RESULT', 'preflight-slow': 'SLOW_PREFLIGHT_RESULT'}[job])
+                     'preflight': 'PREFLIGHT_RESULT', 'preflight-slow': 'SLOW_PREFLIGHT_RESULT',
+                     WINDOW_PLAN_LINK_JOB: 'WINDOW_PLAN_LINK_RESULT'}[job])
         if f'{variable}: ${{{{ needs.{job}.result }}}}' not in gate:
             findings.append(f'build-gate must read the result of {job}')
     if 'DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}' not in gate:
@@ -3440,7 +3503,8 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     if pr and (len(gate_steps) != 3 or _code(gate_steps[1]) != _code(GITHUB_ONLY_STEP)
                or 'needs.changes.outputs.github_only' in gate):
         findings.append('build-gate must independently read the event-bound PR diff before accepting skips')
-    if not gate_steps or _code(gate_steps[-1]) != _code(GATE_STEP if pr else POST_GATE_STEP):
+    expected_gate_step = GATE_STEP if pr else post_gate_step(window_plan_link=window_plan_link)
+    if not gate_steps or _code(gate_steps[-1]) != _code(expected_gate_step):
         findings.append('build-gate must keep the exact result policy: success or a classified docs-only skip')
     if not pr:
         findings += post_shard_workflow_findings(jobs)
