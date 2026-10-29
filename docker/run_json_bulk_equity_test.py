@@ -116,8 +116,8 @@ def _run(sink, library, report, monkeypatch, use_fused, *,
         if use_fused:
             append = runner._JSONColumn.append_ascii
 
-            def counted_append(column, data):
-                result = append(column, data)
+            def counted_append(column, data, *, row_count=1):
+                result = append(column, data, row_count=row_count)
                 counts["encoded_e"] += data.count(b'{"time_ms":')
                 return result
 

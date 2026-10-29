@@ -159,6 +159,289 @@ SYNTHETIC_CASES = (
 )
 
 
+def _iteration_rows(count, *, equity_count=None):
+    rows = [_point(index) for index in range(count if equity_count is None else equity_count)]
+    pnls = (-0.0, 1e-7, -7.0, 1e16, -1e16, 5e-324)
+    for index in range(count):
+        rows.append(_trade(
+            index + 1, pnl=pnls[index % len(pnls)], pnl_pct=-0.0))
+    return rows
+
+
+def _assert_decoded_rows(actual, expected):
+    """Include insertion order, scalar types and signed zero in the comparison."""
+    assert type(actual) is type(expected)
+    if isinstance(expected, dict):
+        assert tuple(actual) == tuple(expected)
+        for key in expected:
+            _assert_decoded_rows(actual[key], expected[key])
+    elif isinstance(expected, list):
+        assert len(actual) == len(expected)
+        for left, right in zip(actual, expected):
+            _assert_decoded_rows(left, right)
+    elif isinstance(expected, float):
+        assert actual.hex() == expected.hex()
+    else:
+        assert actual == expected
+
+
+def _assert_column_iteration(column, expected):
+    assert type(column) is run_json._JSONColumn
+    assert type(column.file) is run_json._BoundedJSONFile
+    assert len(column) == len(expected)
+    _assert_decoded_rows(list(column), expected)
+    _assert_decoded_rows(list(column), expected)
+    left, right = iter(column), iter(column)
+    for row in expected:
+        _assert_decoded_rows(next(left), row)
+        _assert_decoded_rows(next(right), row)
+    sentinel = object()
+    assert next(left, sentinel) is next(right, sentinel) is sentinel
+    # A decoded-row cache is forbidden even if repeatability looks correct.
+    assert not any(isinstance(value, (list, dict, tuple, set))
+                   for value in vars(column).values())
+
+
+def _assert_spool_crosses_windows(column, expected):
+    window = run_json._BoundedJSONFile.window
+    position, crosses = 0, False
+    for index, row in enumerate(expected):
+        position += bool(index)
+        end = position + len(json.dumps(row, separators=(",", ":"), allow_nan=False))
+        crosses |= position // window != (end - 1) // window
+        position = end
+    assert position == column.file.size
+    assert position > 3 * window and crosses
+
+
+@pytest.mark.parametrize("trade_count,equity_count", (
+    (0, 0), (0, 4097), (1, 1), (4097, 4097),
+), ids=("empty", "no-trades-with-equity", "one", "many"))
+@pytest.mark.parametrize("bulk", (False, True), ids=("record-equity", "bulk-equity"))
+def test_fused_report_columns_iterate_serialized_rows(
+        tmp_path, monkeypatch, trade_count, equity_count, bulk):
+    monkeypatch.setattr(run_json, "_BULK_E_ENABLED", bulk)
+    captured, before = [], {}
+
+    def before_prepare(document):
+        captured.append(document)
+        for key, count in (("trades", trade_count), ("equity_curve", equity_count)):
+            column = document[key]
+            before[key] = list(column)
+            assert len(column) == count
+
+    rows = _iteration_rows(trade_count, equity_count=equity_count)
+    with _sink_case(tmp_path, rows) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report, before_prepare=before_prepare)
+        assert outcome.failure is None, outcome.failure
+        expected = json.loads(outcome.report)
+        document = captured[0]
+        assert document["trades"] is sink._trades_spool
+        assert document["equity_curve"] is sink._equity_spool
+        assert expected["summary"]["total_trades"] == sink.counts["T"] == trade_count
+        trade_metadata = document.get("metadata", {}).get("trades", {})
+        if "logical_count" in trade_metadata:
+            assert len(document["trades"]) == trade_metadata["logical_count"]
+        for key, tag, count in (
+                ("trades", "T", trade_count), ("equity_curve", "E", equity_count)):
+            assert len(expected[key]) == sink.counts[tag] == count
+            _assert_decoded_rows(before[key], expected[key])
+            _assert_column_iteration(document[key], expected[key])
+            if count > 1:
+                _assert_spool_crosses_windows(document[key], expected[key])
+
+
+@pytest.mark.parametrize("key", ("trades", "equity_curve"))
+@pytest.mark.parametrize("count", (1, 4097), ids=("one", "many"))
+def test_fused_column_iteration_survives_serialization(tmp_path, monkeypatch, key, count):
+    captured = []
+
+    def before_prepare(document):
+        column = document[key]
+        fast, slow = iter(column), iter(column)
+        fast_rows, slow_rows = [next(fast)], [next(slow)]
+        for _ in range(count // 2):
+            fast_rows.append(next(fast))
+        assert column.file.position == 0
+        read = column.file.read
+        sentinel = object()
+        reads = 0
+
+        def interleaved_read(size=-1):
+            nonlocal reads
+            # Short reads keep the serializer inside its cached window while
+            # the iterator below reads far enough to replace that window.
+            chunk = read(min(size, 8191) if size >= 0 else 8191)
+            if chunk:
+                reads += 1
+                position = column.file.position
+                for _ in range(512):
+                    row = next(slow, sentinel)
+                    if row is sentinel:
+                        break
+                    slow_rows.append(row)
+                # The decoder may replace the shared aligned window, but it
+                # must never advance the serializer's sequential cursor.
+                assert column.file.position == position
+            return chunk
+
+        with monkeypatch.context() as patch, ExitStack() as resources:
+            patch.setattr(column.file, "read", interleaved_read)
+            artifact = run_json._prepare_report_json(
+                document, resources,
+                types.SimpleNamespace(profile="unjailed", spill_dir=str(tmp_path)), sink)
+            chunks = []
+            while chunk := artifact.read(65536):
+                chunks.append(chunk.encode("ascii"))
+            during = b"".join(chunks)
+        assert reads > 0
+        if count > 1:
+            assert reads > 3
+        position = column.file.position
+        fast_rows.extend(fast)
+        slow_rows.extend(slow)
+        assert column.file.position == position
+        captured.append((document, fast_rows, slow_rows, during))
+
+    with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report, before_prepare=before_prepare)
+        assert outcome.failure is None, outcome.failure
+        document, fast_rows, slow_rows, during = captured[0]
+        assert during == outcome.report
+        expected = json.loads(outcome.report)[key]
+        _assert_decoded_rows(fast_rows, expected)
+        _assert_decoded_rows(slow_rows, expected)
+        _assert_column_iteration(document[key], expected)
+
+
+@pytest.mark.parametrize("count", (0, 1, 32769), ids=("empty", "one", "many"))
+def test_fused_output_columns_iterate_serialized_rows(tmp_path, count):
+    rows = []
+    values = (-0.0, 1e-7, 5e-324, 1.7976931348623157e308, None)
+    for index in range(count):
+        start = ordinary.bars.T0 + index
+        rows.append(["O", index, start, start + 1,
+                     values[index % len(values)], 4294967295.])
+        event = _event(f'event {index}, quote"\\\n漢\U0001f680')
+        event[1], event[3] = index + 1, index
+        if count > 1 and index == count // 2:
+            event[-1] += "x" * (2 * run_json._BoundedJSONFile.window + 17)
+        rows.append(event)
+    rows.append(["K", 50.])
+    captured = []
+    with _sink_case(tmp_path, rows, outputs=True) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report, outputs=True,
+            configure=_configure_outputs, before_prepare=captured.append)
+        assert outcome.failure is None, outcome.failure
+        actual, expected = captured[0]["outputs"], json.loads(outcome.report)["outputs"]
+        pairs = [(actual["bars"][key], expected["bars"][key])
+                 for key in ("open_ms", "close_ms")]
+        pairs.extend((entry["values"], reference["values"])
+                     for entry, reference in zip(actual["series"], expected["series"]))
+        pairs.append((actual["events"], expected["events"]))
+        assert len(actual["series"]) == len(expected["series"]) == 2
+        for column, reference in pairs:
+            assert len(reference) == count
+            _assert_column_iteration(column, reference)
+            if count > 1:
+                _assert_spool_crosses_windows(column, reference)
+
+
+@pytest.mark.parametrize("number", (1e-7, 1.2345), ids=("exponent", "fraction"))
+@pytest.mark.parametrize("first", (0.0, 100.0), ids=("numeric-prefix", "incomplete-number"))
+def test_fused_output_number_crossing_window_is_not_truncated(tmp_path, number, first):
+    # "0.0," is four bytes. Starting four or two bytes before the boundary
+    # exposes either a valid numeric prefix ("1e-0"/"1.23") or an incomplete
+    # number ("1e"/"1."). Neither may be yielded before its remaining digits.
+    padding = run_json._BoundedJSONFile.window // 4 - 1
+    values = [0.0] * padding + [number, -0.0]
+    values[0] = first
+    rows = [["O", index, ordinary.bars.T0, ordinary.bars.T0 + 1, value, 1.]
+            for index, value in enumerate(values)] + [["K", 50.]]
+    captured = []
+    with _sink_case(tmp_path, rows, outputs=True) as (sink, library, report):
+        outcome = support.assemble(
+            run_json, sink, library, report, outputs=True,
+            configure=_configure_outputs, before_prepare=captured.append)
+        assert outcome.failure is None, outcome.failure
+        expected = json.loads(outcome.report)["outputs"]["series"][0]["values"]
+        column = captured[0]["outputs"]["series"][0]["values"]
+        start = padding * 4 + len(repr(first)) - len(repr(0.0))
+        assert start < column.file.window < start + len(repr(number))
+        _assert_column_iteration(column, expected)
+
+
+def test_fused_column_iteration_keeps_bounded_memory(tmp_path, monkeypatch):
+    class ReadProbe:
+        def __init__(self, inner):
+            self.inner = inner
+            self.calls = self.largest = 0
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def pread(self, fd, address, count, offset):
+            assert offset % run_json._BoundedJSONFile.window == 0
+            assert address % 4096 == 0
+            self.calls += 1
+            self.largest = max(self.largest, count)
+            return self.inner.pread(fd, address, count, offset)
+
+    peaks = []
+    for count in (256, 12000):
+        with _sink_case(tmp_path, _iteration_rows(count)) as (sink, library, report):
+            sink.verify(library, 1, report)
+            document = run_json._build_sink_report(*support.report_args(report, sink))
+            probes = []
+            with monkeypatch.context() as patch:
+                for key in ("trades", "equity_curve"):
+                    file = document[key].file
+                    probe = ReadProbe(file.libc)
+                    probes.append(probe)
+                    patch.setattr(file, "libc", probe)
+                tracemalloc.start()
+                try:
+                    for key, field in (("trades", "n"), ("equity_curve", "time_ms")):
+                        seen, previous = 0, None
+                        for row in document[key]:
+                            if previous is not None:
+                                assert row[field] > previous
+                            previous = row[field]
+                            seen += 1
+                        assert seen == count  # empty iteration must not prove flat memory
+                        assert len(document[key]) == seen
+                        assert not any(isinstance(value, (list, dict, tuple, set))
+                                       for value in vars(document[key]).values())
+                    peaks.append(tracemalloc.get_traced_memory()[1])
+                finally:
+                    tracemalloc.stop()
+            assert all(probe.calls and probe.largest == run_json._BoundedJSONFile.window
+                       for probe in probes)
+            if count > 256:
+                assert all(probe.calls > 3 for probe in probes)
+    assert peaks[1] - peaks[0] <= 512 * 1024, peaks
+
+
+@pytest.mark.parametrize("payload", (
+    b'{"x":', b'{}{}', b',1', b'1,', b'1,,2', b'1e+',
+    b'NaN', b'{"x":Infinity}', b'"\xff"',
+    b'{"x":"' + b"x" * (run_json._BoundedJSONFile.window + 17) + b'"',
+), ids=("truncated", "missing-comma", "leading-comma", "trailing-comma",
+        "double-comma", "incomplete-exponent", "non-json-number",
+        "nested-non-json-number", "non-ascii", "truncated-wide-row"))
+def test_fused_column_iteration_rejects_malformed_spool(tmp_path, payload):
+    with _sink_case(tmp_path, []) as (sink, library, report):
+        sink.verify(library, 1, report)
+        document = run_json._build_sink_report(*support.report_args(report, sink))
+        # Corrupt the real, still-writable spool before its first read.
+        document["trades"].append_ascii(payload)
+        with pytest.raises(ValueError, match="invalid JSON report column"):
+            list(document["trades"])
+
+
 def test_fused_frozen_oracle_uses_frozen_pf_sink(tmp_path, monkeypatch, frozen):
     assert frozen.pf_sink is frozen._rjone_pf_sink
     assert frozen.pf_sink is not pf_sink

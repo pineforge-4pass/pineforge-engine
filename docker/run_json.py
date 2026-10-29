@@ -6547,7 +6547,7 @@ class _ReportSink:
                 or self._equity_spool_failed):
             return
         try:
-            self._equity_spool.append_ascii(_bulk_equity_ascii(batch))
+            self._equity_spool.append_ascii(_bulk_equity_ascii(batch), row_count=batch.count)
         except Exception as error:
             self._equity_spool_failed = True
             self._remember_spool_failure(error)
@@ -7083,6 +7083,34 @@ class _BoundedJSONFile:
         self.position, self.read_base, self.read_size = 0, -1, 0
         return 0
 
+    def read_at(self, offset, count):
+        """Read up to one aligned window without moving the sequential cursor."""
+        if offset < 0 or count < 0:
+            raise ValueError("report artifact read offsets and counts must be nonnegative")
+        if not self.reading:
+            self.flush()
+            self.reading = True
+            self.read_base, self.read_size = -1, 0
+        if not count or offset >= self.size:
+            return b"" if self.binary else ""
+        base = offset // self.window * self.window
+        if base != self.read_base:
+            while True:
+                copied = self.libc.pread(self.file.fileno(), self.address, self.window, base)
+                if copied >= 0 or ctypes.get_errno() != 4:  # EINTR
+                    break
+            if copied < 0:
+                self._io_error()
+            if copied == 0:
+                raise OSError("short report artifact read")
+            self.read_base, self.read_size = base, copied
+        within = offset - base
+        take = min(count, self.read_size - within, self.size - offset)
+        if take <= 0:
+            raise OSError("short report artifact read")
+        data = self.buffer[within:within + take]
+        return data if self.binary else data.decode("ascii")
+
     def read(self, count=-1):
         if not self.reading:
             self.seek(0)
@@ -7182,10 +7210,70 @@ def _open_uncached_sink(path, *, raw=False):
 
 class _JSONColumn(_JSONRecordArray):
     """A comma-separated, already encoded column in an unlinked temporary."""
+    # Some serializer callers supply only .file via object.__new__.
+    length = 0
+
     def __init__(self, resources, directory):
-        super().__init__(lambda: iter(()))
+        super().__init__(lambda: iter(self), 0)
         self.file = _json_temporary(resources, directory)
         self.empty = True
+
+    def __len__(self):
+        return self.length
+
+    def __iter__(self):
+        def invalid_constant(token):
+            raise ValueError(f"invalid JSON report column: non-JSON number {token}")
+
+        decoder = json.JSONDecoder(parse_constant=invalid_constant)
+        buffer, position, offset = "", 0, 0
+        eof = needs_value = False
+        while True:
+            while position < len(buffer) and buffer[position] in " \t\r\n":
+                position += 1
+            if position == len(buffer):
+                if eof:
+                    if needs_value:
+                        raise ValueError("invalid JSON report column: trailing comma")
+                    return
+            else:
+                try:
+                    value, end = decoder.raw_decode(buffer, position)
+                except json.JSONDecodeError as error:
+                    if eof:
+                        raise ValueError(f"invalid JSON report column: {error.msg}") from error
+                else:
+                    delimiter = end
+                    while delimiter < len(buffer) and buffer[delimiter] in " \t\r\n":
+                        delimiter += 1
+                    if delimiter < len(buffer):
+                        if buffer[delimiter] == ",":
+                            position = delimiter + 1
+                            needs_value = True
+                            yield value
+                            del value
+                            continue
+                        # A window can end in "1e-" or "1.", for which
+                        # raw_decode accepts just the leading integer.
+                        if (eof or delimiter != end or type(value) not in (int, float)
+                                or buffer[delimiter] not in ".eE"):
+                            raise ValueError("invalid JSON report column: expected comma")
+                    elif eof:
+                        yield value
+                        return
+                    # A successful decode at a window's end can still be a
+                    # number prefix. Confirm its separator or EOF first.
+                    del value
+            # Discard consumed rows before reading more. Only the current
+            # encoded value can span windows; each iterator owns its offset.
+            buffer, position = buffer[position:], 0
+            try:
+                chunk = self.file.read_at(offset, self.file.window)
+            except UnicodeDecodeError as error:
+                raise ValueError("invalid JSON report column: non-ASCII data") from error
+            offset += len(chunk)
+            eof = not chunk
+            buffer += chunk
 
     def append(self, value):
         try:
@@ -7196,8 +7284,9 @@ class _JSONColumn(_JSONRecordArray):
             raise RunFailure("report sink write failed", "report_sink_failed",
                              {"reason": "scratch_io"}) from error
         self.empty = False
+        self.length += 1
 
-    def append_ascii(self, data):
+    def append_ascii(self, data, *, row_count=1):
         try:
             if not self.empty:
                 self.file.write_ascii(b",")
@@ -7206,6 +7295,7 @@ class _JSONColumn(_JSONRecordArray):
             raise RunFailure("report sink write failed", "report_sink_failed",
                              {"reason": "scratch_io"}) from error
         self.empty = False
+        self.length += row_count
 
 
 def _json_temporary(resources, directory):
