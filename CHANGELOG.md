@@ -192,6 +192,58 @@ claim those unmeasured values in its documentation.
 
 ### Native live report stream
 
+The development entries below are retained in order. The cumulative stream
+default in the later entry supersedes the earlier delta default; the carried
+accumulator in the earlier entry closes the later entry's remaining native
+rebuild term. All stream modes now retain the cumulative fold for checkpoint
+verification. Interval-mode cumulative documents also carry `ratios_as_of_input`
+and `ratio_context`; export refreshes the ratios and marker without changing
+stored checkpoints.
+
+- **Delta JSONL is the default.** `pineforge-live run --report-jsonl` now
+  emits one `pineforge-native-report-delta/v1` document for each committed
+  input, matching the payload stored in the ledger. This deliberately changes
+  the stream shape for existing consumers that read the old cumulative
+  document; request `--report-jsonl=full` to retain that cumulative output.
+- **Non-ratio per-input report work is flat in appended rows.** The runner
+  carries a closed-trade high-water mark and no longer scans the full closed
+  trade prefix for every input. Delta serialization keeps scalar state and
+  array counts; the report accumulator carries the equity series for ratios,
+  while every mode keeps the cumulative JSON document, accumulator curve and
+  ratio workspace, and engine arrays resident with O(report) growth in equity
+  points and trades as the cost of one cumulative-document builder, measured
+  by `test_native_live_report_memory`: on the lab 10-28 with the default stream
+  and default ratio interval, the runner's own `VmHWM` peak RSS was 22,880 KiB
+  at 1,000 inputs and 40,024 KiB at 10,000 inputs, about 1.9 KiB per additional
+  input, for a native test host that records one equity point per bar (22,472
+  KiB and 29,828 KiB, about 0.82 KiB per additional input, for the native market
+  example that records none), consistent with the per-bar equity series being
+  the difference (the two hosts differ in other ways too); the process
+  measurement includes the accumulator curve, retained cumulative document
+  and engine arrays; the row omitted
+  100,000 inputs because its
+  cumulative-stream projection assumes output volume quadratic in the input
+  count, exceeding the 180 s timeout. These two points do not establish a flat
+  memory bound.
+  The ordinary live path now uses an engine-side carried report
+  accumulator for trade materialization, trade statistics, equity high-water,
+  drawdown/run-up and the other non-ratio scalars, updating only appended rows
+  and replacement tails. The batch `fill_report` and C exports are unchanged.
+- **Optional ratio interval.** `--ratio-interval K` is a positive integer,
+  default 1. K = 1 (the default) is unchanged behaviour: every input carries
+  the exact batch ratios. K > 1 trades per-input freshness of `sharpe_monthly`,
+  `sharpe_bar`, `sortino_bar` and `sortino_monthly` for work: the same batch
+  routine refreshes them at divisible input cursors, the final input and
+  export; intermediate deltas retain the last values and add
+  `ratios_as_of_input`. An additive `ratio_context.chart_timezone` preserves
+  the month clock for export. A pipe/socket whose EOF is discovered after its
+  last commit emits a final refresh at the same cursor; stored deltas remain
+  immutable. Replay saves a separate full marker parse only for canonical
+  deltas whose report equality is checked; rows below a verified checkpoint
+  keep the full syntax parse. Exact ratio recomputation remains O(series), at
+  every input for K = 1 and at the scheduled boundaries for K > 1. Other ordinary-live
+  per-input report work is O(new/replaced rows), including current open lots
+  and diagnostics; full JSONL still writes the whole cumulative document.
 - **Delta JSONL is opt-in; the default stream is unchanged.**
   `pineforge-live run --report-jsonl` continues to emit one cumulative
   `pineforge-native-report/v1` document per committed input, with the same

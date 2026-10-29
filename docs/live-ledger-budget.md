@@ -115,7 +115,7 @@ transaction's report state before its admission. The input is refused before
 growth if its cached pages plus that margin do not fit. A refused boundary
 input leaves database, WAL and SHM byte-identical, including repeated refusals.
 Charging the cumulative payload to the boundary input is intended
-(`Ledger::commit_input`, `runner/store.cpp:1093`). A boundary input can therefore
+(`Ledger::commit_input`, `runner/store.cpp:1099`). A boundary input can therefore
 hit a storage stop when the input alone would fit, up to the cumulative
 payload's reservation earlier than strictly necessary. This cost buys the
 guarantee that no input commits with a checkpoint admitted without room in its
@@ -142,8 +142,8 @@ Startup and recovery checkpoints also admit their actual cached pages before
 COMMIT, using the configured budget without an input reservation. They are
 optional on refusal and publish the same diagnostic. This is intended for both
 startup and post-replay checkpoints (`Ledger::checkpoint_recovered_report`,
-`runner/store.cpp:1219`; the post-replay call is `checkpoint_recovered_report`,
-`runner/main.cpp:1039`): with a large budget, either can spend most of the
+`runner/store.cpp:1225`; the post-replay call is `checkpoint_recovered_report`,
+`runner/main.cpp:1053`): with a large budget, either can spend most of the
 remaining headroom on an O(report) payload before the first live input. The run
 can stop sooner, never over budget. Opening files already
 over a newly supplied finite budget refuses with `LedgerBudgetExceeded` before

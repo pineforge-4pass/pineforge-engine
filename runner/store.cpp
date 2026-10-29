@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "store.hpp"
 #include "report_delta.hpp"
+#include "ratio_report.hpp"
 #include "json.hpp"
 #include "transport.hpp"
 
@@ -386,8 +387,13 @@ std::string export_report(sqlite3* database, std::optional<std::uint64_t> cursor
     const auto committed = scalar(database, "SELECT COALESCE(MAX(input_index)+1,0) FROM inputs");
     const auto target = cursor.value_or(committed);
     if (stats) *stats = {};
-    return read_report_document(database, target, use_checkpoints && target <= committed,
-                                checkpoints_available, stats).dump();
+    auto document = read_report_document(database, target, use_checkpoints && target <= committed,
+                                         checkpoints_available, stats);
+    if (document.find("ratios_as_of_input")) {
+        refresh_report_ratios(document, document.at("ratio_context").at("chart_timezone").text());
+        document.members["ratios_as_of_input"] = Json::number(std::to_string(target));
+    }
+    return document.dump();
 }
 
 std::uint64_t commit_time() {

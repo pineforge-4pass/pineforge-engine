@@ -76,13 +76,80 @@ A closed stdout pipe fails clearly with exit 1, never SIGPIPE; the last input
 and report are already durable, and export remains available.
 
 The input, engine hash, actions, report delta and its integrity digest commit in
-one SQLite transaction. At a checkpoint boundary, the cumulative checkpoint is
-prepared from that transaction's report state before admission. Its serialized
+one SQLite transaction. Append-only `pineforge-native-report-delta/v1` rows
+contain changed scalar fields and appended/replaced array suffixes, not
+historical full-report copies. With the default ratio interval, export folds
+these rows through the selected cursor into byte-identical canonical report JSON.
+The runner-owned accumulator carries trade-stat folds and the equity series
+needed for exact ratios. Every mode, including the default and runs without
+JSONL output, keeps the cumulative JSON document, the accumulator's raw curve
+and ratio workspace, and the engine's own arrays resident. Memory grows with
+equity points and trades: O(report), the cost of one builder of the cumulative
+document. Cumulative stdout, legacy report verification and checkpoint equality
+serialize that same fold of the ledger's suffix patches. Peak RSS numbers come
+from `test_native_live_report_memory`; it prints `mem n=<N> peak_rss_kib=<K>`
+for each completed size on Linux and prints a skip reason on macOS. Measured
+on the lab 10-28 with the default stream and default ratio interval, on a
+native test host that records one equity point per bar: peak RSS 22,880 KiB at
+1,000 inputs and 40,024 KiB at 10,000 inputs, about 1.9 KiB per additional
+input. These are the runner's own `VmHWM` readings for one fixture, including
+the accumulator curve, retained cumulative document and engine arrays. The
+native market example, which records no equity points, read 22,472 KiB and
+29,828 KiB (about 0.82 KiB per additional input), consistent with the per-bar
+equity series being the difference (the two hosts differ in other ways too).
+The row omitted 100,000 inputs because its
+cumulative-stream projection assumes output volume quadratic in the input
+count, exceeding the 180 s timeout. These two points do not establish a flat
+memory bound.
+
+`--ratio-interval K` takes a positive integer and defaults to 1. **K = 1 (the
+default) is unchanged behaviour:** every input's cumulative report and delta
+carry the same exact four ratios as the batch routine. Closed-trade statistics,
+net profit, equity high-water, drawdown/run-up and the other scalar metrics are
+carried in report row order. Ordinary live reports materialize and fold only new
+rows and replacement tails, including the current open-lot rows. Security
+diagnostics still replace their current array. Selected, sink and whole-array
+presentation routes retain their existing report reader.
+
+K > 1 is an opt-in trade of per-input freshness for work for exactly these
+`report.metrics.equity` fields: `sharpe_monthly`, `sharpe_bar`, `sortino_bar` and
+`sortino_monthly`. They are recomputed by the same batch routine when the
+committed-message cursor is divisible by K, at the final input and at export.
+Cursor 0 initializes the warmup ratios. Between boundaries the four values
+retain their last computation, and every interval-mode
+delta and cumulative document adds `ratios_as_of_input`, the committed-message
+cursor of that computation. The additive `ratio_context.chart_timezone` carries
+the civil-month clock required for exact read-only export, including when a
+checkpoint supplies the prefix. Both keys are outside the delta's `fields`;
+patch consumers copy them to the cumulative document. K = 1 adds neither key.
+
+Finite files, `--check` snapshots and `--max-events` refresh a known final input
+before it commits. When EOF or shutdown reveals the end of a pipe/socket after
+its last commit, JSONL emits one extra ratio-refresh delta (or full document) at
+that same cursor before the operational summary. It adds no input or action.
+A storage-budget refusal also refreshes at the last committed cursor, using
+the retained committed curve; the rejected input contributes no report fields.
+This terminal refresh writes no ledger data.
+Export, including `--at-input`, refreshes the four ratios against the selected
+cursor's cumulative curve after verifying its immutable ledger rows, and sets
+the exported freshness marker to that cursor. It leaves stored deltas and
+checkpoints unchanged. Interval-mode ledgers bind K into their deployment
+identity, so resuming requires the same K; K = 1 retains the existing identity.
+
+The ratio recomputation is still O(series), including its batch return mean and
+variance/downside passes. K = 1 pays that cost at every input; K > 1 pays it at
+the scheduled boundaries and final/export reads. Other ordinary-live report
+materialization and folding are O(new/replaced rows) per input, plus current
+open lots and security diagnostics. A fixed K > 1 reduces ratio work frequency;
+it does not make the ratio recomputations independent of history.
+
+At a checkpoint boundary, the cumulative checkpoint is prepared from that
+transaction's report state before admission. Its serialized
 payload length supplies the extra-payload reservation. After the input commits,
 the checkpoint is inserted in its own admitted transaction while retaining the
 writer mutex, with a byte ceiling no greater than the input's reservation.
 Charging that payload to the boundary input is intended
-(`Ledger::commit_input`, `runner/store.cpp:1093`): the boundary input can hit a
+(`Ledger::commit_input`, `runner/store.cpp:1099`): the boundary input can hit a
 storage stop when the input alone would fit, up to the cumulative payload's
 reservation earlier than strictly necessary. This cost buys the guarantee that
 no input commits with a checkpoint admitted without room in its reservation.
@@ -90,8 +157,8 @@ A checkpoint build or write failure records `write_failed` and continues with
 the input durable. If the separate transaction's actual page admission needs
 more room than reserved, only the checkpoint rolls back; the diagnostic count
 increases without latching a storage stop. Preparation still constructs and
-serializes an O(T) cumulative document at a
-boundary, where T is the full report size; it can delay the input loop and does
+serializes an O(T) cumulative document at a boundary, where T is the full
+report size; it can delay the input loop and does
 not provide constant memory or constant export time.
 
 `--checkpoint-interval K` sets the first/base interval, default 1024 committed
@@ -135,34 +202,38 @@ document memory. Ledgers that first need reports or integrity digests populated
 retry after startup replay, before new inputs. Later opens add no startup copy
 when a checkpoint already exists.
 Startup and post-replay checkpoints intentionally have no input reservation
-behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1219`;
-the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1039`).
+behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1225`;
+the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1053`).
 With a large budget, either can spend most of the remaining headroom on an
 O(T) payload before the first live input. The run can stop sooner, never over
 budget; this is the intended cost of preparing the report shortcut at startup.
 
-Append-only
-`pineforge-native-report-delta/v1` rows contain changed scalar fields and
-appended/replaced array suffixes, not historical full-report copies. Export
-folds these rows through the selected cursor into byte-identical canonical
-report JSON. Recovery still replays every committed strategy input because the
+Recovery still replays every committed strategy input because the
 strategy state has no restore API; it verifies warmup, every input's engine hash
 and actions before delivery, verifies the recomputed report at the
 checkpoint and later inputs, and uses the checkpoint only for the report-side
 prefix. At the checkpoint boundary, restart compares the checkpoint payload
-with the recomputed cumulative document, including in delta and no-stream modes.
+with the same carried cumulative document that live stdout used, including
+interval-mode freshness metadata and in delta and no-stream modes. The stored
+freshness marker reproduces known non-periodic final boundaries during replay.
+Recovery saves a separate full marker parse only for canonical deltas whose
+report equality is checked (at or after the verified checkpoint, or all rows
+without one); rows below the checkpoint keep the full syntax parse.
 Existing full-report rows remain immutable and readable; when recovery verifies
 one, it compares it with the recomputed cumulative document. New inputs use
 deltas. Strategy-state recovery remains full replay work.
 
-The export schema and engine computation are unchanged. The runner no longer
-rescans the closed-trade prefix per input. Delta output costs O(new rows) per
-input and avoids quadratic output as history grows. With no report stream or with
-`--report-jsonl=delta`, the runner retains only scalar state and array counts.
-Plain `--report-jsonl` and `--report-jsonl=full` retain the cumulative document
-and keep the old O(cumulative document) output cost per input, which can be
-quadratic over a growing run. The native `fill_report` call still rebuilds the
-engine's trade and equity/metrics report on each input in every mode.
+The batch `fill_report` and C exports are unchanged. Delta output costs
+O(new/replaced rows) per input and avoids quadratic output as history grows.
+Plain `--report-jsonl` and `--report-jsonl=full` keep the
+O(cumulative document) output cost per input, which can be quadratic over a
+growing run. The O(report) resident retention described above applies to every
+mode; the memory measurement row covers the default cumulative stream with
+the default ratio interval. It measures 1,000 and 10,000 inputs, adding 100,000
+when the measured smaller run projects within its 180 s timeout, and prints
+the reason when that largest size is omitted. Its deliberate sanity ceilings
+are a peak below 2 GiB and growth below 4 KiB per additional input between the
+two largest completed sizes; these are ceilings, not measured baselines.
 Array suffix replacement assumes at most one provisional trailing element for
 equity points and broker hashes. The runner never enables tracing and refuses
 nonempty `trace`: traces can contain several records per bucket, so enabling
@@ -171,7 +242,7 @@ not just its last record. `trace_names` likewise has no active trace updates.
 Older ledgers acquire reports by deterministic replay; resume them with `run`
 before export. Ledgers written before integrity digests were added also require
 one verified replay to populate the digests; old full/delta rows stay unchanged.
-Reports are immutable and never change with webhook timing.
+Stored report deltas are immutable and never change with webhook timing.
 The deployment already binds strategy-library bytes, warmup bytes, effective
 settings, symbol units, broker configuration and routing. Operational export
 flags do not change it.
