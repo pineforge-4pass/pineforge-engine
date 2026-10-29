@@ -644,10 +644,10 @@ struct TradeLedger::State {
             }
             return numeric_window.records[row];
         }
-
+        // Reverse span includes global through the first retained row (0 or first).
         const size_type retained = retain_predecessor ? 1 : 0;
         const auto count = std::min(kNumericWindowRows - retained,
-                                    descending ? global - first + 1 : resident_first - global);
+                                    descending ? global - (retiring ? first : 0) + 1 : resident_first - global);
         const auto window_first = descending ? global - (count - 1) : global - retained;
         if (retain_predecessor) {
             const auto row = numeric_window.count - 1;
@@ -809,12 +809,12 @@ struct TradeLedger::State {
     }
     template<auto Member>
     auto numeric_field(size_type global) const {
-        check(global, true);
+        check(global);
         return numeric_record(global).*Member;
     }
     template<StringExtent Record::*Member>
     std::string string_field(size_type global) const {
-        check(global, true);
+        check(global);
         const auto& entry = load(global);
         const auto text = entry.record.*Member;
         if (!entry.strings_valid()) return get_string(text);
@@ -829,7 +829,7 @@ struct TradeLedger::State {
     }
     template<StringExtent Record::*Member>
     bool string_equals(size_type global, std::string_view rhs) const {
-        check(global, true);
+        check(global);
         const auto& entry = load(global);
         const auto text = entry.record.*Member;
         if (!entry.strings_valid() || text.length > kCacheStringBytes)
@@ -1229,7 +1229,7 @@ Trade TradeLedger::read(size_type global) const {
 
 Trade TradeLedger::operator[](size_type global) const { return at(global); }
 Trade TradeLedger::at(size_type global) const {
-    state_->check(global, true);
+    state_->check(global);
     return read(global);
 }
 
@@ -1241,7 +1241,7 @@ Trade TradeLedger::back() const {
 }
 
 Trade TradeLedger::numeric_at(size_type global) const {
-    state_->check(global, true);
+    state_->check(global);
     // Preserve this whole-numeric-row accessor's existing admission behavior.
     return State::decode_numeric(state_->descriptor(global, true));
 }
@@ -1334,6 +1334,7 @@ void TradeLedger::replace(size_type global, const Trade& row) {
 }
 
 void TradeLedger::modify(size_type global, const std::function<void(Trade&)>& edit) {
+    state_->check(global, true);
     Trade row = at(global);
     edit(row);
     replace(global, row);
@@ -1401,7 +1402,7 @@ bool TradeLedger::previous(size_type& cursor, Trade& value) const {
 }
 
 const Trade& TradeLedger::materialize(size_type global) const {
-    state_->check(global, true);
+    state_->check(global);
     const auto found = state_->materialized.find(global);
     if (found != state_->materialized.end()) return found->second;
     return state_->materialized.emplace(global, read(global)).first->second;
@@ -1419,9 +1420,9 @@ void TradeLedger::seal(size_type global_end) {
     // The consumer has already emitted T and folded all logical identities.
     // Only an explicitly admitted sink run drops its physical history.
     state_->retire(global_end);
-    // Publication changes no row content, and the checked accessors refuse
-    // sealed rows before they reach the cache: cached entries stay valid, so a
-    // closedtrades loop is not made cold again by every published trade.
+    // Publication changes no retained row content: cached entries stay valid,
+    // so sealed reads can reuse them without making a closedtrades loop cold.
+    // Physical retirement invalidates its cache and refuses erased rows.
     while (state_->count != 0 && state_->resident_first < global_end) state_->evict();
     state_->first = global_end;
     assert(logical_end_ == state_->end);

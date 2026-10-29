@@ -2222,10 +2222,10 @@ Per-trade reads: `closed_trade_count()` / `closed_trade(i)` return the closed
 rows this run booked; `report_trade_count()` / `get_report_trade(i)` span those
 rows followed by the range-end rows, in the order `fill_report` lays them out.
 `closed_trade(i)`, `get_trade(i)` and `get_report_trade(i)` return owning row
-values by copy, including closed rows paged out of resident storage; a
-range-end row counts in the report space only. A C++ host can read every
-`Trade` field from the returned value. Pinned by `closed_rows_by_index` in
-`tests/test_native_report_truth.cpp`.
+values by copy, including paged-out sealed rows in a non-retiring ledger. A
+retiring ledger refuses erased rows with `RetiredTradeHistoryRead`. Range-end
+rows count only in report space. Every `Trade` field is readable. Pinned by
+`closed_rows_by_index` in `tests/test_native_report_truth.cpp`.
 
 ### Why a row closed
 

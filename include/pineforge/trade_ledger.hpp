@@ -136,10 +136,10 @@ public:
     size_type resident_base() const;
     bool empty() const;
 
-    // read() spans the retained source; a read below base() on an explicitly
-    // retiring sink run refuses with coded logic_error engine_invariant.
-    // at()/[] retain the checked
-    // unsealed-window contract for existing settlement callers.
+    // read()/at()/[] span the retained source, including sealed rows on a
+    // non-retiring ledger. An explicitly retiring ledger refuses reads below
+    // base() with typed RetiredTradeHistoryRead (coded engine_invariant).
+    // Writers still reject sealed rows below the publication boundary.
     // Packed hits allocate only the owning strings required by read(); a
     // numeric-only entry first fills its existing inline string allowance.
     // Direct-mapped eviction above cache_rows(), or oversized strings, retains
@@ -148,12 +148,12 @@ public:
     Trade operator[](size_type global) const;
     Trade at(size_type global) const;
     Trade back() const;
-    // Same checked unsealed-row contract as at(). numeric_at() returns every
+    // Same retained-row read contract as at(). numeric_at() returns every
     // numeric field and flag with empty strings, reading only the descriptor.
     // entry_id_at() returns only that string and shares the field read cache.
     Trade numeric_at(size_type global) const;
     std::string entry_id_at(size_type global) const;
-    // Pine field reads use the same check(global,true) as at(). A numeric
+    // Pine field reads use the same check(global) as at(). A numeric
     // hit writes only the reference bit and loads its Record member, without
     // constructing/copying a Trade or any string. Numeric misses use
     // kNumericWindowRows mapped descriptors and no payload
@@ -168,7 +168,7 @@ public:
     // Copies reuse the mapped source without preads. Reverse refills require two
     // descending miss steps, or continuation below a backward window.
     // Ascending (i,i-1) and (i+1,i) pairs retain a window predecessor instead
-    // of starting a reverse scan. Backward refills stop at base().
+    // of starting a reverse scan. Backward refills stop at 0, or base() if retiring.
     // A cold reverse scan has no probes; a warm one needs at most two forward
     // probes, two extra windows and 2*(kNumericWindowRows-1) repeated rows.
     // After lazy packing, a string hit copies only the requested packed bytes.

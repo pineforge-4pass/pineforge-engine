@@ -429,7 +429,7 @@ PF_API uint64_t strategy_closed_trade_entry_incarnation(
  * handle, like strategy_get_last_error. This legacy pointer API explicitly
  * materializes each requested row; value/page readers use bounded storage.
  * NULL on a NULL handle or an
- * out-of-range/streamed row, checked by the close-cause query before indexing. */
+ * out-of-range/policy-erased row; retained sealed rows remain readable. */
 PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_index) {
     if (!s) return nullptr;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
