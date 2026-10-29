@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1334
+  unreviewed: 1338
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -90,6 +90,10 @@ owners:
 fixed_inputs:
   []
 entries:
+  - {id: "U1619", file: "src/run_quota.cpp", symbol: "args", ops: ["decl", "grow"], container: "RunFailureArgs", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 446}
+  - {id: "U1620", file: "src/run_quota.cpp", symbol: "endpoint", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 816}
+  - {id: "U1621", file: "src/run_quota.cpp", symbol: "endpoints", ops: ["decl", "subscript"], container: "std::map<EndpointKey, std::weak_ptr<RunQuotaEndpoint>>", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 524}
+  - {id: "U1622", file: "src/run_quota.cpp", symbol: "refusal", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 596}
   - {id: "U1609", file: "src/live_report.cpp", symbol: "all", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "One fixed-size trade fold allocated at warmup, retained by the accumulator. Updating it is O(rows appended since the last input), with the held row and current open rows folded into copies. No population-sized storage in this allocation.", line: 167}
   - {id: "U1610", file: "src/live_report.cpp", symbol: "curve", ops: ["decl", "grow"], container: "std::deque<pf_equity_point_t>", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "Retained raw equity history for exact batch ratio recomputation. Growth per input is O(rows appended since the last input); the held point is replaced. Total storage is O(all equity points), not flat memory.", line: 26}
   - {id: "U1611", file: "src/live_report.cpp", symbol: "longs", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "One fixed-size long-trade fold allocated at warmup, retained by the accumulator. Updating it is O(rows appended since the last input), with the held row and current open rows folded into copies. No population-sized storage in this allocation.", line: 169}
