@@ -108,18 +108,18 @@ The catalog contains 79 named failure codes: 38 first released in 1.4.0,
 (3 run-quota codes and 7 report-channel codes). One unnamed `none` sentinel
 gives 80 registry entries; existing numbers stay fixed.
 
-The run-quota additions are `run_descriptor_limit_exceeded` (70),
-`run_quota_configuration_invalid` (71), and `run_resource_quota_exceeded`
-(72). Their finite contract is described [below](#run_failure_codes_quota).
+The run-quota additions are `run_descriptor_limit_exceeded` (74),
+`run_quota_configuration_invalid` (78), and `run_resource_quota_exceeded`
+(79). Their finite contract is described [below](#run_failure_codes_quota).
 
 The seven new codes describe the planned supervised report channel. The
 harness does not emit them yet, and their registration declares no
 report-channel capability. Their closed vocabularies and measurement rules
 are described [after the tables](#run_failure_codes_report_channel).
-The registrations are `diagnostic_budget_exceeded` (73),
-`report_budget_exceeded` (74), `report_channel_failed` (75),
-`run_deadline_exceeded` (76), `run_isolation_unavailable` (77),
-`run_process_refused` (78), and `run_producer_failed` (79).
+The registrations are `diagnostic_budget_exceeded` (70),
+`report_budget_exceeded` (71), `report_channel_failed` (72),
+`run_deadline_exceeded` (73), `run_isolation_unavailable` (75),
+`run_process_refused` (76), and `run_producer_failed` (77).
 
 The 1.7.0 additions are `report_mode_unsupported`, `report_sink_failed`,
 `scratch_capacity_exceeded`, `scratch_configuration_invalid`, and
