@@ -15,6 +15,8 @@
 #include <dirent.h>
 #include <iostream>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <string>
 #include <sys/mman.h>
 #include <sys/resource.h>
@@ -28,6 +30,44 @@ using namespace pineforge;
 using namespace pineforge::detail;
 
 namespace {
+
+// Compute the pre-quota footprint from its field widths and alignment,
+// including the private arena region's vector, extent, optional cap and label.
+// This pins object size, not a count of allocations elsewhere in open().
+struct FieldLayout {
+    std::size_t bytes;
+    std::size_t alignment;
+};
+template<class T> constexpr FieldLayout field_layout() {
+    return {sizeof(T), alignof(T)};
+}
+template<std::size_t Count>
+constexpr FieldLayout aggregate_layout(const std::array<FieldLayout, Count>& fields) {
+    FieldLayout result{0, 1};
+    for (const auto field : fields) {
+        result.bytes += (field.alignment - result.bytes % field.alignment) % field.alignment;
+        result.bytes += field.bytes;
+        result.alignment = std::max(result.alignment, field.alignment);
+    }
+    result.bytes += (result.alignment - result.bytes % result.alignment) % result.alignment;
+    return result;
+}
+constexpr auto unmanaged_region_layout = aggregate_layout(std::array<FieldLayout, 4>{{
+    field_layout<std::vector<std::uint32_t>>(), field_layout<std::uint64_t>(),
+    field_layout<std::optional<std::uint64_t>>(), field_layout<ScratchStore>()
+}});
+constexpr auto unmanaged_file_layout = aggregate_layout(std::array<FieldLayout, 10>{{
+    field_layout<int>(), field_layout<ScratchFile::IoRaiser>(), field_layout<std::string>(),
+    field_layout<std::shared_ptr<ScratchSlab>>(), field_layout<ScratchResource>(),
+    field_layout<bool>(), field_layout<ScratchArena*>(), unmanaged_region_layout,
+    field_layout<std::size_t>(), field_layout<std::size_t>()
+}});
+static_assert(sizeof(ScratchFile) == unmanaged_file_layout.bytes,
+              "quota bookkeeping must fit the pre-quota unmanaged ScratchFile footprint");
+static_assert(sizeof(std::unique_ptr<ScratchFileQuota>) == sizeof(void*),
+              "per-file quota ownership must cost only one pointer");
+static_assert(ScratchFile::kCacheBytes <= std::numeric_limits<std::uint32_t>::max(),
+              "cache-window counters must represent the complete window");
 
 std::uint64_t block_size(const char* directory) {
     struct statvfs filesystem{};
@@ -187,6 +227,63 @@ void sparse_and_lifetime(const char* directory, std::uint64_t limit) {
     assert(::close(alias) == 0);
     // Descriptor escape leaves last-alias proof/refund with the host lease.
     usage(quota, QuotaResource::scratch_bytes, remaining, charge, limit);
+}
+
+void moved_lifetime(const char* directory, std::uint64_t limit, std::uint64_t file_limit) {
+    auto quota = RunQuota::from_environment();
+    const auto block = block_size(directory);
+    const auto end = block + sizeof(unsigned char);
+    const auto charge = quota_rounded_extent(end, block);
+    const auto replaced_charge = quota_rounded_extent(sizeof(unsigned char), block);
+    const auto peak = charge + replaced_charge;
+    assert(limit == peak && file_limit == 2);
+    {
+        ScratchFile assigned;
+        assigned.set_directory(directory);
+        assigned.open("quota-replaced");
+        assigned.ensure_size(sizeof(unsigned char));
+        {
+            ScratchFile file;
+            file.set_directory(directory);
+            file.open("quota-move");
+            file.ensure_size(end);
+            usage(quota, QuotaResource::scratch_bytes, peak, peak, limit);
+            usage(quota, QuotaResource::scratch_files, 2, 2, file_limit);
+
+            ScratchFile moved(std::move(file));
+            assert(!file.opened() && moved.opened());
+            file.clear();
+            usage(quota, QuotaResource::scratch_bytes, peak, peak, limit);
+            usage(quota, QuotaResource::scratch_files, 2, 2, file_limit);
+
+            // Assignment must retire its old backing and transfer the new
+            // backing's sole reservation owner. Never borrow either fd.
+            assigned = std::move(moved);
+            assert(!moved.opened() && assigned.opened());
+            moved.clear();
+            usage(quota, QuotaResource::scratch_bytes, charge, peak, limit);
+            usage(quota, QuotaResource::scratch_files, 1, 2, file_limit);
+        }
+        // Both moved-from objects are now destroyed; the transferred charge
+        // must remain until the sole live owner closes it.
+        usage(quota, QuotaResource::scratch_bytes, charge, peak, limit);
+        usage(quota, QuotaResource::scratch_files, 1, 2, file_limit);
+        assigned.clear();
+        usage(quota, QuotaResource::scratch_bytes, 0, peak, limit);
+        usage(quota, QuotaResource::scratch_files, 0, 2, file_limit);
+        assigned.clear();
+        usage(quota, QuotaResource::scratch_bytes, 0, peak, limit);
+        usage(quota, QuotaResource::scratch_files, 0, 2, file_limit);
+
+        // Reopening proves that close returned reusable capacity; scope
+        // destruction must also release exactly one file and its bytes.
+        assigned.open("quota-reopened");
+        assigned.ensure_size(end);
+        usage(quota, QuotaResource::scratch_bytes, charge, peak, limit);
+        usage(quota, QuotaResource::scratch_files, 1, 2, file_limit);
+    }
+    usage(quota, QuotaResource::scratch_bytes, 0, peak, limit);
+    usage(quota, QuotaResource::scratch_files, 0, 2, file_limit);
 }
 
 class FileSizeLimit {
@@ -489,6 +586,7 @@ with tempfile.TemporaryDirectory(prefix="quota-native-", dir=disk) as directory:
              for operation in ("ensure", "truncate", "write", "write_some")]
     cases += [("create", 0, 1), ("command-create", 0, 1),
               ("sparse", rounded(9 * block + 1), 1),
+              ("move", rounded(block + 1) + rounded(1), 2),
               ("partial", rounded(2 * block + 1), 2),
               ("partial-some", rounded(2 * block + 1), 2),
               ("command", rounded((spill_page + 1) * page), 1),
@@ -594,6 +692,7 @@ int main(int argc, char** argv) {
             else if (which == "create" || which == "command-create")
                 create_refusal(directory, files, which == "command-create");
             else if (which == "sparse") sparse_and_lifetime(directory, limit);
+            else if (which == "move") moved_lifetime(directory, limit, files);
             else if (which == "partial" || which == "partial-some")
                 partial_write(directory, which == "partial-some", limit);
             else if (which == "truncate-error") truncate_then_write_error(directory, limit);

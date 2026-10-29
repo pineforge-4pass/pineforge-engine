@@ -480,7 +480,7 @@ public:
                 reservation->finish();
             }
             if (written > 0 && bounded_cache_)
-                bytes_written_since_sync_ += static_cast<std::size_t>(written);
+                bytes_written_since_sync_ += static_cast<std::uint32_t>(written);
             return written;
         }
         return static_cast<ssize_t>(count);
@@ -501,7 +501,7 @@ public:
                 : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
             const auto received = ::pread(fd_, data, chunk, static_cast<off_t>(offset));
             if (received > 0 && bounded_cache_) {
-                clean_bytes_read_ += static_cast<std::size_t>(received);
+                clean_bytes_read_ += static_cast<std::uint32_t>(received);
                 if (clean_bytes_read_ == kCacheBytes) discard_clean_cache();
             }
             return received;
@@ -533,7 +533,7 @@ public:
             if (count <= 0) io_error(count < 0 ? errno : EIO, "scratch write");
             written += static_cast<std::size_t>(count);
             if (reservation) reservation->wrote(offset + written);
-            if (bounded_cache_) bytes_written_since_sync_ += static_cast<std::size_t>(count);
+            if (bounded_cache_) bytes_written_since_sync_ += static_cast<std::uint32_t>(count);
         }
         if (reservation) reservation->finish();
     }
@@ -561,7 +561,7 @@ public:
             if (count <= 0) io_error(count < 0 ? errno : EIO, "scratch read");
             received += static_cast<std::size_t>(count);
             if (bounded_cache_) {
-                clean_bytes_read_ += static_cast<std::size_t>(count);
+                clean_bytes_read_ += static_cast<std::uint32_t>(count);
                 if (clean_bytes_read_ == kCacheBytes) discard_clean_cache();
             }
         }
@@ -630,9 +630,13 @@ private:
     bool bounded_cache_ = false;
     ScratchArena* arena_ = nullptr;
     ScratchArena::Region region_;
-    mutable std::size_t clean_bytes_read_ = 0;
-    std::size_t bytes_written_since_sync_ = 0;
-    // Empty in unmanaged mode: no quota allocation, query or ledger traffic.
+    // Each transfer is capped at the remaining 64 KiB cache window. These
+    // counters stay in [0, kCacheBytes]; two 32-bit counters leave room for
+    // the quota pointer without enlarging the original unmanaged footprint.
+    mutable std::uint32_t clean_bytes_read_ = 0;
+    std::uint32_t bytes_written_since_sync_ = 0;
+    // All per-file quota state lives behind this one pointer, allocated only
+    // for a managed open. Empty in unmanaged mode: no allocation or traffic.
     std::unique_ptr<ScratchFileQuota> quota_;
 };
 } // namespace pineforge::detail
