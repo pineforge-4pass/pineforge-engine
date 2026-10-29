@@ -141,8 +141,27 @@ def mask_build_identity(text, document):
 
 
 def mask_sink_build_identity(data):
-    """Replace exactly one engine version in the header, retaining every body byte."""
-    header, newline, body = data.partition(b"\n")
+    """Replace exactly one engine version in the header, retaining every body byte.
+
+    The trailer's sha256 covers every line before it, header included (the
+    contract of docker/pf_sink.py), so it moves with the engine version even
+    when no body byte does. It is first checked against the bytes as produced,
+    then replaced by the SHA-256 of the same bytes with only the header engine
+    masked: any other change to the stream still changes it.
+    """
+    trailer_start = data.rfind(b"\n", 0, len(data) - 1) + 1
+    trailer_line = data[trailer_start:]
+    try:
+        trailer = json.loads(trailer_line)
+        recorded = trailer["sha256"]
+    except (ValueError, KeyError, TypeError):
+        recorded = None
+    before = data[:trailer_start]
+    if (not data.endswith(b"\n") or not trailer_start or not isinstance(recorded, str)
+            or len(re.findall(rb'"sha256"\s*:', trailer_line)) != 1
+            or hashlib.sha256(before).hexdigest() != recorded):
+        raise RuntimeError("sink trailer sha256 is not the SHA-256 of the bytes before it")
+    header, newline, body = before.partition(b"\n")
     document = json.loads(header)
     if (not newline or not isinstance(document, dict)
             or document.get("schema") != "pf-report-sink"
@@ -152,7 +171,12 @@ def mask_sink_build_identity(data):
     needle = b'"engine":' + json.dumps(document["engine"], ensure_ascii=False).encode("utf-8")
     if header.count(needle) != 1:
         raise RuntimeError("sink header engine not found exactly once")
-    return header.replace(needle, b'"engine":"<build-identity>"') + newline + body
+    masked = header.replace(needle, b'"engine":"<build-identity>"') + newline + body
+    spelled = b'"sha256":' + json.dumps(recorded).encode("utf-8")
+    if trailer_line.count(spelled) != 1:
+        raise RuntimeError("sink trailer sha256 is not the SHA-256 of the bytes before it")
+    return masked + trailer_line.replace(
+        spelled, b'"sha256":"' + hashlib.sha256(masked).hexdigest().encode("ascii") + b'"')
 
 
 def measure(runner, library, shape, directory):
