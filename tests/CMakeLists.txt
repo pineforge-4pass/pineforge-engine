@@ -7467,6 +7467,17 @@ foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)
     include("${cr150_lane_file}")
 endforeach()
 
+# --- CR-150 engine-layout begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(test_engine_layout_probe test_engine_layout_probe.cpp)
+    target_include_directories(test_engine_layout_probe PRIVATE
+        ${PROJECT_SOURCE_DIR}/include
+        ${PROJECT_BINARY_DIR}/include
+        ${PROJECT_SOURCE_DIR}/src)
+    target_compile_options(test_engine_layout_probe PRIVATE -std=c++17 -ffp-contract=off -UNDEBUG)
+endif()
+# --- CR-150 engine-layout end ---
+
 # --- CR-150 s4e-fix-tmp begin ---
 # CR-352: only these opted-in existing targets need the interposer's linkage.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
