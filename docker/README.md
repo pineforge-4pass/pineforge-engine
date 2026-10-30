@@ -92,7 +92,7 @@ Mount points (provide exactly one of `strategy.pine` / `strategy.cpp`):
 | Host path        | Container path        | Required | Notes                             |
 | ---------------- | --------------------- | :------: | --------------------------------- |
 | `strategy.pine`  | `/in/strategy.pine`   | preferred | PineScript v6 source; transpiled in-container |
-| `strategy.cpp`   | `/in/strategy.cpp`    | back-compat | Pre-transpiled PineForge translation unit (used only if no `.pine`) |
+| `strategy.cpp`   | `/in/strategy.cpp`    | back-compat | Pre-transpiled PineForge translation unit (used only if no `.pine`). Refused unless `PINEFORGE_STRATEGY_CPP_SHA256` holds the sha256 of exactly these bytes, or `PINEFORGE_ALLOW_UNATTESTED_CPP=1` (local trust only; a hosted caller must never set it) |
 | `ohlcv.csv`      | `/in/ohlcv.csv`       | yes      | `timestamp,open,high,low,close,volume` |
 
 ### Transpile only (Pine → C++, no backtest)
@@ -142,7 +142,7 @@ Example combining several keys:
 
 ```bash
 docker run --rm \
-  -v $(pwd)/strategy.cpp:/in/strategy.cpp:ro \
+  -v $(pwd)/strategy.cpp:/in/strategy.cpp:ro -e PINEFORGE_ALLOW_UNATTESTED_CPP=1 \
   -v $(pwd)/ohlcv.csv:/in/ohlcv.csv:ro \
   -e 'PINEFORGE_OVERRIDES={
         "initial_capital":"100000",
@@ -768,7 +768,7 @@ directly (for example `base64 -d | shasum -a 256`).
 | Code | Meaning |
 | ---: | ------- |
 |  `0` | Success — JSON report (or C++ in transpile-only mode) on stdout |
-|  `2` | Missing input mount (`/in/strategy.pine` or `/in/strategy.cpp`, and `/in/ohlcv.csv`) |
+|  `2` | Missing input mount (`/in/strategy.pine` or `/in/strategy.cpp`, and `/in/ohlcv.csv`), or a mounted `strategy.cpp` the host did not vouch for (one typed `run_request_invalid` line on stdout) |
 |  `3` | `g++` compile of the strategy translation unit failed |
 |  `4` | Backtest aborted at runtime |
 |  `5` | Transpile failed (unsupported Pine construct or syntax error) |

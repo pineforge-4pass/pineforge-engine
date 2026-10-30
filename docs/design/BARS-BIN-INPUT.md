@@ -211,7 +211,7 @@ docker/run_json.py:2363).
 This selection contract belongs to `run_json.py`. The container entrypoint
 still sets `OHLCV` to `/in/ohlcv.csv` (subject to its input-directory prefix)
 and invokes `--ohlcv`; renaming its mount alone does not switch routes
-(`OHLCV` docker/entrypoint.sh:105; `OHLCV` docker/entrypoint.sh:300).
+(`OHLCV` docker/entrypoint.sh:105; `OHLCV` docker/entrypoint.sh:324).
 
 ## 4. HPO
 
