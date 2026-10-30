@@ -63,6 +63,9 @@ struct Reader final : source::PineStrategyHost {
     bool equals(int index, std::string_view rhs) const {
         return closed_trade_entry_id_equals(index, rhs);
     }
+    using source::PineStrategyHost::closed_trade_exit_id_equals;
+    using source::PineStrategyHost::closed_trade_entry_comment_equals;
+    using source::PineStrategyHost::closed_trade_exit_comment_equals;
 };
 
 void compare(Reader& host, Size index, const std::string& id,
@@ -206,6 +209,145 @@ void equivalence_rows() {
     variants(retiring, retired_ids.size() - 1, retired_ids.back(), "after retirement");
 }
 
+struct TextMethod {
+    const char* name;
+    std::string Row::*field;
+    bool (TradeLedger::*matches)(int, std::string_view) const;
+    bool (TradeLedger::*equals)(Size, std::string_view) const;
+    bool (Reader::*wrapped)(int, std::string_view) const;
+};
+const std::array<TextMethod, 4> text_methods{{
+    {"entry_id", &Row::entry_id, &TradeLedger::entry_id_matches,
+     &TradeLedger::entry_id_equals, &Reader::equals},
+    {"exit_id", &Row::exit_id, &TradeLedger::exit_id_matches,
+     &TradeLedger::exit_id_equals, &Reader::closed_trade_exit_id_equals},
+    {"entry_comment", &Row::entry_comment, &TradeLedger::entry_comment_matches,
+     &TradeLedger::entry_comment_equals, &Reader::closed_trade_entry_comment_equals},
+    {"exit_comment", &Row::exit_comment, &TradeLedger::exit_comment_matches,
+     &TradeLedger::exit_comment_equals, &Reader::closed_trade_exit_comment_equals}
+}};
+
+void matching_variants(Reader& host, int index, const Row& oracle, const char* context) {
+    for (const auto& method : text_methods) {
+        const auto& text = oracle.*method.field;
+        std::vector<std::string> operands{text, "", text + "!"};
+        if (!text.empty()) {
+            operands.push_back(text.substr(0, text.size() - 1));
+            auto changed = text;
+            changed.back() ^= 1;
+            operands.push_back(changed);
+        }
+        for (const Size offset : {Size{0}, Size{3}, Size{7}, Size{8}, Size{16}}) {
+            if (offset < text.size()) {
+                auto changed = text;
+                changed[offset] ^= 1;
+                operands.push_back(changed);
+            }
+        }
+        for (const auto& operand : operands) {
+            const std::string_view rhs(operand.data(), operand.size());
+            const bool expected = std::string_view(text.data(), text.size()) == rhs;
+            // The new entry point gets the first read, including a cache miss.
+            const bool matched = (host.ledger().*method.matches)(index, rhs);
+            const bool direct = (host.ledger().*method.equals)(static_cast<Size>(index), rhs);
+            const bool wrapped = (host.*method.wrapped)(index, rhs);
+            if (!CHECK(matched == expected && direct == expected && wrapped == expected)) {
+                std::fprintf(stderr,
+                    "context=%s field=%s index=%d text_bytes=%zu rhs_bytes=%zu "
+                    "matched=%d direct=%d wrapper=%d expected=%d\n",
+                    context, method.name, index, text.size(), operand.size(),
+                    matched, direct, wrapped, expected);
+            }
+        }
+        CHECK((host.ledger().*method.matches)(index, std::string_view{}) == text.empty());
+        CHECK((host.ledger().*method.equals)(static_cast<Size>(index), std::string_view{})
+              == text.empty());
+        CHECK((host.*method.wrapped)(index, std::string_view{}) == text.empty());
+    }
+}
+
+void invalid_text_matches(Reader& host, int index) {
+    const std::string empty;
+    for (const auto& method : text_methods) {
+        for (const auto& operand : {std::string{}, std::string{"Other"}, std::string{"\0", 1}}) {
+            const std::string_view rhs(operand.data(), operand.size());
+            const bool expected = std::string_view(empty.data(), empty.size()) == rhs;
+            CHECK((host.ledger().*method.matches)(index, rhs) == expected);
+            CHECK((host.*method.wrapped)(index, rhs) == expected);
+        }
+        CHECK((host.ledger().*method.matches)(index, std::string_view{}));
+        CHECK((host.*method.wrapped)(index, std::string_view{}));
+    }
+}
+
+void matching_rows() {
+    Reader host;
+    auto& ledger = host.ledger();
+    ledger.set_scratch_directory(".");
+    const Size chunk = detail::ScratchFile::kCacheBytes;
+    std::vector<std::string> texts{
+        "", "a", "ab", "abc", "abcd", "abcde", "abcdef", "abcdefg", "abcdefgh",
+        "abcdefghi", std::string("ab\0defg", 7), std::string("ab\0defgh", 8),
+        std::string("ab\0defghi", 9), std::string(TradeLedger::kCacheStringBytes + 1, 'p'),
+        std::string(2 * chunk + 1, 'q')};
+    texts.back()[chunk - 1] = '\0';
+    texts.back()[chunk] = '\0';
+    const Size packed_texts = texts.size() - 2;
+    std::vector<Row> oracle(texts.size());
+    for (Size i = 0; i < oracle.size(); ++i) {
+        // Distinct field inputs catch both wrong members and packed offsets.
+        for (Size field = 0; field < text_methods.size(); ++field)
+            oracle[i].*text_methods[field].field =
+                texts[i < packed_texts ? (i + field) % packed_texts : i];
+        ledger.push_back(oracle[i]);
+    }
+    for (int round = 0; round < 2; ++round)
+        for (Size i = 0; i < oracle.size(); ++i)
+            matching_variants(host, static_cast<int>(i), oracle[i],
+                              round == 0 ? "initial text matches" : "warm text matches");
+    invalid_text_matches(host, -1);
+    invalid_text_matches(host, static_cast<int>(oracle.size()));
+    invalid_text_matches(host, static_cast<int>(oracle.size() + 1));
+    invalid_text_matches(host, std::numeric_limits<int>::max());
+
+    // Same-length replacements must invalidate cached bytes for every member.
+    Row replacement = oracle[7];
+    for (const auto& method : text_methods)
+        (replacement.*method.field).back() ^= 1;
+    ledger.replace(7, replacement);
+    matching_variants(host, 7, replacement, "replace text matches");
+    const Size removed = oracle.size() - 1;
+    ledger.resize(removed);
+    invalid_text_matches(host, static_cast<int>(removed));
+    ledger.push_back(replacement);
+    matching_variants(host, static_cast<int>(removed), replacement, "reused text key");
+
+    Reader retiring;
+    auto& retired = retiring.ledger();
+    retired.set_scratch_directory(".");
+    detail::TradeLedgerStorageProbe::retire(retired);
+    for (const auto& row : {oracle[0], oracle[7], oracle[8]}) retired.push_back(row);
+    matching_variants(retiring, 0, oracle[0], "before retiring empty text");
+    matching_variants(retiring, 1, oracle[7], "before retiring text");
+    matching_variants(retiring, 2, oracle[8], "before retiring live text");
+    retired.seal(2);
+    CHECK(retired.base() == 2);
+    for (Size i = 0; i < 2; ++i) {
+        const Row& row = i == 0 ? oracle[0] : oracle[7];
+        for (const auto& method : text_methods) {
+            for (const auto& rhs : {row.*method.field, std::string{}, std::string{"Mismatch"}}) {
+                refuses([&] { (void)(retired.*method.equals)(i, rhs); }, true);
+                refuses([&] { (void)(retired.*method.matches)(static_cast<int>(i), rhs); }, true);
+                refuses([&] { (void)(retiring.*method.wrapped)(static_cast<int>(i), rhs); }, true);
+            }
+        }
+    }
+    matching_variants(retiring, 2, oracle[8], "retained live text");
+    invalid_text_matches(retiring, -1);
+    invalid_text_matches(retiring, 3);
+    invalid_text_matches(retiring, 4);
+}
+
 // Half the default cache gives the requested 32,768 distinct warm row keys.
 constexpr Size kRows = 32768;
 static_assert(kRows % 2 == 0 && kRows < TradeLedger::kDefaultCacheRows);
@@ -246,6 +388,69 @@ void print_samples(const std::array<Sample, kSamples>& ledger,
             static_cast<unsigned long long>(ledger[i].hits),
             static_cast<unsigned long long>(baseline[i].hits));
     }
+}
+
+void wrapper_cost_row(Size population, const char* label) {
+    Reader host;
+    auto& ledger = host.ledger();
+    ledger.set_scratch_directory(".");
+    std::uint64_t expected_per_pass = 0;
+    for (Size i = 0; i < population; ++i) {
+        Row row{};
+        row.entry_id = i % 2 == 0 ? "Long" : "Short";
+        ledger.push_back(row);
+        expected_per_pass += row.entry_id == "Long";
+    }
+    const auto loop = [&] {
+        std::uint64_t hits = 0;
+        for (Size i = 0; i < population; ++i)
+            hits += host.equals(static_cast<int>(i), "Long");
+        return hits;
+    };
+    hit_sink = loop(); // Populate every final key before any timer runs.
+    // Each pass adds at most population hits; also respect the loop index width.
+    const auto max_passes = std::min<std::uint64_t>(
+        std::numeric_limits<Size>::max(), std::numeric_limits<std::uint64_t>::max() / population);
+    Size passes = 1;
+    for (;;) {
+        const auto sample = sequence(&host, passes, loop);
+        if (sample.elapsed >= kSequenceFloor) break;
+        if (passes > max_passes / 2) {
+            std::printf("%s calibration exceeds accumulator capacity\n", label);
+            return;
+        }
+        passes *= 2;
+    }
+    for (;;) {
+        Sample best{Duration::max(), 0};
+        for (Size i = 0; i < kSamples; ++i) {
+            const auto sample = sequence(&host, passes, loop);
+            if (sample.elapsed < best.elapsed) best = sample;
+        }
+        if (best.elapsed < kSequenceFloor) {
+            if (passes > max_passes / 2) {
+                std::printf("%s calibration exceeds accumulator capacity\n", label);
+                return;
+            }
+            passes *= 2;
+            continue;
+        }
+        const double calls = static_cast<double>(population) * static_cast<double>(passes);
+        std::printf("%s T=%zu P=%zu K=%zu ns_per_call=%.6f hits=%llu expected_hits=%llu\n",
+            label, population, passes, kSamples, best.elapsed.count() * 1e9 / calls,
+            static_cast<unsigned long long>(best.hits),
+            static_cast<unsigned long long>(expected_per_pass * passes));
+        return;
+    }
+}
+
+void wrapper_cost_rows() {
+    if constexpr (kSanitized) {
+        std::puts("SKIP wrapper cost diagnostics: sanitizer instrumentation");
+        return;
+    }
+    wrapper_cost_row(kRows, "diag-wrapper-ordered");
+    wrapper_cost_row(1024, "diag-wrapper-small");
 }
 
 void cost_row() {
@@ -345,7 +550,9 @@ void cost_row() {
 int main() {
     try {
         equivalence_rows();
+        matching_rows();
         std::printf("entry ID equivalence checks=%zu failures=%zu\n", checks, failures);
+        if (failures == 0) wrapper_cost_rows();
         if (failures == 0) cost_row();
     } catch (const std::exception& error) {
         std::fprintf(stderr, "FAIL entry ID comparison exception: %s\n", error.what());

@@ -19,6 +19,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -532,6 +533,33 @@ struct TradeLedger::State {
             offset += static_cast<size_type>(entry.record.entry_comment.length);
         if constexpr (Member == &Record::exit_id)
             offset += static_cast<size_type>(entry.record.exit_comment.length);
+        const auto n = static_cast<size_type>(text.length);
+        if (n <= sizeof(std::uint64_t)) {
+            if (rhs.size() != n) return false;
+            std::uint64_t left = 0, right = 0;
+            const char* lhs = entry.strings.data() + offset;
+            // Fixed-size copies read exactly n bytes, with no library call.
+            if (n == sizeof(std::uint64_t)) {
+                std::memcpy(&left, lhs, sizeof(std::uint64_t));
+                std::memcpy(&right, rhs.data(), sizeof(std::uint64_t));
+            } else {
+                auto* left_bytes = reinterpret_cast<char*>(&left);
+                auto* right_bytes = reinterpret_cast<char*>(&right);
+                if (n & 4) {
+                    std::memcpy(left_bytes, lhs, 4);
+                    std::memcpy(right_bytes, rhs.data(), 4);
+                }
+                if (n & 2) {
+                    std::memcpy(left_bytes + (n & 4), lhs + (n & 4), 2);
+                    std::memcpy(right_bytes + (n & 4), rhs.data() + (n & 4), 2);
+                }
+                if (n & 1) {
+                    std::memcpy(left_bytes + (n & 6), lhs + (n & 6), 1);
+                    std::memcpy(right_bytes + (n & 6), rhs.data() + (n & 6), 1);
+                }
+            }
+            return left == right;
+        }
         return std::string_view(entry.strings.data() + offset,
                                 static_cast<size_type>(text.length)) == rhs;
     }
@@ -936,6 +964,22 @@ bool TradeLedger::entry_comment_equals(size_type global, std::string_view rhs) c
 }
 bool TradeLedger::exit_comment_equals(size_type global, std::string_view rhs) const {
     return state_->string_equals<&State::Record::exit_comment>(global, rhs);
+}
+bool TradeLedger::entry_id_matches(int index, std::string_view rhs) const {
+    if (index < 0 || static_cast<size_type>(index) >= state_->end) return rhs.empty();
+    return state_->string_equals<&State::Record::entry_id>(static_cast<size_type>(index), rhs);
+}
+bool TradeLedger::exit_id_matches(int index, std::string_view rhs) const {
+    if (index < 0 || static_cast<size_type>(index) >= state_->end) return rhs.empty();
+    return state_->string_equals<&State::Record::exit_id>(static_cast<size_type>(index), rhs);
+}
+bool TradeLedger::entry_comment_matches(int index, std::string_view rhs) const {
+    if (index < 0 || static_cast<size_type>(index) >= state_->end) return rhs.empty();
+    return state_->string_equals<&State::Record::entry_comment>(static_cast<size_type>(index), rhs);
+}
+bool TradeLedger::exit_comment_matches(int index, std::string_view rhs) const {
+    if (index < 0 || static_cast<size_type>(index) >= state_->end) return rhs.empty();
+    return state_->string_equals<&State::Record::exit_comment>(static_cast<size_type>(index), rhs);
 }
 double TradeLedger::pnl_at(size_type global) const {
     return state_->numeric_field<&State::Record::pnl>(global);

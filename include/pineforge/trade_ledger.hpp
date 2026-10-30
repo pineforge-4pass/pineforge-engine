@@ -200,6 +200,13 @@ public:
     // from an explicit no-history generated-module capability.
     void seal(size_type global_end);
 
+    // Signed-index comparisons: an index outside [0,size()) compares as empty.
+    // Valid indices keep the checked retained-row contract of *_equals.
+    bool entry_id_matches(int index, std::string_view rhs) const;
+    bool exit_id_matches(int index, std::string_view rhs) const;
+    bool entry_comment_matches(int index, std::string_view rhs) const;
+    bool exit_comment_matches(int index, std::string_view rhs) const;
+
 private:
     friend class BacktestEngine;
     friend struct detail::TradeLedgerStorageProbe;
