@@ -195,7 +195,7 @@ import traceback
 import types
 from contextlib import ExitStack
 from datetime import datetime, timezone
-from itertools import chain
+from itertools import chain, repeat
 from pathlib import Path
 
 
@@ -694,7 +694,7 @@ def build_fingerprint(provenance: dict) -> dict:
 _BAR_HEADER = b"timestamp,open,high,low,close,volume\n"
 _BAR_FLOAT = (
     rb"[+-]?(?:(?:[0-9]+\.[0-9]*|\.[0-9]+)"
-    rb"(?:[eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)"
+    rb"(?:[eE][+-]?[0-9]+)?|[0-9]+(?:[eE][+-]?[0-9]+)?)"
 )
 _BAR_CANONICAL_LINE = re.compile(
     rb"([0-9]{13}),(" + _BAR_FLOAT + rb"),(" + _BAR_FLOAT
@@ -2654,10 +2654,12 @@ def _pack_bar_bulk_slab(matches):
     float_columns = [list(map(float, values)) for values in columns[1:]]
     for raw_values, values in zip(columns[1:], float_columns):
         for raw, value in zip(raw_values, values):
-            text = raw.decode("ascii")
-            if (not math.isfinite(value)
-                    or (value == 0.0 and text.startswith("-"))
-                    or repr(value) != text):
+            # Both paths apply float to the same ASCII text, so alternate
+            # decimal, exponent and integer spellings pack identical doubles.
+            # A finite double's repr contains at most 24 ASCII bytes.
+            # Keep that envelope so CSV's field-size refusals still fall back.
+            if (len(raw) > 24 or not math.isfinite(value)
+                    or (value == 0.0 and raw.startswith(b"-"))):
                 return None
     packed = bytearray(_SOURCE_FEED_RECORD.size * len(timestamps))
     struct.pack_into(
@@ -2671,6 +2673,10 @@ def _pack_bar_bulk_slab(matches):
 
 def _load_bars_bulk(raw: bytes):
     if not _bar_bulk_layout_matches() or not raw.startswith(_BAR_HEADER):
+        return None
+    # The line grammar requires LF. Decline a partial final line before
+    # converting any earlier slabs that DictReader would have to replay.
+    if not raw.endswith(b"\n"):
         return None
     body = raw[len(_BAR_HEADER):]
     packed = bytearray()
@@ -6153,24 +6159,77 @@ _BULK_E_LINE = re.compile(
 # The bound keeps that stack, and every list built from one batch, the same for
 # any window and any file length; a window is consumed in successive batches.
 _BULK_E_BATCH = 128
-_BULK_E_RUN = re.compile(rb"(?:" + _BULK_E_LINE.pattern + (rb"){1,%d}" % _BULK_E_BATCH))
+_BULK_E_RUN_PREFIX = rb"(?:" + _BULK_E_LINE.pattern + rb")"
+_BULK_E_RUN = re.compile(_BULK_E_RUN_PREFIX + (rb"{1,%d}" % _BULK_E_BATCH))
 _BULK_E_LINE_BYTES = 80
+_BULK_E_LITERAL_BYTES = len(b'["E",,,]\n')
+# Coverage adds nine literal bytes to the three captures; the page-tail bound
+# also depends on the timestamp and float token widths. Pin that arithmetic
+# to the grammar so a later grammar edit cannot silently invalidate either.
+assert (
+    _BULK_E_FLOAT == (
+        rb"(?=[-+0-9.e]{1,24}[,\]])-?(?:0|[1-9][0-9]*)"
+        rb"(?:\.[0-9]+(?:e[+-]?[0-9]+)?|e[+-]?[0-9]+)")
+    and _BULK_E_LINE.pattern == (
+        rb'\["E",(0|-?[1-9][0-9]{0,15}),(' + _BULK_E_FLOAT
+        + rb"),(" + _BULK_E_FLOAT + rb")\]\n")
+    and _BULK_E_LINE.groups == 3
+    and _BULK_E_LITERAL_BYTES == 9
+    and _BULK_E_LITERAL_BYTES + 17 + 2 * 24 <= _BULK_E_LINE_BYTES
+), "bulk equity coverage and line bounds must follow the grammar"
 
 
 class _BulkEquity:
-    """One accepted batch of lines, with only its two decoded endpoints retained."""
-    def __init__(self, raw, count, first, last):
+    """A batch's number text and endpoints; direct construction is unbounded."""
+    def __init__(self, raw, count, first, last, columns=None):
         self.raw, self.count, self.first, self.last = raw, count, first, last
+        if columns is None:
+            # Directly constructed batches need no proof or bound. Recover
+            # captures only when they tile the input; columns remain absent
+            # only on direct batches that need substitution over unmatched bytes.
+            rows = _BULK_E_LINE.findall(raw)
+            columns = tuple(zip(*rows)) if rows else ((), (), ())
+            if (sum(map(len, chain.from_iterable(columns)))
+                    + _BULK_E_LITERAL_BYTES * len(rows) != len(raw)):
+                columns = None
+        self.columns = columns
 
 
 def _bulk_equity(raw):
     """Accept a strict subset; a failed proof never supplies an error.
 
-    ``raw`` is one run of at most _BULK_E_BATCH lines; a longer one is no match.
+    Product callers supply one complete _BULK_E_RUN match or, in the pending-line
+    caller, one LF-terminated line containing at most one row. The repeat bound
+    bounds captures retained for encoding independently of window and file sizes.
+    Direct proof callers have the same bound as the run pattern's fullmatch,
+    including when its repeat is replaced. Rebind _BULK_E_LINE only together with
+    a _BULK_E_RUN built from it, which takes the fullmatch branch.
     """
-    if not raw or _BULK_E_RUN.fullmatch(raw) is None:
+    if not raw:
         return None
-    times, equities, profits = zip(*_BULK_E_LINE.findall(raw))
+    rows = _BULK_E_LINE.findall(raw)
+    if not rows:
+        return None
+    times, equities, profits = columns = tuple(zip(*rows))
+    # findall returns disjoint complete lines. Their token lengths plus
+    # the nine literal bytes per line must cover every input byte, so no
+    # prefix, gap or suffix can have been skipped. No second match is needed.
+    if (sum(map(len, times)) + sum(map(len, equities)) + sum(map(len, profits))
+            + _BULK_E_LITERAL_BYTES * len(rows) != len(raw)):
+        return None
+    # Coverage proves a concatenation of complete lines. Read its permitted
+    # count from the run pattern itself, keeping that pattern the sole batch
+    # bound even when replaced. Other pattern shapes keep their fullmatch.
+    prefix, _, repeat_text = _BULK_E_RUN.pattern.rpartition(b"{")
+    bounds = repeat_text[:-1].split(b",")
+    if (prefix == _BULK_E_RUN_PREFIX and repeat_text.endswith(b"}")
+            and len(bounds) == 2 and all(map(bytes.isdigit, bounds))
+            and _BULK_E_RUN.flags == 0):
+        lower, upper = map(int, bounds)
+        if not lower <= len(rows) <= upper:
+            return None
+    elif _BULK_E_RUN.fullmatch(raw) is None:
+        return None
     timestamps = list(map(int, times))
     if min(timestamps) < -((1 << 53) - 1) or max(timestamps) > (1 << 53) - 1:
         return None
@@ -6181,14 +6240,35 @@ def _bulk_equity(raw):
     count = len(timestamps)
     first = dict(time_ms=timestamps[0], equity=numbers[0], open_profit=numbers[count])
     last = dict(time_ms=timestamps[-1], equity=numbers[count - 1], open_profit=numbers[-1])
-    return _BulkEquity(raw, count, first, last)
+    return _BulkEquity(raw, count, first, last, columns)
 
 
 def _bulk_equity_ascii(batch):
-    rows = _BULK_E_LINE.sub(
-        rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
-        batch.raw).splitlines()
-    return b"".join(rows)[:-1] if rows else b""
+    columns = getattr(batch, "columns", None)
+    if columns is None:
+        rows = _BULK_E_LINE.sub(
+            rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
+            batch.raw).splitlines()
+        return b"".join(rows)[:-1] if rows else b""
+    times, equities, profits = columns
+    # Reuse the proof's captured text. zip/chain assemble the fixed keys
+    # without another regex traversal or a replacement expansion per row.
+    return b"".join(chain.from_iterable(zip(
+        repeat(b'{"time_ms":'), times, repeat(b',"equity":'), equities,
+        repeat(b',"open_profit":'), profits, repeat(b"},"))))[:-1]
+
+
+def _bulk_equity_rows(batch):
+    """Keep individual row boundaries for the ordinary array writer."""
+    columns = getattr(batch, "columns", None)
+    if columns is None:
+        return _BULK_E_LINE.sub(
+            rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
+            batch.raw).splitlines()
+    times, equities, profits = columns
+    return list(map(b"".join, zip(
+        repeat(b'{"time_ms":'), times, repeat(b',"equity":'), equities,
+        repeat(b',"open_profit":'), profits, repeat(b"},"))))
 
 
 class _BulkEquityFile:
@@ -7472,11 +7552,9 @@ def _stream_equity_array(value, destination):
     try:
         for record in value.sink._tagged_records("E", bulk=True):
             if isinstance(record, _BulkEquity):
-                # sub and splitlines walk the entire batch in C. No Python
-                # loop, decoder or serializer visits its individual points.
-                rows = _BULK_E_LINE.sub(
-                    rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
-                    record.raw).splitlines()
+                # Reuse the proof's captures, preserving the same row list
+                # and the ordinary writer's flush and failure boundaries.
+                rows = _bulk_equity_rows(record)
             else:
                 # The existing verified decoder owns all noncanonical cases.
                 rows = [json.dumps(record.as_dict(), separators=(",", ":"),
