@@ -13,21 +13,21 @@ struct CommandScratchByteBudget;
 // Exclusive resident/read-through decorator for any ScratchBacking. All access to the
 // owned inner backing must go through this object; construct the inner with
 // NO observer and install the logical I/O observer here, including cache hits.
-// One fixed allocation serves first as a dense resident prefix, then as the
+// One fixed buffer serves first as a dense resident prefix, then as the
 // read cache after spill. At most three stores per run share the fixed bound K
 // below, including their decorator objects/slot keys. Nothing depends on extent
 // or bars. No I/O operation allocates or throws.
 //
 // Page size is immutable per backing. Direct-mapped keys therefore identify
 // pages in this one geometry (512 B through 1 MiB, including non-powers of
-// two); pages above 64 KiB bypass the cache, as do sizes below 512 B.
+// two); pages above kCacheBytes bypass the cache, as do sizes below 512 B.
 class CachedScratchBacking final : public ScratchBacking {
 public:
     static constexpr std::size_t kCacheBytes = 64 * 1024;
-    // K = 198 KiB/run: three 64-KiB buffers plus 2 KiB of object/slot keys each.
-    static constexpr std::size_t kCommandScratchMemoryBytes = 3 * (kCacheBytes + 2 * 1024);
-
-    // The inner must be nonnull. A page-buffer allocation failure is a typed
+    static constexpr std::size_t kMinPageBytes = 512, kFixedObjectBytes = 1024, kMaxSlots = kCacheBytes / kMinPageBytes;
+    static constexpr std::size_t kCommandScratchMemoryBytes =
+        3 * (kCacheBytes + kMaxSlots * sizeof(ScratchPageId) + kFixedObjectBytes); // K counts three buffers, tables and fixed objects.
+    // The inner must be nonnull. A page-buffer or slot-table allocation failure is a typed
     // out_of_memory failure carried by the shared, prebuilt scratch exception.
     // resident_bytes is a construction-only cap, clamped to kCacheBytes;
     // zero retains the all-file/write-through mode. Only a fresh inner can
@@ -56,8 +56,8 @@ protected:
     ScratchStatus do_sync(ScratchDurability durability) noexcept override;
 
 private:
-    static constexpr std::size_t kMinPageBytes = 512;
-    static constexpr std::size_t kMaxSlots = kCacheBytes / kMinPageBytes;
+    // Cache geometry constants are public so the fixed bound names each component.
+    // The remaining members carry the backing and cache state.
 
     std::size_t slot(ScratchPageId id) const noexcept;
     void remember(ScratchPageId id, const std::byte* bytes) const noexcept;
@@ -70,10 +70,10 @@ private:
     std::uint64_t resident_extent_ = 0;
     std::shared_ptr<CommandScratchByteBudget> budget_;
     std::unique_ptr<std::byte[]> bytes_;
-    mutable std::array<ScratchPageId, kMaxSlots> page_ids_{};
+    mutable std::unique_ptr<ScratchPageId[]> page_ids_;
 };
 
-static_assert(sizeof(CachedScratchBacking) <= 2 * 1024,
-              "three backing objects and page buffers must fit the fixed K");
+static_assert(sizeof(CachedScratchBacking) <= CachedScratchBacking::kFixedObjectBytes,
+              "the fixed cache object must fit its fixed K component");
 
 } // namespace pineforge::detail
