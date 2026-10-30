@@ -239,7 +239,9 @@ std::vector<Bar> tape() {
 }
 struct Host final : source::PineStrategyHost {
     std::size_t callbacks = 0;
-    Host() {
+    Count history_reads = 0;
+    bool read_history;
+    explicit Host(bool history = false) : read_history(history) {
         source::PineStrategyConfig config;
         config.initial_capital = kCapital;
         config.default_qty_value = kQuantity;
@@ -256,6 +258,18 @@ struct Host final : source::PineStrategyHost {
         require(pine_bar_index() == static_cast<int>(signal)
                 && bar.timestamp == kStart + static_cast<std::int64_t>(signal) * kStep,
                 "Source callback skipped, duplicated or reordered an input");
+        if (read_history) {
+            const auto expected_rows = signal > 1 ? std::min(signal - 1, kClosedRows) : 0;
+            require(closed_trade_count() == expected_rows,
+                    "History population differs from next-open reversal geometry");
+            for (std::size_t i = 0; i < closed_trade_count(); ++i) {
+                check(closed_trade_entry_id_equals(static_cast<int>(i), entry_id(i)),
+                      "History wrapper differs from the independent entry ID");
+                check(!closed_trade_entry_id_equals(static_cast<int>(i), entry_id(i + 1)),
+                      "History wrapper accepted the opposite entry ID");
+                ++history_reads;
+            }
+        }
         if (signal < kClosedRows) {
             const auto missing = std::numeric_limits<double>::quiet_NaN();
             strategy_entry(entry_id(signal), signal % 2 == 0, missing, missing, kQuantity, "");
@@ -412,10 +426,105 @@ void refusal_controls(const Directory& directory) {
     invariant([&] { (void)retired.entry_id_at(0); });
 }
 
-void scenario(const Directory& directory) {
+Trade packed_row(std::size_t n) {
+    Trade row{};
+    row.entry_id = std::string("id\0", 3) + std::to_string(n);
+    row.entry_comment = "entry";
+    row.exit_id = entry_id(n);
+    row.exit_comment.assign(TradeLedger::kCacheStringBytes - row.entry_id.size()
+                            - row.entry_comment.size() - row.exit_id.size(), 'x');
+    row.pnl = static_cast<double>(n);
+    return row;
+}
+Count same_packed_row(const TradeLedger& ledger, std::size_t i, const Trade& expected) {
+    const auto actual = ledger.read(i);
+    check(actual.entry_id == expected.entry_id && actual.entry_comment == expected.entry_comment
+          && actual.exit_comment == expected.exit_comment && actual.exit_id == expected.exit_id
+          && actual.pnl == expected.pnl, "Memory-filled row differs from its independent input");
+    check(ledger.entry_id_equals(i, expected.entry_id)
+          && ledger.entry_comment_equals(i, expected.entry_comment)
+          && ledger.exit_comment_equals(i, expected.exit_comment)
+          && ledger.exit_id_equals(i, expected.exit_id),
+          "Memory-filled packed comparisons differ from their independent inputs");
+    return actual.entry_id.size() + actual.entry_comment.size()
+        + actual.exit_comment.size() + actual.exit_id.size();
+}
+void memory_fill_controls(const Directory& directory) {
+    TradeLedger ledger;
+    ledger.set_scratch_directory(directory.path);
+    const auto fixed_bytes = ledger.cache_resident_bytes();
+    // A first reader at 2*64+1 rows allocates 4*64 slots. Append through
+    // that capacity: early new rows leave the 64-record window without a
+    // capacity change, isolating memory fill from growth invalidation.
+    const auto initial = 2 * TradeLedger::kResidentRows + 1;
+    const auto population = 4 * TradeLedger::kResidentRows;
+    std::vector<Trade> expected;
+    for (std::size_t i = 0; i < population; ++i) expected.push_back(packed_row(i));
+    for (std::size_t i = 0; i < initial; ++i) ledger.push_back(expected[i]);
+    ledger.replace(0, expected[0]);
+    check(ledger.cache_size() == 0 && ledger.cache_resident_bytes() == fixed_bytes,
+          "Write-only appends allocated or populated the read cache");
+    same_packed_row(ledger, 0, expected[0]);
+    const auto allocated_bytes = ledger.cache_resident_bytes();
+    require(allocated_bytes == fixed_bytes + population * TradeLedger::kLedgerEntryBytes,
+            "Memory-fill control did not allocate its derived cache geometry");
+    for (std::size_t i = initial; i < population; ++i) ledger.push_back(expected[i]);
+    require(ledger.resident_base() > initial
+            && ledger.cache_resident_bytes() == allocated_bytes,
+            "Memory-fill control did not evict appended descriptors at fixed capacity");
+    Count cacheable_rows = 0;
+    ledger_io::Measure append_measurement;
+    for (std::size_t i = initial; i < population; ++i)
+        cacheable_rows += same_packed_row(ledger, i, expected[i]) <= TradeLedger::kCacheStringBytes;
+    const auto appended = append_measurement.finish();
+    valid(appended);
+    const Count appended_rows = population - initial;
+    // Every newly appended row fits both the 256-slot allocation and the
+    // exact 128-byte packing: cold = A-min(A,capacity,cacheable) = 0.
+    const Count capacity = (allocated_bytes - fixed_bytes) / TradeLedger::kLedgerEntryBytes;
+    const Count cold = appended_rows - std::min(
+        {appended_rows, capacity, cacheable_rows});
+    bound("memory-append.index.pread_calls", appended.files[0].pread_calls, cold, appended_rows);
+    bound("memory-append.payload.pread_calls", appended.files[1].pread_calls, cold, appended_rows);
+
+    expected[0] = packed_row(population + 1);
+    ledger.replace(0, expected[0]);
+    ledger_io::Measure replace_measurement;
+    same_packed_row(ledger, 0, expected[0]);
+    const auto replaced = replace_measurement.finish();
+    valid(replaced);
+    bound("memory-replace.index.pread_calls", replaced.files[0].pread_calls, cold, 1);
+    bound("memory-replace.payload.pread_calls", replaced.files[1].pread_calls, cold, 1);
+
+    // Zero changed fields imply zero changed descriptor/payload bytes.
+    // Re-enabling an unconditional descriptor write must break this row.
+    ledger_io::Measure unchanged_measurement;
+    ledger.replace(0, expected[0]);
+    const auto unchanged = unchanged_measurement.finish();
+    valid(unchanged);
+    check(unchanged.files[0].pwrite_calls == 0 && unchanged.files[1].pwrite_calls == 0,
+          "Unchanged replacement rewrote descriptor or payload bytes");
+
+    // One additional byte makes 129: numeric caching must survive, but the
+    // strings must take the disk fallback once a later payload fills the
+    // fixed tail (64*168 bytes). This input is the packing-bound mutant.
+    expected[0].exit_comment.push_back('y');
+    ledger.replace(0, expected[0]);
+    auto tail = packed_row(population + 2);
+    tail.exit_comment.assign(TradeLedger::kResidentRows * TradeLedger::kRecordBytes + 1, 'z');
+    ledger.replace(1, tail);
+    ledger_io::Measure wide_measurement;
+    same_packed_row(ledger, 0, expected[0]);
+    const auto wide = wide_measurement.finish();
+    valid(wide);
+    check(wide.files[0].pread_calls == 0 && wide.files[1].pread_calls > cold,
+          "Oversized memory-filled row lost numeric caching or skipped the string fallback");
+}
+
+void scenario(const Directory& directory, bool read_history = false) {
     const auto bars = tape();
     const auto golden = recompute(bars);
-    Host host;
+    Host host(read_history);
     const std::string path = directory.path + "/report.ndjson";
     const pf_report_sink_v1 sink{sizeof sink, 1, path.c_str(), kRunId, directory.path.c_str()};
     require(host.set_report_sink_v1(&sink) == 0, "Report sink setup refused");
@@ -428,6 +537,12 @@ void scenario(const Directory& directory) {
     require(host.callbacks == bars.size() && host.closed_trade_count() == golden.rows.size()
             && host.physical_position().signed_units == 0.0 && host.pending_order_count() == 0,
             "Reversal driver did not produce the complete flat closed-trade population");
+    // Counts at successive callbacks are 0,0,1,...,T,T: sum = T*(T+3)/2.
+    // Each visited row must match its own ID and reject the opposite ID.
+    require(host.history_reads == (read_history
+                ? golden.rows.size() * (golden.rows.size() + 3) / 2 : 0),
+            "History wrapper did not visit every closed row on every source bar");
+    std::printf("history_per_bar=%s\n", read_history ? "yes" : "no");
     require(host.closed_trade_count() < host.cache_rows()
             && host.cache_rows() == TradeLedger::kDefaultCacheRows,
             "Row population exceeds the declared resident-cache geometry");
@@ -527,6 +642,8 @@ int main() {
         Directory directory;
         forwarding_control(directory);
         scenario(directory);
+        scenario(directory, true);
+        memory_fill_controls(directory);
         refusal_controls(directory);
     } catch (const std::exception& error) {
         std::fprintf(stderr, "FAIL closed-trade scratch I/O: %s\n", error.what());

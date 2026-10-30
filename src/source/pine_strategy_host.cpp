@@ -1120,7 +1120,7 @@ void source::PineStrategyHost::on_native_applied(
     for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
         const std::size_t index = event.first_trade_index + i;
         if (index >= trades_.size()) continue;
-        Trade row = trades_[index];
+        Trade row = trades_[index]; const auto previous_cause = row.close_cause;
         if (row.exit_id == source::kMarginCallLabel) {
             row.close_cause = execution::CloseCause::Liquidation;
         } else if (row.exit_id.empty()) {
@@ -1129,7 +1129,7 @@ void source::PineStrategyHost::on_native_applied(
             else if (row.exit_comment.rfind(source::kIntradayLossComment, 0) == 0)
                 row.close_cause = execution::CloseCause::RiskLimit;
         }
-        adapter_.invalidate_exit_group(index); trades_.replace(index, row);
+        adapter_.invalidate_exit_group(index); if (row.close_cause != previous_cause || index < trades_.base()) trades_.replace(index, row);
     }
     project_short_seed_report_rows(event);
     if (!other_exit_here) order_global_exit_children(event);

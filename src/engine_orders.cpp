@@ -466,7 +466,8 @@ struct TradeLedger::State {
         cache = std::make_unique<CacheEntry[]>(capacity);
         cache_capacity = capacity;
     }
-    const CacheEntry& remember(size_type global, const Record& record) const {
+    const CacheEntry& remember(size_type global, const Record& record,
+                               const Trade* row = nullptr) const {
         ensure_cache(end);
         auto& entry = cache[cache_slot(global)];
         if (current(entry)) --cache_count;
@@ -486,9 +487,18 @@ struct TradeLedger::State {
         }
         if (strings_valid) {
             size_type offset = 0;
-            for (const auto text : texts) {
-                read_string(text, entry.strings.data() + offset);
-                offset += static_cast<size_type>(text.length);
+            if (row) {
+                const std::array<const std::string*, 4> memory_texts{{
+                    &row->entry_id, &row->entry_comment, &row->exit_comment, &row->exit_id}};
+                for (const auto* text : memory_texts) {
+                    std::memcpy(entry.strings.data() + offset, text->data(), text->size());
+                    offset += text->size();
+                }
+            } else {
+                for (const auto text : texts) {
+                    read_string(text, entry.strings.data() + offset);
+                    offset += static_cast<size_type>(text.length);
+                }
             }
         }
         entry.generation = cache_generation | static_cast<size_type>(strings_valid);
@@ -698,7 +708,10 @@ struct TradeLedger::State {
         record.commission = row.commission; record.entry_incarnation = row.entry_incarnation;
         record.close_cause = row.close_cause; record.is_long = row.is_long;
         record.exit_from_bracket = row.exit_from_bracket; record.open_at_end = row.open_at_end;
-        index.write(record_offset(global), &record, sizeof(record));
+        // Retain all payload/extent validation above; skip only a descriptor
+        // whose entire object representation already matches its backing.
+        if (!previous || std::memcmp(previous, &record, sizeof(record)) != 0)
+            index.write(record_offset(global), &record, sizeof(record));
         return record;
     }
     static void erase_bytes(detail::ScratchFile& file, std::uint64_t first,
@@ -1056,6 +1069,7 @@ void TradeLedger::replace(size_type global, const Trade& row) {
     if (global >= state_->resident_first) state_->rows[state_->slot(global)] = record;
     const auto legacy = state_->materialized.find(global);
     if (legacy != state_->materialized.end()) legacy->second = row;
+    if (state_->cache) state_->remember(global, record, &row);
 }
 
 void TradeLedger::modify(size_type global, const std::function<void(Trade&)>& edit) {
@@ -1076,6 +1090,7 @@ void TradeLedger::push_back(const Trade& trade) {
     state_->rows[(state_->head + state_->count) % kResidentRows] = record;
     ++state_->count;
     ++state_->end;
+    if (state_->cache) state_->remember(state_->end - 1, record, &trade);
 }
 
 void TradeLedger::push_back(Trade&& trade) { push_back(static_cast<const Trade&>(trade)); }
@@ -1094,6 +1109,7 @@ void TradeLedger::resize(size_type global_end) {
                                     state_->materialized.end());
     } else {
         while (size() < global_end) push_back(Trade{});
+        state_->invalidate_cache();
     }
 }
 
