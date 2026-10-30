@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from check_replay_off_golden import mask_build_identity, measure
+from check_replay_off_golden import mask_build_identity, mask_sink_build_identity, measure
 
 
 def compact(value, *, canonical=False):
@@ -74,6 +74,17 @@ def trailer_line(before, digest=None):
 
 
 class ReplayOffGoldenTests(unittest.TestCase):
+    def repository_release_versions(self):
+        root = Path(__file__).resolve().parent.parent
+        version = (root / "VERSION").read_text(encoding="utf-8").strip()
+        self.assertRegex(version, r"\A[0-9]+\.[0-9]+\.[0-9]+\Z")
+        major, minor, patch = map(int, version.split("."))
+        return (major, minor, patch), (
+            ("patch", (major, minor, patch + 1)),
+            ("minor", (major, minor + 1, 0)),
+            ("major", (major + 1, 0, 0)),
+        )
+
     def masked_primary(self, data):
         # Only the external producer is substituted. measure(), the default
         # masker, and the sink masker all execute on the real fixture bytes.
@@ -89,6 +100,85 @@ class ReplayOffGoldenTests(unittest.TestCase):
             with mock.patch("check_replay_off_golden.subprocess.run", side_effect=produce):
                 return measure(Path("runner.py"), Path("strategy.so"), "fifo",
                                directory)["primary_sink"]
+
+    def test_repository_release_bumps_preserve_default_report_bytes(self):
+        current, bumps = self.repository_release_versions()
+        for shape in ("fifo", "any", "ordinary"):
+            original, document = report(current, applied=shape)
+            baseline = mask_build_identity(original, document)
+            baseline_digest = hashlib.sha256(baseline).hexdigest()
+            for bump, version in bumps:
+                with self.subTest(scenario=shape, bump=bump, version=version):
+                    raw, document = report(version, applied=shape)
+                    self.assertNotEqual(original, raw)
+                    masked = mask_build_identity(raw, document)
+                    # Reverting numeric engine masking leaves the bumped
+                    # major/minor/patch visible in the report and token.
+                    self.assertEqual(baseline, masked)
+                    self.assertEqual(baseline_digest, hashlib.sha256(masked).hexdigest())
+                    self.assertEqual(len(baseline), len(masked))
+
+    def test_repository_release_bumps_preserve_sink_bytes_and_goldens(self):
+        root = Path(__file__).resolve().parent.parent
+        golden = json.loads((root / "docker" / "replay_off_golden.json").read_text(
+            encoding="utf-8"))
+        scenarios = golden["scenarios"]
+        self.assertIsInstance(scenarios, dict)
+        self.assertEqual(set(scenarios), {"fifo", "any", "ordinary"})
+        # Recorded digests describe real runner output, not these synthetic
+        # streams. Check their structure without pinning their current values.
+        for shape in ("fifo", "any", "ordinary"):
+            self.assertEqual(set(scenarios[shape]), {"default_json", "primary_sink"})
+            for label in ("default_json", "primary_sink"):
+                with self.subTest(scenario=shape, label=label):
+                    record = scenarios[shape][label]
+                    self.assertIsInstance(record["sha256"], str)
+                    self.assertRegex(record["sha256"], r"\A[0-9a-fA-F]{64}\Z")
+                    self.assertIs(type(record["bytes"]), int)
+                    self.assertGreater(record["bytes"], 0)
+
+        current, bumps = self.repository_release_versions()
+        original = primary(".".join(map(str, current)))
+        raw_trailer_digest = json.loads(original.splitlines()[-1])["sha256"]
+        baseline = mask_sink_build_identity(original)
+        baseline_digest = hashlib.sha256(baseline).hexdigest()
+        for bump, version in bumps:
+            with self.subTest(bump=bump, version=version):
+                raw = primary(".".join(map(str, version)))
+                self.assertNotEqual(original, raw)
+                self.assertNotEqual(raw_trailer_digest, json.loads(raw.splitlines()[-1])["sha256"])
+                masked = mask_sink_build_identity(raw)
+                # Keeping the raw trailer (#641 reverted) makes this fail
+                # even when the header engine version is correctly masked.
+                self.assertEqual(baseline, masked)
+                self.assertEqual(baseline_digest, hashlib.sha256(masked).hexdigest())
+                self.assertEqual(len(baseline), len(masked))
+
+    def test_repository_release_bumps_in_sink_body_remain_visible(self):
+        current, bumps = self.repository_release_versions()
+        header, _, remaining = primary(".".join(map(str, current))).partition(b"\n")
+        body = json.loads(remaining.splitlines()[0])
+
+        def with_body_version(version):
+            # Hold the header and body shape fixed; only the body version
+            # changes. Rebuild the trailer so validation accepts those bytes.
+            row = body[:-1] + [".".join(map(str, version))]
+            before = header + b"\n" + compact(row) + b"\n"
+            return before + trailer_line(before)
+
+        original = with_body_version(current)
+        baseline = mask_sink_build_identity(original)
+        self.assertEqual(original.splitlines()[1], baseline.splitlines()[1])
+        for bump, version in bumps:
+            with self.subTest(bump=bump, version=version):
+                raw = with_body_version(version)
+                self.assertEqual(original.splitlines()[0], raw.splitlines()[0])
+                self.assertNotEqual(original.splitlines()[1], raw.splitlines()[1])
+                masked = mask_sink_build_identity(raw)
+                # A mask that hides body versions fails even if it leaves a
+                # raw trailer behind that would otherwise keep streams unequal.
+                self.assertEqual(raw.splitlines()[1], masked.splitlines()[1])
+                self.assertNotEqual(baseline, masked)
 
     def test_default_versions_are_equal_and_non_identity_bytes_stay_visible(self):
         baseline = mask_build_identity(*report())
