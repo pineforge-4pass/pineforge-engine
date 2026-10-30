@@ -227,9 +227,13 @@ def _verify_fused(self, lib, state, report):
 
 
 class _File:
-    def __init__(self, file):
+    def __init__(self, file, window=None):
         import fcntl
         self.file = file
+        if window is not None:
+            if window <= 0 or window % 4096:
+                raise ValueError("report artifact window must be a positive multiple of 4096")
+            self.window = window
         self.buffer = None
         self.used = self.base = self.size = self.position = 0
         self.read_base, self.read_size = -1, 0
