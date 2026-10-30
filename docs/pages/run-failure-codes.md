@@ -290,10 +290,18 @@ The explicit sink-path refusal
 still requires a sealed arena and never creates a backing file or falls back to
 `TMPDIR`, `/tmp` or `/var/tmp`. File-backed command scratch uses
 `scratch_io_failed` (class `resource`), including default-directory query
-failures other than ENOTSUP and all-memory refusals. Native runs create command scratch at begin,
+failures other than ENOTSUP and refusals when all directory candidates are memory-backed. Native runs create command scratch at begin,
 before strategy callbacks. Report scratch uses `report_sink_failed` with
 `reason: scratch_io`; auxiliary tables use `scratch_io_failed`; sink-path I/O
 uses `report_sink_failed` with `reason: sink_io`.
+
+Allocation failure is classified by its origin: `std::bad_alloc` and a required
+`new (std::nothrow)` returning null raise typed `out_of_memory`, including in
+scratch setup and while constructing another error's diagnostic. A prebuilt
+payload allows that cause to survive status-only I/O boundaries without another
+diagnostic allocation. Actual kernel `ENOMEM` from mapping, positional I/O or
+disk operations retains the existing I/O code. Arena/share exhaustion and
+length/extent `EFBIG` refusals retain their existing codes.
 
 Scratch placement, in short (1.7.0 and later). Without an explicit scratch
 directory a native run, with no scratch arena attached, creates one unlinked

@@ -310,10 +310,10 @@ void allocation_failure_is_typed() {
         auto backing = make_command_scratch_backing(page);
     } catch (const std::system_error& error) {
         caught = error.code() == std::error_code(ENOMEM, std::generic_category())
-            && pineforge::classify_run_failure(error).code == pineforge::RunFailureCode::scratch_io_failed;
+            && pineforge::classify_run_failure(error).code == pineforge::RunFailureCode::out_of_memory;
     }
     fail_next_array = false;
-    require(caught && allocation_faults == before + 1, "real page allocation fails typed with ENOMEM");
+    require(caught && allocation_faults == before + 1, "real page allocation fails typed as out_of_memory with ENOMEM");
     auto retry = make_command_scratch_backing(page);
     const auto image = pattern(page, 3);
     physical = {};

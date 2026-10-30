@@ -76,7 +76,8 @@ public:
     // a page_size above 1 MiB or a page_count above 16 Mi. Failures surface
     // through status():
     // bad geometry, null backing, create_empty on a used backing, an ordering
-    // id mismatch or workspace allocation failure => programming_error; reopen
+    // id mismatch => programming_error; workspace allocation failure with valid
+    // geometry => io_error with a carried out_of_memory failure; reopen
     // of an empty backing => not_found; reopen without a valid committed state
     // => corrupt; backing I/O failure => io_error. A store whose status is not
     // ok answers every other call with programming_error and changes nothing;
@@ -91,9 +92,10 @@ public:
 
     // Construction/open result; no operation is legal unless this is ok.
     ScratchStatus status() const noexcept;
-    // The last typed backing I/O failure, retained across successful rollback
-    // I/O so a status raiser can preserve it. A new begin clears it. Diagnostic
-    // state only; it is absent from the store's logical/durable digests.
+    // The typed setup allocation failure, or last typed backing I/O failure,
+    // retained across successful rollback I/O so a status raiser can preserve
+    // it. A new begin clears the backing failure. Diagnostic state only; it is
+    // absent from the store's logical/durable digests.
     const ReportScratchIoError* carried_failure() const noexcept override;
     std::size_t page_size() const noexcept override;
     std::uint64_t record_count() const noexcept override;
