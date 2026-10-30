@@ -14470,7 +14470,21 @@
     "namespace pineforge #1",
     "inline namespace engine_script_run_v19 #1",
     "struct TradeLedger :: State #1",
-    "void ensure_cache ( size_type population ) const #1"
+    "void ensure_cache ( ) const #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_orders.cpp",
+   "symbol": "page",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "struct TradeLedger :: State #1",
+    "CacheEntry & ensure_cache_entry ( size_type global ) const #1",
+    "if ( ! page ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_unique",

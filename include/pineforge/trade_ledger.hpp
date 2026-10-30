@@ -51,8 +51,8 @@ public:
     static constexpr size_type kDefaultCacheRows = 65536;
     static constexpr size_type kMaxCacheRows = 1048576;
     // A report-sink run has the same declared constant cap as the default:
-    // 65,536 x 312 = 20,447,232 entry bytes, plus sizeof(TradeLedger)+sizeof(State).
-    // Allocation remains lazy and grows by powers of two up to this cap.
+    // 20,447,232 entry bytes + 2,048 table bytes + sizeof(TradeLedger)+sizeof(State).
+    // Pages allocate lazily up to this cap, clipping the final page to fit.
     static constexpr size_type kSinkCacheRows = kDefaultCacheRows;
     using Visitor = std::function<bool(size_type, const Trade&)>;
 
@@ -97,15 +97,15 @@ public:
     // bytes on 64-bit targets; maximum: 1,048,576 rows, 327,155,712 entry bytes.
     void set_cache_rows(size_type rows);
     size_type cache_rows() const;
-    // Accounted ledger/cache storage: rows*kLedgerEntryBytes + a fixed base
-    // (sizeof ledger + State). Excludes allocator overhead, scratch/OS pages,
+    // Accounted storage: sizeof(TradeLedger)+sizeof(State)+rows*kLedgerEntryBytes
+    // + ceil(rows/256)*sizeof(void*). Excludes allocator overhead, scratch/OS pages,
     // configured directory strings, returned owning Trades and the explicit
     // legacy materialize() map. Validates the same row range as the setter.
     static size_type resident_cache_bytes(size_type rows);
-    // Actual allocation: fixed base plus allocated capacity*kLedgerEntryBytes.
-    // Allocated on the first read, at min(cache_rows(), the next power of two
-    // >= max(64,size())). Further growth invalidates entries; capacity stays
-    // bounded by cache_rows(), not the bars (a retiring ledger: retained rows).
+    // Actual allocation: fixed base + ceil(cache_rows()/256) owning pointers
+    // after first read + min(256,cache_rows()-256*p)*kLedgerEntryBytes per page p.
+    // Slot mapping stays fixed; page growth preserves entries. Writes only
+    // fill an existing cache; retirement frees pages outside retained rows.
     size_type cache_resident_bytes() const;
     // Occupied decoded entries only; separate from resident_size()'s legacy
     // descriptor/materialization accounting.
@@ -199,6 +199,13 @@ public:
     // Historical bytes remain readable unless the engine admitted retirement
     // from an explicit no-history generated-module capability.
     void seal(size_type global_end);
+
+    // Signed-index comparisons: an index outside [0,size()) compares as empty.
+    // Valid indices keep the checked retained-row contract of *_equals.
+    bool entry_id_matches(int index, std::string_view rhs) const;
+    bool exit_id_matches(int index, std::string_view rhs) const;
+    bool entry_comment_matches(int index, std::string_view rhs) const;
+    bool exit_comment_matches(int index, std::string_view rhs) const;
 
 private:
     friend class BacktestEngine;

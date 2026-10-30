@@ -2876,23 +2876,23 @@ protected:
         return scratch_table_run_.slab;
     }
 
-    // In-place closed-trade text comparisons (see TradeLedger::*_equals): an
+    // In-place closed-trade text comparisons (see TradeLedger::*_matches): an
     // invalid index compares as the empty string, as the owning getters return.
     bool closed_trade_entry_id_equals(int idx, std::string_view rhs) const {
-        if (idx < 0 || idx >= static_cast<int>(trades_.size())) return rhs.empty();
-        return trades_.entry_id_equals(static_cast<std::size_t>(idx), rhs);
+        return trades_.entry_id_matches(idx, rhs);
+
     }
     bool closed_trade_exit_id_equals(int idx, std::string_view rhs) const {
-        if (idx < 0 || idx >= static_cast<int>(trades_.size())) return rhs.empty();
-        return trades_.exit_id_equals(static_cast<std::size_t>(idx), rhs);
+        return trades_.exit_id_matches(idx, rhs);
+
     }
     bool closed_trade_entry_comment_equals(int idx, std::string_view rhs) const {
-        if (idx < 0 || idx >= static_cast<int>(trades_.size())) return rhs.empty();
-        return trades_.entry_comment_equals(static_cast<std::size_t>(idx), rhs);
+        return trades_.entry_comment_matches(idx, rhs);
+
     }
     bool closed_trade_exit_comment_equals(int idx, std::string_view rhs) const {
-        if (idx < 0 || idx >= static_cast<int>(trades_.size())) return rhs.empty();
-        return trades_.exit_comment_equals(static_cast<std::size_t>(idx), rhs);
+        return trades_.exit_comment_matches(idx, rhs);
+
     }
 
     // The last point stays editable until its successor is recorded. Sinks
