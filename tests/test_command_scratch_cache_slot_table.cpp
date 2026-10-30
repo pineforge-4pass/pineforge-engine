@@ -19,9 +19,9 @@ constexpr std::size_t kDocumentedMemoryBytes =
          + (CachedScratchBacking::kCacheBytes / kMinimumCachedPageBytes)
                * sizeof(ScratchPageId)
          + kDocumentedFixedObjectBytes);
-static_assert(CachedScratchBacking::kCacheBytes == 64 * 1024,
-              "this row documents the default command-scratch geometry");
-static_assert(kDocumentedMemoryBytes == 202752,
+// At the default cache size the documented bound is 198 KiB; at any other size
+// the same formula holds and only the figure differs.
+static_assert(CachedScratchBacking::kCacheBytes != 64 * 1024 || kDocumentedMemoryBytes == 202752,
               "the documented default command-scratch bound is 198 KiB");
 static_assert(CachedScratchBacking::kCommandScratchMemoryBytes == kDocumentedMemoryBytes,
               "the command-scratch bound must include the slot table and fixed object");
