@@ -7,6 +7,23 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- A script container (string, array, map or object store) whose scratch
+  growth or commit fails now reports the typed scratch failure instead of
+  `engine_unclassified_error` with the text `o1 store: put/commit: io_error`.
+  When the scratch arena is exhausted the run fails with `report_sink_failed`
+  and `reason: arena_exhausted`; when the disk scratch fails (a zero
+  `RLIMIT_FSIZE`, `ENOSPC` or `EIO` on the unjailed route) it fails with
+  `report_sink_failed` and `reason: scratch_io`. Runs that did not fail are
+  unchanged.
+- A failed memory allocation in the scratch layer now fails the run with the
+  typed `out_of_memory` code. A `std::bad_alloc`, or a `nothrow` allocation
+  that returned null, in the command and script scratch backings, the page
+  cache, the arena directories and metadata, the store workspace, the
+  external-opening readbacks, the owning journal decoders and the spilled
+  order book used to end as `scratch_io_failed`, `report_sink_failed`,
+  `engine_invariant` or an unclassified error. A real operating-system
+  `ENOMEM` from a mapping or a disk operation, an extent limit and arena
+  exhaustion keep their existing codes. Runs that did not fail are unchanged.
 - The container entrypoint no longer compiles a mounted `/in/strategy.cpp` on
   trust. With no `/in/strategy.pine`, it compiles the file only when the
   environment holds `PINEFORGE_STRATEGY_CPP_SHA256` equal to the sha256 of

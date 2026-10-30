@@ -122,6 +122,8 @@ in 32-event chunks, and keeps its 128-event floor. It spills older events even
 within one bar when that bar exceeds the cap before retirement. Page size
 is still 32,768 bytes and the decoded cache still has four slots.
 The bound `CommandScratchStore` codec instead uses its configured workspace.
+Its owning diagnostic decoder throws typed `out_of_memory` on allocation
+failure; the nonowning validation scan retains its `noexcept` status contract.
 
 For the short waiting-child parent-terminal fixture (short ids), the book's 4,096-row
 cap and the journal's 2,048-event cap give a per-engine definition plateau of
@@ -243,7 +245,12 @@ Capacity resources are `layout`, `sequence_data`, `sequence_index`,
 The implemented bounded-memory checks cover the entire operation's count and
 byte workset before its first semantic mutation, with no grow/rehash/fallback.
 Physical allocator failure stays `out_of_memory`; it is not relabeled as a
-logical capacity breach. Report-sink failures retain their separate code.
+logical capacity breach or I/O error. This includes required scratch-cache
+and store-workspace allocations, arena metadata and diagnostic construction.
+Consumers consult the carried failure before mapping an I/O status. Actual
+kernel `ENOMEM` retains the applicable I/O code; genuine arena/share exhaustion
+retains `report_sink_failed` with `reason: arena_exhausted`.
+Report-sink failures retain their separate code.
 See [Run-failure codes](@ref run_failure_codes) for the channel and catalog.
 
 The host must preserve these engine-originated codes and closed arguments,

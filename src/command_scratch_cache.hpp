@@ -28,7 +28,7 @@ public:
     static constexpr std::size_t kCommandScratchMemoryBytes = 3 * (kCacheBytes + 2 * 1024);
 
     // The inner must be nonnull. A page-buffer allocation failure is a typed
-    // scratch_io_failed std::system_error with ENOMEM, as for factory setup.
+    // out_of_memory failure carried by the shared, prebuilt scratch exception.
     // resident_bytes is a construction-only cap, clamped to kCacheBytes;
     // zero retains the all-file/write-through mode. Only a fresh inner can
     // start resident. A budget here must not also be installed on the inner.

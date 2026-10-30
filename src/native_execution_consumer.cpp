@@ -1281,8 +1281,8 @@ struct NativeExecutionConsumer::RunCommandScratch {
                                         detail::ScratchOpenMode::create_empty},
               backing.get())) {
         if (store->status() != detail::ScratchStatus::ok) {
-            if (store->status() == detail::ScratchStatus::io_error)
-                detail::rethrow_carried_scratch_failure(backing->carried_failure());
+            if (store->status() == detail::ScratchStatus::io_error) // the store carries a refused workspace allocation
+                detail::rethrow_carried_scratch_failure(store->carried_failure() ? store->carried_failure() : backing->carried_failure());
             throw coded<std::logic_error>(
                 store->status() == detail::ScratchStatus::io_error
                     ? RunFailureCode::scratch_io_failed : RunFailureCode::engine_invariant,

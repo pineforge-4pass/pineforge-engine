@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <type_traits>
 #include <unistd.h>
 #include <utility>
 
@@ -26,6 +27,16 @@
 
 namespace pineforge::detail {
 namespace {
+
+// Nonlocal initialization prepares the system_error message when the library
+// loads, before a host starts runs or installs allocation limits. No first-use
+// initializer or argument canonicalizer can allocate in a bad_alloc handler.
+const ReportScratchIoError allocation_failure{
+    RunFailureValue{RunFailureCode::out_of_memory, nullptr},
+    ENOMEM, "scratch allocation failed"};
+static_assert(std::is_nothrow_copy_constructible_v<ReportScratchIoError>
+              && std::is_nothrow_copy_assignable_v<ReportScratchIoError>,
+              "allocation failure transport must not allocate");
 
 [[noreturn]] void arena_error(int error, const char* operation,
                              const char* reason = "arena_io") {
@@ -123,6 +134,10 @@ ScratchArenaBackend validate_backing(int fd, std::uint64_t bytes) {
 }
 
 } // namespace
+
+const ReportScratchIoError& scratch_out_of_memory_failure() noexcept {
+    return allocation_failure;
+}
 
 struct ScratchArena::Impl {
     struct Window {
@@ -323,7 +338,7 @@ struct ScratchArena::Impl {
                 std::min(counters.chunks_total, capacity + std::max<std::uint64_t>(capacity, 1)));
             try { region.chunks.reserve(static_cast<std::size_t>(next)); }
             catch (const std::bad_alloc&) {
-                arena_error(ENOMEM, "scratch arena chunk table");
+                throw scratch_out_of_memory_failure();
             } catch (const std::length_error&) {
                 arena_error(EFBIG, "scratch arena chunk table size");
             }
@@ -371,7 +386,7 @@ void ScratchArena::attach(int fd, std::uint64_t bytes) {
             arena_error(errno, "scratch arena ignore SIGXFSZ");
         singleton_ = std::move(candidate);
     } catch (const std::bad_alloc&) {
-        arena_error(ENOMEM, "scratch arena metadata", "arena_backing");
+        throw scratch_out_of_memory_failure();
     } catch (const std::length_error&) {
         arena_error(EFBIG, "scratch arena metadata size", "arena_backing");
     }
@@ -429,7 +444,7 @@ void ScratchArena::open_region(Region& region, std::optional<std::uint64_t> max_
             arena_error(EFBIG, "scratch arena bounded directory size");
         try { region.chunks.reserve(static_cast<std::size_t>(count)); }
         catch (const std::bad_alloc&) {
-            arena_error(ENOMEM, "scratch arena bounded directory");
+            throw scratch_out_of_memory_failure();
         } catch (const std::length_error&) {
             arena_error(EFBIG, "scratch arena bounded directory size");
         }

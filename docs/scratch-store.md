@@ -87,6 +87,12 @@ Anything else leaves `status()` at `programming_error` and performs no I/O.
 Cache and slot counts are not part of the stored format: a reopen may use
 different ones.
 
+If the constructor's `nothrow` workspace allocation fails with valid geometry,
+`status()` is `io_error` and `carried_failure()` identifies typed `out_of_memory`.
+The failure carrier remains available even though the workspace does not exist.
+Consumers rethrow that cause before interpreting the status. Invalid geometry
+continues to report `programming_error`.
+
 ### Resident bound of the parent-terminal drain (native order)
 
 The native request core's `JournalStore` has a resident cap of 2,048
@@ -292,13 +298,27 @@ well under one byte per handle ever issued even when the live set is bounded.
 | `cancelled` | A visitor returned `false`. |
 | `not_found` | An absent handle, a page past the extent, or nothing to reopen. |
 | `programming_error` | Contract misuse or a request the host did not provision for. |
-| `io_error` | The medium failed. |
+| `io_error` | Backing I/O failed, or a carried allocation failure must be raised. |
 | `corrupt` | Stored bytes failed validation. |
 
 `put` and `erase` return `io_error` for backing I/O failure; other failures return
 `programming_error`. Erasing an absent handle returns `not_found` in an active
 transaction that is not rollback-only. `commit` reports the failing backing call's
 own status. Reads preserve backing `io_error`/`corrupt` and comparator failures.
+
+The status is a transport, not the run-failure classification. Command and
+script backings retain a prebuilt typed `out_of_memory` exception when an
+allocation fails, including an allocation while formatting an I/O or arena
+exhaustion diagnostic. Successful construction of an arena/share exhaustion
+diagnostic still yields `report_sink_failed` with `reason: arena_exhausted`.
+A real syscall error, including kernel `ENOMEM`, keeps its I/O classification;
+no consumer infers allocation failure from errno.
+
+Freezing external openings raises a captured allocation failure before mapping
+the read/create/write status. Owning native and admission journal decoders are
+throwing diagnostic surfaces: they raise typed `out_of_memory` before their
+callers can interpret invalid-storage status. Their nonowning validation scans
+remain nonallocating and `noexcept`.
 
 ## What a consumer lane must do
 

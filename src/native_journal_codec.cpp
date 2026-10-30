@@ -253,13 +253,18 @@ template<bool Owning> struct Load {
 };
 
 template<bool Owning> Status decode(const detail::ScratchByteSource& source,
-                                   detail::ScratchBuffer page, CommandEvent& event) noexcept {
+                                   detail::ScratchBuffer page, CommandEvent& event,
+                                   const detail::ReportScratchIoError*& failure) noexcept {
+    failure = nullptr;
     if (!page.data || !page.size) return Status::programming_error;
     try {
         jc::Reader in{source, page};
         Load<Owning>{in}(event);
         return in.finish();
-    } catch (const std::bad_alloc&) { return Status::programming_error; }
+    } catch (const std::bad_alloc&) {
+        if constexpr (Owning) failure = &detail::scratch_out_of_memory_failure();
+        return Status::programming_error;
+    }
     catch (...) { return Status::corrupt; }
 }
 } // namespace
@@ -283,16 +288,25 @@ JournalRecordSource encode_journal_record(const CommandEvent& event) noexcept {
     return JournalRecordSource(event);
 }
 detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource& source,
-    detail::ScratchBuffer page, CommandEvent& event) noexcept {
-    CommandEvent result;
-    const auto status = decode<true>(source, page, result);
-    if (status == Status::ok) event = std::move(result);
-    return status;
+    detail::ScratchBuffer page, CommandEvent& event) {
+    try {
+        CommandEvent result;
+        const detail::ReportScratchIoError* failure = nullptr;
+        const auto status = decode<true>(source, page, result, failure);
+        // Owning diagnostics can allocate. Raise their cause before a caller
+        // maps programming_error to invalid storage.
+        detail::rethrow_carried_scratch_failure(failure);
+        if (status == Status::ok) event = std::move(result);
+        return status;
+    } catch (const std::bad_alloc&) {
+        throw detail::scratch_out_of_memory_failure();
+    }
 }
 detail::ScratchStatus scan_journal_record(const detail::ScratchByteSource& source,
     detail::ScratchBuffer page, std::uint64_t& ordinal) noexcept {
     CommandEvent result;
-    const auto status = decode<false>(source, page, result);
+    const detail::ReportScratchIoError* failure = nullptr;
+    const auto status = decode<false>(source, page, result, failure);
     if (status == Status::ok)
         ordinal = std::visit([](const auto& event) { return event.ordinal; }, result);
     return status;

@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace pineforge::detail {
@@ -19,7 +20,17 @@ public:
                    const RunFailureArgs& args = {{"reason", "scratch_io"}})
         : std::system_error(error, std::generic_category(), operation),
           RunFailureInfo(RunFailureCode::report_sink_failed, args) {}
+    // An already validated value, for payloads prepared before an allocation
+    // can fail. This path does not canonicalize or allocate failure arguments.
+    ReportScratchIoError(RunFailureValue failure, int error, const char* operation)
+        : std::system_error(error, std::generic_category(), operation),
+          RunFailureInfo(std::move(failure)) {}
 };
+
+// Prepared during library initialization, before run-owned allocations. Raising
+// or carrying a copy only shares the existing message and validated payload.
+// Use allocation provenance (bad_alloc or nothrow null), never syscall errno.
+const ReportScratchIoError& scratch_out_of_memory_failure() noexcept;
 
 // Re-emit the original typed object, retaining errno, English and the validated
 // argument object. Status-only backings pass nullptr and keep their old raiser.
