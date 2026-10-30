@@ -34,7 +34,7 @@ fields from the writer and the sink request:
 | --- | --- |
 | `schema` | Format identifier `"pf-report-sink"` (`src/report_sink_writer.cpp:228`, `docker/pf_sink.py:179`). |
 | `version` | Wire version `1` (`src/report_sink_writer.cpp:228`, `docker/pf_sink.py:181`). |
-| `run_id` | Caller identifier from `--run-id`, default empty, passed to the native sink descriptor (`docker/run_json.py:5395`, `docker/run_json.py:6582`, `src/report_sink_writer.cpp:229`). |
+| `run_id` | Caller identifier from `--run-id`, default empty, passed to the native sink descriptor (`docker/run_json.py:5395`, `docker/run_json.py:6622`, `src/report_sink_writer.cpp:229`). |
 | `engine` | Compiled `PINEFORGE_VERSION_STRING` (`src/report_sink_writer.cpp:230`); the reader validates it as a string (`docker/pf_sink.py:183`). |
 | `records` | Ordered descriptors for record kinds enabled in that run (`src/report_sink_writer.cpp:231`, `docker/pf_sink.py:188`). |
 | `records[].type` | One-character record kind (`src/report_sink_writer.cpp:237`, `docker/pf_sink.py:190`). |
