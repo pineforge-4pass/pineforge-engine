@@ -172,6 +172,7 @@ constexpr Count kBudget = detail::ScratchFile::kCacheBytes;
 // The ledger zero-fill block is 4,096 B, and the arena chunk is an exact
 // multiple of it. Keep the test geometry tied to that shared block relation.
 constexpr Count kZeroBlock = detail::ScratchArena::kChunkBytes / 256;
+static_assert(kZeroBlock == 4096);
 constexpr char kRunId[] = "closed-trade-stream";
 static_assert(kClosed >= 2000);
 int failures = 0;
@@ -336,8 +337,9 @@ void raw_zero_prefix(const stream_io::Io& file, Count zeroed_end, Count dead_end
     require(::fstat(file.fd, &status) == 0 && status.st_dev == file.device
             && status.st_ino == file.inode && static_cast<Count>(status.st_size) >= dead_end,
             "raw ledger inspection lost its backing extent");
-    require(dead_end >= zeroed_end && dead_end - zeroed_end < kZeroBlock,
-            "raw ledger dead tail is not below one zero-fill block");
+    // zeroed_end=floor(dead_end/block)*block; a sub-block remainder follows
+    // from that geometry, rather than providing another observation of I/O.
+    require(dead_end >= zeroed_end, "raw ledger zero prefix exceeds the dead extent");
     std::array<unsigned char, kZeroBlock> bytes{};
     Count first = 0;
     while (first < zeroed_end) {
@@ -351,6 +353,23 @@ void raw_zero_prefix(const stream_io::Io& file, Count zeroed_end, Count dead_end
               "retired scratch prefix contains nonzero bytes");
         first += count;
     }
+}
+void raw_survivors(const stream_io::Io& file, Count first,
+                   const stream_io::Io& reference, Count reference_first,
+                   Count count, const char* message) {
+    const auto read = [count](const stream_io::Io& source, Count offset) {
+        struct stat status{};
+        require(::fstat(source.fd, &status) == 0 && status.st_dev == source.device
+                && status.st_ino == source.inode && status.st_size >= 0
+                && static_cast<Count>(status.st_size) >= offset + count,
+                "raw survivor inspection lost its backing extent");
+        std::vector<unsigned char> bytes(static_cast<std::size_t>(count));
+        // The real syscall bypasses both measurement and resident ledger data.
+        require(__real_pread(source.fd, bytes.data(), bytes.size(), static_cast<off_t>(offset))
+                    == static_cast<ssize_t>(bytes.size()), "raw survivor read failed");
+        return bytes;
+    };
+    check(read(file, first) == read(reference, reference_first), message);
 }
 Count rebase_copy_bytes(Count releases, Count retained_rows) {
     Count total = 0;
@@ -491,6 +510,29 @@ void scenario(const Directory& directory) {
                     index_dead_relative);
     raw_zero_prefix(payload, payload_dead_relative - payload_dead_relative % kZeroBlock,
                     payload_dead_relative);
+    // An independent run without a sink retains all history, so its raw files
+    // provide descriptor images (including numeric bits and text extents)
+    // unaffected by retirement. Keep these oracle transfers out of io above.
+    trade_retirement_fixture::Strategy reference(false, false, false, nullptr);
+    reference.set_broker_state_hash_recording(false);
+    stream_io::Measure reference_measurement;
+    reference.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    const auto reference_io = reference_measurement.finish();
+    require(reference.last_run_status() == 0 && reference.last_error().empty()
+            && reference.base() == 0 && reference.closed_trade_count() == geometry.trades,
+            "raw survivor reference did not retain the complete input tape");
+    valid(reference_io);
+    // R=N-3 leaves three rows. Index dead_end=R*168 minus released chunks;
+    // payload dead_end=R*(len("flip")+len("flip")) minus released chunks.
+    // Both are unaligned here; inspect live bytes beyond each pending prefix.
+    require(index_dead_relative % kZeroBlock != 0 && payload_dead_relative % kZeroBlock != 0,
+            "stream raw survivor fixture requires unaligned dead ends");
+    raw_survivors(index, index_dead_relative, reference_io.files[0], index_dead,
+                  (geometry.trades - retired) * TradeLedger::kRecordBytes,
+                  "raw stream index survivors changed after retirement");
+    raw_survivors(payload, payload_dead_relative, reference_io.files[1], geometry.retired_bytes,
+                  geometry.text_bytes - geometry.retired_bytes,
+                  "raw stream payload survivors changed after retirement");
     host.check_copy();
     // Refusals must precede every backing access, even an empty comparison.
     stream_io::Measure refusal_measurement;
