@@ -480,9 +480,12 @@ void object_store_allocation_failure() {
         return ScratchStatus::ok;
     });
     fault.finish();
-    transaction->rollback();
     require(backing->page_count() == 0, "failed object-store commit publishes no backing page");
     require_memory(result);
+    // Rollback blanks the possibly tainted superblock slot. Make the backing
+    // serviceable only after checking the failed commit and its original cause.
+    filler.clear();
+    transaction->rollback();
 }
 
 void native_decode_allocation_failure() {

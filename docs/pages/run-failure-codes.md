@@ -171,7 +171,7 @@ in addition to its six released 1.4.0 reasons.
 | `no_data_request` | `no_data` | no | `call` (pine_source), `function` (vocab, 9 values), `line` (integer) | The script read a request whose data PineForge does not pin for this run. |
 | `other_symbol_feed_missing` | `no_data` | no | `timeframe` (timeframe, optional) | No feed is installed for another symbol's request at its timeframe. |
 | `other_symbol_request` | `no_data` | no | `call` (pine_source), `function` (vocab, 2 values), `line` (integer), `symbol` (symbol, optional) | The script read another symbol's request and no bars of that symbol were installed. |
-| `out_of_memory` | `resource` | yes | none | The run ran out of memory. |
+| `out_of_memory` | `resource` | yes | none | A C++ allocation failed, including scratch caches, arena metadata, store workspace, owning journal decode or diagnostic construction. A real syscall ENOMEM retains its I/O code. |
 | `outputs_limit` | `strategy_limit` | no | `max` (integer), `reason` (vocab, 2 values) | A recorded-outputs capacity limit was reached during the run. |
 | `outputs_rejected` | `input` | no | `reason` (vocab, 3 values) | Recorded outputs were asked of a strategy library that records none, or the recording cannot be honoured as asked. |
 | `pine_array_error` | `strategy` | no | `collection` (vocab, 2 values, optional), `method` (vocab, 12 values, optional), `reason` (vocab, 5 values) | An array call failed: an index out of bounds, an inverted slice, an empty array, an invalid size, or a modified historical collection. |
@@ -290,10 +290,18 @@ The explicit sink-path refusal
 still requires a sealed arena and never creates a backing file or falls back to
 `TMPDIR`, `/tmp` or `/var/tmp`. File-backed command scratch uses
 `scratch_io_failed` (class `resource`), including default-directory query
-failures other than ENOTSUP and all-memory refusals. Native runs create command scratch at begin,
+failures other than ENOTSUP and refusals when all directory candidates are memory-backed. Native runs create command scratch at begin,
 before strategy callbacks. Report scratch uses `report_sink_failed` with
 `reason: scratch_io`; auxiliary tables use `scratch_io_failed`; sink-path I/O
 uses `report_sink_failed` with `reason: sink_io`.
+
+Allocation failure is classified by its origin: `std::bad_alloc` and a required
+`new (std::nothrow)` returning null raise typed `out_of_memory`, including in
+scratch setup and while constructing another error's diagnostic. A prebuilt
+payload allows that cause to survive status-only I/O boundaries without another
+diagnostic allocation. Actual kernel `ENOMEM` from mapping, positional I/O or
+disk operations retains the existing I/O code. Arena/share exhaustion and
+length/extent `EFBIG` refusals retain their existing codes.
 
 Scratch placement, in short (1.7.0 and later). Without an explicit scratch
 directory a native run, with no scratch arena attached, creates one unlinked

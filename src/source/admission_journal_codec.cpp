@@ -329,7 +329,9 @@ template<class A> struct Schema {
 };
 
 template<bool Owning> Status decode(const detail::ScratchByteSource& source,
-    detail::ScratchBuffer page, Event& event, JournalRecordSummary& summary) noexcept {
+    detail::ScratchBuffer page, Event& event, JournalRecordSummary& summary,
+    const detail::ReportScratchIoError*& failure) noexcept {
+    failure = nullptr;
     if (!page.data || !page.size) return Status::programming_error;
     try {
         jc::Reader in{source,page};
@@ -345,7 +347,10 @@ template<bool Owning> Status decode(const detail::ScratchByteSource& source,
             summary.rejected_bar = load.bar;
         }
         return status;
-    } catch (const std::bad_alloc&) { return Status::programming_error; }
+    } catch (const std::bad_alloc&) {
+        if constexpr (Owning) failure = &detail::scratch_out_of_memory_failure();
+        return Status::programming_error;
+    }
     catch (...) { return Status::corrupt; }
 }
 } // namespace
@@ -387,17 +392,24 @@ detail::ScratchStatus JournalRecordSource::read(std::uint64_t offset,
 }
 JournalRecordSource encode_journal_record(const Event& event) noexcept { return JournalRecordSource(event); }
 detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource& source,
-    detail::ScratchBuffer page, Event& event) noexcept {
-    Event result;
-    JournalRecordSummary summary;
-    const auto status = decode<true>(source,page,result,summary);
-    if (status == Status::ok) event = std::move(result);
-    return status;
+    detail::ScratchBuffer page, Event& event) {
+    try {
+        Event result;
+        JournalRecordSummary summary;
+        const detail::ReportScratchIoError* failure = nullptr;
+        const auto status = decode<true>(source,page,result,summary,failure);
+        detail::rethrow_carried_scratch_failure(failure);
+        if (status == Status::ok) event = std::move(result);
+        return status;
+    } catch (const std::bad_alloc&) {
+        throw detail::scratch_out_of_memory_failure();
+    }
 }
 detail::ScratchStatus scan_journal_record(const detail::ScratchByteSource& source,
     detail::ScratchBuffer page, JournalRecordSummary& summary) noexcept {
     Event scratch;
-    return decode<false>(source,page,scratch,summary);
+    const detail::ReportScratchIoError* failure = nullptr;
+    return decode<false>(source,page,scratch,summary,failure);
 }
 detail::ScratchStatus fold_journal_record(const detail::ScratchByteSource& source,
     detail::ScratchBuffer page, std::uint64_t& digest) noexcept {

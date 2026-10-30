@@ -471,9 +471,9 @@ or bounds the row.
 | --- | --- |
 | `scratch_capacity_exceeded`, argument `resource` | A slab region ran out, more than 4,096 cohorts are live in the bounded profile, or an id is longer than 64 bytes in the bounded profile (refused before any store change). Admit larger maxima or shorter ids before another attempt |
 | `report_sink_failed`, reason `arena_exhausted` | The inherited arena filled. A host may re-place the run on a larger arena; one that makes a single attempt returns the failure |
-| `scratch_io_failed` | A scratch read, write, create or resize failed, or the command-scratch byte cap was reached |
+| `scratch_io_failed` | A scratch read, write, create or resize failed, including real syscall `ENOMEM`, or the command-scratch byte cap was reached |
 | `scratch_configuration_invalid` | `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES` is not a positive decimal |
-| `out_of_memory` | The allocator failed. It is not relabelled as a capacity failure |
+| `out_of_memory` | A C++ allocation failed, including scratch buffers, arena directories/metadata, store workspace, owning decode or error-diagnostic construction. It is not relabelled as I/O or a capacity failure |
 
 See [Run-failure codes](@ref run_failure_codes) for the arguments and the
 retry rules.
