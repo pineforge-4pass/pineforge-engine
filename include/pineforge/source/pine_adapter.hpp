@@ -3152,7 +3152,6 @@ private:
         // receipt read has seen a command other than Accepted since its last
         // pass (a memo: fresh working roots release nothing; begin sets it).
         std::vector<std::uint64_t> working_roots;
-        std::vector<std::uint64_t> roster_roots;
         std::vector<std::uint64_t> lot_openings;
         std::vector<std::uint64_t> successor_lots;
         std::vector<std::pair<native_order::CohortHandle, std::uint64_t>> released_origins;

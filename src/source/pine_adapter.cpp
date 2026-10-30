@@ -1112,6 +1112,11 @@ PineExecutionAdapter::PineExecutionAdapter(NativeStrategyHost& host,
 }
 
 namespace detail {
+// All adapter summary allocations use this source-only extension.
+struct AdapterPositionTailSummary final : PositionTailSummary {
+    std::vector<std::uint64_t> roster_roots;
+};
+
 // Share the production attached-arena/disk selection and per-run I/O policy.
 struct CommandScratchRun {
     // Fixed geometry, independent of bars, handles and text widths.
@@ -2574,7 +2579,7 @@ void PineExecutionAdapter::revive_brackets_after_margin(
 
 void PineExecutionAdapter::reset_for_run() {
     position_tail_spill_.reset();
-    position_tail_summary_ = std::make_shared<detail::PositionTailSummary>();
+    position_tail_summary_ = std::make_shared<detail::AdapterPositionTailSummary>();
     exit_scratch_ = nullptr;
     pine_view_host_ = nullptr;
     // Incarnations start over with the run.
@@ -4422,9 +4427,6 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     std::size_t members = 0;
     for (const auto& roster : core.cohorts()) members += roster.origins.size();
     if (members == 0) return;
-    // The common case, in a direct scan with nothing allocated or sorted:
-    // every member still opened a lot that is open, or roots a working
-    // request, so none can go.
     const auto root_of = [](const native_order::LiveRequest& row) {
         return row.definition->root ? row.definition->root->incarnation
                                     : row.handle().incarnation;
@@ -4455,7 +4457,10 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     PINEFORGE_LOOKUP_INDEX_WORK("cohort_origin_pass", this, run_counter_, 1);
     auto& working = scratch.working_roots;
     auto& lots = scratch.lot_openings;
-    auto& roster_roots = scratch.roster_roots;
+    if (!position_tail_summary_)
+        position_tail_summary_ = std::make_shared<detail::AdapterPositionTailSummary>();
+    auto& roster_roots = static_cast<detail::AdapterPositionTailSummary&>(
+        *position_tail_summary_).roster_roots;
     auto& successor_lots = scratch.successor_lots;
     auto& released = scratch.released_origins;
     working.clear();
@@ -4468,8 +4473,6 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     for (const auto& lot : pine->pyramid_entries_) lots.push_back(lot.entry_incarnation);
     std::sort(lots.begin(), lots.end());
     lots.erase(std::unique(lots.begin(), lots.end()), lots.end());
-    // This pass builds the union of origins held by all stored rosters.
-    // The scratch retains capacity and is cleared before each union is built.
     for (const auto& roster : core.cohorts()) {
         PINEFORGE_LOOKUP_INDEX_WORK("cohort_origin_roster", this, run_counter_, 1);
         for (const auto& origin : roster.origins)
@@ -4478,8 +4481,6 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     std::sort(roster_roots.begin(), roster_roots.end());
     roster_roots.erase(std::unique(roster_roots.begin(), roster_roots.end()),
                        roster_roots.end());
-    // The lots no roster names as a root: a replace successor's (or an
-    // opening no roster holds).
     for (const auto opening : lots) {
         if (opening == 0) continue;
         if (!std::binary_search(roster_roots.begin(), roster_roots.end(), opening)) {
@@ -4491,8 +4492,7 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
         const auto& origins = roster.origins;
         if (origins.empty()) continue;
         if (probe.run != origins.front().run) probe.run = origins.front().run;
-        // The newest open successor lot this roster binds: every member older
-        // than it may be its root.
+        // Keep older roots while the newest successor lot remains bound.
         std::uint64_t kept_below = 0;
         for (const auto opening : successor_lots) {
             probe.incarnation = opening;
@@ -12100,7 +12100,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         const std::size_t base = pine ? pine->trades_.base() : 0;
         observe_position_tail_rows();
         if (!position_tail_summary_)
-            position_tail_summary_ = std::make_shared<detail::PositionTailSummary>();
+            position_tail_summary_ = std::make_shared<detail::AdapterPositionTailSummary>();
         auto& summary = *position_tail_summary_;
 #ifdef PINEFORGE_POSITION_TAIL_BEFORE_QUERY
         PINEFORGE_POSITION_TAIL_BEFORE_QUERY(summary);
@@ -28689,7 +28689,7 @@ void PineExecutionAdapter::observe_position_tail_rows() {
 
 void PineExecutionAdapter::begin_position_tail_summary() {
     if (!position_tail_summary_)
-        position_tail_summary_ = std::make_shared<detail::PositionTailSummary>();
+        position_tail_summary_ = std::make_shared<detail::AdapterPositionTailSummary>();
     auto* pine = pine_view_of(host_);
     if (!pine || short_seed_.final_short.incarnation != 0) {
         position_tail_summary_->invalidate(
@@ -28993,7 +28993,7 @@ void PineExecutionAdapter::set_id_tables_directory(const std::string& directory)
     placement_.set_auxiliary_tables_directory(directory);
     consumed_partial_exit_cycles_.set_directory(directory);
     if (!position_tail_summary_)
-        position_tail_summary_ = std::make_shared<detail::PositionTailSummary>();
+        position_tail_summary_ = std::make_shared<detail::AdapterPositionTailSummary>();
     position_tail_summary_->set_directory(directory);
 }
 
