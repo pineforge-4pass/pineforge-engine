@@ -36,10 +36,10 @@ CachedScratchBacking::CachedScratchBacking(std::unique_ptr<ScratchBacking> inner
         bytes_.reset(new (std::nothrow) std::byte[kCacheBytes]);
         if (!bytes_)
             throw scratch_out_of_memory_failure();
-        page_ids_.reset(new (std::nothrow) ScratchPageId[kMaxSlots]());
+        page_ids_.reset(new (std::nothrow) ScratchPageId[slot_count_]());
         if (!page_ids_)
             throw scratch_out_of_memory_failure();
-        std::fill_n(page_ids_.get(), kMaxSlots, scratch_no_page);
+        std::fill_n(page_ids_.get(), slot_count_, scratch_no_page);
     }
 }
 

@@ -1,6 +1,9 @@
+#define PINEFORGE_TEST_ALLOCATION_BYTES
+#include "global_allocation_replacement.hpp"
 #include "../src/command_scratch_cache.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -12,13 +15,15 @@
 namespace {
 using namespace pineforge::detail;
 
-constexpr std::size_t kMinimumCachedPageBytes = 512;
-constexpr std::size_t kDocumentedFixedObjectBytes = 1024;
+constexpr std::size_t kMinimumCachedPageBytes = CachedScratchBacking::kMinPageBytes;
+constexpr std::size_t kDocumentedFixedObjectBytes = CachedScratchBacking::kFixedObjectBytes;
 constexpr std::size_t kDocumentedMemoryBytes =
     3 * (CachedScratchBacking::kCacheBytes
          + (CachedScratchBacking::kCacheBytes / kMinimumCachedPageBytes)
                * sizeof(ScratchPageId)
          + kDocumentedFixedObjectBytes);
+constexpr std::size_t kMiddleCachedPageBytes = CachedScratchBacking::kMinPageBytes * 8;
+constexpr std::size_t kLargeCachedPageBytes = CachedScratchBacking::kMinPageBytes * 128;
 // At the default cache size the documented bound is 198 KiB; at any other size
 // the same formula holds and only the figure differs.
 static_assert(CachedScratchBacking::kCacheBytes != 64 * 1024 || kDocumentedMemoryBytes == 202752,
@@ -29,6 +34,40 @@ static_assert(CachedScratchBacking::kCommandScratchMemoryBytes == kDocumentedMem
 void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
 }
+
+struct AllocationCapture {
+    std::array<std::size_t, 4> sizes{};
+    std::size_t count = 0;
+
+    static AllocationCapture* current;
+
+    static void record(std::size_t size) noexcept {
+        if (current == nullptr) return;
+        if (current->count < current->sizes.size())
+            current->sizes[current->count] = size;
+        ++current->count;
+    }
+};
+
+AllocationCapture* AllocationCapture::current = nullptr;
+
+struct AllocationObservation {
+    explicit AllocationObservation(AllocationCapture& capture) {
+        require(!global_allocation::recording && global_allocation::on_recorded == nullptr,
+                "begin with allocation observation disabled");
+        AllocationCapture::current = &capture;
+        global_allocation::live_bytes = 0;
+        global_allocation::on_recorded = &AllocationCapture::record;
+        global_allocation::recording = true;
+    }
+
+    ~AllocationObservation() {
+        global_allocation::recording = false;
+        global_allocation::on_recorded = nullptr;
+        global_allocation::live_bytes = 0;
+        AllocationCapture::current = nullptr;
+    }
+};
 
 struct IoCounts {
     std::uint64_t reads = 0;
@@ -66,6 +105,35 @@ std::size_t slot_count_for(std::size_t page_size) {
     return page_size >= kMinimumCachedPageBytes
             && page_size <= CachedScratchBacking::kCacheBytes
         ? CachedScratchBacking::kCacheBytes / page_size : 0;
+}
+
+void check_slot_table_allocation(std::size_t page_size) {
+    const auto slot_count = slot_count_for(page_size);
+    require(slot_count != 0, "the allocation row uses a cached page geometry");
+    if (page_size == CachedScratchBacking::kMinPageBytes)
+        require(slot_count == CachedScratchBacking::kMaxSlots,
+                "the minimum page geometry uses the maximum slot count");
+
+    std::vector<std::byte> storage(page_size);
+    std::vector<std::byte> page(page_size);
+    auto inner = std::make_unique<FixedMemoryScratchBacking>(
+        ScratchBuffer{storage.data(), storage.size()}, page_size);
+    AllocationCapture observed;
+    ScratchStatus highest_slot_status = ScratchStatus::ok;
+    {
+        AllocationObservation observation(observed);
+        CachedScratchBacking cache(std::move(inner));
+        highest_slot_status = cache.write_page(
+            static_cast<ScratchPageId>(slot_count - 1), bytes(page));
+    }
+
+    require(observed.count == 2, "cache construction allocates exactly two arrays");
+    require(observed.sizes[0] == CachedScratchBacking::kCacheBytes,
+            "the page buffer allocation uses kCacheBytes");
+    require(observed.sizes[1] == slot_count * sizeof(ScratchPageId),
+            "the slot table allocation uses the wrapped page slot count");
+    require(highest_slot_status == ScratchStatus::programming_error,
+            "the highest slot write reaches the real inner backing boundary");
 }
 
 struct ExpectedRead {
@@ -259,6 +327,9 @@ void exercise_geometry(std::size_t page_size) {
 
 int main() {
     try {
+        check_slot_table_allocation(CachedScratchBacking::kMinPageBytes);
+        check_slot_table_allocation(kMiddleCachedPageBytes);
+        check_slot_table_allocation(kLargeCachedPageBytes);
         exercise_geometry(512);
         exercise_geometry(4 * 1024);
         exercise_geometry(64 * 1024);

@@ -694,7 +694,7 @@ does not certify its lifetime extent. The bound codec's existing command share s
 
 The command-scratch resident/cache ledger term is fixed **K = `3 * (kCacheBytes + kMaxSlots * sizeof(ScratchPageId) + kFixedObjectBytes)`**:
 at the default this is **202,752 bytes/run**, `3 * (65536 + 1024 + 1024)`, named at
-`src/command_scratch_cache.hpp:28`, including three 64-KiB buffers, their 1-KiB slot tables and fixed objects (`static_assert(sizeof(CachedScratchBacking)` at `src/command_scratch_cache.hpp:76`).
+`src/command_scratch_cache.hpp:28`, including three 64-KiB buffers, slot tables allocated with each wrapped backing's page slot count (K is charged at the worst case of 512-byte pages) and fixed objects (`static_assert(sizeof(CachedScratchBacking)` at `src/command_scratch_cache.hpp:76`).
 Each disk store reuses one buffer for its resident prefix, then its read cache;
 crossing `kCacheBytes` (64 KiB at default) spills once. Attached arenas retain direct mapped admission.
 Charge K (prose ledger; scripts/arena_bound.py has no K input) alongside existing workspaces/inner backings, replacing the old read-cache allowance; K changes no arena-storage formula or certification.

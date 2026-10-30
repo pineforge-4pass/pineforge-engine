@@ -14,9 +14,9 @@ struct CommandScratchByteBudget;
 // owned inner backing must go through this object; construct the inner with
 // NO observer and install the logical I/O observer here, including cache hits.
 // One fixed buffer serves first as a dense resident prefix, then as the
-// read cache after spill. At most three stores per run share the fixed bound K
-// below, including their decorator objects/slot keys. Nothing depends on extent
-// or bars. No I/O operation allocates or throws.
+// read cache after spill. Its slot table uses the wrapped backing's slot count.
+// K below charges the worst case (512-byte pages) for three stores, including
+// decorator objects/slot keys. Nothing depends on extent or bars; no I/O operation allocates or throws.
 //
 // Page size is immutable per backing. Direct-mapped keys therefore identify
 // pages in this one geometry (512 B through 1 MiB, including non-powers of
@@ -26,7 +26,7 @@ public:
     static constexpr std::size_t kCacheBytes = 64 * 1024;
     static constexpr std::size_t kMinPageBytes = 512, kFixedObjectBytes = 1024, kMaxSlots = kCacheBytes / kMinPageBytes;
     static constexpr std::size_t kCommandScratchMemoryBytes =
-        3 * (kCacheBytes + kMaxSlots * sizeof(ScratchPageId) + kFixedObjectBytes); // K counts three buffers, tables and fixed objects.
+        3 * (kCacheBytes + kMaxSlots * sizeof(ScratchPageId) + kFixedObjectBytes); // K charges three buffers, 512-byte-page tables and fixed objects.
     // The inner must be nonnull. A page-buffer or slot-table allocation failure is a typed
     // out_of_memory failure carried by the shared, prebuilt scratch exception.
     // resident_bytes is a construction-only cap, clamped to kCacheBytes;
