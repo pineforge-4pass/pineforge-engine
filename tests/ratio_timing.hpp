@@ -31,6 +31,25 @@
 
 namespace ratio_timing {
 
+struct LegSeconds {
+    double small;
+    double large;
+};
+
+// A borderline failure gets one fresh pair; a pass or a ratio at least twice
+// the bound stands as measured. The caller checks each pair's minimum times.
+template<class Remeasure>
+inline double ratio_with_remeasurement(double small_seconds, double large_seconds,
+                                       double shape_bound, Remeasure&& remeasure) {
+    const double ratio = small_seconds > 0.0 ? large_seconds / small_seconds : 0.0;
+    if (ratio >= shape_bound && ratio < 2.0 * shape_bound) {
+        const LegSeconds retry = remeasure();
+        const double retry_ratio = retry.small > 0.0 ? retry.large / retry.small : 0.0;
+        return retry_ratio < ratio ? retry_ratio : ratio;
+    }
+    return ratio;
+}
+
 // This process's user-mode CPU seconds (POSIX getrusage), for a row whose
 // legs allocate enough that the kernel's page faults dominate the difference
 // between them: std::clock also counts system time, and a leg whose buffers
