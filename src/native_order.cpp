@@ -24,7 +24,7 @@
 #include <system_error>
 #include <utility>
 #include <variant>
-
+#include "native_cohort_target_work.hpp"
 namespace pineforge::native_order {
 inline namespace native_order_v8 {
 
@@ -452,7 +452,7 @@ bool opening_close_alive(const TargetObservation& observation, const OpeningClos
 }
 
 bool handle_less(const RequestHandle& a, const RequestHandle& b) noexcept {
-    // Accepted cohorts are run-homogeneous.
+    PF_COHORT_WORK(HandleCompare); // Accepted cohorts are run-homogeneous.
     return a.incarnation < b.incarnation;
 }
 
@@ -941,7 +941,7 @@ inline std::size_t book_position(const std::vector<LiveRequest>& live, uint64_t 
     constexpr std::size_t kWalk = 16;
     std::size_t first = 0;
     std::size_t count = live.size();
-    while (count > kWalk) {
+    while (count > kWalk) { PF_COHORT_WORK(ResidentStep);
         const std::size_t half = count / 2;
         if (key_of(live[first + half]) < key) {
             first += half + 1;
@@ -950,7 +950,7 @@ inline std::size_t book_position(const std::vector<LiveRequest>& live, uint64_t 
             count = half;
         }
     }
-    for (std::size_t i = first; i < live.size(); ++i) {
+    for (std::size_t i = first; i < live.size(); ++i) { PF_COHORT_WORK(ResidentStep);
         const uint64_t row = key_of(live[i]);
         if (row < key) continue;
         return row == key ? i : live.size();
@@ -2797,7 +2797,7 @@ const LiveRequest* WorkingRequestCore::find_repriced(uint64_t incarnation) const
 // classify's lookup without the call to classify: every lookup the consumer
 // makes passes through here.
 const LiveRequest* WorkingRequestCore::find_live(const RequestHandle& handle) const {
-    if (!names_run(handle, identity_)) return nullptr;
+    PF_COHORT_WORK(FindLive); if (!names_run(handle, identity_)) return nullptr;
     const LiveRequest* resident = nullptr;
     if (!repriced_.empty()) {
         resident = find_repriced(handle.incarnation);
@@ -2978,11 +2978,11 @@ void WorkingRequestCore::index_committed(const CommandEvent& event) noexcept {
 }
 
 bool WorkingRequestCore::issued(const RequestHandle& handle) const noexcept {
-    if (handle.incarnation == 0 || handle.run != identity_) return false;
+    PF_COHORT_WORK(Issued); if (handle.incarnation == 0 || handle.run != identity_) return false;
     const auto it = std::upper_bound(
             issued_.begin(), issued_.end(), handle.incarnation,
             [](uint64_t incarnation, const std::pair<uint64_t, uint64_t>& range) {
-                return incarnation < range.first;
+                PF_COHORT_WORK(IssuedComparison); return incarnation < range.first;
             });
     return it != issued_.begin() && handle.incarnation <= std::prev(it)->second;
 }
@@ -2994,7 +2994,7 @@ bool WorkingRequestCore::issued(const RequestHandle& handle) const noexcept {
 // answer), so a membership test needs nothing but it.
 std::optional<RequestHandle> WorkingRequestCore::canonical_cohort_origin(
         const RequestHandle& origin) const {
-    if (!issued(origin)) return std::nullopt;
+    PF_COHORT_WORK(Canonical); if (!issued(origin)) return std::nullopt;
     if (const auto* live = find_live(origin)) {
         const auto& root = live->definition->root;
         return root ? *root : live->handle();
@@ -3095,7 +3095,7 @@ void WorkingRequestCore::cohort_remove(CohortHandle cohort, RequestHandle origin
 
 bool WorkingRequestCore::cohort_contains(
         CohortHandle cohort, const RequestHandle& opening) const {
-    if (!cohort_exists(cohort)) return false;
+    PF_COHORT_WORK(Contains); if (!cohort_exists(cohort)) return false;
     const auto root = canonical_cohort_origin(opening);
     if (!root) return false;
     const auto found = cohorts_.find(cohort.value);
@@ -8070,7 +8070,7 @@ struct WorkingRequestCore::SuccessorRootIndex {
     }
 
     Row read(uint64_t index) const {
-        assert((slab || file.opened()) && index < disk_rows);
+        PF_COHORT_WORK(RootDiskRead); assert((slab || file.opened()) && index < disk_rows);
         Row row;
         if (slab) {
             slab->read_at(detail::ScratchResource::successor_roots,
@@ -8092,7 +8092,7 @@ struct WorkingRequestCore::SuccessorRootIndex {
         if (tail_size != 0 && successor >= tail[0].successor) {
             const auto end = tail.begin() + static_cast<std::ptrdiff_t>(tail_size);
             const auto where = std::lower_bound(tail.begin(), end, successor,
-                    [](const Row& row, uint64_t key) { return row.successor < key; });
+                    [](const Row& row, uint64_t key) { PF_COHORT_WORK(RootTailComparison); return row.successor < key; });
             return where != end && where->successor == successor
                     ? std::optional<uint64_t>{where->root} : std::nullopt;
         }
@@ -8224,7 +8224,7 @@ void WorkingRequestCore::append_successor_root(uint64_t incarnation, uint64_t ro
 }
 
 std::optional<uint64_t> WorkingRequestCore::successor_root(uint64_t incarnation) const {
-    return successor_roots_ ? successor_roots_->find(incarnation) : std::nullopt;
+    PF_COHORT_WORK(Successor); return successor_roots_ ? successor_roots_->find(incarnation) : std::nullopt;
 }
 
 // The consumer folds at commit and pins every queued cause before retiring the

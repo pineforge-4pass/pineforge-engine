@@ -1,0 +1,5 @@
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND TEST_SOURCES test_native_cohort_target_transcript)
+    pineforge_add_unit_test(test_native_cohort_target_transcript)
+    set_tests_properties(test_native_cohort_target_transcript PROPERTIES LABELS "slow")
+endif()
