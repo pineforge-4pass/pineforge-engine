@@ -13176,6 +13176,18 @@
   },
   {
    "file": "src/command_scratch_cache.cpp",
+   "symbol": "reset",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "CachedScratchBacking :: CachedScratchBacking ( std :: unique_ptr < ScratchBacking > inner , ScratchIoObserver observer , std :: size_t resident_bytes , std :: shared_ptr < CommandScratchByteBudget > budget ) : ScratchBacking ( inner ? inner -> kind ( ) : ScratchBackingKind :: disk , inner ? inner -> page_size ( ) : 0 , observer ) , inner_ ( std :: move ( inner ) ) , slot_count_ ( page_size ( ) > = kMinPageBytes && page_size ( ) < = kCacheBytes ? kCacheBytes / page_size ( ) : 0 ) , resident_pages_ ( slot_count_ ! = 0 ? std :: min ( resident_bytes , kCacheBytes ) / page_size ( ) : 0 ) , resident_ ( resident_pages_ ! = 0 && inner_ -> page_count ( ) = = 0 ) , budget_ ( std :: move ( budget ) ) #1",
+    "if ( slot_count_ ! = 0 ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new",
+   "ordinal": 2
+  },
+  {
+   "file": "src/command_scratch_cache.cpp",
    "symbol": "budget_",
    "scope": [
     "namespace pineforge :: detail #1",
@@ -30073,6 +30085,17 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "position_tail_summary_",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "working",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -30095,11 +30118,24 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "roster_roots",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
+    "for ( const auto & roster : core . cohorts ( ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "roster_roots . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "successor_lots",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto opening : lots ) #1"
+    "for ( const auto opening : lots ) #1",
+    "if ( ! std :: binary_search ( roster_roots . begin ( ) , roster_roots . end ( ) , opening ) ) #1"
    ],
    "cls": "grow",
    "spelling": "successor_lots . push_back ( . . . )",
@@ -30111,7 +30147,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & roster : core . cohorts ( ) ) #1"
+    "for ( const auto & roster : core . cohorts ( ) ) #2"
    ],
    "cls": "assign",
    "spelling": "origins = . . .",
@@ -30123,7 +30159,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & roster : core . cohorts ( ) ) #1",
+    "for ( const auto & roster : core . cohorts ( ) ) #2",
     "for ( const auto & origin : origins ) #1"
    ],
    "cls": "grow",
@@ -39906,6 +39942,17 @@
    ],
    "cls": "decl",
    "spelling": "std :: unordered_set < const void * >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_position_tail_summary.hpp",
+   "symbol": "roster_roots",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "struct AdapterPositionTailSummary final : PositionTailSummary #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < std :: uint64_t >",
    "ordinal": 1
   },
   {

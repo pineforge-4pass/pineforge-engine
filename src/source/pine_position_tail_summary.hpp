@@ -15,6 +15,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace pineforge::source::detail {
 
@@ -459,5 +460,8 @@ double replay_position_tail(std::size_t end, std::size_t base, Read&& read,
     }
     return result;
 }
+
+// Source-only extension of the position-tail summary: every allocation uses it.
+struct AdapterPositionTailSummary final : PositionTailSummary { std::vector<std::uint64_t> roster_roots; };
 
 } // namespace pineforge::source::detail

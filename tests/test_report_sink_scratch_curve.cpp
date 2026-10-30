@@ -200,8 +200,18 @@ using pineforge::NativeRunSpec;
 using pineforge::NativeSetupStatus;
 using pineforge::NativeStrategyHost;
 using pineforge::ReportC;
+using pineforge::detail::CachedScratchBacking;
+using pineforge::detail::ScratchPageId;
 namespace native_order = pineforge::native_order;
 namespace rs = pineforge::report_sink;
+
+// The older header kept kMaxSlots private; its minimum cached page is 512 bytes.
+// Retain that geometry oracle so the inline-table parent reaches the census.
+template<class Cache = CachedScratchBacking, std::size_t Slots = Cache::kMaxSlots>
+constexpr std::size_t cache_slot_array_bytes(int) { return Slots * sizeof(ScratchPageId); }
+constexpr std::size_t cache_slot_array_bytes(...) {
+    return CachedScratchBacking::kCacheBytes / 512 * sizeof(ScratchPageId);
+}
 
 constexpr std::int64_t start_ms = INT64_C(1736121600000);
 constexpr std::int64_t step_ms = 60000;
@@ -1284,20 +1294,26 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
     // cr150-contracts.md, Report-sink presentation: one copied ordinary tail,
     // and the observer keeps its presented value inline, with no owning array.
     // This bare host opens only the Dependency command store (512-byte pages).
-    // Its CachedScratchBacking owns C = kCacheBytes; capture temporarily adds
-    // H = sizeof(one point) before the run exit guard releases the cache.
-    // Thus run peak = C + (observer ? H : 0), largest array = C, allocations =
-    // one cache + (observer ? one tail : none), and live bytes at return = 0.
+    // Its CachedScratchBacking owns C = kCacheBytes and S = slot-table bytes.
+    // Capture temporarily adds H = sizeof(one point) before run exit releases
+    // the cache: run peak = C + S + (observer ? H : 0),
+    // largest array = C, allocations = page buffer + slot table + capture tail,
+    // and live bytes at return = 0.
     // Keep this census separate so C cannot hide an extra array during fill.
     // Mutation: in native_execution_consumer.cpp capture_presentation, change
     // new pf_equity_point_t[1]{*held} to new pf_equity_point_t[2]{*held};
-    // observer run peak becomes C + 2H and must fail this equality.
-    constexpr std::size_t command_cache_bytes = pineforge::detail::CachedScratchBacking::kCacheBytes;
+    // observer run peak becomes C + S + 2H and must fail this equality.
+    constexpr std::size_t command_cache_arrays[] = {
+        CachedScratchBacking::kCacheBytes, cache_slot_array_bytes(0),
+    };
+    constexpr std::size_t command_cache_bytes =
+        command_cache_arrays[0] + command_cache_arrays[1];
     const std::size_t capture_arrays = observer ? 1 : 0;
     require(run_arrays.peak_bytes == command_cache_bytes + capture_arrays * held_bytes
-                && run_arrays.capacity_bytes == command_cache_bytes
-                && run_arrays.allocations == 1 + capture_arrays,
-            "run census differs from one dependency cache plus the counted capture tail: peak_bytes="
+                && run_arrays.capacity_bytes == CachedScratchBacking::kCacheBytes
+                && run_arrays.allocations == std::size(command_cache_arrays) + capture_arrays,
+            "run census differs from the dependency page buffer and slot table "
+            "plus the counted capture tail: peak_bytes="
             + std::to_string(run_arrays.peak_bytes)
             + ", capacity_bytes=" + std::to_string(run_arrays.capacity_bytes)
             + ", allocations=" + std::to_string(run_arrays.allocations));
