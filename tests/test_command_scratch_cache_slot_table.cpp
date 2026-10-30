@@ -114,7 +114,12 @@ void check_slot_table_allocation(std::size_t page_size) {
         require(slot_count == CachedScratchBacking::kMaxSlots,
                 "the minimum page geometry uses the maximum slot count");
 
-    std::vector<std::byte> storage(page_size);
+    // The inner backing holds exactly kInnerPages pages (one), so page id
+    // `slot_count - 1` is inside it only when it is page 0, that is only when the
+    // cache has a single slot (a page as large as the cache). Otherwise the write
+    // is beyond the inner extent and the inner refuses it with programming_error.
+    constexpr std::size_t kInnerPages = 1;
+    std::vector<std::byte> storage(kInnerPages * page_size);
     std::vector<std::byte> page(page_size);
     auto inner = std::make_unique<FixedMemoryScratchBacking>(
         ScratchBuffer{storage.data(), storage.size()}, page_size);
@@ -132,8 +137,12 @@ void check_slot_table_allocation(std::size_t page_size) {
             "the page buffer allocation uses kCacheBytes");
     require(observed.sizes[1] == slot_count * sizeof(ScratchPageId),
             "the slot table allocation uses the wrapped page slot count");
-    require(highest_slot_status == ScratchStatus::programming_error,
-            "the highest slot write reaches the real inner backing boundary");
+    // Expectation derived per geometry from the page index, not a fixed status:
+    // page id slot_count - 1 is in range of the one-page inner iff slot_count - 1 < kInnerPages.
+    const ScratchStatus expected_highest_slot_status =
+        slot_count - 1 < kInnerPages ? ScratchStatus::ok : ScratchStatus::programming_error;
+    require(highest_slot_status == expected_highest_slot_status,
+            "the highest slot write status follows whether its page is inside the inner backing");
 }
 
 struct ExpectedRead {
