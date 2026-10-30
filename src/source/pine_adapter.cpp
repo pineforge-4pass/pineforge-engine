@@ -4452,6 +4452,7 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
         }
         if (every_member_bound) return;
     }
+    PINEFORGE_LOOKUP_INDEX_WORK("cohort_origin_pass", this, run_counter_, 1);
     auto& working = scratch.working_roots;
     auto& lots = scratch.lot_openings;
     auto& successor_lots = scratch.successor_lots;
@@ -4479,6 +4480,7 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
         if (opening == 0) continue;
         bool root = false;
         for (const auto& roster : core.cohorts()) {
+            PINEFORGE_LOOKUP_INDEX_WORK("cohort_origin_roster", this, run_counter_, 1);
             if (member(roster.origins, opening)) {
                 root = true;
                 break;
