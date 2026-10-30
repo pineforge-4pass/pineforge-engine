@@ -1,6 +1,8 @@
 """Independent copies of the immediate column writer and equity proof.
 
-The copied bodies are from 3e34b9a02164ee5f619f9f3bcb8773da037e9d11.
+The copied bodies are verbatim from these git blobs:
+docker/run_json.py: b5081ee6dea5e3355f5d65c1c044b30eef25009a
+docker/pf_sink.py: f40cd8c7c58264da7679ce456442d1a5d09e1760
 Only unchanged dependencies are shared with the wrapper. This support module
 does not match the test collection glob.
 """
@@ -225,9 +227,13 @@ def _verify_fused(self, lib, state, report):
 
 
 class _File:
-    def __init__(self, file):
+    def __init__(self, file, window=None):
         import fcntl
         self.file = file
+        if window is not None:
+            if window <= 0 or window % 4096:
+                raise ValueError("report artifact window must be a positive multiple of 4096")
+            self.window = window
         self.buffer = None
         self.used = self.base = self.size = self.position = 0
         self.read_base, self.read_size = -1, 0

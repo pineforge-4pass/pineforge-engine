@@ -719,8 +719,11 @@ def _invoke_before_sink_read_refusal(tmp_path, monkeypatch, mutate, *,
         changed, scratch, failures = [], [], []
         active_sink = None
 
-        def initialize(file, stream):
-            original_init(file, stream)
+        def initialize(file, stream, window=None):
+            if window is None:
+                original_init(file, stream)
+            else:
+                original_init(file, stream, window)
             if not isinstance(file, runner._UncachedSinkFile):
                 scratch.append((file, file.fileno()))
 

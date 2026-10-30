@@ -554,13 +554,14 @@ def test_failed_serialization_closes_unpublished_artifact_immediately(
     artifacts = []
     original = run_json._json_temporary
 
-    def temporary(resources, directory):
-        file = original(resources, directory)
+    def temporary(resources, directory, window=None):
+        file = original(resources, directory, window)
         artifacts.append((file, file.fileno()))
         return file
 
     def rows():
-        yield "x" * (run_json._BoundedJSONFile.window + 19)
+        final_window = 1024 * 1024
+        yield "x" * (final_window + 19)
         raise failure("injected after a real write")
 
     monkeypatch.setattr(run_json, "_json_temporary", temporary)
@@ -585,8 +586,9 @@ def test_failed_serialization_closes_unpublished_artifact_immediately(
         assert list(tmp_path.iterdir()) == [sentinel]
 
 
-def test_automatic_sink_midwrite_failure_publishes_only_failure(tmp_path, monkeypatch):
-    original = run_json._BoundedJSONFile.write
+@pytest.mark.parametrize("method", ("write", "write_ascii"))
+def test_automatic_sink_midwrite_failure_publishes_only_failure(tmp_path, monkeypatch, method):
+    original = getattr(run_json._BoundedJSONFile, method)
     artifacts = []
 
     def fail_after_window(file, text):
@@ -596,8 +598,10 @@ def test_automatic_sink_midwrite_failure_publishes_only_failure(tmp_path, monkey
             raise OSError("injected after a real write")
         return written
 
-    monkeypatch.setattr(run_json._BoundedJSONFile, "write", fail_after_window)
-    library = ordinary.SinkLibrary(pnls=tuple(float(i) for i in range(601)))
+    monkeypatch.setattr(run_json._BoundedJSONFile, method, fail_after_window)
+    final_window = 1024 * 1024
+    trade_count = final_window // 128 + 1
+    library = ordinary.SinkLibrary(pnls=tuple(float(i) for i in range(trade_count)))
     status, text, stderr, library = ordinary.invoke(
         tmp_path, monkeypatch, library=library, extra=["--spill-dir", str(tmp_path)])
     assert artifacts and artifacts[0].size > artifacts[0].window

@@ -43,7 +43,7 @@ class _ColumnWork:
         assert len(actual) == len(expected), (
             f"SPOOL_ASCII_WRITES: {len(actual)} real writes; "
             f"expected {len(expected)} bounded joins")
-        assert actual == expected
+        assert actual == expected, "SPOOL_ASCII_WRITES: encoded join boundaries differ"
 
     def assert_no_trade_streams(self):
         assert self.trade_stream_calls == 0, (
@@ -135,6 +135,124 @@ def _pair(sink, library, report, monkeypatch, **kwargs):
     assert hashlib.sha256(actual.report).digest() == hashlib.sha256(expected.report).digest()
     assert Path(sink.path).read_bytes() == raw
     return actual
+
+
+class _TradeDict(dict):
+    """A mapping whose subclass identity must preserve generic dispatch."""
+
+
+def _gate_trade(shape):
+    trade = json.loads(_trade_text(_trade(1)))
+    if shape == "non-string-key":
+        trade[7] = trade.pop("side")
+    elif shape == "long-string":
+        trade["side"] = "x" * 4097
+    elif shape == "dict-subclass":
+        trade = _TradeDict(trade)
+    elif shape == "escaped-side":
+        trade["side"] = ('quote"\\/\b\f\n\r\t' + "".join(map(chr, range(32)))
+                         + "\u007f\u0080漢\U0001f600")
+    elif shape in ("nan", "inf", "-inf"):
+        trade["pnl"] = float(shape)
+    else:
+        assert shape == "ordinary"
+    return trade
+
+
+def _trade_gate_bytes(trade, tmp_path, monkeypatch, *, old=False):
+    context = reference.install(monkeypatch) if old else nullcontext()
+    calls, errors = Counter(), []
+    with context, ExitStack() as resources, monkeypatch.context() as patch:
+        column = run_json._JSONColumn(resources, str(tmp_path))
+        # A completed predecessor also pins the separator before a failing row.
+        column.append(json.loads(_trade_text(_trade(1))))
+        append, append_ascii = column.append, column.append_ascii
+
+        def generic(value):
+            calls["generic"] += 1
+            return append(value)
+
+        def fast(data, *, row_count=1):
+            calls["fast"] += 1
+            return append_ascii(data, row_count=row_count)
+
+        patch.setattr(column, "append", generic)
+        patch.setattr(column, "append_ascii", fast)
+        # Inject values after the sink-to-report projection, which normally
+        # produces only exact scalar types and the short side string.
+        patch.setattr(run_json, "_sink_trade", lambda record: record)
+        patch.setattr(reference, "_sink_trade", lambda record: record)
+        sink = types.SimpleNamespace(
+            named=False, _trades_spool=column, _trades_spool_failed=False,
+            _remember_spool_failure=errors.append)
+        run_json._ReportSink._append_trade_record(sink, trade)
+        column.file.seek(0)
+        data = column.file.read().encode("ascii")
+        assert data.startswith(_trade_text(_trade(1)) + b",")
+        outcome = (data, tuple((type(error), str(error)) for error in errors),
+                   len(column), sink._trades_spool_failed)
+    return outcome, calls
+
+
+def _assert_trade_gate(calls, *, fast):
+    expected = Counter(fast=1) if fast else Counter(generic=1)
+    assert calls == expected, (
+        f"TRADE_ENCODER_GATE: {dict(calls)} dispatches; expected {dict(expected)}")
+
+
+@pytest.mark.parametrize("shape,fast", (
+    ("ordinary", True), ("escaped-side", True),
+    ("non-string-key", False), ("long-string", False), ("dict-subclass", False),
+    ("nan", False), ("inf", False), ("-inf", False),
+))
+def test_trade_encoder_gate_matches_generic_bytes(tmp_path, monkeypatch, shape, fast):
+    trade = _gate_trade(shape)
+    expected, control = _trade_gate_bytes(trade, tmp_path, monkeypatch, old=True)
+    _assert_trade_gate(control, fast=False)
+    if fast:
+        with pytest.raises(AssertionError, match="TRADE_ENCODER_GATE"):
+            _assert_trade_gate(control, fast=True)
+    actual, calls = _trade_gate_bytes(trade, tmp_path, monkeypatch)
+    assert actual == expected
+    _assert_trade_gate(calls, fast=fast)
+    assert run_json._json_scalar_record(trade) is (
+        shape not in ("non-string-key", "dict-subclass"))
+    # Non-finite scalars pass the type/size predicate, then allow_nan=False
+    # rejects speculative encoding and replays the generic prefix and error.
+    assert run_json._json_fast_value(trade) is (fast or shape in ("nan", "inf", "-inf"))
+    if shape in ("nan", "inf", "-inf"):
+        assert len(expected[1]) == 1 and expected[1][0][0] is ValueError
+        assert expected[2:] == (1, True)
+    else:
+        assert expected[1] == ()
+        assert expected[2:] == (2, False)
+
+
+@pytest.mark.parametrize("shape", ("dict-subclass", "long-string"))
+def test_trade_encoder_gate_detects_widened_acceptance(tmp_path, monkeypatch, shape):
+    trade = _gate_trade(shape)
+    expected, control = _trade_gate_bytes(trade, tmp_path, monkeypatch, old=True)
+    _assert_trade_gate(control, fast=False)
+    actual, baseline = _trade_gate_bytes(trade, tmp_path, monkeypatch)
+    assert actual == expected
+    _assert_trade_gate(baseline, fast=False)
+    if shape == "dict-subclass":
+        name = "_json_scalar_record"
+        changed = _mutate(
+            run_json._json_scalar_record, "return type(value) is dict and all(",
+            "return isinstance(value, dict) and all(")
+    else:
+        name = "_json_fast_value"
+        changed = _mutate(
+            run_json._json_fast_value,
+            "return sum(len(item) for item in value.values() if type(item) is str) <= _STREAM_FAST_STR_LIMIT",
+            "return True")
+    monkeypatch.setattr(run_json, name, changed)
+    actual, calls = _trade_gate_bytes(trade, tmp_path, monkeypatch)
+    assert actual == expected
+    assert calls == Counter(fast=1)
+    with pytest.raises(AssertionError, match="TRADE_ENCODER_GATE"):
+        _assert_trade_gate(calls, fast=False)
 
 
 @pytest.mark.parametrize("count", (1, 511, 512, 513, 1024, 4097))
@@ -251,6 +369,74 @@ def _wide_trade(size):
     return data
 
 
+def _byte_boundary_parts(size, count):
+    prefix_count = 1 if count == 2 else 511
+    parts = [(_trade_text(_trade(index + 1)), 1) for index in range(prefix_count)]
+    prefix_size = sum(len(data) for data, _ in parts) + len(parts) - 1
+    last_count = count - prefix_count
+    tail = [_trade_text(_trade(prefix_count + index + 1)) for index in range(last_count - 1)]
+    wide_size = size - prefix_size - 1 - sum(map(len, tail)) - len(tail)
+    parts.append((b",".join([*tail, _wide_trade(wide_size)]), last_count))
+    assert len(b",".join(data for data, _ in parts)) == size
+    assert sum(rows for _, rows in parts) == count
+    # At 513, a two-row piece meets the byte bound while crossing the row bound.
+    # Its predecessor queue has 511 rows, so both pre-checks are exercised.
+    parts.append((_trade_text(_trade(count + 1)), 1))
+    return parts
+
+
+def _encoded_column_bytes(parts, tmp_path, monkeypatch, *, old=False):
+    context = reference.install(monkeypatch) if old else nullcontext()
+    work = _ColumnWork()
+    with context, ExitStack() as resources, work.install(monkeypatch):
+        column = run_json._JSONColumn(resources, str(tmp_path))
+        work.columns[column.file] = "T"
+        for data, count in parts:
+            column.append_ascii(data, row_count=count)
+        assert len(column) == sum(count for _, count in parts)
+        artifact = run_json._prepare_stream_report(
+            {"trades": column}, resources, str(tmp_path))
+        data = artifact.read().encode("ascii")
+        expected = b'{"trades":[' + b",".join(piece for piece, _ in parts) + b"]}\n"
+        assert data == expected
+        assert len(json.loads(data)["trades"]) == len(column)
+    return data, work, column.file
+
+
+@pytest.mark.parametrize("size", (262143, 262144, 262145))
+@pytest.mark.parametrize("count", (2, 512, 513))
+def test_encoded_spool_exact_byte_and_record_boundaries(tmp_path, monkeypatch, size, count):
+    parts = _byte_boundary_parts(size, count)
+    expected_chunks = _joined(parts)
+    expected, control, before = _encoded_column_bytes(parts, tmp_path, monkeypatch, old=True)
+    with pytest.raises(AssertionError, match="SPOOL_ASCII_WRITES"):
+        control.assert_writes(before, expected_chunks)
+    actual, work, after = _encoded_column_bytes(parts, tmp_path, monkeypatch)
+    assert actual == expected
+    work.assert_writes(after, expected_chunks)
+
+
+@pytest.mark.parametrize("count", (2, 512))
+def test_spool_join_counter_detects_inclusive_byte_precheck(tmp_path, monkeypatch, count):
+    parts = _byte_boundary_parts(262144, count)
+    expected_chunks = _joined(parts)
+    expected, control, before = _encoded_column_bytes(parts, tmp_path, monkeypatch, old=True)
+    with pytest.raises(AssertionError, match="SPOOL_ASCII_WRITES"):
+        control.assert_writes(before, expected_chunks)
+    actual, baseline, file = _encoded_column_bytes(parts, tmp_path, monkeypatch)
+    assert actual == expected
+    baseline.assert_writes(file, expected_chunks)
+    changed = _mutate(
+        run_json._BoundedJSONFile.append_ascii,
+        "or self._pending_bytes + size > _STREAM_BATCH_BYTES",
+        "or self._pending_bytes + size >= _STREAM_BATCH_BYTES")
+    monkeypatch.setattr(run_json._BoundedJSONFile, "append_ascii", changed)
+    actual, work, after = _encoded_column_bytes(parts, tmp_path, monkeypatch)
+    assert actual == expected
+    with pytest.raises(AssertionError, match="SPOOL_ASCII_WRITES"):
+        work.assert_writes(after, expected_chunks)
+
+
 @pytest.mark.parametrize("size", (262144, 262145, 524305))
 @pytest.mark.parametrize("neighbours", (False, True))
 def test_encoded_trade_byte_bound_and_oversized_row(
@@ -313,69 +499,119 @@ def test_pending_ascii_precedes_other_artifact_operations(tmp_path, monkeypatch,
 
 
 class _ProofWork(_EquityWork):
-    """Reuse the regex observer; wrap real dict construction in the proof only."""
+    """Observe proof/diagnostic dict calls and fresh batches' stored dictionaries."""
     def __init__(self):
         super().__init__()
         self.bound_calls = Counter()
         self.eager_dicts = 0
         self.endpoint_dicts = 0
-        self.batches = self.proof_calls = self.python_calls = 0
+        self.batch_dicts = 0
+        self.batches = self.proof_calls = 0
         self.active = set()
         self.endpoint_inputs = {}
 
     def _profile(self, frame, event, arg):
         super()._profile(frame, event, arg)
+        observed_proof = frame.f_code is self.root and frame.f_globals is self.namespace
         if event == "call":
             if frame.f_code.co_name == "_bulk_equity_endpoint":
                 self.endpoint_inputs[id(frame)] = frame.f_locals["point"]
-            if frame.f_code is self.root or (
+            if observed_proof or (
                     frame.f_back is not None and id(frame.f_back) in self.active):
                 self.active.add(id(frame))
-                self.python_calls += frame.f_code is not self.dict_code
-                self.proof_calls += frame.f_code is self.root
+                self.proof_calls += observed_proof
         elif event == "return":
-            if frame.f_code is self.root and arg is not None:
+            if observed_proof and arg is not None:
                 self.batches += 1
+                self.batch_dicts += sum(isinstance(value, dict) for value in vars(arg).values())
             if id(frame) in self.endpoint_inputs:
                 before = self.endpoint_inputs.pop(id(frame))
                 self.endpoint_dicts += type(arg) is dict and arg is not before
             self.active.discard(id(frame))
         elif event == "c_call" and id(frame) in self.active:
             name = getattr(arg, "__name__", "")
-            if name in ("rpartition", "split", "endswith", "isdigit"):
+            if (name in ("rpartition", "split", "endswith", "isdigit")
+                    or (name in ("rfind", "find", "index")
+                        and getattr(arg, "__self__", None) is self.run.pattern)):
                 self.bound_calls[name] += 1
 
     @contextmanager
     def install(self, monkeypatch):
         prove = run_json._bulk_equity
+        trades = run_json._SinkReportDiagnostics.trades
 
         def constructed(*args, **kwargs):
             value = dict(*args, **kwargs)
             self.eager_dicts += 1
             return value
 
-        # Identical bytecode, defaults and dependencies; only the dict global
-        # delegates through an observer. Other module functions keep dict's type.
+        # Observe dict calls in both functions without changing dict's type in
+        # the constructor's isinstance checks. Inspect fresh batch state there.
         namespace = dict(prove.__globals__, dict=constructed)
         observed = types.FunctionType(
             prove.__code__, namespace, prove.__name__, prove.__defaults__, prove.__closure__)
         observed.__kwdefaults__ = prove.__kwdefaults__
-        self.root, self.dict_code = prove.__code__, constructed.__code__
+        observed_trades = types.FunctionType(
+            trades.__code__, dict(trades.__globals__, dict=constructed),
+            trades.__name__, trades.__defaults__, trades.__closure__)
+        observed_trades.__kwdefaults__ = trades.__kwdefaults__
+        self.root, self.namespace = prove.__code__, namespace
         with monkeypatch.context() as patch:
             patch.setattr(run_json, "_bulk_equity", observed)
+            patch.setattr(run_json._SinkReportDiagnostics, "trades", observed_trades)
             with super().install(patch):
                 yield self
 
+    def assert_proofs_observed(self):
+        assert self.proof_calls == self.batches > 0 and not self.active, (
+            f"EQUITY_PROOF_WORK: {self.proof_calls} instrumented calls for {self.batches} batches")
+
     def assert_bounds_cached(self):
-        assert self.proof_calls == self.batches > 0 and not self.active
+        self.assert_proofs_observed()
         assert not self.bound_calls, (
             f"EQUITY_BOUND_WORK: {dict(self.bound_calls)} repeated bound operations")
 
     def assert_endpoints_lazy(self):
+        self.assert_proofs_observed()
         assert self.proof_calls == self.batches > 1
-        assert self.eager_dicts + self.endpoint_dicts <= 2, (
+        assert self.eager_dicts + self.endpoint_dicts <= 2 and self.batch_dicts == 0, (
             f"EQUITY_ENDPOINT_WORK: {self.eager_dicts} eager dictionaries and "
-            f"{self.endpoint_dicts} endpoint dictionaries for {self.batches} batches")
+            f"{self.endpoint_dicts} endpoint dictionaries for {self.batches} batches; "
+            f"{self.batch_dicts} dictionaries stored on fresh batches")
+
+
+def _observed_proof(raw, monkeypatch, *, old=False):
+    context = reference.install(monkeypatch) if old else nullcontext()
+    with context:
+        work = _ProofWork()
+        with work.install(monkeypatch):
+            batch = run_json._bulk_equity(raw)
+            assert batch is not None
+            encoded = run_json._bulk_equity_ascii(batch)
+    return encoded, work
+
+
+@pytest.mark.parametrize("old", (False, True), ids=("current", "reference"))
+def test_equity_proof_counter_detects_uninstrumented_globals(monkeypatch, old):
+    raw = ordinary.encoded(_point(0))
+    context = reference.install(monkeypatch) if old else nullcontext()
+    with context:
+        prove = run_json._bulk_equity
+        control = _ProofWork()
+        with control.install(monkeypatch):
+            batch = run_json._bulk_equity(raw)
+            assert batch is not None
+            expected = run_json._bulk_equity_ascii(batch)
+        control.assert_proofs_observed()
+        work = _ProofWork()
+        with work.install(monkeypatch):
+            # This shares the instrumented function's code but bypasses its globals.
+            batch = prove(raw)
+            assert batch is not None
+            assert run_json._bulk_equity_ascii(batch) == expected
+        assert work.proof_calls == work.batches == 0
+        with pytest.raises(AssertionError, match="EQUITY_PROOF_WORK"):
+            work.assert_proofs_observed()
 
 
 @pytest.mark.parametrize("batch_size", (1, 12, 127, 128))
@@ -396,6 +632,7 @@ def test_equity_bound_work_is_cached(tmp_path, monkeypatch, batch_size):
     expected, control = run(True)
     assert control.bound_calls["rpartition"] == control.bound_calls["split"] == 1
     assert control.eager_dicts == 2
+    assert control.batch_dicts == 2
     with pytest.raises(AssertionError, match="EQUITY_BOUND_WORK"):
         control.assert_bounds_cached()
     actual, work = run(False)
@@ -403,6 +640,7 @@ def test_equity_bound_work_is_cached(tmp_path, monkeypatch, batch_size):
     work.assert_bounded()
     work.assert_bounds_cached()
     assert work.eager_dicts == work.endpoint_dicts == 0
+    assert work.batch_dicts == 0
 
 
 def test_equity_endpoint_dictionaries_belong_only_to_curve_endpoints(tmp_path, monkeypatch):
@@ -415,34 +653,110 @@ def test_equity_endpoint_dictionaries_belong_only_to_curve_endpoints(tmp_path, m
             expected, _, _ = _run(sink, library, report, monkeypatch, work=control)
         assert expected.failure is None and control.batches >= 37
         assert control.eager_dicts == 2 * control.batches
+        assert control.batch_dicts == 2 * control.batches
         with pytest.raises(AssertionError, match="EQUITY_ENDPOINT_WORK"):
             control.assert_endpoints_lazy()
         work = _ProofWork()
         actual, _, _ = _run(sink, library, report, monkeypatch, work=work)
         support.assert_same(actual, expected)
-        assert work.endpoint_dicts == 2 and work.eager_dicts == 0
         work.assert_endpoints_lazy()
+        assert work.endpoint_dicts == 2 and work.eager_dicts == 0
 
 
 @pytest.mark.parametrize("operation", (
     '_BULK_E_RUN.pattern.rpartition(b"{")',
     '_BULK_E_RUN.pattern.split(b",")',
     '_BULK_E_RUN.pattern.endswith(b"}")',
+    '_BULK_E_RUN.pattern.rfind(b"{")',
+    '_BULK_E_RUN.pattern.find(b"{")',
+    '_BULK_E_RUN.pattern.index(b"{")',
     'b"128".isdigit()',
 ))
 def test_equity_bound_counter_detects_repeated_pattern_inspection(monkeypatch, operation):
     prove = run_json._bulk_equity
+    raw = ordinary.encoded(_point(0))
+    expected, control = _observed_proof(raw, monkeypatch, old=True)
+    with pytest.raises(AssertionError, match="EQUITY_BOUND_WORK"):
+        control.assert_bounds_cached()
+    actual, baseline = _observed_proof(raw, monkeypatch)
+    assert actual == expected
+    baseline.assert_bounds_cached()
     # This also operates on the immediate proof: it deliberately restores one
     # repeated operation without changing its return value.
     changed = _mutate(prove, "    if not raw:\n",
                       f"    {operation}\n    if not raw:\n")
     monkeypatch.setattr(run_json, "_bulk_equity", changed)
-    work = _ProofWork()
-    raw = ordinary.encoded(_point(0))
-    with work.install(monkeypatch):
-        assert run_json._bulk_equity(raw) is not None
+    actual, work = _observed_proof(raw, monkeypatch)
+    assert actual == expected
     with pytest.raises(AssertionError, match="EQUITY_BOUND_WORK"):
         work.assert_bounds_cached()
+
+
+def test_equity_bound_counter_detects_rederived_interval(monkeypatch):
+    raw = ordinary.encoded(_point(0))
+    expected, control = _observed_proof(raw, monkeypatch, old=True)
+    with pytest.raises(AssertionError, match="EQUITY_BOUND_WORK"):
+        control.assert_bounds_cached()
+    actual, baseline = _observed_proof(raw, monkeypatch)
+    assert actual == expected
+    baseline.assert_bounds_cached()
+    changed = _mutate(
+        run_json._bulk_equity, "        lower, upper = _BULK_E_DEFAULT_BOUNDS\n",
+        "        pattern = _BULK_E_RUN.pattern\n"
+        '        opening = pattern.rfind(b"{")\n'
+        '        comma = pattern.rfind(b",")\n'
+        "        lower, upper = int(pattern[opening + 1:comma]), int(pattern[comma + 1:-1])\n")
+    monkeypatch.setattr(run_json, "_bulk_equity", changed)
+    actual, work = _observed_proof(raw, monkeypatch)
+    assert actual == expected
+    assert work.bound_calls == Counter(rfind=2)
+    with pytest.raises(AssertionError, match="EQUITY_BOUND_WORK"):
+        work.assert_bounds_cached()
+
+
+@pytest.mark.parametrize("location", ("constructor", "trades"))
+def test_equity_endpoint_counter_detects_dictionaries_outside_proof(
+        tmp_path, monkeypatch, location):
+    rows = []
+    for index in range(5):
+        rows.extend((_point(index), _trade(index + 1)))
+    with _sink_case(tmp_path, rows) as (sink, library, report):
+        control = _ProofWork()
+        expected, _, _ = _run(
+            sink, library, report, monkeypatch, old=True, work=control)
+        assert expected.failure is None and control.batches >= 5
+        assert control.batch_dicts == 2 * control.batches
+        with pytest.raises(AssertionError, match="EQUITY_ENDPOINT_WORK"):
+            control.assert_endpoints_lazy()
+        baseline = _ProofWork()
+        actual, _, _ = _run(sink, library, report, monkeypatch, work=baseline)
+        support.assert_same(actual, expected)
+        baseline.assert_endpoints_lazy()
+        with monkeypatch.context() as patch:
+            if location == "constructor":
+                changed = _mutate(
+                    run_json._BulkEquity.__init__, "    self.columns = columns\n",
+                    "    self.columns = columns\n"
+                    '    self._eager_point = dict(zip(("time_ms", "equity", "open_profit"), self._last))\n')
+                patch.setattr(run_json._BulkEquity, "__init__", changed)
+            else:
+                changed = _mutate(
+                    run_json._SinkReportDiagnostics.trades, "last_bulk = record",
+                    'self.last = dict(zip(("time_ms", "equity", "open_profit"), record._last))\n'
+                    "            last_bulk = record")
+                patch.setattr(run_json._SinkReportDiagnostics, "trades", changed)
+            work = _ProofWork()
+            actual, _, _ = _run(sink, library, report, patch, work=work)
+        support.assert_same(actual, expected)
+        assert work.endpoint_dicts == 2
+        if location == "constructor":
+            assert work.eager_dicts == 0
+            assert work.batch_dicts == work.batches
+        else:
+            assert work.batch_dicts == 0
+            assert work.eager_dicts == work.batches
+        with pytest.raises(AssertionError, match="EQUITY_ENDPOINT_WORK"):
+            work.assert_endpoints_lazy()
 
 
 @pytest.mark.parametrize("endpoint", ("first", "last"))
@@ -528,7 +842,10 @@ def _float_shapes():
     return values
 
 
-def test_finite_trade_shapes_and_escaped_ids_keep_report_bytes(tmp_path, monkeypatch):
+def test_report_path_with_finite_trades_and_escaped_sink_ids_matches_reference(
+        tmp_path, monkeypatch):
+    # The report path verifies these sink strings, then drops ids/comments from
+    # report trades. These rows exercise the whole path, not the trade encoder.
     strings = [
         "", "ordinary", 'quote"\\/\b\f\n\r\t',
         "".join(map(chr, range(32))), "\u007f\u0080漢\U0001f600",
