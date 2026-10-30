@@ -198,12 +198,36 @@ elif [[ -f "${SRC_CPP}" ]]; then
     TRANSPILED=false
     if [[ "${SELECTED}" == "true" ]]; then
         INVENTORY_IN="${PINEFORGE_REQUEST_FEED_INVENTORY:-}"
-        # Freeze the caller's bytes once into the private work dir (GEN). From here g++, the
-        # binder and run_json.py's --generated-cpp all use that one file, so the caller's
-        # mutable file is read only here. A failed copy ends the run before compile and run.
+    fi
+    # Freeze the caller's bytes once into the private work dir (GEN). From here g++, the
+    # binder and run_json.py's --generated-cpp all use that one file, so the caller's
+    # mutable file is read only here. A failed copy ends the run before compile and run.
+    # The unattested local-only path (PINEFORGE_ALLOW_UNATTESTED_CPP=1) freezes only on the
+    # selected-window path, as before.
+    if [[ "${SELECTED}" == "true" || "${PINEFORGE_ALLOW_UNATTESTED_CPP:-}" != "1" ]]; then
         cp -- "${SRC_CPP}" "${GEN}" >&2 \
             || { echo "[pineforge] cannot snapshot strategy.cpp into the work dir" >&2; exit 3; }
         SRC="${GEN}"
+    fi
+    # A mounted strategy.cpp is native code run in this process. Compile it only when the
+    # host vouches for these exact bytes (PINEFORGE_STRATEGY_CPP_SHA256, set in the container's
+    # environment, which the mount's author does not control), or on the explicit local opt-out.
+    # The digest is taken over the frozen copy that g++ then reads, so there is no gap between
+    # the check and the use.
+    if [[ "${PINEFORGE_ALLOW_UNATTESTED_CPP:-}" != "1" ]]; then
+        want="${PINEFORGE_STRATEGY_CPP_SHA256:-}"
+        if command -v sha256sum >/dev/null 2>&1; then
+            have="$(sha256sum -- "${GEN}")"
+        else
+            have="$(shasum -a 256 -- "${GEN}")"
+        fi
+        have="${have%% *}"
+        if [[ ! "${want}" =~ ^[0-9a-f]{64}$ || "${have}" != "${want}" ]]; then
+            echo "[pineforge] refused: mounted strategy.cpp is not vouched for by PINEFORGE_STRATEGY_CPP_SHA256" >&2
+            # Same shape as the catalog's "{prog}: error: {argparse message}" text for run_request_invalid.
+            printf '%s\n' '{"engine":"pineforge","error":"entrypoint.sh: error: mounted strategy.cpp is not vouched for by a matching PINEFORGE_STRATEGY_CPP_SHA256","code":"run_request_invalid","args":{"option":"generated_cpp"}}'
+            exit 2
+        fi
     fi
 else
     echo "error: missing input — mount /in/strategy.pine (preferred) or /in/strategy.cpp" >&2

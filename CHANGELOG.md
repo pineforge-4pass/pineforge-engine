@@ -5,6 +5,17 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
+## Unreleased
+
+- The container entrypoint no longer compiles a mounted `/in/strategy.cpp` on
+  trust. With no `/in/strategy.pine`, it compiles the file only when the
+  environment holds `PINEFORGE_STRATEGY_CPP_SHA256` equal to the sha256 of
+  exactly those bytes (taken over the frozen copy g++ reads). Otherwise it ends
+  with exit 2 and one `run_request_invalid` line (option `generated_cpp`) before
+  any compile. `PINEFORGE_ALLOW_UNATTESTED_CPP=1` keeps the old behaviour for
+  local use; a hosted caller must not set it. Mounting `strategy.pine` is
+  unchanged.
+
 ## 1.9.0 — 2026-10-30
 
 - On macOS, `CMakeLists.txt` now lets one symbol,
