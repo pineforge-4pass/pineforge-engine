@@ -1927,7 +1927,9 @@ void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
     const TradeLedger empty;
     const auto fixed_bytes = empty.cache_resident_bytes();
     const auto cache_bound = TradeLedger::resident_cache_bytes(TradeLedger::kSinkCacheRows);
-    CHECK(cache_bound == fixed_bytes + 20447232);
+    // The page table (one pointer per 256 slots) is part of the charge.
+    const auto page_table_bytes = (TradeLedger::kSinkCacheRows / 256) * sizeof(void*);
+    CHECK(cache_bound == fixed_bytes + 20447232 + page_table_bytes);
     CHECK(cache_bound <= TradeLedger::resident_cache_bytes(TradeLedger::kDefaultCacheRows));
     for (int mode = 0; mode < 3; ++mode) {
         const bool selected = mode == 1;
@@ -1955,7 +1957,9 @@ void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
         // allocated before this interval is covered by the exact resident-byte
         // assertions too. The 1k run must retain only 1,024 cache entries;
         // 70k and 100k must both stop at the declared constant, not trade count.
-        CHECK(small.ledger_cache_bytes == fixed_bytes + 1024 * TradeLedger::kLedgerEntryBytes);
+        // 1,024 slots are four whole 256-slot pages behind the page table.
+        CHECK(small.ledger_cache_bytes
+              == fixed_bytes + page_table_bytes + 1024 * TradeLedger::kLedgerEntryBytes);
         CHECK(capped.ledger_cache_bytes == cache_bound);
         CHECK(large.ledger_cache_bytes == cache_bound);
         const auto window = report_sink::kScratchWindowBytes;
