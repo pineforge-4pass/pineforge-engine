@@ -1385,6 +1385,8 @@ list(APPEND TEST_SOURCES test_native_match_allocations)
 list(APPEND TEST_SOURCES test_adapter_command_allocations)
 list(APPEND TEST_SOURCES test_adapter_exit_scratch)
 list(APPEND TEST_SOURCES test_reversal_exit_owner_gate)
+# The acceptance-ordered exposure fold against the frozen position selector.
+list(APPEND TEST_SOURCES test_cohort_exposure_fold)
 # R5 lane PERF-L1: NativeStrategyHost's consumer, aggregate and lifecycle reads
 # against the lookups they replaced, inside every host hook of randomized
 # runs. Source-free, so it also runs in the kernel-only profile.

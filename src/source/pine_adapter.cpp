@@ -5,7 +5,7 @@
 #include <pineforge/compat/pine/market_admission.hpp>
 
 #include <pineforge/pending_order_mirror.hpp>
-
+#include "pine_cohort_exposure.hpp"
 #include <pineforge/native_calendar.hpp>
 #include <pineforge/timeframe.hpp>
 
@@ -5358,37 +5358,37 @@ double PineExecutionAdapter::cohort_exposure_for(const SourceId& id) const noexc
 }
 
 double PineExecutionAdapter::cohort_exposure_for(const CohortFacts& facts) const noexcept {
-    double total = 0.0;
-    // `live_units_by_origin` is a lookup table.  Quantities must follow the
-    // cohort's deterministic source insertion order, never its hash buckets.
-    // Only roster positions whose incarnation has a unit row can contribute:
-    // step through just those, ascending, rather than the id's whole entry
-    // history. Allocation-free (the pending-order readback calls this).
-    bool have_previous = false;
-    std::size_t previous = 0;
-    for (;;) {
-        bool have_next = false;
-        std::size_t next = 0;
-        double units = 0.0;
-        for (const auto& unit : facts.live_units_by_origin) {
-            const auto* positions = facts.origins.positions_of(unit.first);
-            if (!positions) continue;
-            for (const auto position : *positions) {
-                if (have_previous && position <= previous) continue;
-                if (!have_next || position < next) {
-                    have_next = true;
-                    next = position;
-                    units = unit.second;
-                }
-                break;
-            }
-        }
-        if (!have_next) break;
-        if (std::isfinite(units) && units > 0.0) total += units;
-        have_previous = true;
-        previous = next;
-    }
-    return std::isfinite(total) && total > 0.0 ? total : 0.0;
+    // Quantities follow deterministic source insertion order, never the
+    // lookup table's hash buckets. The private seam owns that fold.
+    // Each retained roster position contributes separately when its
+    // incarnation has a live-unit row. Repeated incarnations therefore
+    // contribute once per occurrence, in ascending global position order.
+    // Positions before the retained window do not contribute. A unit row
+    // without a retained position does not contribute either.
+    // The per-term finite/positive filter precedes each addition. The final
+    // finite/positive clamp also matters: overflowing sums return zero.
+    // Reordering, regrouping or multiplying repeated units changes bits.
+    // Allocation-free: pending-order readback calls this const noexcept
+    // member, including while exporting quantity reservation values.
+    // Diagnostic work belongs to the returned value, never adapter state.
+    // The seam receives the original roster and map by const reference.
+    // Its unit-row visit count includes the final unsuccessful scan.
+    // Keeping the seam independent of the observation macro lets tests
+    // inspect values and work without changing its compiled definition.
+    // The member remains the observation boundary with adapter/run identity.
+    // Global positions keep their order after prefix retirement.
+    // A missing map row contributes no term for its roster position.
+    // A missing roster position contributes no term for its map row.
+    // Source readback and execution therefore observe identical quantities.
+    const auto folded = detail::fold_cohort_exposure(facts.origins,
+                                                    facts.live_units_by_origin);
+    // No aggregate or reservation state is updated by this read.
+    // The returned diagnostics describe only the current fold.
+    // They are deliberately separate from the value operations.
+    // In particular, visiting the final unsuccessful selector pass
+    // changes the work count without changing the total.
+    // Callers receive only the clamped exposure value.
+    return folded.total;
 }
 
 // The units of the position an exit's entry (from_entry) holds; none for an
@@ -30277,3 +30277,45 @@ std::array<std::uint64_t, 3> PineExecutionAdapter::retirement_validation_state()
 }
 #endif
 } // namespace pineforge::source
+
+namespace pineforge::source::detail {
+
+CohortExposureFold fold_cohort_exposure(
+        const OriginRoster& origins,
+        const std::unordered_map<std::uint64_t, double>& live_units_by_origin) noexcept {
+    std::uint64_t steps = 0;
+    double total = 0.0;
+    // `live_units_by_origin` is a lookup table.  Quantities must follow the
+    // cohort's deterministic source insertion order, never its hash buckets.
+    // Only roster positions whose incarnation has a unit row can contribute:
+    // step through just those, ascending, rather than the id's whole entry
+    // history. Allocation-free (the pending-order readback calls this).
+    bool have_previous = false;
+    std::size_t previous = 0;
+    for (;;) {
+        bool have_next = false;
+        std::size_t next = 0;
+        double units = 0.0;
+        for (const auto& unit : live_units_by_origin) {
+            ++steps;
+            const auto* positions = origins.positions_of(unit.first);
+            if (!positions) continue;
+            for (const auto position : *positions) {
+                if (have_previous && position <= previous) continue;
+                if (!have_next || position < next) {
+                    have_next = true;
+                    next = position;
+                    units = unit.second;
+                }
+                break;
+            }
+        }
+        if (!have_next) break;
+        if (std::isfinite(units) && units > 0.0) total += units;
+        have_previous = true;
+        previous = next;
+    }
+    return {std::isfinite(total) && total > 0.0 ? total : 0.0, steps, 4};
+}
+
+} // namespace pineforge::source::detail
