@@ -1025,7 +1025,7 @@ cmake -S . -B build-kernel -DPINEFORGE_BUILD_SOURCE_LAYER=OFF -DPINEFORGE_BUILD_
 ```
 
 `PINEFORGE_BUILD_SOURCE_LAYER` CMakeLists.txt:43 OFF leaves `libpineforge.a`
-holding exactly the objects of `PineForge::kernel` CMakeLists.txt:176, and
+holding exactly the objects of `PineForge::kernel` CMakeLists.txt:177, and
 every example already links that target, so a source-layer symbol reaching an
 example is a link error in the default build too.
 
