@@ -453,9 +453,9 @@ void memory_fill_controls(const Directory& directory) {
     TradeLedger ledger;
     ledger.set_scratch_directory(directory.path);
     const auto fixed_bytes = ledger.cache_resident_bytes();
-    // A first reader at 2*64+1 rows allocates 4*64 slots. Append through
-    // that capacity: early new rows leave the 64-record window without a
-    // capacity change, isolating memory fill from growth invalidation.
+    // A first reader at 2*64+1 rows touches page zero. Append through its
+    // min(256,cap) slots: early new rows leave the 64-record window without
+    // another page allocation, isolating memory fill from page growth.
     const auto initial = 2 * TradeLedger::kResidentRows + 1;
     const auto population = 4 * TradeLedger::kResidentRows;
     std::vector<Trade> expected;
@@ -466,7 +466,14 @@ void memory_fill_controls(const Directory& directory) {
           "Write-only appends allocated or populated the read cache");
     same_packed_row(ledger, 0, expected[0]);
     const auto allocated_bytes = ledger.cache_resident_bytes();
-    require(allocated_bytes == fixed_bytes + population * TradeLedger::kLedgerEntryBytes,
+    const Count page_slots = 256;
+    const Count cap = ledger.cache_rows();
+    const Count table_bytes = ((cap + page_slots - 1) / page_slots) * sizeof(void*);
+    // Only page zero was touched: one page times its real clipped slot count.
+    // Eager full-cap allocation or omitted table accounting fails this row.
+    const Count expected_slots = std::min(page_slots, cap);
+    require(allocated_bytes == fixed_bytes + table_bytes
+                               + expected_slots * TradeLedger::kLedgerEntryBytes,
             "Memory-fill control did not allocate its derived cache geometry");
     for (std::size_t i = initial; i < population; ++i) ledger.push_back(expected[i]);
     require(ledger.resident_base() > initial
@@ -481,7 +488,9 @@ void memory_fill_controls(const Directory& directory) {
     const Count appended_rows = population - initial;
     // Every newly appended row fits both the 256-slot allocation and the
     // exact 128-byte packing: cold = A-min(A,capacity,cacheable) = 0.
-    const Count capacity = (allocated_bytes - fixed_bytes) / TradeLedger::kLedgerEntryBytes;
+    const Count capacity = (allocated_bytes - fixed_bytes - table_bytes)
+        / TradeLedger::kLedgerEntryBytes;
+    require(capacity == expected_slots, "Memory-fill allocation has the wrong slot count");
     const Count cold = appended_rows - std::min(
         {appended_rows, capacity, cacheable_rows});
     bound("memory-append.index.pread_calls", appended.files[0].pread_calls, cold, appended_rows);
@@ -567,11 +576,12 @@ void scenario(const Directory& directory, bool read_history = false) {
     const auto trades = static_cast<Count>(host.closed_trade_count());
     const auto& index = io.files[static_cast<std::size_t>(ledger_io::File::index)];
     const auto& payload = io.files[static_cast<std::size_t>(ledger_io::File::payload)];
-    // (a) calls/T <= T/T: one descriptor publication per final row.
-    // src/engine_orders.cpp:637-659,1010-1020; redundant host replace:
-    // src/source/pine_strategy_host.cpp:1120-1132. Byte budget = T*kRecordBytes
-    // (include/pineforge/trade_ledger.hpp:40); syscall splits count in full.
-    bound("descriptor-write count", index.pwrite_calls, trades, trades);
+    // (a) One logical descriptor store per row, plus at most floor(bytes/65536)
+    // splits: ScratchFile::write limits each pwrite to the remaining 64 KiB
+    // write budget (include/pineforge/detail/scratch_file.hpp:342-351).
+    // Restoring three stores per trade must exceed this observed-call bound.
+    const Count descriptor_calls = trades + index.pwrite_bytes / (64 * 1024);
+    bound("descriptor-write count", index.pwrite_calls, descriptor_calls, trades);
     bound("index.pwrite_bytes", index.pwrite_bytes, trades * TradeLedger::kRecordBytes, trades);
     // (b) calls/T <= sum_rows sum_four_fields(!empty)/T; bytes <= sum(length).
     // put_string writes only nonempty extents: src/engine_orders.cpp:572-579;
@@ -596,8 +606,8 @@ void scenario(const Directory& directory, bool read_history = false) {
         static_cast<unsigned long long>(index.pread_bytes),
         static_cast<unsigned long long>(payload.pread_bytes));
 
-    // The first pass above populated all decoded rows after any growth
-    // invalidations. A second full-history read must require no disk reads.
+    // The first pass above populated every decoded row in the touched pages.
+    // A second full-history read must require no disk reads.
     ledger_io::Measure warm_measurement;
     for (std::size_t i = 0; i < golden.rows.size(); ++i) {
         const auto row = host.closed_trade(i);
