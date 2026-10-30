@@ -15,6 +15,29 @@
 #include <variant>
 #include <vector>
 
+#if defined(PINEFORGE_ROSTER_PASS_OBSERVER) \
+    && __has_include("../src/source/roster_pass_work.hpp")
+#include "../src/source/roster_pass_work.hpp"
+namespace cohort_origin_fixture {
+using RosterWork = pineforge::source::roster_pass_work::Counts;
+using RosterScope = pineforge::source::roster_pass_work::Scope;
+constexpr bool roster_observer_available = true;
+}
+#else
+// The test overlay must compile against the previous implementation too.
+// Missing instrumentation is a named runtime failure, including the quiet row.
+namespace cohort_origin_fixture {
+struct RosterWork {
+    std::uint64_t roster_cohort_visits = 0;
+    std::uint64_t due_passes = 0;
+};
+struct RosterScope {
+    explicit RosterScope(RosterWork&) noexcept {}
+};
+constexpr bool roster_observer_available = false;
+}
+#endif
+
 namespace cohort_origin_fixture {
 struct Work {
     std::uint64_t passes = 0;
@@ -63,6 +86,8 @@ using Digest = std::pair<std::uint64_t, std::uint64_t>;
 
 int checks = 0;
 int failures = 0;
+int rows_run = 0;
+const char* selected_row = nullptr;
 #define CHECK(condition) do {                                                  \
     ++checks;                                                                 \
     if (!(condition)) {                                                       \
@@ -73,6 +98,22 @@ int failures = 0;
 
 void require(bool value, const char* reason) {
     if (!value) throw std::runtime_error(reason);
+}
+
+void expect_work(const char* name, const RosterWork& actual, const RosterWork& expected) {
+    ++checks;
+    if (!roster_observer_available
+        || actual.roster_cohort_visits != expected.roster_cohort_visits
+        || actual.due_passes != expected.due_passes) {
+        ++failures;
+        std::fprintf(stderr,
+            "FAIL %s: due_passes=%llu expected=%llu roster_cohort_visits=%llu expected=%llu%s\n",
+            name, static_cast<unsigned long long>(actual.due_passes),
+            static_cast<unsigned long long>(expected.due_passes),
+            static_cast<unsigned long long>(actual.roster_cohort_visits),
+            static_cast<unsigned long long>(expected.roster_cohort_visits),
+            roster_observer_available ? "" : " (roster observer unavailable)");
+    }
 }
 
 // Explicit member instantiation is the adapter storage fixtures' access
@@ -122,6 +163,134 @@ public:
         (adapter_.*access(ReleaseOrigins{}))();
     }
 };
+
+enum class CounterPath { Empty, Direct, General, FailedDirect, NotDue };
+
+class CounterHost final : public Host {
+public:
+    CounterHost(std::size_t handles, CounterPath path)
+        : Host(1), handles_(handles), path_(path) {}
+    RosterWork work, expected;
+    std::size_t cohort_rows = 0, nonempty_rows = 0, memberships = 0, live_requests = 0;
+    bool measured = false;
+
+    void on_source_bar(const Bar&) override {
+        require(!measured && handles_ != 0, "counter population was not constructed once");
+        no::CohortHandle last{};
+        for (std::size_t i = 0; i < handles_; ++i) last = cohort_open();
+        // One rostered root, zero lots. General-path work must exceed the
+        // source's direct-scan product bound: M*(L+Q) = 1*(0+(64+1)).
+        constexpr std::size_t direct_scan_limit = 64;
+        const std::size_t requests = path_ == CounterPath::Empty ? 0
+            : path_ == CounterPath::General ? direct_scan_limit + 1 : 1;
+        no::RequestHandle member{};
+        for (std::size_t i = 0; i < requests; ++i) {
+            no::Request request{no::Transact{1.0}, "pending-" + std::to_string(i), ""};
+            request.trigger = no::Limit{50.0};
+            const auto result = submit(request);
+            require(result.status == no::SubmitStatus::Accepted && result.handle,
+                    "counter request was not accepted");
+            if (i == 0) {
+                member = *result.handle;
+                cohort_add(last, member);
+            }
+        }
+        if (path_ == CounterPath::FailedDirect) {
+            require(cancel(member).status == no::CancelStatus::Cancelled,
+                    "counter member was not canceled");
+        }
+        require(lots().empty(), "counter pending requests unexpectedly filled");
+        live_requests = core().live().size();
+        require(live_requests == requests - (path_ == CounterPath::FailedDirect ? 1 : 0),
+                "counter working population differs from its construction");
+        const bool due = path_ != CounterPath::NotDue;
+        expected.due_passes = due ? 1 : 0;
+        // Derive counts from every constructed row, rather than constants
+        // equal to the expected result. The sole member is in the LAST row:
+        // a failed direct scan also visits all C rows, so its total is 4C.
+        for (const auto& roster : core().cohorts()) {
+            ++cohort_rows;
+            nonempty_rows += !roster.origins.empty();
+            memberships += roster.origins.size();
+            if (!due) continue;
+            ++expected.roster_cohort_visits; // Member-count walk.
+            if (path_ == CounterPath::Direct || path_ == CounterPath::FailedDirect)
+                ++expected.roster_cohort_visits; // Direct walk.
+            if (path_ == CounterPath::General || path_ == CounterPath::FailedDirect) {
+                ++expected.roster_cohort_visits; // Union walk.
+                ++expected.roster_cohort_visits; // Release walk.
+            }
+        }
+        require(cohort_rows == handles_, "counter issued an unintended cohort");
+        require(memberships == (path_ == CounterPath::Empty ? 0U : 1U),
+                "counter membership population differs from its construction");
+        require(nonempty_rows == memberships, "counter root is not in exactly one roster");
+        const auto epoch = consumer().dormant_core_epoch();
+        const auto digest = NativeExecutionConsumerProbe::cohort_digest(consumer());
+        const auto continuation = native_continuation_hash();
+        const auto receipt_begin = core().cohort_receipts().size();
+        scratch().roster_pass_due = due;
+        {
+            RosterScope scope(work);
+            (adapter_.*access(ReleaseOrigins{}))();
+        }
+        CHECK(!scratch().roster_pass_due);
+        if (path_ == CounterPath::FailedDirect) {
+            CHECK(!core().cohort_contains(last, member));
+            CHECK(core().cohort_receipts().size() == receipt_begin + memberships);
+            const auto& receipt = core().cohort_receipts().back();
+            CHECK(receipt.operation == no::CohortReceiptOperation::Remove);
+            CHECK(receipt.status == no::CohortReceiptStatus::Applied);
+            CHECK(receipt.cohort == last && receipt.origin == member);
+            CHECK(consumer().dormant_core_epoch() == epoch + memberships);
+        } else {
+            CHECK(core().cohort_receipts().size() == receipt_begin);
+            CHECK(consumer().dormant_core_epoch() == epoch);
+            CHECK(NativeExecutionConsumerProbe::cohort_digest(consumer()) == digest);
+            CHECK(native_continuation_hash() == continuation);
+            if (memberships != 0) CHECK(core().cohort_contains(last, member));
+        }
+        measured = true;
+    }
+
+private:
+    std::size_t handles_;
+    CounterPath path_;
+};
+
+RosterWork counter_case(const char* name, std::size_t handles, CounterPath path) {
+    CounterHost host(handles, path);
+    const auto bars = tape(1);
+    host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    require(host.last_error().empty(), host.last_error().c_str());
+    require(host.measured, "counter row did not reach the adapter");
+    expect_work(name, host.work, host.expected);
+    std::printf("%s: C=%zu R=%zu M=%zu L=0 Q=%zu visits=%llu expected=%llu\n",
+                name, host.cohort_rows, host.nonempty_rows, host.memberships, host.live_requests,
+                static_cast<unsigned long long>(host.work.roster_cohort_visits),
+                static_cast<unsigned long long>(host.expected.roster_cohort_visits));
+    return host.work;
+}
+
+void empty_heavy_work() {
+    // Increase only historical handles. R=M=1, L=0 and Q=64+1 stay fixed.
+    // Each added handle costs one count, one union and one release visit.
+    constexpr std::size_t first_handles = 8;
+    constexpr std::size_t added_empty_handles = first_handles * first_handles;
+    const auto first = counter_case("roster empty heavy first", first_handles, CounterPath::General);
+    const auto second = counter_case("roster empty heavy second",
+                                    first_handles + added_empty_handles, CounterPath::General);
+    RosterWork delta, expected_delta;
+    require(second.roster_cohort_visits >= first.roster_cohort_visits,
+            "adding empty handles reduced full-walk work");
+    delta.roster_cohort_visits = second.roster_cohort_visits - first.roster_cohort_visits;
+    for (std::size_t i = 0; i < added_empty_handles; ++i) {
+        ++expected_delta.roster_cohort_visits; // Count.
+        ++expected_delta.roster_cohort_visits; // Union.
+        ++expected_delta.roster_cohort_visits; // Release.
+    }
+    expect_work("roster empty heavy slope", delta, expected_delta);
+}
 
 class RampHost final : public Host {
 public:
@@ -265,6 +434,7 @@ struct Stage {
     Digest before_digest{}, after_digest{};
     std::uint64_t before_epoch = 0, after_epoch = 0;
     std::uint64_t before_continuation = 0, after_continuation = 0;
+    RosterWork roster_work, expected_work;
 };
 
 struct SourceCohort { friend auto access(SourceCohort); };
@@ -407,6 +577,33 @@ private:
         const auto reference = original_release(core(), lots());
         const auto receipt_begin = core().cohort_receipts().size();
         Stage stage;
+        stage.expected_work.due_passes = 1;
+        // This population starts with an unbound canceled origin in the
+        // first roster, so the optional direct scan stops after ONE row.
+        // Count, union and release each walk C rows; every nonempty roster
+        // also probes each successor lot: 3C + 1 + R*S.
+        const auto first = core().cohorts().begin();
+        require(first != core().cohorts().end() && !first->origins.empty(),
+                "successor counter lacks its first unbound member");
+        const auto unbound = first->origins.front().incarnation;
+        require(std::none_of(lots().begin(), lots().end(),
+                    [&](const PyramidEntry& lot) { return lot.entry_incarnation == unbound; })
+                && std::none_of(core().live().begin(), core().live().end(),
+                    [&](const no::LiveRequest& live) {
+                        return (live.definition->root ? live.definition->root->incarnation
+                                                      : live.handle().incarnation) == unbound;
+                    }), "successor counter direct scan will not stop at its first row");
+        ++stage.expected_work.roster_cohort_visits; // Failed direct prefix.
+        for (const auto& roster : core().cohorts()) {
+            ++stage.expected_work.roster_cohort_visits; // Count.
+            ++stage.expected_work.roster_cohort_visits; // Union.
+            ++stage.expected_work.roster_cohort_visits; // Release.
+            if (!roster.origins.empty())
+                for (const auto opening : reference.successor_lots) {
+                    (void)opening;
+                    ++stage.expected_work.roster_cohort_visits; // Successor probe.
+                }
+        }
         stage.before_digest = NativeExecutionConsumerProbe::cohort_digest(consumer());
         stage.before_epoch = consumer().dormant_core_epoch();
         stage.before_continuation = native_continuation_hash();
@@ -421,6 +618,7 @@ private:
             Work work;
             {
                 CountScope scope(work);
+                RosterScope roster_scope(stage.roster_work);
                 release();
             }
             CHECK(work.passes == 1); // Each stage falls through the direct-scan test.
@@ -507,7 +705,19 @@ void identity() {
     CHECK(actual.broker_state_hash() == reference.broker_state_hash());
 }
 
+void successor_work() {
+    IdentityHost host(false);
+    const auto bars = tape(1);
+    host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    require(host.last_error().empty(), host.last_error().c_str());
+    require(!host.stages.empty(), "successor counter did not reach a release stage");
+    for (const auto& stage : host.stages)
+        expect_work("roster successor probes", stage.roster_work, stage.expected_work);
+}
+
 template<class Function> void row(const char* name, Function function) {
+    if (selected_row && std::strcmp(selected_row, name) != 0) return;
+    ++rows_run;
     try {
         function();
     } catch (const std::exception& error) {
@@ -517,8 +727,13 @@ template<class Function> void row(const char* name, Function function) {
 }
 } // namespace cohort_origin_fixture
 
-int main() {
+int main(int argc, char** argv) {
     using namespace cohort_origin_fixture;
+    if (argc == 2) selected_row = argv[1];
+    else if (argc != 1) {
+        std::fprintf(stderr, "FAIL row selection: expected at most one row name\n");
+        return 1;
+    }
     // A union pass dereferences each of the N singleton rosters exactly once,
     // then sorts N roots and binary-searches N lots. Allow 2*N roster visits:
     // 256 and 512. The old scan visits 1+...+N rosters, hence 8256 and 32896.
@@ -530,6 +745,21 @@ int main() {
     // counter removed along with the old loop.
     row("nonzero roster witness", [] { ramp(65, 130); });
     row("ordered origin release", [] { identity(); });
+    // C is test geometry; every expected visit is accumulated over its rows.
+    constexpr std::size_t handles = 8;
+    row("roster general", [] { counter_case("roster general", handles, CounterPath::General); });
+    row("roster direct", [] { counter_case("roster direct", handles, CounterPath::Direct); });
+    row("roster empty", [] { counter_case("roster empty", handles, CounterPath::Empty); });
+    row("roster not due", [] { counter_case("roster not due", handles, CounterPath::NotDue); });
+    row("roster failed direct", [] {
+        counter_case("roster failed direct", handles, CounterPath::FailedDirect);
+    });
+    row("roster empty heavy", [] { empty_heavy_work(); });
+    row("roster successor probes", [] { successor_work(); });
+    if (rows_run == 0) {
+        ++failures;
+        std::fprintf(stderr, "FAIL row selection: no matching row\n");
+    }
     std::printf("test_adapter_cohort_origin_release: %d checks, %d failures\n",
                 checks, failures);
     return failures == 0 ? 0 : 1;

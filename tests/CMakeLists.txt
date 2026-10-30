@@ -3803,7 +3803,6 @@ list(APPEND TEST_SOURCES test_native_unreachable_book)
 list(APPEND TEST_SOURCES test_native_dormant_book_cost)
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     list(APPEND TEST_SOURCES test_standing_orders_wall test_projected_pending_scaling)
-    list(APPEND TEST_SOURCES test_adapter_cohort_origin_release)
     list(APPEND TEST_SOURCES test_abi_layout_probe)
 endif()
 list(APPEND TEST_SOURCES test_native_dormant_book_resident)
@@ -8025,6 +8024,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8
     target_link_options(test_ledger_block_zeroing PRIVATE "-Wl,--wrap=pwrite")
 endif()
 # --- CR-150 ledger-block-zeroing end ---
+
+# --- CR-150 roster-pass-work begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    # The fixture includes the real adapter translation unit before linking
+    # the archive, so only this test target needs the counting overlay.
+    target_compile_definitions(test_adapter_cohort_origin_release PRIVATE
+        PINEFORGE_ROSTER_PASS_OBSERVER=1)
+endif()
+# --- CR-150 roster-pass-work end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
