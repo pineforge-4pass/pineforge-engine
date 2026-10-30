@@ -93,11 +93,11 @@ void check_value(const char* row, const T& value, bool expected) {
 
 template <class T>
 void check_present_value(const char* row, const T& value) {
-    // Value storage constructs a live object, never an absent reference.
-    // In particular, size and the missingness of elements do not enter this
-    // expectation. An empty-as-na mutant fails every empty collection row.
-    const T* reference = std::addressof(value);
-    check_value(row, value, reference == nullptr);
+    // DEFINED MEANING (stated in na.hpp): a plain value, including an empty
+    // container, is present and never na, whatever its size or elements. The
+    // expectation is therefore the literal false. An empty-as-na mutant fails
+    // every empty collection row.
+    check_value(row, value, false);
 }
 
 template <class T>
@@ -345,9 +345,10 @@ int main() {
 
     const std::vector<std::string> empty;
     const std::vector<std::string> populated{"item"};
-    check_coexistence("generated_vector_empty", empty, std::addressof(empty) == nullptr);
-    check_coexistence("generated_vector_nonempty", populated,
-                      std::addressof(populated) == nullptr);
+    // Defined meaning: a plain vector value is present, so the generated
+    // free overload and the engine agree on false.
+    check_coexistence("generated_vector_empty", empty, false);
+    check_coexistence("generated_vector_nonempty", populated, false);
     ArrayHistoryValue<std::vector<std::string>> history;
     check_coexistence("generated_history_missing", history, !history.value);
     check_value("engine_history_missing", history, !history.value);
