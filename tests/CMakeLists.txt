@@ -7988,6 +7988,36 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND
 endif()
 # --- CR-150 core-cr150-replay-rq end ---
 
+# --- CR-150 closed-trade-io begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND PINEFORGE_BUILD_SOURCE_LAYER)
+    target_link_options(test_closed_trade_scratch_io PRIVATE
+        "-Wl,--wrap=pread" "-Wl,--wrap=pwrite"
+        "-Wl,--wrap=read" "-Wl,--wrap=write"
+        "-Wl,--wrap=readv" "-Wl,--wrap=writev"
+        "-Wl,--wrap=preadv" "-Wl,--wrap=pwritev" "-Wl,--wrap=mmap")
+endif()
+# --- CR-150 closed-trade-io end ---
+# --- CR-150 closed-trade-stream-io begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND PINEFORGE_BUILD_SOURCE_LAYER)
+    target_link_libraries(test_closed_trade_stream_io PRIVATE Threads::Threads)
+    target_link_options(test_closed_trade_stream_io PRIVATE
+        "-Wl,--wrap=pread" "-Wl,--wrap=pwrite" "-Wl,--wrap=ftruncate"
+        "-Wl,--wrap=read" "-Wl,--wrap=write"
+        "-Wl,--wrap=readv" "-Wl,--wrap=writev"
+        "-Wl,--wrap=preadv" "-Wl,--wrap=pwritev" "-Wl,--wrap=mmap")
+endif()
+# --- CR-150 closed-trade-stream-io end ---
+# --- CR-150 closed-trade-text-coalesce begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND PINEFORGE_BUILD_SOURCE_LAYER)
+    target_link_libraries(test_closed_trade_text_coalesce PRIVATE Threads::Threads)
+    target_link_options(test_closed_trade_text_coalesce PRIVATE
+        "-Wl,--wrap=pread" "-Wl,--wrap=pwrite" "-Wl,--wrap=ftruncate"
+        "-Wl,--wrap=read" "-Wl,--wrap=write"
+        "-Wl,--wrap=readv" "-Wl,--wrap=writev"
+        "-Wl,--wrap=preadv" "-Wl,--wrap=pwritev" "-Wl,--wrap=mmap")
+endif()
+# --- CR-150 closed-trade-text-coalesce end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
