@@ -464,6 +464,37 @@ void workspace_allocation_failure() {
         return ScratchStatus::ok;
     });
     require_memory(result, store.carried_failure());
+
+    require(store.status() == ScratchStatus::io_error
+                && store.begin() == ScratchStatus::programming_error
+                && store.page_size() == 0 && store.record_count() == 0
+                && !store.transaction_active(),
+            "the allocation marker refuses mutation and exposes no workspace");
+    std::array<std::byte, kPageBytes> page{};
+    page.fill(std::byte{0x5a});
+    const auto untouched = page;
+    std::uint64_t digest = 0x123456789abcdef0ULL;
+    require(store.state_digest({page.data(), page.size()}, digest)
+                == ScratchStatus::programming_error
+                && digest == 0x123456789abcdef0ULL && page == untouched
+                && backing.page_count() == 0,
+            "the allocation marker leaves digest output, buffer and backing untouched");
+
+    std::array<std::byte, 16 * kPageBytes> healthy_bytes{};
+    FixedMemoryScratchBacking healthy_backing(
+        {healthy_bytes.data(), healthy_bytes.size()}, kPageBytes);
+    CommandScratchStore healthy(geometry, &healthy_backing);
+    require(healthy.status() == ScratchStatus::ok && !healthy.carried_failure()
+                && healthy.page_size() == kPageBytes && healthy.record_count() == 0
+                && healthy.begin() == ScratchStatus::ok && healthy.transaction_active(),
+            "a later unarmed store has its own healthy transaction state");
+    require(store.status() == ScratchStatus::io_error && store.carried_failure()
+                && store.page_size() == 0 && store.record_count() == 0
+                && !store.transaction_active()
+                && store.begin() == ScratchStatus::programming_error,
+            "a healthy store cannot mutate the shared allocation marker");
+    require(healthy.rollback() == ScratchStatus::ok && !healthy.transaction_active(),
+            "the independent healthy transaction rolls back normally");
 }
 
 void object_store_allocation_failure() {
