@@ -32,6 +32,12 @@ namespace pineforge {
 using namespace internal;
 
 namespace {
+#if defined(__GNUC__) || defined(__clang__)
+// Sixteen visits at about 7 ns each give about 112 ns of lead time,
+// roughly two cache-miss latencies.
+constexpr std::size_t kPrefetchAhead = 16;
+#endif
+
 // Source predicates are resolved here, never retained by native settlement.
 // Every fragment of an opening must agree with the selected source predicate.
 template<class Predicate>
@@ -521,6 +527,14 @@ struct TradeLedger::State {
     [[gnu::always_inline]]
     bool string_equals(size_type global, std::string_view rhs) const {
         check(global);
+#if defined(__GNUC__) || defined(__clang__)
+        if (cache) {
+            const auto* ahead = &cache[cache_slot(global + kPrefetchAhead)];
+            __builtin_prefetch(&ahead->generation, 0, 3);
+            __builtin_prefetch(&ahead->record.entry_id.length, 0, 3);
+            __builtin_prefetch(ahead->strings.data(), 0, 3);
+        }
+#endif
         const auto* cached_entry = cached(global);
         const auto& entry = cached_entry ? *cached_entry : load(global);
         const auto text = entry.record.*Member;
