@@ -29127,18 +29127,6 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "roster_roots",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "namespace detail #5",
-    "struct AdapterPositionTailSummary final : PositionTailSummary #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < std :: uint64_t >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
    "symbol": "run",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -30092,17 +30080,6 @@
    ],
    "cls": "alloc",
    "spelling": "make_shared",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "roster_roots",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "roster_roots = . . .",
    "ordinal": 1
   },
   {
@@ -39953,6 +39930,17 @@
    ],
    "cls": "decl",
    "spelling": "std :: unordered_set < const void * >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_position_tail_summary.hpp",
+   "symbol": "roster_roots",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "struct AdapterPositionTailSummary final : PositionTailSummary #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < std :: uint64_t >",
    "ordinal": 1
   },
   {
