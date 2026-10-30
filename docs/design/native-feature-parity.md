@@ -1119,7 +1119,7 @@ A `sample` call tree of each run splits the adapter fold: the placement
 snapshots are 55 % of it on the order-and-cancel shape and 97 % on the
 re-issue shape, the journal reflection the other 45 % and 1 %, the scheduler
 prefix under 2 %. Most of a snapshot's bytes are field paths the reflection
-builds as strings, one per field (`Reflect::field` market_admission.cpp:658-661).
+builds as strings, one per field (`Reflect::field` market_admission.cpp:662-665).
 
 Why it is not fixed in this lane. The fold can be made incremental without
 moving a single value, but not from inside lane F9's files:

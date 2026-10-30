@@ -478,6 +478,9 @@ MEMBER(AdmissionCount, pineforge::source::PineExecutionAdapter, admission_events
 MEMBER(AdmissionDigest, pineforge::source::PineExecutionAdapter, admission_events_digest_);
 MEMBER(AdmissionLast, pineforge::source::PineExecutionAdapter, admission_events_last_);
 MEMBER(AdmissionOutstanding, ad::Journal, outstanding_count_);
+MEMBER(AdmissionWindow, ad::Journal, folded_window_);
+MEMBER(AdmissionWindowValid, ad::Journal, fold_valid_);
+MEMBER(AdmissionGate, ad::Journal, rejection_gate_);
 MEMBER(NativeCore, pineforge::NativeExecutionConsumer, requests_);
 MEMBER(NativeNote, pineforge::NativeExecutionConsumer, note_committed_events);
 MEMBER(NativeNoteCohorts, pineforge::NativeExecutionConsumer, note_cohort_receipts);
@@ -2240,6 +2243,7 @@ void s34_backing_physical_charge_and_lifetime_red() {
 #endif
 
 #if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 11
+void admission_fold_failure_publication();
 // Unknown birth causes must refuse before storage.
 void s3_admission_unknown_birth_cause_refused_red() {
     Rig rig;
@@ -2328,6 +2332,108 @@ void s3_admission_unknown_birth_cause_refused_red() {
         require(AdmissionModel(decoded).storage() == bytes,
                 "all known birth causes and every other field read back identically");
     }
+    rig.audit(store);
+    admission_fold_failure_publication();
+}
+
+void admission_fold_failure_publication() {
+    Rig rig;
+    CommandScratchStore store(rig.config(), &rig.backing);
+    ad::Journal journal;
+    bind_journal_codec(journal, store);
+    AdmissionFold model;
+    auto first = command(journal.next_sequence(), 7);
+    first.outcome = ad::Outcome::RejectedPricedCap;
+    journal.append(first); model.append(first, 1);
+    const auto prefix = journal.folded_window();
+    journal.retire_prefix(prefix.count, prefix.digest, prefix.last_sequence);
+
+    const auto second = admission_example(1, journal.next_sequence(), 0, 0);
+    journal.append(second); model.append(second, 2);
+    auto third = command(journal.next_sequence(), 9);
+    third.outcome = ad::Outcome::RejectedAffordability;
+    journal.append(third); model.append(third, 3);
+    const auto before = journal.*access(AdmissionWindow{});
+    const auto before_gate = journal.*access(AdmissionGate{});
+    const auto frontier = journal.sequence_frontier();
+    const auto count = journal.event_count();
+    const auto unchanged = [&] {
+        const auto actual = journal.*access(AdmissionWindow{});
+        const auto actual_gate = journal.*access(AdmissionGate{});
+        require(actual.count == before.count && actual.digest == before.digest
+                && actual.last_sequence == before.last_sequence
+                && actual.last_rejected_command_bar == before.last_rejected_command_bar
+                && journal.*access(AdmissionWindowValid{}),
+                "failed query publishes no candidate prefix");
+        require(actual_gate.sequence == before_gate.sequence && actual_gate.bar == before_gate.bar
+                && actual_gate.valid == before_gate.valid
+                && journal.last_rejected_command_bar() == before_gate.bar,
+                "failed query preserves the already published append gate");
+        require(journal.sequence_frontier() == frontier && journal.event_count() == count
+                && !journal.has_unfinished_events() && !store.transaction_active(),
+                "failed query changes no sequence, event or transaction state");
+    };
+    const auto valid = AdmissionModel(third).storage();
+    std::vector<Bytes> malformed;
+    auto bad_count = valid;
+    std::fill_n(bad_count.begin(), 8, std::byte{0xff});
+    malformed.push_back(std::move(bad_count));
+    auto bad_path = AdmissionModel(third);
+    bad_path.rows.back().path += ".unexpected";
+    malformed.push_back(bad_path.storage());
+    auto bad_tag = AdmissionModel(third);
+    bad_tag.rows.back().value = std::string("wrong type");
+    malformed.push_back(bad_tag.storage());
+    auto truncated = valid;
+    truncated.pop_back(); malformed.push_back(std::move(truncated));
+    auto trailing = valid;
+    trailing.push_back(std::byte{0}); malformed.push_back(std::move(trailing));
+    std::array<std::byte, 512> page{};
+    for (const auto& bytes : malformed) {
+        const pd::ScratchSpanSource source(view(bytes));
+        ad::JournalRecordSummary summary;
+        status_is(scan_journal_record(source, {page.data(), page.size()}, summary),
+                  ScratchStatus::corrupt, "legacy validation rejects the same bytes");
+        put(store, 3, source);
+        engine_invariant([&] { journal.folded_window(); });
+        unchanged();
+    }
+    const pd::ScratchSpanSource repaired(view(valid));
+    put(store, 3, repaired);
+    const auto recovered = journal.folded_window();
+    require(recovered.count == model.count && recovered.digest == model.h
+            && recovered.last_sequence == model.last
+            && recovered.last_rejected_command_bar == model.rejected_bar,
+            "successful retry starts from the unpublished prefix and folds each event once");
+
+    // Make the next value exceed both resident frames so a backing read is
+    // unavoidable even if the inclusive frontier key happens to remain warm.
+    const auto tail = admission_example(1, journal.next_sequence(), 3, 8193);
+    journal.append(tail);
+    const auto committed = journal.*access(AdmissionWindow{});
+    const auto committed_gate = journal.*access(AdmissionGate{});
+    const auto tail_count = journal.event_count();
+    const auto tail_frontier = journal.sequence_frontier();
+    const auto faults = rig.backing.read_faults;
+    rig.backing.fail_reads = true;
+    bool refused = false;
+    try { journal.folded_window(); }
+    catch (const pd::AuxiliaryScratchIoError& error) {
+        refused = error.run_failure_code() == pineforge::RunFailureCode::scratch_io_failed;
+    }
+    require(refused && rig.backing.read_faults > faults, "remaining backing failure is published");
+    const auto actual = journal.*access(AdmissionWindow{});
+    const auto actual_gate = journal.*access(AdmissionGate{});
+    require(actual.count == committed.count && actual.digest == committed.digest
+            && actual.last_sequence == committed.last_sequence
+            && actual.last_rejected_command_bar == committed.last_rejected_command_bar
+            && journal.*access(AdmissionWindowValid{})
+            && actual_gate.sequence == committed_gate.sequence && actual_gate.bar == committed_gate.bar
+            && actual_gate.valid == committed_gate.valid
+            && journal.sequence_frontier() == tail_frontier && journal.event_count() == tail_count
+            && !store.transaction_active(),
+            "I/O failure publishes no prefix, gate, sequence or transaction change");
+    rig.backing.fail_reads = false;
     rig.audit(store);
 }
 #endif

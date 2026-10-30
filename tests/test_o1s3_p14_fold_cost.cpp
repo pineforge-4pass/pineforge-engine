@@ -152,6 +152,122 @@ ad::Event command(std::uint64_t sequence, int bar, ad::Outcome outcome) {
 int gate(const ad::Journal& journal) {
     return pineforge::compat::pine::last_rejected_command_bar(journal);
 }
+class CountingSource final : public pd::ScratchByteSource {
+    const pd::ScratchByteSource& source_;
+public:
+    mutable std::uint64_t reads = 0;
+    explicit CountingSource(const pd::ScratchByteSource& source) : source_(source) {}
+    std::uint64_t size() const noexcept override { return source_.size(); }
+    const pd::ReportScratchIoError* carried_failure() const noexcept override {
+        return source_.carried_failure();
+    }
+    pd::ScratchStatus read(std::uint64_t offset, pd::ScratchBuffer out) const noexcept override {
+        ++reads;
+        return source_.read(offset, out);
+    }
+};
+
+void fixed_fold_work() {
+    for (bool codec : {false, true}) {
+        Rig rig;
+        ad::Journal journal;
+        if (codec) ad::bind_journal_codec(journal, rig.store);
+        std::uint64_t expected = seed;
+        for (unsigned i = 0; i != 2; ++i) {
+            const auto event = command(journal.next_sequence(), 7 + i,
+                                       ad::Outcome::RejectedPricedCap);
+            const auto wire = reflected(event, true);
+            const auto pages = (wire.size() + page_size - 1) / page_size;
+            CHECK(7 * page_size < wire.size() && wire.size() <= 8 * page_size);
+
+            // Every field emits three words: path length, tag, then a scalar
+            // or text length. Count each field again on a page-edge retry.
+            // These short texts never let the non-owning scan skip a page.
+            std::uint64_t fields = 0, field_pages = 0, offset = 8;
+            ad::reflect(event, "event", [&](const ad::Field& field) {
+                const auto* value = std::get_if<std::string>(&field.value);
+                const auto length = 24 + field.path.size() + (value ? value->size() : 0);
+                CHECK(length < page_size);
+                field_pages += (offset + length - 1) / page_size - offset / page_size + 1;
+                offset += length;
+                ++fields;
+            });
+            CHECK(offset == wire.size());
+            const auto constructor_words = 1 + 3 * fields;
+            const auto pass_words = 1 + 3 * field_pages;
+            const auto constructor_checks = 2 * fields + 1;
+            // Each slice checks every field, both empty-array cursors, its
+            // final status, and the status after each emitted/retried field.
+            const auto pass_checks = pages * (fields + 2 + 1) + field_pages;
+            fold_cost::work = {};
+            const auto encoded = ad::encode_journal_record(event);
+            CHECK(fold_cost::work.words == constructor_words);
+            CHECK(fold_cost::work.checks == constructor_checks);
+            CHECK(encoded.size() == wire.size());
+            std::array<std::byte, page_size> page{};
+            for (std::uint64_t at = 0; at < wire.size();) {
+                const auto count = static_cast<std::size_t>(
+                    std::min<std::uint64_t>(page.size(), wire.size() - at));
+                ok(encoded.read(at, {page.data(), count}));
+                CHECK(std::memcmp(page.data(), wire.data() + at, count) == 0);
+                at += count;
+            }
+
+            // Keep the separate legacy composition as a comparison oracle.
+            const auto legacy_encoded = ad::encode_journal_record(event);
+            CountingSource legacy(legacy_encoded);
+            ad::JournalRecordSummary summary;
+            auto legacy_digest = expected;
+            fold_cost::work = {};
+            ok(ad::scan_journal_record(legacy, {page.data(), page.size()}, summary));
+            ok(ad::fold_journal_record(legacy, {page.data(), page.size()}, legacy_digest));
+            CHECK(legacy.reads == 2 * pages);
+            CHECK(fold_cost::work.words == 2 * pass_words);
+            CHECK(fold_cost::work.checks == 2 * pass_checks);
+            CHECK(summary.sequence == ad::sequence(event));
+            CHECK(summary.rejected && summary.rejected_bar == 7 + static_cast<int>(i));
+            expected = reference_fold(expected, event);
+            CHECK(legacy_digest == expected);
+
+            journal.append(event);
+            fold_cost::work = {};
+            const auto folded = journal.folded_window();
+            const auto actual = fold_cost::work;
+            CHECK(folded.digest == legacy_digest && folded.count == i + 1);
+            CHECK(folded.last_sequence == summary.sequence);
+            CHECK(folded.last_rejected_command_bar == summary.rejected_bar);
+            CHECK(gate(journal) == summary.rejected_bar);
+            if (codec) {
+                CHECK(actual.records == 1 && actual.calls == pages);
+                CHECK(actual.bytes == wire.size());
+                CHECK(actual.words == 0 && actual.checks == 0);
+            } else {
+                // The original observer sees encoder words but no in-memory
+                // source reads. This exact arithmetic also runs on that tree:
+                // constructor + two equal passes derives 16 reads, not eight.
+                CHECK(actual.words >= constructor_words);
+                const auto slice_words = actual.words - constructor_words;
+                CHECK(slice_words % pass_words == 0);
+                const auto source_reads = pages * (slice_words / pass_words);
+                std::printf("unbound fold: derived reads=%llu, expected=%zu, words=%llu\n",
+                    static_cast<unsigned long long>(source_reads), pages,
+                    static_cast<unsigned long long>(actual.words));
+                CHECK(source_reads == pages);
+                CHECK(actual.words == constructor_words + pass_words);
+                CHECK(actual.checks == constructor_checks + pass_checks);
+                CHECK(actual.records == 1 && actual.calls == pages);
+                CHECK(actual.bytes == wire.size());
+            }
+            fold_cost::work = {};
+            for (unsigned query = 0; query != 8; ++query) {
+                CHECK(journal.folded_window().digest == expected);
+                CHECK(gate(journal) == summary.rejected_bar);
+            }
+            CHECK(fold_cost::work.calls == 0 && fold_cost::work.bytes == 0);
+            CHECK(fold_cost::work.words == 0 && fold_cost::work.checks == 0);
+        }
+    }
+}
 void print(const char* phase, bool codec, std::size_t events, std::uint64_t bytes,
            const Counts& counts) {
     std::printf("%s codec=%d E=%zu R=%llu records=%llu reads=%llu bytes=%llu words=%llu checks=%llu\n",
@@ -367,6 +483,7 @@ void cursor_preserves_bytes() {
 
 int main() {
     const struct Case { const char* name; void (*run)(); } cases[] = {
+        {"fixed fold work", fixed_fold_work},
         {"event axis", event_growth}, {"record axis", record_growth},
         {"gate updates", cached_gate_updates}, {"cursor bytes", cursor_preserves_bytes},
     };
