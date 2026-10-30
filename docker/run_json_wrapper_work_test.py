@@ -1150,9 +1150,6 @@ def _spelled_bar_tape(kind, count=37):
 def _assert_bar_spelling_admission(raw, *, packed=True, reference_packed=False):
     assert run_json._load_bars_bulk(_bar_tape(1)) is not None
     assert (_reference_load_bars_bulk(raw) is not None) == reference_packed
-    if (run_json._BAR_FLOAT == _REFERENCE_BAR_FLOAT
-            and "or repr(value) != text" in inspect.getsource(run_json._pack_bar_bulk_slab)):
-        packed = reference_packed
     if packed:
         assert run_json._load_bars_bulk(raw) is not None, (
             "BARS_SPELLING_ADMISSION: an admitted spelling must use the packed path")
