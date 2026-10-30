@@ -208,7 +208,7 @@ private:
 };
 JournalRecordSource encode_journal_record(const Event&) noexcept;
 detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource&,
-    detail::ScratchBuffer, Event&) noexcept;
+    detail::ScratchBuffer, Event&);
 class Journal;
 void bind_journal_codec(Journal&, detail::CommandScratchStore&);
 detail::ScratchStatus append_journal_record(Journal&, const detail::ScratchByteSource&) noexcept;

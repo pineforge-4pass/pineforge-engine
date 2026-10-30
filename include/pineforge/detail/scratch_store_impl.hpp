@@ -1765,27 +1765,41 @@ private:
 struct CommandScratchStore::State : scratch_impl::Core {
     State(const ScratchStoreConfig& config, ScratchBacking* backing, std::size_t total) noexcept
         : scratch_impl::Core(config, backing, total) {}
+    static State* allocation_failed() noexcept {
+        // Invalid geometry constructs no workspace and performs no I/O. Every
+        // Core operation refuses it before mutation. Only pointer identity is
+        // used as the setup carrier; no embedded object gains a data member.
+        static State failed(ScratchStoreConfig{}, nullptr, 0);
+        return &failed;
+    }
 };
 
 inline CommandScratchStore::CommandScratchStore(ScratchStoreConfig config, ScratchBacking* backing) noexcept {
     static_assert(sizeof(State) == sizeof(scratch_impl::Core), "the workspace layout assumes no extra members");
+    // Prepare the nonallocating setup marker outside the block that can fail.
+    auto* const allocation_failed = State::allocation_failed();
     const std::size_t total = scratch_impl::Core::required_bytes(config, backing);
     void* block = ::operator new(total, std::nothrow);
-    if (block == nullptr) return;
+    if (block == nullptr) {
+        if (scratch_impl::Core::geometry_ok(config, backing)) state_ = allocation_failed;
+        return;
+    }
     state_ = new (block) State(config, backing, total);
 }
 
 inline CommandScratchStore::~CommandScratchStore() noexcept {
-    if (state_ == nullptr) return;
+    if (state_ == nullptr || state_ == State::allocation_failed()) return;
     state_->shutdown();
     state_->~State();
     ::operator delete(static_cast<void*>(state_));
 }
 
 inline ScratchStatus CommandScratchStore::status() const noexcept {
+    if (state_ == State::allocation_failed()) return ScratchStatus::io_error;
     return state_ == nullptr ? ScratchStatus::programming_error : state_->open_status_;
 }
 inline const ReportScratchIoError* CommandScratchStore::carried_failure() const noexcept {
+    if (state_ == State::allocation_failed()) return &scratch_out_of_memory_failure();
     return state_ && state_->carried_failure_ ? &*state_->carried_failure_ : nullptr;
 }
 inline std::size_t CommandScratchStore::page_size() const noexcept { return state_ == nullptr ? 0 : state_->page_; }

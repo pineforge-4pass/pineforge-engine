@@ -616,7 +616,7 @@ struct WorkingRequestCore::BookSpill {
     }
 
     // Throws the carried failure, if any: an I/O failure as the typed
-    // scratch failure (scratch_io_failed), anything else as it was thrown.
+    // scratch failure (scratch_io_failed), typed allocation failure unchanged.
     void check() const {
         if (!failure) return;
         try {
@@ -624,6 +624,8 @@ struct WorkingRequestCore::BookSpill {
         } catch (const detail::AuxiliaryScratchIoError&) {
             throw;
         } catch (const std::system_error& error) {
+            if (const auto* typed = dynamic_cast<const RunFailureInfo*>(&error))
+                if (typed->run_failure_code() == RunFailureCode::out_of_memory) throw;
             throw detail::AuxiliaryScratchIoError(error);
         }
     }
