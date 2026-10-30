@@ -402,7 +402,8 @@ detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource& sou
         if (status == Status::ok) event = std::move(result);
         return status;
     } catch (const std::bad_alloc&) {
-        throw detail::scratch_out_of_memory_failure();
+        detail::rethrow_carried_scratch_failure(&detail::scratch_out_of_memory_failure());
+        return Status::programming_error; // unreachable: the helper always throws a non-null failure
     }
 }
 detail::ScratchStatus scan_journal_record(const detail::ScratchByteSource& source,
