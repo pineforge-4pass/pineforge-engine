@@ -3803,6 +3803,8 @@ list(APPEND TEST_SOURCES test_native_unreachable_book)
 list(APPEND TEST_SOURCES test_native_dormant_book_cost)
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     list(APPEND TEST_SOURCES test_standing_orders_wall test_projected_pending_scaling)
+    list(APPEND TEST_SOURCES test_adapter_cohort_origin_release)
+    list(APPEND TEST_SOURCES test_abi_layout_probe)
 endif()
 list(APPEND TEST_SOURCES test_native_dormant_book_resident)
 list(APPEND TEST_SOURCES test_native_dormant_book_transcript)
@@ -8017,6 +8019,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND PINEFO
         "-Wl,--wrap=preadv" "-Wl,--wrap=pwritev" "-Wl,--wrap=mmap")
 endif()
 # --- CR-150 closed-trade-text-coalesce end ---
+# --- CR-150 ledger-block-zeroing begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8
+   AND PINEFORGE_BUILD_SOURCE_LAYER)
+    target_link_options(test_ledger_block_zeroing PRIVATE "-Wl,--wrap=pwrite")
+endif()
+# --- CR-150 ledger-block-zeroing end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))

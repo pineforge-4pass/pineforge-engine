@@ -383,6 +383,9 @@ struct TradeLedger::State {
     // Physical origins only. Record keys, text extents, size/base, all money
     // folds and every hash remain in the original global coordinate space.
     std::uint64_t index_origin = 0, payload_origin = 0, payload_retired = 0;
+    // File-relative zeroed prefixes. These watermarks move with release_prefix
+    // and never claim a block until its write has completed.
+    std::uint64_t index_zeroed_end = 0, payload_zeroed_end = 0;
     bool retiring = false;
     std::array<char, kPayloadTailBytes> payload_tail{};
     std::string directory;
@@ -816,9 +819,11 @@ struct TradeLedger::State {
             index.write(record_offset(global), &record, sizeof(record));
         return record;
     }
+    static constexpr std::uint64_t kZeroBlock = 4096;
+    static_assert(detail::ScratchArena::kChunkBytes % kZeroBlock == 0);
     static void erase_bytes(detail::ScratchFile& file, std::uint64_t first,
                             std::uint64_t stop) {
-        const std::array<unsigned char, 4096> zeros{};
+        const std::array<unsigned char, kZeroBlock> zeros{};
         while (first < stop) {
             const auto count = static_cast<size_type>(
                 std::min<std::uint64_t>(zeros.size(), stop - first));
@@ -846,7 +851,7 @@ struct TradeLedger::State {
         }
     }
     static void release_head(detail::ScratchFile& file, std::uint64_t& origin,
-                             std::uint64_t old_end, std::uint64_t new_end,
+                             std::uint64_t& zeroed_end, std::uint64_t new_end,
                              bool empty) {
         if (new_end == origin && !empty) return;
         if (empty) {
@@ -854,15 +859,36 @@ struct TradeLedger::State {
             // final partial chunk too. Keep the configured backing open.
             if (file.opened()) file.truncate(0);
             origin = new_end;
+            zeroed_end = 0;
             return;
         }
         const auto bytes = (new_end - origin) / detail::ScratchArena::kChunkBytes
             * detail::ScratchArena::kChunkBytes;
-        file.release_prefix(bytes);
-        origin += bytes;
-        // At most one zero-filled head chunk remains. It contains no closed
-        // row bytes; complete chunks have returned to the allocator/file.
-        erase_bytes(file, std::max(old_end, origin) - origin, new_end - origin);
+        if (bytes != 0) {
+            // Rebase before zeroing: release_prefix compacts the surviving
+            // suffix, so zeroing before it would clear bytes that are copied
+            // or discarded. A pending range wholly below the release drops
+            // with the prefix.
+            file.release_prefix(bytes);
+            origin += bytes;
+            zeroed_end = zeroed_end > bytes ? zeroed_end - bytes : 0;
+        }
+        const auto dead_end = new_end - origin;
+        // Everything below dead_end is dead. Start at zeroed_end, NOT at the
+        // previous dead end: the bytes in between are the pending tail of the
+        // earlier retirements and must be zeroed with the block they complete.
+        const auto first = zeroed_end;
+        const auto aligned_end = dead_end - dead_end % kZeroBlock;
+        const std::array<unsigned char, kZeroBlock> zeros{};
+        for (auto offset = first; offset < aligned_end;) {
+            const auto count = static_cast<size_type>(
+                std::min<std::uint64_t>(zeros.size(), aligned_end - offset));
+            file.write(offset, zeros.data(), count);
+            offset += count;
+            zeroed_end = offset;
+        }
+        // At most one head chunk remains: completed blocks are zero-filled,
+        // while the newest dead bytes below one zero-fill block remain pending.
     }
     void retire(size_type global_end) {
         if (!retiring || global_end == first) return;
@@ -876,13 +902,13 @@ struct TradeLedger::State {
                                     row.exit_comment, row.exit_id})
                 if (text.length != 0) text_first = std::min(text_first, text.offset);
         }
-        const auto index_first = absolute_record_offset(first);
         const auto index_stop = absolute_record_offset(global_end);
         const bool index_empty = global_end == end;
         const bool payload_empty = text_first == payload_end;
         // The payload plan covers everything below text_first: complete
-        // chunks are released, the old dead head is zero, and release_head
-        // zeros its extension. An empty payload is truncated in full.
+        // chunks are released, and release_head zeroes completed blocks while
+        // leaving only its newest sub-block tail pending. An empty payload is
+        // truncated in full.
         // No strings are shared between rows. Erase retired text even when a
         // replacement put it AFTER a surviving row's earliest payload.
         for (size_type i = first; i < global_end; ++i) {
@@ -899,9 +925,8 @@ struct TradeLedger::State {
                 erase_payload_tail(text);
             }
         }
-        release_head(index, index_origin, index_first, index_stop, index_empty);
-        release_head(payload, payload_origin, payload_retired, text_first,
-                     payload_empty);
+        release_head(index, index_origin, index_zeroed_end, index_stop, index_empty);
+        release_head(payload, payload_origin, payload_zeroed_end, text_first, payload_empty);
         payload_retired = text_first;
         invalidate_cache();
         release_cache_pages(first, global_end, global_end, end);

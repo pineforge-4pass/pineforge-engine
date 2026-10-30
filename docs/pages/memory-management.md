@@ -18,7 +18,7 @@ row.
 | Input bars | The OHLCV arrays. The engine borrows them and copies nothing; they must outlive the run. `docker/run_json.py` maps a binary bars file privately, copy-on-write, so touched pages count toward its resident size | Input bars N |
 
 The jailed/no-sink stdout route, J0, keeps the legacy result behavior: a FULL
-result may retain `O(T)` closed-trade rows and its FULL report projection is `O(T)` heap. With a report sink and a script that never reads closed-trade history by index, closed trades below the published base are not retained in the arena or scratch file;
+result may retain `O(T)` closed-trade rows and its FULL report projection is `O(T)` heap. With a report sink and a script that never reads closed-trade history by index, closed trades below the published base are not retained in the arena or scratch file beyond the newest retired index and payload bytes per file, fewer than 4,096 bytes (about 24 trade descriptors); disk scratch is anonymous, unlinked and never reopened, while hosted arena bytes stay in the run-owned chunk until the run ends, and the bytes are released when the ledger is cleared or destroyed;
 otherwise full history is kept (O(T)). Retirement requires the optional compiled-module symbol `strategy_reads_trade_history()` to return zero and the existing streamable policy; a missing or nonzero symbol keeps full history. A below-base read on a retiring run refuses with `engine_invariant`.
 
 ## Report memory: resident buffers, disk and the jailed arena {#memory_sink}
@@ -77,8 +77,8 @@ Binary curve scratch on **disk** still costs **24 B per script bar**
 **6 MiB at 262,144 bars** and **48 MiB at 2,097,152 bars**, calculated payload
 sizes excluding other scratch and output.
 The sink's `E` output and the default route's JSON artifact also grow with
-the bar count: `_build_sink_report` docker/run_json.py:7919-8016 supplies lazy
-record arrays, and `_prepare_stream_report` docker/run_json.py:7780-7800
+the bar count: `_build_sink_report` docker/run_json.py:7926-8023 supplies lazy
+record arrays, and `_prepare_stream_report` docker/run_json.py:7784-7807
 serializes them to a temporary artifact.
 Lazy serialization bounds buffers, not output bytes.
 The test that checks the resident claim runs with a fixed minimal table
@@ -161,7 +161,7 @@ bytes.
 
 The sink-off jailed route buffers the whole report text before writing to
 stdout, so a serialization error publishes no partial report
-(`_prepare_report_json`, `docker/run_json.py:7803`; publication in
+(`_prepare_report_json`, `docker/run_json.py:7810`; publication in
 `_write_report`, `docker/run_json.py:4797`). Its UTF-8 byte buffer uses about
 one byte of resident text per output byte, plus bounded encoding and
 read-back buffers, on top of the input mapping and the engine's storage:
@@ -236,8 +236,8 @@ measured jailed descriptor run carried no sha256 of the stream, so a caller has 
 the trailer against.
 
 The process entry reserves the caller's original stdout as a private report descriptor before argument parsing or
-strategy loading (`_ReportOutput` at `docker/run_json.py:8261`; `_host_main` at
-`docker/run_json.py:8421`). It redirects native fd 1 to fd 2, and writes the summary and every typed
+strategy loading (`_ReportOutput` at `docker/run_json.py:8268`; `_host_main` at
+`docker/run_json.py:8428`). It redirects native fd 1 to fd 2, and writes the summary and every typed
 failure through the saved descriptor. The native stream N stays on the descriptor supplied by the caller.
 Isolation holds only when the harness keeps stdout and stderr separate. If they name the same file
 (for example, with `2>&1`), the host writes one stderr line,
@@ -245,15 +245,15 @@ Isolation holds only when the harness keeps stdout and stderr separate. If they 
 publication through the saved descriptor.
 The host refuses a report descriptor that shares a number or open file with N, the phase descriptor, or
 arena fd 5, using `run_request_invalid` (`_validate_report_fd_separation` at
-`docker/run_json.py:8383`). The library can write the saved descriptor because it runs in this process.
+`docker/run_json.py:8390`). The library can write the saved descriptor because it runs in this process.
 The descriptor is non-inheritable, so exec'd children do not get it. Code that deliberately writes
 through that file description can still affect the report. This transport arrangement isolates
 ordinary native fd 1 output when the streams stay separate; it is not a security boundary.
 
 Imported library calls write reports and failures to the current Python stdout without reserving or
-redirecting descriptors (`_report_output` at `docker/run_json.py:8344`). Each call to the library entry
+redirecting descriptors (`_report_output` at `docker/run_json.py:8351`). Each call to the library entry
 gets its own publication guard, so repeated runs remain independent (`_LibraryReportRun` at
-`docker/run_json.py:8240`).
+`docker/run_json.py:8247`).
 
 **When the report is complete.** The verified trailer is the completion marker, and EOF alone is not.
 Read every record as provisional until the trailer's counts and sha256 equal what the reader counted and
@@ -278,7 +278,7 @@ from the closed list of the catalog (`report_sink_failed` at `docker/run_failure
 `arena_bytes`, `claimed_bytes`, `store` and `needed_bytes_lower_bound`, `sink_exhausted` carries
 `sink_bytes` and `cap_bytes`, and every other reason carries `reason` alone, a closed reader included.
 A write error while `run_json.py` prepares the report in scratch is raised as `RunFailure` with
-`scratch_io` (`docker/run_json.py:7794-7795`); it is not a write to the descriptor. `sink_peer_closed` is also raised when the descriptor setup itself
+`scratch_io` (`docker/run_json.py:7801-7802`); it is not a write to the descriptor. `sink_peer_closed` is also raised when the descriptor setup itself
 finds a closed peer (`EPIPE`, `ECONNRESET` or `ENOTCONN`, with the message "report sink fd setup
 failed"; `RunFailure` at `docker/run_json.py:2196-2203`). The descriptor then holds records without a
 verified trailer, and a caller treats it as absent. The engine writer loops a short write to completion,
@@ -317,7 +317,7 @@ store; the part that spills grows in the scratch backing.
 
 | Store | Resident bound | Bytes per entry | Spills to scratch |
 | --- | --- | --- | --- |
-| Trade ledger (`TradeLedger`), descriptor window | 64 rows (`kResidentRows`, `include/pineforge/trade_ledger.hpp:41`), and a fixed payload tail of the same size | 168 B per row descriptor (`kRecordBytes`), so 10,752 B for the rows and 10,752 B for the tail; the four strings of a row are variable | Retiring sink runs erase published rows and return complete head chunks, keeping at most one zero-filled head chunk per extent plus the unsealed suffix; other runs retain 168 B plus text per closed trade |
+| Trade ledger (`TradeLedger`), descriptor window | 64 rows (`kResidentRows`, `include/pineforge/trade_ledger.hpp:41`), and a fixed payload tail of the same size | 168 B per row descriptor (`kRecordBytes`), so 10,752 B for the rows and 10,752 B for the tail; the four strings of a row are variable | Retiring sink runs erase published rows and return complete head chunks, keeping at most one head chunk per extent plus the unsealed suffix; each head retains fewer than 4,096 B of the newest retired index and payload bytes per file (about 24 trade descriptors) until the next zero-fill block completes or the chunk holding them is returned; other runs retain 168 B plus text per closed trade |
 | Trade ledger, read cache | Up to 65,536 occupied entries with or without a report sink (`kSinkCacheRows = kDefaultCacheRows`; the ceiling `kMaxCacheRows` is 1,048,576). Direct-mapped by global index modulo the fixed cap; the first read creates a table of `ceil(cap/256)` owning pointers, and each first-touched page `p` allocates `min(256,cap-256*p)` slots (the comment on `TradeLedger::cache_resident_bytes`, `include/pineforge/trade_ledger.hpp:105-109`). Page growth preserves existing entries; writes fill only an existing cache. Retirement frees pages outside the retained window, bounding allocated slots by `min(cap,(ceil(retained_rows/256)+2)*256)`. Chosen by the engine when the run begins, through `TradeLedger::set_cache_rows` (`src/native_execution_consumer.cpp:3192-3193`); the C API has no setter for it in this release | 312 B per slot (`kLedgerEntryBytes`: 168 B record, 16 B key and generation, 128 inline string bytes); up to 79,872 B per page, with the last page clipped to the cap. The charge `resident_cache_bytes(cap)` is `sizeof(TradeLedger)+sizeof(State)+cap*312+ceil(cap/256)*sizeof(void*)`: at the default cap, 20,447,232 entry bytes (19.5 MiB) plus 2,048 table bytes on 64-bit targets and the fixed base. Actual allocation never exceeds this charge. Both caps are independent of trade and bar counts | Not applicable (a cache over the retained rows) |
 | Command journal | 2,048 events (`kMaxResident`, `src/native_order.cpp:1717`), in 32-event chunks (`kChunk`), with a floor of 128 events kept (`kKeepResident`) | Not a constant: an event is a variant with variable payload and `sizeof` of a resident slot is not stated in the source and was not compiled. Plus one lazy 163,840 B spill buffer per journal: a 32,768 B write buffer and four 32,768 B reload buffers (`SpillStorage`) | Older events, in pages of 32,768 B (`kSpillPageBytes`, `:1738`) read back through four decoded page slots. An event whose serialized form exceeds one page is refused with `EFBIG` (about 1,360 external openings) and stays resident |
 | Order book | 4,096 rows | See the drain plateau below | Older rows |

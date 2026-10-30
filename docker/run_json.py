@@ -7157,9 +7157,13 @@ class _BoundedJSONFile:
     """
     window = 64 * 1024
 
-    def __init__(self, file):
+    def __init__(self, file, window=None):
         import fcntl
         self.file = file
+        if window is not None:
+            if window <= 0 or window % 4096:
+                raise ValueError("report artifact window must be a positive multiple of 4096")
+            self.window = window
         self.buffer = None
         self.used = self.base = self.size = self.position = 0
         self.read_base, self.read_size = -1, 0
@@ -7556,7 +7560,7 @@ class _JSONColumn(_JSONRecordArray):
                              {"reason": "scratch_io"}) from error
 
 
-def _json_temporary(resources, directory):
+def _json_temporary(resources, directory, window=None):
     try:
         # _BoundedJSONFile owns ASCII encoding and the aligned I/O window.
         # The owner supplies only an unbuffered, automatically unlinked fd.
@@ -7565,7 +7569,7 @@ def _json_temporary(resources, directory):
         raise RunFailure("report sink open failed", "report_sink_failed",
                          {"reason": "scratch_io"}) from error
     try:
-        file = _BoundedJSONFile(file)  # unjailed report artifacts
+        file = _BoundedJSONFile(file, window)  # unjailed report artifacts
         resources.callback(_close_json_temporary, file)
     except OSError as error:
         file.close()
@@ -7780,7 +7784,10 @@ def _stream_json_value(value, destination):
 def _prepare_stream_report(document, resources, directory, *, sink_errors=True):
     try:
         with ExitStack() as prepared:
-            file = _json_temporary(prepared, directory)
+            # Bound only the final artifact's aligned I/O window: fixed,
+            # independent of report size, and a multiple of 4096. Columns,
+            # spools and the sink reader keep the class window.
+            file = _json_temporary(prepared, directory, 1024 * 1024)
             _stream_json(document, file)
             file.write("\n")
             file.flush()  # disk errors must precede the first report byte
