@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1338
+  unreviewed: 1340
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1614,3 +1614,5 @@ entries:
   - {id: "U1606", file: "include/pineforge/native_module.hpp", symbol: "value_", ops: ["assign"], container: "unresolved by the index: value_ = ...", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 122}
   - {id: "U1607", file: "src/engine_metrics.cpp", symbol: "months", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 462}
   - {id: "U1608", file: "src/engine_metrics.cpp", symbol: "next", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 398}
+  - {id: "U1623", file: "src/native_execution_consumer.cpp", symbol: "cohort_opening_index_", ops: ["grow"], container: "std::vector<CohortOpeningIndexRow>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 14701, note: "Derived scratch populated from physical lots during eligible ordinary bar target reads. The lot count must fit row_budget before reserve(max_rows) and emplace_back; over-budget input or bad_alloc uses the complete reader. Reserve requests the fixed payload on rebuild and retains the first successful allocation across commands and begin. Layout estimate from source, not measured: 4096 rows of 16 bytes, 64 KiB payload, excluding vector and allocator overhead. Settlement and host lot-write generations invalidate the view; no rollback image, hash fold or persistence. Member-vector reserve and loop growth are outside the gate's bounded admission form, so this stays OPEN. Tests: tests/test_native_cohort_target_cost.cpp, tests/test_native_cohort_target_transcript.cpp, tests/test_native_cohort_target_invalidation.cpp, tests/test_native_cohort_target_bypass.cpp."}
+  - {id: "U1624", file: "src/native_execution_consumer.hpp", symbol: "cohort_opening_index_", ops: ["decl"], container: "std::vector<CohortOpeningIndexRow>", owner: "native-kernel", phase: "unclassified", state: "unreviewed", line: 2842, note: "Consumer-owned derived scratch, rebuilt from physical lots during eligible ordinary bar target reads and invalidated by settlement and host lot-write generations. Capacity survives clear and begin; contents are never persisted or hashed and require no rollback image. Layout estimate from source, not measured: kCohortOpeningIndexBytes requests 64 KiB payload, 4096 rows at 16 bytes each, excluding vector and allocator overhead; larger lot sets use the complete reader. Unsupported member-vector admission stays OPEN. Tests: tests/test_native_cohort_target_cost.cpp, tests/test_native_cohort_target_transcript.cpp, tests/test_native_cohort_target_invalidation.cpp, tests/test_native_cohort_target_bypass.cpp."}
