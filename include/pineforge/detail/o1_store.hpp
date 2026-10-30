@@ -226,6 +226,13 @@ class Store {
   // Wrappers forward the reason unchanged.
   virtual void note_cleanup_skipped(CleanupSkip reason) noexcept = 0;
   virtual Stats stats() const = 0;
+
+  // Cache invalidation token, not transactional state. Advances whenever an
+  // outer transaction restores the previous version, including a rollback-only
+  // commit or abandonment. Joined rollbacks only poison the outer transaction;
+  // the token advances when that outer transaction actually rolls back.
+  // Forwarding wrappers must return the inner store's token unchanged.
+  virtual std::uint64_t rollback_epoch() const noexcept = 0;
 };
 
 // Allocation-free joined operation. An unfinished joined scope poisons its

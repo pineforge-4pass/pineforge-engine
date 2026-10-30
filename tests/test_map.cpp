@@ -2,11 +2,14 @@
 
 #include <pineforge/na.hpp>
 
+#include <array>
 #include <cassert>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -14,6 +17,43 @@
 #include <vector>
 
 using pineforge::PineMap;
+
+// Count the actual Store::read boundary, with real backing and transactions.
+// No lifecycle call, epoch query, or map operation increments this counter.
+class ReadCountingStore final : public pineforge::detail::o1::Store {
+    using Store = pineforge::detail::o1::Store;
+    using Id = pineforge::detail::o1::Id;
+    using Tx = pineforge::detail::o1::Tx;
+    Store& inner_;
+
+public:
+    explicit ReadCountingStore(Store& inner) noexcept : inner_(inner) {}
+    mutable std::size_t reads = 0;
+
+    Id create(std::uint64_t bytes, std::uint64_t align) override {
+        return inner_.create(bytes, align);
+    }
+    void release(Id id) override { inner_.release(id); }
+    bool alive(Id id) const override { return inner_.alive(id); }
+    std::uint64_t size(Id id) const override { return inner_.size(id); }
+    bool resize(Id id, std::uint64_t bytes) override { return inner_.resize(id, bytes); }
+    std::size_t read(Id id, std::uint64_t off, void* dst, std::size_t n) const override {
+        ++reads;
+        return inner_.read(id, off, dst, n);
+    }
+    std::size_t write(Id id, std::uint64_t off, const void* src, std::size_t n) override {
+        return inner_.write(id, off, src, n);
+    }
+    std::unique_ptr<Tx> begin() override { return inner_.begin(); }
+    bool join_active_tx() override { return inner_.join_active_tx(); }
+    void abandon_joined_tx() noexcept override { inner_.abandon_joined_tx(); }
+    std::unique_ptr<Tx> begin_cleanup() override { return inner_.begin_cleanup(); }
+    void note_cleanup_skipped(pineforge::detail::o1::CleanupSkip reason) noexcept override {
+        inner_.note_cleanup_skipped(reason);
+    }
+    pineforge::detail::o1::Stats stats() const override { return inner_.stats(); }
+    std::uint64_t rollback_epoch() const noexcept override { return inner_.rollback_epoch(); }
+};
 
 template <typename Fn>
 static void expect_runtime_error(Fn&& fn, const char* message) {
@@ -454,6 +494,449 @@ static void test_snapshot_keeps_original_identity_alive() {
     assert(!restored.contains(8));
 }
 
+static void test_hot_cache_alias_invalidation() {
+    using Map = PineMap<std::string, double>;
+    auto map = Map::new_();
+    map.put("alpha", 1.0);
+    assert(map.get("alpha") == 1.0); // Populate the shared cache.
+
+    auto alias = map;
+    alias.put("alpha", 2.0);
+    assert(map.get("alpha") == 2.0);
+
+    alias.put("beta", 3.0);
+    assert(map.contains("beta"));
+    assert(map.get("beta") == 3.0);
+
+    assert(map.remove("alpha") == 2.0);
+    assert(!alias.contains("alpha"));
+    assert(pineforge::is_na(map.get("alpha")));
+
+    alias.put("alpha", pineforge::na<double>());
+    assert(map.contains("alpha"));
+    assert(pineforge::is_na(map.get("alpha")));
+}
+
+static void test_hot_cache_copy_independence_and_exact_string_keys() {
+    using Map = PineMap<std::string, double>;
+    auto original = Map::new_();
+    original.put("answer", 1.0);
+    assert(original.get("answer") == 1.0); // Populate before copying.
+
+    auto independent = original.copy();
+    independent.put("answer", 2.0);
+    independent.put("only-copy", 3.0);
+    assert(original.get("answer") == 1.0);
+    assert(!original.contains("only-copy"));
+
+    original.put("only-original", 4.0);
+    assert(!independent.contains("only-original"));
+
+    // Distinct external keys with the same first 24 bytes remain distinct.
+    // This is a regression row; their hashes need not collide, so it does not
+    // independently force the cache's full-key comparison after its hash filter.
+    const std::string prefix(24, 'p');
+    const std::string first = prefix + "aaaaaa";
+    const std::string second = prefix + "bbbbbb";
+    auto keys = Map::new_();
+    keys.put(first, 11.0);
+    keys.put(second, 22.0);
+    assert(keys.get(first) == 11.0);
+    assert(keys.get(second) == 22.0);
+    assert(keys.get(first) == 11.0);
+    assert(keys.remove(first) == 11.0);
+    assert(keys.contains(second));
+    assert(keys.get(second) == 22.0);
+}
+
+static void test_hot_cache_invalidation_for_each_map_mutation() {
+    using Map = PineMap<std::string, double>;
+    auto map = Map::new_();
+
+    map.put("put", 1.0);
+    assert(map.get("put") == 1.0);
+    map.put("put", 2.0);
+    assert(map.get("put") == 2.0);
+
+    map.put("remove", 3.0);
+    assert(map.get("remove") == 3.0);
+    assert(map.remove("remove") == 3.0);
+    assert(!map.contains("remove"));
+    assert(pineforge::is_na(map.get("remove")));
+
+    map.put("clear", 4.0);
+    assert(map.get("clear") == 4.0);
+    map.clear();
+    assert(!map.contains("clear"));
+    assert(pineforge::is_na(map.get("clear")));
+
+    auto target = Map::new_();
+    target.put("existing", 5.0);
+    assert(target.get("existing") == 5.0);
+    auto source = Map::new_();
+    source.put("existing", 6.0);
+    source.put("added", 7.0);
+    target.put_all(source);
+    assert(target.get("existing") == 6.0);
+    assert(target.get("added") == 7.0);
+
+    auto snapshot = target.snapshot();
+    target.put("existing", 8.0);
+    assert(target.get("existing") == 8.0);
+    target.restore(snapshot);
+    assert(target.get("existing") == 6.0);
+    assert(target.get("added") == 7.0);
+}
+
+static void test_hot_cache_na_absent_empty_and_numeric_keys() {
+    using Map = PineMap<int, double>;
+    auto map = Map::new_();
+    assert(map.size() == 0);
+    assert(!map.contains(17));
+    assert(pineforge::is_na(map.get(17)));
+
+    map.put(17, pineforge::na<double>());
+    assert(map.contains(17));
+    assert(pineforge::is_na(map.get(17)));
+    assert(pineforge::is_na(map.remove(17)));
+    assert(!map.contains(17));
+    assert(pineforge::is_na(map.get(17)));
+
+    map.clear();
+    assert(map.size() == 0);
+    assert(!map.contains(17));
+}
+
+struct HotReadObservation {
+    bool present;
+    double value;
+};
+
+static std::vector<HotReadObservation> run_hot_read_sequence(bool warm) {
+    using Map = PineMap<std::string, double>;
+    auto map = Map::new_();
+    map.put("alpha", 1.0);
+    map.put("beta", pineforge::na<double>());
+    map.put("gamma", 3.0);
+
+    if (warm) {
+        for (const char* key : {"alpha", "beta", "gamma", "missing"}) {
+            (void)map.contains(key);
+            (void)map.get(key);
+        }
+    }
+
+    std::vector<HotReadObservation> observations;
+    const auto observe = [&observations, &map](const char* key) {
+        observations.push_back({map.contains(key), map.get(key)});
+    };
+    observe("alpha");
+    observe("beta");
+    observe("missing");
+    map.put("alpha", 4.0);
+    observe("alpha");
+    map.remove("gamma");
+    observe("gamma");
+    map.put("delta", 5.0);
+    observe("delta");
+    return observations;
+}
+
+static void test_hot_cache_cold_and_warm_sequences_match() {
+    const auto cold = run_hot_read_sequence(false);
+    const auto warm = run_hot_read_sequence(true);
+    const std::array<HotReadObservation, 6> expected{{
+        {true, 1.0},
+        {true, pineforge::na<double>()},
+        {false, pineforge::na<double>()},
+        {true, 4.0},
+        {false, pineforge::na<double>()},
+        {true, 5.0},
+    }};
+    assert(cold.size() == expected.size());
+    assert(warm.size() == expected.size());
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+        assert(cold[index].present == expected[index].present);
+        assert(warm[index].present == expected[index].present);
+        const bool expected_na = pineforge::is_na(expected[index].value);
+        const bool cold_na = pineforge::is_na(cold[index].value);
+        const bool warm_na = pineforge::is_na(warm[index].value);
+        assert(cold_na == expected_na);
+        assert(warm_na == expected_na);
+        if (!expected_na) {
+            assert(cold[index].value == expected[index].value);
+            assert(warm[index].value == expected[index].value);
+        }
+    }
+}
+
+static void test_hot_cache_lifetime_and_history() {
+    using Map = PineMap<int, int>;
+    auto var = Map::new_();
+    auto varip = var;
+    var.put(1, 10);
+    const auto read_var = [&var] { return var.get(1); };
+    assert(read_var() == 10);
+
+    varip.put(1, 11);
+    assert(read_var() == 11);
+    auto previous = var.snapshot();
+    var.put(1, 12);
+    assert(read_var() == 12);
+
+    auto history = Map::new_();
+    history.restore(previous);
+    assert(history.get(1) == 11);
+    var.restore(previous);
+    assert(read_var() == 11);
+}
+
+static void test_hot_cache_fixed_memory_and_replacement() {
+    using Cache = pineforge::detail::MapReadCache<std::uint64_t, std::uint64_t>;
+    static_assert(std::is_trivially_copyable_v<Cache>);
+    static_assert(sizeof(Cache) == Cache::capacity * sizeof(Cache::Entry) +
+                                       sizeof(std::size_t) + sizeof(std::uint64_t));
+    Cache one;
+    one.record(1, 1, 1, 2);
+    std::size_t one_valid_slot = 0;
+    for (const auto& entry : one.entries)
+        if (entry.valid) ++one_valid_slot;
+    assert(one_valid_slot == 1);
+    assert(one.entries[0].key == 1 && one.entries[0].value == 2);
+
+    Cache many;
+    for (std::uint64_t index = 0; index != 100'000; ++index) {
+        many.record(index, static_cast<std::uint32_t>(index), index, index + 1);
+    }
+    std::size_t valid_slots = 0;
+    std::uint64_t expected_key = 99'992; // Final eight records, in ring order.
+    for (const auto& entry : many.entries) {
+        if (entry.valid) ++valid_slots;
+        assert(entry.key == expected_key);
+        assert(entry.value == expected_key + 1);
+        ++expected_key;
+    }
+    assert(valid_slots == Cache::capacity);
+
+    using Map = PineMap<std::string, double>;
+    static_assert(Map::hot_read_cache_slots == 8);
+    static_assert(Map::hot_read_cache_bytes == 528);
+}
+
+static void test_hot_cache_store_read_counts() {
+    using Map = PineMap<std::string, double>;
+    auto owner = std::make_shared<pineforge::detail::MapStoreHolder>();
+    ReadCountingStore counting(*owner->store);
+    auto holder = std::make_shared<pineforge::detail::MapStoreHolder>(counting);
+    pineforge::detail::MapStoreScope scope(holder);
+    auto map = Map::new_();
+    map.put("inline", 1.0);
+
+    auto before = counting.reads;
+    assert(map.get("inline") == 1.0);
+    // Header, bucket, links, key rep, value rep: the uncached read budget.
+    assert(counting.reads - before == 5);
+    before = counting.reads;
+    assert(map.get("inline") == 1.0);
+    assert(counting.reads == before);
+    assert(map.contains("inline"));
+    assert(counting.reads == before);
+
+    map.put("inline", 2.0);
+    before = counting.reads;
+    assert(map.contains("inline"));
+    // contains fetches both reps in the existing key-rep read.
+    assert(counting.reads - before == 4);
+    before = counting.reads;
+    assert(map.contains("inline"));
+    assert(counting.reads == before);
+    assert(map.get("inline") == 2.0);
+    assert(counting.reads == before);
+
+    map.put("inline", 3.0);
+    before = counting.reads;
+    assert(map.get("inline") == 3.0);
+    assert(counting.reads - before == 5);
+
+    // A Store rollback invalidates even an untouched map. Refill must stamp
+    // the new epoch, or the subsequent identical get can never become a hit.
+    {
+        auto tx = counting.begin();
+        tx->rollback();
+    }
+    before = counting.reads;
+    assert(map.get("inline") == 3.0);
+    assert(counting.reads - before == 5);
+    before = counting.reads;
+    assert(map.get("inline") == 3.0);
+    assert(counting.reads == before);
+
+    before = counting.reads;
+    assert(!map.contains("absent"));
+    const auto absent_reads = counting.reads - before;
+    assert(absent_reads > 0);
+    before = counting.reads;
+    assert(!map.contains("absent"));
+    assert(counting.reads - before == absent_reads);
+    before = counting.reads;
+    assert(pineforge::is_na(map.get("absent")));
+    assert(counting.reads - before == absent_reads);
+
+    map.clear();
+    for (int index = 0; index < 9; ++index)
+        map.put(std::to_string(index), static_cast<double>(index));
+    for (int index = 0; index < 9; ++index)
+        assert(map.get(std::to_string(index)) == static_cast<double>(index));
+    before = counting.reads;
+    assert(map.get("0") == 0.0);
+    assert(counting.reads > before); // The ninth distinct key evicted the first.
+    before = counting.reads;
+    assert(map.get("0") == 0.0);
+    assert(counting.reads == before);
+}
+
+static void test_hot_cache_outer_transaction_rollback() {
+    using Map = PineMap<std::string, double>;
+    auto holder = std::make_shared<pineforge::detail::MapStoreHolder>();
+    pineforge::detail::MapStoreScope scope(holder);
+    auto map = Map::new_();
+    map.put("k", 1.0);
+    {
+        auto tx = holder->store->begin();
+        map.put("k", 2.0);
+        map.put("j", 3.0);
+        assert(map.get("k") == 2.0);
+        assert(map.contains("j"));
+        tx->rollback();
+    }
+    assert(map.get("k") == 1.0);
+    assert(!map.contains("j"));
+
+    // Exercise contains as the first lookup after a second rollback too.
+    {
+        auto tx = holder->store->begin();
+        map.put("k", 4.0);
+        map.put("j", 5.0);
+        assert(map.get("k") == 4.0);
+        assert(map.contains("j"));
+        tx->rollback();
+    }
+    assert(!map.contains("j"));
+    assert(map.get("k") == 1.0);
+
+    using StringMap = PineMap<std::string, std::string>;
+    auto strings = StringMap::new_();
+    const std::string persistent(25, 'p');
+    const std::string added(25, 'j');
+    const std::string initial(65, 'v');
+    const std::string changed(66, 'w');
+    strings.put(persistent, initial);
+    {
+        auto tx = holder->store->begin();
+        strings.put(persistent, changed);
+        strings.put(added, changed);
+        assert(strings.get(persistent) == changed);
+        assert(strings.contains(added));
+        tx->rollback();
+    }
+    // The added key's cached payload id and the changed value's payload id
+    // are dead now. Check the epoch before comparing or decoding either rep.
+    assert(!strings.contains(added));
+    assert(strings.get(persistent) == initial);
+}
+
+static void test_hot_cache_rollback_only_commit_and_abandonment() {
+    using Map = PineMap<std::string, double>;
+    auto holder = std::make_shared<pineforge::detail::MapStoreHolder>();
+    pineforge::detail::MapStoreScope scope(holder);
+    auto map = Map::new_();
+    map.put("k", 1.0);
+    {
+        auto tx = holder->store->begin();
+        map.put("k", 2.0);
+        map.put("j", 3.0);
+        assert(map.get("k") == 2.0);
+        assert(map.contains("j"));
+        {
+            auto joined = holder->store->begin();
+            joined->rollback(); // Poison the outer transaction.
+        }
+        bool rollback_only = false;
+        try {
+            tx->commit(); // Restores bytes before throwing RollbackOnly.
+        } catch (const pineforge::detail::o1::RollbackOnly&) {
+            rollback_only = true;
+        }
+        assert(rollback_only);
+    }
+    assert(map.get("k") == 1.0);
+    assert(!map.contains("j"));
+
+    {
+        auto tx = holder->store->begin();
+        map.put("k", 4.0);
+        map.put("j", 5.0);
+        assert(map.get("k") == 4.0);
+        assert(map.contains("j"));
+        // Unfinished outer handle rolls back in its destructor.
+    }
+    assert(!map.contains("j"));
+    assert(map.get("k") == 1.0);
+}
+
+template <typename Value>
+static void check_hot_cache_read_views(const std::string& key, const Value& initial,
+                                      const Value& changed, std::size_t key_reads,
+                                      std::size_t value_reads) {
+    using Map = PineMap<std::string, Value>;
+    auto owner = std::make_shared<pineforge::detail::MapStoreHolder>();
+    ReadCountingStore counting(*owner->store);
+    auto holder = std::make_shared<pineforge::detail::MapStoreHolder>(counting);
+    pineforge::detail::MapStoreScope scope(holder);
+    auto map = Map::new_();
+    map.put(key, initial);
+    assert(map.get(key) == initial);
+    const auto check_cached = [&] {
+        auto before = counting.reads;
+        assert(map.get(key) == initial);
+        assert(counting.reads - before == key_reads + value_reads);
+        before = counting.reads;
+        assert(map.contains(key));
+        assert(counting.reads - before == key_reads);
+    };
+    check_cached();
+    {
+        const auto keys = map.keys();
+        assert(keys.size() == 1 && keys[0] == key);
+        check_cached();
+        const auto values = map.values();
+        assert(values.size() == 1 && values[0] == initial);
+        check_cached();
+        const auto independent = map.copy();
+        assert(independent.get(key) == initial);
+        check_cached();
+        const auto snapshot = map.snapshot();
+        check_cached();
+
+        map.put(key, changed);
+        assert(map.get(key) == changed);
+        map.restore(snapshot);
+        assert(map.get(key) == initial);
+        check_cached();
+    } // Retained images/copy release payload refcounts without changing this map.
+    check_cached();
+}
+
+static void test_hot_cache_read_views_preserve_hits() {
+    check_hot_cache_read_views(std::string(24, 'i'), 1.0, 2.0, 0, 0);
+    check_hot_cache_read_views("inline-value", std::string(65, 'v'),
+                              std::string(66, 'w'), 0, 1);
+    // The external key needs two 512-byte comparisons; the external value
+    // needs one decode read, even when the map-slot representations are cached.
+    check_hot_cache_read_views(std::string(513, 'k'), std::string(65, 'v'),
+                              std::string(66, 'w'), 2, 1);
+}
+
 int main() {
     static_assert(std::is_copy_constructible_v<PineMap<int, double>>);
     static_assert(std::is_copy_assignable_v<PineMap<int, double>>);
@@ -480,6 +963,17 @@ int main() {
     test_snapshot_restores_after_rebind_to_na();
     test_two_alias_members_restore_to_one_identity();
     test_snapshot_keeps_original_identity_alive();
+    test_hot_cache_alias_invalidation();
+    test_hot_cache_copy_independence_and_exact_string_keys();
+    test_hot_cache_invalidation_for_each_map_mutation();
+    test_hot_cache_na_absent_empty_and_numeric_keys();
+    test_hot_cache_cold_and_warm_sequences_match();
+    test_hot_cache_lifetime_and_history();
+    test_hot_cache_fixed_memory_and_replacement();
+    test_hot_cache_store_read_counts();
+    test_hot_cache_outer_transaction_rollback();
+    test_hot_cache_rollback_only_commit_and_abandonment();
+    test_hot_cache_read_views_preserve_hits();
 
     std::printf("All test_map tests passed.\n");
     return 0;
