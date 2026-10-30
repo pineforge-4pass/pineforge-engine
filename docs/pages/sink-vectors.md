@@ -32,15 +32,15 @@ fields from the writer and the sink request:
 
 | Header field | Meaning and source |
 | --- | --- |
-| `schema` | Format identifier `"pf-report-sink"` (`src/report_sink_writer.cpp:228`, `docker/pf_sink.py:173`). |
-| `version` | Wire version `1` (`src/report_sink_writer.cpp:228`, `docker/pf_sink.py:175`). |
-| `run_id` | Caller identifier from `--run-id`, default empty, passed to the native sink descriptor (`docker/run_json.py:5389`, `docker/run_json.py:6500`, `src/report_sink_writer.cpp:229`). |
-| `engine` | Compiled `PINEFORGE_VERSION_STRING` (`src/report_sink_writer.cpp:230`); the reader validates it as a string (`docker/pf_sink.py:177`). |
-| `records` | Ordered descriptors for record kinds enabled in that run (`src/report_sink_writer.cpp:231`, `docker/pf_sink.py:182`). |
-| `records[].type` | One-character record kind (`src/report_sink_writer.cpp:237`, `docker/pf_sink.py:184`). |
-| `records[].fields` | Positional column names (`src/report_sink_writer.cpp:245`, `docker/pf_sink.py:199`). |
-| `records[].types` | Matching wire types, including nullable `?` suffixes (`src/report_sink_writer.cpp:245`, `docker/pf_sink.py:199`). |
-| `records[].units` | Matching column units, or empty strings when unspecified (`src/report_sink_writer.cpp:245`, `docker/pf_sink.py:199`). |
+| `schema` | Format identifier `"pf-report-sink"` (`src/report_sink_writer.cpp:228`, `docker/pf_sink.py:179`). |
+| `version` | Wire version `1` (`src/report_sink_writer.cpp:228`, `docker/pf_sink.py:181`). |
+| `run_id` | Caller identifier from `--run-id`, default empty, passed to the native sink descriptor (`docker/run_json.py:5395`, `docker/run_json.py:6582`, `src/report_sink_writer.cpp:229`). |
+| `engine` | Compiled `PINEFORGE_VERSION_STRING` (`src/report_sink_writer.cpp:230`); the reader validates it as a string (`docker/pf_sink.py:183`). |
+| `records` | Ordered descriptors for record kinds enabled in that run (`src/report_sink_writer.cpp:231`, `docker/pf_sink.py:188`). |
+| `records[].type` | One-character record kind (`src/report_sink_writer.cpp:237`, `docker/pf_sink.py:190`). |
+| `records[].fields` | Positional column names (`src/report_sink_writer.cpp:245`, `docker/pf_sink.py:205`). |
+| `records[].types` | Matching wire types, including nullable `?` suffixes (`src/report_sink_writer.cpp:245`, `docker/pf_sink.py:205`). |
+| `records[].units` | Matching column units, or empty strings when unspecified (`src/report_sink_writer.cpp:245`, `docker/pf_sink.py:205`). |
 
 A foreign reader parses `valid.pfsink` and compares its result with
 `valid.expected.parse.json`: the header, records in order (tag, field names
