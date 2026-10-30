@@ -9,7 +9,7 @@
 
 namespace pineforge::detail {
 
-// Closed vocabulary: layout is a refusal resource, not a tenth byte region.
+// Closed vocabulary: layout and cohort capacity labels are not byte regions.
 enum class ScratchResource : std::uint32_t {
     layout = 0,
     sequence_data,
@@ -20,9 +20,8 @@ enum class ScratchResource : std::uint32_t {
     consumed_index,
     cohort,
     exit_rank,
-    successor_roots,
+    successor_roots, cohort_ids_total, cohort_orders_live,
 };
-
 inline const char* scratch_resource_name(ScratchResource resource) noexcept {
     switch (resource) {
     case ScratchResource::layout: return "layout";
@@ -35,10 +34,11 @@ inline const char* scratch_resource_name(ScratchResource resource) noexcept {
     case ScratchResource::cohort: return "cohort";
     case ScratchResource::exit_rank: return "exit_rank";
     case ScratchResource::successor_roots: return "successor_roots";
+    case ScratchResource::cohort_ids_total: return "cohort_ids_total";
+    case ScratchResource::cohort_orders_live: return "cohort_orders_live";
     }
     return "layout";
 }
-
 // Locale-independent decimal grouping, shared by all count/byte refusals.
 inline std::string scratch_limit_number(std::uint64_t limit) {
     char digits[26]; // 20 decimal digits and six separators fit.
@@ -67,7 +67,7 @@ inline std::string scratch_limit_message(const char* prefix, std::uint64_t limit
 
 inline std::string scratch_count_limit_message(ScratchResource resource, std::uint64_t limit) {
     switch (resource) {
-    case ScratchResource::cohort:
+    case ScratchResource::cohort: case ScratchResource::cohort_ids_total:
         return scratch_limit_message("more than ", limit,
             " distinct order ids in one run; reuse ids, e.g. build the id from a modulo of bar_index");
     case ScratchResource::erased_index:
@@ -87,7 +87,7 @@ inline std::string scratch_count_limit_message(ScratchResource resource, std::ui
 
 inline std::string scratch_byte_limit_message(ScratchResource resource, std::uint64_t limit) {
     switch (resource) {
-    case ScratchResource::cohort:
+    case ScratchResource::cohort: case ScratchResource::cohort_ids_total:
         return scratch_limit_message("order ids use more than ", limit,
             " bytes in one run; use shorter ids or reuse ids");
     case ScratchResource::erased_data:

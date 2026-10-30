@@ -1627,7 +1627,9 @@
       "consumed_index",
       "cohort",
       "exit_rank",
-      "successor_roots"
+      "successor_roots",
+      "cohort_ids_total",
+      "cohort_orders_live"
      ]
     }
    },

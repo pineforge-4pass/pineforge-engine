@@ -506,7 +506,7 @@ private:
             if (!row.second.owner->second.spillable()) ++live;
         }
         if (live > kMaxResidentCohorts || extra > kMaxResidentCohorts - live)
-            throw ScratchCapacityError(ScratchResource::cohort,
+            throw ScratchCapacityError(ScratchResource::cohort_orders_live,
                 scratch_resident_cohort_limit_message(kMaxResidentCohorts));
     }
     void spill_before_admission(std::size_t extra) const {

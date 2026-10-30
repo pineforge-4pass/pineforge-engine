@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "811f5e5bccacc6fe7d33544bcb3ff04a231fc9843b37613cdc72b180a53cd21f"
+    "catalogSha256": "1742b39abd8fecb650000f29b32c69442241daf76688c8cb92447818fefb2654"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -16,7 +16,45 @@
   },
   "metadataChanges": [],
   "added": [],
-  "changed": [],
+  "changed": [
+    {
+      "code": "scratch_capacity_exceeded",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.resource.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "layout",
+            "sequence_data",
+            "sequence_index",
+            "erased_data",
+            "erased_index",
+            "consumed_data",
+            "consumed_index",
+            "cohort",
+            "exit_rank",
+            "successor_roots"
+          ],
+          "after": [
+            "layout",
+            "sequence_data",
+            "sequence_index",
+            "erased_data",
+            "erased_index",
+            "consumed_data",
+            "consumed_index",
+            "cohort",
+            "exit_rank",
+            "successor_roots",
+            "cohort_ids_total",
+            "cohort_orders_live"
+          ]
+        }
+      ]
+    }
+  ],
   "removed": [],
   "deprecated": []
 }

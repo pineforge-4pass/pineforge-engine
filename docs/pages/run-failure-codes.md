@@ -126,6 +126,15 @@ The 1.7.0 additions are `report_mode_unsupported`, `report_sink_failed`,
 `scratch_io_failed`. Their classes, retryability and typed arguments are
 listed below.
 
+For `scratch_capacity_exceeded`, `resource=cohort_ids_total` identifies the
+bounded cohort table's historical distinct-ID count or aggregate ID-byte
+budget (`U/B_U`, default 65,536 IDs / 4,194,304 bytes).
+`resource=cohort_orders_live` identifies the separate 4,096 live-order-ID cap.
+`resource=cohort` remains valid for the refusal of an ID longer than 64 bytes,
+generic cohort-region capacity and the generic store's live-object cap.
+The labels preserve the existing message text, limits and refusal order;
+the independent `report_sink_failed` argument `store=cohort` is unchanged.
+
 `report_mode_unsupported` (code 65) also covers a native begin when
 `SUMMARY_ONLY` (the v1 mode or the pending legacy equity mode) is combined with
 an execution observer or a selected window and no report sink is enabled:
@@ -208,7 +217,7 @@ in addition to its six released 1.4.0 reasons.
 | `run_quota_configuration_invalid` | `input` | no | `reason` (vocab, 8 values), `setting` (vocab, 10 values), `stage` (vocab, 8 values) | The finite host run contract is missing, malformed, overflowing, unauthenticated or unsupported. An unset limit refuses with missing_limit; explicit decimal zero is literal zero capacity. There is no implicit unlimited mode. Limits, extents, deltas and reportable counters must fit 2^53-1. |
 | `run_request_invalid` | `input` | no | `option` (vocab, 25 values) | The harness command line or one of its JSON options is invalid. |
 | `run_resource_quota_exceeded` | `resource` | no | `artifact` (vocab, 14 values), `limit` (integer), `peak` (integer), `requested` (integer), `resource` (vocab, 3 values), `stage` (vocab, 8 values), `used` (integer) | An atomic reservation exceeded a finite run resource allowance before growth. used is committed plus pending before the denied delta; requested is additional capacity, not the desired total; peak is the preceding high water. Produced output is never refunded by deleting an artifact. Counters are host-owned nonnegative integers at most 2^53-1. |
-| `scratch_capacity_exceeded` | `resource` | no | `resource` (vocab, 10 values) | The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying. |
+| `scratch_capacity_exceeded` | `resource` | no | `resource` (vocab, 12 values) | The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying. |
 | `scratch_configuration_invalid` | `input` | no | `reason` (vocab, 3 values), `stage` (vocab, 1 values) | The command-scratch byte cap from the environment or the caller is malformed: not a positive decimal, out of uint64_t range, or zero. |
 | `scratch_io_failed` | `resource` | no | none | The engine could not create, resize, read or write command scratch or the storage of one of its auxiliary tables (the disk id table, the id-pair store or the placement table). Command scratch also raises this code when the default-directory policy fails a directory query or refuses memory-backed default candidates, or when an explicit memory-backed command directory is refused. Native runs create command scratch at begin, so these failures are resource failures before any strategy callback. The run has no successful completion. Report-sink scratch files, the curve writer and the position-tail facade do not raise this code: they raise report_sink_failed with reason scratch_io. |
 | `security_feed_refused` | `input` | no | `reason` (vocab, 11 values) | An auxiliary or native request.security feed was refused. |

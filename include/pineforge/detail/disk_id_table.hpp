@@ -128,7 +128,7 @@ public:
             if (extra_rows == maximum || key.size() > maximum - extra_bytes) {
                 const auto resource = file_.scratch_resource();
                 const auto& manifest = file_.scratch_owner()->manifest();
-                throw ScratchCapacityError(resource, extra_rows == maximum
+                throw ScratchCapacityError(resource == ScratchResource::cohort ? ScratchResource::cohort_ids_total : resource, extra_rows == maximum
                     ? scratch_count_limit_message(resource,
                         resource == ScratchResource::cohort ? manifest.U : manifest.V)
                     : scratch_byte_limit_message(resource,
@@ -238,15 +238,15 @@ private:
         // the null byte and fixed headers is exactly aggregate stored key bytes.
         const auto key_bytes = end_ - 1 - header * size_;
         if (size_ > rows || extra_rows > rows - size_)
-            throw ScratchCapacityError(resource, scratch_count_limit_message(resource, rows));
+            throw ScratchCapacityError(resource == ScratchResource::cohort ? ScratchResource::cohort_ids_total : resource, scratch_count_limit_message(resource, rows));
         if (key_bytes > bytes || extra_bytes > bytes - key_bytes)
-            throw ScratchCapacityError(resource, scratch_byte_limit_message(resource, bytes));
+            throw ScratchCapacityError(resource == ScratchResource::cohort ? ScratchResource::cohort_ids_total : resource, scratch_byte_limit_message(resource, bytes));
         const auto capacity = slab->region(resource).capacity;
         if (end_ > capacity || extra_rows > (capacity - end_) / header)
-            throw ScratchCapacityError(resource, scratch_byte_limit_message(resource, bytes));
+            throw ScratchCapacityError(resource == ScratchResource::cohort ? ScratchResource::cohort_ids_total : resource, scratch_byte_limit_message(resource, bytes));
         const auto fixed_bytes = header * extra_rows;
         if (extra_bytes > capacity - end_ - fixed_bytes)
-            throw ScratchCapacityError(resource, scratch_byte_limit_message(resource, bytes));
+            throw ScratchCapacityError(resource == ScratchResource::cohort ? ScratchResource::cohort_ids_total : resource, scratch_byte_limit_message(resource, bytes));
         slab->require_extend(resource, end_ + fixed_bytes + extra_bytes);
     }
     [[noreturn]] void io_error(int error, const char* operation) const {
