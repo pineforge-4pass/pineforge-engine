@@ -15,6 +15,15 @@ version number follows semantic versioning over the surfaces the
   `RLIMIT_FSIZE`, `ENOSPC` or `EIO` on the unjailed route) it fails with
   `report_sink_failed` and `reason: scratch_io`. Runs that did not fail are
   unchanged.
+- A failed memory allocation in the scratch layer now fails the run with the
+  typed `out_of_memory` code. A `std::bad_alloc`, or a `nothrow` allocation
+  that returned null, in the command and script scratch backings, the page
+  cache, the arena directories and metadata, the store workspace, the
+  external-opening readbacks, the owning journal decoders and the spilled
+  order book used to end as `scratch_io_failed`, `report_sink_failed`,
+  `engine_invariant` or an unclassified error. A real operating-system
+  `ENOMEM` from a mapping or a disk operation, an extent limit and arena
+  exhaustion keep their existing codes. Runs that did not fail are unchanged.
 
 ## 1.9.0 — 2026-10-30
 
