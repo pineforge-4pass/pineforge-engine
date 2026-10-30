@@ -76,8 +76,12 @@ struct SourceExitScratchRun {
 
     SourceExitScratchRun() {
         if (exit.status() != ::pineforge::detail::ScratchStatus::ok) {
-            if (exit.status() == ::pineforge::detail::ScratchStatus::io_error)
+            if (exit.status() == ::pineforge::detail::ScratchStatus::io_error) {
+                // A refused workspace allocation is carried by the store itself;
+                // a backing fault is carried by the backing.
+                ::pineforge::detail::rethrow_carried_scratch_failure(exit.carried_failure());
                 ::pineforge::detail::rethrow_carried_scratch_failure(exit_backing->carried_failure());
+            }
             const auto code = exit.status() == ::pineforge::detail::ScratchStatus::io_error
                 ? RunFailureCode::scratch_io_failed
                 : RunFailureCode::engine_invariant;
