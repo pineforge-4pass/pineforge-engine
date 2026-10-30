@@ -1112,10 +1112,8 @@ PineExecutionAdapter::PineExecutionAdapter(NativeStrategyHost& host,
 }
 
 namespace detail {
-// All adapter summary allocations use this source-only extension.
-struct AdapterPositionTailSummary final : PositionTailSummary {
-    std::vector<std::uint64_t> roster_roots;
-};
+// Source-only extension of the position-tail summary: every allocation uses it.
+struct AdapterPositionTailSummary final : PositionTailSummary { std::vector<std::uint64_t> roster_roots; };
 
 // Share the production attached-arena/disk selection and per-run I/O policy.
 struct CommandScratchRun {
@@ -4427,6 +4425,9 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     std::size_t members = 0;
     for (const auto& roster : core.cohorts()) members += roster.origins.size();
     if (members == 0) return;
+    // The common case, in a direct scan with nothing allocated or sorted:
+    // every member still opened a lot that is open, or roots a working
+    // request, so none can go.
     const auto root_of = [](const native_order::LiveRequest& row) {
         return row.definition->root ? row.definition->root->incarnation
                                     : row.handle().incarnation;
@@ -4457,8 +4458,7 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     PINEFORGE_LOOKUP_INDEX_WORK("cohort_origin_pass", this, run_counter_, 1);
     auto& working = scratch.working_roots;
     auto& lots = scratch.lot_openings;
-    if (!position_tail_summary_)
-        position_tail_summary_ = std::make_shared<detail::AdapterPositionTailSummary>();
+    if (!position_tail_summary_) position_tail_summary_ = std::make_shared<detail::AdapterPositionTailSummary>();
     auto& roster_roots = static_cast<detail::AdapterPositionTailSummary&>(
         *position_tail_summary_).roster_roots;
     auto& successor_lots = scratch.successor_lots;
