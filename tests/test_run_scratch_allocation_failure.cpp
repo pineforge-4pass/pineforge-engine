@@ -19,6 +19,8 @@
 #include <stdexcept>
 #include <string>
 
+#include <unistd.h>
+
 namespace {
 using namespace command_arena_test;
 using pineforge::NativeExecutionConsumer;
@@ -26,12 +28,21 @@ using pineforge::RunFailureCode;
 
 constexpr auto kDisabled = std::numeric_limits<std::size_t>::max();
 
-// The older header kept kMaxSlots private; its minimum cached page is 512 bytes.
-// Retain that geometry oracle so the inline-table parent reaches the assertions.
-template<class Cache = CachedScratchBacking, std::size_t Slots = Cache::kMaxSlots>
-constexpr std::size_t cache_slot_array_bytes(int) { return Slots * sizeof(ScratchPageId); }
-constexpr std::size_t cache_slot_array_bytes(...) {
-    return CachedScratchBacking::kCacheBytes / 512 * sizeof(ScratchPageId);
+enum class EntryKind { run, exit };
+
+// The cache decorator allocates its slot table with the slot count of the page
+// size of the store it wraps: kCacheBytes / page_size entries. The run entry
+// opens its command store with 512-byte pages (the minimum cached page), the
+// exit entry with the platform page size (the same sysconf call the production
+// exit run makes). The expectation is derived from that page size.
+std::size_t cache_page_size(EntryKind kind) {
+    return kind == EntryKind::run
+        ? CachedScratchBacking::kMinPageBytes
+        : static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
+}
+
+std::size_t expected_slot_table_bytes(EntryKind kind) {
+    return CachedScratchBacking::kCacheBytes / cache_page_size(kind) * sizeof(ScratchPageId);
 }
 
 struct AllocationFault {
@@ -74,8 +85,6 @@ struct Environment {
     }
 };
 
-enum class EntryKind { run, exit };
-
 // Observe successful setup allocations with the existing allocator callback.
 // No ordinal countdown is armed across owner, file or cache construction.
 struct WorkspaceBoundary {
@@ -113,7 +122,7 @@ struct WorkspaceBoundary {
             }
             break;
         case Next::slot_table:
-            slot_table_matches = bytes == cache_slot_array_bytes(0);
+            slot_table_matches = bytes == expected_slot_table_bytes(kind);
             if (!slot_table_matches) next = Next::done;
             else if (kind == EntryKind::run) next = Next::store_object;
             else before_workspace();
