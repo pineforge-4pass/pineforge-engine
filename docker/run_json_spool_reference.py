@@ -1,6 +1,8 @@
 """Independent copies of the immediate column writer and equity proof.
 
-The copied bodies are from 3e34b9a02164ee5f619f9f3bcb8773da037e9d11.
+The copied bodies are verbatim from these git blobs:
+docker/run_json.py: b5081ee6dea5e3355f5d65c1c044b30eef25009a
+docker/pf_sink.py: f40cd8c7c58264da7679ce456442d1a5d09e1760
 Only unchanged dependencies are shared with the wrapper. This support module
 does not match the test collection glob.
 """
