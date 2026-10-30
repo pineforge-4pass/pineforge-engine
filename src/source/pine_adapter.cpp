@@ -4468,6 +4468,8 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     for (const auto& lot : pine->pyramid_entries_) lots.push_back(lot.entry_incarnation);
     std::sort(lots.begin(), lots.end());
     lots.erase(std::unique(lots.begin(), lots.end()), lots.end());
+    // This pass builds the union of origins held by all stored rosters.
+    // The scratch retains capacity and is cleared before each union is built.
     for (const auto& roster : core.cohorts()) {
         PINEFORGE_LOOKUP_INDEX_WORK("cohort_origin_roster", this, run_counter_, 1);
         for (const auto& origin : roster.origins)
