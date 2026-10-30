@@ -949,7 +949,7 @@ The full mode enumerates every source-marked validation directory plus
 every parity-baseline probe, uses the same manifest reader before each
 run, and drives the canonical run_strategy CLI. Missing proofs are printed
 and cause incomplete proof coverage to fail. The
-`RETURN TO CORE-TOP: no corpus probe has a certified FACTS record` guard is
+`RETURN TO MAINTAINERS: no corpus probe has a certified FACTS record` guard is
 retained: this lab harness must not pass without any certified arena to
 compare with actual usage. It is a certification failure, not a production
 admission or sizing decision. Production still uses the default attempt-0
