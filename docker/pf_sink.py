@@ -32,6 +32,9 @@ _ORDER = "ETOVKXH"
 _HEX64 = re.compile(r"[0-9a-f]{16}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _UNPARSED = object()
+_SPACE_OR_CONTROL = re.compile(rb"[\x00-\x20]")
+_SURROGATE = re.compile(r"[\ud800-\udfff]")
+_FIELD_KINDS = {"i64": 0, "u64": 1, "f64": 2, "bool": 3, "str": 4, "hex64": 5}
 
 
 class SinkFormatError(ValueError):
@@ -94,7 +97,7 @@ def _keys(value: Any, expected: tuple[str, ...], label: str) -> None:
 
 
 def _string(value: Any) -> str:
-    if type(value) is not str or any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+    if type(value) is not str or _SURROGATE.search(value) is not None:
         raise SinkFormatError("expected a Unicode string without unpaired surrogates")
     return value
 
@@ -145,20 +148,23 @@ def _parse(line: bytes) -> Any:
         raise SinkFormatError("blank line")
     if body.startswith(b"\xef\xbb\xbf"):
         raise SinkFormatError("UTF-8 BOM is forbidden")
-    quoted = False
-    escaped = False
-    for byte in body:
-        if quoted:
-            if escaped:
-                escaped = False
-            elif byte == 0x5C:
-                escaped = True
+    # Without a byte <= 0x20, the lexical walk cannot reject anything.
+    # UTF-8 decoding and json.loads below still validate the complete body.
+    if _SPACE_OR_CONTROL.search(body) is not None:
+        quoted = False
+        escaped = False
+        for byte in body:
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif byte == 0x5C:
+                    escaped = True
+                elif byte == 0x22:
+                    quoted = False
             elif byte == 0x22:
-                quoted = False
-        elif byte == 0x22:
-            quoted = True
-        elif byte <= 0x20:
-            raise SinkFormatError("whitespace or control byte outside a JSON string")
+                quoted = True
+            elif byte <= 0x20:
+                raise SinkFormatError("whitespace or control byte outside a JSON string")
     try:
         return json.loads(body.decode("utf-8"), object_pairs_hook=_pairs,
                           parse_int=_int_token, parse_float=_float_token, parse_constant=_constant)
@@ -234,6 +240,32 @@ def _field(value: Any, wire_type: str) -> Any:
     raise SinkFormatError("unknown wire type")
 
 
+def _record_values(items, plan):
+    """Apply predecoded rules in order; retain the generic refusal path."""
+    values = []
+    for value, (kind, optional) in zip(items, plan):
+        if value is None:
+            if not optional:
+                raise SinkFormatError("null in a non-optional column")
+        elif kind <= 1:
+            if type(value) is not int or abs(value) > I53_MAX or (kind == 1 and value < 0):
+                _field(value, "u64" if kind == 1 else "i64")
+        elif kind == 2:
+            if not isinstance(value, _FloatToken) or repr(value.value) != value.text:
+                _field(value, "f64?")
+            value = value.value
+        elif kind == 3:
+            if type(value) is not bool:
+                raise SinkFormatError("bool column requires true or false")
+        else:
+            if type(value) is not str or _SURROGATE.search(value) is not None:
+                raise SinkFormatError("expected a Unicode string without unpaired surrogates")
+            if kind == 5 and _HEX64.fullmatch(value) is None:
+                raise SinkFormatError("hex64 requires 16 lowercase hex digits")
+        values.append(value)
+    return tuple(values)
+
+
 class RecordParser:
     """Parse record lines against one header, without receipt or file state.
 
@@ -244,6 +276,11 @@ class RecordParser:
     def __init__(self, header: dict[str, Any]):
         self._descriptors = _header(header)
         self._equity_descriptor = self._descriptors["E"]
+        self._plans = {
+            tag: tuple((_FIELD_KINDS[kind.rstrip("?")], kind.endswith("?"))
+                       for kind in descriptor.types)
+            for tag, descriptor in self._descriptors.items()
+        }
 
     def parse(self, line: bytes, *, parsed: Any = _UNPARSED) -> Record:
         value = _parse(line) if parsed is _UNPARSED else parsed
@@ -255,7 +292,7 @@ class RecordParser:
         descriptor = self._descriptors[tag]
         if len(value) != len(descriptor.fields) + 1:
             raise SinkFormatError("record field count differs from its descriptor")
-        values = tuple(_field(item, kind) for item, kind in zip(value[1:], descriptor.types))
+        values = _record_values(value[1:], self._plans[tag])
         if tag == "T" and values[1] not in ("long", "short"):
             raise SinkFormatError("trade side must be long or short")
         return Record(tag, descriptor.fields, values)
