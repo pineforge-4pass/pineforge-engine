@@ -4455,10 +4455,12 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     PINEFORGE_LOOKUP_INDEX_WORK("cohort_origin_pass", this, run_counter_, 1);
     auto& working = scratch.working_roots;
     auto& lots = scratch.lot_openings;
+    auto& roster_roots = scratch.roster_roots;
     auto& successor_lots = scratch.successor_lots;
     auto& released = scratch.released_origins;
     working.clear();
     lots.clear();
+    roster_roots.clear();
     successor_lots.clear();
     released.clear();
     for (const auto& live : core.live()) working.push_back(root_of(live));
@@ -4466,27 +4468,21 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     for (const auto& lot : pine->pyramid_entries_) lots.push_back(lot.entry_incarnation);
     std::sort(lots.begin(), lots.end());
     lots.erase(std::unique(lots.begin(), lots.end()), lots.end());
-    const auto member = [](const std::vector<native_order::RequestHandle>& origins,
-                           std::uint64_t incarnation) {
-        const auto at = std::lower_bound(origins.begin(), origins.end(), incarnation,
-            [](const native_order::RequestHandle& origin, std::uint64_t value) {
-                return origin.incarnation < value;
-            });
-        return at != origins.end() && at->incarnation == incarnation;
-    };
+    for (const auto& roster : core.cohorts()) {
+        PINEFORGE_LOOKUP_INDEX_WORK("cohort_origin_roster", this, run_counter_, 1);
+        for (const auto& origin : roster.origins)
+            roster_roots.push_back(origin.incarnation);
+    }
+    std::sort(roster_roots.begin(), roster_roots.end());
+    roster_roots.erase(std::unique(roster_roots.begin(), roster_roots.end()),
+                       roster_roots.end());
     // The lots no roster names as a root: a replace successor's (or an
     // opening no roster holds).
     for (const auto opening : lots) {
         if (opening == 0) continue;
-        bool root = false;
-        for (const auto& roster : core.cohorts()) {
-            PINEFORGE_LOOKUP_INDEX_WORK("cohort_origin_roster", this, run_counter_, 1);
-            if (member(roster.origins, opening)) {
-                root = true;
-                break;
-            }
+        if (!std::binary_search(roster_roots.begin(), roster_roots.end(), opening)) {
+            successor_lots.push_back(opening);
         }
-        if (!root) successor_lots.push_back(opening);
     }
     auto& probe = scratch.lot_probe;
     for (const auto& roster : core.cohorts()) {
