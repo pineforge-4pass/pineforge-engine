@@ -31,6 +31,45 @@ inline namespace native_order_v8 {
 namespace {
 using ReadStatus = detail::ScratchStatus;
 
+// A synchronous throwing consumer owns the slot. No failure survives outside
+// that operation; nested operations restore the previous slot on every exit.
+// The noexcept readers never publish a thread-wide remembered failure.
+class OpeningFailureScope {
+public:
+    OpeningFailureScope() noexcept : previous_(current_) { current_ = this; }
+    ~OpeningFailureScope() { current_ = previous_; }
+    OpeningFailureScope(const OpeningFailureScope&) = delete;
+    OpeningFailureScope& operator=(const OpeningFailureScope&) = delete;
+
+    static void remember(const std::exception& error) noexcept {
+        if (!current_) return;
+        const auto* typed = dynamic_cast<const RunFailureInfo*>(&error);
+        if (dynamic_cast<const std::bad_alloc*>(&error)
+            || (typed && typed->run_failure_code() == RunFailureCode::out_of_memory))
+            current_->allocation_failed_ = true;
+    }
+    void rethrow_if_failed() const {
+        if (allocation_failed_) throw detail::scratch_out_of_memory_failure();
+    }
+private:
+    inline static thread_local OpeningFailureScope* current_ = nullptr;
+    OpeningFailureScope* const previous_;
+    bool allocation_failed_ = false;
+};
+
+template<class Operation>
+auto with_opening_failure(Operation operation) -> decltype(operation()) {
+    OpeningFailureScope failure;
+    try {
+        auto result = operation();
+        // Consult the operation's cause before interpreting its bare status.
+        failure.rethrow_if_failed();
+        return result;
+    } catch (const std::bad_alloc&) {
+        throw detail::scratch_out_of_memory_failure();
+    }
+}
+
 struct OpeningFile {
     detail::ScratchFile storage;
     OpeningFile() = default;
@@ -41,6 +80,9 @@ struct OpeningFile {
             storage.set_directory(directory);
             storage.open("pineforge-openings");
             return ReadStatus::ok;
+        } catch (const std::exception& error) {
+            OpeningFailureScope::remember(error);
+            return ReadStatus::io_error;
         } catch (...) {
             return ReadStatus::io_error;
         }
@@ -56,6 +98,9 @@ ReadStatus write_opening_word(detail::ScratchFile& file, std::uint64_t index,
         bytes[i] = static_cast<unsigned char>(value >> (i * 8));
     try {
         file.write(index * 8, bytes.data(), bytes.size());
+    } catch (const std::exception& error) {
+        OpeningFailureScope::remember(error);
+        return ReadStatus::io_error;
     } catch (...) {
         return ReadStatus::io_error;
     }
@@ -69,6 +114,9 @@ ReadStatus read_opening_word(const detail::ScratchFile& file, std::uint64_t inde
     std::array<unsigned char, 8> bytes{};
     try {
         file.read(index * 8, bytes.data(), bytes.size());
+    } catch (const std::exception& error) {
+        OpeningFailureScope::remember(error);
+        return ReadStatus::io_error;
     } catch (...) {
         return ReadStatus::io_error;
     }
@@ -106,6 +154,9 @@ ReadStatus OpeningInputCursor::opening_at(
         const auto status = reader_(context_, index, value);
         if (status == ReadStatus::ok) out = value;
         return status;
+    } catch (const std::exception& error) {
+        OpeningFailureScope::remember(error);
+        return ReadStatus::programming_error;
     } catch (...) {
         return ReadStatus::programming_error;
     }
@@ -175,11 +226,19 @@ static ReadStatus freeze_openings_in_directory(
     return ReadStatus::ok;
 }
 
+static ReadStatus freeze_openings_checked(
+        const RunIdentity& run, const OpeningReadback& input,
+        std::shared_ptr<const OpeningReadback>& out, const std::string& directory) {
+    return with_opening_failure([&] {
+        return freeze_openings_in_directory(run, input, out, directory);
+    });
+}
+
 ReadStatus freeze_openings(const RunIdentity& run, const OpeningReadback& input,
                            std::shared_ptr<const OpeningReadback>& out) {
     // Standalone readbacks use ScratchFile's TMPDIR policy. Core-owned
     // freezes below also honor the core's explicitly configured directory.
-    return freeze_openings_in_directory(run, input, out, {});
+    return freeze_openings_checked(run, input, out, {});
 }
 
 std::uint64_t opening_count(const std::vector<RequestHandle>& owned,
@@ -461,7 +520,7 @@ void canonicalize_owner(Request& request, const RunIdentity& run, const std::str
         if (bind->external_openings) {
             if (!dynamic_cast<const FrozenOpenings*>(bind->external_openings.get())) {
                 std::shared_ptr<const OpeningReadback> frozen;
-                const auto status = freeze_openings_in_directory(
+                const auto status = freeze_openings_checked(
                     run, *bind->external_openings, frozen, directory);
                 if (status != ReadStatus::ok)
                     throw detail::ScratchIoError(EIO, "native opening freeze");
@@ -647,6 +706,14 @@ std::optional<CoreFailure> observe_openings(const TargetObservation& observation
     return observe_openings(close.openings, close.cycle, close.side,
                             observation.current_position, observation.openings, live_count,
                             close.external_openings.get(), observation.external_openings);
+}
+
+std::optional<CoreFailure> observe_openings_checked(const TargetObservation& observation,
+                                                   const OpeningsClose& close,
+                                                   std::size_t* live_count) {
+    return with_opening_failure([&] {
+        return observe_openings(observation, close, live_count);
+    });
 }
 
 bool current_shape(const LiveRequest& live) noexcept {
@@ -1376,7 +1443,8 @@ void snapshot_refused_openings(Request& request) {
     const std::uint64_t count = given.count();
     for (std::uint64_t index = 0; index != count; ++index) {
         RequestHandle opening;
-        if (given.opening_at(index, opening) != ReadStatus::ok) break;
+        if (with_opening_failure([&] { return given.opening_at(index, opening); })
+            != ReadStatus::ok) break;
         rows.push_back(opening);
     }
     bind->external_openings = std::make_shared<StoredOpenings>(std::move(rows));
@@ -1420,7 +1488,8 @@ void archive_external_openings(Ar& ar, std::shared_ptr<const OpeningReadback>& e
         ar.raw(&count, sizeof count);
         for (std::uint64_t index = 0; index != count; ++index) {
             RequestHandle opening;
-            if (external->opening_at(index, opening) != ReadStatus::ok) {
+            if (with_opening_failure([&] { return external->opening_at(index, opening); })
+                != ReadStatus::ok) {
                 throw detail::ScratchIoError(EIO, "native opening readback");
             }
             ar(opening);
@@ -1450,7 +1519,7 @@ void archive_external_openings(Ar& ar, std::shared_ptr<const OpeningReadback>& e
                     return ReadStatus::ok;
                 });
         std::shared_ptr<const OpeningReadback> frozen;
-        if (freeze_openings_in_directory(openings.front().run, input, frozen, {})
+        if (freeze_openings_checked(openings.front().run, input, frozen, {})
             != ReadStatus::ok) {
             throw detail::ScratchIoError(EIO, "native opening freeze");
         }
@@ -3724,7 +3793,9 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         }
         for (std::uint64_t i = 0; i < count; ++i) {
             RequestHandle member;
-            if (opening_at(*cohort, bind->external_openings.get(), i, member)
+            if (with_opening_failure([&] {
+                    return opening_at(*cohort, bind->external_openings.get(), i, member);
+                })
                     != ReadStatus::ok
                 || !member.incarnation || member.run != identity_)
                 return RequestRejectReason::InvalidOwner;
@@ -3741,9 +3812,11 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         const auto* nonflat = std::get_if<PositionNonflat>(&position);
         if (!nonflat || nonflat->cycle != bind->cycle) return RequestRejectReason::InvalidOwner;
         std::size_t live_count = 0;
-        if (observe_openings(*cohort, bind->cycle, nonflat->side, position,
-                             context.openings, &live_count, bind->external_openings.get(),
-                             context.external_openings)
+        if (with_opening_failure([&] {
+                return observe_openings(*cohort, bind->cycle, nonflat->side, position,
+                                        context.openings, &live_count,
+                                        bind->external_openings.get(), context.external_openings);
+            })
             || live_count != count) return RequestRejectReason::InvalidOwner;
     } else if (const auto* bind = std::get_if<BindCohort>(&request.owner)) {
         if (!host_sized || host_sized->kind != HostSizedKind::Close
@@ -4930,7 +5003,7 @@ bool WorkingRequestCore::refresh_allowance(
         if (!opening_close_alive(observation, *close)) return false;
     } else if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
         std::size_t live_count = 0;
-        if (observe_openings(observation, *close, &live_count) || live_count == 0) return false;
+        if (observe_openings_checked(observation, *close, &live_count) || live_count == 0) return false;
     } else if (std::holds_alternative<UnboundBookClose>(live.authority)) {
         // An unbound close binds here only when it carried a binding the
         // book still has (ReplaceOptions::keep_binding) and the caller hands
@@ -5138,7 +5211,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_evaluation(
 
     if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
         std::size_t live_count = 0;
-        if (const auto error = observe_openings(observation, *close, &live_count)) {
+        if (const auto error = observe_openings_checked(observation, *close, &live_count)) {
             return PreparationError{*error, EventId{identity_, 0}, target};
         }
         if (live_count == 0) {
@@ -5256,7 +5329,7 @@ Preparation<Installed> WorkingRequestCore::apply_evaluation(
 
     if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
         std::size_t live_count = 0;
-        if (const auto error = observe_openings(observation, *close, &live_count)) {
+        if (const auto error = observe_openings_checked(observation, *close, &live_count)) {
             return PreparationError{*error, EventId{identity_, 0}, target};
         }
         if (live_count == 0) {
@@ -6307,7 +6380,7 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
         }
     } else if (selected_auth) {
         std::size_t live_count = 0;
-        if (const auto error = observe_openings(proposal.pre_target, *selected_auth, &live_count)) {
+        if (const auto error = observe_openings_checked(proposal.pre_target, *selected_auth, &live_count)) {
             return PreparationError{*error, EventId{identity_, 0}, target};
         }
         if (!same_position(proposal.pre_fill, proposal.pre_target.current_position)) {
@@ -6775,7 +6848,7 @@ Preparation<WorkingRequestCore::ExecutionValues> WorkingRequestCore::execution_v
         }
     } else if (selected_auth) {
         std::size_t live_count = 0;
-        if (const auto error = observe_openings(proposal.pre_target, *selected_auth, &live_count)) {
+        if (const auto error = observe_openings_checked(proposal.pre_target, *selected_auth, &live_count)) {
             return PreparationError{*error, EventId{identity_, 0}, target};
         }
         if (!same_position(proposal.pre_fill, proposal.pre_target.current_position)) {
@@ -7013,7 +7086,7 @@ InstallResult WorkingRequestCore::apply_execution(
     bool retain = can_retain;
     if (const auto* selected = std::get_if<OpeningsClose>(&live.authority)) {
         std::size_t live_count = 0;
-        if (observe_openings(facts.post_target, *selected, &live_count)) {
+        if (observe_openings_checked(facts.post_target, *selected, &live_count)) {
             return InstallError::WrongCoreOrRun;
         }
         if (live_count == 0) retain = false;
@@ -7834,7 +7907,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_bound_expiry(
         gone = !opening_close_alive(observation, *close);
     } else if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
         std::size_t live_count = 0;
-        if (const auto error = observe_openings(observation, *close, &live_count)) {
+        if (const auto error = observe_openings_checked(observation, *close, &live_count)) {
             return PreparationError{*error, physical_cause, child};
         }
         gone = live_count == 0;
@@ -7909,7 +7982,7 @@ Preparation<Installed> WorkingRequestCore::apply_bound_expiry(
         gone = !opening_close_alive(observation, *close);
     } else if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
         std::size_t live_count = 0;
-        if (const auto error = observe_openings(observation, *close, &live_count)) {
+        if (const auto error = observe_openings_checked(observation, *close, &live_count)) {
             return PreparationError{*error, physical_cause, child};
         }
         gone = live_count == 0;

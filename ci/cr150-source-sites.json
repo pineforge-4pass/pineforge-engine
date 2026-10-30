@@ -2326,6 +2326,18 @@
    "symbol": "state_",
    "scope": [
     "namespace pineforge :: detail #1",
+    "inline CommandScratchStore :: CommandScratchStore ( ScratchStoreConfig config , ScratchBacking * backing ) noexcept #1",
+    "if ( block = = nullptr ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "state_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_store_impl.hpp",
+   "symbol": "state_",
+   "scope": [
+    "namespace pineforge :: detail #1",
     "inline CommandScratchStore :: CommandScratchStore ( ScratchStoreConfig config , ScratchBacking * backing ) noexcept #1"
    ],
    "cls": "alloc",
