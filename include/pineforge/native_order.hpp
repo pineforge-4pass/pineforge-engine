@@ -490,10 +490,8 @@ private:
 };
 
 /// Freeze and canonicalize a same-run, unique stream. Uses bounded workspace
-/// and an exclusive unlinked file; failure leaves out unchanged. Only creation
-/// of the fixed-size retained owner allocates, never a membership read.
-/// Allocation failures, including a read diagnostic or input callback, throw
-/// the prebuilt typed out_of_memory failure before returning a generic status.
+/// and an exclusive unlinked file; failure leaves out unchanged (an allocation
+/// failure throws typed out_of_memory). Only creation of the fixed-size owner allocates.
 detail::ScratchStatus freeze_openings(
     const RunIdentity&, const OpeningReadback&,
     std::shared_ptr<const OpeningReadback>& out);
@@ -1426,8 +1424,7 @@ private:
     detail::ScratchStatus status_ = detail::ScratchStatus::ok;
 };
 JournalRecordSource encode_journal_record(const CommandEvent&) noexcept;
-// Owning decode is an explicit diagnostic surface. Allocation failure throws
-// typed out_of_memory; invalid input and ordinary I/O keep their status values.
+// Owning decode is an explicit diagnostic surface; an allocation failure throws typed out_of_memory.
 detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource&,
     detail::ScratchBuffer, CommandEvent&);
 class WorkingRequestCore;

@@ -171,7 +171,7 @@ in addition to its six released 1.4.0 reasons.
 | `no_data_request` | `no_data` | no | `call` (pine_source), `function` (vocab, 9 values), `line` (integer) | The script read a request whose data PineForge does not pin for this run. |
 | `other_symbol_feed_missing` | `no_data` | no | `timeframe` (timeframe, optional) | No feed is installed for another symbol's request at its timeframe. |
 | `other_symbol_request` | `no_data` | no | `call` (pine_source), `function` (vocab, 2 values), `line` (integer), `symbol` (symbol, optional) | The script read another symbol's request and no bars of that symbol were installed. |
-| `out_of_memory` | `resource` | yes | none | A C++ allocation failed, including scratch caches, arena metadata, store workspace, owning journal decode or diagnostic construction. A real syscall ENOMEM retains its I/O code. |
+| `out_of_memory` | `resource` | yes | none | The run ran out of memory. |
 | `outputs_limit` | `strategy_limit` | no | `max` (integer), `reason` (vocab, 2 values) | A recorded-outputs capacity limit was reached during the run. |
 | `outputs_rejected` | `input` | no | `reason` (vocab, 3 values) | Recorded outputs were asked of a strategy library that records none, or the recording cannot be honoured as asked. |
 | `pine_array_error` | `strategy` | no | `collection` (vocab, 2 values, optional), `method` (vocab, 12 values, optional), `reason` (vocab, 5 values) | An array call failed: an index out of bounds, an inverted slice, an empty array, an invalid size, or a modified historical collection. |

@@ -249,7 +249,8 @@ logical capacity breach or I/O error. This includes required scratch-cache
 and store-workspace allocations, arena metadata and diagnostic construction.
 Consumers consult the carried failure before mapping an I/O status. Actual
 kernel `ENOMEM` retains the applicable I/O code; genuine arena/share exhaustion
-retains `report_sink_failed` with `reason: arena_exhausted`.
+retains `report_sink_failed` with `reason: arena_exhausted`. Report-sink failures
+retain their separate code.
 See [Run-failure codes](@ref run_failure_codes) for the channel and catalog.
 
 The host must preserve these engine-originated codes and closed arguments,

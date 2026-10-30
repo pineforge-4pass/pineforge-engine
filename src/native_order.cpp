@@ -162,7 +162,7 @@ ReadStatus OpeningInputCursor::opening_at(
     }
 }
 
-static ReadStatus freeze_openings_impl(
+static ReadStatus freeze_openings_in_directory(
         const RunIdentity& run, const OpeningReadback& input,
         std::shared_ptr<const OpeningReadback>& out, const std::string& directory) {
     if (input.count() == 0
@@ -226,11 +226,11 @@ static ReadStatus freeze_openings_impl(
     return ReadStatus::ok;
 }
 
-static ReadStatus freeze_openings_in_directory(
+static ReadStatus freeze_openings_checked(
         const RunIdentity& run, const OpeningReadback& input,
         std::shared_ptr<const OpeningReadback>& out, const std::string& directory) {
     return with_opening_failure([&] {
-        return freeze_openings_impl(run, input, out, directory);
+        return freeze_openings_in_directory(run, input, out, directory);
     });
 }
 
@@ -238,7 +238,7 @@ ReadStatus freeze_openings(const RunIdentity& run, const OpeningReadback& input,
                            std::shared_ptr<const OpeningReadback>& out) {
     // Standalone readbacks use ScratchFile's TMPDIR policy. Core-owned
     // freezes below also honor the core's explicitly configured directory.
-    return freeze_openings_in_directory(run, input, out, {});
+    return freeze_openings_checked(run, input, out, {});
 }
 
 std::uint64_t opening_count(const std::vector<RequestHandle>& owned,
@@ -520,7 +520,7 @@ void canonicalize_owner(Request& request, const RunIdentity& run, const std::str
         if (bind->external_openings) {
             if (!dynamic_cast<const FrozenOpenings*>(bind->external_openings.get())) {
                 std::shared_ptr<const OpeningReadback> frozen;
-                const auto status = freeze_openings_in_directory(
+                const auto status = freeze_openings_checked(
                     run, *bind->external_openings, frozen, directory);
                 if (status != ReadStatus::ok)
                     throw detail::ScratchIoError(EIO, "native opening freeze");
@@ -1519,7 +1519,7 @@ void archive_external_openings(Ar& ar, std::shared_ptr<const OpeningReadback>& e
                     return ReadStatus::ok;
                 });
         std::shared_ptr<const OpeningReadback> frozen;
-        if (freeze_openings_in_directory(openings.front().run, input, frozen, {})
+        if (freeze_openings_checked(openings.front().run, input, frozen, {})
             != ReadStatus::ok) {
             throw detail::ScratchIoError(EIO, "native opening freeze");
         }

@@ -207,8 +207,6 @@ private:
     mutable std::array<std::uint64_t, 4> array_rows_{};
 };
 JournalRecordSource encode_journal_record(const Event&) noexcept;
-// Owning diagnostics throw typed out_of_memory on allocation failure; scanning
-// without decoded ownership retains its nonallocating, noexcept status contract.
 detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource&,
     detail::ScratchBuffer, Event&);
 class Journal;

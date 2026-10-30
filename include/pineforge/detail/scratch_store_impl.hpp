@@ -1780,11 +1780,9 @@ inline CommandScratchStore::CommandScratchStore(ScratchStoreConfig config, Scrat
     auto* const allocation_failed = State::allocation_failed();
     const std::size_t total = scratch_impl::Core::required_bytes(config, backing);
     void* block = ::operator new(total, std::nothrow);
-    if (block == nullptr) {
-        if (scratch_impl::Core::geometry_ok(config, backing)) state_ = allocation_failed;
-        return;
-    }
-    state_ = new (block) State(config, backing, total);
+    // A refused allocation with valid geometry takes the marker; bad geometry leaves null.
+    state_ = block != nullptr ? new (block) State(config, backing, total)
+        : scratch_impl::Core::geometry_ok(config, backing) ? allocation_failed : nullptr;
 }
 
 inline CommandScratchStore::~CommandScratchStore() noexcept {
