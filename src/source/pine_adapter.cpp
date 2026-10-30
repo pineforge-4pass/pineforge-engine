@@ -1112,9 +1112,6 @@ PineExecutionAdapter::PineExecutionAdapter(NativeStrategyHost& host,
 }
 
 namespace detail {
-// Source-only extension of the position-tail summary: every allocation uses it.
-struct AdapterPositionTailSummary final : PositionTailSummary { std::vector<std::uint64_t> roster_roots; };
-
 // Share the production attached-arena/disk selection and per-run I/O policy.
 struct CommandScratchRun {
     // Fixed geometry, independent of bars, handles and text widths.
@@ -4481,6 +4478,8 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     std::sort(roster_roots.begin(), roster_roots.end());
     roster_roots.erase(std::unique(roster_roots.begin(), roster_roots.end()),
                        roster_roots.end());
+    // The lots no roster names as a root: a replace successor's (or an
+    // opening no roster holds).
     for (const auto opening : lots) {
         if (opening == 0) continue;
         if (!std::binary_search(roster_roots.begin(), roster_roots.end(), opening)) {
@@ -4492,7 +4491,8 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
         const auto& origins = roster.origins;
         if (origins.empty()) continue;
         if (probe.run != origins.front().run) probe.run = origins.front().run;
-        // Keep older roots while the newest successor lot remains bound.
+        // The newest open successor lot this roster binds: every member older
+        // than it may be its root.
         std::uint64_t kept_below = 0;
         for (const auto opening : successor_lots) {
             probe.incarnation = opening;
