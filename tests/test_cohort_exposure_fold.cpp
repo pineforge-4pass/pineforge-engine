@@ -137,6 +137,68 @@ void boundary_values() {
     assert(shape(200, 1, k + 1).path == 3);
 }
 
+detail::CohortExposureFold check_stack_sort(const OriginRoster& origins,
+                                          const Units& units) {
+    assert(origins.members().size() > 4 * units.size() + 16);
+    std::size_t positions = 0;
+    for (const auto& row : units) {
+        const auto* mapped = origins.positions_of(row.first);
+        if (mapped) positions += mapped->size();
+    }
+    assert(positions > 0 && positions <= 128);
+    const auto hits_before = path_hits[2];
+    const auto actual = check(origins, units);
+    assert(actual.path == 2 && actual.steps > 0);
+    assert(path_hits[2] > hits_before);
+    return actual;
+}
+
+void stack_sort_special_values() {
+    OriginRoster origins;
+    for (const auto id : {7U, 19U, 43U, 7U, 43U, 19U}) push(origins, id);
+    for (std::size_t i = origins.size(); i < 64; ++i) push(origins, 1000 + i);
+    const double tiny = std::numeric_limits<double>::denorm_min();
+    Units units{{7, 0.0}, {19, tiny}, {43, 2.0 * tiny}};
+    const std::array<double, 7> values{{
+        std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity(),
+        -0.0, 0.0, -1.0, tiny
+    }};
+    for (const auto value : values) {
+        units[7] = value;
+        const auto actual = check_stack_sort(origins, units);
+        // Each row occurs twice; the denormal contribution stays observable.
+        const double expected = (value == tiny ? 8.0 : 6.0) * tiny;
+        assert(std::memcmp(&actual.total, &expected, sizeof expected) == 0);
+    }
+    for (auto& row : units) row.second = std::numeric_limits<double>::max();
+    const auto overflow = check_stack_sort(origins, units);
+    const double expected = 0.0; // Multiple maximum values overflow to +inf.
+    assert(std::memcmp(&overflow.total, &expected, sizeof expected) == 0);
+}
+
+void stack_sort_interleavings() {
+    const std::array<std::uint64_t, 3> small_ids{{19, 43, 71}};
+    const std::array<std::size_t, 3> repeats{{8, 12, 16}};
+    for (std::size_t shape = 0; shape < repeats.size(); ++shape) {
+        OriginRoster origins;
+        const Units units{{7, 1e16}, {19, 1.0}, {43, 1.0}, {71, 1.0}};
+        for (std::size_t i = 0; i < small_ids.size() * repeats[shape]; ++i) {
+            if (i == 4) push(origins, 7);
+            push(origins, small_ids[(i + shape) % small_ids.size()]);
+        }
+        for (std::size_t i = origins.size(); i < 64; ++i) push(origins, 1000 + i);
+        const auto actual = check_stack_sort(origins, units);
+        // Four ones precede 1e16: the exact sum is 10000000000000004.
+        // The ULP is 2 and this sum has an even significand, so later ones
+        // round away. Grouping rows puts k complete small rows before 1e16,
+        // yielding 1e16 + repeats[shape] * k (k = 0..3), never this literal.
+        const double expected = 10000000000000004.0;
+        assert(std::memcmp(&actual.total, &expected, sizeof expected) == 0);
+    }
+}
+
 void randomized_mutations() {
     std::mt19937_64 random(0x461bea77d5ULL);
     const std::array<double, 11> values{{
@@ -197,6 +259,8 @@ void randomized_mutations() {
 int main() {
     special_values_and_multiplicity();
     boundary_values();
+    stack_sort_special_values();
+    stack_sort_interleavings();
     randomized_mutations();
     for (const auto hits : path_hits) assert(hits > 0);
     std::printf("cohort exposure bit comparisons: %llu\n",

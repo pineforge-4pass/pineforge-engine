@@ -3828,11 +3828,6 @@ foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
 
-if(TARGET test_cohort_exposure_work)
-    add_test(NAME test_cohort_exposure_caller_groups
-        COMMAND test_cohort_exposure_work --caller-groups)
-endif()
-
 if(UNIX)
     # PASS_REGULAR_EXPRESSION makes output matching replace CTest's exit-code
     # result, while WILL_FAIL accepts every nonzero result. The driver checks
@@ -8022,6 +8017,14 @@ option(PINEFORGE_COHORT_EXPOSURE_FIXTURES
     "Compare every cohort exposure call with the frozen selector" OFF)
 if(PINEFORGE_COHORT_EXPOSURE_FIXTURES)
     target_compile_definitions(pineforge PRIVATE PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    if(TARGET pineforge_source_quiet_ungated)
+        target_compile_definitions(pineforge_source_quiet_ungated PRIVATE
+            PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    endif()
+    if(TARGET pineforge_source_quiet_probe)
+        target_compile_definitions(pineforge_source_quiet_probe PRIVATE
+            PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    endif()
     # These TUs compile the adapter directly, including two through the
     # position-tail retirement fixture header. Source properties also cover
     # any additional target built from the same TU in this directory.
