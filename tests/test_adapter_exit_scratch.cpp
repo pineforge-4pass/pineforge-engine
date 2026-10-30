@@ -21,6 +21,7 @@
 #include "global_allocation_replacement.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <memory>
 #include <stdexcept>
@@ -52,10 +53,12 @@ struct CohortSlots { friend auto access(CohortSlots); };
 struct CancelText { friend auto access(CancelText); };
 struct Relative { friend auto access(Relative); };
 struct ScratchOwner { friend auto access(ScratchOwner); };
+struct ScratchState { friend auto access(ScratchState); };
 template struct Access<CancelText, static_cast<void (Adapter::*)(
     const source::detail::ScratchByteSource&)>(&Adapter::cancel_exit_orders_for_full_close)>;
 template struct Access<Relative, &Adapter::pending_relative_exits_>;
 template struct Access<ScratchOwner, &Adapter::exit_scratch_>;
+template struct Access<ScratchState, &pineforge::detail::CommandScratchStore::state_>;
 #endif
 template struct Access<Placements, &Adapter::placement_>;
 template struct Access<Live, &Adapter::live_handles_>;
@@ -223,6 +226,353 @@ native_order::ExecutionAppliedEvent event() {
     result.terminal = false;
     return result;
 }
+
+#if PF_HAS_EXIT_SCRATCH
+struct IoChargeLog {
+    // Fixed fixture: P=512, two cache slots, 1024 backing pages, at most 65 rows.
+    // Keys (32 bytes) and incarnations (8 bytes) each occupy one 56-byte cell.
+    // Ordered leaves hold (512-16-32)/8=58 handles; handle leaves hold
+    // (512-16-16)/32=15, with radix fanout (512-16-16)/8=60.
+    // Thus both trees have height <=2, with at most one ordered separator.
+    static_assert(pineforge::detail::scratch_min_page_size == 512);
+    static_assert(source::detail::kExitScopeEraseBatch == 64);
+    static constexpr std::size_t max_population = source::detail::kExitScopeEraseBatch + 1;
+    // A cache rd costs <=2 charges (dirty eviction + read); wr costs <=4
+    // (that fetch + pool read + journal write). A fresh wr_page costs <=1.
+    // descend: root/leaf counts + child read, then <=1+6+1 comparisons,
+    // each reading an index slot, two handle pages and one stored-key cell.
+    static constexpr std::size_t comparisons = 1 + 6 + 1;
+    static constexpr std::size_t descend_reads = 3 + comparisons * (1 + 2 + 1);
+    // hset insertion: two new pages, four rd, four wr. Erase: four rd,
+    // six wr, including the empty handle leaf and its parent slot/count.
+    static constexpr std::size_t handle_insert_charges = 2 + 4 * 2 + 4 * 4;
+    static constexpr std::size_t handle_erase_charges = 4 * 2 + 6 * 4;
+    // Ordered append split: rd leaf, wr leaf, two fresh pages. Ordered erase:
+    // four rd + six wr, plus separator hget, cell free and possible hset.
+    static constexpr std::size_t index_insert_charges = 2 + 4 + 2;
+    static constexpr std::size_t index_erase_charges =
+        4 * 2 + 6 * 4 + 2 * 2 + (2 + 4) + handle_erase_charges;
+    // Buffered commit: journal-tail read/write, <=2 dirty cache writes,
+    // one superblock write. begin and create_empty issue no backing calls.
+    static constexpr std::size_t commit_charges = 2 + 2 + 1;
+    static constexpr std::size_t insert_charges =
+        2 * descend_reads + 2 * (1 + 4) + handle_insert_charges
+        + index_insert_charges + commit_charges;
+    // Consumption is idle/clean: lower_bound adds two rd after descend,
+    // and reading key words and value each adds two handle rd + one cell rd.
+    static constexpr std::size_t consume_charges = descend_reads + 2 + 2 * (2 + 1);
+    // Teardown seeks may evict dirty pages. Erase adds a stored probe read
+    // per comparison, initial hget, leaf_entry, and one separator-name read.
+    static constexpr std::size_t scope_seek_charges = 2 * (descend_reads + 2 + 2 + 1);
+    static constexpr std::size_t erase_charges =
+        2 * (descend_reads + comparisons + 2 + 1 + 1)
+        + 2 * (2 + 4) + handle_erase_charges + index_erase_charges;
+    // 119 + 43 + 80 + 212 + 5 = 459 charges/row, including teardown.
+    // Empty-scope lookups/destructors add zero: 459 * (64+1) = 29835.
+    static constexpr std::size_t capacity = max_population
+        * (insert_charges + consume_charges + scope_seek_charges
+           + erase_charges + commit_charges);
+    std::array<pineforge::detail::ScratchIoCharge, capacity> entries{};
+    std::size_t count = 0;
+    bool overflow = false;
+
+    static void charge(void* opaque,
+                       const pineforge::detail::ScratchIoCharge& value) noexcept {
+        auto& log = *static_cast<IoChargeLog*>(opaque);
+        if (log.count == log.entries.size()) {
+            log.overflow = true;
+            return;
+        }
+        log.entries[log.count++] = value;
+    }
+};
+
+bool same_io_charge(const pineforge::detail::ScratchIoCharge& left,
+                    const pineforge::detail::ScratchIoCharge& right) {
+    return left.kind == right.kind
+        && left.operation == right.operation
+        && left.page == right.page
+        && left.bytes == right.bytes
+        && left.status == right.status;
+}
+
+// Observe the first consumer comparison after the unconditional live-handle
+// snapshot. Read fixed Core counters only; do not perform I/O, invoke another
+// consumer, or install a row/I/O observer in this construction fixture.
+struct ConstructionCounter {
+    pineforge::detail::scratch_impl::Core* core = nullptr;
+    IoChargeLog* charge_log = nullptr;
+    std::uint64_t population = 0;
+    std::uint64_t sequence_before = 0;
+    std::uint64_t handles_before = 0;
+    std::uint64_t publications = 0;
+    std::uint64_t inserted = 0;
+    std::uint64_t records = 0;
+    std::size_t charge_count = 0;
+    bool captured = false;
+    bool consumer_idle = false;
+
+    pineforge::detail::ScratchKeyOrder order() noexcept {
+        const auto original = source::detail::exit_scratch_key_order();
+        return {original.id, this,
+            [](void* opaque, const source::detail::ScratchByteSource& left,
+               const source::detail::ScratchByteSource& right, int& result) noexcept {
+                auto& counter = *static_cast<ConstructionCounter*>(opaque);
+                if (counter.core && !counter.captured && counter.population != 0
+                        && counter.core->cur_.record_count == counter.population) {
+                    // Each distinct ordinal allocates one fresh handle. The
+                    // final put increments record_count after its comparisons;
+                    // reaching this population identifies the first consumer,
+                    // even if a broken builder left its transaction open.
+                    counter.captured = true;
+                    counter.consumer_idle = !counter.core->active_;
+                    counter.publications = counter.core->cur_.seq - counter.sequence_before;
+                    counter.inserted = counter.core->cur_.next_handle - counter.handles_before;
+                    counter.records = counter.core->cur_.record_count;
+                    counter.charge_count = counter.charge_log
+                        ? counter.charge_log->count : 0;
+                }
+                const auto compare = source::detail::exit_scratch_key_order();
+                return compare.compare(compare.context, left, right, result);
+            }};
+    }
+};
+
+void construction_publications() {
+    namespace pd = pineforge::detail;
+    namespace sd = source::detail;
+    scenario = "bounded handle snapshot publications";
+    // The insertion policy is the fixed 64-row batch constant shared with
+    // teardown. It is not a page capacity: at P=512 the store's ordered leaf has
+    // (512 - 16 trailer bytes - 32 header bytes) / 8 = 58 entries.
+    constexpr std::size_t batch = sd::kExitScopeEraseBatch;
+    static_assert(batch == 64, "construction acceptance uses a fixed 64-row batch");
+    constexpr std::size_t page_size = pd::scratch_min_page_size;
+    constexpr std::size_t backing_pages = 1024;
+    for (const std::size_t population : {std::size_t{0}, std::size_t{1}, batch, batch + 1}) {
+        std::array<std::byte, backing_pages * page_size> bytes{};
+        pd::FixedMemoryScratchBacking backing({bytes.data(), bytes.size()}, page_size);
+        ConstructionCounter counter;
+        pd::CommandScratchStore store{
+            {2, page_size, 1, 1, counter.order(), pd::ScratchOpenMode::create_empty}, &backing};
+        CHECK(!backing.has_io_observer());
+        CHECK(store.status() == pd::ScratchStatus::ok);
+        CHECK(!store.has_io_observer());
+        auto* state = store.*access(ScratchState{});
+        CHECK(state != nullptr);
+        if (!state || store.status() != pd::ScratchStatus::ok) continue;
+        counter.core = state;
+        counter.population = population;
+        counter.sequence_before = state->cur_.seq;
+        counter.handles_before = state->cur_.next_handle;
+        sd::ExitScratchContext context{store, handle(1).run};
+        EmptyHost host;
+        Adapter adapter(host);
+        adapter.bind_exit_scratch(context);
+        auto& live = adapter.*access(Live{});
+        for (std::size_t i = 0; i < population; ++i)
+            live.push_back(handle(population - i));
+        // No placements, cohorts or pending requests: only the generic flat
+        // live-handle snapshot creates records. Its consumer finds no placement
+        // and cannot cancel, submit, or build another nonempty selection.
+        CHECK(!context.observe_rows && !context.observe_lookup);
+        CHECK(!store.transaction_active()); // Applied entry
+        adapter.on_applied(event(), {});
+        CHECK(!store.transaction_active()); // Applied return and scope teardown
+        CHECK(!context.teardown_failure.pending());
+        CHECK(store.record_count() == 0);
+        CHECK(state->cur_.next_handle - counter.handles_before == population);
+        if (population == 0) {
+            CHECK(!counter.captured);
+            counter.publications = state->cur_.seq - counter.sequence_before;
+            counter.inserted = state->cur_.next_handle - counter.handles_before;
+        } else {
+            CHECK(counter.captured);
+            CHECK(counter.consumer_idle);
+            CHECK(counter.records == population);
+        }
+        // Successful buffered commit_impl publishes one alternate superblock
+        // and increments seq once. Sampled before consumption/erase, this is
+        // construction work only; teardown publications are checked separately.
+        const auto expected = population / batch + (population % batch != 0);
+        CHECK(counter.inserted == population);
+        CHECK(counter.publications == expected);
+        CHECK(state->cur_.seq - counter.sequence_before
+            == counter.publications + expected);
+        std::array<std::byte, page_size> page{};
+        std::uint64_t digest = 0;
+        CHECK(store.state_digest({page.data(), page.size()}, digest) == pd::ScratchStatus::ok);
+        CHECK(!store.transaction_active()); // hash boundary
+        std::printf("%s: rows=%zu inserted=%llu publications=%llu expected=%zu\n",
+            scenario, population, static_cast<unsigned long long>(counter.inserted),
+            static_cast<unsigned long long>(counter.publications), expected);
+    }
+}
+
+void observed_construction_publications() {
+    namespace pd = pineforge::detail;
+    namespace sd = source::detail;
+    scenario = "observed handle snapshot publications";
+    constexpr std::size_t batch = sd::kExitScopeEraseBatch;
+    constexpr std::size_t page_size = pd::scratch_min_page_size;
+    constexpr std::size_t backing_pages = 1024;
+    for (const std::size_t population : {std::size_t{0}, std::size_t{1}, batch, batch + 1}) {
+        std::array<std::byte, backing_pages * page_size> bytes{};
+        IoChargeLog actual_log;
+        pd::FixedMemoryScratchBacking backing(
+            {bytes.data(), bytes.size()}, page_size,
+            {&actual_log, &IoChargeLog::charge});
+        ConstructionCounter counter;
+        counter.charge_log = &actual_log;
+        pd::CommandScratchStore store{
+            {2, page_size, 1, 1, counter.order(), pd::ScratchOpenMode::create_empty}, &backing};
+        CHECK(backing.has_io_observer());
+        CHECK(store.has_io_observer());
+        CHECK(store.status() == pd::ScratchStatus::ok);
+        auto* state = store.*access(ScratchState{});
+        CHECK(state != nullptr);
+        if (!state || store.status() != pd::ScratchStatus::ok) continue;
+        counter.core = state;
+        counter.population = population;
+        counter.sequence_before = state->cur_.seq;
+        counter.handles_before = state->cur_.next_handle;
+        const auto actual_start = actual_log.count;
+        sd::ExitScratchContext context{store, handle(1).run};
+        EmptyHost host;
+        Adapter adapter(host);
+        adapter.bind_exit_scratch(context);
+        auto& live = adapter.*access(Live{});
+        for (std::size_t i = 0; i < population; ++i)
+            live.push_back(handle(population - i));
+        CHECK(!context.observe_rows && !context.observe_lookup);
+        CHECK(!store.transaction_active());
+        adapter.on_applied(event(), {});
+        CHECK(!store.transaction_active());
+        CHECK(store.record_count() == 0);
+        CHECK(state->cur_.next_handle - counter.handles_before == population);
+        if (population == 0) {
+            CHECK(!counter.captured);
+            counter.publications = state->cur_.seq - counter.sequence_before;
+            counter.inserted = state->cur_.next_handle - counter.handles_before;
+            counter.charge_count = actual_log.count;
+        } else {
+            CHECK(counter.captured);
+            CHECK(counter.consumer_idle);
+            CHECK(counter.records == population);
+        }
+        CHECK(counter.inserted == population);
+        CHECK(counter.publications == population);
+        CHECK(counter.charge_count >= actual_start);
+
+        // This is the unchanged per-row path: each scalar append invokes
+        // exit_scratch_edit, so every row begins and publishes independently.
+        std::array<std::byte, backing_pages * page_size> expected_bytes{};
+        IoChargeLog expected_log;
+        pd::FixedMemoryScratchBacking expected_backing(
+            {expected_bytes.data(), expected_bytes.size()}, page_size,
+            {&expected_log, &IoChargeLog::charge});
+        ConstructionCounter expected_counter;
+        expected_counter.charge_log = &expected_log;
+        expected_counter.population = population;
+        pd::CommandScratchStore expected_store{
+            {2, page_size, 1, 1, expected_counter.order(),
+             pd::ScratchOpenMode::create_empty}, &expected_backing};
+        CHECK(expected_backing.has_io_observer());
+        CHECK(expected_store.has_io_observer());
+        CHECK(expected_store.status() == pd::ScratchStatus::ok);
+        expected_counter.core = expected_store.*access(ScratchState{});
+        CHECK(expected_counter.core != nullptr);
+        sd::ExitScratchContext expected_context{expected_store, handle(1).run};
+        const auto expected_start = expected_log.count;
+        std::size_t expected_end = expected_start;
+        {
+            // The flat Applied path first creates an empty owner-selection
+            // scope, performs its empty ordered lookup, then creates an empty
+            // ended-source scope before the live-handle snapshot.
+            sd::ExitScratchRows<std::string> exit_owners(expected_context);
+            exit_owners.ordered_text(
+                [](const sd::ExitScratchText&) { return true; }, true);
+            sd::ExitScratchRows<std::string> ended_sources(expected_context);
+            sd::ExitScratchRows<Handle> rows(expected_context);
+            for (std::size_t i = 0; i < population; ++i)
+                rows.push_back(handle(population - i));
+            rows.finish();
+            expected_end = expected_log.count;
+            if (!rows.empty()) {
+                // The adapter samples at the first consumer comparison,
+                // after descend has already read index/handle pages. Reach
+                // that same boundary in this independent scalar reference.
+                (void)rows.front();
+                CHECK(expected_counter.captured);
+                CHECK(expected_counter.consumer_idle);
+                expected_end = expected_counter.charge_count;
+            }
+        }
+        if (population == 0) expected_end = expected_log.count;
+        CHECK(!expected_store.transaction_active());
+        CHECK(!actual_log.overflow);
+        CHECK(!expected_log.overflow);
+        CHECK(expected_end >= expected_start);
+        if (counter.charge_count >= actual_start && expected_end >= expected_start) {
+            const auto actual_count = counter.charge_count - actual_start;
+            const auto expected_count = expected_end - expected_start;
+            CHECK(actual_count == expected_count);
+            if (actual_count == expected_count) {
+                for (std::size_t index = 0; index < actual_count; ++index) {
+                    CHECK(same_io_charge(actual_log.entries[actual_start + index],
+                                         expected_log.entries[expected_start + index]));
+                }
+            }
+        }
+    }
+}
+
+void batch_visibility_boundaries() {
+    namespace pd = pineforge::detail;
+    namespace sd = source::detail;
+    scenario = "batched row visibility boundaries";
+    constexpr std::size_t page_size = pd::scratch_min_page_size;
+    constexpr std::size_t backing_pages = 1024;
+    std::array<std::byte, backing_pages * page_size> bytes{};
+    pd::FixedMemoryScratchBacking backing({bytes.data(), bytes.size()}, page_size);
+    pd::CommandScratchStore store{
+        {2, page_size, 1, 1, sd::exit_scratch_key_order(),
+         pd::ScratchOpenMode::create_empty}, &backing};
+    CHECK(!backing.has_io_observer());
+    CHECK(store.status() == pd::ScratchStatus::ok);
+    if (store.status() != pd::ScratchStatus::ok) return;
+    auto* state = store.*access(ScratchState{});
+    CHECK(state != nullptr);
+    if (!state) return;
+    const auto sequence_before = state->cur_.seq;
+    {
+        sd::ExitScratchContext context{store, handle(1).run};
+        sd::ExitScratchBatchRows<Handle> rows(context);
+        try {
+            rows.push_back(handle(2));
+            rows.push_back(handle(1));
+        } catch (const sd::ExitScratchError& error) {
+            CHECK(false);
+            CHECK(error.status() == pd::ScratchStatus::programming_error);
+            if (store.transaction_active())
+                CHECK(store.rollback() == pd::ScratchStatus::ok);
+            return;
+        }
+        CHECK(rows.size() == 2);
+        CHECK(store.transaction_active());
+        CHECK(state->cur_.seq == sequence_before);
+        CHECK(rows[0] == handle(2));
+        CHECK(rows[1] == handle(1));
+        rows.finish();
+        CHECK(!store.transaction_active());
+        CHECK(state->cur_.seq == sequence_before + 1);
+        CHECK(rows[0] == handle(2));
+        CHECK(rows[1] == handle(1));
+    }
+    CHECK(!store.transaction_active());
+    CHECK(store.record_count() == 0);
+}
+#endif
 
 void child_rows(std::size_t population) {
     scenario = "X25 child snapshot";
@@ -735,6 +1085,13 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "expected all, x25, x26, or x27\n");
         return 2;
     }
+#if PF_HAS_EXIT_SCRATCH
+    if (row == "all") {
+        construction_publications();
+        batch_visibility_boundaries();
+        observed_construction_publications();
+    }
+#endif
     for (const auto population : {17U, 129U, 513U}) {
         if (row == "all" || row == "x25") child_rows(population);
         if (row == "all" || row == "x26") paired_closes(population);

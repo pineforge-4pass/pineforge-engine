@@ -1809,6 +1809,10 @@ inline std::uint64_t CommandScratchStore::record_count() const noexcept {
 inline bool CommandScratchStore::transaction_active() const noexcept {
     return state_ != nullptr && state_->open_status_ == ScratchStatus::ok && state_->active_;
 }
+inline bool CommandScratchStore::has_io_observer() const noexcept {
+    return state_ != nullptr && state_->backing_ != nullptr
+        && state_->backing_->has_io_observer();
+}
 inline ScratchStatus CommandScratchStore::begin() noexcept {
     return state_ == nullptr ? ScratchStatus::programming_error : state_->begin();
 }

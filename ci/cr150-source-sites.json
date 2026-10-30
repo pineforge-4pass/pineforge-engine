@@ -8198,7 +8198,7 @@
    "scope": [
     "namespace pineforge :: source #1",
     "namespace detail #1",
-    "template < class T > class ExitScratchRows #1"
+    "template < class T , ExitScratchRowMode Mode = ExitScratchRowMode :: per_row > class ExitScratchRows #1"
    ],
    "cls": "temp",
    "spelling": "const_iterator",
@@ -8210,7 +8210,7 @@
    "scope": [
     "namespace pineforge :: source #1",
     "namespace detail #1",
-    "template < class T > class ExitScratchRows #1"
+    "template < class T , ExitScratchRowMode Mode = ExitScratchRowMode :: per_row > class ExitScratchRows #1"
    ],
    "cls": "decl",
    "spelling": "const_iterator",
@@ -8222,7 +8222,7 @@
    "scope": [
     "namespace pineforge :: source #1",
     "namespace detail #1",
-    "template < class T > class ExitScratchRows #1"
+    "template < class T , ExitScratchRowMode Mode = ExitScratchRowMode :: per_row > class ExitScratchRows #1"
    ],
    "cls": "decl",
    "spelling": "const_iterator",
