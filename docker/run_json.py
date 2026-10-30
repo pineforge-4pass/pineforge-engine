@@ -6161,6 +6161,10 @@ _BULK_E_LINE = re.compile(
 _BULK_E_BATCH = 128
 _BULK_E_RUN_PREFIX = rb"(?:" + _BULK_E_LINE.pattern + rb")"
 _BULK_E_RUN = re.compile(_BULK_E_RUN_PREFIX + (rb"{1,%d}" % _BULK_E_BATCH))
+# Cache only this exact pattern's interval. A replacement run still supplies
+# its own bound, independently of the window and the original batch constant.
+_BULK_E_DEFAULT_RUN = _BULK_E_RUN
+_BULK_E_DEFAULT_BOUNDS = (1, _BULK_E_BATCH)
 _BULK_E_LINE_BYTES = 80
 _BULK_E_LITERAL_BYTES = len(b'["E",,,]\n')
 # Coverage adds nine literal bytes to the three captures; the page-tail bound
@@ -6182,7 +6186,9 @@ assert (
 class _BulkEquity:
     """A batch's number text and endpoints; direct construction is unbounded."""
     def __init__(self, raw, count, first, last, columns=None):
-        self.raw, self.count, self.first, self.last = raw, count, first, last
+        self.raw, self.count = raw, count
+        self._first = tuple(first.values()) if isinstance(first, dict) else first
+        self._last = tuple(last.values()) if isinstance(last, dict) else last
         if columns is None:
             # Directly constructed batches need no proof or bound. Recover
             # captures only when they tile the input; columns remain absent
@@ -6193,6 +6199,30 @@ class _BulkEquity:
                     + _BULK_E_LITERAL_BYTES * len(rows) != len(raw)):
                 columns = None
         self.columns = columns
+
+    @property
+    def first(self):
+        self._first = _bulk_equity_endpoint(self._first)
+        return self._first
+
+    @first.setter
+    def first(self, point):
+        self._first = point
+
+    @property
+    def last(self):
+        self._last = _bulk_equity_endpoint(self._last)
+        return self._last
+
+    @last.setter
+    def last(self, point):
+        self._last = point
+
+
+def _bulk_equity_endpoint(point):
+    if type(point) is tuple:
+        return dict(time_ms=point[0], equity=point[1], open_profit=point[2])
+    return point
 
 
 def _bulk_equity(raw):
@@ -6220,15 +6250,20 @@ def _bulk_equity(raw):
     # Coverage proves a concatenation of complete lines. Read its permitted
     # count from the run pattern itself, keeping that pattern the sole batch
     # bound even when replaced. Other pattern shapes keep their fullmatch.
-    prefix, _, repeat_text = _BULK_E_RUN.pattern.rpartition(b"{")
-    bounds = repeat_text[:-1].split(b",")
-    if (prefix == _BULK_E_RUN_PREFIX and repeat_text.endswith(b"}")
-            and len(bounds) == 2 and all(map(bytes.isdigit, bounds))
-            and _BULK_E_RUN.flags == 0):
-        lower, upper = map(int, bounds)
-        if not lower <= len(rows) <= upper:
-            return None
-    elif _BULK_E_RUN.fullmatch(raw) is None:
+    if _BULK_E_RUN is _BULK_E_DEFAULT_RUN:
+        lower, upper = _BULK_E_DEFAULT_BOUNDS
+    else:
+        prefix, _, repeat_text = _BULK_E_RUN.pattern.rpartition(b"{")
+        bounds = repeat_text[:-1].split(b",")
+        if (prefix == _BULK_E_RUN_PREFIX and repeat_text.endswith(b"}")
+                and len(bounds) == 2 and all(map(bytes.isdigit, bounds))
+                and _BULK_E_RUN.flags == 0):
+            lower, upper = map(int, bounds)
+        else:
+            if _BULK_E_RUN.fullmatch(raw) is None:
+                return None
+            lower = upper = len(rows)
+    if not lower <= len(rows) <= upper:
         return None
     timestamps = list(map(int, times))
     if min(timestamps) < -((1 << 53) - 1) or max(timestamps) > (1 << 53) - 1:
@@ -6238,8 +6273,8 @@ def _bulk_equity(raw):
     if not all(map(math.isfinite, numbers)) or list(map(repr, numbers)) != texts:
         return None
     count = len(timestamps)
-    first = dict(time_ms=timestamps[0], equity=numbers[0], open_profit=numbers[count])
-    last = dict(time_ms=timestamps[-1], equity=numbers[count - 1], open_profit=numbers[-1])
+    first = (timestamps[0], numbers[0], numbers[count])
+    last = (timestamps[-1], numbers[count - 1], numbers[-1])
     return _BulkEquity(raw, count, first, last, columns)
 
 
@@ -6412,15 +6447,18 @@ class _SinkReportDiagnostics:
         # O/V/K/X/H do not enter the trade fold. A fused sink supplies the
         # optional sink argument so those records can be dispatched to their
         # bounded artifacts while the reader hashes every record.
+        last_bulk = None
         for record in _bulk_equity_records(reader):
             if isinstance(record, _BulkEquity):
                 if not self.count_e:
                     self.first = record.first
-                self.last = record.last
+                # Only the final batch contributes the curve's last point.
+                last_bulk = record
                 self.count_e += record.count
                 if sink is not None:
                     sink._append_equity_batch(record)
             elif record.tag == "E":
+                last_bulk = None
                 point = record.as_dict()
                 if not self.count_e:
                     self.first = point
@@ -6444,6 +6482,8 @@ class _SinkReportDiagnostics:
                 yield record
             elif sink is not None:
                 sink._append_output_record(record)
+        if last_bulk is not None:
+            self.last = last_bulk.last
 
 
 class _FusedOutputState:
@@ -6681,10 +6721,31 @@ class _ReportSink:
                 or self._trades_spool_failed):
             return
         try:
-            self._trades_spool.append(_sink_trade(record))
+            trade = _sink_trade(record)
+            if _json_fast_value(trade):
+                try:
+                    encoded = json.dumps(trade, separators=(",", ":"), allow_nan=False)
+                except ValueError:
+                    pass  # retain the piecewise writer's prefix and exception
+                else:
+                    self._trades_spool.append_ascii(encoded.encode("ascii"))
+                    return
+            self._trades_spool.append(trade)
         except Exception as error:
             self._trades_spool_failed = True
             self._remember_spool_failure(error)
+
+    def _finish_fused_columns(self):
+        # Pending row text has the same deferred refusal as an append failure.
+        # Drain before assembly can inspect a column or select a later error.
+        for column, failed in (
+                (self._equity_spool, self._equity_spool_failed),
+                (self._trades_spool, self._trades_spool_failed)):
+            if column is not None and not failed:
+                try:
+                    column._flush_ascii()
+                except Exception as error:
+                    self._remember_spool_failure(error)
 
     def _append_output_record(self, record):
         if self._fused_outputs is not None:
@@ -6778,6 +6839,7 @@ class _ReportSink:
                         "the report sink trailer differs from its engine receipt")
                 self._check_fused_identity(reader, self.path, self.named)
                 self._close_fused_reader(reader)
+                self._finish_fused_columns()
         except SinkFormatError as error:
             raise _engine_invariant(
                 f"the engine's report sink is invalid: {error}") from error
@@ -7103,6 +7165,8 @@ class _BoundedJSONFile:
         self.read_base, self.read_size = -1, 0
         self.reading = False
         self._dirty = False
+        self._pending_ascii = []
+        self._pending_rows = self._pending_bytes = 0
         self.binary = False
         self.libc = ctypes.CDLL(None, use_errno=True)
         fd = file.fileno()
@@ -7159,6 +7223,7 @@ class _BoundedJSONFile:
             self.used = 0
 
     def write(self, text):
+        self._flush_ascii()
         if self.reading:
             raise ValueError("a prepared report artifact is read-only")
         for offset in range(0, len(text), self.window):
@@ -7167,6 +7232,7 @@ class _BoundedJSONFile:
 
     def write_ascii(self, data):
         """Append already encoded ASCII through the same aligned I/O window."""
+        self._flush_ascii()
         if self.reading:
             raise ValueError("a prepared report artifact is read-only")
         position = 0
@@ -7181,7 +7247,33 @@ class _BoundedJSONFile:
                 self._sync_window()
         return len(data)
 
+    def append_ascii(self, data, row_count):
+        """Join complete column rows within the ordinary streaming bounds."""
+        if self.reading:
+            raise ValueError("a prepared report artifact is read-only")
+        size = len(data)
+        if self._pending_ascii and (
+                self._pending_rows + row_count > _STREAM_BATCH_RECORDS
+                or self._pending_bytes + size > _STREAM_BATCH_BYTES):
+            self._flush_ascii()
+        self._pending_ascii.append(data)
+        self._pending_rows += row_count
+        self._pending_bytes += size
+        # A single oversized row is written alone, as in the array writer.
+        if (self._pending_rows >= _STREAM_BATCH_RECORDS
+                or self._pending_bytes >= _STREAM_BATCH_BYTES):
+            self._flush_ascii()
+        return size
+
+    def _flush_ascii(self):
+        if self._pending_ascii:
+            data = b"".join(self._pending_ascii)
+            self._pending_ascii.clear()  # never retry a failed write
+            self._pending_rows = self._pending_bytes = 0
+            self.write_ascii(data)
+
     def flush(self):
+        self._flush_ascii()
         self.file.flush()  # retain checked flush/close failure behavior
         if not self.reading and self._dirty:
             self._sync_window()
@@ -7257,10 +7349,15 @@ class _BoundedJSONFile:
         return (b"" if self.binary else "").join(pieces)
 
     def close(self):
-        if self.buffer is not None:
-            self.buffer.close()
-            self.buffer = None
-        self.file.close()
+        try:
+            self._flush_ascii()
+        finally:
+            try:
+                if self.buffer is not None:
+                    self.buffer.close()
+                    self.buffer = None
+            finally:
+                self.file.close()
 
 
 class _UncachedSinkFile(_BoundedJSONFile):
@@ -7444,14 +7541,19 @@ class _JSONColumn(_JSONRecordArray):
         if not data and row_count == 0:
             return
         try:
-            if not self.empty:
-                self.file.write_ascii(b",")
-            self.file.write_ascii(data)
+            self.file.append_ascii(data if self.empty else b"," + data, row_count)
         except OSError as error:
             raise RunFailure("report sink write failed", "report_sink_failed",
                              {"reason": "scratch_io"}) from error
         self.empty = False
         self.length += row_count
+
+    def _flush_ascii(self):
+        try:
+            self.file._flush_ascii()
+        except OSError as error:
+            raise RunFailure("report sink write failed", "report_sink_failed",
+                             {"reason": "scratch_io"}) from error
 
 
 def _json_temporary(resources, directory):
