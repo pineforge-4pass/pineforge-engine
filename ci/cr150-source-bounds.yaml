@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1341
+  unreviewed: 1343
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1004,6 +1004,7 @@ entries:
   - {id: "U0943", file: "src/source/pine_adapter.cpp", symbol: "reviewed", ops: ["grow"], container: "unresolved by the index: reviewed.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 21207}
   - {id: "U0944", file: "src/source/pine_adapter.cpp", symbol: "roots", ops: ["grow"], container: "unresolved by the index: roots.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 3791}
   - {id: "U0945", file: "src/source/pine_adapter.cpp", symbol: "roster", ops: ["grow"], container: "unresolved by the index: roster.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 23435}
+  - {id: "U1626", file: "src/source/pine_adapter.cpp", symbol: "roster_roots", ops: ["assign", "decl", "grow"], container: "std::vector<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1116}
   - {id: "U0946", file: "src/source/pine_adapter.cpp", symbol: "rows", ops: ["assign", "decl", "grow"], container: "std::vector<Ranked>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 940}
   - {id: "U0947", file: "src/source/pine_adapter.cpp", symbol: "same_bar_defaults", ops: ["decl", "grow"], container: "std::vector<std::pair<std::uint64_t, native_order::RequestHandle>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 14751}
   - {id: "U0948", file: "src/source/pine_adapter.cpp", symbol: "seen", ops: ["decl", "grow"], container: "std::unordered_set<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 22115}
@@ -1501,6 +1502,7 @@ entries:
   - {id: "U1469", file: "src/source/pine_position_tail_summary.hpp", symbol: "live_cohorts_", ops: ["decl", "grow"], container: "std::unordered_set<const void*>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 282}
   - {id: "U1470", file: "src/source/pine_position_tail_summary.hpp", symbol: "margins_", ops: ["grow"], container: "unresolved by the index: margins_.insert(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 405}
   - {id: "U1471", file: "src/source/pine_position_tail_summary.hpp", symbol: "origins_", ops: ["decl", "grow"], container: "Origins", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 252}
+  - {id: "U1627", file: "src/source/pine_position_tail_summary.hpp", symbol: "roster_roots", ops: ["decl"], container: "std::vector<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 465}
   - {id: "U1472", file: "src/source/pine_scheduler_native.cpp", symbol: "consumed_script_cursor_", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 213}
   - {id: "U1473", file: "src/source/pine_scheduler_native.cpp", symbol: "input_script_cursor", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 212}
   - {id: "U1474", file: "src/source/pine_scheduler_native.cpp", symbol: "owned", ops: ["grow"], container: "unresolved by the index: owned.assign(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 25}
