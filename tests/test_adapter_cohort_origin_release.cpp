@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -266,50 +267,57 @@ struct Stage {
     std::uint64_t before_continuation = 0, after_continuation = 0;
 };
 
+struct SourceCohort { friend auto access(SourceCohort); };
+template struct Access<SourceCohort, &Adapter::cohort_for>;
+
 class IdentityHost final : public Host {
 public:
     explicit IdentityHost(bool original) : Host(1), original_(original) {}
     std::vector<Stage> stages;
 
     void on_source_bar(const Bar&) override {
-        require(stages.empty(), "identity population was constructed twice");
-        const auto a = cohort_open();
-        const auto b = cohort_open();
-        const auto c = cohort_open();
+        require(stages.empty(), "identity on_source_bar constructed its population twice");
+        // Source orders need placement records for opening admission. Register
+        // their named cohorts first so they use these same three rosters.
+        const auto a = (adapter_.*access(SourceCohort{}))("replace-root");
+        const auto b = (adapter_.*access(SourceCohort{}))("direct-root");
+        const auto c = (adapter_.*access(SourceCohort{}))("closing-root");
         const auto empty = cohort_open();
-        // Four cohort_open calls issue handles 1 through 4 in order.
+        // Cohort creation issues handles 1 through 4 in order.
         CHECK(a.value == 1 && b.value == 2 && c.value == 3 && empty.value == 4);
         // Cohort opens issue no request incarnations; the next request is 1.
         const auto old_pending = put_resting("older-pending");
         CHECK(old_pending.incarnation == 1); // First submitted request.
         cohort_add(a, old_pending);
         withdraw(old_pending);
-        const auto root = put_resting("replace-root");
+        const auto root = put_order("replace-root", 1.0, 50.0);
         CHECK(root.incarnation == 2); // The second submit follows the first cancel.
-        cohort_add(a, root);
         cohort_add(b, root); // A shared root exercises duplicate union members.
-        const auto replaced = replace(root, {no::Transact{2.0}, "successor", ""});
-        require(replaced.successor.has_value(), "replacement did not issue a successor");
-        const auto successor = *replaced.successor;
+        const auto successor = put_order("replace-root", 2.0);
+        require(successor != root && !core().find_live(root),
+                "identity strategy_order replace-root did not issue a successor");
+        const auto* successor_row = core().find_live(successor);
+        require(successor_row && successor_row->definition->root
+                    && *successor_row->definition->root == root,
+                "identity strategy_order replace-root successor lost its chain root");
         CHECK(successor.incarnation == 3); // A fresh-handle replace issues one successor.
-        fill(successor, 2.0, 0.0);
+        fill(successor, 2.0, 0.0); // The long transaction on flat opens 2 and closes 0.
         const auto pending_a = put_resting("later-pending-a");
         CHECK(pending_a.incarnation == 4); // Next submit after the replace successor.
         cohort_add(a, pending_a);
         withdraw(pending_a);
-        const auto direct = put({no::Transact{3.0}, "direct-root", ""});
+        const auto direct = put_order("direct-root", 3.0);
         CHECK(direct.incarnation == 5); // The next submit follows canceled origin 4.
-        cohort_add(b, direct);
-        fill(direct, 3.0, 0.0);
+        fill(direct, 3.0, 0.0); // A same-side transaction opens 3 and closes 0.
         const auto pending_b = put_resting("later-pending-b");
         CHECK(pending_b.incarnation == 6); // The next submit follows filled origin 5.
         cohort_add(b, pending_b);
         withdraw(pending_b);
-        const auto closed = put({no::Transact{4.0}, "closing-root", ""});
+        const auto closed = put_order("closing-root", 4.0);
         CHECK(closed.incarnation == 7); // The next submit follows canceled origin 6.
-        cohort_add(c, closed);
-        fill(closed, 4.0, 0.0);
-        require(core().live().empty(), "identity setup left an unexpected working request");
+        fill(closed, 4.0, 0.0); // A same-side transaction opens 4 and closes 0.
+        require(core().live().empty(),
+                "identity after closing-root fill left an unexpected working request");
         CHECK(lots().size() == 3); // Successor 3 and direct openings 5 and 7.
         CHECK(physical_position().signed_units == 9.0); // 2 + 3 + 4 long units.
         CHECK(trade_count() == 0); // The first release follows cancels alone.
@@ -323,7 +331,7 @@ public:
         close_direct.owner = no::BindOpening{closed, position_cycle_seq_};
         const auto first_close = put(close_direct);
         CHECK(first_close.incarnation == 8); // Closing root 7 issues the next request.
-        fill(first_close, 0.0, 4.0);
+        fill(first_close, 0.0, 4.0); // The bound Reduce opens 0 and closes lot 7's 4.
         CHECK(lots().size() == 2); // Only openings 3 and 5 remain after closing 7.
         stages.push_back(release_stage());
 
@@ -331,7 +339,7 @@ public:
         close_successor.owner = no::BindOpening{successor, position_cycle_seq_};
         const auto second_close = put(close_successor);
         CHECK(second_close.incarnation == 9); // Closing successor 3 issues the next request.
-        fill(second_close, 0.0, 2.0);
+        fill(second_close, 0.0, 2.0); // The bound Reduce opens 0 and closes lot 3's 2.
         CHECK(lots().size() == 1); // Opening 5 survives both selected closes.
         CHECK(physical_position().signed_units == 3.0); // 9 - 4 - 2 long units.
         stages.push_back(release_stage());
@@ -340,10 +348,26 @@ public:
     }
 
 private:
+    no::RequestHandle put_order(const char* label, double units,
+                               double limit = std::numeric_limits<double>::quiet_NaN()) {
+        strategy_order(label, true, units, limit);
+        const auto live = core().live();
+        const auto found = std::find_if(live.begin(), live.end(),
+            [&](const no::LiveRequest& row) { return row.request().label == label; });
+        require(found != live.end(),
+                ("identity strategy_order " + std::string(label)
+                    + " did not leave an accepted working request").c_str());
+        return found->handle();
+    }
     no::RequestHandle put(const no::Request& request) {
         const auto result = submit(request);
+        std::string reason = "identity submit " + request.label + " SubmitStatus="
+            + std::to_string(static_cast<unsigned>(result.status));
+        if (result.reason)
+            reason += " RequestRejectReason="
+                + std::to_string(static_cast<unsigned>(*result.reason));
         require(result.status == no::SubmitStatus::Accepted && result.handle,
-                "identity request was not accepted");
+                reason.c_str());
         return *result.handle;
     }
     no::RequestHandle put_resting(const char* label) {
@@ -352,13 +376,29 @@ private:
         return put(request);
     }
     void withdraw(const no::RequestHandle& handle) {
-        require(cancel(handle).status == no::CancelStatus::Cancelled,
-                "pending origin was not canceled before filling");
+        const auto result = cancel(handle);
+        require(result.status == no::CancelStatus::Cancelled,
+                ("identity cancel incarnation " + std::to_string(handle.incarnation)
+                    + " CancelStatus="
+                    + std::to_string(static_cast<unsigned>(result.status))).c_str());
     }
     void fill(const no::RequestHandle& handle, double opened, double closed) {
         const auto result = execute_current({handle, NativeCurrentPriceRule::AsPresented});
+        std::string outcome = "ExecutionAppliedEvent";
+        if (const auto* refusal = std::get_if<NativeCurrentRefusal>(&result)) {
+            outcome = "NativeCurrentRefusal=" + std::to_string(static_cast<unsigned>(*refusal));
+        } else if (std::holds_alternative<no::NoEffectEvent>(result)) {
+            outcome = "NoEffectEvent";
+        } else if (const auto* rejected = std::get_if<no::MatchRejectedEvent>(&result)) {
+            outcome = "MatchRejectedEvent MatchRejectReason="
+                + std::to_string(static_cast<unsigned>(rejected->reason));
+        } else if (const auto* cancelled = std::get_if<no::CancelledEvent>(&result)) {
+            outcome = "CancelledEvent CancelReason="
+                + std::to_string(static_cast<unsigned>(cancelled->reason));
+        }
         require(std::holds_alternative<no::ExecutionAppliedEvent>(result),
-                "identity current execution did not apply");
+                ("identity execute_current incarnation " + std::to_string(handle.incarnation)
+                    + " returned " + outcome).c_str());
         const auto& event = std::get<no::ExecutionAppliedEvent>(result);
         CHECK(event.opened_units == opened);
         CHECK(event.closed_units == closed);
@@ -424,8 +464,10 @@ void identity() {
     IdentityHost actual(false);
     reference.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
     actual.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
-    require(reference.last_error().empty(), reference.last_error().c_str());
-    require(actual.last_error().empty(), actual.last_error().c_str());
+    require(reference.last_error().empty(),
+            ("identity reference run: " + reference.last_error()).c_str());
+    require(actual.last_error().empty(),
+            ("identity current run: " + actual.last_error()).c_str());
     // One cancellation-only pass and one pass after each of two closes.
     CHECK(actual.stages.size() == 3 && reference.stages.size() == 3);
     // Before any close, successor 3 keeps roots below 3 in both rosters;
