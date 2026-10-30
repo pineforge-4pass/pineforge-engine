@@ -2831,6 +2831,43 @@ private:
     // Only BookSpill's index poison is permanent until the next run.
     bool match_dormant_was_fast_ = false;
     MatchDormantCounts match_dormant_counts_;
+
+    // Disposable observations, never continuation state. Const reads and
+    // invalidations belong to the run's single execution thread. No borrowed
+    // pointer into this index survives a read. Its constant payload, at most
+    // 64 KiB, is lazily reserved once and retained across commands and begin,
+    // even for a handful of lots; it is not a lot or trade history.
+    using CohortOpeningIndexRow = std::pair<std::uint64_t, std::uint64_t>;
+    static constexpr std::size_t kCohortOpeningIndexBytes = 64 * 1024;
+    // Test seam only; production uses the fixed payload budget.
+    std::size_t cohort_opening_index_bytes_ = kCohortOpeningIndexBytes;
+    // Allows extension witnesses to compile against the frozen previous headers;
+    // the cost witness itself requires no new member or build definition.
+#define PINEFORGE_HAS_COHORT_OPENING_INDEX 1
+    mutable std::vector<CohortOpeningIndexRow> cohort_opening_index_;
+    mutable bool cohort_opening_index_valid_ = false;
+    mutable bool cohort_opening_index_attempted_ = false;
+    mutable std::uint64_t cohort_opening_index_settlement_ = 0;
+    mutable std::uint64_t cohort_opening_index_lots_ = 0;
+    std::uint64_t cohort_lots_generation_ = 0;
+    bool cohort_opening_index_current() const noexcept;
+    bool read_indexed_cohort_target(const BacktestEngine&, native_order::CohortHandle,
+                                   const native_order::PositionNonflat&,
+                                   std::vector<native_order::OpeningObservation>&) const;
+    // A source host may retire dust lots in its applied notification. Treat
+    // the entire callback as a potential lot writer, including exception exits.
+    // Reads inside that window use the complete reader.
+    class CohortLotsWrite {
+    public:
+        explicit CohortLotsWrite(NativeExecutionConsumer& c) noexcept : consumer_(c) {
+            ++consumer_.cohort_lots_generation_;
+        }
+        ~CohortLotsWrite() { ++consumer_.cohort_lots_generation_; }
+        CohortLotsWrite(const CohortLotsWrite&) = delete;
+        CohortLotsWrite& operator=(const CohortLotsWrite&) = delete;
+    private:
+        NativeExecutionConsumer& consumer_;
+    };
 };
 
 // The same lazy backing used by RunCommandScratch's Book binding. Kept in
