@@ -30,11 +30,28 @@ namespace full_fold {
 
 namespace no = pineforge::native_order;
 
+// Optional exact transcript of the existing field encoder, before hashing.
+// Lengths, variant tags, double bits and string chunks are all retained.
+// Normal callers keep the same fold value and allocate nothing here.
+inline thread_local std::vector<std::uint64_t>* word_trace = nullptr;
+class WordTrace {
+public:
+    explicit WordTrace(std::vector<std::uint64_t>& out) noexcept : previous_(word_trace) {
+        word_trace = &out;
+    }
+    ~WordTrace() { word_trace = previous_; }
+    WordTrace(const WordTrace&) = delete;
+    WordTrace& operator=(const WordTrace&) = delete;
+private:
+    std::vector<std::uint64_t>* previous_;
+};
+
 // One multiply-xorshift per 64-bit word: every word moves the whole state,
 // and the fold is cheap enough to run after every command of a long book.
 struct Fold {
     std::uint64_t h = 0x243F6A8885A308D3ull;
     void u(std::uint64_t v) {
+        if (word_trace) word_trace->push_back(v);
         h = (h ^ v) * 0x9E3779B97F4A7C15ull;
         h ^= h >> 29;
     }
