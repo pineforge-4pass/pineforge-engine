@@ -98,7 +98,7 @@ For each source-marked probe:
 The source inventory is deliberately not a complete Pine type/dataflow
 analyzer. No trusted general finite-proof producer currently exists in
 this engine tree. Completing that compiler/lowering integration and
-reading the pinned sources is **RETURN TO CORE-TOP**, not an authorization
+reading the pinned sources is **pending a maintainer decision**, not an authorization
 to invent a census number.
 
 The hard failure
