@@ -69,6 +69,9 @@ struct Counters {
     std::uint64_t roster_work_sum;
 };
 
+// One copy per image: the library and each strategy module are built with
+// hidden visibility, so each holds its own counters. Attach, note_* and
+// publish must run in the same image; one attach per process.
 inline Counters counters{};
 
 namespace detail {
@@ -135,6 +138,10 @@ bool attach_from_environment() noexcept;
 // copy the payload, then acquire/recheck seq, retrying odd or changed values.
 // In-process readers use atomic word loads and an acquire fence before the
 // second seq load; retrying ordinary racing C++ loads is not sufficient.
+// A reader without atomics (pread) must read the whole 128 bytes twice and
+// accept only two byte-identical images with an even seq. After a kill, an odd
+// seq means a publish was interrupted and the payload may mix two states;
+// every counter is advisory.
 void publish() noexcept;
 
 } // namespace pineforge::detail::gauge
