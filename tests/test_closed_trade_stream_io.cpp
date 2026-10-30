@@ -458,8 +458,10 @@ void scenario(const Directory& directory) {
     bound("stream.index.pwrite_calls", index.writes,
           geometry.trades + index_head_blocks + index_releases
               + index_logical_bytes / kBudget, geometry.trades);
+    // The payload takes one append write per closed trade (both texts in one
+    // call), not one per text extent.
     bound("stream.payload.pwrite_calls", payload.writes,
-          geometry.extents + payload_head_blocks + payload_releases
+          geometry.trades + payload_head_blocks + payload_releases
               + payload_bytes / kBudget, geometry.trades);
     bound("stream.index.pwrite_bytes", index.written, index_logical_bytes, geometry.trades);
     bound("stream.payload.pwrite_bytes", payload.written, payload_bytes, geometry.trades);
@@ -467,7 +469,9 @@ void scenario(const Directory& directory) {
             "physical accounting omitted appended row storage");
     // At most three live rows and one newly closed row; all descriptors fit
     // the 64-row ring, all live text fits the fixed 64*168-byte payload tail.
-    // cold=max(0,live_rows-capacity)=0; no reads or compaction truncates.
+    // cold=max(0,live_rows-capacity)=0; no cold reads. A chunk release reads
+    // the retained suffix back in windows to move it (one read per window,
+    // below one window here), so each release adds that many reads.
     // MUTANTS: read index in descriptor's resident branch, or read payload
     // in read_string's tail branch: each breaks its respective zero-read bound.
     const Count live = geometry.trades - retired + 1;
@@ -475,8 +479,10 @@ void scenario(const Directory& directory) {
     const Count tail_rows = TradeLedger::kResidentRows * TradeLedger::kRecordBytes
         / geometry.max_text_bytes;
     const Count cold_payload = live - std::min(live, tail_rows);
-    bound("stream.index.pread_calls", index.reads, cold_index, geometry.trades);
-    bound("stream.payload.pread_calls", payload.reads, cold_payload, geometry.trades);
+    bound("stream.index.pread_calls", index.reads,
+          cold_index + index_releases + index_rebase_bytes / kBudget, geometry.trades);
+    bound("stream.payload.pread_calls", payload.reads,
+          cold_payload + payload_releases, geometry.trades);
     // MUTANT: truncate each file to its existing storage_bytes() in
     // release_head even when no chunk is released: breaks its truncate bound.
     bound("stream.index.ftruncate_calls", index.truncates, index_releases, geometry.trades);
