@@ -10609,18 +10609,6 @@
   },
   {
    "file": "include/pineforge/source/pine_adapter.hpp",
-   "symbol": "roster_roots",
-   "scope": [
-    "namespace pineforge :: source #2",
-    "class PineExecutionAdapter #1",
-    "struct RetiredRowScratch #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < std :: uint64_t >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/source/pine_adapter.hpp",
    "symbol": "lot_openings",
    "scope": [
     "namespace pineforge :: source #2",
@@ -30107,24 +30095,11 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "roster_roots",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & roster : core . cohorts ( ) ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "roster_roots . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
    "symbol": "successor_lots",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto opening : lots ) #1",
-    "if ( ! std :: binary_search ( roster_roots . begin ( ) , roster_roots . end ( ) , opening ) ) #1"
+    "for ( const auto opening : lots ) #1"
    ],
    "cls": "grow",
    "spelling": "successor_lots . push_back ( . . . )",
@@ -30136,7 +30111,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & roster : core . cohorts ( ) ) #2"
+    "for ( const auto & roster : core . cohorts ( ) ) #1"
    ],
    "cls": "assign",
    "spelling": "origins = . . .",
@@ -30148,7 +30123,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & roster : core . cohorts ( ) ) #2",
+    "for ( const auto & roster : core . cohorts ( ) ) #1",
     "for ( const auto & origin : origins ) #1"
    ],
    "cls": "grow",
