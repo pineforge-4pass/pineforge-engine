@@ -29127,6 +29127,18 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "roster_roots",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "namespace detail #5",
+    "struct AdapterPositionTailSummary final : PositionTailSummary #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < std :: uint64_t >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "run",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -30073,6 +30085,28 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "position_tail_summary_",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "roster_roots",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "roster_roots = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "working",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -30095,11 +30129,24 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "roster_roots",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
+    "for ( const auto & roster : core . cohorts ( ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "roster_roots . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "successor_lots",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto opening : lots ) #1"
+    "for ( const auto opening : lots ) #1",
+    "if ( ! std :: binary_search ( roster_roots . begin ( ) , roster_roots . end ( ) , opening ) ) #1"
    ],
    "cls": "grow",
    "spelling": "successor_lots . push_back ( . . . )",
@@ -30111,7 +30158,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & roster : core . cohorts ( ) ) #1"
+    "for ( const auto & roster : core . cohorts ( ) ) #2"
    ],
    "cls": "assign",
    "spelling": "origins = . . .",
@@ -30123,7 +30170,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & roster : core . cohorts ( ) ) #1",
+    "for ( const auto & roster : core . cohorts ( ) ) #2",
     "for ( const auto & origin : origins ) #1"
    ],
    "cls": "grow",
