@@ -270,6 +270,7 @@ void history_guard() {
     };
     const auto small = fold(64);
     const auto large = fold(128);
+    CHECK(small.path == 2 && large.path == 2);
     const auto delta = large.steps > small.steps
         ? large.steps - small.steps : small.steps - large.steps;
     CHECK(delta <= 16);

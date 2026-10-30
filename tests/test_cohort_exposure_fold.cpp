@@ -53,10 +53,13 @@ void push(OriginRoster& origins, std::uint64_t incarnation) {
 }
 
 std::uint64_t comparisons = 0;
+std::array<std::uint64_t, 4> path_hits{};
 detail::CohortExposureFold check(const OriginRoster& origins, const Units& units) {
     const auto actual = detail::fold_cohort_exposure(origins, units);
     const double expected = old_fold(origins, units);
     assert(std::memcmp(&actual.total, &expected, sizeof expected) == 0);
+    assert(actual.path < path_hits.size());
+    ++path_hits[actual.path];
     ++comparisons;
     return actual;
 }
@@ -64,13 +67,13 @@ detail::CohortExposureFold check(const OriginRoster& origins, const Units& units
 void special_values_and_multiplicity() {
     OriginRoster origins;
     Units units;
-    check(origins, units);
+    assert(check(origins, units).path == 0);
     units.emplace(19, 1.0);
-    check(origins, units); // Unit row with no roster entry.
+    assert(check(origins, units).path == 0); // Unit row with no roster entry.
     push(origins, 71);
     check(origins, units); // Roster entry with no unit row.
     units.clear();
-    check(origins, units);
+    assert(check(origins, units).path == 0);
     push(origins, 19);
     push(origins, 3);
     push(origins, 19);
@@ -121,14 +124,17 @@ detail::CohortExposureFold shape(std::size_t history, std::size_t rows,
 }
 
 void boundary_values() {
-    shape(4 * 3 + 16, 3, 6);
-    shape(4 * 3 + 17, 3, 6);
-    shape(4 * 3 + 17, 3, 0);
-    shape(600, 128, 128);
-    shape(600, 129, 129);
+    assert(shape(4 * 3 + 16, 3, 6).path == 1);
+    assert(shape(4 * 3 + 17, 3, 6).path == 2);
+    const auto no_positions = shape(4 * 3 + 17, 3, 0);
+    assert(no_positions.path == 2 && no_positions.total == 0.0);
+    assert(no_positions.steps == 3); // Every missing unit row is still examined.
+    const auto k = detail::kCohortFoldStack;
+    assert(shape(600, k, k).path == 2);
+    assert(shape(600, k + 1, k + 1).path == 3);
     // Multiplicity alone reaches the stack boundary.
-    shape(200, 1, 128);
-    shape(200, 1, 129);
+    assert(shape(200, 1, k).path == 2);
+    assert(shape(200, 1, k + 1).path == 3);
 }
 
 void randomized_mutations() {
@@ -192,6 +198,12 @@ int main() {
     special_values_and_multiplicity();
     boundary_values();
     randomized_mutations();
+    for (const auto hits : path_hits) assert(hits > 0);
     std::printf("cohort exposure bit comparisons: %llu\n",
                 static_cast<unsigned long long>(comparisons));
+    std::printf("cohort exposure paths: %llu %llu %llu %llu\n",
+                static_cast<unsigned long long>(path_hits[0]),
+                static_cast<unsigned long long>(path_hits[1]),
+                static_cast<unsigned long long>(path_hits[2]),
+                static_cast<unsigned long long>(path_hits[3]));
 }
