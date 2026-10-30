@@ -27,6 +27,7 @@
 
 #include <pineforge/detail/o1_store.hpp>
 
+#include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/detail/scratch_errors.hpp>
 #include <pineforge/detail/scratch_store.hpp>
 
@@ -467,8 +468,9 @@ StoreImpl::Header StoreImpl::header_for(Id id) const {
   // Lookup/read failures can follow successful chunk puts/erases. Poison before
   // constructing the exception too: its string allocation can itself throw.
   if (outer_active_) rollback_only_ = true;
-  if (status == ScratchStatus::io_error)
+  if (status == ScratchStatus::io_error && store_ && store_->carried_failure()) {
     rethrow_carried_scratch_failure(store_->carried_failure());
+  }
   throw std::runtime_error(std::string("o1 store: ") + what + ": " + status_text(status));
 }
 

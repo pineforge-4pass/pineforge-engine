@@ -5,6 +5,17 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
+## Unreleased
+
+- A script container (string, array, map or object store) whose scratch
+  growth or commit fails now reports the typed scratch failure instead of
+  `engine_unclassified_error` with the text `o1 store: put/commit: io_error`.
+  When the scratch arena is exhausted the run fails with `report_sink_failed`
+  and `reason: arena_exhausted`; when the disk scratch fails (a zero
+  `RLIMIT_FSIZE`, `ENOSPC` or `EIO` on the unjailed route) it fails with
+  `report_sink_failed` and `reason: scratch_io`. Runs that did not fail are
+  unchanged.
+
 ## 1.9.0 — 2026-10-30
 
 - On macOS, `CMakeLists.txt` now lets one symbol,
