@@ -1387,6 +1387,8 @@ list(APPEND TEST_SOURCES test_adapter_exit_scratch)
 list(APPEND TEST_SOURCES test_reversal_exit_owner_gate)
 # The acceptance-ordered exposure fold against the frozen position selector.
 list(APPEND TEST_SOURCES test_cohort_exposure_fold)
+# Deterministic work counts on reused-id and distinct-id opening runs.
+list(APPEND TEST_SOURCES test_cohort_exposure_work)
 # R5 lane PERF-L1: NativeStrategyHost's consumer, aggregate and lifecycle reads
 # against the lookups they replaced, inside every host hook of randomized
 # runs. Source-free, so it also runs in the kernel-only profile.
@@ -3825,6 +3827,11 @@ endif()
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
+
+if(TARGET test_cohort_exposure_work)
+    add_test(NAME test_cohort_exposure_caller_groups
+        COMMAND test_cohort_exposure_work --caller-groups)
+endif()
 
 if(UNIX)
     # PASS_REGULAR_EXPRESSION makes output matching replace CTest's exit-code

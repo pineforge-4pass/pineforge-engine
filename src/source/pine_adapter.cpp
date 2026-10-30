@@ -5358,7 +5358,8 @@ double PineExecutionAdapter::cohort_exposure_for(const SourceId& id) const noexc
 }
 
 double PineExecutionAdapter::cohort_exposure_for(const CohortFacts& facts) const noexcept {
-    // Quantities follow deterministic source insertion order, never the
+    PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_call", this, run_counter_, 1);
+    // Quantities follow source insertion order, never the
     // lookup table's hash buckets. The private seam owns that fold.
     // Each retained roster position contributes separately when its
     // incarnation has a live-unit row. Repeated incarnations therefore
@@ -5379,14 +5380,13 @@ double PineExecutionAdapter::cohort_exposure_for(const CohortFacts& facts) const
     // Global positions keep their order after prefix retirement.
     // A missing map row contributes no term for its roster position.
     // A missing roster position contributes no term for its map row.
-    // Source readback and execution therefore observe identical quantities.
     const auto folded = detail::fold_cohort_exposure(facts.origins,
                                                     facts.live_units_by_origin);
-    // No aggregate or reservation state is updated by this read.
-    // The returned diagnostics describe only the current fold.
-    // They are deliberately separate from the value operations.
-    // In particular, visiting the final unsuccessful selector pass
-    // changes the work count without changing the total.
+    PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_step", this, run_counter_, folded.steps);
+    PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_window", this, run_counter_,
+                               facts.origins.members().size());
+    PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_rows", this, run_counter_,
+                               facts.live_units_by_origin.size());
     // Callers receive only the clamped exposure value.
     return folded.total;
 }
