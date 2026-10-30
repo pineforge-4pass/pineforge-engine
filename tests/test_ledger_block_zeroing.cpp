@@ -19,6 +19,9 @@ struct TradeLedgerStorageProbe {
     static void retire_history(TradeLedger& ledger) {
         ledger.set_history_retirement(true);
     }
+    static std::array<std::uint64_t, 2> bytes(const TradeLedger& ledger) {
+        return ledger.scratch_storage_bytes();
+    }
 };
 } // namespace pineforge::detail
 
@@ -130,7 +133,7 @@ void empty_truncate_restarts_the_watermark(const std::string& directory) {
     pineforge::detail::TradeLedgerStorageProbe::retire_history(ledger);
     for (int index = 0; index < 40; ++index) ledger.push_back(row(index));
     ledger.seal(40);
-    const auto empty = ledger.scratch_storage_bytes();
+    const auto empty = pineforge::detail::TradeLedgerStorageProbe::bytes(ledger);
     if (empty[0] != 0 || empty[1] != 0 || ledger.base() != 40)
         throw std::runtime_error("empty retirement did not truncate both files");
 
