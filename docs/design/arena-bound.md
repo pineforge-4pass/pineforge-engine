@@ -226,7 +226,7 @@ The producer must be trusted build tooling, never user-supplied assertions.
 The compiler owner must additionally bind imported library closures, the
 target/compiler profile and any external request/environment identity not
 already in the resolved plan. **That producer and external provenance
-integration remain RETURN TO CORE-TOP.**
+integration remain with the maintainers for a decision.**
 
 ## Compiler facts the bound needs
 
@@ -699,8 +699,8 @@ Each disk store reuses one buffer for its resident prefix, then its read cache;
 crossing 64 KiB spills once. Attached arenas retain direct mapped admission.
 Charge K (prose ledger; scripts/arena_bound.py has no K input) alongside existing workspaces/inner backings, replacing the old read-cache allowance; K changes no arena-storage formula or certification.
 
-CORE-TOP's A5-WIDER brief reports a **44.4–46.2 MB pre-flat-port resident
-constant**, referring to Q2 at 15:43. That is a historical measurement,
+The maintainers' wider A5 note reports a **44.4–46.2 MB pre-flat-port resident
+constant**, citing an earlier note. That is a historical measurement,
 not a source-derived upper bound for this merged tree or arbitrary
 compiled strategy state. No P_as measurement was supplied. The calculator
 therefore installs neither value by default. A supplied historical RSS
