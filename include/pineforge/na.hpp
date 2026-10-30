@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <string>
 #include <type_traits>
 #include <utility>
 
@@ -80,6 +81,13 @@ inline bool is_na(const ScriptArray<T>& value) {
     return !value.store_backed();
 }
 
+// A string na is stored as the empty string: na<std::string>() is "" (the
+// generic na<T>() above), and generated code has always read "" as na (the
+// codegen warns that TradingView tells an authored "" from a missing string,
+// the engine cannot). So the one string observer is "is it empty". It is a
+// non-template overload, which wins over the generic template below.
+inline bool is_na(const std::string& value) { return value.empty(); }
+
 // Preserve the existing scalar overloads, including bool/float conversions
 // and user-defined numeric conversions, rather than intercepting them here.
 template <typename T, std::enable_if_t<
@@ -94,8 +102,11 @@ inline bool is_na(const T& value) {
         return na_detail::call_adl_is_na(value);
     } else {
         // Value storage without a nullable ID is always present. In particular,
-        // std::vector<T, A>, std::string, std::map and std::unordered_map cannot
-        // hold an na reference: even an empty container answers false. A plain
+        // std::vector<T, A>, std::map and std::unordered_map cannot hold an na
+        // reference, so std::vector<T, A> cannot tell an na array from an empty
+        // one: even an empty container answers false (the nullable-array
+        // representation is a separate, later change). The string rule is the
+        // overload above. A plain
         // UDT without a missingness protocol follows the same rule; fields and
         // elements are never inspected recursively. Its na<T>() remains T{}.
         return false;

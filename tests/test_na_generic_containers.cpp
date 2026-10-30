@@ -311,8 +311,14 @@ int main() {
     check_present_value("vector_udt_nonempty", std::vector<FlaggedHandle>{{}});
     check_present_value("vector_drawing_empty", std::vector<Line>{});
     check_present_value("vector_drawing_nonempty", std::vector<Line>{{}});
-    check_present_value("string_empty", std::string{});
-    check_present_value("string_nonempty", std::string{"item"});
+    // DEFINED MEANING for strings (na.hpp): a string na is stored as "", so
+    // the empty string is na and any non-empty text is present. TradingView
+    // tells an authored "" from a missing string; the engine cannot (known
+    // gap, warned by codegen). The value na<std::string>() must read as na.
+    check_value("string_empty", std::string{}, true);
+    check_value("string_nonempty", std::string{"item"}, false);
+    check_value("string_blank", std::string{" "}, false);
+    check_value("string_na_roundtrip", pineforge::na<std::string>(), true);
     check_present_value("script_string_empty", ScriptString{});
     check_present_value("map_empty", std::map<std::string, double>{});
     check_present_value("map_nonempty", std::map<std::string, double>{
@@ -332,7 +338,6 @@ int main() {
     check_default_value<std::vector<std::string>>("na_vector");
     check_default_value<std::map<std::string, double>>("na_map");
     check_default_value<std::unordered_map<std::string, std::string>>("na_unordered_map");
-    check_default_value<std::string>("na_string");
     check_default_value<PlainObject>("na_plain_udt");
     check_flag_flip("member_flag_flip", FlaggedHandle{});
     check_default_handle<FlaggedHandle>("member_na_roundtrip");
