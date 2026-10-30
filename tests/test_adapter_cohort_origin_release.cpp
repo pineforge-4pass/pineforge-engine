@@ -519,16 +519,16 @@ template<class Function> void row(const char* name, Function function) {
 
 int main() {
     using namespace cohort_origin_fixture;
-    // A union pass dereferences N singleton rosters once, then sorts N roots
-    // and binary-searches N lots. Allow N*ceil(log2(N)) roster visits (c=1):
-    // 128*7=896 and 256*8=2048. The old scan visits 1+...+N rosters,
-    // hence 8256 and 32896. Both N^2 products exceed kDirectScan=64.
-    row("distinct roots 128", [] { ramp(128, 896); });
-    row("distinct roots 256", [] { ramp(256, 2048); });
-    // 65 > 64, 65^2 > 64; bound 65*7=455, old visits 65*66/2=2145.
+    // A union pass dereferences each of the N singleton rosters exactly once,
+    // then sorts N roots and binary-searches N lots. Allow 2*N roster visits:
+    // 256 and 512. The old scan visits 1+...+N rosters, hence 8256 and 32896.
+    // Both N^2 products exceed kDirectScan=64.
+    row("distinct roots 128", [] { ramp(128, 256); });
+    row("distinct roots 256", [] { ramp(256, 512); });
+    // 65 > 64, 65^2 > 64; bound 2*65=130, old visits 65*66/2=2145.
     // The positive counter assertion rejects both an early return and a
     // counter removed along with the old loop.
-    row("nonzero roster witness", [] { ramp(65, 455); });
+    row("nonzero roster witness", [] { ramp(65, 130); });
     row("ordered origin release", [] { identity(); });
     std::printf("test_adapter_cohort_origin_release: %d checks, %d failures\n",
                 checks, failures);
