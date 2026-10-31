@@ -19,7 +19,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 # Pinned to main at the merge; when main moves again before this change merges, repoint all three to the new main head (and re-run the re-anchor and the OFF row).
-BASE = "1a7593b2f2f8a0b17a90c3cb9503ce4a7c508683"
+BASE = "aaefc903be91732fe7854fc7ffa10f5a8aeee11c"
 ENTRYPOINT = Path(os.environ.get("PINEFORGE_ENTRYPOINT_UNDER_TEST",
                                 str(ROOT / "docker/entrypoint.sh"))).resolve()
 WALL = "PINEFORGE_COMPILE_WALL_MS"
