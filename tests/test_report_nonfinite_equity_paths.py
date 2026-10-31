@@ -280,7 +280,7 @@ def test_non_sink_native_nonfinite(tmp_path, field, bad):
 @pytest.mark.parametrize("field,bad", CASES)
 def test_file_sink_native_nonfinite(tmp_path, native_writer, field, bad):
     # Mutation: remove _validate_report_result(out) in _build_sink_report's
-    # non-fd branch at docker/run_json.py:6435.
+    # non-fd branch at docker/run_json.py:6451.
     result = run_path(tmp_path, field, bad, "file", writer=native_writer,
                       extra=("--spill-dir", str(tmp_path)))
     assert_native_poison(result, field, bad)
