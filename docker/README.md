@@ -162,6 +162,49 @@ settings apply to compilation and binding; transpilation and backtesting
 have their own controls. A requested guard requires Linux procfs and
 child-subreaper support; an unavailable mechanism is a usage refusal.
 
+### Opt-in supervised report channel
+
+`docker/pineforge_report_supervise.py` is an opt-in, separate-process report
+channel (`--report-channel supervised/v1 --terminal-status-fd M ...`, or the
+environment names listed in its module docstring). It is OFF by default: with
+no channel option or variable set, `run_json.py` behaves exactly as before. It
+is **not yet host-attested**: an ordinary invocation refuses with
+`run_isolation_unavailable{reason:"policy"}` before starting a producer, and
+only an explicit test attestation can run it. For now the full report needs an
+external sink descriptor; the internal snapshot handoff is pending. It does not
+forward the host run-quota marker, so it refuses to start when any variable
+whose name starts with `PF_RUN_QUOTA_` is set.
+
+Limits. Report, diagnostic, wall and stall limits are unlimited when unset or
+`0`; a positive value is exact and a positive host grant can only constrain it
+(a request above the grant is refused, never clamped). Two cleanup graces have a
+default: `--post-exit-drain-ms` (how long diagnostic and receipt pipes may stay
+open after their owners exit) and `--stop-grace-ms` (the wait between the
+terminate request and the forced kill), both 1000 ms by default and unlimited
+at `0`. A value of `0` for `--stop-grace-ms` disables the forced kill, so the
+supervisor then waits for the producer's process group to exit. The same
+unsigned-decimal grammar applies to every limit.
+
+Terminal record. Each handled outcome produces one `pf-run-terminal/v1` record
+with the members `schema`, `version`, `contract`, `attempt_id`, `invocation`,
+`complete`, `exit_class`, `failure`, `exit_status`, `diagnostics`, `producer`,
+`limits`, `report_charged_bytes`, `channels`, `sink_verification`, `usage` and
+`cleanup`. `diagnostics` is a list of text strings, each cut at 1,024 bytes;
+refusals and expired graces name their parameter there. Each entry of `limits`
+(including `post_exit_drain_ms` and `stop_grace_ms`) reports `requested`,
+`granted` and `effective`, with `effective` null for an unlimited dimension.
+`complete` stays false while the native execution domain is not measured empty,
+so a test-attested run records `complete: false`.
+
+Sink validation. Unjailed runs validate the native sink in file mode with an
+optional cap. Under the jailed profile the validator runs in provisional stdout
+mode with a positive bound: `--planned-sink-bytes`
+(`PINEFORGE_REPORT_PLANNED_SINK_BYTES`) or the positive report allowance, and the
+run is refused before launch when neither exists. The supervisor holds up to
+that bound in memory until the validator exits 0 with a complete receipt, so an
+operator who sets a very large report allowance on a jailed profile lets the
+supervisor grow to that size.
+
 ### Transpile only (Pine → C++, no backtest)
 
 Set `PINEFORGE_TRANSPILE_ONLY=1` to emit the generated C++ on stdout and exit
