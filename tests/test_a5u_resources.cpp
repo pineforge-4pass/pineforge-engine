@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 namespace {
 using a5u_test::require;
@@ -43,9 +44,12 @@ void arena_backing_accounting() {
         constexpr auto bound = a5u_test::store_bound(8);
         constexpr auto payload_bytes = 2 * bound;
         constexpr std::uint64_t count = 8;
+        // Publish the payload so this remains a backing-spill check even
+        // when unwritten Store chunks are represented by implicit zeros.
+        const std::vector<unsigned char> zeros(payload_bytes);
         std::array<std::uint64_t, 2> backing_checkpoints{};
         for (std::uint64_t i = 0; i < count; ++i) {
-            const Id object = graph.make(payload_bytes, 1);
+            const Id object = graph.make(UdtType{0, payload_bytes, 1}, zeros.data(), nullptr);
             const auto field = (i + 1) * UINT64_C(137);
             graph.set_scalar(object, field);
             graph.set_edge(object, 0, graph.edge(root, 0));

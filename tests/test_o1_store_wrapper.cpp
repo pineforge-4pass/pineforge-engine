@@ -51,6 +51,7 @@ public:
         inner_.note_cleanup_skipped(reason);
     }
     Stats stats() const override { return inner_.stats(); }
+    std::uint64_t rollback_epoch() const noexcept override { return inner_.rollback_epoch(); }
 
 private:
     Store& inner_;
@@ -177,6 +178,7 @@ void wrapper_abandon(bool explicit_rollback) {
     using Leaf = MapTree<1>::Map;
     auto map = std::make_unique<Leaf>(MapTree<1>::build());
     const auto before = inner.stats();
+    const auto before_epoch = wrapper.rollback_epoch();
     {
         auto outer = wrapper.begin();
         {
@@ -195,8 +197,13 @@ void wrapper_abandon(bool explicit_rollback) {
         require(inner.stats().cleanup_skipped_rollback_only == 1 &&
                     inner.stats().cleanup_failed == 0,
                 "wrapper did not forward the benign cleanup diagnostic");
+        require(wrapper.rollback_epoch() == before_epoch,
+                "joined abandonment advanced the epoch before restoring bytes");
         outer->rollback();
     }
+    require(wrapper.rollback_epoch() == before_epoch + 1 &&
+                inner.rollback_epoch() == before_epoch + 1,
+            "wrapper did not forward the completed outer rollback epoch");
     const auto stats = wrapper.stats();
     require(stats.bytes_live == before.bytes_live &&
                 stats.objects_live == before.objects_live &&
