@@ -95,6 +95,39 @@ observation descriptors, compiler processes and cleanup resources as well as
 data artifacts. Storage extent rounding and memory-backed files require a
 host policy; they cannot be inferred from a child's claimed inode/extent.
 
+## Ledger memory
+
+The Python ledger (`RunQuota` in `docker/run_quota.py`) keeps one record per
+live backing file or directory, so its memory is linear in the live objects
+and is bounded by the file limit: **about 0.9 KB per live file multiplied by
+`PF_RUN_SCRATCH_FILES`**. A reserve that would make the live count exceed the
+limit is refused with `files_boundary` (`resource_exceeded`), so the limit is
+also the ceiling on the ledger. The engine adds no separate ceiling and
+`parse_limits()` still accepts any value up to `2^53-1`; the host sizes its
+control plane from the limit it sets, with the ledger's share given by the
+product above.
+
+Measured on CPython 3.12.16 against the real ledger, one owner, empty backing
+files, with the limit set to 1,000, 10,000, 100,000 and 1,000,000 files:
+
+| Question | Result at every limit |
+| --- | --- |
+| Does the steady state grow? | No. 200,000 cycles of reserve, commit, cancel and release leave the traced allocation 8,786 bytes below its start and the resident size unchanged. |
+| What does a live file cost? | 877.8, 877.4, 924.7 and 903.9 bytes of Python allocation per live file (0.88 to 0.92 KB), the same across a thousandfold range of limits. A full table of one million live files is about 904 MB of allocation. |
+| What is retained when an owner disconnects without finishing? | Everything. All records and committed charges stay until the host process exits, because a ledger lives for one run. |
+| What is returned after every object is released? | The records are gone but the containers keep their capacity (about 84 allocated bytes per former object at one million), which is ordinary allocator behaviour and not growth. |
+| What happens one past the limit? | The reserve is refused with `files_boundary`, used equal to the limit. |
+
+The resident size of a full table was measured only with the allocation
+tracer attached (2.02 GB at one million files, of which 588 MB is the
+tracer's own bookkeeping), so the allocation figure above is the one to
+budget from, with headroom for the interpreter's own overhead.
+
+Not covered by this measurement: the transport and the per-request ticket map
+of `serve()`, more than one owner, tickets still pending, object grants and
+the descriptor maps of several owners, limits above one million files, other
+Python versions, and the native ledger in `src/run_quota.cpp`.
+
 Unmanaged client snapshots return empty accounting solely as a no-op API
 result. Those zeros are not policy limits or measured usage and must not be
 published as finite caps in a receipt. Managed-only sizing/policy utilities
