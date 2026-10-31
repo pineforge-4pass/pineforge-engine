@@ -212,6 +212,9 @@ public:
     std::size_t cancels = 0, replacements = 0, partials = 0, brackets = 0;
     std::size_t base() const { return trades_.base(); }
     void refuse_old_field() const { (void)closed_trade_profit(0); }
+    bool old_entry_id_equals(std::string_view rhs) const {
+        return closed_trade_entry_id_equals(0, rhs);
+    }
     void check_copy() const {
         TradeLedger copied(trades_);
         TradeLedger moved(std::move(copied));

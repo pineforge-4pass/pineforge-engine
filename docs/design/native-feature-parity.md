@@ -884,8 +884,8 @@ between the halves. The mark itself is the same bar on both.
 (engine.hpp:714) is initialised NaN, reset to NaN at run start
 (`fold_exit_trail_peak_` engine_run.cpp:109) and **never assigned a finite value anywhere in the
 tree**, so the `fold_exit_trail_peak_` checks
-(engine_execution.cpp:1120, :1135; `fold_exit_trail_peak_` engine_report.cpp:2288)
-and the shared producer's `preceding_exit_trail_peak` check (engine_orders.cpp:186)
+(engine_execution.cpp:1120, :1135; `fold_exit_trail_peak_` engine_report.cpp:2294)
+and the shared producer's `preceding_exit_trail_peak` check (engine_orders.cpp:193)
 are inert. The shared producer keeps the carry so it folds exactly what the kernel's settling path folds; removing the member is an epoch question (it is
 hashed as `fold_exit_trail_peak_` at engine_state_hash.cpp:86) and is left to a lane that budgets one.
 
@@ -1720,7 +1720,7 @@ virtual void hash_host_extension(BrokerStateHashSink&) const {}   // F (S: hash_
 NativeMetricsView native_metrics() const;                          // S: net_profit, equity, closed_trades, open_lots; non-virtual
 ```
 
-- `KernelRecorded`: the consumer calls the existing `update_equity_extremes()` (engine.hpp:1654) + `record_equity_point(script_open_ms)` (engine.hpp:1681) once per script calculation (after `invoke_callback` native_execution_consumer.cpp:8618, :8618, :8618, :8618) and after the `AfterCalculation` close; appends the per-bar broker hash when recording is on; synthesizes the open-position row at run end / `stream_end` with the existing `build_close_trade_with_costs` (engine_orders.cpp:75).
+- `KernelRecorded`: the consumer calls the existing `update_equity_extremes()` (engine.hpp:1654) + `record_equity_point(script_open_ms)` (engine.hpp:1681) once per script calculation (after `invoke_callback` native_execution_consumer.cpp:8618, :8618, :8618, :8618) and after the `AfterCalculation` close; appends the per-bar broker hash when recording is on; synthesizes the open-position row at run end / `stream_end` with the existing `build_close_trade_with_costs` (engine_orders.cpp:82).
 - `KernelRecordedAtHostMarks` (R1, KERNEL-EDGE): the same recording, at the points a C++ host names with `NativeStrategyHost::mark_native_report_point` instead of once per calculation; the consumer never records on its own initiative under it, so the continuation identity stays where `HostRecorded` leaves it. The Pine adapter's existing `mark_script_report_point` route has the same kernel producer. It is what the adapter declares (`KernelRecordedAtHostMarks` pine_adapter.cpp:3042), with `report_open_position_at_end == false`.
 - Publish read-only `closed_trade_*` accessors (RP6).
 - Alternative: F's virtual `owns_equity_recording()` (the A48 ownership pattern of `owns_lot_excursions` native_host.hpp:1043). Same semantics, but it costs a host-epoch bump, so the spec form was chosen; the virtual was never added, and `NativeReportPolicy` is what landed (§3.4 row 3).

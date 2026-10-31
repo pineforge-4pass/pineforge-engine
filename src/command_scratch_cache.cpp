@@ -36,8 +36,11 @@ CachedScratchBacking::CachedScratchBacking(std::unique_ptr<ScratchBacking> inner
         bytes_.reset(new (std::nothrow) std::byte[kCacheBytes]);
         if (!bytes_)
             throw scratch_out_of_memory_failure();
+        page_ids_.reset(new (std::nothrow) ScratchPageId[slot_count_]());
+        if (!page_ids_)
+            throw scratch_out_of_memory_failure();
+        std::fill_n(page_ids_.get(), slot_count_, scratch_no_page);
     }
-    page_ids_.fill(scratch_no_page);
 }
 
 CachedScratchBacking::~CachedScratchBacking() noexcept {
@@ -91,6 +94,9 @@ ScratchStatus CachedScratchBacking::do_write_page(
     const auto before = page_count();
     const auto growth = id >= before ? (id + 1 - before) * size : 0;
     if (budget_ && growth != 0 && !budget_->reserve(growth)) return ScratchStatus::io_error;
+    // Keep this local predicate before write()'s resident/spill choice. Only
+    // the inner disk backing reserves shared scratch bytes; charging here
+    // would count resident pages as disk and charge a spilled prefix twice.
     const auto status = write(id, source);
     // A failed spill keeps the resident prefix authoritative. After spill,
     // ftruncate may have extended the file before a failed/short pwrite;

@@ -149,7 +149,7 @@ cases or to any other field; in particular `sharpe_bar` and `sortino_bar` have
 none on any span. If `cagr` took its compounded form,
 `diagnostics.annualization` is absent, whatever `calmar` is.
 
-`_annualization_diagnostics` (`docker/run_json.py:4099`) derives the span from
+`_annualization_diagnostics` (`docker/run_json.py:4105`) derives the span from
 the same first and last curve times. Under one day a finite `cagr` on a positive
 span is enough, since the kernel makes `cagr` null only in the existing
 domains. From one day on the writer repeats the kernel's arithmetic, `(pow(E/E0,
