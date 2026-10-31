@@ -169,6 +169,7 @@ public:
         inner_.note_cleanup_skipped(reason);
     }
     pineforge::detail::o1::Stats stats() const override { return inner_.stats(); }
+    std::uint64_t rollback_epoch() const noexcept override { return inner_.rollback_epoch(); }
 };
 
 // Disk backing created in the test's working directory and unlinked at once

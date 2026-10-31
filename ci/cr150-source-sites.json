@@ -5717,18 +5717,6 @@
    "scope": [
     "namespace pineforge #1",
     "template < typename Key , typename Value > class PineMap #1",
-    "static void create_objects ( Storage & storage ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "heap_values . reserve ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "heap_values",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1",
     "static void set_heap_value ( Storage & storage , std :: uint32_t slot , Value && value ) #1"
    ],
    "cls": "grow",
@@ -5741,9 +5729,10 @@
    "scope": [
     "namespace pineforge #1",
     "template < typename Key , typename Value > class PineMap #1",
-    "static Located locate ( Storage & storage , const detail :: MapHeader & header , const Key & key , std :: uint64_t hash ) #1",
+    "template < bool WithValue = false > static Located locate ( Storage & storage , const detail :: MapHeader & header , const Key & key , std :: uint64_t hash ) #1",
     "while ( at ! = 0 && at < = header . high_water ) #1",
-    "if ( links . hash = = hash && key_matches ( storage . store ( ) , load_key_rep ( storage , at - 1 ) , key ) ) #1"
+    "if ( links . hash = = hash ) #1",
+    "if ( key_matches ( storage . store ( ) , found . key , key ) ) #1"
    ],
    "cls": "assign",
    "spelling": "previous = . . .",

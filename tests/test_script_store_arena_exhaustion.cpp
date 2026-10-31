@@ -198,10 +198,12 @@ std::uint64_t map_arena_bytes(const std::string& payload) {
             "disk map preparation and first insertion complete without a throw");
     growth.verify(1, payload);
     const auto extent = holder->backing->page_count() * holder->backing->page_size();
-    require(extent > kArenaBytes, "a prepared map needs more than the minimum arena");
-    // A map prepares all 50,000 slots. Use the smallest whole-MiB arena
-    // covering actual disk preparation plus one committed insertion, so the
-    // arena witness cannot fail at map.new_() or its first growth operation.
+    require(extent > 0, "the disk control published at least one page");
+    // A map publishes its chunks on first write, so a prepared map no longer
+    // fills a whole MiB by itself. Use the smallest whole-MiB arena covering
+    // the measured disk extent plus one committed insertion (never less than
+    // the minimum arena), so the arena witness cannot fail at map.new_() or at
+    // its first growth operation.
     return ((extent + kArenaBytes - 1) / kArenaBytes) * kArenaBytes;
 }
 
