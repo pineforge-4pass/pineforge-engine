@@ -30122,7 +30122,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & row : core . nonempty_cohorts ( ) ) #2"
+    "for ( const auto & [ key , roster ] : core . nonempty_cohorts ( ) ) #2"
    ],
    "cls": "grow",
    "spelling": "roster_roots . push_back ( . . . )",
@@ -30147,7 +30147,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & row : core . nonempty_cohorts ( ) ) #3"
+    "for ( const auto & [ key , roster ] : core . nonempty_cohorts ( ) ) #3"
    ],
    "cls": "assign",
    "spelling": "origins = . . .",
@@ -30159,7 +30159,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & row : core . nonempty_cohorts ( ) ) #3",
+    "for ( const auto & [ key , roster ] : core . nonempty_cohorts ( ) ) #3",
     "for ( const auto & origin : origins ) #1"
    ],
    "cls": "grow",
