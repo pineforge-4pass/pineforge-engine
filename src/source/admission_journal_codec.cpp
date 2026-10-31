@@ -98,7 +98,64 @@ struct Save {
     }
 };
 
-template<bool Owning> struct Load {
+class FoldSource final : public detail::ScratchByteSource {
+    const detail::ScratchByteSource& source_;
+public:
+    mutable Status failure = Status::ok;
+    mutable std::optional<detail::ReportScratchIoError> carried;
+    explicit FoldSource(const detail::ScratchByteSource& source) : source_(source) {}
+    std::uint64_t size() const noexcept override { return source_.size(); }
+    Status read(std::uint64_t offset, detail::ScratchBuffer out) const noexcept override {
+        const auto status = source_.read(offset,out);
+        if (status != Status::ok && failure == Status::ok) {
+            failure = status;
+            if (status == Status::io_error)
+                if (const auto* error = source_.carried_failure()) carried = *error;
+        }
+        return status;
+    }
+};
+struct CanonicalFold {
+    std::uint64_t digest;
+    std::uint64_t after_sequence;
+    bool active = true;
+    bool validation_skipped = false;
+    void bytes(const char* data, std::size_t size) noexcept {
+        for (std::size_t i = 0; i != size; ++i)
+            digest = (digest ^ static_cast<unsigned char>(data[i])) * 1099511628211ULL;
+    }
+    void word(std::uint64_t value) noexcept {
+        for (unsigned i = 0; i != 8; ++i)
+            digest = (digest ^ ((value >> (8 * i)) & 255)) * 1099511628211ULL;
+    }
+    template<class T> void scalar(const T& value) noexcept {
+        if constexpr (std::is_same_v<T, double>) {
+            std::uint64_t bits = 0;
+            std::memcpy(&bits, &value, sizeof bits);
+            if ((bits & 0x7fffffffffffffffULL) == 0) bits = 0;
+            else if ((bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL
+                     && (bits & 0x000fffffffffffffULL)) bits = 0x7ff8000000000000ULL;
+            word(bits);
+        } else word(static_cast<std::uint64_t>(value));
+    }
+};
+constexpr std::size_t kJournalFoldWorkspaceLimit = 1024;
+constexpr std::size_t kJournalFoldFieldBytes = 256;
+// Fixed candidate/read-failure state, two diagnostic transport slots, two
+// summaries and eight words for scalar/pointer controls, plus the existing
+// comparison buffer reused for text. Nothing is retained between calls.
+// ReportScratchIoError copies share their prepared message/argument payload.
+// The Reader page and non-owning schema frame remain the existing workspace.
+constexpr std::size_t kJournalFoldWorkspaceBytes = sizeof(CanonicalFold) + sizeof(FoldSource)
+    + 2 * sizeof(std::optional<detail::ReportScratchIoError>) + 2 * sizeof(JournalRecordSummary)
+    + 8 * sizeof(std::uint64_t) + kJournalFoldFieldBytes;
+static_assert(kJournalFoldWorkspaceBytes <= kJournalFoldWorkspaceLimit,
+              "fixed admission fold workspace");
+static_assert(std::is_nothrow_copy_constructible_v<detail::ReportScratchIoError>
+              && std::is_nothrow_copy_assignable_v<detail::ReportScratchIoError>,
+              "diagnostic transport must be nonthrowing");
+
+template<bool Owning, bool Folding = false> struct Load {
     static constexpr bool loading = true;
     static constexpr bool owning = Owning;
     jc::Reader& in;
@@ -106,6 +163,7 @@ template<bool Owning> struct Load {
     JournalRecordSummary summary;
     Outcome outcome = Outcome::NoAdmission;
     int bar = -1;
+    CanonicalFold* fold = nullptr;
     bool good() const { return in.status == Status::ok; }
     template<class T> void field(const Path& path, const char* name, T& value) {
         if (!good()) return;
@@ -114,13 +172,39 @@ template<bool Owning> struct Load {
         const auto length = in.word();
         if (!good()) return;
         if (length != key.length) { in.status = Status::corrupt; return; }
-        std::array<char, 256> bytes{};
+        std::array<char, kJournalFoldFieldBytes> bytes{};
         in.bytes(bytes.data(), key.length);
         if (!good()) return;
         if (std::memcmp(bytes.data(), key.bytes.data(), key.length) || in.word() != tag<T>()) {
             in.status = Status::corrupt; return;
         }
-        if constexpr (std::is_same_v<T, std::string>) in.text(value, Owning);
+        if constexpr (Folding) {
+            if (fold->active) {
+                fold->word(length); fold->bytes(bytes.data(), key.length); fold->word(tag<T>());
+            }
+        }
+        if constexpr (std::is_same_v<T, std::string>) {
+            if constexpr (!Folding) in.text(value, Owning);
+            else {
+                const auto size = in.word();
+                if (!good()) return;
+                if (size > in.remaining() || size > value.max_size()) {
+                    in.status = Status::corrupt; return;
+                }
+                if (!fold->active) in.skip(size);
+                else {
+                    fold->word(size);
+                    const auto end = in.position + size;
+                    if (end > in.cached_at + in.cached_size) fold->validation_skipped = true;
+                    while (in.position != end && good()) {
+                        const auto count = static_cast<std::size_t>(
+                            std::min<std::uint64_t>(bytes.size(), end - in.position));
+                        in.bytes(bytes.data(), count);
+                        if (good()) fold->bytes(bytes.data(), count);
+                    }
+                }
+            }
+        }
         else if constexpr (std::is_same_v<T, double>) in.real(value);
         else if constexpr (std::is_same_v<T, bool>) {
             const auto raw = in.word();
@@ -130,11 +214,16 @@ template<bool Owning> struct Load {
             std::underlying_type_t<T> raw{}; in.integer(raw); value = static_cast<T>(raw);
         } else in.integer(value);
         if constexpr (std::is_integral_v<T> || std::is_enum_v<T>) {
-            if (key.is("event.observation.command") || key.is("event.receipt.sequence"))
+            if (key.is("event.observation.command") || key.is("event.receipt.sequence")) {
                 summary.sequence = static_cast<std::uint64_t>(value);
+                if constexpr (Folding)
+                    if (summary.sequence <= fold->after_sequence) fold->active = false;
+            }
             if (key.is("event.outcome")) outcome = static_cast<Outcome>(value);
             if (key.is("event.observation.bar")) bar = static_cast<int>(value);
         }
+        if constexpr (Folding && !std::is_same_v<T, std::string>)
+            if (good() && fold->active) fold->scalar(value);
     }
 };
 
@@ -328,17 +417,18 @@ template<class A> struct Schema {
     }
 };
 
-template<bool Owning> Status decode(const detail::ScratchByteSource& source,
+template<bool Owning, bool Folding = false> Status decode(const detail::ScratchByteSource& source,
     detail::ScratchBuffer page, Event& event, JournalRecordSummary& summary,
-    const detail::ReportScratchIoError*& failure) noexcept {
+    const detail::ReportScratchIoError*& failure, CanonicalFold* fold = nullptr) noexcept {
     failure = nullptr;
     if (!page.data || !page.size) return Status::programming_error;
     try {
         jc::Reader in{source,page};
-        Load<Owning> load{in};
+        Load<Owning,Folding> load{in};
+        load.fold = fold;
         load.expected_rows = in.word();
         if (load.expected_rows > in.remaining() / 24) return Status::corrupt;
-        Schema<Load<Owning>>{load}.event(event);
+        Schema<Load<Owning,Folding>>{load}.event(event);
         if (load.rows != load.expected_rows && in.status == Status::ok) in.status = Status::corrupt;
         const auto status = in.finish();
         if (status == Status::ok) {
@@ -356,6 +446,7 @@ template<bool Owning> Status decode(const detail::ScratchByteSource& source,
 } // namespace
 
 JournalRecordSource::JournalRecordSource(const Event& event) noexcept : event_(&event) {
+    jc::observe_work(jc::WorkOperation::payload_source);
     try {
         jc::Writer counter;
         Save count{counter,true};
@@ -375,6 +466,7 @@ detail::ScratchStatus JournalRecordSource::read(std::uint64_t offset,
     if (offset > length_ || buffer.size > length_ - offset || (buffer.size && !buffer.data))
         return Status::programming_error;
     if (!buffer.size) return Status::ok;
+    jc::observe_work(jc::WorkOperation::payload_read, buffer.size);
     try {
         // Forward pages resume within the current array element. A seek before
         // the saved field boundary (including the second pass) starts anew.
@@ -411,6 +503,39 @@ detail::ScratchStatus scan_journal_record(const detail::ScratchByteSource& sourc
     Event scratch;
     const detail::ReportScratchIoError* failure = nullptr;
     return decode<false>(source,page,scratch,summary,failure);
+}
+detail::ScratchStatus fold_validated_journal_record(const detail::ScratchByteSource& source,
+    detail::ScratchBuffer page, JournalRecordSummary& summary, std::uint64_t& digest,
+    std::uint64_t after_sequence, std::optional<detail::ReportScratchIoError>* failure) noexcept {
+    if (failure) failure->reset();
+    Event scratch;
+    FoldSource input(source);
+    CanonicalFold fold{digest,after_sequence};
+    JournalRecordSummary candidate;
+    const detail::ReportScratchIoError* unused = nullptr;
+    const auto status = decode<false,true>(input,page,scratch,candidate,unused,&fold);
+    if (status != Status::ok && fold.validation_skipped) {
+        // A skipped text region changes the old scan's refill boundaries.
+        // On any fused failure, replay that scan to retain its validation
+        // priority: its next page can fail before the fused schema error.
+        // Keep its tag-read error handling too. Never retry the hash or turn
+        // the original failure into a successful query.
+        JournalRecordSummary checked;
+        const auto validation = scan_journal_record(source,page,checked);
+        if (validation != Status::ok) {
+            if (failure && validation == Status::io_error)
+                if (const auto* error = source.carried_failure()) *failure = *error;
+            return validation;
+        }
+        if (failure) *failure = input.carried;
+        return input.failure != Status::ok ? input.failure : status;
+    }
+    if (failure && status == Status::io_error) *failure = input.carried;
+    if (status == Status::ok) {
+        summary = candidate;
+        if (summary.sequence > after_sequence) digest = fold.digest;
+    }
+    return status;
 }
 detail::ScratchStatus fold_journal_record(const detail::ScratchByteSource& source,
     detail::ScratchBuffer page, std::uint64_t& digest) noexcept {
