@@ -90,7 +90,7 @@
 #
 # Memory and scratch controls (environment): PINEFORGE_COMMAND_SCRATCH_MAX_BYTES
 # caps the bytes the command-store scratch may extend (one thread, in total);
-# PINEFORGE_COMMAND_SCRATCH_DIR or TMPDIR picks the disk-backed scratch directory;
+# TMPDIR picks the disk-backed scratch directory (PINEFORGE_COMMAND_SCRATCH_DIR: command stores only);
 # PF_SCRATCH_ARENA_FD=5 with PF_SCRATCH_ARENA_BYTES supplies an inherited arena,
 # PF_SCRATCH_ARENA_JAILED=1 requires a sealed memfd, and PF_SCRATCH_WINDOW_BYTES
 # (default 32 MiB) caps what is mapped at once; PINEFORGE_RUN_JSON_PROFILE=jailed
