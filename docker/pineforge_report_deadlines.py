@@ -84,15 +84,18 @@ class Deadline:
     Default clock: CLOCK_BOOTTIME if usable, otherwise time.monotonic. Helpers
     arm P when an operation becomes pending; idle computation consumes only W.
     expired() checks W; stall_remaining_ms() separately exposes P, including
-    its initial interval from construction.
+    its initial interval from construction. None or zero disables either limit;
+    the corresponding remaining time is math.inf and polls remain finite.
     This object cannot enforce a deadline while its process is stopped.
     """
 
     def __init__(self, wall_ms, stall_ms, clock=time.monotonic):
         for name, value in (("wall_ms", wall_ms), ("stall_ms", stall_ms)):
+            if value is None:
+                continue
             if (isinstance(value, bool) or not isinstance(value, (int, float))
-                    or not 0 < value <= _MAX_DURATION_MS):
-                raise ValueError(name + " must be a positive finite duration")
+                    or not 0 <= value <= _MAX_DURATION_MS):
+                raise ValueError(name + " must be a nonnegative finite duration or None")
         self._clock = clock
         if clock is time.monotonic and hasattr(time, "CLOCK_BOOTTIME"):
             try:
@@ -102,8 +105,10 @@ class Deadline:
             else:
                 self._clock = lambda: time.clock_gettime(time.CLOCK_BOOTTIME)
         started = self._now()
-        self._wall_at = started + wall_ms / 1000
-        self._stall_seconds = stall_ms / 1000
+        self._wall_at = (math.inf if wall_ms is None or wall_ms == 0
+                         else started + wall_ms / 1000)
+        self._stall_seconds = (math.inf if stall_ms is None or stall_ms == 0
+                               else stall_ms / 1000)
         self._stall_at = started + self._stall_seconds
 
     def _now(self):
@@ -113,11 +118,11 @@ class Deadline:
         return now
 
     def remaining_wall_ms(self):
-        """R16: nonnegative milliseconds to the original W; no outside action."""
+        """R16: milliseconds to the original W, or math.inf when unlimited."""
         return max(0.0, (self._wall_at - self._now()) * 1000)
 
     def expired(self):
-        """R16: whether absolute W expired; no host watchdog or idle-P action."""
+        """R16: whether absolute W expired; always false for an unlimited W."""
         return self._now() >= self._wall_at
 
     def note_progress(self, nbytes):
@@ -128,7 +133,7 @@ class Deadline:
             self._stall_at = self._now() + self._stall_seconds
 
     def stall_remaining_ms(self):
-        """R16: nonnegative milliseconds to P; no external process enforcement."""
+        """R16: milliseconds to P, or math.inf when unlimited."""
         return max(0.0, (self._stall_at - self._now()) * 1000)
 
     def _begin_pending(self):
@@ -144,6 +149,7 @@ class Deadline:
         remaining = expiry - now
         if remaining <= 0:
             raise DeadlineError(kind, stage_hint, bytes_moved)
+        # Even two unlimited limits use finite slices to recheck signals/clock.
         # Finite slices also recheck BOOTTIME after resume from system suspend.
         return max(1, math.ceil(min(remaining * 1000, _POLL_SLICE_MS)))
 

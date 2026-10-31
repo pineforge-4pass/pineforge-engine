@@ -1,7 +1,9 @@
 """Real-process tests for R06/R08/R16/R17 and T18/T19/T20/T21/T30.
 
 Every test fails in setUp on main: the required module is absent. No module
-functions or clocks are replaced. The separate Linux interposer records real
+functions or clocks are replaced in the ordinary cases. The mutation control
+loads a temporary source copy with exactly one deliberate stall re-arm.
+The separate Linux interposer records real
 syscall returns and supplies faults the kernel cannot reliably schedule.
 """
 
@@ -27,8 +29,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 MODULE = ROOT / "docker/pineforge_report_deadlines.py"
 FIXTURE = HERE / "process_fixture.py"
-TIMING_SLACK_MS = 250
-EARLY_SLACK_MS = 40
+TIMING_SLACK_MS = 40
+EARLY_SLACK_MS = 20
 _injector_dir = None
 _injector_library = None
 
@@ -184,6 +186,17 @@ class DeadlineProcesses(unittest.TestCase):
         self.assertGreaterEqual(elapsed * 1000, expected_ms - EARLY_SLACK_MS)
         self.assertLessEqual(elapsed * 1000, expected_ms + TIMING_SLACK_MS)
 
+    def operation_elapsed(self, outcome, events, pending_syscall=None):
+        # Fixture timestamps exclude launch, pipe delivery and parent scheduling.
+        started_ns = outcome["started_ns"]
+        if outcome.get("kind") == "stall":
+            progress = [event["tick"] for event in events
+                        if event["name"] == pending_syscall and event["result"] > 0]
+            if progress:
+                started_ns = progress[-1]
+        self.assertGreaterEqual(outcome["finished_ns"], started_ns)
+        return (outcome["finished_ns"] - started_ns) / 1e9
+
     def assert_failure(self, outcome, name, kind=None, moved=None, stage="publish"):
         self.assertFalse(outcome["ok"], outcome)
         self.assertEqual(outcome["exception"], name)
@@ -202,7 +215,7 @@ class DeadlineProcesses(unittest.TestCase):
         self.assertTrue(polls, "fixture must actually encounter backpressure")
         for event in polls:
             self.assertGreaterEqual(event["requested"], 0)
-            self.assertLessEqual(event["requested"], maximum_ms)
+            self.assertLessEqual(event["requested"], min(50, maximum_ms))
 
     def pause(self, process):
         os.kill(process.process.pid, signal.SIGSTOP)
@@ -222,14 +235,14 @@ class DeadlineProcesses(unittest.TestCase):
             environment = self.environment(trace, config, faults or {})
             with Process("worker", config, (*fds, trace.fileno()),
                          env=environment) as worker:
-                started = time.monotonic()
                 worker.go()
                 outcome = worker.result((bound_ms + TIMING_SLACK_MS) / 1000)
-                elapsed = time.monotonic() - started
-            return outcome, elapsed, trace_events(trace)
+            events = trace_events(trace)
+            return outcome, self.operation_elapsed(outcome, events), events
 
     def write_case(self, peer_options=None, options=None, faults=None,
-                   bound_ms=1000, paused=False, storm=False, tcp=False):
+                   bound_ms=1000, paused=False, storm=False, tcp=False,
+                   resume_after_ms=None):
         config = {"operation": "write", "size": 262144, "seed": 93,
                   "wall_ms": 1000, "stall_ms": 500, "stage_hint": "publish"}
         config.update(options or {})
@@ -263,7 +276,8 @@ class DeadlineProcesses(unittest.TestCase):
                 storm_process.go()
             started = time.monotonic()
             worker.go()
-            if peer_config.get("mode") == "after_backpressure":
+            if (peer_config.get("mode") == "after_backpressure"
+                    or resume_after_ms is not None):
                 # pread leaves the writer's shared trace offset untouched.
                 while True:
                     entries = []
@@ -274,13 +288,18 @@ class DeadlineProcesses(unittest.TestCase):
                     if any(fields[0] == "send" and
                            int(fields[4]) == errno.EAGAIN
                            for fields in entries):
-                        peer.command("drain")
+                        if resume_after_ms is not None:
+                            self.assertTrue(paused)
+                            time.sleep(resume_after_ms / 1000)
+                            os.kill(peer.process.pid, signal.SIGCONT)
+                            paused = False
+                        else:
+                            peer.command("drain")
                         break
                     if time.monotonic() - started > bound_ms / 1000:
                         self.fail("real socket never reached EAGAIN before its bound")
                     time.sleep(0.003)
             outcome = worker.line((bound_ms + TIMING_SLACK_MS) / 1000)
-            elapsed = time.monotonic() - started
             if storm_process is not None:
                 storm_process.command("stop")
                 self.assertGreater(storm_process.result(2)["sent"], 10)
@@ -291,7 +310,9 @@ class DeadlineProcesses(unittest.TestCase):
             if peer_config.get("mode") == "never":
                 peer.command("drain")
             peer_result = early_peer if early_peer is not None else peer.result(3)
-            return outcome, peer_result, elapsed, trace_events(trace)
+            events = trace_events(trace)
+            elapsed = self.operation_elapsed(outcome, events, "send")
+            return outcome, peer_result, elapsed, events
 
     def read_case(self, writer_options=None, options=None, faults=None,
                   bound_ms=1000):
@@ -314,15 +335,17 @@ class DeadlineProcesses(unittest.TestCase):
             incoming.close()
             outgoing.close()
             writer.go()
-            started = time.monotonic()
             worker.go()
             outcome = worker.result((bound_ms + TIMING_SLACK_MS) / 1000)
-            elapsed = time.monotonic() - started
             peer = writer.result(2)
-            return outcome, peer, elapsed, trace_events(trace)
+            events = trace_events(trace)
+            return outcome, peer, self.operation_elapsed(outcome, events, "read"), events
 
     def relay_case(self, size, allowance, chunk=127, paused=False,
-                   wall_ms=1000, stall_ms=500, writer_options=None):
+                   wall_ms=1000, stall_ms=500, writer_options=None,
+                   faults=None, bound_ms=None):
+        if bound_ms is None:
+            bound_ms = wall_ms if wall_ms else 1000
         with contextlib.ExitStack() as stack:
             source, producer = socket_pair()
             destination, consumer = socket_pair()
@@ -344,22 +367,22 @@ class DeadlineProcesses(unittest.TestCase):
             worker = stack.enter_context(Process(
                 "worker", config,
                 (source.fileno(), destination.fileno(), trace.fileno()),
-                env=self.environment(trace, config, {})))
+                env=self.environment(trace, config, faults or {})))
             for endpoint in (source, producer, destination, consumer):
                 endpoint.close()
             reader.go()
             if paused:
                 self.pause(reader)
             writer.go()
-            started = time.monotonic()
             worker.go()
-            outcome = worker.result((wall_ms + TIMING_SLACK_MS) / 1000)
-            elapsed = time.monotonic() - started
+            outcome = worker.result((bound_ms + TIMING_SLACK_MS) / 1000)
             if paused:
                 os.kill(reader.process.pid, signal.SIGCONT)
             peer = reader.result(2)
             sent = writer.result(2)
-            return outcome, peer, sent, elapsed, trace_events(trace)
+            events = trace_events(trace)
+            elapsed = self.operation_elapsed(outcome, events, "send")
+            return outcome, peer, sent, elapsed, events
 
     def test_import_has_no_signal_thread_file_or_descriptor_side_effects(self):
         """R16/R17: import alone cannot activate channel enforcement."""
@@ -388,6 +411,227 @@ class DeadlineProcesses(unittest.TestCase):
         self.assertEqual(result["remaining_at_expiry"], 0)
         self.assert_timing(elapsed, wall_ms)
 
+    def test_unlimited_constructor_interface_and_invalid_values(self):
+        """None/zero expose infinity; invalid durations still raise ValueError."""
+        with Process("constructors", {}) as probe:
+            probe.go()
+            result = probe.result(1)
+        self.assertEqual(
+            [(row["wall_ms"], row["stall_ms"]) for row in result["snapshots"]],
+            [(None, None), (None, 0), (0, None), (0, 0),
+             (None, 700), (0, 700), (700, None), (700, 0), (0.0, 0.0)])
+        for row in result["snapshots"]:
+            for dimension in ("wall", "stall"):
+                remaining = row[dimension + "_remaining_ms"]
+                if row[dimension + "_ms"] in (None, 0):
+                    self.assertEqual(remaining, math.inf)
+                else:
+                    self.assertGreater(remaining, 0)
+                    self.assertLessEqual(remaining, 700)
+            self.assertFalse(row["expired"])
+        invalid = (
+            "negative", "negative_fraction", "true", "false", "nan", "infinity",
+            "negative_infinity", "infinity_text", "negative_infinity_text",
+            "nan_text", "numeric_text", "zero_text", "bytes", "complex", "list",
+            "mapping", "object", "unrepresentable",
+        )
+        self.assertCountEqual(
+            [(row["name"], row["dimension"], row["exception"])
+             for row in result["rejections"]],
+            [(name, dimension, "ValueError") for name in invalid
+             for dimension in ("wall", "stall")])
+
+    def assert_unlimited_stall_write(self, stall_ms):
+        hold_ms, size, seed = 360, 65573, 47
+        outcome, peer, elapsed, events = self.write_case(
+            options={"wall_ms": 2000, "stall_ms": stall_ms,
+                     "size": size, "seed": seed},
+            faults={"SEND_FAULTS": "eintr", "POLL_FAULTS": "eintr"},
+            bound_ms=2000, paused=True, resume_after_ms=hold_ms)
+        self.assertTrue(outcome["ok"], outcome)
+        self.assertTrue(outcome["fd_live"])
+        self.assertEqual(outcome["stall_remaining_ms"], math.inf)
+        self.assertEqual(outcome["result"]["written"], size)
+        self.assert_prefix(peer, size, seed)
+        self.assertEqual(positive_total(events, "send"), size)
+        sends = [event for event in events if event["name"] == "send"]
+        first_again = next(event for event in sends if event["errno"] == errno.EAGAIN)
+        last_progress = [event for event in sends if event["result"] > 0][-1]
+        self.assertGreaterEqual((last_progress["tick"] - first_again["tick"]) / 1e6,
+                                hold_ms)
+        self.assertGreater(elapsed * 1000, 150)
+        self.assertTrue(any(event["errno"] == errno.EINTR for event in sends))
+        self.assertTrue(any(0 < event["result"] < event["requested"] for event in sends))
+        self.assertTrue(any(event["name"] == "poll" and event["errno"] == errno.EINTR
+                            for event in events))
+        self.assert_finite_polls(events, 50)
+
+    def test_none_stall_allows_stopped_then_resumed_peer(self):
+        """A real reader stopped beyond 150 ms can resume with P=None."""
+        self.assert_unlimited_stall_write(None)
+
+    def test_zero_stall_allows_stopped_then_resumed_peer(self):
+        """A real reader stopped beyond 150 ms can resume with P=0."""
+        self.assert_unlimited_stall_write(0)
+
+    def test_unlimited_wall_outlasts_every_finite_deadline(self):
+        """Trickling for 2800 ms exceeds the largest finite W/P here, 2500 ms."""
+        for wall_ms in (None, 0):
+            with self.subTest(wall_ms=wall_ms):
+                size = 7
+                outcome, peer, elapsed, events = self.read_case(
+                    {"size": size, "step": 1, "interval_ms": 400},
+                    {"operation": "read_many", "nmax": 1,
+                     "wall_ms": wall_ms, "stall_ms": 800},
+                    {"READ_FAULTS": "eintr,eagain", "POLL_FAULTS": "eintr"},
+                    bound_ms=3500)
+                self.assertTrue(outcome["ok"], outcome)
+                self.assertTrue(outcome["fd_live"])
+                self.assertEqual(outcome["wall_remaining_ms"], math.inf)
+                self.assertFalse(outcome["wall_expired"])
+                self.assertEqual(outcome["result"], {
+                    "data_hex": reference(size, 19).hex(), "eof": True,
+                })
+                self.assert_prefix(peer, size, 19)
+                self.assertEqual(positive_total(events, "read"), size)
+                self.assertGreater(elapsed * 1000, 2500)
+                reads = [event for event in events if event["name"] == "read"]
+                first_byte = next(event for event in reads if event["result"] > 0)
+                eof = next(event for event in reads if event["result"] == 0)
+                self.assertGreater((eof["tick"] - first_byte["tick"]) / 1e6, 2500)
+                self.assertTrue({errno.EINTR, errno.EAGAIN}.issubset(
+                    {event["errno"] for event in reads}))
+                self.assertTrue(any(event["name"] == "poll"
+                                    and event["errno"] == errno.EINTR
+                                    for event in events))
+                self.assert_finite_polls(events, 50)
+
+    def test_unlimited_stall_write_still_obeys_finite_wall(self):
+        """An unlimited P cannot prevent fixed W from ending a stopped write."""
+        wall_ms = 330
+        for stall_ms in (None, 0):
+            with self.subTest(stall_ms=stall_ms):
+                outcome, peer, elapsed, events = self.write_case(
+                    options={"wall_ms": wall_ms, "stall_ms": stall_ms},
+                    bound_ms=wall_ms, paused=True)
+                written = positive_total(events, "send")
+                self.assertGreater(written, 0)
+                self.assert_failure(outcome, "DeadlineError", "wall", written)
+                self.assert_prefix(peer, written, 93)
+                self.assert_timing(elapsed, wall_ms)
+                self.assert_finite_polls(events, 50)
+
+    def test_unlimited_stall_read_still_obeys_finite_wall(self):
+        """An open source with P disabled still ends at W, after one byte."""
+        wall_ms = 330
+        for stall_ms in (None, 0):
+            with self.subTest(stall_ms=stall_ms):
+                outcome, peer, elapsed, events = self.read_case(
+                    {"size": 2, "step": 1, "interval_ms": 500},
+                    {"operation": "read_many", "nmax": 1,
+                     "wall_ms": wall_ms, "stall_ms": stall_ms},
+                    bound_ms=wall_ms)
+                self.assert_failure(outcome, "DeadlineError", "wall", 0,
+                                    stage="finalize")
+                self.assertEqual(bytes.fromhex(outcome["data_hex"]), reference(1, 19))
+                self.assertGreaterEqual(peer["count"], 1)
+                self.assertEqual(positive_total(events, "read"), 1)
+                self.assert_timing(elapsed, wall_ms)
+                self.assert_finite_polls(events, 50)
+
+    def test_unlimited_wall_still_obeys_finite_stall(self):
+        """A disabled W leaves the original pending P effective."""
+        stall_ms = 150
+        for wall_ms in (None, 0):
+            with self.subTest(wall_ms=wall_ms):
+                outcome, peer, elapsed, events = self.write_case(
+                    {"mode": "never"}, {"wall_ms": wall_ms, "stall_ms": stall_ms},
+                    bound_ms=stall_ms)
+                written = positive_total(events, "send")
+                self.assertGreater(written, 0)
+                self.assert_failure(outcome, "DeadlineError", "stall", written)
+                self.assert_prefix(peer, written, 93)
+                self.assert_timing(elapsed, stall_ms)
+                self.assert_finite_polls(events, 50)
+
+    def test_unlimited_relay_keeps_exact_counters_and_unforwarded_probe(self):
+        """Both unlimited conventions preserve the allowance+1 overflow probe."""
+        allowance = 31
+        for wall_ms, stall_ms in ((None, None), (None, 0), (0, None), (0, 0)):
+            with self.subTest(wall_ms=wall_ms, stall_ms=stall_ms):
+                outcome, peer, sent, _, events = self.relay_case(
+                    79, allowance, chunk=11, wall_ms=wall_ms, stall_ms=stall_ms,
+                    faults={"READ_FAULTS": "eintr,eagain",
+                            "SEND_FAULTS": "eintr,eagain",
+                            "POLL_FAULTS": "eintr"})
+                self.assertTrue(outcome["ok"], outcome)
+                self.assertTrue(outcome["fd_live"])
+                self.assertTrue(outcome["src_live"])
+                self.assertEqual(outcome["wall_remaining_ms"], math.inf)
+                self.assertEqual(outcome["stall_remaining_ms"], math.inf)
+                self.assertFalse(outcome["wall_expired"])
+                self.assertEqual(outcome["result"], {
+                    "observed": allowance + 1, "accepted": allowance,
+                    "written": allowance, "overflow": True, "eof": False,
+                })
+                self.assert_prefix(peer, allowance, 71)
+                self.assertGreaterEqual(sent["count"], allowance + 1)
+                self.assertEqual(positive_total(events, "read"), allowance + 1)
+                self.assertEqual(positive_total(events, "send"), allowance)
+                for name in ("read", "send"):
+                    self.assertTrue({errno.EINTR, errno.EAGAIN}.issubset(
+                        {event["errno"] for event in events if event["name"] == name}))
+                self.assertTrue(any(event["name"] == "poll"
+                                    and event["errno"] == errno.EINTR
+                                    for event in events))
+                self.assert_finite_polls(events, 50)
+
+    def test_single_extra_stall_rearm_is_rejected_by_the_same_bound(self):
+        """The 150 ms stall bound accepts the product and rejects one re-arm."""
+        stall_ms = 150
+        source = MODULE.read_text(encoding="utf-8")
+        anchor = (
+            "                _wait(endpoint.fileno(), select.POLLOUT, deadline, stage_hint,\n"
+            "                      moved, True)\n"
+        )
+        self.assertEqual(source.count(anchor), 1,
+                         "mutation requires the single expected write EAGAIN wait")
+        doctored = source.replace(anchor, anchor + (
+            "                if not getattr(deadline, '_test_rearmed', False):\n"
+            "                    deadline._test_rearmed = True\n"
+            "                    deadline._begin_pending()\n"
+        ), 1)
+        with tempfile.TemporaryDirectory(prefix="report-deadline-mutation-") as directory:
+            mutant = Path(directory) / MODULE.name
+            mutant.write_text(doctored, encoding="utf-8")
+            timings = []
+            for module_path in (MODULE, mutant):
+                outcome, peer, elapsed, events = self.write_case(
+                    {"mode": "never"},
+                    {"module_path": str(module_path), "wall_ms": None,
+                     "stall_ms": stall_ms},
+                    {"SEND_LIMIT": 1, "SEND_FAULTS": "real,late_eagain",
+                     "REPEAT_SEND_EINTR": 1},
+                    bound_ms=600, paused=True)
+                self.assert_failure(outcome, "DeadlineError", "stall", 1)
+                self.assert_prefix(peer, 1, 93)
+                self.assertEqual(positive_total(events, "send"), 1)
+                sends = [event for event in events if event["name"] == "send"]
+                again = [event for event in sends if event["errno"] == errno.EAGAIN]
+                self.assertEqual(len(again), 1)
+                self.assertGreaterEqual((again[0]["tick"] - sends[0]["tick"]) / 1e6,
+                                        100)
+                self.assertTrue(any(event["name"] == "poll" and event["result"] > 0
+                                    for event in events))
+                self.assertGreater(sum(event["errno"] == errno.EINTR
+                                       for event in sends), 10)
+                self.assert_finite_polls(events, 50)
+                timings.append(elapsed)
+            self.assert_timing(timings[0], stall_ms)
+            self.assertGreater(timings[1] * 1000, stall_ms + TIMING_SLACK_MS)
+            with self.assertRaises(AssertionError):
+                self.assert_timing(timings[1], stall_ms)
+
     def test_idle_computation_does_not_consume_pending_publication_stall(self):
         """R16: P begins when bytes become pending, after idle computation."""
         size, seed = 83, 41
@@ -412,7 +656,7 @@ class DeadlineProcesses(unittest.TestCase):
         self.assertEqual(positive_total(events, "send"), 0)
 
     def test_nonreading_peer_stalls_with_exact_prefix(self):
-        """T18/T20, R16/R17: open reader, no reads, P plus 120 ms slack."""
+        """T18/T20, R16/R17: open reader, no reads, P plus 40 ms slack."""
         stall_ms = 150
         outcome, peer, elapsed, events = self.write_case(
             {"mode": "never"}, {"wall_ms": 1400, "stall_ms": stall_ms},

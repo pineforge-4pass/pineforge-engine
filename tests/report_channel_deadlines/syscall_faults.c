@@ -79,7 +79,8 @@ static void trace(const char *name, int fd, long requested, long result,
     }
 }
 
-/* -1 means a real operation, 0 is an injected zero, positive is errno. */
+/* -1 means a real operation, 0 is an injected zero, positive is errno.
+ * -3 supplies one delayed send EAGAIN for the single-renewal control. */
 static int next_fault(const char **plan)
 {
     if (!*plan || !**plan)
@@ -93,6 +94,7 @@ static int next_fault(const char **plan)
     FAULT("zero", 0);
     FAULT("eintr", EINTR);
     FAULT("eagain", EAGAIN);
+    FAULT("late_eagain", -3);
     FAULT("ebadf", EBADF);
     FAULT("eio", EIO);
     FAULT("reset", ECONNRESET);
@@ -140,7 +142,14 @@ ssize_t send(int fd, const void *buffer, size_t length, int flags)
 {
     if (fd != target)
         return syscall(SYS_sendto, fd, buffer, length, flags, NULL, 0);
-    int fault = repeat_send_eintr ? delayed_eintr() : next_fault(&send_faults);
+    int fault = send_faults && *send_faults ? next_fault(&send_faults)
+        : (repeat_send_eintr ? delayed_eintr() : -1);
+    if (fault == -3) {
+        const struct timespec delay = {0, 100000000};
+        if (syscall(SYS_nanosleep, &delay, NULL) != 0)
+            _exit(126);
+        fault = EAGAIN;
+    }
     size_t attempt = send_limit && length > send_limit ? send_limit : length;
     ssize_t result;
     if (fault >= 0) {

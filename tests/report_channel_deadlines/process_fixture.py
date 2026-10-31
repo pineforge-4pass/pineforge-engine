@@ -32,13 +32,14 @@ def start():
         raise RuntimeError("fixture did not receive its start command")
 
 
-def load_module():
-    if not MODULE.is_file():
+def load_module(path=MODULE):
+    path = Path(path)
+    if not path.is_file():
         raise AssertionError(
             "main has no docker/pineforge_report_deadlines.py; "
             "the report deadline tests must fail before implementation"
         )
-    spec = importlib.util.spec_from_file_location("pineforge_report_deadlines", MODULE)
+    spec = importlib.util.spec_from_file_location("pineforge_report_deadlines", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -63,9 +64,10 @@ def worker(config):
             signals_seen.append(signum)
         signal.signal(signal.SIGUSR1, handle_signal)
         signal.siginterrupt(signal.SIGUSR1, True)
-    module = load_module()
+    module = load_module(config.get("module_path", MODULE))
     data = payload(config.get("size", 0), config.get("seed", 0))
     start()
+    started_ns = time.monotonic_ns()
     deadline = module.Deadline(config.get("wall_ms", 1000),
                                config.get("stall_ms", 500))
     received = bytearray()
@@ -121,13 +123,20 @@ def worker(config):
             result["remaining_at_expiry"] = deadline.remaining_wall_ms()
         else:
             raise ValueError("unknown fixture operation")
+        finished_ns = time.monotonic_ns()
         emit({"ok": True, "result": result, "signals_seen": len(signals_seen),
+              "started_ns": started_ns, "finished_ns": finished_ns,
+              "wall_remaining_ms": deadline.remaining_wall_ms(),
+              "stall_remaining_ms": deadline.stall_remaining_ms(),
+              "wall_expired": deadline.expired(),
               "sigpipe": int(signal.getsignal(signal.SIGPIPE)),
               "fd_live": descriptor_live(config.get("fd")),
               "src_live": descriptor_live(config.get("src_fd"))})
     except (module.DeadlineError, module.ChannelIOError) as exc:
+        finished_ns = time.monotonic_ns()
         result = {
             "ok": False, "exception": type(exc).__name__,
+            "started_ns": started_ns, "finished_ns": finished_ns,
             "kind": getattr(exc, "kind", None),
             "errno": getattr(exc, "errno", None),
             "stage_hint": exc.stage_hint, "bytes_moved": exc.bytes_moved,
@@ -143,6 +152,48 @@ def worker(config):
         # Keep handlers installed until the external sender has stopped.
         if sys.stdin.readline().strip() != "release":
             raise RuntimeError("signal fixture did not receive its release command")
+
+
+def constructors(config):
+    module = load_module()
+    start()
+    snapshots = []
+    for wall_ms, stall_ms in ((None, None), (None, 0), (0, None), (0, 0),
+                              (None, 700), (0, 700), (700, None), (700, 0),
+                              (0.0, 0.0)):
+        deadline = module.Deadline(wall_ms, stall_ms)
+        deadline.note_progress(0)
+        deadline.note_progress(1)
+        snapshots.append({
+            "wall_ms": wall_ms, "stall_ms": stall_ms,
+            "wall_remaining_ms": deadline.remaining_wall_ms(),
+            "stall_remaining_ms": deadline.stall_remaining_ms(),
+            "expired": deadline.expired(),
+        })
+    invalid = (
+        ("negative", -1), ("negative_fraction", -0.5),
+        ("true", True), ("false", False),
+        ("nan", float("nan")), ("infinity", float("inf")),
+        ("negative_infinity", float("-inf")), ("infinity_text", "Infinity"),
+        ("negative_infinity_text", "-inf"), ("nan_text", "NaN"),
+        ("numeric_text", "150"), ("zero_text", "0"),
+        ("bytes", b"150"), ("complex", 150 + 0j), ("list", []),
+        ("mapping", {}), ("object", object()),
+        ("unrepresentable", 9007199254740991),
+    )
+    rejections = []
+    for name, value in invalid:
+        for dimension in ("wall", "stall"):
+            args = (value, None) if dimension == "wall" else (None, value)
+            try:
+                module.Deadline(*args)
+            except Exception as exc:
+                failure = type(exc).__name__
+            else:
+                failure = "accepted"
+            rejections.append({"name": name, "dimension": dimension,
+                               "exception": failure})
+    emit({"snapshots": snapshots, "rejections": rejections})
 
 
 def reader(config):
@@ -238,5 +289,5 @@ def import_probe(config):
 
 if __name__ == "__main__":
     roles = {"worker": worker, "reader": reader, "writer": writer,
-             "storm": storm, "import": import_probe}
+             "storm": storm, "import": import_probe, "constructors": constructors}
     roles[sys.argv[1]](json.loads(sys.argv[2]))
