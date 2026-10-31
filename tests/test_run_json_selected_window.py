@@ -2072,7 +2072,12 @@ class AbbreviationTests(unittest.TestCase):
 
 @pytest.fixture(scope="module")
 def preroll_runtime(tmp_path_factory):
-    """A real installation layout, built on the verification host when not supplied."""
+    """A real installation layout using CTest's source-host fixture and planner."""
+    supplied = (os.environ.get("PINEFORGE_PREROLL_STRATEGY_SO"),
+                os.environ.get("PINEFORGE_PREROLL_PLANNER_SO"))
+    if not any(supplied):
+        pytest.skip("SKIP lab module not supplied: PINEFORGE_PREROLL_STRATEGY_SO; CTest wires it")
+    assert all(supplied), "supply both pre-roll fixture libraries"
     project = tmp_path_factory.mktemp("preroll-runtime")
     prefix = project / "install"
     binary, libraries = prefix / "bin", prefix / "lib"
@@ -2086,46 +2091,10 @@ def preroll_runtime(tmp_path_factory):
         shutil.copy2(source, binary / source.name)
     module = libraries / "preroll_fixture.so"
     planner = libraries / "libpineforge_window_plan.so"
-    supplied = (os.environ.get("PINEFORGE_PREROLL_STRATEGY_SO"),
-                os.environ.get("PINEFORGE_PREROLL_PLANNER_SO"))
-    if any(supplied):
-        assert all(supplied), "supply both pre-roll fixture libraries"
-        for source, destination in zip(supplied, (module, planner)):
-            source = Path(source).resolve()
-            assert source.is_file(), source
-            shutil.copy2(source, destination)
-    else:
-        options = "\n".join(
-            f'set(PINEFORGE_BUILD_{name} OFF CACHE BOOL "" FORCE)'
-            for name in ("TESTS", "SOURCE_LAYER", "CORPUS_STRATEGIES", "EXAMPLES",
-                         "TUTORIAL", "LIVE_RUNNER", "BENCH_STRATEGIES", "SPEED_BENCH"))
-        (project / "CMakeLists.txt").write_text(f"""
-cmake_minimum_required(VERSION 3.16)
-project(preroll_fixture LANGUAGES C CXX)
-{options}
-add_subdirectory("{ROOT.as_posix()}" runtime)
-add_library(preroll_fixture MODULE "{ROOT.as_posix()}/tests/preroll_fixture_strategy.cpp")
-target_link_libraries(preroll_fixture PRIVATE pineforge)
-target_compile_features(preroll_fixture PRIVATE cxx_std_17)
-target_compile_options(preroll_fixture PRIVATE -ffp-contract=off -UNDEBUG)
-if(APPLE)
-  target_link_options(preroll_fixture PRIVATE "-Wl,-force_load,$<TARGET_FILE:pineforge>")
-else()
-  target_link_options(preroll_fixture PRIVATE
-    "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
-endif()
-set_target_properties(preroll_fixture PROPERTIES PREFIX "" SUFFIX ".so"
-  LIBRARY_OUTPUT_DIRECTORY "{libraries.as_posix()}")
-set_target_properties(pineforge_window_plan PROPERTIES SUFFIX ".so"
-  LIBRARY_OUTPUT_DIRECTORY "{libraries.as_posix()}")
-""", encoding="utf-8")
-        build = project / "build"
-        for command in (
-                ["cmake", "-S", str(project), "-B", str(build), "-DCMAKE_BUILD_TYPE=Release"],
-                ["cmake", "--build", str(build), "--target", "preroll_fixture",
-                 "pineforge_window_plan", "--parallel", "4"]):
-            done = subprocess.run(command, capture_output=True, text=True)
-            assert done.returncode == 0, (command, done.stdout, done.stderr)
+    for source, destination in zip(supplied, (module, planner)):
+        source = Path(source).resolve()
+        assert source.is_file(), source
+        shutil.copy2(source, destination)
     assert module.is_file() and planner.is_file(), (module, planner)
     return binary / "run_json.py", module
 

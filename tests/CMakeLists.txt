@@ -8119,7 +8119,9 @@ endif()
 # --- CR-150 roster-pass-work end ---
 
 # --- CR-150 selected-window-preroll-limit begin ---
-if(UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+# The real CLI fixture needs the Pine scheduler's timeframe initialization.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
     add_library(preroll_fixture_strategy MODULE preroll_fixture_strategy.cpp)
     target_link_libraries(preroll_fixture_strategy PRIVATE pineforge)
     target_compile_options(preroll_fixture_strategy PRIVATE -ffp-contract=off -UNDEBUG)
