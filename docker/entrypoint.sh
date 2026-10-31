@@ -51,6 +51,14 @@
 #                        nothing is installed and such a request stops the run where its
 #                        value is read. An index or feed the harness cannot install fails
 #                        the run (exit 4, one {"engine":"pineforge","error":...} line).
+#   PINEFORGE_MAX_SYMBOL_FEEDS  Maximum symbols and total feeds (--max-symbol-feeds).
+#   PINEFORGE_MAX_INVENTORY_BYTES  Maximum inventory bytes (--max-inventory-bytes),
+#                        forwarded to both the binder and runner. For both limits:
+#                        unset or 0 = unlimited; positive integer = limit; empty,
+#                        negative or non-integer = usage error in the receiving tool.
+#   PINEFORGE_TV_COMPAT  1/true/yes/on opts into --tv-compat: defaults of 256
+#                        symbols/feeds and 8 MiB inventory, from run_json.py's one
+#                        compatibility set. Explicit limits, including 0, win.
 #
 # Optional env vars (selected-window mode; unset PINEFORGE_REPORT_POLICY = the
 # unchanged path above, which reads no inventory):
@@ -90,7 +98,7 @@
 #
 # Memory and scratch controls (environment): PINEFORGE_COMMAND_SCRATCH_MAX_BYTES
 # caps the bytes the command-store scratch may extend (one thread, in total);
-# PINEFORGE_COMMAND_SCRATCH_DIR or TMPDIR picks the disk-backed scratch directory;
+# TMPDIR picks the disk-backed scratch directory (PINEFORGE_COMMAND_SCRATCH_DIR: command stores only);
 # PF_SCRATCH_ARENA_FD=5 with PF_SCRATCH_ARENA_BYTES supplies an inherited arena,
 # PF_SCRATCH_ARENA_JAILED=1 requires a sealed memfd, and PF_SCRATCH_WINDOW_BYTES
 # (default 32 MiB) caps what is mapped at once; PINEFORGE_RUN_JSON_PROFILE=jailed
@@ -261,6 +269,9 @@ g++ -std=c++17 -O2 -ffp-contract=off -fPIC -shared \
 # run: there is no fallback to the ordinary path and run_json.py is not started.
 # Without an inventory (a .cpp the caller gave none for) nothing is bound and none is
 # invented; run_json.py gets no --request-feed-inventory and refuses the run.
+inventory_limits=()
+[[ "${PINEFORGE_TV_COMPAT:-}" =~ ^(1|true|yes|on)$ ]] && inventory_limits+=(--tv-compat)
+[[ -n "${PINEFORGE_MAX_INVENTORY_BYTES+x}" ]] && inventory_limits+=(--max-inventory-bytes "${PINEFORGE_MAX_INVENTORY_BYTES}")
 BOUND_INVENTORY=""
 if [[ "${SELECTED}" == "true" ]]; then
     if [[ -n "${INVENTORY_IN}" ]]; then
@@ -270,7 +281,8 @@ if [[ "${SELECTED}" == "true" ]]; then
             --inventory "${INVENTORY_IN}" \
             --cpp "${SRC}" \
             --so "${SO}" \
-            --out "${BOUND_INVENTORY}" >&2 \
+            --out "${BOUND_INVENTORY}" \
+            ${inventory_limits[@]+"${inventory_limits[@]}"} >&2 \
             || { echo "[pineforge] request-feed inventory binding failed" >&2; exit 3; }
     else
         echo "[pineforge] no request-feed inventory for this strategy.cpp; none is passed on" >&2
@@ -280,7 +292,7 @@ fi
 echo "[pineforge] running backtest ..." >&2
 
 # Optional per-run knobs (mirror scripts/run_strategy.py). Built conditionally so
-# unset env never passes an empty/invalid flag.
+# unset env never passes an empty/invalid flag; set limits are forwarded even empty.
 #   PINEFORGE_TRADE_START_MS            unix-ms; suppress orders before it
 #   PINEFORGE_CHART_TZ                  IANA tz for date builtins
 #   PINEFORGE_MAGNIFIER_VOLUME_WEIGHTED 1/true → vw magnifier (needs BAR_MAGNIFIER)
@@ -293,6 +305,8 @@ extra=()
 [[ "${PINEFORGE_MAGNIFIER_VOLUME_WEIGHTED:-}" =~ ^(1|true|yes|on)$ ]] && extra+=(--magnifier-volume-weighted)
 [[ -n "${PINEFORGE_SYMINFO:-}" ]]        && extra+=(--syminfo "${PINEFORGE_SYMINFO}")
 [[ -n "${PINEFORGE_SYMBOL_FEEDS:-}" ]]   && extra+=(--symbol-feeds "${PINEFORGE_SYMBOL_FEEDS}")
+[[ -n "${PINEFORGE_MAX_SYMBOL_FEEDS+x}" ]] && extra+=(--max-symbol-feeds "${PINEFORGE_MAX_SYMBOL_FEEDS}")
+extra+=(${inventory_limits[@]+"${inventory_limits[@]}"})
 [[ -n "${PINEFORGE_REPORT_SINK_FD+x}" ]] && extra+=(--report-sink-fd "${PINEFORGE_REPORT_SINK_FD}")  # set values incl. empty; run_json.py validates
 [[ -n "${PINEFORGE_RUN_ID+x}" ]] && extra+=(--run-id "${PINEFORGE_RUN_ID}")  # set values incl. empty; run_json.py validates
 if [[ "${PINEFORGE_BENCH:-}" =~ ^(1|true|yes|on)$ ]]; then

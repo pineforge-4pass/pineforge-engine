@@ -2968,6 +2968,21 @@ private:
     mutable bool sequence_row_folded_ = false;
     report_sequence::SequenceWitness output_row_witness_base_;
     report_sequence::SequenceWitness output_event_row_witness_;
+
+public:
+    // Configure this thread's next hosts BEFORE their constructors declare
+    // outputs. nullptr means unlimited; a negative value is a checked refusal.
+    static int set_output_series_limit_checked(const std::int64_t* maximum,
+                                               char* error, std::size_t capacity) noexcept;
+    // 1: a declaration exceeded its operator limit since the last successful
+    // setter; write that maximum. 0: none; -1: null destination. No allocation.
+    static int output_series_limit_failure(std::int64_t* maximum) noexcept;
+
+private:
+    static std::optional<std::int64_t> default_output_series_limit() noexcept;
+    // Recorder admission only, outside execution state and its hashes, like
+    // the output shape and recording switch. Existing hosts keep their setting.
+    std::optional<std::int64_t> max_output_series_ = default_output_series_limit();
 };
 
 inline constexpr std::size_t kReportSinkHeldEquityPoints = 1;

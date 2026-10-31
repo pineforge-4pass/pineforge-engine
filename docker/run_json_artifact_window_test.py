@@ -1,4 +1,4 @@
-"""Pin the final report window independently of every source column and reader."""
+"""Pin the reserved final report window, budgeted columns and independent reader."""
 from contextlib import ExitStack
 from pathlib import Path
 import sys
@@ -61,27 +61,27 @@ def _assert_fused_windows(tmp_path, monkeypatch):
     columns = [
         document["trades"], document["equity_curve"],
         outputs["bars"]["open_ms"], outputs["bars"]["close_ms"],
-        *(series["values"] for series in outputs["series"]), outputs["events"],
+        outputs["events"], *(series["values"] for series in outputs["series"]),
     ]
     assert len(columns) == 7
     assert all(type(column) is run_json._JSONColumn for column in columns)
-    assert all(column.file.window == 64 * 1024 for column in columns)
+    assert [column.file.window for column in columns] == [
+        *([1024 * 1024] * 5), *([64 * 1024] * 2)]
     readers = [file for file in opened if isinstance(file, run_json._UncachedSinkFile)]
     assert len(readers) == 1
     assert len(opened) == 9
     assert set(opened) == {artifact, *readers, *(column.file for column in columns)}
-    assert all(file.window == 64 * 1024 for file in opened if file is not artifact)
+    assert all(file.window == 64 * 1024 for file in readers)
 
 
-def test_fused_report_has_only_one_large_artifact_window(tmp_path, monkeypatch):
+def test_fused_report_reserves_final_artifact_and_budgets_source_columns(tmp_path, monkeypatch):
     _assert_fused_windows(tmp_path, monkeypatch)
 
 
 def test_fused_window_check_detects_missing_final_argument(tmp_path, monkeypatch):
     changed = _mutate(
         run_json._prepare_stream_report,
-        "_json_temporary(prepared, directory, 1024 * 1024)",
-        "_json_temporary(prepared, directory)")
+        ", _artifact_windows(resources).report_window", "")
     monkeypatch.setattr(run_json, "_prepare_stream_report", changed)
     with pytest.raises(AssertionError, match="FINAL_ARTIFACT_WINDOW"):
         _assert_fused_windows(tmp_path, monkeypatch)
@@ -97,8 +97,8 @@ def test_multimegabyte_fused_report_bytes_ignore_final_window(tmp_path, monkeypa
     rows[2:3] = events
     ordinary_prepare = _mutate(
         run_json._prepare_stream_report,
-        "_json_temporary(prepared, directory, 1024 * 1024)",
-        "_json_temporary(prepared, directory, 64 * 1024)")
+        "_artifact_windows(resources).report_window",
+        "_BoundedJSONFile.window")
     reports, windows = [], []
 
     def consume(artifact, document):
@@ -116,6 +116,6 @@ def test_multimegabyte_fused_report_bytes_ignore_final_window(tmp_path, monkeypa
                     run_json, sink, library, report, outputs=True,
                     configure=_configure_outputs, consume=consume)
         assert outcome.failure is None, outcome.failure
-    assert windows == [1024 * 1024, 64 * 1024]
-    assert len(reports) == 2 and len(reports[0]) > 3 * 1024 * 1024
+    assert windows == [run_json._ARTIFACT_LARGE_WINDOW, run_json._BoundedJSONFile.window]
+    assert len(reports) == 2 and len(reports[0]) > 3 * windows[0]
     assert reports[0] == reports[1]

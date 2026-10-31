@@ -167,8 +167,12 @@ namespace {
 using namespace pineforge;
 using trade_retirement_fixture::require;
 using stream_io::Count;
-constexpr Count kClosed = 32 * TradeLedger::kResidentRows;
+constexpr Count kClosed = 6400;
 constexpr Count kBudget = detail::ScratchFile::kCacheBytes;
+// The ledger zero-fill block is 4,096 B, and the arena chunk is an exact
+// multiple of it. Keep the test geometry tied to that shared block relation.
+constexpr Count kZeroBlock = detail::ScratchArena::kChunkBytes / 256;
+static_assert(kZeroBlock == 4096);
 constexpr char kRunId[] = "closed-trade-stream";
 static_assert(kClosed >= 2000);
 int failures = 0;
@@ -328,14 +332,19 @@ Geometry golden(const std::string& path, Count retired,
           && receipt.sha256_hex == digest, "report receipt differs from golden");
     return geometry;
 }
-void raw_zeros(const stream_io::Io& file, Count first, Count stop) {
+void raw_zero_prefix(const stream_io::Io& file, Count zeroed_end, Count dead_end) {
     struct stat status{};
     require(::fstat(file.fd, &status) == 0 && status.st_dev == file.device
-            && status.st_ino == file.inode && static_cast<Count>(status.st_size) >= stop,
+            && status.st_ino == file.inode && static_cast<Count>(status.st_size) >= dead_end,
             "raw ledger inspection lost its backing extent");
-    std::array<unsigned char, 4096> bytes{};
-    while (first < stop) {
-        const auto count = static_cast<std::size_t>(std::min<Count>(bytes.size(), stop - first));
+    // zeroed_end=floor(dead_end/block)*block; a sub-block remainder follows
+    // from that geometry, rather than providing another observation of I/O.
+    require(dead_end >= zeroed_end, "raw ledger zero prefix exceeds the dead extent");
+    std::array<unsigned char, kZeroBlock> bytes{};
+    Count first = 0;
+    while (first < zeroed_end) {
+        const auto count = static_cast<std::size_t>(
+            std::min<Count>(bytes.size(), zeroed_end - first));
         // Inspection deliberately bypasses measurement; these are not engine reads.
         require(__real_pread(file.fd, bytes.data(), count, static_cast<off_t>(first))
                     == static_cast<ssize_t>(count), "raw ledger prefix read failed");
@@ -344,6 +353,34 @@ void raw_zeros(const stream_io::Io& file, Count first, Count stop) {
               "retired scratch prefix contains nonzero bytes");
         first += count;
     }
+}
+void raw_survivors(const stream_io::Io& file, Count first,
+                   const stream_io::Io& reference, Count reference_first,
+                   Count count, const char* message) {
+    const auto read = [count](const stream_io::Io& source, Count offset) {
+        struct stat status{};
+        require(::fstat(source.fd, &status) == 0 && status.st_dev == source.device
+                && status.st_ino == source.inode && status.st_size >= 0
+                && static_cast<Count>(status.st_size) >= offset + count,
+                "raw survivor inspection lost its backing extent");
+        std::vector<unsigned char> bytes(static_cast<std::size_t>(count));
+        // The real syscall bypasses both measurement and resident ledger data.
+        require(__real_pread(source.fd, bytes.data(), bytes.size(), static_cast<off_t>(offset))
+                    == static_cast<ssize_t>(bytes.size()), "raw survivor read failed");
+        return bytes;
+    };
+    check(read(file, first) == read(reference, reference_first), message);
+}
+Count rebase_copy_bytes(Count releases, Count retained_rows) {
+    Count total = 0;
+    for (Count release = 1; release <= releases; ++release) {
+        const Count boundary = release * detail::ScratchArena::kChunkBytes;
+        const Count first_global_end =
+            (boundary + TradeLedger::kRecordBytes - 1) / TradeLedger::kRecordBytes;
+        total += (first_global_end + retained_rows) * TradeLedger::kRecordBytes
+            - boundary;
+    }
+    return total;
 }
 void forwarding_control(const Directory& directory) {
     detail::ScratchFile index, payload;
@@ -414,28 +451,46 @@ void scenario(const Directory& directory) {
     const Count index_dead = retired * TradeLedger::kRecordBytes;
     const Count index_bytes = descriptor_bytes + index_dead;
     const Count payload_bytes = geometry.text_bytes + geometry.retired_bytes;
-    // Below one release chunk: each single-row seal adds one head-zero request
-    // per file. No empty truncation or copy occurs while the two-row suffix lives.
-    require(descriptor_bytes < detail::ScratchArena::kChunkBytes
-            && geometry.text_bytes < detail::ScratchArena::kChunkBytes
-            && geometry.max_text_bytes <= 4096, "fixture crossed its no-compaction geometry");
-    // For ordered positive requests l_j, A_j=sum earlier l:
-    // calls_j=1+floor((A_j+l_j-1)/W)-floor(A_j/W).
-    // Summing permits at most floor(total_bytes/W) extra splits per file.
+    const Count index_origin = index_dead
+        - index_dead % detail::ScratchArena::kChunkBytes;
+    const Count payload_origin = geometry.retired_bytes
+        - geometry.retired_bytes % detail::ScratchArena::kChunkBytes;
+    const Count index_dead_relative = index_dead - index_origin;
+    const Count payload_dead_relative = geometry.retired_bytes - payload_origin;
+    const Count index_head_blocks = index_dead / kZeroBlock;
+    const Count payload_head_blocks = geometry.retired_bytes / kZeroBlock;
+    const Count index_releases = index_dead / detail::ScratchArena::kChunkBytes;
+    const Count payload_releases =
+        geometry.retired_bytes / detail::ScratchArena::kChunkBytes;
+    const Count index_rebase_bytes =
+        rebase_copy_bytes(index_releases, geometry.trades - retired);
+    const Count index_logical_bytes = index_bytes + index_rebase_bytes;
+    // The 6,400-row tape crosses a one-megabyte index chunk. Each rebase
+    // copies only the retained suffix, which is below the 64 KiB write window,
+    // so it contributes one pwrite per released chunk. Every descriptor/text
+    // store and every zero-fill block contributes one more; a logical write
+    // can add at most one split for each complete write window in its derived
+    // byte total.
     // MUTANT: restore erase_payload(text) in retire: adds retired_extents
     // payload requests and retired_bytes bytes, exceeding the payload bounds.
     // Duplicating store's index.write breaks both index write bounds.
     bound("stream.index.pwrite_calls", index.writes,
-          geometry.trades + retired + index_bytes / kBudget, geometry.trades);
+          geometry.trades + index_head_blocks + index_releases
+              + index_logical_bytes / kBudget, geometry.trades);
+    // The payload takes one append write per closed trade (both texts in one
+    // call), not one per text extent.
     bound("stream.payload.pwrite_calls", payload.writes,
-          geometry.extents + retired + payload_bytes / kBudget, geometry.trades);
-    bound("stream.index.pwrite_bytes", index.written, index_bytes, geometry.trades);
+          geometry.trades + payload_head_blocks + payload_releases
+              + payload_bytes / kBudget, geometry.trades);
+    bound("stream.index.pwrite_bytes", index.written, index_logical_bytes, geometry.trades);
     bound("stream.payload.pwrite_bytes", payload.written, payload_bytes, geometry.trades);
     require(index.written >= descriptor_bytes && payload.written >= geometry.text_bytes,
             "physical accounting omitted appended row storage");
     // At most three live rows and one newly closed row; all descriptors fit
     // the 64-row ring, all live text fits the fixed 64*168-byte payload tail.
-    // cold=max(0,live_rows-capacity)=0; no reads or compaction truncates.
+    // cold=max(0,live_rows-capacity)=0; no cold reads. A chunk release reads
+    // the retained suffix back in windows to move it (one read per window,
+    // below one window here), so each release adds that many reads.
     // MUTANTS: read index in descriptor's resident branch, or read payload
     // in read_string's tail branch: each breaks its respective zero-read bound.
     const Count live = geometry.trades - retired + 1;
@@ -443,16 +498,42 @@ void scenario(const Directory& directory) {
     const Count tail_rows = TradeLedger::kResidentRows * TradeLedger::kRecordBytes
         / geometry.max_text_bytes;
     const Count cold_payload = live - std::min(live, tail_rows);
-    bound("stream.index.pread_calls", index.reads, cold_index, geometry.trades);
-    bound("stream.payload.pread_calls", payload.reads, cold_payload, geometry.trades);
-    const Count index_releases = index_dead / detail::ScratchArena::kChunkBytes;
-    const Count payload_releases = geometry.retired_bytes / detail::ScratchArena::kChunkBytes;
+    bound("stream.index.pread_calls", index.reads,
+          cold_index + index_releases + index_rebase_bytes / kBudget, geometry.trades);
+    bound("stream.payload.pread_calls", payload.reads,
+          cold_payload + payload_releases, geometry.trades);
     // MUTANT: truncate each file to its existing storage_bytes() in
     // release_head even when no chunk is released: breaks its truncate bound.
     bound("stream.index.ftruncate_calls", index.truncates, index_releases, geometry.trades);
     bound("stream.payload.ftruncate_calls", payload.truncates, payload_releases, geometry.trades);
-    raw_zeros(index, 0, index_dead);
-    raw_zeros(payload, 0, geometry.retired_bytes);
+    raw_zero_prefix(index, index_dead_relative - index_dead_relative % kZeroBlock,
+                    index_dead_relative);
+    raw_zero_prefix(payload, payload_dead_relative - payload_dead_relative % kZeroBlock,
+                    payload_dead_relative);
+    // An independent run without a sink retains all history, so its raw files
+    // provide descriptor images (including numeric bits and text extents)
+    // unaffected by retirement. Keep these oracle transfers out of io above.
+    trade_retirement_fixture::Strategy reference(false, false, false, nullptr);
+    reference.set_broker_state_hash_recording(false);
+    stream_io::Measure reference_measurement;
+    reference.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    const auto reference_io = reference_measurement.finish();
+    require(reference.last_run_status() == 0 && reference.last_error().empty()
+            && reference.base() == 0 && reference.closed_trade_count() == geometry.trades,
+            "raw survivor reference did not retain the complete input tape");
+    valid(reference_io);
+    // R=N-3 leaves three rows. Index dead_end=R*168 minus released chunks;
+    // payload dead_end=R*(len("flip")+len("flip")) minus released chunks.
+    // Both are unaligned here; inspect live bytes beyond each pending prefix.
+    require(index_dead_relative % kZeroBlock != 0 && payload_dead_relative % kZeroBlock != 0,
+            "stream raw survivor fixture requires unaligned dead ends");
+    raw_survivors(index, index_dead_relative, reference_io.files[0], index_dead,
+                  (geometry.trades - retired) * TradeLedger::kRecordBytes,
+                  "raw stream index survivors changed after retirement");
+    raw_survivors(payload, payload_dead_relative, reference_io.files[1], geometry.retired_bytes,
+                  geometry.text_bytes - geometry.retired_bytes,
+                  "raw stream payload survivors changed after retirement");
+    host.check_copy();
     // Refusals must precede every backing access, even an empty comparison.
     stream_io::Measure refusal_measurement;
     trade_retirement_fixture::refused([&] { (void)host.closed_trade(0); });

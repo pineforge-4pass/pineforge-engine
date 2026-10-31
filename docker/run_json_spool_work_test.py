@@ -24,7 +24,9 @@ import run_json_spool_reference as reference
 import run_json_fused_test_support as support
 import run_json_wrapper_test_support as fixtures
 from run_json_wrapper_work_test import _EquityWork, _mutate, _EQUITY_WIRES
-from run_json_fused_test import _sink_case, _configure_outputs, _synthetic_case
+from run_json_fused_test import (
+    _sink_case, _configure_outputs, _synthetic_case, _column_row_width, artifact_window,
+)
 from run_json_trade_scan_test import _point, _trade, _event
 import test_run_json_sink as ordinary
 
@@ -1040,55 +1042,102 @@ def test_deferred_spool_failure_keeps_report_refusal_precedence(
 
 
 @pytest.mark.parametrize("tag", ("T", "E"))
-@pytest.mark.parametrize("position", (0, 300, 600), ids=("first", "middle", "last"))
 def test_fused_short_write_has_the_same_failure_envelope(
-        tmp_path, monkeypatch, tag, position):
+        tmp_path, monkeypatch, tag, artifact_window):
+    """Compare full-window and tail faults at three physical spool offsets."""
+    windows = support.spool_windows(tmp_path)
+    assert windows[tag] == artifact_window
+    counts = {
+        "E": max(601, 3 * windows["E"] // _column_row_width(_point(0)) + 2),
+        "T": max(601, 3 * windows["T"] // _column_row_width(_trade(1)) + 2),
+    }
     rows = []
-    for index in range(601):
-        rows.extend((_point(index), _trade(index + 1)))
+    for index in range(max(counts.values())):
+        if index < counts["E"]:
+            rows.append(_point(index))
+        if index < counts["T"]:
+            rows.append(_trade(index + 1))
     parts = ([_trade_text(row) for row in rows if row[0] == "T"] if tag == "T"
              else [reference._bulk_equity_ascii(reference._bulk_equity(
                  ordinary.encoded(row))) for row in rows if row[0] == "E"])
-    threshold = sum(len(part) + 1 for part in parts[:position])
+    size = sum(map(len, parts)) + len(parts) - 1
+    window = windows[tag]
+    assert size > 3 * window and size % window
+    offsets = (
+        ("first", 0),
+        ("middle", size // window // 2 * window),
+        ("last", size // window * window),
+    )
+    observed = {False: [], True: []}
     with _sink_case(tmp_path, rows) as (sink, library, report):
-        def run(old):
+        assert Path(sink.path).stat().st_size < 32 * 1024 * 1024
+
+        def run(old, position, fault_offset):
             context = reference.install(monkeypatch) if old else nullcontext()
             with context, monkeypatch.context() as patch:
                 prepare = run_json._ReportSink._prepare_fused_artifacts
-                write = run_json._BoundedJSONFile.write_ascii
-                files, seen, armed, fired = [], defaultdict(int), set(), []
+                prepare_report = run_json._prepare_report_json
+                temporary = run_json._json_temporary
+                files, writes, fired, verified, preparing = [], [], [], [], []
+
+                def opened(*args, **kwargs):
+                    file = temporary(*args, **kwargs)
+                    files.append(file)
+                    return file
 
                 def prepared(target, *args):
                     prepare(target, *args)
                     file = (target._trades_spool if tag == "T" else target._equity_spool).file
-                    files.append(file)
+                    assert file.window == window
+                    target_fd = file.fileno()
                     libc = file.libc
 
                     def pwrite(fd, address, count, offset):
-                        if file in armed and not fired:
-                            fired.append((fd, offset))
+                        assert fd == target_fd
+                        writes.append((fd, offset, count))
+                        if offset == fault_offset and not fired:
+                            fired.append((fd, offset, bool(verified), bool(preparing)))
                             return count - 4096
                         return libc.pwrite(fd, address, count, offset)
 
                     file.libc = types.SimpleNamespace(pwrite=pwrite, pread=libc.pread)
 
-                def written(file, data):
-                    if file in files:
-                        seen[file] += len(data)
-                        if seen[file] > threshold:
-                            armed.add(file)
-                    return write(file, data)
+                def report_started(*args, **kwargs):
+                    preparing.append(True)
+                    return prepare_report(*args, **kwargs)
 
+                patch.setattr(run_json, "_json_temporary", opened)
                 patch.setattr(run_json._ReportSink, "_prepare_fused_artifacts", prepared)
-                patch.setattr(run_json._BoundedJSONFile, "write_ascii", written)
-                outcome, _, _ = _run(sink, library, report, patch)
+                patch.setattr(run_json, "_prepare_report_json", report_started)
+                outcome, _, _ = _run(
+                    sink, library, report, patch,
+                    after_verify=lambda *args: verified.append(True))
             assert len(fired) == 1 and outcome.report == b""
+            fd, offset, after_verify, after_prepare = fired[0]
+            assert offset == fault_offset
+            assert [(write_fd, write_offset) for write_fd, write_offset, _ in writes] == [
+                (fd, index * window) for index in range(fault_offset // window + 1)]
+            if position == "last":
+                assert after_verify and after_prepare
+                assert writes[-1][2] == (size % window + 4095) // 4096 * 4096
+            else:
+                assert not after_verify and not after_prepare
+                assert writes[-1][2] == window
             assert outcome.failure[2:5] == (
                 "report sink write failed", "report_sink_failed", {"reason": "scratch_io"})
             assert str(outcome.error.__cause__) == "short report artifact write"
+            assert files and all(file.closed and file.buffer is None for file in files)
+            assert all(file.size < 32 * 1024 * 1024 for file in files)
+            assert list(tmp_path.iterdir()) == [Path(sink.path)]
+            observed[old].append((fd, offset))
             return outcome
 
-        support.assert_same(run(False), run(True))
+        for position, fault_offset in offsets:
+            support.assert_same(run(False, position, fault_offset),
+                                run(True, position, fault_offset))
+    for faults in observed.values():
+        assert len(set(faults)) == len({offset for _, offset in faults}) == 3
+    assert list(tmp_path.iterdir()) == []
 
 
 def _proof_identity(raw):

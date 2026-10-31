@@ -2024,6 +2024,31 @@
   },
   {
    "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "quota_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFileQuota #1",
+    "public : explicit ScratchFileQuota ( QuotaArtifact artifact ) : quota_ ( RunQuota :: from_environment ( ) ) , artifact_ ( artifact ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "quota_ . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "quota_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFileQuota #1",
+    "class Growth #1",
+    "public : Growth ( ScratchFileQuota & owner , std :: uint64_t requested_end ) : owner_ ( owner ) , realized_ ( owner . extent_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "quota_ . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
    "symbol": "directory_",
    "scope": [
     "namespace pineforge :: detail #1",
@@ -2045,6 +2070,18 @@
    ],
    "cls": "assign",
    "spelling": "directory_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "reservation",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFile #1",
+    "void truncate ( std :: uint64_t bytes ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "reservation . emplace ( . . . )",
    "ordinal": 1
   },
   {
@@ -2106,6 +2143,56 @@
    "cls": "append",
    "spelling": "name + = . . .",
    "ordinal": 3
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "quota_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFile #1",
+    "void open ( const char * prefix ) #1",
+    "if ( mode ( ) = = QuotaMode :: managed ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "reservation",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFile #1",
+    "void ensure_size ( std :: uint64_t bytes , std :: uint64_t needed_bytes_lower_bound = 0 ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "reservation . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "reservation",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFile #1",
+    "ssize_t write_some ( std :: uint64_t offset , const void * data , std :: size_t length ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "reservation . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "reservation",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFile #1",
+    "void write ( std :: uint64_t offset , const void * data , std :: size_t length ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "reservation . emplace ( . . . )",
+   "ordinal": 1
   },
   {
    "file": "include/pineforge/detail/scratch_file.hpp",
@@ -5630,18 +5717,6 @@
    "scope": [
     "namespace pineforge #1",
     "template < typename Key , typename Value > class PineMap #1",
-    "static void create_objects ( Storage & storage ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "heap_values . reserve ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/map.hpp",
-   "symbol": "heap_values",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename Key , typename Value > class PineMap #1",
     "static void set_heap_value ( Storage & storage , std :: uint32_t slot , Value && value ) #1"
    ],
    "cls": "grow",
@@ -5654,9 +5729,10 @@
    "scope": [
     "namespace pineforge #1",
     "template < typename Key , typename Value > class PineMap #1",
-    "static Located locate ( Storage & storage , const detail :: MapHeader & header , const Key & key , std :: uint64_t hash ) #1",
+    "template < bool WithValue = false > static Located locate ( Storage & storage , const detail :: MapHeader & header , const Key & key , std :: uint64_t hash ) #1",
     "while ( at ! = 0 && at < = header . high_water ) #1",
-    "if ( links . hash = = hash && key_matches ( storage . store ( ) , load_key_rep ( storage , at - 1 ) , key ) ) #1"
+    "if ( links . hash = = hash ) #1",
+    "if ( key_matches ( storage . store ( ) , found . key , key ) ) #1"
    ],
    "cls": "assign",
    "spelling": "previous = . . .",
@@ -13176,6 +13252,18 @@
   },
   {
    "file": "src/command_scratch_cache.cpp",
+   "symbol": "reset",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "CachedScratchBacking :: CachedScratchBacking ( std :: unique_ptr < ScratchBacking > inner , ScratchIoObserver observer , std :: size_t resident_bytes , std :: shared_ptr < CommandScratchByteBudget > budget ) : ScratchBacking ( inner ? inner -> kind ( ) : ScratchBackingKind :: disk , inner ? inner -> page_size ( ) : 0 , observer ) , inner_ ( std :: move ( inner ) ) , slot_count_ ( page_size ( ) > = kMinPageBytes && page_size ( ) < = kCacheBytes ? kCacheBytes / page_size ( ) : 0 ) , resident_pages_ ( slot_count_ ! = 0 ? std :: min ( resident_bytes , kCacheBytes ) / page_size ( ) : 0 ) , resident_ ( resident_pages_ ! = 0 && inner_ -> page_count ( ) = = 0 ) , budget_ ( std :: move ( budget ) ) #1",
+    "if ( slot_count_ ! = 0 ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new",
+   "ordinal": 2
+  },
+  {
+   "file": "src/command_scratch_cache.cpp",
    "symbol": "budget_",
    "scope": [
     "namespace pineforge :: detail #1",
@@ -13262,6 +13350,19 @@
    "cls": "append",
    "spelling": "path + = . . .",
    "ordinal": 2
+  },
+  {
+   "file": "src/command_scratch_production.cpp",
+   "symbol": "quota_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #2",
+    "class CommandScratchFile final : public ScratchBacking #1",
+    "public : CommandScratchFile ( std :: size_t size , ScratchIoObserver observer ) : ScratchBacking ( ScratchBackingKind :: disk , size , observer ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
   },
   {
    "file": "src/command_scratch_production.cpp",
@@ -30110,7 +30211,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & roster : core . cohorts ( ) ) #1"
+    "for ( const auto & [ key , roster ] : core . nonempty_cohorts ( ) ) #2"
    ],
    "cls": "grow",
    "spelling": "roster_roots . push_back ( . . . )",
@@ -30135,7 +30236,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & roster : core . cohorts ( ) ) #2"
+    "for ( const auto & [ key , roster ] : core . nonempty_cohorts ( ) ) #3"
    ],
    "cls": "assign",
    "spelling": "origins = . . .",
@@ -30147,7 +30248,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & roster : core . cohorts ( ) ) #2",
+    "for ( const auto & [ key , roster ] : core . nonempty_cohorts ( ) ) #3",
     "for ( const auto & origin : origins ) #1"
    ],
    "cls": "grow",

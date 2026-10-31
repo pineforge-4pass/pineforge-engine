@@ -328,7 +328,7 @@ Selected carry-in validation includes the minimum entry time folded at seal
 (`first_entry_time` `src/native_execution_consumer.cpp:12984`), so a
 window starting after a sealed entry refuses with the existing typed
 `engine_invariant`. Validation never indexes a retired row. `write_report_sink_trades`
-(`src/engine_report.cpp:1693`) resumes at the global T cursor: sealed rows
+(`src/engine_report.cpp:1699`) resumes at the global T cursor: sealed rows
 already in the sink are emitted exactly once, followed by the resident suffix
 and open rows. The sink remains the complete row report.
 

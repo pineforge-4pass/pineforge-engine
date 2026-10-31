@@ -960,14 +960,17 @@ namespace pineforge {
 namespace {
 
 constexpr double kUnwrittenOutput = std::numeric_limits<double>::quiet_NaN();
+// The optional operator limit is snapshotted before a host constructor runs.
+// Its typed refusal remains readable even when the factory returns no handle.
+[[noreturn]] void refuse_series_limit(std::int64_t maximum);
 
 [[noreturn]] void refuse_output(const std::string& text) {
     throw coded<std::logic_error>(RunFailureCode::engine_invariant, {}, "outputs: " + text);
 }
 
-[[noreturn]] void refuse_output_limit(const char* reason, const char* text) {
+[[noreturn]] void refuse_output_limit(const char* reason, const char* text, std::int64_t max = INT_MAX) {
     throw coded<std::runtime_error>(RunFailureCode::outputs_limit,
-                                    {{"reason", reason}, {"max", INT_MAX}}, text);
+                                    {{"reason", reason}, {"max", max}}, text);
 }
 
 // A refused switch, recorded as the C boundary records a refused call: a
@@ -1049,6 +1052,9 @@ void BacktestEngine::declare_outputs(int series_slots, int outputs, int run_cons
     if (series_slots < 0 || outputs < 0 || run_constants < 0)
         refuse_output("declared counts must not be negative");
     if (output_host_running()) refuse_output("declare_outputs while a run is in progress");
+    if (max_output_series_ && series_slots > *max_output_series_)
+        refuse_series_limit(*max_output_series_);
+
     if (outputs_declared_) {
         if (series_slots != outputs_slots_ || outputs != outputs_count_
             || run_constants != outputs_constants_) {
@@ -2477,4 +2483,40 @@ int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
     return PF_REPORT_MODE_ACCEPTED;
 }
 
+}  // namespace pineforge
+
+#include <pineforge/checked_settings.hpp>
+
+namespace pineforge {
+namespace {
+thread_local std::optional<std::int64_t> output_series_default;
+thread_local std::optional<std::int64_t> output_series_refused_max;
+
+[[noreturn]] void refuse_series_limit(std::int64_t maximum) {
+    output_series_refused_max = maximum;
+    refuse_output_limit("too_many_series", "outputs: the series count is at its limit", maximum);
+}
+}  // namespace
+
+int BacktestEngine::set_output_series_limit_checked(
+        const std::int64_t* maximum, char* error, std::size_t capacity) noexcept {
+    return checked_settings::boundary(error, capacity, [&] {
+        checked_settings::require(!maximum || *maximum >= 0,
+                                  "max output series must not be negative");
+        output_series_default = maximum && *maximum > 0
+            ? std::optional<std::int64_t>(*maximum) : std::nullopt;
+        output_series_refused_max.reset();
+    });
+}
+
+int BacktestEngine::output_series_limit_failure(std::int64_t* maximum) noexcept {
+    if (!maximum) return -1;
+    if (!output_series_refused_max) return 0;
+    *maximum = *output_series_refused_max;
+    return 1;
+}
+
+std::optional<std::int64_t> BacktestEngine::default_output_series_limit() noexcept {
+    return output_series_default;
+}
 }  // namespace pineforge

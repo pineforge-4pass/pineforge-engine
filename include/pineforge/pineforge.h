@@ -2013,7 +2013,7 @@ PF_API int strategy_set_symbol_feed_borrowed_v1(
 
 /** Exact C++ engine layout accepted by the live report accumulator.
  *  Bump whenever that layout changes, independently of #PF_ABI_VERSION. */
-#define PF_STREAM_ENGINE_LAYOUT_VERSION 1u
+#define PF_STREAM_ENGINE_LAYOUT_VERSION 2u
 
 /** Optional module declaration that its strategy handles point directly to
  *  a BacktestEngine with the returned #PF_STREAM_ENGINE_LAYOUT_VERSION.
@@ -2023,6 +2023,27 @@ PF_API int strategy_set_symbol_feed_borrowed_v1(
  *  stream ABI and execution-capabilities versions alone do not prove layout.
  *  This query reads no strategy state and changes no report or hash. */
 PF_API uint32_t strategy_stream_engine_layout_version(void);
+
+/** Set this module's creation-time recorded-series limit on the calling thread.
+ *  Call before strategy_create/strategy_create_checked (or C++ construction):
+ *  the base engine snapshots it before the derived constructor declares.
+ *  NULL or 0 means unlimited, the default. A non-NULL positive int64 is the
+ *  operator's maximum.
+ *  Returns a pf_settings_status_t; negative values return
+ *  #PF_SETTINGS_INVALID_ARGUMENT without changing the previous setting.
+ *  Errors follow the checked-settings buffer protocol. Success also clears
+ *  the typed declaration refusal read by #pf_output_series_limit_failure.
+ *  The host must restore NULL after its factory call; existing hosts retain
+ *  their snapshot. Different threads have independent defaults and refusals. */
+PF_API int pf_output_series_limit_set_checked(const int64_t* maximum,
+                                             char* error, size_t error_capacity);
+/** Read an outputs_limit / too_many_series declaration refusal even when a
+ *  factory returned NULL. Returns 1 and writes the positive operator maximum
+ *  from the refused setting (NULL or 0 selects unlimited), 0 when no refusal
+ *  has occurred since the last successful setter (leaving the destination
+ *  unchanged), or -1 for NULL. Query on the creation thread before restoring
+ *  the default. No exception or allocation crosses the ABI. */
+PF_API int pf_output_series_limit_failure(int64_t* maximum);
 
 #ifdef __cplusplus
 } /* extern "C" */
