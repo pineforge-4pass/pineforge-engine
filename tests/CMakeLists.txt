@@ -2307,6 +2307,29 @@ add_test(NAME test_compile_inventory_pipeline
     COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
+# Opt-in supervised report channel and compile-step limits: real-process rows that
+# start the supervisor, a producer or the entrypoint with real descriptors and judge
+# the bytes, packets, wall time and wait statuses from outside. Linux hosts only
+# (the descriptor, signal and process-table checks need /proc and real sockets).
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME test_report_channel_contract
+        COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
+            -s ${PROJECT_SOURCE_DIR}/tests/report_channel -p test_contract.py -v
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+    add_test(NAME test_report_channel_deadlines
+        COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
+            -s ${PROJECT_SOURCE_DIR}/tests/report_channel_deadlines -p test_deadlines.py -v
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+    add_test(NAME test_entrypoint_compile_limits
+        COMMAND ${CMAKE_COMMAND} -E env
+            "PINEFORGE_ENTRYPOINT_TEST_ARCHIVE=$<TARGET_FILE:pineforge>"
+            ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/entrypoint_limits/test_compile_limits.py
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+    set_tests_properties(test_report_channel_contract test_report_channel_deadlines
+        test_entrypoint_compile_limits PROPERTIES LABELS "report-channel")
+endif()
+
 # The seven ABI-provider manifests and the four receipt-gated rows. The
 # private-fixture PRs take every manifest below out of the public tree, and
 # scripts/prepare_settlement_cpp_abi_base.py answers a missing one with the
