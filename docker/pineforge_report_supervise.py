@@ -12,6 +12,8 @@ R is inherited fd 1, D is inherited fd 2, M is an inherited connected AF_UNIX
 SOCK_SEQPACKET endpoint. None is passed to the producer. The producer receives
 only a dynamically allocated candidate writer, named by the private environment
 PINEFORGE_REPORT_CANDIDATE_FD, and the marker PINEFORGE_REPORT_PRODUCER=supervised/v1.
+An explicit inherited sink adds a private K writer named
+PINEFORGE_REPORT_NATIVE_SINK_FD. U must close its last K writer before C.
 Both of its stdio writers refer to one private diagnostic pipe.
 
 This first integration has no deployed namespace/seccomp/reservation adapter.
@@ -24,15 +26,18 @@ It runs controlled process fixtures without claiming the deployed OS boundary.
 It must never be supplied by a billed/production launcher. The cleanup receipt
 leaves domain_empty unavailable; a PID or a reaped child is no domain proof.
 
-Native sink admission is checked, but sink capture/publication is fail-closed
-until the separate relay/validator integration lands. No caller sink is passed
-to a producer. Deadline integration points are marked ``interface: deadlines``;
-the current loops use nonblocking descriptors and absolute monotonic times.
+S counts/hashes K, relays through one 64 KiB queue to the real file finalizer,
+and publishes its private verified inode to N before R. N stays solely in S.
+Named sinks and the automatic internal snapshot handoff remain fail-closed.
+The synchronous deadline helpers handle attestation reads and stream publication.
+Metered ready reads, pipes, packet delivery and concurrent relay steps use
+nonblocking adapters with the same absolute Deadline and preserve every chunk.
 """
 from __future__ import annotations
 
 import argparse
 import codecs
+import ctypes
 from dataclasses import dataclass
 import errno
 import fcntl
@@ -42,6 +47,7 @@ import math
 import os
 from pathlib import Path
 import re
+import select
 import selectors
 import signal
 import socket
@@ -50,6 +56,11 @@ import subprocess
 import sys
 import tempfile
 import time
+
+from pineforge_report_deadlines import (
+    Deadline, DeadlineError, PeerClosed, TransportError,
+    bounded_read, bounded_write, close_once,
+)
 
 
 CONTRACT = "supervised/v1"
@@ -563,6 +574,8 @@ class Channel:
         self.complete = self.known = absent
         self.accepted_hash = hashlib.sha256()
         self.written_hash = hashlib.sha256()
+        self.active = not absent
+        self.logical_hash = None
 
     def accept(self, data):
         self.accepted += len(data)
@@ -582,7 +595,10 @@ class Channel:
             "sha256": (self.accepted_hash if name == "candidate" else self.written_hash).hexdigest(),
         }
         if name == "sink":
-            value.update(sha256=None, accepted_sha256=None, logical_sha256=None)
+            value.update(
+                sha256=self.written_hash.hexdigest() if self.written else None,
+                accepted_sha256=self.accepted_hash.hexdigest() if self.active else None,
+                logical_sha256=self.logical_hash)
         if name == "status":
             value["sha256"] = None
         return value
@@ -611,6 +627,15 @@ def pipe():
     return tuple(ends)
 
 
+def stream_pair():
+    ends = [endpoint.detach() for endpoint in socket.socketpair()]
+    for index, fd in enumerate(ends):
+        if fd == 5:
+            ends[index] = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 6)
+            close_once(fd)
+    return tuple(ends)
+
+
 class Supervisor:
     def __init__(self, argv):
         self.argv, self.started = list(argv), time.monotonic()
@@ -634,6 +659,15 @@ class Supervisor:
         self.status_fd = None
         self.sink_fd = None
         self.planned_sink_bytes = None
+        self.sink_bound = None
+        self.validator = None
+        self.sink_directory = None
+        self.sink_target = None
+        self.sink_verification = None
+        self.sink_deferred = False
+        self.sink_overflow = False
+        self.native_eof = False
+        self.publication_started = False
         self.process = None
         self.spool = None
         self.charged = 0
@@ -648,6 +682,18 @@ class Supervisor:
         self.operation = "report"
         self.wall_end = self.started + DEFAULTS["wall_ms"] / 1000
         self.stall_seconds = DEFAULTS["stall_ms"] / 1000
+        self.deadline = Deadline(DEFAULTS["wall_ms"], DEFAULTS["stall_ms"])
+        self.diagnostic_by_stage = {stage: 0 for stage in ("run", "finalize")}
+        # A single raw syscall returns EINTR to S's deadline loop. Python's
+        # convenience writes can retry it below that loop.
+        self.raw_io = ctypes.CDLL(None, use_errno=True)
+        self.raw_io.write.argtypes = (ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t)
+        self.raw_io.write.restype = ctypes.c_ssize_t
+        self.raw_io.read.argtypes = (ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t)
+        self.raw_io.read.restype = ctypes.c_ssize_t
+        self.raw_io.send.argtypes = (
+            ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int)
+        self.raw_io.send.restype = ctypes.c_ssize_t
         for fd in (1, 2):
             try:
                 os.set_blocking(fd, False)
@@ -675,11 +721,24 @@ class Supervisor:
         self.exit_class = exit_class
         self.facade = 4 if self.invocation == "entrypoint" else (2 if usage else 1)
 
-    def io_failure(self, error):
+    def io_failure(self, error, stage="publish"):
         if error.wall:
-            self.latch("run_deadline_exceeded", {"stage": "publish"})
+            self.latch("run_deadline_exceeded", {"stage": stage})
+        elif error.channel == "sink" and error.reason != "deadline":
+            self.latch("report_sink_failed", {
+                "reason": "sink_peer_closed" if error.reason == "peer_closed" else "sink_io"})
         else:
             self.latch("report_channel_failed", {"channel": error.channel, "reason": error.reason})
+
+    def stage(self):
+        return "finalize" if (self.native_eof or (
+            self.sink_bound is None and self.process is not None
+            and self.process.poll() is not None)) else "run"
+
+    def transfer_error(self, error, channel):
+        if isinstance(error, DeadlineError):
+            return TransferError(channel, "deadline", wall=error.kind == "wall")
+        return TransferError(channel, "peer_closed" if isinstance(error, PeerClosed) else "io")
 
     def _attestation(self, text):
         if text is None:
@@ -696,24 +755,15 @@ class Supervisor:
                 raise UsageError("TEST attestation must be read-only")
             os.set_blocking(fd, False)
             data = bytearray()
-            # interface: deadlines -- replace with bounded_read and Deadline.
-            end = min(self.wall_end, time.monotonic() + self.stall_seconds)
-            with selectors.DefaultSelector() as selector:
-                selector.register(fd, selectors.EVENT_READ)
-                while True:
-                    if time.monotonic() >= end:
-                        raise UsageError("attestation deadline")
-                    if not selector.select(min(0.05, end - time.monotonic())):
-                        continue
-                    try:
-                        chunk = os.read(fd, min(QUEUE_BYTES, TERMINAL_BYTES + 1 - len(data)))
-                    except (BlockingIOError, InterruptedError):
-                        continue
-                    if not chunk:
-                        break
-                    data.extend(chunk)
-                    if len(data) > TERMINAL_BYTES:
-                        raise UsageError("oversized attestation")
+            while True:
+                chunk, eof = bounded_read(
+                    fd, min(QUEUE_BYTES, TERMINAL_BYTES + 1 - len(data)),
+                    self.deadline, "prepare")
+                if eof:
+                    break
+                data.extend(chunk)
+                if len(data) > TERMINAL_BYTES:
+                    raise UsageError("oversized attestation")
             document = json.loads(data.decode("utf-8"))
             if (document.get("schema") != "pf-report-test-only-host-attestation"
                     or type(document.get("version")) is not int or document["version"] != 1
@@ -739,7 +789,7 @@ class Supervisor:
                 raise UsageError("invalid planned sink allowance")
             self.planned_sink_bytes = planned
             return grants
-        except (OSError, ValueError, UnicodeError, KeyError, TypeError, UsageError):
+        except (OSError, DeadlineError, ValueError, UnicodeError, KeyError, TypeError, UsageError):
             self.latch("run_isolation_unavailable", {"reason": "policy"})
             return None
 
@@ -769,6 +819,8 @@ class Supervisor:
                 self.sink_fd = sink_fd
                 writable_stream(sink_fd)
                 identities.append(endpoint_identity(sink_fd))
+            if options.report_sink is not None and options.report_sink_fd is not None:
+                raise UsageError("conflicting sink routes")
             if len(identities) != len(set(identities)):
                 raise UsageError("aliased endpoints")
             if options.run_phase_fd is not None:
@@ -836,37 +888,102 @@ class Supervisor:
             for name in ("candidate", "report"):
                 self.channels[name].limit = self.limits["report_bytes"]["effective"]
             self.channels["diagnostic"].limit = self.limits["diagnostic_bytes"]["effective"]
-            # K/S/V must own every sink route. Until that integration exists,
-            # never give a caller target or inherited N to a producer.
-            if (options.report_sink is not None or options.report_sink_fd is not None
+            # A named target and the internal snapshot protocol need their own
+            # handoff/publication adapters. Never let U open either target.
+            if (options.report_sink is not None
                     or names & {"--report-sink", "--report-sink-fd", "--report-replay-sink"}):
                 self.latch("run_isolation_unavailable", {"reason": "descriptor"})
                 return
             if time.monotonic() >= self.wall_end:
                 self.latch("run_deadline_exceeded", {"stage": "prepare"})
                 return
+            # Resolve W once from the original start, before any covered work.
+            # No data phase or successful write constructs a fresh W.
+            self.deadline = Deadline(
+                (self.wall_end - time.monotonic()) * 1000,
+                self.limits["stall_ms"]["effective"])
+            if self.sink_fd is not None:
+                self.sink_bound = self.planned_sink_bytes or report_limit
+                self.channels["sink"] = Channel(self.sink_bound)
+                self.sink_verification = {
+                    "exit_status": None, "signal": None, "complete": False,
+                    "counts": {tag: None for tag in "ETOVKXH"},
+                    "sha256": None, "finalizer_version": None}
             os.set_blocking(1, False)
             os.set_blocking(2, False)
         except (OSError, UsageError, ValueError):
             self.latch("run_request_invalid", {"option": "arguments"}, usage=True)
 
-    def bounded_write(self, fd, data, channel, *, terminal=False):
-        # interface: deadlines -- replace with bounded_write and Deadline.
-        end = (time.monotonic() + self.stall_seconds if terminal else
-               min(self.wall_end, time.monotonic() + self.stall_seconds))
+    def send_ready(self, fd, data, *, socket_endpoint):
+        """One raw nonblocking syscall, including EINTR, with bounded scratch."""
+        length = len(data)
+        if length > QUEUE_BYTES:
+            raise ValueError("oversized pending channel step")
+        buffer = (ctypes.c_char * length).from_buffer_copy(data)
+        if socket_endpoint:
+            count = self.raw_io.send(
+                fd, buffer, length, getattr(socket, "MSG_DONTWAIT", 0)
+                | getattr(socket, "MSG_NOSIGNAL", 0))
+        else:
+            # main() suppresses SIGPIPE before any pipe write. The companion
+            # helper deliberately accepts stream sockets only.
+            count = self.raw_io.write(fd, buffer, length)
+        if count < 0:
+            error = ctypes.get_errno() or errno.EIO
+            raise OSError(error, os.strerror(error))
+        return count
+
+    def read_ready(self, fd, size, stage):
+        """Return a ready chunk before the caller checks W after observation.
+
+        bounded_read can raise after consuming a chunk without returning its
+        bytes. Metered inputs need the payload for independent prefix hashes.
+        These owned pipes are nonblocking; no wait/retry happens in this step.
+        """
+        if self.deadline.expired():
+            raise DeadlineError("wall", stage, 0)
+        if not 0 < size <= QUEUE_BYTES:
+            raise ValueError("invalid ready read size")
+        buffer = ctypes.create_string_buffer(size)
+        count = self.raw_io.read(fd, buffer, size)
+        if count < 0:
+            error = ctypes.get_errno() or errno.EIO
+            raise OSError(error, os.strerror(error))
+        return buffer.raw[:count]
+
+    def write_ready(self, fd, data):
+        """Caller owns W, per-channel P, the queue and nonblocking fd setup."""
+        return self.send_ready(
+            fd, data, socket_endpoint=stat.S_ISSOCK(os.fstat(fd).st_mode))
+
+    def bounded_write(self, fd, data, channel, *, stage="publish"):
+        if stat.S_ISSOCK(os.fstat(fd).st_mode):
+            try:
+                count = bounded_write(fd, data, self.deadline, stage)
+            except (DeadlineError, PeerClosed, TransportError) as error:
+                self.channels[channel].write(memoryview(data)[:error.bytes_moved])
+                self.publication_started |= channel in ("report", "sink") and error.bytes_moved > 0
+                raise self.transfer_error(error, channel) from error
+            self.channels[channel].write(memoryview(data)[:count])
+            self.publication_started |= channel in ("report", "sink") and count > 0
+            return
+        # Pipe adapter: the descriptor is nonblocking, W never changes, and
+        # only a positive syscall return renews this pending operation's P.
+        end = time.monotonic() + self.stall_seconds
         remaining = memoryview(data)
         with selectors.DefaultSelector() as selector:
             selector.register(fd, selectors.EVENT_WRITE)
             while remaining:
                 now = time.monotonic()
-                if not terminal and now >= self.wall_end:
+                if self.deadline.expired():
                     raise TransferError(channel, "deadline", wall=True)
                 if now >= end:
                     raise TransferError(channel, "deadline")
                 try:
-                    count = os.write(fd, remaining)
+                    count = self.write_ready(fd, remaining[:QUEUE_BYTES])
                 except (BlockingIOError, InterruptedError):
-                    selector.select(min(0.05, end - now))
+                    selector.select(min(0.05, self.deadline.remaining_wall_ms() / 1000,
+                                        max(0, end - now)))
                     continue
                 except OSError as error:
                     reason = "peer_closed" if error.errno in (
@@ -875,14 +992,89 @@ class Supervisor:
                 if count <= 0:
                     raise TransferError(channel, "io")
                 self.channels[channel].write(remaining[:count])
+                self.publication_started |= channel in ("report", "sink") and count > 0
                 remaining = remaining[count:]
                 end = time.monotonic() + self.stall_seconds
-                if not terminal:
-                    end = min(end, self.wall_end)
+        if self.deadline.expired():
+            raise TransferError(channel, "deadline", wall=True)
+
+    def finish_sink(self, data, receipt_eof):
+        """Interpret V only after its actual wait and receipt EOF are known."""
+        status = self.validator.returncode
+        verification = self.sink_verification
+        verification["exit_status"] = status if status >= 0 else None
+        verification["signal"] = -status if status < 0 else None
+        try:
+            if not receipt_eof or not data.endswith(b"\n") or data.count(b"\n") != 1:
+                raise ProtocolError("missing or incomplete finalizer receipt")
+            receipt = json.loads(data)
+            base = {"complete", "sink_bytes", "sha256", "finalizer_version",
+                    *("count_" + tag.lower() for tag in "ETOVKXH")}
+            extra = ({"reason", "cap_bytes"} if "reason" in receipt else
+                     {"tool", "event", "exit_code", "detail", "code", "args"}
+                     if "code" in receipt else set())
+            if (set(receipt) != base | extra or type(receipt["complete"]) is not bool
+                    or type(receipt["sink_bytes"]) is not int
+                    or not 0 <= receipt["sink_bytes"] <= self.sink_bound + 1
+                    or not isinstance(receipt["finalizer_version"], str)
+                    or receipt["finalizer_version"] != "1.1.0"):
+                raise ProtocolError("invalid finalizer receipt")
+            counts = {tag: receipt["count_" + tag.lower()] for tag in "ETOVKXH"}
+            if any(type(value) is not int or not 0 <= value <= MAX_INTEGER
+                   for value in counts.values()):
+                raise ProtocolError("invalid finalizer counts")
+            digest = receipt["sha256"]
+            if ((receipt["complete"] and (not isinstance(digest, str)
+                                         or re.fullmatch(r"[0-9a-f]{64}", digest) is None))
+                    or (not receipt["complete"] and digest != "")):
+                raise ProtocolError("invalid finalizer digest")
+            if "reason" in receipt and (
+                    receipt["reason"] != "sink_exhausted"
+                    or receipt["cap_bytes"] != self.sink_bound
+                    or receipt["sink_bytes"] != self.sink_bound + 1):
+                raise ProtocolError("invalid exhaustion receipt")
+            verification.update(counts=counts, sha256=digest or None,
+                                finalizer_version=receipt["finalizer_version"])
+            if (receipt["complete"] != (status == 0)
+                    or (status == 8) != ("reason" in receipt)
+                    or ("code" in receipt and status != 3)):
+                raise ProtocolError("finalizer receipt disagrees with actual wait")
+            sink = self.channels["sink"]
+            if status == 0:
+                if (not self.native_eof or sink.truncated
+                        or receipt["sink_bytes"] != sink.accepted
+                        or os.stat(self.sink_target).st_size != sink.accepted):
+                    raise ProtocolError("finalizer completion differs from K")
+                verification["complete"] = True
+                sink.logical_hash = digest
+            elif status == 6:
+                # A missing trailer can result from a producer exit. R19
+                # defers this EOF evidence until U's real wait/claim is known.
+                self.sink_deferred = True
+            elif status == 8:
+                if not self.sink_overflow:
+                    raise ProtocolError("finalizer overflow without K evidence")
+            elif status == 5:
+                self.latch("report_sink_failed", {"reason": "sink_io"})
+            elif status == 7:
+                self.latch("harness_internal_error", {})
+            elif status == 3 and extra:
+                if (receipt["tool"] != "pineforge-sink-finalize"
+                        or receipt["event"] != "sink_refused" or receipt["exit_code"] != 3
+                        or receipt["code"] != "report_result_invalid"):
+                    raise ProtocolError("invalid typed finalizer refusal")
+                self.latch(receipt["code"], receipt["args"])
+            else:
+                self.latch("report_channel_failed", {"channel": "sink", "reason": "protocol"})
+        except (OSError, ValueError, TypeError, KeyError, ProtocolError):
+            self.latch("report_channel_failed", {"channel": "sink", "reason": "protocol"})
 
     def capture(self):
         candidate_read, candidate_write = pipe()
         diagnostic_read, diagnostic_write = pipe()
+        owned = {candidate_read, candidate_write, diagnostic_read, diagnostic_write}
+        readers = {candidate_read: "candidate", diagnostic_read: "diagnostic"}
+        native_read = native_write = relay_fd = validator_read = receipt_read = None
         environment = dict(os.environ)
         for name in tuple(environment):
             if name.startswith(("PINEFORGE_REPORT_", "PINEFORGE_TERMINAL_",
@@ -892,130 +1084,301 @@ class Supervisor:
         environment["PINEFORGE_REPORT_CANDIDATE_FD"] = str(candidate_write)
         self.spool = tempfile.TemporaryFile(mode="w+b")
         self.artifacts_removed = False
+        diagnostic_pending, relay_pending, receipt = bytearray(), bytearray(), bytearray()
+        diagnostic_since = None
+        candidate_waiting = False
+        receipt_eof = validator_done = False
+        stopping = {}
+
+        def release(fd):
+            if fd in owned:
+                owned.remove(fd)
+                if not close_once(fd):
+                    name = readers.get(fd, "sink")
+                    if name == "receipt":
+                        name = "sink"
+                    self.latch("report_channel_failed", {"channel": name, "reason": "io"})
+
+        def stop(process, now):
+            if process is None or process.poll() is not None:
+                return
+            if process not in stopping:
+                process.terminate()
+                stopping[process] = now
+            elif now - stopping[process] >= STOP_GRACE_MS / 1000:
+                process.kill()
+
         try:
+            if self.sink_fd is not None:
+                native_read, native_write = pipe()
+                relay_fd, validator_read = stream_pair()
+                receipt_read, receipt_write = pipe()
+                owned.update((native_read, native_write, relay_fd, validator_read,
+                              receipt_read, receipt_write))
+                readers.update({native_read: "sink", receipt_read: "receipt"})
+                environment["PINEFORGE_REPORT_NATIVE_SINK_FD"] = str(native_write)
+                self.sink_directory = tempfile.TemporaryDirectory(prefix="pf-supervised-sink-")
+                self.sink_target = str(Path(self.sink_directory.name) / "verified.sink")
+                self.validator = subprocess.Popen(
+                    [sys.executable, "-B", str(Path(__file__).with_name("pineforge_sink_finalize.py")),
+                     "--in-fd", str(validator_read), "--out", self.sink_target,
+                     "--max-bytes", str(self.sink_bound), "--receipt-fd", "2"],
+                    stdin=subprocess.DEVNULL, stdout=diagnostic_write, stderr=receipt_write,
+                    close_fds=True, pass_fds=(validator_read,), start_new_session=True)
+                release(validator_read)
+                release(receipt_write)
+                os.set_blocking(relay_fd, False)
             launch_started = time.monotonic()
             self.process = subprocess.Popen(
                 self.options.command, stdin=subprocess.DEVNULL,
                 stdout=diagnostic_write, stderr=diagnostic_write, close_fds=True,
-                pass_fds=(candidate_write,), env=environment, start_new_session=True)
+                pass_fds=(candidate_write,) if native_write is None else
+                (candidate_write, native_write), env=environment, start_new_session=True)
             self.run_started = launch_started
-            self.channels["diagnostic"].known = self.channels["diagnostic"].complete = False
-        except BaseException:
-            os.close(candidate_read)
-            os.close(diagnostic_read)
-            raise
-        finally:
-            os.close(candidate_write)
-            os.close(diagnostic_write)
-        pending = bytearray()
-        pending_since = None
-        readers = {candidate_read: "candidate", diagnostic_read: "diagnostic"}
-        stopping_at = None
-        try:
+            diagnostic = self.channels["diagnostic"]
+            diagnostic.known = diagnostic.complete = False
+            release(candidate_write)
+            release(diagnostic_write)
+            if native_write is not None:
+                release(native_write)
+
             with selectors.DefaultSelector() as selector:
-                for fd, name in readers.items():
+                def watch(fd, events, name):
+                    if fd not in selector.get_map():
+                        selector.register(fd, events, name)
+
+                def unwatch(fd):
+                    if fd in selector.get_map():
+                        selector.unregister(fd)
+
+                def end_read(fd):
+                    unwatch(fd)
+                    release(fd)
+                    readers.pop(fd, None)
+
+                def read(fd, size, name):
+                    try:
+                        return self.read_ready(fd, size, self.stage())
+                    except (BlockingIOError, InterruptedError):
+                        return None
+                    except DeadlineError as error:
+                        if error.kind == "wall":
+                            self.latch("run_deadline_exceeded", {"stage": self.stage()})
+                        else:
+                            self.latch("report_channel_failed", {"channel": name, "reason": "deadline"})
+                    except OSError:
+                        self.latch("report_channel_failed", {"channel": name, "reason": "io"})
+                    return None
+
+                for fd in readers:
                     os.set_blocking(fd, False)
-                    selector.register(fd, selectors.EVENT_READ, name)
-                # interface: deadlines -- absolute W, and P only while D is pending.
-                while readers or self.process.poll() is None or pending:
-                    events = selector.select(0.02)
+                while readers or self.process.poll() is None or diagnostic_pending or (
+                        self.validator is not None and self.validator.poll() is None):
+                    for fd, name in readers.items():
+                        paused = (
+                            (name == "sink" and bool(relay_pending))
+                            or (name == "diagnostic" and len(diagnostic_pending) == QUEUE_BYTES)
+                            or (name == "candidate" and candidate_waiting))
+                        if paused:
+                            unwatch(fd)
+                        else:
+                            watch(fd, selectors.EVENT_READ, name)
+                    if relay_fd in owned and relay_pending:
+                        watch(relay_fd, selectors.EVENT_WRITE, "relay")
+                    elif relay_fd is not None:
+                        unwatch(relay_fd)
+                    if diagnostic_pending:
+                        watch(2, selectors.EVENT_WRITE, "diagnostic_output")
+                    else:
+                        unwatch(2)
+                    events = selector.select(min(0.02, self.deadline.remaining_wall_ms() / 1000))
+                    ready = {key.fd for key, _ in events}
                     if self.cancelled:
                         self.latch("run_aborted", {})
-                    # Fixed within-batch budget precedence: diagnostic before JSON.
-                    events.sort(key=lambda item: item[0].data != "diagnostic")
-                    for key, _ in events:
-                        if self.failure is not None:
-                            break
-                        name, fd = key.data, key.fd
-                        channel = self.channels[name]
-                        allowance = channel.limit - channel.accepted
-                        room = QUEUE_BYTES - len(pending) if name == "diagnostic" else QUEUE_BYTES
-                        if room <= 0:
-                            continue
-                        try:
-                            data = os.read(fd, min(room, allowance + 1))
-                        except (BlockingIOError, InterruptedError):
-                            continue
-                        except OSError:
-                            self.latch("report_channel_failed", {"channel": name, "reason": "io"})
-                            break
-                        if not data:
-                            channel.known = True
-                            selector.unregister(fd)
-                            readers.pop(fd)
-                            os.close(fd)
-                            continue
-                        channel.observed += len(data)
-                        accepted = data[:allowance]
-                        channel.accept(accepted)
-                        if name == "candidate":
-                            if self.spool.write(accepted) != len(accepted):
-                                raise OSError("short candidate spool write")
-                            self.charged += len(accepted)
-                        else:
-                            if not pending and accepted:
-                                pending_since = time.monotonic()
-                            pending.extend(accepted)
-                        if len(data) > allowance:
-                            channel.truncated = True
-                            if name == "diagnostic":
+
+                    # R19: diagnostic budget, native budget, candidate budget,
+                    # independent validator/transport evidence, then W.
+                    if diagnostic_read in ready and diagnostic_read in readers:
+                        allowance = diagnostic.limit - diagnostic.accepted
+                        room = QUEUE_BYTES - len(diagnostic_pending)
+                        data = read(diagnostic_read, min(room, allowance + 1), "diagnostic")
+                        if data == b"":
+                            diagnostic.known = True
+                            end_read(diagnostic_read)
+                        elif data:
+                            diagnostic.observed += len(data)
+                            accepted = data[:allowance]
+                            diagnostic.accept(accepted)
+                            self.diagnostic_by_stage[self.stage()] += len(accepted)
+                            if not diagnostic_pending and accepted:
+                                diagnostic_since = time.monotonic()
+                            diagnostic_pending.extend(accepted)
+                            if len(data) > allowance:
+                                diagnostic.truncated = True
                                 self.latch("diagnostic_budget_exceeded", {
-                                    "cap_bytes": channel.limit, "used_bytes": channel.accepted,
+                                    "cap_bytes": diagnostic.limit, "used_bytes": diagnostic.accepted,
                                     "requested_bytes": 1})
-                            else:
-                                self.latch("report_budget_exceeded", {
-                                    "channel": "json", "cap_bytes": channel.limit,
-                                    "used_bytes": channel.accepted, "requested_bytes": 1})
-                    if pending:
+                                end_read(diagnostic_read)
+
+                    if candidate_read in ready:
+                        candidate_waiting = True
+                        unwatch(candidate_read)
+                    if candidate_waiting and native_read in readers and not relay_pending:
+                        # A readiness batch can precede a just-queued K EOF.
+                        # Check K again before interpreting any C readiness.
+                        ready.update(select.select([native_read], [], [], 0)[0])
+                    native_progress = False
+                    if (native_read in ready and native_read in readers
+                            and not relay_pending and self.failure is None):
+                        sink = self.channels["sink"]
+                        allowance = sink.limit - sink.accepted
+                        native_progress = True
+                        data = read(native_read, min(QUEUE_BYTES, allowance + 1), "sink")
+                        if data == b"":
+                            sink.known = self.native_eof = True
+                            self.finalize_started = time.monotonic()
+                            self.channels["candidate"].limit = self.channels["report"].limit - sink.accepted
+                            end_read(native_read)
+                        elif data:
+                            native_progress = True
+                            sink.observed += len(data)
+                            accepted = data[:allowance]
+                            sink.accept(accepted)
+                            self.charged += len(accepted)
+                            self.channels["candidate"].limit = self.channels["report"].limit - sink.accepted
+                            # Unlike deadlines.relay(), V must receive the one
+                            # probe too. It is queued, never approved/charged.
+                            relay_pending.extend(data)
+                            if len(data) > allowance:
+                                sink.truncated = self.sink_overflow = True
+                                self.latch("report_sink_failed", {
+                                    "reason": "sink_exhausted", "sink_bytes": sink.observed,
+                                    "cap_bytes": sink.limit})
+                                end_read(native_read)
+
+                    if receipt_read in ready and receipt_read in readers:
+                        data = read(receipt_read, min(QUEUE_BYTES, TERMINAL_BYTES + 1 - len(receipt)),
+                                    "sink")
+                        if data == b"":
+                            receipt_eof = True
+                            end_read(receipt_read)
+                        elif data:
+                            receipt.extend(data)
+                            if len(receipt) > TERMINAL_BYTES:
+                                self.latch("report_channel_failed", {"channel": "sink", "reason": "protocol"})
+                                end_read(receipt_read)
+
+                    if candidate_waiting and candidate_read in readers and self.failure is None:
+                        candidate = self.channels["candidate"]
+                        if native_read in readers:
+                            if not relay_pending and not native_progress:
+                                # K readiness was serviced first. With no K
+                                # bytes/EOF queued, C data proves an open K.
+                                data = read(candidate_read, 1, "candidate")
+                                if data == b"":
+                                    candidate.known = True
+                                    end_read(candidate_read)
+                                elif data:
+                                    candidate.observed += len(data)
+                                    candidate.truncated = True
+                                    self.latch("report_channel_failed", {
+                                        "channel": "candidate", "reason": "protocol"})
+                        elif self.validator is None or validator_done:
+                            allowance = candidate.limit - candidate.accepted
+                            data = read(candidate_read, min(QUEUE_BYTES, allowance + 1), "candidate")
+                            candidate_waiting = False
+                            if data == b"":
+                                candidate.known = True
+                                end_read(candidate_read)
+                            elif data:
+                                candidate.observed += len(data)
+                                accepted = data[:allowance]
+                                candidate.accept(accepted)
+                                if self.spool.write(accepted) != len(accepted):
+                                    raise OSError("short candidate spool write")
+                                self.charged += len(accepted)
+                                if len(data) > allowance:
+                                    candidate.truncated = True
+                                    self.latch("report_budget_exceeded", {
+                                        "channel": "aggregate" if self.channels["sink"].accepted else "json",
+                                        "cap_bytes": self.channels["report"].limit,
+                                        "used_bytes": self.charged, "requested_bytes": 1})
+
+                    # Each output direction owns one fixed-size pending queue.
+                    # Never wait in a synchronous write here: D and C must stay
+                    # serviceable when V stops. K waits consume W, not P.
+                    for fd, pending, name in (
+                            (relay_fd, relay_pending, "sink"),
+                            (2, diagnostic_pending, "diagnostic")):
+                        if not pending or fd not in ready or self.deadline.expired():
+                            continue
                         try:
-                            count = os.write(2, pending)
+                            count = self.write_ready(fd, pending)
                             if count <= 0:
-                                raise TransferError("diagnostic", "io")
-                            self.channels["diagnostic"].write(memoryview(pending)[:count])
+                                raise OSError(errno.EIO, "zero channel write")
+                            if name == "diagnostic":
+                                diagnostic.write(memoryview(pending)[:count])
+                                diagnostic_since = time.monotonic()
                             del pending[:count]
-                            pending_since = time.monotonic() if pending else None
                         except (BlockingIOError, InterruptedError):
                             pass
-                        except (OSError, TransferError) as error:
-                            if isinstance(error, OSError):
-                                reason = "peer_closed" if error.errno in (
-                                    errno.EPIPE, errno.ECONNRESET, errno.ENOTCONN) else "io"
-                                error = TransferError("diagnostic", reason)
-                            self.io_failure(error)
-                            self.channels["diagnostic"].truncated = True
+                        except OSError as error:
+                            reason = "peer_closed" if error.errno in (
+                                errno.EPIPE, errno.ECONNRESET, errno.ENOTCONN) else "io"
+                            self.io_failure(TransferError(name, reason))
+                            self.channels[name].truncated = True
                             pending.clear()
+                    if relay_fd in owned and native_read not in readers and not relay_pending:
+                        unwatch(relay_fd)
+                        release(relay_fd)
+                    if (self.validator is not None and not validator_done
+                            and self.validator.poll() is not None and receipt_read not in readers):
+                        self.finish_sink(bytes(receipt), receipt_eof)
+                        validator_done = True
+
                     now = time.monotonic()
-                    if self.cancelled:
-                        self.latch("run_aborted", {})
-                    if now >= self.wall_end:
-                        self.latch("run_deadline_exceeded", {"stage": "run"})
-                        pending.clear()
-                    elif pending_since is not None and now - pending_since >= self.stall_seconds:
-                        self.io_failure(TransferError("diagnostic", "deadline"))
-                        self.channels["diagnostic"].truncated = True
-                        pending.clear()
-                    if self.failure is not None:
+                    if self.deadline.expired():
+                        self.latch("run_deadline_exceeded", {"stage": self.stage()})
                         for fd in tuple(readers):
-                            if self.channels[readers[fd]].accepted:
-                                self.channels[readers[fd]].truncated = True
-                            selector.unregister(fd)
-                            readers.pop(fd)
-                            os.close(fd)
-                        if self.process.poll() is None:
-                            if stopping_at is None:
-                                self.process.terminate()
-                                stopping_at = now
-                            elif now - stopping_at >= STOP_GRACE_MS / 1000:
-                                self.process.kill()
+                            end_read(fd)
+                        diagnostic.truncated |= bool(diagnostic_pending)
+                        diagnostic_pending.clear()
+                        relay_pending.clear()
+                        if self.validator is not None and self.validator.poll() is None:
+                            self.validator.kill()
+                    elif (diagnostic_pending and diagnostic_since is not None
+                          and now - diagnostic_since >= self.stall_seconds):
+                        diagnostic.truncated = True
+                        diagnostic_pending.clear()
+                        self.io_failure(TransferError("diagnostic", "deadline"))
+                    if self.failure is not None:
+                        for fd in (candidate_read, native_read):
+                            if fd in readers:
+                                channel = self.channels[readers[fd]]
+                                channel.truncated |= bool(channel.accepted and not channel.known)
+                                end_read(fd)
+                        stop(self.process, now)
+                        if not self.sink_overflow:
+                            relay_pending.clear()
+                            if relay_fd in owned:
+                                unwatch(relay_fd)
+                                release(relay_fd)
+                            stop(self.validator, now)
                     if self.process.poll() is not None and self.run_finished is None:
                         self.run_finished = now
-                self.process.wait()
+                        if self.finalize_started is None and self.sink_bound is None:
+                            self.finalize_started = now
+                self.process.wait(timeout=STOP_GRACE_MS / 1000)
+                if self.validator is not None:
+                    self.validator.wait(timeout=STOP_GRACE_MS / 1000)
+                    if not validator_done:
+                        self.finish_sink(bytes(receipt), receipt_eof)
         finally:
-            for fd in readers:
-                os.close(fd)
-        self.channels["diagnostic"].complete = (
-            self.channels["diagnostic"].known and not self.channels["diagnostic"].truncated
-            and self.channels["diagnostic"].accepted == self.channels["diagnostic"].written)
+            for fd in tuple(owned):
+                release(fd)
+        diagnostic = self.channels["diagnostic"]
+        diagnostic.complete = (diagnostic.known and not diagnostic.truncated
+                               and diagnostic.accepted == diagnostic.written)
 
     def validate(self):
         """Watch the trusted parser externally, including its diagnostic bytes."""
@@ -1034,7 +1397,8 @@ class Supervisor:
                  "--_validate-candidate", str(self.spool.fileno()), str(result_write), self.operation],
                 stdin=subprocess.DEVNULL, stdout=diagnostic_write, stderr=diagnostic_write,
                 pass_fds=(self.spool.fileno(), result_write), close_fds=True)
-            self.finalize_started = launch_started
+            if self.finalize_started is None:
+                self.finalize_started = launch_started
         except BaseException:
             os.close(result_read)
             os.close(diagnostic_read)
@@ -1047,7 +1411,6 @@ class Supervisor:
                 for fd, name in readers.items():
                     os.set_blocking(fd, False)
                     selector.register(fd, selectors.EVENT_READ, name)
-                # interface: deadlines -- bounded_read under the same absolute W.
                 while readers or worker.poll() is None:
                     events = selector.select(0.02)
                     events.sort(key=lambda item: item[0].data != "diagnostic")
@@ -1056,9 +1419,23 @@ class Supervisor:
                         allowance = (channel.limit - channel.accepted if key.data == "diagnostic"
                                      else TERMINAL_BYTES - len(data))
                         try:
-                            chunk = os.read(key.fd, min(QUEUE_BYTES, allowance + 1))
+                            chunk = self.read_ready(
+                                key.fd, min(QUEUE_BYTES, allowance + 1), "finalize")
                         except (BlockingIOError, InterruptedError):
                             continue
+                        except DeadlineError as error:
+                            if error.kind == "wall":
+                                self.latch("run_deadline_exceeded", {"stage": "finalize"})
+                            else:
+                                self.latch("report_channel_failed", {
+                                    "channel": "diagnostic" if key.data == "diagnostic" else "candidate",
+                                    "reason": "deadline"})
+                            break
+                        except OSError:
+                            self.latch("report_channel_failed", {
+                                "channel": "diagnostic" if key.data == "diagnostic" else "candidate",
+                                "reason": "io"})
+                            break
                         if not chunk:
                             if key.data == "diagnostic":
                                 diagnostic_eof = True
@@ -1070,23 +1447,24 @@ class Supervisor:
                             channel.observed += len(chunk)
                             accepted = chunk[:allowance]
                             channel.accept(accepted)
+                            self.diagnostic_by_stage["finalize"] += len(accepted)
                             if len(chunk) > allowance:
                                 channel.truncated = True
                                 self.latch("diagnostic_budget_exceeded", {
                                     "cap_bytes": channel.limit, "used_bytes": channel.accepted,
                                     "requested_bytes": 1})
                             try:
-                                self.bounded_write(2, accepted, "diagnostic")
+                                self.bounded_write(2, accepted, "diagnostic", stage="finalize")
                             except TransferError as error:
                                 channel.truncated = True
-                                self.io_failure(error)
+                                self.io_failure(error, "finalize")
                         else:
                             data.extend(chunk)
                             if len(data) > TERMINAL_BYTES:
                                 self.latch("harness_internal_error", {})
                     if self.cancelled:
                         self.latch("run_aborted", {})
-                    if time.monotonic() >= self.wall_end:
+                    if self.deadline.expired():
                         self.latch("run_deadline_exceeded", {"stage": "finalize"})
                     if self.failure is not None:
                         if worker.poll() is None:
@@ -1141,6 +1519,8 @@ class Supervisor:
             self.latch("run_producer_failed", {"reason": "signal", "signal": -status})
         elif status:
             self.latch("run_producer_failed", {"reason": "exit", "exit_status": status})
+        if self.sink_deferred:
+            self.latch("report_channel_failed", {"channel": "sink", "reason": "protocol"})
         if not valid:
             self.latch("report_channel_failed", {"channel": "candidate", "reason": "protocol"})
         if valid and (self.failure is None or (
@@ -1151,16 +1531,25 @@ class Supervisor:
         return None
 
     def failure_document(self):
-        if self.failure is None:
+        if self.failure is None or self.publication_started:
             return None
         code, args = self.failure["code"], self.failure["args"]
         text = self.catalog[code]["english"][0]
         value = {"engine": "pineforge", "error": text, "code": code, "args": args}
-        data = wire(value)
         allowance = self.channels["report"].limit - self.charged
-        if len(data) > allowance:
+        if allowance < 1:
             return None
-        self.charged += len(data)
+        pieces, length = [], 1  # The final LF is part of R.
+        encoder = json.JSONEncoder(separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+        for text in encoder.iterencode(value):
+            piece = text.encode("utf-8")
+            if len(piece) > allowance - length:
+                return None
+            pieces.append(piece)
+            length += len(piece)
+        pieces.append(b"\n")
+        data = b"".join(pieces)
+        self.charged += length
         return data
 
     def publish(self, selected):
@@ -1169,6 +1558,28 @@ class Supervisor:
         if selected is None:
             return
         self.publish_started = time.monotonic()
+        sink = self.channels["sink"]
+        if self.sink_fd is not None and self.failure is None:
+            try:
+                os.set_blocking(self.sink_fd, False)
+                with open(self.sink_target, "rb") as source:
+                    while data := source.read(QUEUE_BYTES):
+                        self.bounded_write(self.sink_fd, data, "sink")
+                sink.complete = (
+                    self.sink_verification["complete"] and sink.known
+                    and sink.written == sink.accepted and not sink.truncated)
+                if not sink.complete:
+                    raise TransferError("sink", "io")
+            except TransferError as error:
+                sink.truncated = sink.written < sink.accepted
+                self.io_failure(error)
+                self.publish_finished = time.monotonic()
+                return
+            except OSError:
+                sink.truncated = sink.written < sink.accepted
+                self.latch("report_sink_failed", {"reason": "sink_io"})
+                self.publish_finished = time.monotonic()
+                return
         report = self.channels["report"]
         length = len(selected) if isinstance(selected, bytes) else self.channels["candidate"].accepted
         report.observed = report.accepted = length
@@ -1196,11 +1607,12 @@ class Supervisor:
             if fd in self.external_closed:
                 continue
             self.external_closed.add(fd)
-            try:
-                os.close(fd)
-            except OSError:
+            if not close_once(fd):
                 self.channels[name].complete = False
-                self.latch("report_channel_failed", {"channel": name, "reason": "io"})
+                if name == "sink":
+                    self.latch("report_sink_failed", {"reason": "sink_io"})
+                else:
+                    self.latch("report_channel_failed", {"channel": name, "reason": "io"})
         if self.spool is not None:
             try:
                 self.spool.close()
@@ -1208,6 +1620,12 @@ class Supervisor:
             except OSError:
                 self.artifacts_removed = False
                 self.latch("report_channel_failed", {"channel": "candidate", "reason": "io"})
+        if self.sink_directory is not None:
+            try:
+                self.sink_directory.cleanup()
+            except OSError:
+                self.artifacts_removed = False
+                self.latch("report_sink_failed", {"reason": "sink_io"})
 
     def usage(self):
         stages = {stage: {"state": "not_started",
@@ -1236,19 +1654,47 @@ class Supervisor:
                          int(((end or now) - start) * 1000), "clock")
         for name, value, limit_name in (
                 ("report_bytes", self.charged, "report_bytes"),
-                ("sink_bytes", 0, None),
+                ("sink_bytes", self.channels["sink"].accepted, None),
                 ("diagnostic_bytes", self.channels["diagnostic"].accepted, "diagnostic_bytes")):
             limit = self.limits.get(limit_name, {})
             measured(job["resources"], name, value, "channel",
-                     limit=limit.get("effective"), requested=limit.get("requested"))
+                     limit=self.sink_bound if name == "sink_bytes" else limit.get("effective"),
+                     requested=self.planned_sink_bytes if name == "sink_bytes"
+                     else limit.get("requested"))
         if self.run_started is not None:
             measured(stages["run"]["resources"], "report_bytes",
-                     self.channels["candidate"].accepted, "channel")
+                     self.channels["sink"].accepted +
+                     (0 if self.sink_bound is not None else self.channels["candidate"].accepted),
+                     "channel", limit=self.channels["report"].limit,
+                     requested=self.limits["report_bytes"]["requested"])
+            measured(stages["run"]["resources"], "sink_bytes",
+                     self.channels["sink"].accepted, "channel", limit=self.sink_bound,
+                     requested=self.planned_sink_bytes)
             measured(stages["run"]["resources"], "diagnostic_bytes",
-                     self.channels["diagnostic"].accepted, "channel")
+                     self.diagnostic_by_stage["run"], "channel",
+                     limit=self.channels["diagnostic"].limit,
+                     requested=self.limits["diagnostic_bytes"]["requested"])
+        if self.finalize_started is not None:
+            measured(stages["finalize"]["resources"], "report_bytes",
+                     self.channels["candidate"].accepted if self.sink_bound is not None else 0,
+                     "channel", limit=self.channels["candidate"].limit)
+            measured(stages["finalize"]["resources"], "sink_bytes", 0, "channel",
+                     limit=self.sink_bound, requested=self.planned_sink_bytes)
+            measured(stages["finalize"]["resources"], "diagnostic_bytes",
+                     self.diagnostic_by_stage["finalize"], "channel",
+                     limit=self.channels["diagnostic"].limit,
+                     requested=self.limits["diagnostic_bytes"]["requested"])
         if self.publish_started is not None:
             measured(stages["publish"]["resources"], "report_bytes",
-                     self.channels["report"].written, "channel")
+                     self.channels["report"].written, "channel",
+                     limit=self.channels["report"].limit,
+                     requested=self.limits["report_bytes"]["requested"])
+            measured(stages["publish"]["resources"], "sink_bytes",
+                     self.channels["sink"].written, "channel", limit=self.sink_bound,
+                     requested=self.planned_sink_bytes)
+            measured(stages["publish"]["resources"], "diagnostic_bytes", 0, "channel",
+                     limit=self.channels["diagnostic"].limit,
+                     requested=self.limits["diagnostic_bytes"]["requested"])
         return {"version": 1, "stages": stages, "job": job}
 
     def record(self):
@@ -1258,7 +1704,10 @@ class Supervisor:
         return {
             "schema": "pf-run-terminal", "version": 1, "contract": CONTRACT,
             "attempt_id": self.attempt, "invocation": self.invocation,
-            "complete": self.failure is None and self.channels["report"].complete,
+            "complete": (self.failure is None and self.channels["report"].complete
+                         and self.channels["candidate"].complete
+                         and self.channels["diagnostic"].complete
+                         and self.channels["sink"].complete),
             "exit_class": self.exit_class if self.failure is not None else "success",
             "failure": self.failure, "exit_status": self.facade,
             "producer": {
@@ -1267,12 +1716,12 @@ class Supervisor:
                 "signal": -status if status is not None and status < 0 else None,
                 "failure": self.producer_claim, "failure_claim_omitted": self.claim_omitted,
             },
-            "limits": {**self.limits, "sink_bytes": None, "terminal_bytes": TERMINAL_BYTES,
+            "limits": {**self.limits, "sink_bytes": self.sink_bound, "terminal_bytes": TERMINAL_BYTES,
                        "stop_grace_ms": STOP_GRACE_MS, "relay_queue_bytes": QUEUE_BYTES,
                        "producer_claim_bytes": CLAIM_BYTES},
             "report_charged_bytes": self.charged,
             "channels": {name: channel.record(name) for name, channel in self.channels.items()},
-            "sink_verification": None, "usage": self.usage(),
+            "sink_verification": self.sink_verification, "usage": self.usage(),
             "cleanup": {
                 "producer_reaped": cleanup(None if self.process is None else status is not None),
                 "domain_empty": cleanup(None),
@@ -1299,18 +1748,19 @@ class Supervisor:
             # Required fields never become an unbounded "emergency" packet.
             self.facade = 4 if self.invocation == "entrypoint" else 1
             return
-        # interface: deadlines -- a single atomic packet, absolute terminal grace.
-        end = time.monotonic() + self.stall_seconds
+        # The helper's stream writer cannot send a packet atomically. This
+        # adapter attempts exactly one packet within the reserved terminal P.
+        grace = Deadline(self.stall_seconds * 1000, self.stall_seconds * 1000)
         with selectors.DefaultSelector() as selector:
             selector.register(self.status_socket, selectors.EVENT_WRITE)
             while True:
-                if time.monotonic() >= end:
+                if grace.expired():
                     self.facade = 4 if self.invocation == "entrypoint" else 1
                     return
                 try:
-                    count = self.status_socket.send(packet, getattr(socket, "MSG_NOSIGNAL", 0))
+                    count = self.send_ready(self.status_socket.fileno(), packet, socket_endpoint=True)
                 except (BlockingIOError, InterruptedError):
-                    selector.select(min(0.05, max(0, end - time.monotonic())))
+                    selector.select(min(0.05, grace.remaining_wall_ms() / 1000))
                     continue
                 except OSError:
                     self.facade = 4 if self.invocation == "entrypoint" else 1
@@ -1331,6 +1781,13 @@ class Supervisor:
             if self.process is not None and self.process.poll() is None:
                 self.process.kill()
                 self.process.wait(timeout=STOP_GRACE_MS / 1000)
+            if self.validator is not None and self.validator.poll() is None:
+                self.validator.kill()
+                self.validator.wait(timeout=STOP_GRACE_MS / 1000)
+            if self.validator is not None:
+                status = self.validator.returncode
+                self.sink_verification["exit_status"] = status if status >= 0 else None
+                self.sink_verification["signal"] = -status if status < 0 else None
         try:
             self.publish(selected)
         except Exception:

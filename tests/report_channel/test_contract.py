@@ -1,16 +1,20 @@
-"""Round-one outside-in contract rows. Run with unittest discovery."""
+"""Outside-in report-channel contract rows. Run with unittest discovery."""
 from __future__ import annotations
 
 import hashlib
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
 import unittest
 
-from host import ROOT, clean_environment, encoded, launch, reference, require_supervisor, sink_wire
+from host import (
+    ROOT, clean_environment, encoded, launch, reference, require_supervisor,
+    sink_receipt, sink_wire, validator_observer,
+)
 
 
 class Contract(unittest.TestCase):
@@ -318,6 +322,244 @@ class Contract(unittest.TestCase):
         self.assertIsNone(record["producer"]["stage"])
         self.assertNotIn(b"PRODUCER_STARTED", capture.diagnostic)
         self.assertLessEqual(record["report_charged_bytes"], 512)
+
+    def test_t12_sink_exact_fit_and_real_finalizer_receipt(self):
+        with validator_observer() as observer:
+            for closes, first_ts, fragment in (([3, 8, 5], 2000, 1),
+                                                ([21, 17, 19, 23], 9000, 65536)):
+                with self.subTest(closes=closes, fragment=fragment):
+                    request = {"closes": closes, "first_ts": first_ts, "inherited_sink": True,
+                               "fragment_bytes": fragment, "stderr": encoded(b"native\x00\xff")}
+                    expected = reference(request)
+                    native = sink_wire(closes, first_ts)
+                    cap = len(native)
+                    allowance = cap + len(expected.stdout)
+                    capture = launch(request, sink=True, planned_sink_bytes=cap, observer=observer,
+                                     options=("--report-max-bytes", str(allowance)))
+                    record = self.assert_record(
+                        capture, complete=True, exit_class="success", exit_status=0)
+                    self.assertEqual(expected.returncode, 0)
+                    self.assertEqual(capture.report, expected.stdout)
+                    self.assertEqual(capture.sink, native)
+                    self.assertEqual(capture.diagnostic, b"native\x00\xff")
+                    self.assertEqual(capture.finalizer_receipt(),
+                                     sink_receipt(native, complete=True, equity_count=len(closes)))
+                    self.assertEqual(len([event for event in capture.validator_events
+                                          if event[:1] == b"S"]), 1)
+                    logical = hashlib.sha256(
+                        b"".join(native.splitlines(keepends=True)[:-1])).hexdigest()
+                    self.assertEqual(record["sink_verification"], {
+                        "exit_status": 0, "signal": None, "complete": True,
+                        "counts": {tag: len(closes) if tag == "E" else 0 for tag in "ETOVKXH"},
+                        "sha256": logical, "finalizer_version": "1.1.0"})
+                    cell = record["channels"]["sink"]
+                    self.assertEqual(cell["observed_bytes"], cap)
+                    self.assertEqual(cell["accepted_bytes"], cap)
+                    self.assertEqual(cell["written_bytes"], cap)
+                    self.assertEqual(cell["limit_bytes"], cap)
+                    self.assertEqual(cell["accepted_sha256"], hashlib.sha256(native).hexdigest())
+                    self.assertEqual(cell["sha256"], hashlib.sha256(native).hexdigest())
+                    self.assertEqual(cell["logical_sha256"], logical)
+                    self.assertTrue(cell["complete"])
+                    self.assertTrue(cell["source_total_known"])
+                    self.assertFalse(cell["truncated"])
+                    self.assertEqual(record["report_charged_bytes"], allowance)
+                    self.assertEqual(record["channels"]["candidate"]["limit_bytes"], len(expected.stdout))
+                    job = record["usage"]["job"]["resources"]
+                    for name, used, limit in (
+                            ("report_bytes", allowance, allowance), ("sink_bytes", cap, cap),
+                            ("diagnostic_bytes", len(b"native\x00\xff"), 1048576)):
+                        self.assertEqual(job[name]["used"], used)
+                        self.assertEqual(job[name]["limit"], limit)
+                        self.assertEqual(job[name]["state"], "measured")
+                        self.assertEqual(job[name]["source"], "channel")
+                    stages = record["usage"]["stages"]
+                    self.assertEqual(stages["run"]["resources"]["sink_bytes"]["used"], cap)
+                    self.assertEqual(stages["finalize"]["resources"]["report_bytes"]["used"],
+                                     len(expected.stdout))
+                    self.assertEqual(stages["publish"]["resources"]["sink_bytes"]["used"], cap)
+                    self.assertEqual(stages["publish"]["resources"]["report_bytes"]["used"],
+                                     len(expected.stdout))
+
+    def test_t12_sink_one_over_real_finalizer_receipt(self):
+        with validator_observer() as observer:
+            for closes, fragment in (([4, 9], 1), ([31, 33, 29, 34], 65536)):
+                with self.subTest(closes=closes, fragment=fragment):
+                    native = sink_wire(closes)
+                    cap = len(native) - 1
+                    capture = launch(
+                        {"closes": closes, "inherited_sink": True, "fragment_bytes": fragment,
+                         "sink_suffix": encoded(b"unread" * 65536)},
+                        sink=True, planned_sink_bytes=cap, observer=observer,
+                        options=("--report-max-bytes", "65536"))
+                    record = self.refusal(capture, "report_sink_failed", {
+                        "reason": "sink_exhausted", "sink_bytes": cap + 1, "cap_bytes": cap},
+                        exit_class="transport_failure", status=1)
+                    # This is V's actual FILE receipt, observed at its write,
+                    # compared byte-for-byte with finalizer 1.1.0's contract.
+                    self.assertEqual(capture.finalizer_receipt(),
+                                     sink_receipt(native, complete=False, cap=cap))
+                    self.assertTrue(any(event[:1] == b"P" for event in capture.validator_events))
+                    verification = record["sink_verification"]
+                    self.assertEqual(verification["exit_status"], 8)
+                    self.assertIsNone(verification["signal"])
+                    self.assertFalse(verification["complete"])
+                    self.assertEqual(verification["counts"], dict.fromkeys("ETOVKXH", 0))
+                    self.assertIsNone(verification["sha256"])
+                    cell = record["channels"]["sink"]
+                    self.assertEqual(cell["observed_bytes"], cap + 1)
+                    self.assertEqual(cell["accepted_bytes"], cap)
+                    self.assertEqual(cell["accepted_sha256"], hashlib.sha256(native[:cap]).hexdigest())
+                    self.assertEqual(cell["written_bytes"], 0)
+                    self.assertIsNone(cell["sha256"])
+                    self.assertIsNone(cell["logical_sha256"])
+                    self.assertTrue(cell["truncated"])
+                    self.assertFalse(cell["source_total_known"])
+                    self.assertFalse(cell["complete"])
+                    self.assertEqual(capture.sink, b"")
+                    self.assertEqual(record["channels"]["candidate"]["observed_bytes"], 0)
+                    self.assertEqual(record["report_charged_bytes"], cap + len(capture.report))
+                    if capture.report:
+                        self.assertEqual(json.loads(capture.report)["args"], record["failure"]["args"])
+
+    def test_t12_paused_validator_cannot_erase_overflow_evidence(self):
+        native = sink_wire([11, 15, 13, 17])
+        cap = len(native) - 1
+        with validator_observer() as observer:
+            capture = launch(
+                {"closes": [11, 15, 13, 17], "inherited_sink": True,
+                 "sink_suffix": encoded(b"unread" * 65536)},
+                sink=True, planned_sink_bytes=cap, observer=observer, pause_probe=True,
+                kill_stopped_probe=True,
+                options=("--report-max-bytes", "65536", "--channel-wall-ms", "2000",
+                         "--channel-stall-ms", "500"))
+        record = self.refusal(capture, "report_sink_failed", {
+            "reason": "sink_exhausted", "sink_bytes": cap + 1, "cap_bytes": cap},
+            exit_class="transport_failure", status=1)
+        probes = {int(event[1:]) for event in capture.validator_events if event[:1] == b"P"}
+        self.assertEqual(len(probes), 1, "real V never read the overflow probe")
+        self.assertEqual(capture.stopped_validators, probes, "real V was not observed stopped")
+        self.assertEqual(capture.killed_validators, probes, "host never issued the actual signal")
+        self.assertEqual(capture.finalizer_receipt(), b"")
+        self.assertEqual(record["sink_verification"], {
+            "exit_status": None, "signal": signal.SIGKILL, "complete": False,
+            "counts": dict.fromkeys("ETOVKXH"), "sha256": None, "finalizer_version": None})
+        cell = record["channels"]["sink"]
+        self.assertEqual(cell["observed_bytes"], cap + 1)
+        self.assertEqual(cell["accepted_bytes"], cap)
+        self.assertEqual(cell["accepted_sha256"], hashlib.sha256(native[:cap]).hexdigest())
+        self.assertFalse(cell["source_total_known"])
+        self.assertIsNone(cell["logical_sha256"])
+        self.assertEqual(capture.sink, b"")
+        job = record["usage"]["job"]["resources"]
+        self.assertEqual(job["sink_bytes"]["used"], cap)
+        self.assertEqual(job["sink_bytes"]["state"], "measured")
+
+    def test_t13_exported_sink_and_candidate_share_one_allowance(self):
+        for closes, label in (([6, 10, 8], "café🙂.csv"), ([20, 25, 21, 27], "longer.csv")):
+            request = {"closes": closes, "label": label, "inherited_sink": True}
+            expected = reference(request).stdout
+            native = sink_wire(closes)
+            for allowance in (len(native) + len(expected) - 1, len(native) + len(expected)):
+                with self.subTest(closes=closes, allowance=allowance):
+                    self.assertLess(len(native), allowance)
+                    self.assertLess(len(expected), allowance)
+                    # No planned B: S must translate R into a positive V cap.
+                    capture = launch(request, sink=True,
+                                     options=("--report-max-bytes", str(allowance)))
+                    if allowance == len(native) + len(expected):
+                        record = self.assert_record(
+                            capture, complete=True, exit_class="success", exit_status=0)
+                        self.assertEqual(capture.report, expected)
+                        self.assertEqual(capture.sink, native)
+                        self.assertEqual(record["report_charged_bytes"], allowance)
+                    else:
+                        record = self.refusal(capture, "report_budget_exceeded", {
+                            "channel": "aggregate", "cap_bytes": allowance,
+                            "used_bytes": allowance, "requested_bytes": 1},
+                            exit_class="resource_refusal", status=1)
+                        self.assertEqual(capture.report, b"")
+                        self.assertEqual(capture.sink, b"")
+                        self.assertEqual(record["report_charged_bytes"], allowance)
+                        candidate = record["channels"]["candidate"]
+                        self.assertEqual(candidate["limit_bytes"], len(expected) - 1)
+                        self.assertEqual(candidate["observed_bytes"], len(expected))
+                        self.assertEqual(candidate["accepted_bytes"], len(expected) - 1)
+                        self.assertEqual(candidate["sha256"], hashlib.sha256(expected[:-1]).hexdigest())
+                        self.assertTrue(candidate["truncated"])
+                        self.assertFalse(candidate["source_total_known"])
+                    self.assertEqual(record["limits"]["sink_bytes"], allowance)
+                    sink = record["channels"]["sink"]
+                    self.assertEqual(sink["observed_bytes"], len(native))
+                    self.assertEqual(sink["accepted_bytes"], len(native))
+                    self.assertEqual(sink["accepted_sha256"], hashlib.sha256(native).hexdigest())
+                    self.assertTrue(record["sink_verification"]["complete"])
+
+    def test_t17_native_fragments_and_explicit_empty_sink(self):
+        with validator_observer() as observer:
+            for fragment in (b"", b'{"schema":"pf-report-sink"'):
+                for status in (0, 7):
+                    with self.subTest(fragment=fragment, status=status):
+                        capture = launch(
+                            {"inherited_sink": True, "native_sink": encoded(fragment),
+                             "fragment_bytes": 1, "exit_status": status},
+                            sink=True, observer=observer)
+                        if status:
+                            record = self.refusal(capture, "run_producer_failed", {
+                                "reason": "exit", "exit_status": status},
+                                exit_class="producer_failure", status=1)
+                        else:
+                            record = self.refusal(capture, "report_channel_failed", {
+                                "channel": "sink", "reason": "protocol"},
+                                exit_class="transport_failure", status=1)
+                        self.assertEqual(capture.finalizer_receipt(),
+                                         sink_receipt(fragment, complete=False))
+                        self.assertEqual(record["producer"]["exit_status"], status)
+                        self.assertEqual(record["sink_verification"]["exit_status"], 6)
+                        self.assertFalse(record["sink_verification"]["complete"])
+                        self.assertEqual(capture.sink, b"")
+                        sink = record["channels"]["sink"]
+                        self.assertEqual(sink["observed_bytes"], len(fragment))
+                        self.assertEqual(sink["accepted_bytes"], len(fragment))
+                        self.assertEqual(sink["accepted_sha256"], hashlib.sha256(fragment).hexdigest())
+                        self.assertTrue(sink["source_total_known"])
+                        self.assertFalse(sink["complete"])
+                        if capture.report:
+                            self.assertEqual(capture.report.count(b"\n"), 1)
+                            self.assertIn("error", json.loads(capture.report))
+
+    def test_t17_candidate_while_native_sink_open_is_protocol_refusal(self):
+        capture = launch(
+            {"inherited_sink": True, "closes": [9, 14, 11],
+             "candidate_before_sink_close": True, "hold_sink_open_ms": 10000},
+            sink=True, options=("--channel-wall-ms", "3000"))
+        record = self.refusal(capture, "report_channel_failed", {
+            "channel": "candidate", "reason": "protocol"},
+            exit_class="transport_failure", status=1)
+        self.assertEqual(capture.sink, b"")
+        candidate = record["channels"]["candidate"]
+        self.assertEqual(candidate["observed_bytes"], 1)
+        self.assertEqual(candidate["accepted_bytes"], 0)
+        self.assertFalse(candidate["source_total_known"])
+        self.assertTrue(candidate["truncated"])
+        self.assertLessEqual(record["report_charged_bytes"], 67108864)
+
+    def test_t17_runner_startup_failure_closes_private_sink_before_candidate(self):
+        argv = ["--an-unrecognized-runner-option"]
+        baseline = subprocess.run(
+            [sys.executable, "-B", str(ROOT / "docker/run_json.py"), *argv],
+            capture_output=True, env=clean_environment(), check=False, timeout=10)
+        capture = launch(direct=True, command=argv, sink=True)
+        record = self.refusal(capture, "run_producer_failed", {"reason": "claim"},
+                              exit_class="producer_failure", status=1)
+        self.assertEqual(baseline.returncode, 2)
+        self.assertEqual(capture.report, baseline.stdout)
+        self.assertEqual(capture.sink, b"")
+        self.assertEqual(record["producer"]["exit_status"], 2)
+        self.assertEqual(record["sink_verification"]["exit_status"], 6)
+        self.assertEqual(record["channels"]["sink"]["observed_bytes"], 0)
+        self.assertTrue(record["channels"]["sink"]["source_total_known"])
+        self.assertTrue(record["channels"]["candidate"]["complete"])
 
     def test_t17_empty_and_partial_candidates_fail_only_after_wait(self):
         for candidate in (b"", b'{"engine":"pineforge"', b'{"engine":"pineforge"}'):

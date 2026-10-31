@@ -7,12 +7,13 @@ certifies an image/launcher pairing. No product module is imported here.
 from __future__ import annotations
 
 import base64
-from contextlib import ExitStack
-from dataclasses import dataclass
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
 import selectors
+import signal
 import socket
 import subprocess
 import sys
@@ -78,6 +79,36 @@ def sink_wire(closes, first_ts=1000):
                           "sha256": hashlib.sha256(prefix).hexdigest()})
 
 
+def sink_receipt(data, *, complete, cap=None, equity_count=0):
+    """Finalizer 1.1.0 FILE receipt oracle, independent of product imports/M."""
+    import hashlib
+    prefix = b"".join(data.splitlines(keepends=True)[:-1])
+    value = {
+        "complete": complete,
+        **{"count_" + tag.lower(): equity_count if tag == "E" else 0
+           for tag in "ETOVKXH"},
+        **({"reason": "sink_exhausted"} if cap is not None else {}),
+        "sink_bytes": len(data),
+        **({"cap_bytes": cap} if cap is not None else {}),
+        "sha256": hashlib.sha256(prefix).hexdigest() if complete else "",
+        "finalizer_version": "1.1.0",
+    }
+    return json.dumps(value, separators=(",", ":")).encode() + b"\n"
+
+
+@contextmanager
+def validator_observer():
+    """Build only on the executing CLOUD test host; absence is a failure."""
+    with tempfile.TemporaryDirectory(prefix="pf-finalizer-observer-") as directory:
+        library = Path(directory) / "observe.so"
+        subprocess.run(
+            [os.environ.get("CC", "cc"), "-std=c11", "-shared", "-fPIC",
+             "-Wall", "-Wextra", "-Werror", "-o", str(library),
+             str(Path(__file__).with_name("observe_finalizer.c"))],
+            capture_output=True, check=True, timeout=30)
+        yield library
+
+
 @dataclass
 class Capture:
     report: bytes
@@ -88,6 +119,12 @@ class Capture:
     returncode: int
     attempt_id: str
     eof: set
+    validator_events: list = field(default_factory=list)
+    stopped_validators: set = field(default_factory=set)
+    killed_validators: set = field(default_factory=set)
+
+    def finalizer_receipt(self):
+        return b"".join(event[1:] for event in self.validator_events if event[:1] == b"R")
 
     def terminal(self):
         if len(self.packets) != 1:
@@ -101,7 +138,8 @@ class Capture:
 
 def launch(request=None, *, options=(), environment=None, status="valid",
            alias=None, sink=False, attested=True, grants=None, command=None,
-           direct=False, activate=True, wrong_direction=None, planned_sink_bytes=None):
+           direct=False, activate=True, wrong_direction=None, planned_sink_bytes=None,
+           observer=None, pause_probe=False, kill_stopped_probe=False):
     """Create R/D/M, launch S, and read every endpoint concurrently to EOF.
 
     ``status`` tests absent, pipe, stream, reserved, closed and wrong-direction
@@ -215,6 +253,14 @@ def launch(request=None, *, options=(), environment=None, status="valid",
             argv += ["--", *producer_command]
         env = clean_environment()
         env.update(environment or {})
+        trace = None
+        if observer is not None:
+            trace = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            trace.bind(str(Path(directory) / "trace"))
+            trace.setblocking(False)
+            env.update(LD_PRELOAD=str(observer), PF_REPORT_TEST_TRACE=str(Path(directory) / "trace"))
+            if pause_probe:
+                env["PF_REPORT_TEST_PAUSE_PROBE"] = "1"
         process = subprocess.Popen(
             argv, stdin=subprocess.DEVNULL, stdout=report_write,
             stderr=diagnostic_write, pass_fds=tuple(set(inherited)),
@@ -246,6 +292,9 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                 selector.register(fd, selectors.EVENT_READ, name)
         status_host.setblocking(False)
         selector.register(status_host, selectors.EVENT_READ, "status")
+        validator_events, stopped_validators, killed_validators = [], set(), set()
+        if trace is not None:
+            selector.register(trace, selectors.EVENT_READ, "trace")
         deadline = time.monotonic() + 20
         try:
             while selector.get_map():
@@ -253,7 +302,14 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                     raise AssertionError(
                         f"TEST host watchdog expired: {output!r}, packets={packets!r}")
                 for key, _ in selector.select(0.05):
-                    if key.data == "status":
+                    if key.data == "trace":
+                        while True:
+                            try:
+                                data = trace.recv(65537)
+                            except BlockingIOError:
+                                break
+                            validator_events.append(data)
+                    elif key.data == "status":
                         data, ancillary, packet_flags, _ = status_host.recvmsg(65537)
                         if data:
                             packets.append(data)
@@ -268,6 +324,27 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                         else:
                             eof.add(key.data)
                             selector.unregister(key.fileobj)
+                for event in validator_events:
+                    if event[:1] != b"P":
+                        continue
+                    pid = int(event[1:])
+                    try:
+                        state = Path(f"/proc/{pid}/status").read_text()
+                    except FileNotFoundError:
+                        continue
+                    if any(line.startswith("State:\tT") for line in state.splitlines()):
+                        stopped_validators.add(pid)
+                        if kill_stopped_probe and pid not in killed_validators:
+                            os.kill(pid, signal.SIGKILL)
+                            killed_validators.add(pid)
+                if (trace is not None and process.poll() is not None
+                        and all(key.data == "trace" for key in selector.get_map().values())):
+                    while True:
+                        try:
+                            validator_events.append(trace.recv(65537))
+                        except BlockingIOError:
+                            break
+                    selector.unregister(trace)
             wait = process.wait(timeout=max(0.01, deadline - time.monotonic()))
         finally:
             if process.poll() is None:
@@ -275,10 +352,13 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                 process.wait(timeout=2)
             selector.close()
             status_host.close()
+            if trace is not None:
+                trace.close()
             for fd in owned_readers:
                 os.close(fd)
         return Capture(bytes(output["report"]), bytes(output["diagnostic"]),
-                       bytes(output["sink"]), packets, flags, wait, attempt, eof)
+                       bytes(output["sink"]), packets, flags, wait, attempt, eof,
+                       validator_events, stopped_validators, killed_validators)
 
 
 def reference(request):

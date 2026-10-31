@@ -5981,7 +5981,10 @@ def _new_report_sink(lib, state, args, *, body=True):
                                        {"reason": "symbol_missing"})
         if int(lib.pf_report_sink_version()) != 1:
             raise _engine_invariant("the strategy library has an incompatible report sink ABI")
-        args._sink_fd_owner = _InheritedSinkFd(args.report_sink_fd)
+        args._sink_fd_owner = (
+            _SUPERVISED_NATIVE_SINK_OWNER
+            if _SUPERVISED_NATIVE_SINK_OWNER is not None
+            else _InheritedSinkFd(args.report_sink_fd))
         return _FdReportSink(lib, state, fd=args.report_sink_fd,
                              run_id=getattr(args, "run_id", ""),
                              owner=args._sink_fd_owner)
@@ -5997,6 +6000,11 @@ def _new_report_sink(lib, state, args, *, body=True):
         return None  # old modules keep their existing report ABI
     if not all(present) or int(lib.pf_report_sink_version()) != 1:
         raise _engine_invariant("the strategy library has an incompatible report sink ABI")
+    if isinstance(_REPORT_OUTPUT, _CandidateOutput):
+        # The automatic full projection needs S's read-only snapshot handoff.
+        # Until supplied, do not create an unmetered internal native sink.
+        raise RunFailure("the supervised internal sink handoff is unavailable",
+                         "run_isolation_unavailable", {"reason": "descriptor"})
     # Only the body run may create/truncate the caller's sink.
     return _ReportSink(lib, state, directory=getattr(args, "spill_dir", None),
                        run_id=getattr(args, "run_id", ""),
@@ -6078,6 +6086,10 @@ class _FdReportSink:
                 or (diagnostics.count_e and diagnostics.last.time_ms < diagnostics.first.time_ms)):
             raise _engine_invariant("the report sink diagnostics differ from its engine receipt")
         self.counts, self.summary, self.diagnostics = counts, summary, diagnostics
+        if self._owner is _SUPERVISED_NATIVE_SINK_OWNER:
+            # The engine borrows K. Receipt checks finish capture; EOF must
+            # precede candidate serialization and final strategy cleanup.
+            self.close()
 
     def close(self):
         if self.fd is not None:
@@ -8246,6 +8258,7 @@ def _read_strategy_initial_capital(lib, state):
 
 _REPORT_OUTPUT = None
 _LIBRARY_REPORT_RUN = None
+_SUPERVISED_NATIVE_SINK_OWNER = None
 
 
 class _LibraryReportRun:
@@ -8355,7 +8368,7 @@ class _ReportOutput:
 class _CandidateOutput(_ReportOutput):
     """Own only S's private candidate writer; stdio is already isolated by S."""
 
-    def __init__(self, text):
+    def __init__(self, text, *, native_sink=None):
         if (not isinstance(text, str) or re.fullmatch(r"[0-9]{1,10}", text) is None
                 or not 3 <= int(text) <= (1 << 31) - 1 or int(text) == 5):
             raise ValueError("invalid private candidate descriptor")
@@ -8365,9 +8378,18 @@ class _CandidateOutput(_ReportOutput):
             raise ValueError("candidate aliases producer diagnostics")
         os.set_inheritable(fd, False)
         self.fd = fd
+        self.native_sink = native_sink
         self._state = "open"
 
+    def write(self, text):
+        # Also covers parser/startup failures before a native sink is attached.
+        if self.native_sink is not None:
+            self.native_sink.close()
+        return super().write(text)
+
     def discard(self):
+        if self.native_sink is not None:
+            self.native_sink.close()
         self._state = "published"
         fd, self.fd = self.fd, None
         if fd is not None:
@@ -8375,6 +8397,11 @@ class _CandidateOutput(_ReportOutput):
                 os.close(fd)
             except OSError:
                 pass
+
+    def close(self):
+        if self.native_sink is not None:
+            self.native_sink.close()
+        super().close()
 
 
 def _report_output(destination=None):
@@ -8461,14 +8488,27 @@ _REPORT_MAIN = main
 
 
 def _host_main(argv=None) -> int:
-    global _REPORT_OUTPUT
+    global _REPORT_OUTPUT, _SUPERVISED_NATIVE_SINK_OWNER
     candidate_fd = None
+    native_sink = None
     if os.environ.get("PINEFORGE_REPORT_PRODUCER") == "supervised/v1":
         candidate_fd = os.environ.pop("PINEFORGE_REPORT_CANDIDATE_FD", None)
+        native_sink_text = os.environ.pop("PINEFORGE_REPORT_NATIVE_SINK_FD", None)
         os.environ.pop("PINEFORGE_REPORT_PRODUCER")
         if candidate_fd is None:
             _write_diagnostic("run_json: missing private candidate destination\n")
             return 1
+        if native_sink_text is not None:
+            if (re.fullmatch(r"[0-9]{1,10}", native_sink_text) is None
+                    or not 3 <= int(native_sink_text) <= (1 << 31) - 1
+                    or int(native_sink_text) == 5):
+                _write_diagnostic("run_json: invalid private native sink descriptor\n")
+                return 1
+            native_sink = _InheritedSinkFd(int(native_sink_text))
+            tokens = list(sys.argv[1:] if argv is None else argv)
+            # S removes external sink options before launching this process.
+            # The private descriptor preserves the inherited-sink projection.
+            argv = ["--report-sink-fd", native_sink_text, *tokens]
     else:
         # Keep the OFF parser, help bytes and legacy abbreviations untouched.
         # Import the supervisor only when an exact new control is supplied.
@@ -8493,12 +8533,20 @@ def _host_main(argv=None) -> int:
             return pineforge_report_supervise.main(
                 pineforge_report_supervise.direct_arguments(tokens))
     try:
-        output = _ReportOutput() if candidate_fd is None else _CandidateOutput(candidate_fd)
+        output = (_ReportOutput() if candidate_fd is None else
+                  _CandidateOutput(candidate_fd, native_sink=native_sink))
+        if native_sink is not None:
+            os.fstat(native_sink.fd)
+            if (native_sink.fd == output.fd or _same_open_file(native_sink.fd, output.fd)
+                    or _same_open_file(native_sink.fd, 1) or _same_open_file(native_sink.fd, 2)):
+                raise ValueError("native sink aliases another producer channel")
+            os.set_inheritable(native_sink.fd, False)
     except Exception as error:
         sys.stderr.write(f"run_json: report channel setup failed: {error}\n")
         sys.stderr.flush()
         return 1
     _REPORT_OUTPUT = output
+    _SUPERVISED_NATIVE_SINK_OWNER = native_sink
     status = 1
     try:
         status = _REPORT_MAIN(argv)
@@ -8528,6 +8576,7 @@ def _host_main(argv=None) -> int:
                 except Exception:
                     traceback.print_exc(file=sys.stderr)
         _REPORT_OUTPUT = None
+        _SUPERVISED_NATIVE_SINK_OWNER = None
     return status
 
 

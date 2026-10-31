@@ -53,13 +53,18 @@ def main():
             document.pop("equity_curve")
         candidate = json.dumps(document, separators=(",", ":"), allow_nan=False,
                                ensure_ascii=False).encode() + b"\n"
+    sink_fd = None
     if request.get("inherited_sink"):
         name = ("PINEFORGE_REPORT_REFERENCE_SINK_FD" if reference
                 else "PINEFORGE_REPORT_NATIVE_SINK_FD")
         sink_fd = int(os.environ[name])
-        write_all(sink_fd, sink_wire(request.get("closes", [10, 12, 11]),
-                                    request.get("first_ts", 1000)), fragment)
-        os.close(sink_fd)
+        native = (base64.b64decode(request["native_sink"]) if "native_sink" in request else
+                  sink_wire(request.get("closes", [10, 12, 11]), request.get("first_ts", 1000)))
+        native += base64.b64decode(request.get("sink_suffix", ""))
+        write_all(sink_fd, native, fragment)
+        if not request.get("candidate_before_sink_close"):
+            os.close(sink_fd)
+            sink_fd = None
     fd = 1 if reference else int(os.environ["PINEFORGE_REPORT_CANDIDATE_FD"])
     if request.get("runner_writer") or "failure_writer" in request:
         sys.path.insert(0, str(ROOT / "docker"))
@@ -81,6 +86,9 @@ def main():
         write_all(fd, candidate, fragment)
         if not reference:
             os.close(fd)
+    if sink_fd is not None:
+        time.sleep(request["hold_sink_open_ms"] / 1000)
+        os.close(sink_fd)
     if request.get("delay_after_candidate_ms"):
         time.sleep(request["delay_after_candidate_ms"] / 1000)
     return request.get("exit_status", 0)
