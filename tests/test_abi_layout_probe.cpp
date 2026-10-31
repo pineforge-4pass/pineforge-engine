@@ -55,8 +55,8 @@ using Scratch = std::remove_reference_t<
 #if defined(__linux__) && defined(__x86_64__) && defined(__GLIBCXX__)
 // The ABI pins apply to Linux x86_64 builds that use GNU libstdc++.
 static_assert(sizeof(Scratch) == 672, "RetiredRowScratch size changed");
-static_assert(sizeof(Adapter) == 88968, "PineExecutionAdapter size changed");
-static_assert(sizeof(Host) == 96896, "PineStrategyHost size changed");
+static_assert(sizeof(Adapter) == 89488, "PineExecutionAdapter size changed");
+static_assert(sizeof(Host) == 107928, "PineStrategyHost size changed");
 static_assert(!HasRosterRoots<Scratch>::value,
               "RetiredRowScratch::roster_roots must be absent");
 #endif
@@ -121,8 +121,8 @@ int main() {
 #if defined(__linux__) && defined(__x86_64__) && defined(__GLIBCXX__)
     bool pins_hold = true;
     pins_hold &= pin("sizeof RetiredRowScratch", sizeof(Scratch), 672);
-    pins_hold &= pin("sizeof PineExecutionAdapter", sizeof(Adapter), 88968);
-    pins_hold &= pin("sizeof PineStrategyHost", sizeof(Host), 96896);
+    pins_hold &= pin("sizeof PineExecutionAdapter", sizeof(Adapter), 89488);
+    pins_hold &= pin("sizeof PineStrategyHost", sizeof(Host), 107928);
     pins_hold &= pin("RetiredRowScratch::roots",
                      member_offset(adapter.*access(RetiredScratch{}), &Scratch::roots), 0);
     pins_hold &= pin("RetiredRowScratch::askable_origins",
@@ -180,13 +180,13 @@ int main() {
     pins_hold &= pin("RetiredRowScratch::origin_fronts_pinned",
                      member_offset(adapter.*access(RetiredScratch{}), &Scratch::origin_fronts_pinned), 664);
     pins_hold &= pin("PineExecutionAdapter::pine_view_",
-                     member_offset(adapter, access(BeforeScratch{})), 87688);
+                     member_offset(adapter, access(BeforeScratch{})), 88208);
     pins_hold &= pin("PineExecutionAdapter::retired_row_scratch_",
-                     member_offset(adapter, access(RetiredScratch{})), 87696);
+                     member_offset(adapter, access(RetiredScratch{})), 88216);
     pins_hold &= pin("PineExecutionAdapter::staged_scopes_",
-                     member_offset(adapter, access(AfterScratch{})), 88368);
+                     member_offset(adapter, access(AfterScratch{})), 88888);
     pins_hold &= pin("PineStrategyHost::adapter_",
-                     member_offset(host, access(HostAdapter{})), 5112);
+                     member_offset(host, access(HostAdapter{})), 6408);
     return pins_hold ? 0 : 1;
 #else
     std::printf("abi pins skipped: not linux x86_64 libstdc++\n");

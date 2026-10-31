@@ -3,6 +3,7 @@
  */
 
 #include "engine_internal.hpp"
+#include <pineforge/cache_policy.hpp>
 #include "native_execution_consumer.hpp"
 #include "selected_report_view.hpp"
 #include <pineforge/metrics_stream.hpp>
@@ -1788,14 +1789,15 @@ void BacktestEngine::stage_report_sink_equity_tail(const ReportC* out) const {
 }
 
 void BacktestEngine::compute_report_sink_metrics(ReportC* out,
-                                                std::int64_t equity_count) const {
+                                                std::int64_t equity_count,
+                                                CacheCapacity equity_capacity) const {
     try {
         const auto region = report_sink_state_.equity_scratch->region();
         if (region.point_count != equity_count)
             throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                 "ordinary sink metric curve differs from its captured point count");
         compute_report_sink_trade_metrics(out, out->trades, out->trades_len);
-        const report_sink::ScratchCurveWindow curve(region);
+        const report_sink::ScratchCurveWindow curve(region, equity_capacity);
         out->metrics.equity = metrics::compute_equity_stats(
             curve, equity_count, initial_capital_, chart_timezone_, first_bar_open_,
             current_bar_.close, bars_in_market_, out->net_profit);
@@ -1816,7 +1818,8 @@ void BacktestEngine::fill_report_sink_metrics_section(ReportC* out) const {
         out->equity_curve = held ? new pf_equity_point_t[1]{*held} : nullptr;
         present_report_equity_tail(out);
         stage_report_sink_equity_tail(out);
-        compute_report_sink_metrics(out, report_sink_state_.equity_scratch->size());
+        compute_report_sink_metrics(out, report_sink_state_.equity_scratch->size(),
+                                    cache_policy_for_run().equity_curve_pages);
     } catch (...) {
         free_report(out);
         *out = {};
