@@ -2718,11 +2718,6 @@ public:
     // The transcript witness reads the Limit-class resident watermark only.
     std::uint64_t dormant_watermark_for_test() const noexcept;
 
-    // Internal fixture seam, frozen before the first event. Production uses
-    // the journal's existing defaults; these sizes never enter run state.
-    static void set_journal_residency_for_test(native_order::WorkingRequestCore&,
-                                              std::size_t maximum, std::size_t keep);
-
     using DormantReach = bool (*)(bool ge, double level, double lo,
                                  double hi, double delta) noexcept;
     // GE means level >= lo - delta; LE means level <= hi + delta.
