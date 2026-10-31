@@ -508,7 +508,7 @@ This setter adds no environment variables or JSON limits.
 | Erased minima and consumed cycles | `erased_minima_pages`, `consumed_cycle_pages` | 32 KiB each, shared by that owner's data/index files |
 | Position-tail read window | `position_tail_pages` | 64 KiB in 16 complete 4 KiB pages, plus one shared metadata charge per page |
 | Successor-root, group-receipt and chain-segment read caches | `successor_root_pages`, `receipt_tail_pages`, `chain_segment_pages` | 64, 64 and 16 fixed-width payload rows respectively; pending write batches are separate fixed transaction workspace |
-| Ordinary report-sink metric curve reader | `equity_curve_pages` | 2,730 complete 24-byte point lines, plus a fixed 65,520-byte sequential block workspace charged by `cache_control_bytes()`; the writer's retry batch is separate mandatory workspace |
+| Ordinary report-sink metric curve reader | `equity_curve_pages` | 2,730 complete 24-byte point lines, plus a fixed 65,520-byte sequential block workspace charged by `cache_control_bytes()`; zero capacity turns the cache off, so each lookup reads one point (about eight backing reads per point of a report); the writer's retry batch is separate mandatory workspace |
 | Numeric Series/rings, HeldHistory, extrema and WMA windows constructed by the run | `ta_history_pages` | Existing owning logical window; finite allowances select backed numeric pages |
 | Native-day trade-day/week/month columns | `feed_calendar_pages` | 256 KiB inclusive per column |
 | Recorded request tapes installed without an explicit C++ capacity | `recorded_series_pages` | 256 KiB inclusive per tape |
