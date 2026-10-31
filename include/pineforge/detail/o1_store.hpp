@@ -9,7 +9,7 @@
 // STORE GUARANTEES:
 //  - A write or resize never fails because the resident window is full; it spills.
 //    Creation is bounded by Shape::max_live_objects, independent of lifetime ids.
-//  - Resident bytes are bounded by the ScratchStore workspace picked at open,
+//  - Resident workspace plus kStoreReadCacheBytes is fixed at open,
 //    independent of bars B and of objects created.
 //  - Ids are stable and never recycled while reachable; a released id is dead, and
 //    reads of a dead id are a caller error, not a silent zero.
@@ -65,6 +65,13 @@ inline constexpr std::uint64_t kMaxLiveObjectsCap = UINT64_C(1024) * 1024;
 // from a valid script, rather than a limit on objects or nesting.
 inline constexpr std::size_t kMaxTxHandles = 4;
 
+// Two fixed direct-mapped tables per StoreImpl: decoded headers and verified
+// chunk handles, eight slots each. Each entry uses three 64-bit words.
+// No chunk payloads or population-sized directory are resident in this cache.
+inline constexpr std::size_t kStoreReadCacheSlots = 8;
+inline constexpr std::size_t kStoreReadCacheBytes =
+    kStoreReadCacheSlots * (3 * sizeof(std::uint64_t) + 3 * sizeof(std::uint64_t));
+
 class TxPoolExhausted : public std::runtime_error {
  public:
   TxPoolExhausted()
@@ -101,7 +108,7 @@ struct Shape {
 
 struct Stats {
   std::uint64_t bytes_live = 0;     // logical bytes held by live ids
-  std::uint64_t bytes_resident = 0; // fixed ScratchStore workspace, constant per store
+  std::uint64_t bytes_resident = 0; // fixed ScratchStore workspace + Store read cache
   std::uint64_t pages_spilled = 0;  // backing pages currently allocated
   std::uint64_t bytes_backing = 0;  // file growth, never charged as resident
   std::uint64_t max_live_handles = 0; // caller high-water, finished handles included
@@ -138,7 +145,7 @@ class Tx {
 
 class TxScope;
 
-// Single-threaded: read() const mutates its key and chunk buffers.
+// Single-threaded: read() const mutates its key/chunk buffers and fixed cache.
 class Store {
  public:
   virtual ~Store();

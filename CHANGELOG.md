@@ -7,6 +7,14 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- Reading a script container (string, array, map or object store) is cheaper:
+  each Store now keeps two fixed tables of 8 slots, one for decoded object
+  headers and one for chunk lookup handles, so a repeated read of the same
+  object or chunk no longer descends the scratch index again. The tables add a
+  fixed 384 bytes per Store to `bytes_resident` whatever the number of objects
+  or chunks, and are cleared before every scratch put, erase and rollback and
+  on every scratch failure. Results are unchanged.
+
 ## 1.9.1 — 2026-10-31
 
 - A script container (string, array, map or object store) whose scratch
