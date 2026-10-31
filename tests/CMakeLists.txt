@@ -2313,12 +2313,12 @@ add_test(NAME test_compile_inventory_pipeline
 # (the descriptor, signal and process-table checks need /proc and real sockets).
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME test_report_channel_contract
-        COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
-            -s ${PROJECT_SOURCE_DIR}/tests/report_channel -p test_contract.py -v
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/report_channel/test_contract.py
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
     add_test(NAME test_report_channel_deadlines
-        COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
-            -s ${PROJECT_SOURCE_DIR}/tests/report_channel_deadlines -p test_deadlines.py -v
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/report_channel_deadlines/test_deadlines.py
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
     add_test(NAME test_entrypoint_compile_limits
         COMMAND ${CMAKE_COMMAND} -E env
