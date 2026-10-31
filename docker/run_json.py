@@ -6545,10 +6545,10 @@ class _FusedOutputState:
             directory = sink.directory
             self.opens = _JSONColumn(resources, directory)
             self.closes = _JSONColumn(resources, directory)
+            self.events = _JSONColumn(resources, directory)
             self.columns = [
                 _JSONColumn(resources, directory) for _ in self.entries
             ]
-            self.events = _JSONColumn(resources, directory)
         except Exception as error:
             self.remember(error)
 
@@ -6701,6 +6701,7 @@ class _ReportSink:
 
     def _prepare_fused_artifacts(self, lib, state):
         if not self.named:
+            self._spool_resources._window_budget = _artifact_windows(self)
             try:
                 self._equity_spool = _JSONColumn(
                     self._spool_resources, self.directory, indexed=True)
@@ -7167,8 +7168,9 @@ class _BoundedJSONFile:
     Disk files use Linux O_DIRECT or Darwin F_NOCACHE. Legacy libraries with
     no engine sink can also use tmpfs/ramfs for the unjailed JSON artifact.
     Engine sink and scratch directories are selected by _disk_report_directory.
-    One aligned 64 KiB anonymous window is the I/O working set. Full windows
-    are written before reuse; flush synchronizes pending writes before readback.
+    One aligned anonymous window is the I/O working set (64 KiB by default).
+    Artifact callers choose larger windows within their per-run budget.
+    Full windows are written before reuse; flush synchronizes pending writes before readback.
     Jailed and fd routes use UTF-8 memory buffers.
     """
     window = 64 * 1024
@@ -7382,6 +7384,8 @@ class _BoundedJSONFile:
 
 class _UncachedSinkFile(_BoundedJSONFile):
     """Uncached binary readback with an independent bounded window."""
+    window = 64 * 1024
+
     def __init__(self, file):
         position = file.tell()
         super().__init__(file)  # path sinks are unjailed only
@@ -7443,6 +7447,42 @@ def _open_uncached_sink(path, *, raw=False):
         raise
 
 
+# Six large windows for fixed files with outputs: report, equity/trade, open/close/event.
+_ARTIFACT_WINDOW_BUDGET_BYTES = 6 * 1024 * 1024
+_ARTIFACT_LARGE_WINDOW = 1024 * 1024
+# TradingView Pine Script, Writing scripts > Limitations > Chart visuals > Plot limits:
+# "A maximum of 64 plot counts are allowed per script." The engine refuses more series.
+_OUTPUT_SERIES_LIMIT = 64
+# Indexed decoding bounds copied slices; sequential reads use the full file window.
+_JSON_COLUMN_LOOKUP_READ_SIZE = 64 * 1024
+
+
+class _ArtifactWindowBudget:
+    """Reserve the final report first, then allocate large windows in order.
+
+    Equity and trade spools precede open/close/event columns in creation
+    order, followed by recorded output series in slot order.
+    """
+
+    def __init__(self):
+        self.remaining = _ARTIFACT_WINDOW_BUDGET_BYTES
+        self.report_window = self.take()
+
+    def take(self):
+        if self.remaining >= _ARTIFACT_LARGE_WINDOW:
+            self.remaining -= _ARTIFACT_LARGE_WINDOW
+            return _ARTIFACT_LARGE_WINDOW
+        return _BoundedJSONFile.window
+
+
+def _artifact_windows(owner):
+    """Share one accountant through a sink and its report resource scopes."""
+    budget = getattr(owner, "_window_budget", None)
+    if budget is None:
+        budget = owner._window_budget = _ArtifactWindowBudget()
+    return budget
+
+
 class _JSONColumn(_JSONRecordArray):
     """A comma-separated, already encoded column in an unlinked temporary."""
     # Some serializer callers supply only .file via object.__new__.
@@ -7450,7 +7490,8 @@ class _JSONColumn(_JSONRecordArray):
 
     def __init__(self, resources, directory, *, indexed=False):
         super().__init__(lambda: iter(self), 0, self._item_at if indexed else None)
-        self.file = _json_temporary(resources, directory)
+        self.file = _json_temporary(
+            resources, directory, _artifact_windows(resources).take())
         self.empty = True
         # One cursor: the next row number and its byte offset, never a row.
         self._cursor_index = self._cursor_offset = 0
@@ -7464,9 +7505,10 @@ class _JSONColumn(_JSONRecordArray):
         The first read freezes the report spool, after which it accepts no
         more rows. Iterate before the report's resources are closed;
         afterwards iteration raises ValueError, even for an empty column.
-        A single row larger than one 64 KiB window is decoded again after
-        each further window, taking time proportional to its size times the
-        number of windows (bounded by the sink's 1 MiB record cap).
+        A single row larger than the read size is decoded again after each
+        refill, taking time proportional to its size times the number of
+        refills. Iteration reads a full file window; indexed reads use a
+        separate fixed bound.
         Indexed columns support [i], which costs O(i) from the cursor;
         callers should iterate.
         """
@@ -7480,18 +7522,21 @@ class _JSONColumn(_JSONRecordArray):
             self._cursor_index = self._cursor_offset = 0
         # The decoder lives only for this call. Retaining its generator would
         # also retain the last yielded row and a private encoded window.
-        for value, offset in self._iter_rows(self._cursor_offset):
+        for value, offset in self._iter_rows(
+                self._cursor_offset, _JSON_COLUMN_LOOKUP_READ_SIZE):
             self._cursor_index += 1
             self._cursor_offset = offset
             if self._cursor_index == index + 1:
                 return value
         raise ValueError("invalid JSON report column: row count differs")
 
-    def _iter_rows(self, offset=0):
+    def _iter_rows(self, offset=0, read_size=None):
         """Yield each decoded row and the byte offset following its separator."""
         if self.file.closed:
             raise ValueError(
                 "a report column cannot be iterated after the report resources were closed")
+        if read_size is None:
+            read_size = self.file.window
 
         def invalid_constant(token):
             raise ValueError(f"invalid JSON report column: non-JSON number {token}")
@@ -7539,7 +7584,7 @@ class _JSONColumn(_JSONRecordArray):
             # encoded value can span windows; each iterator owns its offset.
             buffer, position = buffer[position:], 0
             try:
-                chunk = self.file.read_at(offset, self.file.window)
+                chunk = self.file.read_at(offset, read_size)
             except UnicodeDecodeError as error:
                 raise ValueError("invalid JSON report column: non-ASCII data") from error
             offset += len(chunk)
@@ -7800,10 +7845,9 @@ def _stream_json_value(value, destination):
 def _prepare_stream_report(document, resources, directory, *, sink_errors=True):
     try:
         with ExitStack() as prepared:
-            # Bound only the final artifact's aligned I/O window: fixed,
-            # independent of report size, and a multiple of 4096. Columns,
-            # spools and the sink reader keep the class window.
-            file = _json_temporary(prepared, directory, 1024 * 1024)
+            # The report's window was reserved before any column allocation.
+            file = _json_temporary(
+                prepared, directory, _artifact_windows(resources).report_window)
             _stream_json(document, file)
             file.write("\n")
             file.flush()  # disk errors must precede the first report byte
@@ -7841,6 +7885,8 @@ def _prepare_report_json(document, resources, args, sink):
             raise sink._spool_failure
         # Keep the final artifact provisional until auxiliary files have closed.
         with ExitStack() as prepared_files:
+            prepared_files._window_budget = _artifact_windows(
+                sink if sink is not None else resources)
             prepared = _prepare_stream_report(
                 document, prepared_files,
                 sink.directory if sink is not None else args.spill_dir,
@@ -8224,6 +8270,9 @@ def _sink_outputs_block(lib, state, sink, resources, *, summary_only=False):
                      key=lambda entry: entry["slot"])
     outputs = {entry["index"]: entry for entry in
                _manifest_entries(block["manifest"], "outputs", ("index", "id"))}
+    # After the report reservation: equity/trade spools, then open/close/event
+    # columns in creation order, then recorded series in slot order.
+    resources._window_budget = _artifact_windows(sink)
     opens, closes, events = (_JSONColumn(resources, sink.directory) for _ in range(3))
     columns = [_JSONColumn(resources, sink.directory) for _ in entries]
     expected_row = 0

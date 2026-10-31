@@ -70,9 +70,10 @@ def native_program():
     return str(path)
 
 
-def owner(q, ledger, *, pid=None, generation=1, soft=64, role=None):
-    return ledger.open_owner(pid=os.getpid() if pid is None else pid, uid=os.getuid(),
-                             gid=os.getgid(), generation=generation,
+def owner(q, ledger, *, pid=None, uid=None, gid=None, generation=1, soft=64, role=None):
+    return ledger.open_owner(pid=os.getpid() if pid is None else pid,
+                             uid=os.getuid() if uid is None else uid,
+                             gid=os.getgid() if gid is None else gid, generation=generation,
                              role=q.Role.WORKER if role is None else role, soft_nofile=soft)
 
 
@@ -1118,6 +1119,106 @@ def test_server_refuses_bad_packet_before_growth(q, frame):
         assert fields[:3] == (b"PFQ1", 1, 0x8001)
         assert fields[4 + 15] == 6  # status = protocol, independently located.
         assert all(row.used == 0 for row in ledger.snapshot())
+    finally:
+        client.close()
+        thread.join()
+        assert not errors, errors
+
+
+@pytest.mark.parametrize("uid", [2147483648, 2147483649, 4294967294, 4294967295])
+@pytest.mark.parametrize("gid", [2147483648, 2147483649, 4294967294, 4294967295])
+def test_kernel_credentials_decode_unsigned_uid_and_gid(q, uid, gid):
+    ledger = q.RunQuota(q.Amounts(100, 2, 100, 8))
+    actor = owner(q, ledger, uid=uid, gid=gid)
+    credentials = struct.pack("=iII", actor.pid, uid, gid)
+    assert len(credentials) == 12
+    assert q._credentials_match(credentials, actor) is True
+
+
+@pytest.mark.parametrize("uid,wire_uid", [
+    (2147483648, 2147483649),
+    (2147483649, 2147483650),
+    (4294967294, 4294967295),
+    (4294967295, 4294967294),
+])
+def test_kernel_credentials_uid_off_by_one_refuses(q, uid, wire_uid):
+    ledger = q.RunQuota(q.Amounts(100, 2, 100, 8))
+    actor = owner(q, ledger, uid=uid, gid=2147483648)
+    credentials = struct.pack("=iII", actor.pid, uid, 2147483648)
+    assert q._credentials_match(credentials, actor) is True
+    credentials = struct.pack("=iII", actor.pid, wire_uid, 2147483648)
+    assert q._credentials_match(credentials, actor) is False
+
+
+@pytest.mark.parametrize("gid,wire_gid", [
+    (2147483648, 2147483649),
+    (2147483649, 2147483650),
+    (4294967294, 4294967295),
+    (4294967295, 4294967294),
+])
+def test_kernel_credentials_gid_off_by_one_refuses(q, gid, wire_gid):
+    ledger = q.RunQuota(q.Amounts(100, 2, 100, 8))
+    actor = owner(q, ledger, uid=2147483648, gid=gid)
+    credentials = struct.pack("=iII", actor.pid, 2147483648, gid)
+    assert q._credentials_match(credentials, actor) is True
+    credentials = struct.pack("=iII", actor.pid, 2147483648, wire_gid)
+    assert q._credentials_match(credentials, actor) is False
+
+
+def test_kernel_credentials_pid_off_by_one_refuses(q):
+    ledger = q.RunQuota(q.Amounts(100, 2, 100, 8))
+    actor = owner(q, ledger, uid=2147483648, gid=2147483648)
+    credentials = struct.pack("=iII", actor.pid, 2147483648, 2147483648)
+    assert q._credentials_match(credentials, actor) is True
+    credentials = struct.pack("=iII", actor.pid + 1, 2147483648, 2147483648)
+    assert q._credentials_match(credentials, actor) is False
+
+
+def test_kernel_credentials_negative_pid_does_not_match_non_negative_owner(q):
+    ledger = q.RunQuota(q.Amounts(100, 2, 100, 8))
+    actor = owner(q, ledger, uid=2147483648, gid=2147483648)
+    credentials = struct.pack("=iII", actor.pid, 2147483648, 2147483648)
+    assert q._credentials_match(credentials, actor) is True
+    credentials = struct.pack("=iII", -2147483648, 2147483648, 2147483648)
+    assert q._credentials_match(credentials, actor) is False
+
+
+@pytest.mark.parametrize("uid,gid,wire_uid,wire_gid", [
+    (4294967296, 2147483648, 2147483648, 2147483648),
+    (2147483648, 4294967296, 2147483648, 2147483648),
+    (4294967296, 2147483648, 4294967295, 4294967295),
+    (2147483648, 4294967296, 4294967295, 4294967295),
+])
+def test_kernel_credentials_registered_value_above_uint32_never_matches(
+        q, uid, gid, wire_uid, wire_gid):
+    ledger = q.RunQuota(q.Amounts(100, 2, 100, 8))
+    valid = owner(q, ledger, uid=wire_uid, gid=wire_gid)
+    impossible = owner(q, ledger, uid=uid, gid=gid)
+    credentials = struct.pack("=iII", valid.pid, wire_uid, wire_gid)
+    assert q._credentials_match(credentials, valid) is True
+    assert q._credentials_match(credentials, impossible) is False
+
+
+def test_real_kernel_credentials_accept_current_process(q):
+    ledger = q.RunQuota(q.Amounts(100, 2, 100, 8))
+    server, client = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    q.prepare_socket(server)
+    actor = owner(q, ledger)
+    thread, errors = start_server(q, ledger, server, actor)
+    values = [0] * 30
+    values[7] = 3
+    # The real high-id proof requires a privilege drop; these decode rows
+    # cover the unsigned boundary and this row uses the process credentials
+    # that the kernel supplies on the existing HELLO path.
+    try:
+        assert actor.pid == os.getpid()
+        assert actor.uid == os.getuid()
+        assert actor.gid == os.getgid()
+        client.sendall(FRAME.pack(b"PFQ1", 1, 1, 1, *values))
+        fields = FRAME.unpack(client.recv(257))
+        assert fields[:3] == (b"PFQ1", 1, 0x8001)
+        assert fields[3] == 1
+        assert fields[4 + 15] == 0
     finally:
         client.close()
         thread.join()
