@@ -80,7 +80,7 @@ ceilings:
   # These entries remain OPEN.
   # The literal-vector proof form cannot express a caller's fixed byte policy.
   # Two feed-projection builder entries: the resident one-page provider and the directory string.
-  unreviewed: 1341
+  unreviewed: 1344
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1304,6 +1304,8 @@ entries:
   - {id: "U1254", file: "include/pineforge/detail/scratch_file.hpp", symbol: "directory_", ops: ["assign", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 50}
   - {id: "U1255", file: "include/pineforge/detail/scratch_file.hpp", symbol: "name", ops: ["append", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 137}
   - {id: "U1256", file: "include/pineforge/detail/scratch_file.hpp", symbol: "refusal", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 135}
+  - {id: "U1649", file: "include/pineforge/detail/scratch_file.hpp", symbol: "quota_", ops: ["alloc", "grow"], container: "unresolved by the index: quota_.reserve(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 53}
+  - {id: "U1650", file: "include/pineforge/detail/scratch_file.hpp", symbol: "reservation", ops: ["grow"], container: "unresolved by the index: reservation.emplace(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 298}
   - {id: "U1257", file: "include/pineforge/detail/scratch_sequence.hpp", symbol: "<temp:const_iterator>", ops: ["temp"], container: "unresolved by the index: const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 26}
   - {id: "U1258", file: "include/pineforge/detail/scratch_sequence.hpp", symbol: "begin", ops: ["decl"], container: "const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 91}
   - {id: "U1259", file: "include/pineforge/detail/scratch_sequence.hpp", symbol: "directory_", ops: ["assign", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 52}
@@ -1364,6 +1366,7 @@ entries:
   - {id: "U1317", file: "src/command_scratch_production.cpp", symbol: "budget", ops: ["alloc"], container: "std::shared_ptr<CommandScratchByteBudget>", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "Setup creates one shared byte-budget control when the weak environment registration is absent or has a different limit. Factory now takes resident_bytes and cache_bytes. The budget control is fixed-size; the admitted backing byte limit is not an optional cache capacity or a proof of a population bound.", line: 416}
   - {id: "U1318", file: "src/command_scratch_production.cpp", symbol: "budget_", ops: ["grow"], container: "unresolved by the index: budget_.reserve(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 175}
   - {id: "U1319", file: "src/command_scratch_production.cpp", symbol: "make_unique", ops: ["alloc"], container: "command cache decorator and arena/file backing controls", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "Four setup identities move into the three-argument factory: arena decorator/inner and file decorator/inner, mutually exclusive pairs. Each construction allocates one control object; cache/prefix bytes are U1316, mandatory scratch workspace and backing extent are separately owned. All four ordinals remain OPEN.", line: 425}
+  - {id: "U1651", file: "src/command_scratch_production.cpp", symbol: "quota_", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 232}
   - {id: "U1320", file: "src/command_scratch_production.cpp", symbol: "path", ops: ["append", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 226}
   - {id: "U1321", file: "src/command_scratch_production.cpp", symbol: "refusal", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 224}
   - {id: "U1322", file: "src/command_scratch_production.cpp", symbol: "set_command_scratch_byte_cap", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 368}

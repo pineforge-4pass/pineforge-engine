@@ -1216,7 +1216,7 @@ class RealTree(unittest.TestCase):
         self.assertEqual(c['findings'], 0)
         self.assertEqual(c['PASS(bounded)'], 0)
         # Exact manifest entry counts: unreviewed + pending-flat-memory.
-        self.assertEqual(c['OPEN'], 1341 + 184)
+        self.assertEqual(c['OPEN'], 1344 + 184)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')
