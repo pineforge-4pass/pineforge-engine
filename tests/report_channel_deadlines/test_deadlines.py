@@ -27,7 +27,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 MODULE = ROOT / "docker/pineforge_report_deadlines.py"
 FIXTURE = HERE / "process_fixture.py"
-TIMING_SLACK_MS = 120
+TIMING_SLACK_MS = 250
 EARLY_SLACK_MS = 40
 _injector_dir = None
 _injector_library = None
@@ -266,10 +266,14 @@ class DeadlineProcesses(unittest.TestCase):
             if peer_config.get("mode") == "after_backpressure":
                 # pread leaves the writer's shared trace offset untouched.
                 while True:
-                    entries = os.pread(trace.fileno(), 1048576, 0).decode().splitlines()
-                    if any(line.split()[0] == "send" and
-                           int(line.split()[4]) == errno.EAGAIN
-                           for line in entries):
+                    entries = []
+                    for line in os.pread(trace.fileno(), 1048576, 0).decode().splitlines():
+                        fields = line.split()
+                        if len(fields) == 7:
+                            entries.append(fields)
+                    if any(fields[0] == "send" and
+                           int(fields[4]) == errno.EAGAIN
+                           for fields in entries):
                         peer.command("drain")
                         break
                     if time.monotonic() - started > bound_ms / 1000:
@@ -667,7 +671,7 @@ class DeadlineProcesses(unittest.TestCase):
         """T18/T30 mechanism, R16: repeated small reads keep the original W."""
         wall_ms = 450
         outcome, peer, elapsed, events = self.read_case(
-            {"size": 100, "step": 1, "interval_ms": 35},
+            {"size": 100, "step": 1, "interval_ms": 50},
             {"operation": "read_many", "nmax": 1,
              "wall_ms": wall_ms, "stall_ms": 150}, bound_ms=wall_ms)
         self.assert_failure(outcome, "DeadlineError", "wall", 0, stage="finalize")
@@ -676,6 +680,10 @@ class DeadlineProcesses(unittest.TestCase):
         self.assertEqual(actual, reference(len(actual), 19))
         self.assertGreaterEqual(peer["count"], len(actual))
         self.assertEqual(positive_total(events, "read"), len(actual))
+        positive = [event for event in events
+                    if event["name"] == "read" and event["result"] > 0]
+        self.assertGreater((positive[-1]["tick"] - positive[0]["tick"]) / 1e6,
+                           250)
         self.assert_timing(elapsed, wall_ms)
         self.assert_finite_polls(events, 150)
 

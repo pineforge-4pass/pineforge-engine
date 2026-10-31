@@ -62,9 +62,21 @@ static void trace(const char *name, int fd, long requested, long result,
     int length = snprintf(line, sizeof(line), "%s %d %ld %ld %d %d %lld\n",
                           name, fd, requested, result, error, flags,
                           (long long)now.tv_sec * 1000000000LL + now.tv_nsec);
-    if (length <= 0 || (size_t)length >= sizeof(line) ||
-        syscall(SYS_write, trace_fd, line, (size_t)length) != length)
+    if (length <= 0 || (size_t)length >= sizeof(line))
         _exit(125);
+    size_t written = 0;
+    while (written < (size_t)length) {
+        ssize_t count = syscall(SYS_write, trace_fd, line + written,
+                                (size_t)length - written);
+        if (count < 0) {
+            if (errno == EINTR)
+                continue;
+            _exit(125);
+        }
+        if (count == 0)
+            _exit(125);
+        written += (size_t)count;
+    }
 }
 
 /* -1 means a real operation, 0 is an injected zero, positive is errno. */
@@ -109,6 +121,21 @@ static int kernel_poll(struct pollfd *fds, nfds_t count, int timeout)
     return (int)syscall(SYS_ppoll, fds, count, &duration, NULL, 0);
 }
 
+/*
+ * glibc declares poll's descriptor array as write-only.  Inspect it through
+ * this attribute-free, non-inlined const view so the interposer can identify
+ * the descriptors it owns without triggering that declaration's warning.
+ */
+__attribute__((noinline))
+static int watched_fd(const struct pollfd *fds, nfds_t count)
+{
+    int watched = -1;
+    for (nfds_t index = 0; index < count; ++index)
+        if (fds[index].fd == target || fds[index].fd == source)
+            watched = fds[index].fd;
+    return watched;
+}
+
 ssize_t send(int fd, const void *buffer, size_t length, int flags)
 {
     if (fd != target)
@@ -150,10 +177,7 @@ ssize_t read(int fd, void *buffer, size_t length)
 
 int poll(struct pollfd *fds, nfds_t count, int timeout)
 {
-    int watched = -1;
-    for (nfds_t index = 0; index < count; ++index)
-        if (fds[index].fd == target || fds[index].fd == source)
-            watched = fds[index].fd;
+    int watched = watched_fd(fds, count);
     if (watched < 0)
         return kernel_poll(fds, count, timeout);
     int fault = repeat_poll_eintr ? delayed_eintr() : next_fault(&poll_faults);
