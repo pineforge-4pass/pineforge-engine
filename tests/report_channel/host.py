@@ -84,7 +84,9 @@ def process_info(pid):
     """Read the real Linux process table from the external TEST host."""
     try:
         fields = Path(f"/proc/{pid}/stat").read_text().rpartition(") ")[2].split()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # A process that exits between the directory listing and the read is gone:
+        # the kernel answers the read of a dying process's stat with ESRCH.
         return None
     return {"pid": pid, "state": fields[0], "parent": int(fields[1]),
             "group": int(fields[2]), "started": int(fields[19])}

@@ -2307,27 +2307,27 @@ add_test(NAME test_compile_inventory_pipeline
     COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
-# Opt-in supervised report channel and compile-step limits: real-process rows that
-# start the supervisor, a producer or the entrypoint with real descriptors and judge
-# the bytes, packets, wall time and wait statuses from outside. Linux hosts only
-# (the descriptor, signal and process-table checks need /proc and real sockets).
+# Opt-in supervised report channel and compile-step limits: real-process rows (Linux only,
+# /proc and real sockets) that start the supervisor, a producer or the entrypoint and judge
+# bytes, packets, wall time and wait statuses from outside. The entrypoint row compiles a
+# plain strategy.so, so it is not registered where the archive needs a sanitizer runtime.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    add_test(NAME test_report_channel_contract
-        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+    add_test(NAME test_report_channel_contract COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
             ${PROJECT_SOURCE_DIR}/tests/report_channel/test_contract.py
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-    add_test(NAME test_report_channel_deadlines
-        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+    add_test(NAME test_report_channel_deadlines COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
             ${PROJECT_SOURCE_DIR}/tests/report_channel_deadlines/test_deadlines.py
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-    add_test(NAME test_entrypoint_compile_limits
-        COMMAND ${CMAKE_COMMAND} -E env
-            "PINEFORGE_ENTRYPOINT_TEST_ARCHIVE=$<TARGET_FILE:pineforge>"
-            ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
-            ${PROJECT_SOURCE_DIR}/tests/entrypoint_limits/test_compile_limits.py
-        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-    set_tests_properties(test_report_channel_contract test_entrypoint_compile_limits PROPERTIES LABELS "report-channel")
+    set_tests_properties(test_report_channel_contract PROPERTIES LABELS "report-channel")
     set_tests_properties(test_report_channel_deadlines PROPERTIES LABELS "report-channel" RUN_SERIAL TRUE)
+    if(NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+        add_test(NAME test_entrypoint_compile_limits COMMAND ${CMAKE_COMMAND} -E env
+                "PINEFORGE_ENTRYPOINT_TEST_ARCHIVE=$<TARGET_FILE:pineforge>"
+                ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+                ${PROJECT_SOURCE_DIR}/tests/entrypoint_limits/test_compile_limits.py
+            WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+        set_tests_properties(test_entrypoint_compile_limits PROPERTIES LABELS "report-channel")
+    endif()
 endif()
 
 # OFF identity of the opt-in report channel: the same fixed requests through main's own
