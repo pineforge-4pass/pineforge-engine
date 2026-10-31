@@ -712,6 +712,8 @@ class Supervisor:
         if exit_class is None:
             exit_class = (
                 "input_refusal" if usage or code == "report_mode_unsupported" else
+                "resource_refusal" if code in ("report_budget_exceeded",
+                                              "diagnostic_budget_exceeded") else
                 "producer_failure" if code == "run_producer_failed" else
                 "harness_fault" if code == "harness_internal_error" else
                 "aborted" if code == "run_aborted" else

@@ -70,8 +70,9 @@ def sink_wire(closes, first_ts=1000):
                    "types": [column[1] for column in values],
                    "units": [column[2] for column in values]}
                   for tag, values in columns.items()]}
+    # The f64? columns require canonical double tokens even for integral inputs.
     prefix = line(header) + b"".join(
-        line(["E", first_ts + index * 60000, close, 0])
+        line(["E", first_ts + index * 60000, float(close), 0.0])
         for index, close in enumerate(closes))
     import hashlib
     return prefix + line({"trailer": "pf-report-sink", "version": 1,
@@ -116,7 +117,7 @@ class Capture:
     sink: bytes
     packets: list
     packet_flags: list
-    returncode: int
+    returncode: int | None
     attempt_id: str
     eof: set
     validator_events: list = field(default_factory=list)
@@ -126,14 +127,49 @@ class Capture:
     def finalizer_receipt(self):
         return b"".join(event[1:] for event in self.validator_events if event[:1] == b"R")
 
+    def failure_context(self):
+        """Keep the whole terminal record and bounded, loss-tolerant D text."""
+        records = []
+        for packet in self.packets:
+            try:
+                records.append(json.loads(packet))
+            except (ValueError, UnicodeError):
+                records.append({"invalid_terminal_bytes": repr(packet)})
+        record = records[0] if len(records) == 1 else records
+        verification = record.get("sink_verification") if isinstance(record, dict) else None
+        if not isinstance(verification, dict):
+            verification = {}
+        receipt = self.finalizer_receipt()
+        return json.dumps({
+            "terminal": record,
+            "supervisor_wait_status": self.returncode,
+            "packet_flags": self.packet_flags,
+            "eof": sorted(self.eof),
+            "diagnostic": {
+                "length_bytes": len(self.diagnostic),
+                "prefix": self.diagnostic[:4096].decode("utf-8", "replace"),
+                "truncated": len(self.diagnostic) > 4096,
+            },
+            "validator": {
+                "exit_status": verification.get("exit_status") if verification else None,
+                "signal": verification.get("signal") if verification else None,
+                "receipt_length_bytes": len(receipt),
+                "receipt_bytes": repr(receipt),
+            },
+        }, separators=(",", ":"), ensure_ascii=True)
+
     def terminal(self):
         if len(self.packets) != 1:
             raise AssertionError(
-                f"expected exactly one terminal packet, got {self.packets!r}; "
-                f"wait={self.returncode}, R={self.report!r}, D={self.diagnostic!r}")
+                f"expected exactly one terminal packet; {self.failure_context()}")
         if self.packet_flags != [0]:
-            raise AssertionError(f"truncated/ancillary terminal packet: {self.packet_flags!r}")
-        return json.loads(self.packets[0])
+            raise AssertionError(
+                f"truncated/ancillary terminal packet; {self.failure_context()}")
+        try:
+            return json.loads(self.packets[0])
+        except (ValueError, UnicodeError) as error:
+            raise AssertionError(
+                f"invalid terminal JSON; {self.failure_context()}") from error
 
 
 def launch(request=None, *, options=(), environment=None, status="valid",
@@ -148,7 +184,13 @@ def launch(request=None, *, options=(), environment=None, status="valid",
     """
     require_supervisor()
     attempt = uuid.uuid4().hex
-    with tempfile.TemporaryDirectory(prefix="pf-report-channel-") as directory, ExitStack() as stack:
+    with ExitStack() as fixtures, tempfile.TemporaryDirectory(
+            prefix="pf-report-channel-") as directory, ExitStack() as stack:
+        # Every sink row needs actual receipt bytes in a failure message,
+        # including rows that do not otherwise inspect observer events.
+        if observer is None and (
+                sink or alias in ("report_sink", "diagnostic_sink", "status_sink")):
+            observer = fixtures.enter_context(validator_observer())
         request_path = Path(directory) / "request.json"
         request_path.write_text(json.dumps(request or {}), encoding="utf-8")
         all_fds = set()
@@ -299,8 +341,12 @@ def launch(request=None, *, options=(), environment=None, status="valid",
         try:
             while selector.get_map():
                 if time.monotonic() >= deadline:
+                    partial = Capture(
+                        bytes(output["report"]), bytes(output["diagnostic"]),
+                        bytes(output["sink"]), packets, flags, process.poll(), attempt, eof,
+                        validator_events, stopped_validators, killed_validators)
                     raise AssertionError(
-                        f"TEST host watchdog expired: {output!r}, packets={packets!r}")
+                        f"TEST host watchdog expired; {partial.failure_context()}")
                 for key, _ in selector.select(0.05):
                     if key.data == "trace":
                         while True:
