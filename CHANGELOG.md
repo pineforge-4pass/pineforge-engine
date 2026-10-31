@@ -42,6 +42,23 @@ version number follows semantic versioning over the surfaces the
   unset. Once opted in, an unset or zero value is unlimited and a positive
   value is exact; when no dimension is limited, the original compile and
   binding behavior is retained.
+- The runner no longer refuses more than 256 symbols or total extra feeds in a
+  `--symbol-feeds` index, and the two request-feed inventory readers (the
+  runner's and `bind_compiled_inventory.py`) no longer refuse an inventory over
+  8 MiB: both limits are now parameters whose default is no limit.
+  `--max-symbol-feeds N` and `--max-inventory-bytes N` (environment
+  `PINEFORGE_MAX_SYMBOL_FEEDS` and `PINEFORGE_MAX_INVENTORY_BYTES` in the
+  container entrypoint) set a limit; unset or `0` is unlimited and anything
+  else that is not a nonnegative integer is a usage error. With a limit set the
+  typed refusals (`too_many_symbols`, `too_many_feeds`, the inventory
+  incompleteness refusal, binder exit 10) are unchanged and name the limit in
+  force. `--tv-compat` (`PINEFORGE_TV_COMPAT`) selects the former values, 256
+  and 8 MiB, as defaults; an explicit value, including `0`, wins. The key
+  length limit is unchanged. The ambiguous-prefix message of the runner's
+  argument parser now lists the new options where they share a prefix:
+  `--t` also names `--tv-compat`, and `--m` and `--ma` also name
+  `--max-symbol-feeds` and `--max-inventory-bytes`. The exit status, the code
+  `run_request_invalid` and its args are unchanged.
 - Recorded output series are unlimited by default; 0 or omission of `--limit-output-series` means no limit, while a positive N is the operator's cap and any refusal reports that positive N as `max`. Report-window memory follows the declared count: 6 MiB + 64 KiB × S + a 64 KiB reader with the default I/O sizes.
 - Reading a map is cheaper: each map now keeps a fixed read cache of 8 slots
   for the keys and values it has just read, so a repeated `get` or `contains`

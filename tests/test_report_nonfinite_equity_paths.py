@@ -266,8 +266,8 @@ def convert_fd_capture(tmp_path, result, wire):
 @pytest.mark.parametrize("field,bad", CASES)
 def test_non_sink_native_nonfinite(tmp_path, field, bad):
     # Mutation: for equity, remove ("equity", "equity_curve.equity") at
-    # docker/run_json.py:4211; for open_profit, remove
-    # ("open_profit", "equity_curve.open_profit") at docker/run_json.py:4212.
+    # docker/run_json.py:4372; for open_profit, remove
+    # ("open_profit", "equity_curve.open_profit") at docker/run_json.py:4373.
     result = run_path(tmp_path, field, bad, "array")
     assert_native_poison(result, field, bad)
     assert not any(hasattr(result.library, name) for name in SINK_EXPORTS)
@@ -280,7 +280,7 @@ def test_non_sink_native_nonfinite(tmp_path, field, bad):
 @pytest.mark.parametrize("field,bad", CASES)
 def test_file_sink_native_nonfinite(tmp_path, native_writer, field, bad):
     # Mutation: remove _validate_report_result(out) in _build_sink_report's
-    # non-fd branch at docker/run_json.py:6451.
+    # non-fd branch at docker/run_json.py:8038.
     result = run_path(tmp_path, field, bad, "file", writer=native_writer,
                       extra=("--spill-dir", str(tmp_path)))
     assert_native_poison(result, field, bad)

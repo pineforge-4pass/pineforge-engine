@@ -340,7 +340,7 @@ def discover_probes(root, only):
 
 
 def compile_command(prefix, cpp, so):
-    # docker/entrypoint.sh:248-254, token for token; do not add or change flags.
+    # docker/entrypoint.sh:259-265, token for token; do not add or change flags.
     return [
         "g++", "-std=c++17", "-O2", "-ffp-contract=off", "-fPIC", "-shared",
         f"-I{prefix}/include", "-I/usr/include/eigen3", str(cpp),
@@ -350,7 +350,7 @@ def compile_command(prefix, cpp, so):
 
 
 def runtime_command(run_json, work, options, *, phase_fd=None):
-    # docker/entrypoint.sh:689-702, ordinary TRANSPILED=true route.
+    # docker/entrypoint.sh:336-349, ordinary TRANSPILED=true route.
     command = [
         sys.executable, str(run_json), "--so", str(work / "strategy.so"),
         "--ohlcv", str(work / "bars.csv"),
@@ -371,7 +371,7 @@ def runtime_command(run_json, work, options, *, phase_fd=None):
 
 
 def bind_inventory_command(run_json, work, codegen):
-    # docker/entrypoint.sh:331-335. The helper beside this run_json delegates
+    # docker/entrypoint.sh:280-286. The helper beside this run_json delegates
     # all inventory validation/hashing to the explicitly selected codegen.
     helper = Path(run_json).with_name("bind_compiled_inventory.py")
     if not helper.is_file():
@@ -438,12 +438,12 @@ def transpile_worker(codegen, pine, cpp, diagnostic, inventory_out=None):
         return 5
     try:
         if inventory_out is None:
-            # docker/entrypoint.sh:139-144. No support bypass, timeframe binding,
+            # docker/entrypoint.sh:126-131. No support bypass, timeframe binding,
             # inventory API, or invented provenance file on this ordinary route.
             generated = transpile(Path(pine).read_text(encoding="utf-8"), filename="strategy.pine")
             Path(cpp).write_text(generated, encoding="utf-8")
         else:
-            # docker/entrypoint.sh:169-176, including no primary_chart_timeframe
+            # docker/entrypoint.sh:161-167, including no primary_chart_timeframe
             # binding. Serialize only the inventory returned by pinned codegen.
             result = transpile_with_request_inventory(
                 Path(pine).read_text(encoding="utf-8"), filename="strategy.pine")
