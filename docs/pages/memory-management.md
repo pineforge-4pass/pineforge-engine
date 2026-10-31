@@ -287,9 +287,9 @@ trailer raises `missing header or trailer`.
 and exit status 1
 (2 for the refusals above). The separate sink finalizer tool,
 `docker/pineforge_sink_finalize.py`, has its own exit statuses: 0 complete and verified, 2 usage error,
-3 malformed stream, 4 verification failure, 5 input or output failure, 6 end of input without a
+3 malformed stream or host-profile refusal, 4 verification failure, 5 input or output failure, 6 end of input without a
 trailer, 7 internal error, 8 `sink_exhausted` (the stream exceeds `--max-bytes`;
-`sink_exhausted` at `docker/pineforge_sink_finalize.py:100-109`). Its output is provisional until
+`sink_exhausted` at `docker/pineforge_sink_finalize.py:104-113`). Its output is provisional until
 exit 0, and a consumer must discard everything it received on exit 3 to 8 (`PROVISIONAL` at
 `docker/pineforge_sink_finalize.py:24-26`). The failure catalog maps exit 8 to `report_sink_failed`
 with `reason` `sink_exhausted` (`sink_exhausted` at `docker/run_failure_codes.json:1105`). A sink failure carries code `report_sink_failed` and a `reason`
@@ -320,7 +320,7 @@ to EOF got exit status 0 and a complete verified trailer.
 | Control | Kind | Default | What it does |
 | --- | --- | --- | --- |
 | `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES` | environment, positive decimal `uint64` | unset: no cap | Caps the bytes the command-store backings of one thread may extend, in total. A malformed value fails the run with `scratch_configuration_invalid`; exceeding it fails with `scratch_io_failed` |
-| `PINEFORGE_COMMAND_SCRATCH_DIR`, `TMPDIR` | environment, a directory | `TMPDIR`, else `/tmp` | Where scratch files go when no arena is attached. An explicit directory never falls back; a tmpfs or ramfs is refused |
+| `PINEFORGE_COMMAND_SCRATCH_DIR`, `TMPDIR` | environment, a directory | `TMPDIR`, else `/tmp` | Where scratch files go when no arena is attached: `TMPDIR` for the trade ledger, the report files and the command stores; `PINEFORGE_COMMAND_SCRATCH_DIR` for the command stores only (when `run_json.py` is invoked directly, `--spill-dir` also sets the directory for engine scratch and unlinked report temporaries, below). An explicit directory never falls back; a tmpfs or ramfs is refused |
 | `PF_SCRATCH_ARENA_FD`, `PF_SCRATCH_ARENA_BYTES` | environment | none | The inherited arena: descriptor 5 (only 5 is accepted) and its size in bytes, in whole 1 MiB chunks (under 1 MiB is refused). A run that crosses it fails with `report_sink_failed`, reason `arena_exhausted`, and the failure carries a lower bound of the bytes needed |
 | `PF_SCRATCH_WINDOW_BYTES` | environment | 32 MiB | Total cap on the arena bytes mapped at one time, rounded down to whole pages. Mapped pages count toward the resident size while mapped |
 | `pf_scratch_tables_v1` through `strategy_set_scratch_tables_v1` | descriptor of eleven maxima | disk tables; with `bounded_memory`, the policy values of [Scratch tables](@ref scratch_tables) | Sizes the fixed slab of the historical tables: `K_e`, `B_e`, `K_c`, `B_c`, `U`, `B_U`, `V`, `B_V`, `R` and the unused q pair. Exceeding a maximum fails the run with `scratch_capacity_exceeded` |
