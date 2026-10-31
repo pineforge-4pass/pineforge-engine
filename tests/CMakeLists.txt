@@ -7453,6 +7453,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             ${PROJECT_SOURCE_DIR}/tests/test_parity_jailed_adapter.py)
 endif()
 
+add_test(
+    NAME test_parity_packaged_paths
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_parity_packaged_paths.py
+)
+
 # Property reads and the diagnostic belong before the lane loop;
 # the fence grammar permits target definitions, not get_target_property/message.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
@@ -8101,9 +8107,3 @@ endforeach()
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
 endif()
-
-add_test(
-    NAME test_parity_packaged_paths
-    COMMAND ${Python3_EXECUTABLE}
-            ${PROJECT_SOURCE_DIR}/scripts/test_parity_packaged_paths.py
-)
