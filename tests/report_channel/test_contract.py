@@ -141,6 +141,71 @@ class Contract(unittest.TestCase):
             "code": code, "args": args, "authority": "supervisor"}, msg=msg)
         return record
 
+    def launch_run_quota_case(self, controls, *, observer, invocation="run_json",
+                              attested=True, options=(), supervisor_path=None, direct=False):
+        environment = clean_environment()
+        self.assertEqual(
+            {name: value for name, value in environment.items()
+             if name.startswith("PF_RUN_QUOTA_")}, {},
+            msg="quota cases require an unmanaged TEST baseline before launch")
+        environment.update(controls)
+        self.assertEqual(
+            {name: value for name, value in environment.items()
+             if name.startswith("PF_RUN_QUOTA_")},
+            {name: value for name, value in controls.items()
+             if name.startswith("PF_RUN_QUOTA_")},
+            msg="quota case must install exactly its requested markers before launch")
+        self.assertTrue(Path(observer).is_file())
+        with tempfile.TemporaryDirectory(prefix="pf-channel-quota-") as directory:
+            marker = Path(directory) / "producer.json"
+            self.assertFalse(marker.exists(), msg="producer marker must be absent before launch")
+            if direct:
+                self.assertEqual(invocation, "run_json")
+            capture = launch(
+                {"closes": [7, 13, 9], "inherited_sink": True,
+                 "producer_identity_path": str(marker), "stdout": encoded(b"PRODUCER_STARTED")},
+                environment=environment, sink=True, observer=observer, attested=attested,
+                options=(*(() if direct else ("--invocation", invocation)), *options),
+                supervisor_path=supervisor_path, direct=direct,
+                command=["--an-unrecognized-runner-option"] if direct else None)
+            identity = json.loads(marker.read_text()) if marker.exists() else None
+            return capture, identity
+
+    def assert_run_quota_prelaunch(self, capture, identity):
+        msg = capture.failure_context()
+        record = capture.terminal()
+        self.assertIsNone(
+            record["producer"]["stage"], msg=f"pre-launch refusal started a child; {msg}")
+        self.assertIsNone(identity, msg=msg)
+        self.assertEqual(record["producer"], {
+            "stage": None, "exit_status": None, "signal": None,
+            "failure": None, "failure_claim_omitted": False}, msg=msg)
+        self.assertEqual(capture.validator_events, [], msg=msg)
+        self.assertIsNone(record["sink_verification"], msg=msg)
+        self.assertEqual(capture.diagnostic, b"", msg=msg)
+        self.assertEqual(capture.sink, b"", msg=msg)
+        self.assertEqual(record["channels"]["candidate"]["observed_bytes"], 0, msg=msg)
+        for stage in ("run", "finalize"):
+            self.assertEqual(record["usage"]["stages"][stage]["state"], "not_started", msg=msg)
+
+    def assert_run_quota_refusal(self, capture, identity, variables, *, invocation="run_json"):
+        self.assert_run_quota_prelaunch(capture, identity)
+        msg = capture.failure_context()
+        record = self.refusal(
+            capture, "run_isolation_unavailable", {"reason": "policy"},
+            exit_class="resource_refusal", status=4 if invocation == "entrypoint" else 1,
+            invocation=invocation, msg=msg)
+        self.assertEqual(record["diagnostics"], [
+            ("the supervised report channel does not forward the host run-quota marker: "
+             + name + " is set (unsupported combination)").encode("utf-8")[:1024].decode(
+                 "utf-8", "ignore")
+            for name in sorted(variables)], msg=msg)
+        self.assertTrue(all(len(text.encode("utf-8")) <= 1024
+                            for text in record["diagnostics"]), msg=msg)
+        report = json.loads(capture.report)
+        self.assertEqual(report["code"], "run_isolation_unavailable", msg=msg)
+        self.assertEqual(report["args"], {"reason": "policy"}, msg=msg)
+
     def assert_producer_group_gone(self, capture, identity_path):
         msg = capture.failure_context()
         identity = json.loads(identity_path.read_text())
@@ -597,6 +662,154 @@ class Contract(unittest.TestCase):
         self.refusal(capture, "run_isolation_unavailable", {"reason": "policy"},
                      exit_class="resource_refusal", status=1, msg=msg)
         self.assertNotIn(b"PRODUCER_STARTED", capture.diagnostic, msg=msg)
+
+    def test_run_quota_named_markers_refuse_before_launch_including_empty_values(self):
+        with validator_observer() as observer:
+            for name, value in (("PF_RUN_QUOTA_MODE", "managed"),
+                                ("PF_RUN_QUOTA_NATIVE_FD", "9"),
+                                ("PF_RUN_QUOTA_PYTHON_FD", "10")):
+                for setting in (value, ""):
+                    for invocation in ("run_json", "entrypoint"):
+                        with self.subTest(name=name, value=setting, invocation=invocation):
+                            variables = {name: setting}
+                            capture, identity = self.launch_run_quota_case(
+                                variables, observer=observer, invocation=invocation)
+                            self.assert_run_quota_refusal(
+                                capture, identity, variables, invocation=invocation)
+
+    def test_run_quota_future_prefix_name_refuses_before_launch(self):
+        with validator_observer() as observer:
+            for value in ("future-marker", ""):
+                for invocation in ("run_json", "entrypoint"):
+                    with self.subTest(value=value, invocation=invocation):
+                        variables = {"PF_RUN_QUOTA_FUTURE_X": value}
+                        capture, identity = self.launch_run_quota_case(
+                            variables, observer=observer, invocation=invocation)
+                        self.assert_run_quota_refusal(
+                            capture, identity, variables, invocation=invocation)
+
+    def test_run_quota_multiple_markers_have_separate_sorted_diagnostics(self):
+        variables = {"PF_RUN_QUOTA_PYTHON_FD": "python-marker-value",
+                     "PF_RUN_QUOTA_MODE": "mode-marker-value"}
+        self.assertNotEqual(list(variables), sorted(variables))
+        with validator_observer() as observer:
+            for invocation in ("run_json", "entrypoint"):
+                with self.subTest(invocation=invocation):
+                    capture, identity = self.launch_run_quota_case(
+                        variables, observer=observer, invocation=invocation)
+                    self.assert_run_quota_refusal(
+                        capture, identity, variables, invocation=invocation)
+
+    def test_run_quota_diagnostic_names_stay_within_the_utf8_bound(self):
+        name = "PF_RUN_QUOTA_" + "é" * 600
+        self.assertGreater(len(name.encode("utf-8")), 1024)
+        variables = {name: "future-marker"}
+        with validator_observer() as observer:
+            for invocation in ("run_json", "entrypoint"):
+                with self.subTest(invocation=invocation):
+                    capture, identity = self.launch_run_quota_case(
+                        variables, observer=observer, invocation=invocation)
+                    self.assert_run_quota_refusal(
+                        capture, identity, variables, invocation=invocation)
+
+    def test_run_quota_policy_refusal_precedes_missing_host_attestation(self):
+        variables = {"PF_RUN_QUOTA_MODE": ""}
+        with validator_observer() as observer:
+            for invocation in ("run_json", "entrypoint"):
+                with self.subTest(invocation=invocation):
+                    capture, identity = self.launch_run_quota_case(
+                        variables, observer=observer, invocation=invocation, attested=False)
+                    self.assert_run_quota_refusal(
+                        capture, identity, variables, invocation=invocation)
+
+    def test_run_quota_direct_runner_dispatch_refuses_before_producer(self):
+        with validator_observer() as observer:
+            for name in ("PF_RUN_QUOTA_MODE", "PF_RUN_QUOTA_NATIVE_FD",
+                         "PF_RUN_QUOTA_PYTHON_FD", "PF_RUN_QUOTA_FUTURE_X"):
+                with self.subTest(name=name):
+                    variables = {name: ""}
+                    capture, identity = self.launch_run_quota_case(
+                        variables, observer=observer, direct=True)
+                    self.assert_run_quota_refusal(capture, identity, variables)
+
+    def test_run_quota_control_usage_errors_win_before_policy_refusal(self):
+        variables = {"PF_RUN_QUOTA_MODE": "managed"}
+        invalid_controls = (
+            (("--report-channel", "supervised/v999"), {}),
+            (("--not-a-channel-control", "1"), {}),
+            (("--post-exit-drain-ms", "1", "--post-exit-drain-ms", "2"), {}),
+            (("--stop-grace-ms",), {}),
+            (("--planned-sink-bytes", "-1"), {}),
+            ((), {"PINEFORGE_RUN_JSON_PROFILE": "invalid"}),
+            *(((flag, "-1"), {}) for flag, _, _, _ in KNOBS),
+            *(((), {name: ""}) for _, name, _, _ in KNOBS),
+        )
+        with validator_observer() as observer:
+            capture, identity = self.launch_run_quota_case(variables, observer=observer)
+            self.assert_run_quota_refusal(capture, identity, variables)
+            for invocation in ("run_json", "entrypoint"):
+                for options, environment in invalid_controls:
+                    with self.subTest(invocation=invocation, options=options,
+                                      environment=environment):
+                        capture, identity = self.launch_run_quota_case(
+                            {**variables, **environment}, observer=observer,
+                            invocation=invocation, options=options)
+                        self.assert_run_quota_prelaunch(capture, identity)
+                        record = self.refusal(
+                            capture, "run_request_invalid", {"option": "arguments"},
+                            status=4 if invocation == "entrypoint" else 2,
+                            invocation=invocation)
+                        self.assertTrue(record["diagnostics"], msg=capture.failure_context())
+                        self.assertFalse(any("host run-quota marker" in text
+                                             for text in record["diagnostics"]),
+                                         msg=capture.failure_context())
+
+    def test_run_quota_lookalikes_and_unmanaged_environment_preserve_delivery(self):
+        expected = reference({"closes": [7, 13, 9], "inherited_sink": True})
+        self.assertEqual(expected.returncode, 0, msg=repr(expected.stderr))
+        self.assertEqual(expected.sink, sink_wire([7, 13, 9]))
+        with validator_observer() as observer:
+            for environment in ({}, {"XPF_RUN_QUOTA_MODE": "managed"},
+                                {"PF_RUN_QUOTA": "managed"},
+                                {"XPF_RUN_QUOTA_MODE": "", "PF_RUN_QUOTA": ""}):
+                with self.subTest(environment=environment):
+                    self.assertFalse(any(name.startswith("PF_RUN_QUOTA_")
+                                         for name in environment))
+                    capture, identity = self.launch_run_quota_case(
+                        environment, observer=observer)
+                    msg = capture.failure_context()
+                    self.assertIsNotNone(identity, msg=msg)
+                    self.assert_fixture_delivery(capture, msg=msg)
+                    self.assertEqual(capture.report, expected.stdout, msg=msg)
+                    self.assertEqual(capture.sink, expected.sink, msg=msg)
+                    self.assertEqual(capture.diagnostic, b"PRODUCER_STARTED", msg=msg)
+                    self.assertTrue(capture.validator_events, msg=msg)
+                    self.assertIsNone(process_info(identity["pid"]), msg=msg)
+                    variables = {**environment, "PF_RUN_QUOTA_FUTURE_X": ""}
+                    refused, identity = self.launch_run_quota_case(
+                        variables, observer=observer)
+                    self.assert_run_quota_refusal(
+                        refused, identity, ("PF_RUN_QUOTA_FUTURE_X",))
+
+    def test_run_quota_prefix_assertions_reject_a_narrowed_prefix(self):
+        variables = {"PF_RUN_QUOTA_FUTURE_X": "future-marker"}
+        with validator_observer() as observer:
+            capture, identity = self.launch_run_quota_case(variables, observer=observer)
+            self.assert_run_quota_refusal(capture, identity, variables)
+            text = SUPERVISOR.read_text(encoding="utf-8")
+            original = 'RUN_QUOTA_PREFIX = "PF_RUN_QUOTA_"\n'
+            self.assertEqual(text.count(original), 1)
+            with tempfile.TemporaryDirectory(prefix="pf-quota-prefix-mutation-") as directory:
+                changed = supervisor_fixture(directory, text=text.replace(
+                    original, 'RUN_QUOTA_PREFIX = "PF_RUN_QUOTA_MODE"\n'))
+                capture, identity = self.launch_run_quota_case(
+                    variables, observer=observer, supervisor_path=changed)
+                msg = capture.failure_context()
+                self.assertIsNotNone(identity, msg=msg)
+                self.assert_fixture_delivery(capture, msg=msg)
+                self.assertTrue(capture.validator_events, msg=msg)
+                with self.assertRaisesRegex(AssertionError, "pre-launch refusal started a child"):
+                    self.assert_run_quota_refusal(capture, identity, variables)
 
     def test_t2_zero_or_absent_host_grants_are_unlimited(self):
         diagnostic = (b"unlimited\x00\xff" * 100000) + b"tail"

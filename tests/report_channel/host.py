@@ -45,10 +45,12 @@ def encoded(data):
 
 
 def clean_environment():
+    """Build an unmanaged TEST baseline; launch overlays explicit controls."""
     return {key: value for key, value in os.environ.items()
             if key != "PINEFORGE_RUN_JSON_PROFILE"
             and not key.startswith(("PINEFORGE_REPORT_", "PINEFORGE_TERMINAL_",
-                                    "PINEFORGE_DIAGNOSTIC_", "PINEFORGE_CHANNEL_"))}
+                                    "PINEFORGE_DIAGNOSTIC_", "PINEFORGE_CHANNEL_",
+                                    "PF_RUN_QUOTA_"))}
 
 
 def main_blob(path):

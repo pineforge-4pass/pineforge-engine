@@ -29,6 +29,10 @@ A delivered test fixture therefore has complete=false, failure=null and
 exit_class=resource_refusal, with the runtime-refusal facade exit 1 (4 for the
 entrypoint). Only measured-true domain_empty can permit complete=true.
 
+the supervised report channel does not forward the host run-quota marker; it refuses to start when a PF_RUN_QUOTA_ variable is set.
+Empty values count as set. This policy refusal follows control-grammar parsing,
+including for the TEST adapter, and precedes host attestation and child launch.
+
 Unset and zero R/D/W/P requests impose no limit. A positive host grant is an
 optional constraint: omitted/zero requests resolve to it, positive requests
 above it are refused without clamping. An absent or zero host grant means
@@ -118,6 +122,7 @@ from pineforge_report_deadlines import (
 
 
 CONTRACT = "supervised/v1"
+RUN_QUOTA_PREFIX = "PF_RUN_QUOTA_"
 MAX_INTEGER = (1 << 53) - 2
 INT_MAX = (1 << 31) - 1
 TERMINAL_BYTES = 65536
@@ -1074,6 +1079,15 @@ class Supervisor:
             names = {token.partition("=")[0] for token in tokens}
             if names & {"--help", "-h", "--run-phase-fd"} or "csv2bin" in tokens:
                 raise UsageError("excluded producer protocol")
+            quota_markers = sorted(name for name in os.environ
+                                   if name.startswith(RUN_QUOTA_PREFIX))
+            if quota_markers:
+                for name in quota_markers:
+                    self.diagnostics.append(diagnostic_text(
+                        "the supervised report channel does not forward the host run-quota marker: "
+                        + name + " is set (unsupported combination)"))
+                self.latch("run_isolation_unavailable", {"reason": "policy"})
+                return
             for index, token in enumerate(tokens):
                 name, equals, suffix = token.partition("=")
                 if name == "--report-mode":

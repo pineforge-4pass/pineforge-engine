@@ -12,6 +12,7 @@ version number follows semantic versioning over the surfaces the
   an external sink for now, while the internal snapshot handoff is pending.
   Unset or zero report, diagnostic, wall and stall limits are unlimited;
   positive values apply exactly, subject to any positive host grant.
+- the supervised report channel does not forward the host run-quota marker; it refuses to start when a PF_RUN_QUOTA_ variable is set.
 - The supervised channel's `--post-exit-drain-ms`
   (`PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS`) controls how long diagnostic and
   receipt pipes may stay open after their owners exit. The default is 1000 ms;
