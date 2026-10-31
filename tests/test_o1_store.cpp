@@ -544,8 +544,13 @@ void check_read_cache_mutations() {
   REQUIRE(!store->alive(id));
   const Id after = store->create(1024, 8);
   REQUIRE(after > other);
+  // A never-written chunk reads zero and publishes nothing; it has no handle
+  // for the fixed table to hold, so no warm claim is made for it.
   require_byte(*store, after, 512, 0);
-  require_warm_byte(*store, backing, after, 512, 0);
+  // Publish chunk 1 of the new id; the table must then serve it warm.
+  REQUIRE(store->write(after, 512, &tail, 1) == 1);
+  require_byte(*store, after, 512, 0x7a);
+  require_warm_byte(*store, backing, after, 512, 0x7a);
   REQUIRE(!store->alive(id));
   REQUIRE(!store->alive(0));
   REQUIRE(throws_invalid_argument([&] { (void)store->read(0, 0, nullptr, 0); }));
