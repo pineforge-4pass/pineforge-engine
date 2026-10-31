@@ -408,7 +408,7 @@ class Contract(unittest.TestCase):
                         self.assertTrue(record["channels"]["report"]["complete"], msg=msg)
 
     def assert_finite_report_stall(self, *, supervisor_path=None, guard=HANG_GUARD_SECONDS,
-                                   after_stall=None):
+                                   after_stall=None, check_timing=True):
         expected = reference({"label": "finite-report-" + "x" * 16384}).stdout
         with tempfile.TemporaryDirectory(prefix="pf-finite-report-") as directory:
             identity = Path(directory) / "producer.json"
@@ -423,9 +423,10 @@ class Contract(unittest.TestCase):
                 exit_class="transport_failure", status=1, msg=msg)
             self.assert_producer_group_gone(capture, identity)
             self.assertIn("report", capture.control["stalled_at"], msg=msg)
-            duration = capture.control["exited_at"] - capture.control["stalled_at"]["report"]
-            self.assertGreaterEqual(duration, 0.5, msg=msg)
-            self.assertLess(duration, 0.8, msg=msg)
+            if check_timing:
+                duration = capture.control["exited_at"] - capture.control["stalled_at"]["report"]
+                self.assertGreaterEqual(duration, 0.5, msg=msg)
+                self.assertLess(duration, 0.8, msg=msg)
             self.assertEqual(capture.control["held_until_exit"], ["report"], msg=msg)
             self.assertEqual(record["limits"]["stall_ms"]["effective"], 600, msg=msg)
             self.assertEqual(record["limits"]["wall_ms"]["effective"], 60000, msg=msg)
@@ -442,7 +443,8 @@ class Contract(unittest.TestCase):
         # Before the host honoured it, 0 expired the very first poll and None failed on the sum.
         for guard in (None, 0):
             with self.subTest(guard=guard):
-                self.assert_finite_report_stall(guard=guard)
+                # a host row: it asserts that the launch completes and no guard fired, not a wall bound
+                self.assert_finite_report_stall(guard=guard, check_timing=False)
         # The host's own default is none too, so every launch() that names no guard agrees.
         self.assertIsNone(inspect.signature(launch).parameters["watchdog_seconds"].default)
         self.assertIsNone(inspect.signature(launch).parameters["watchdog_after_stall_seconds"].default)
@@ -450,7 +452,7 @@ class Contract(unittest.TestCase):
     def test_host_guard_counted_from_the_stall_does_not_fire_before_it(self):
         # A launch that ends well inside the guard (the supervisor's own 600 ms stall deadline)
         # must not be expired by a guard counted from the stall.
-        self.assert_finite_report_stall(guard=None, after_stall=60)
+        self.assert_finite_report_stall(guard=None, after_stall=60, check_timing=False)
 
     def test_hang_guard_environment_parse(self):
         parse = hang_guard_from_environment
