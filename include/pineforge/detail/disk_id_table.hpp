@@ -34,6 +34,12 @@ public:
     using Offset = std::uint64_t;
     DiskIdTable() = default;
     explicit DiskIdTable(std::size_t cache_bytes) : read_cache_(cache_bytes) {}
+    explicit DiskIdTable(IdTableReadCache::Policy cache) : read_cache_(cache) {}
+    explicit DiskIdTable(CacheCapacity capacity)
+        : DiskIdTable(IdTableReadCache::policy_for_capacity(capacity)) {}
+    void set_cache_capacity(CacheCapacity capacity) {
+        read_cache_.set_cache_capacity(capacity);
+    }
     DiskIdTable(const DiskIdTable&) = delete;
     DiskIdTable& operator=(const DiskIdTable&) = delete;
     DiskIdTable(DiskIdTable&& other) noexcept { *this = std::move(other); }

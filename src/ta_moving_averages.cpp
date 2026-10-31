@@ -355,8 +355,8 @@ double EMA::compute(double src) {
 
 // --- WMA (Weighted Moving Average) ---
 
-WMA::WMA(int length)
-    : length_(length), buffer_(static_cast<std::size_t>(length)) {}
+WMA::WMA(int length, WindowCacheCapacity cache)
+    : length_(length), buffer_(static_cast<std::size_t>(length), cache) {}
 
 double WMA::compute(double src) {
     if (is_na(src)) {

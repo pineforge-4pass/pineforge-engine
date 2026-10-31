@@ -987,6 +987,15 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_ledger_history_scale_400k',
     # tests/cr150.d/o1w-tail.cmake:6.
     'test_position_tail_summary_scale',
+    # Complete native-tail and retained-identity cache sweeps.
+    'test_native_tail_window_sizes',
+    'test_retained_sequence_window_sizes',
+    'test_cache_sweep_position_tail',
+    'test_cache_sweep_equity_curve',
+    'test_cache_sweep_native_tails',
+    # tests/cr150.d/cache-sweep-ledger-rows.cmake:4 and trade-ledger-cache.cmake:9.
+    'test_cache_sweep_ledger_rows',
+    'test_trade_ledger_cache_sweep',
     # tests/cr150.d/p2cx-a5s.cmake:3.
     'test_o1_store',
     # tests/cr150.d/udt-object-graphs.cmake:6.
