@@ -1310,6 +1310,9 @@ int run(Config c) {
                     }
                     if (pending.size() > MAX_FRAME)
                         throw std::runtime_error("input line exceeds 1 MiB");
+                    // Feed deadlines count waiting, excluding the consume pass.
+                    last_data = std::chrono::steady_clock::now();
+                    if (!pending.empty()) message_started = last_data;
                 }
             } else {
                 std::ifstream input(c.feed);
