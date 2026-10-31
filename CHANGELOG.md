@@ -8,6 +8,33 @@ version number follows semantic versioning over the surfaces the
 ## Unreleased
 
 - Recorded output series are unlimited by default; 0 or omission of `--limit-output-series` means no limit, while a positive N is the operator's cap and any refusal reports that positive N as `max`. Report-window memory follows the declared count: 6 MiB + 64 KiB × S + a 64 KiB reader with the default I/O sizes.
+- Reading a map is cheaper: each map now keeps a fixed read cache of 8 slots
+  for the keys and values it has just read, so a repeated `get` or `contains`
+  of the same key no longer reads the Store again. The cache adds a fixed 528
+  bytes per map identity for a `map<string, float>` whatever the number of
+  pairs, is cleared by every mutation of the map and invalidated when the
+  Store rolls back an outer transaction, and is never filled from an absent
+  key. Results are unchanged. The internal `detail::o1::Store` interface gains
+  a pure virtual `rollback_epoch()` for that invalidation; a Store
+  implementation outside the engine tree must provide it.
+- Reading a script container (string, array, map or object store) is cheaper:
+  each Store now keeps two fixed tables of 8 slots, one for decoded object
+  headers and one for chunk lookup handles, so a repeated read of the same
+  object or chunk no longer descends the scratch index again. The tables add a
+  fixed 384 bytes per Store to `bytes_resident` whatever the number of objects
+  or chunks, and are cleared before every scratch put, erase and rollback and
+  on every scratch failure. Results are unchanged.
+- Creating an empty map now writes two header records; its arena and index
+  data chunks are published on first write. The Store does this for every
+  script container: an object is created with its header record only, so a
+  string created with a bound and a UDT object made without a payload behave
+  the same way. Declared sizes, the 50,000-pair
+  capacity, iteration order and the refusal at the cap are unchanged. Scratch
+  exhaustion from publishing a container's data chunks now surfaces at the
+  first operation that publishes them (for a map `put`, `remove`, `clear`,
+  `copy`, `snapshot` or `restore`) instead of at creation, with the same typed failure
+  `report_sink_failed` and `reason: arena_exhausted`. Scripts that create maps
+  they never fill can now run where they used to fail at `map.new`.
 
 ## 1.9.1 — 2026-10-31
 

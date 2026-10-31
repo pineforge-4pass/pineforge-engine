@@ -112,7 +112,7 @@ always, and any other run that inherits one), curve scratch instead consumes
 the **RAM-backed arena**, so those same **24 B per script bar are memory**.
 The fd setter attaches the arena (`attach_from_environment`
 src/engine_report.cpp:1410), and `ScratchFile::open`
-include/pineforge/detail/scratch_file.hpp:168-175 selects it.
+include/pineforge/detail/scratch_file.hpp:308-316 selects it.
 Linux jailed admission requires sealed memfd backing
 (`strategy_require_report_scratch_arena_v1` src/c_abi.cpp:1481-1498).
 The hosting wrapper supplies `PF_SCRATCH_ARENA_BYTES`
@@ -127,7 +127,7 @@ Exhaustion fails closed with typed `report_sink_failed`
 (`ReportScratchIoError` include/pineforge/detail/scratch_arena.hpp:16-21),
 reason `arena_exhausted` src/scratch_arena.cpp:249-253.
 There is no RAM fallback (the comment on `ScratchFile`
-include/pineforge/detail/scratch_file.hpp:31-37).
+include/pineforge/detail/scratch_file.hpp:157-163).
 
 A **jailed run without `--report-sink-fd` has no sink at all**:
 `_new_report_sink` docker/run_json.py:5967-5985 returns `None`, so it retains
@@ -290,7 +290,7 @@ and exit status 1
 `docker/pineforge_sink_finalize.py`, has its own exit statuses: 0 complete and verified, 2 usage error,
 3 malformed stream or host-profile refusal, 4 verification failure, 5 input or output failure, 6 end of input without a
 trailer, 7 internal error, 8 `sink_exhausted` (the stream exceeds `--max-bytes`;
-`sink_exhausted` at `docker/pineforge_sink_finalize.py:104-113`). Its output is provisional until
+`sink_exhausted` at `docker/pineforge_sink_finalize.py:115-123`). Its output is provisional until
 exit 0, and a consumer must discard everything it received on exit 3 to 8 (`PROVISIONAL` at
 `docker/pineforge_sink_finalize.py:24-26`). The failure catalog maps exit 8 to `report_sink_failed`
 with `reason` `sink_exhausted` (`sink_exhausted` at `docker/run_failure_codes.json:1105`). A sink failure carries code `report_sink_failed` and a `reason`
@@ -345,7 +345,7 @@ store; the part that spills grows in the scratch backing.
 | Order book | 4,096 rows | See the drain plateau below | Older rows |
 | Command-store resident prefix / read cache | Fixed K = `3 * (kCacheBytes + kMaxSlots * sizeof(ScratchPageId) + kFixedObjectBytes)` = 202,752 B (198 KiB) per run at the default: three 64 KiB page buffers, a table allocated with the slot count for the wrapped backing's page size (K is charged at the worst case of 512-byte pages: 128 eight-byte slot keys, 1 KiB), and a 1 KiB fixed object (`CachedScratchBacking::kCommandScratchMemoryBytes`, `src/command_scratch_cache.hpp:28`; `static_assert(sizeof(CachedScratchBacking)` at `src/command_scratch_cache.hpp:76`); pages larger than `kCacheBytes` (64 KiB at default) or smaller than 512 B bypass the buffer; the constant has no upper cap in the class (at 4 GiB the table is 8 Mi entries of 8 B, 64 MiB per store) | Counted in bytes; independent of extent and bars; replaces the previous read-cache allowance | Each disk store holds its prefix in the same buffer until its extent exceeds `kCacheBytes` (64 KiB at default), then spills the prefix once and reuses the buffer as a read cache. Attached arenas retain direct mapped admission |
 | Id-table read caches | A separate fixed 192 KiB of page bytes **per adapter, not per engine** (`IdTableReadCache::kAdapterCacheBytes`, `include/pineforge/detail/id_table_read_cache.hpp`): only the adapter opts in its cohort AVL and exit-rank AVL at 64 KiB each, and erased minima and consumed cycles at 32 KiB each (data/index sharing one allocation per pair store). Other table instances default to zero capacity and allocate nothing. Lines are 4 KiB; allocation is lazy, falls back to direct reads on allocation failure, and never grows. All slab and arena paths bypass allocation and cache lookup, including unjailed regular-file arenas and inherited sealed memfds | Plus a fixed cache control object per table instance, each with sixteen page/file tags, one owning pointer and a slot count (`sizeof(IdTableReadCache)`); no per-id metadata. One adapter owns each enabled cache; no sharing across threads. Every write still reaches the file immediately; overlapping writes invalidate before I/O, appends invalidate from the old tail page onward, and index growth, clear, moves and backend changes invalidate all lines. Bound from constants, not a measurement | Not applicable (copy-in/copy-out reads over private disk files; formats and logical folds unchanged) |
-| Scratch files read through a bounded window | one 64 KiB window per file that enables it (`ScratchFile::kCacheBytes`, `include/pineforge/detail/scratch_file.hpp:40`) | Counted in bytes. It bounds the operating-system page cache the file pins (the kernel is asked to drop clean pages); it is not an engine heap cache | Not applicable |
+| Scratch files read through a bounded window | one 64 KiB window per file that enables it (`ScratchFile::kCacheBytes`, `include/pineforge/detail/scratch_file.hpp:166`) | Counted in bytes. It bounds the operating-system page cache the file pins (the kernel is asked to drop clean pages); it is not an engine heap cache | Not applicable |
 | Report sink writer | a fixed 64 KiB buffer; a record line may not exceed 1 MiB | Counted in bytes | The sink file or stream |
 | Position-tail read window | one fixed 64 KiB window | Counted in bytes | The position tail: a 30-byte footer plus the entry id per trade |
 | Cohort id table | Rows kept in memory: at most twice the rows left by the last spill pass, plus 64, plus the rows pinned by live exposure or an outstanding reference (the comment above `kMaxResidentCohorts` at `include/pineforge/detail/scratch_defaults.hpp:16`; the threshold is set in `DiskResidentIdTable::spill`, with the floor `kSpillFloor` of 64). That is not a bound in terms of live rows. In the bounded scratch (jailed) profile, admission also refuses a run that would hold more than 4,096 live (non-spillable) cohorts (`kMaxResidentCohorts`, `include/pineforge/detail/scratch_defaults.hpp:16`) with `scratch_capacity_exceeded`. The rows that hold an opening or live units are also tracked in an ordered set, one map node each. `DiskResidentIdTable::find` walks the disk AVL on every lookup, even for resident rows; those disk reads use the id-table page cache above. `exit_rank_keys_` is a separate plain `DiskIdTable`. The id-pair store's index file starts at 64 slots and doubles when it grows (`kInitialSlots` and `grow_index`, `include/pineforge/detail/id_pair_store.hpp`) | Not measured | The on-disk ordered tree |
