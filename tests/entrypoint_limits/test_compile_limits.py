@@ -232,10 +232,22 @@ def original_process_present(record):
 def pipe_read_bytes(result, role="driver"):
     endpoint = result.records[role]["stdout"]
     assert endpoint.startswith("pipe:["), endpoint
-    expression = re.compile(
-        r"read\(\d+<" + re.escape(endpoint) + r">,.*\)\s+=\s+(\d+)")
-    counts = [int(match.group(1)) for line in result.syscalls.splitlines()
-              if (match := expression.search(line))]
+    started = re.compile(r"^(?:\[pid\s+)?(\d+)\]?\s+read\(\d+<" + re.escape(endpoint) + r">,")
+    finished = re.compile(r"\)\s+=\s+(\d+)")
+    counts, split = [], set()
+    for line in result.syscalls.splitlines():
+        begin = started.search(line)
+        if begin and "<unfinished ...>" in line:
+            # strace -f prints a read that overlaps another process's syscall in two
+            # parts: the start here, the byte count on a later "resumed" line.
+            split.add(begin.group(1))
+        elif begin and (match := finished.search(line)):
+            counts.append(int(match.group(1)))
+        elif "<... read resumed>" in line:
+            pid = line.split(None, 1)[0]
+            if pid in split and (match := finished.search(line)):
+                split.discard(pid)
+                counts.append(int(match.group(1)))
     assert counts, "the syscall observer saw no reads from the compiler diagnostic pipe"
     return sum(counts)
 
