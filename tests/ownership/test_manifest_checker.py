@@ -546,6 +546,57 @@ class ManifestCheckerTests(unittest.TestCase):
         path.write_text(text.replace("struct PineStrategyConfig {", "struct PineStrategyConfig {\n    double new_value = 0.0;", 1), encoding="utf-8")
         self.reject("descriptor-fields", "PineStrategyConfig: declaration fields differ from manifest", copied_tree=True)
 
+    def native_order_descriptor_fixture(self, order_source):
+        sources = {
+            "include/pineforge/source/pine_adapter.hpp": (
+                "struct PineStrategyConfig {}; struct StrategyOverrides {}; "
+                "struct PineReplayRiskConfig {};"),
+            "include/pineforge/native_run_spec.hpp":
+                "enum class NativeRunSpecField { None };",
+            "include/pineforge/native_order.hpp": order_source,
+            "src/source/pine_value_admit_doors.hpp": "",
+            "include/pineforge/source/pine_strategy_host.hpp": "",
+            "include/pineforge/checked_settings.hpp": "struct Setting {};",
+            "include/pineforge/engine.hpp": "",
+            "include/pineforge/order_action.hpp":
+                "struct Transact { double signed_units; };",
+            "include/pineforge/execution.hpp": "struct Flatten {};",
+            "include/pineforge/detail/read_through_cache.hpp": (
+                "struct ReadThroughCacheStats { unsigned fixture_reads; "
+                "unsigned fixture_bytes; };"),
+            "include/pineforge/detail/cache_capacity.hpp":
+                "struct CacheCapacity { unsigned fixture_budget; };",
+            "include/pineforge/unmapped.hpp":
+                "struct UnmappedDescriptor { unsigned value; };",
+        }
+        return {file: ownership.Cpp(source, file) for file, source in sources.items()}
+
+    def test_native_order_descriptors_use_explicit_providers(self):
+        cpp_files = self.native_order_descriptor_fixture(
+            "struct ReadThroughCacheStats; struct CacheCapacity; "
+            "struct LocalDescriptor { double local_value; }; "
+            "struct Request { ReadThroughCacheStats* stats; CacheCapacity* capacity; "
+            "LocalDescriptor local; };")
+        actual = ownership.discover_descriptors(cpp_files)
+        for name, file, fields in (
+                ("ReadThroughCacheStats", "include/pineforge/detail/read_through_cache.hpp",
+                 ["fixture_reads", "fixture_bytes"]),
+                ("CacheCapacity", "include/pineforge/detail/cache_capacity.hpp",
+                 ["fixture_budget"]),
+                ("LocalDescriptor", "include/pineforge/native_order.hpp", ["local_value"]),
+                ("Request", "include/pineforge/native_order.hpp", ["stats", "capacity", "local"])):
+            with self.subTest(descriptor=name):
+                self.assertEqual(actual["native_order." + name],
+                                 {"file": file, "anchor": name, "fields": fields})
+
+    def test_native_order_descriptor_without_provider_is_rejected(self):
+        cpp_files = self.native_order_descriptor_fixture(
+            "struct UnmappedDescriptor; struct Request {};")
+        with self.assertRaises(ownership.InputError) as raised:
+            ownership.discover_descriptors(cpp_files)
+        self.assertEqual(str(raised.exception),
+                         "missing struct descriptor UnmappedDescriptor")
+
     def test_d4_independent_reconstruction_matches_manifest(self):
         self.assertEqual(manifest_schema(self.doc), emitted_schema(ROOT))
 

@@ -743,6 +743,20 @@ def _session_calendar_provenance(metadata) -> dict | None:
 # offsetof checks in src/c_abi.cpp; if any of these structs drift, the
 # library fails to compile.
 
+class CachePolicyEntryC(ctypes.Structure):
+    """Native C alignment; mirrors pf_cache_policy_entry_v1."""
+    _fields_ = [("kind", ctypes.c_uint32),
+                ("capacity_bytes", ctypes.c_uint64)]
+
+
+class CachePolicyC(ctypes.Structure):
+    """Caller-owned entries are copied by strategy_set_cache_policy_v1."""
+    _fields_ = [("struct_size", ctypes.c_uint32),
+                ("version", ctypes.c_uint32),
+                ("entry_count", ctypes.c_uint64),
+                ("entries", ctypes.POINTER(CachePolicyEntryC))]
+
+
 class BarC(ctypes.Structure):
     _fields_ = [
         ("open", ctypes.c_double),
@@ -2262,6 +2276,10 @@ class Strategy:
 
         L.strategy_free.argtypes = [ctypes.c_void_p]
         L.report_free.argtypes = [ctypes.POINTER(ReportC)]
+        if hasattr(L, "strategy_set_cache_policy_v1"):
+            L.strategy_set_cache_policy_v1.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(CachePolicyC)]
+            L.strategy_set_cache_policy_v1.restype = ctypes.c_int
         if hasattr(L, "strategy_closed_trade_entry_incarnation"):
             L.strategy_closed_trade_entry_incarnation.argtypes = [
                 ctypes.c_void_p, ctypes.c_int]
