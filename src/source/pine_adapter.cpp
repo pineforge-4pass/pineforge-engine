@@ -4422,7 +4422,8 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     if (!pine) return;
     const auto& core = as_native_consumer(*consumer).request_core();
     std::size_t members = 0;
-    for (const auto& roster : core.cohorts()) {
+    for (const auto& row : core.nonempty_cohorts()) {
+        const auto& roster = row.second;
         PF_ROSTER_PASS_WORK(roster_cohort_visits);
         members += roster.origins.size();
     }
@@ -4437,7 +4438,8 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     constexpr std::size_t kDirectScan = 64;
     if (members * (pine->pyramid_entries_.size() + core.live().size()) <= kDirectScan) {
         bool every_member_bound = true;
-        for (const auto& roster : core.cohorts()) {
+        for (const auto& row : core.nonempty_cohorts()) {
+            const auto& roster = row.second;
             PF_ROSTER_PASS_WORK(roster_cohort_visits);
             for (const auto& origin : roster.origins) {
                 const std::uint64_t incarnation = origin.incarnation;
@@ -4476,7 +4478,8 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     for (const auto& lot : pine->pyramid_entries_) lots.push_back(lot.entry_incarnation);
     std::sort(lots.begin(), lots.end());
     lots.erase(std::unique(lots.begin(), lots.end()), lots.end());
-    for (const auto& roster : core.cohorts()) {
+    for (const auto& row : core.nonempty_cohorts()) {
+        const auto& roster = row.second;
         PF_ROSTER_PASS_WORK(roster_cohort_visits);
         PINEFORGE_LOOKUP_INDEX_WORK("cohort_origin_roster", this, run_counter_, 1);
         for (const auto& origin : roster.origins)
@@ -4494,7 +4497,8 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
         }
     }
     auto& probe = scratch.lot_probe;
-    for (const auto& roster : core.cohorts()) {
+    for (const auto& row : core.nonempty_cohorts()) {
+        const auto& roster = row.second;
         PF_ROSTER_PASS_WORK(roster_cohort_visits);
         const auto& origins = roster.origins;
         if (origins.empty()) continue;

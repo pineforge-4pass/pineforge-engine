@@ -1860,6 +1860,11 @@ public:
     /// whose members have been removed. Walking allocates nothing and does
     /// no I/O; empty rows are synthesized from the dense handle sequence.
     CohortView cohorts() const noexcept;
+    /// Borrow the rosters holding origins, in ascending cohort-handle order.
+    /// No copies or allocation; use only until the next cohort mutation.
+    const std::map<std::uint64_t, CohortRoster>& nonempty_cohorts() const noexcept {
+        return cohorts_;
+    }
     /// The retained cohort-receipt window, in command order. Its absolute
     /// positions are [cohort_receipt_base(), cohort_receipt_count()). A
     /// standalone core retains all rows until its reader retires them; the
