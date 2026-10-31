@@ -90,8 +90,8 @@ void help() {
                  "         --report-jsonl=delta (mirror committed report deltas to stdout)\n"
                  "         --ratio-interval K (positive; default 1 keeps exact ratios at every input)\n"
                  "         --status-file PATH --status-interval 1 (seconds, 1..300)\n"
-                 "         --feed-idle-timeout 15 --feed-message-timeout 15 (seconds)\n"
-                 "           stdin: 0 = no limit, no upper cap; network feeds: 1..300\n"
+                 "         --feed-idle-timeout S --feed-message-timeout S (seconds)\n"
+                 "           stdin: default 0 = no limit, no upper cap; network/file feeds: default 15, 1..300\n"
                  "         --control-dir PATH --max-ledger-bytes N (0 disables budget)\n"
                  "         --ledger-unbounded (explicit unlimited service ledger)\n"
                  "JSONL: {\"type\":\"tick\",\"ts\":60000,\"seq\":1,\"price\":100,\"qty\":1}\n"
@@ -279,6 +279,10 @@ Config args(int argc, char **argv) {
     }
     if (!c.feed_url.empty() && seen.count("--feed"))
         throw std::runtime_error("choose feed or feed-url");
+    if (c.feed_url.empty() && c.feed == "-") {
+        if (!seen.count("--feed-idle-timeout")) c.feed_idle_timeout = 0;
+        if (!seen.count("--feed-message-timeout")) c.feed_message_timeout = 0;
+    }
     const auto validate_feed_timeout = [&](const char* flag, std::uint64_t seconds) {
         if ((!c.feed_url.empty() || c.feed != "-") && (!seconds || seconds > 300))
             throw std::runtime_error(std::string(flag) + " must be 1..300 seconds" +

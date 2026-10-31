@@ -7,6 +7,22 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- **Default change, user-visible:** `pineforge-live run --feed -` (the stdin
+  feed) no longer ends a run by itself after 15 seconds without data or 15
+  seconds to complete a line. With neither flag given, `--feed-idle-timeout`
+  and `--feed-message-timeout` now default to 0, meaning no limit, so a quiet
+  market is not an error; the run ends when stdin closes or the process is
+  stopped. A caller that relied on the 15 second default to end a run must
+  close stdin or pass an explicit value. A set value still ends intake: for
+  stdin the flags accept 0 (no limit) and any positive number of seconds (the
+  300 second upper bound is gone); network feeds (`--feed-url`, HTTP and
+  WebSocket) and local files keep the default of 15 and the 1 to 300 range, and
+  refuse 0 with a message naming the flag. The stdin idle clock no longer counts
+  the engine's own processing time: a long consume pass (a sanitizer build, a
+  slow report consumer) is not idle, and a partial line is measured from its
+  first byte or from the end of the pass that precedes it, so a sender that
+  dribbles bytes cannot keep an unfinished line alive past a set message
+  timeout.
 - The runner no longer refuses more than 256 symbols or total extra feeds in a
   `--symbol-feeds` index, and the two request-feed inventory readers (the
   runner's and `bind_compiled_inventory.py`) no longer refuse an inventory over

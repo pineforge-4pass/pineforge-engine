@@ -247,5 +247,48 @@ def main():
             print(f"PASS stdin {name}: {expected_count} committed inputs", flush=True)
 
 
+        ledger = root / "default-gap.sqlite"
+        default_command = command(ledger, silent_warmup)
+        for flag in ("--feed-idle-timeout", "--feed-message-timeout"):
+            offset = default_command.index(flag)
+            default_command[offset:offset + 2] = []
+        process = subprocess.Popen(default_command, stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            process.stdin.write(json.dumps(dict(type="bar", bar=bars[30])) + "\n")
+            process.stdin.flush()
+            readable, _, _ = select.select([process.stdout], [], [], 180)
+            assert readable, "default stdin produced no stdout within 180 seconds"
+            committed = json.loads(process.stdout.readline())
+            assert committed["schema_version"] == "pineforge-native-report/v1", committed
+            assert committed["input_cursor"] == 1, committed
+            # Default-stdin silence stimulus: hold stdin open for 17 s after
+            # the committed report, crossing the previous 15 s default.
+            time.sleep(17)
+            assert not process.stdin.closed
+            assert process.poll() is None, ("default stdin bound ended intake", process.poll())
+            process.stdin.write(json.dumps(dict(type="bar", bar=bars[31])) + "\n")
+            process.stdin.flush()
+            process.stdin.close()
+            process.stdin = None
+            output, errors = process.communicate()
+            assert process.returncode == 0, (process.returncode, output, errors)
+            documents = [json.loads(line) for line in output.splitlines()]
+            assert len(documents) == 2, documents
+            assert documents[0]["schema_version"] == "pineforge-native-report/v1", documents[0]
+            assert documents[0]["input_cursor"] == 2, documents[0]
+            assert documents[1]["inputs_committed"] == 2, documents[1]
+            assert documents[1]["inputs_processed"] == 2, documents[1]
+            with sqlite3.connect(ledger) as database:
+                assert database.execute("SELECT count(*) FROM inputs").fetchone() == (2,)
+                assert database.execute(
+                    "SELECT max(input_cursor) FROM report_snapshots").fetchone() == (2,)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            process.communicate()
+        print("PASS stdin default-gap: no timeout flags, 17 s silence, two committed inputs", flush=True)
+
+
 if __name__ == "__main__":
     main()
