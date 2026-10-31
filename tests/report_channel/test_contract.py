@@ -9,11 +9,30 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 from host import (
-    ROOT, clean_environment, encoded, launch, reference, require_supervisor,
-    sink_receipt, sink_wire, validator_observer,
+    ROOT, clean_environment, encoded, fixture_subreaper, launch, process_info,
+    reference, require_supervisor, sink_receipt, sink_wire, validator_observer,
+)
+
+
+KNOBS = (
+    ("--report-max-bytes", "PINEFORGE_REPORT_MAX_BYTES", "report_bytes", 4096),
+    ("--diagnostic-max-bytes", "PINEFORGE_DIAGNOSTIC_MAX_BYTES", "diagnostic_bytes", 64),
+    ("--channel-wall-ms", "PINEFORGE_CHANNEL_WALL_MS", "wall_ms", 10000),
+    ("--channel-stall-ms", "PINEFORGE_CHANNEL_STALL_MS", "stall_ms", 2000),
+)
+INACTIVE_CONTROLS = (
+    *((flag, "0") for flag, _, _, _ in KNOBS),
+    ("--terminal-status-fd", "9"), ("--attempt-id", "0"),
+    ("--host-attestation-fd", "9"), ("--test-only-host-attestation-fd", "9"),
+)
+INACTIVE_ENVIRONMENT = (
+    *(environment for _, environment, _, _ in KNOBS),
+    "PINEFORGE_TERMINAL_STATUS_FD", "PINEFORGE_REPORT_ATTEMPT_ID",
+    "PINEFORGE_REPORT_HOST_ATTESTATION_FD",
 )
 
 
@@ -78,6 +97,25 @@ class Contract(unittest.TestCase):
             self.assertEqual(set(entry), {"value", "measurement_state"}, msg=msg)
             if entry["measurement_state"] == "unavailable":
                 self.assertIsNone(entry["value"], msg=msg)
+        domain = record["cleanup"]["domain_empty"]
+        if domain != {"value": True, "measurement_state": "measured"}:
+            self.assertFalse(record["complete"], msg=msg)
+            self.assertNotEqual(record["exit_class"], "success", msg=msg)
+        return record
+
+    def assert_fixture_delivery(self, capture, *, msg=None):
+        """Successful byte delivery is observable without certifying isolation."""
+        if msg is None:
+            msg = capture.failure_context()
+        record = self.assert_record(
+            capture, complete=False, exit_class="resource_refusal", exit_status=1, msg=msg)
+        self.assertIsNone(record["failure"], msg=msg)
+        self.assertEqual(record["cleanup"]["domain_empty"], {
+            "value": None, "measurement_state": "unavailable"}, msg=msg)
+        self.assertEqual(record["producer"]["exit_status"], 0, msg=msg)
+        self.assertIsNone(record["producer"]["signal"], msg=msg)
+        for name in ("candidate", "report", "diagnostic", "sink"):
+            self.assertTrue(record["channels"][name]["complete"], msg=f"{name}; {msg}")
         return record
 
     def refusal(self, capture, code, args, *, exit_class="input_refusal", status=2, msg=None):
@@ -101,8 +139,7 @@ class Contract(unittest.TestCase):
                     self.assertEqual(capture.report, baseline.stdout, msg=msg)
                     self.assertEqual(json.loads(capture.report)["summary"]["net_pnl"],
                                      closes[-1] - closes[0], msg=msg)
-                    record = self.assert_record(
-                        capture, complete=True, exit_class="success", exit_status=0, msg=msg)
+                    record = self.assert_fixture_delivery(capture, msg=msg)
                     self.assertIsNone(record["failure"], msg=msg)
                     self.assertEqual(record["producer"]["exit_status"], 0, msg=msg)
                     self.assertIsNone(record["producer"]["signal"], msg=msg)
@@ -116,14 +153,13 @@ class Contract(unittest.TestCase):
         baseline = reference(request)
         capture = launch(request, sink=True)
         msg = capture.failure_context()
-        self.assertEqual(capture.returncode, 0, msg=(
-            f"inherited-sink success requires the round-two K/S/V relay; {msg}"))
+        self.assertEqual(capture.returncode, 1, msg=(
+            f"the unisolated fixture must preserve the inherited-sink projection; {msg}"))
         self.assertEqual(capture.report, baseline.stdout, msg=msg)
         self.assertEqual(capture.sink, baseline.sink, msg=msg)
         self.assertEqual(capture.sink, sink_wire(request["closes"]), msg=msg)
         self.assertNotIn("trades", json.loads(capture.report), msg=msg)
-        record = self.assert_record(
-            capture, complete=True, exit_class="success", exit_status=0, msg=msg)
+        record = self.assert_fixture_delivery(capture, msg=msg)
         self.assertTrue(record["sink_verification"]["complete"], msg=msg)
         self.assertGreater(len(capture.sink), 0, msg=msg)
         self.assertEqual(record["channels"]["sink"]["written_bytes"], len(capture.sink),
@@ -141,8 +177,7 @@ class Contract(unittest.TestCase):
                 self.assertEqual(capture.report, baseline.stdout, msg=msg)
                 self.assertEqual(json.loads(capture.report)["summary"]["net_pnl"],
                                  closes[-1] - closes[0], msg=msg)
-                self.assert_record(capture, complete=True, exit_class="success", exit_status=0,
-                                   msg=msg)
+                self.assert_fixture_delivery(capture, msg=msg)
 
     def test_t1_owned_runner_failure_writer_preserves_failure_bytes(self):
         request = {"failure_writer": {
@@ -161,13 +196,14 @@ class Contract(unittest.TestCase):
     def test_t2_defaults_and_not_started_usage(self):
         capture = launch()
         msg = capture.failure_context()
-        record = self.assert_record(capture, complete=True, exit_class="success", exit_status=0,
-                                    msg=msg)
+        record = self.assert_fixture_delivery(capture, msg=msg)
         limits = record["limits"]
-        for name, expected in (("report_bytes", 67108864), ("diagnostic_bytes", 1048576),
-                               ("wall_ms", 600000), ("stall_ms", 5000)):
+        # The wire uses null effective limits for every unlimited dimension.
+        for _, _, name, _ in KNOBS:
             self.assertEqual(limits[name], {
-                "requested": None, "granted": expected, "effective": expected}, msg=msg)
+                "requested": None, "granted": None, "effective": None}, msg=msg)
+        for name in ("report", "candidate", "diagnostic"):
+            self.assertIsNone(record["channels"][name]["limit_bytes"], msg=msg)
         self.assertEqual(limits["terminal_bytes"], 65536, msg=msg)
         self.assertEqual(limits["stop_grace_ms"], 1000, msg=msg)
         self.assertEqual(limits["relay_queue_bytes"], 65536, msg=msg)
@@ -186,9 +222,9 @@ class Contract(unittest.TestCase):
     def test_t2_environment_activation_and_cli_version_precedence(self):
         capture = launch(activate=False, environment={
             "PINEFORGE_REPORT_CHANNEL": "supervised/v1"})
-        self.assert_record(capture, complete=True, exit_class="success", exit_status=0)
+        self.assert_fixture_delivery(capture)
         capture = launch(environment={"PINEFORGE_REPORT_CHANNEL": "supervised/unknown"})
-        self.assert_record(capture, complete=True, exit_class="success", exit_status=0)
+        self.assert_fixture_delivery(capture)
 
     def test_t2_direct_runner_parser_failure_uses_candidate_boundary(self):
         argv = ["--an-unrecognized-runner-option"]
@@ -224,49 +260,127 @@ class Contract(unittest.TestCase):
                      exit_class="resource_refusal", status=1, msg=msg)
         self.assertNotIn(b"PRODUCER_STARTED", capture.diagnostic, msg=msg)
 
-    def test_t2_zero_host_grant_refuses_before_producer(self):
-        capture = launch({"stdout": encoded(b"PRODUCER_STARTED")}, grants={
-            "report_bytes": 0, "diagnostic_bytes": 1048576,
-            "wall_ms": 600000, "stall_ms": 5000})
-        msg = capture.failure_context()
-        self.refusal(capture, "run_isolation_unavailable", {"reason": "policy"},
-                     exit_class="resource_refusal", status=1, msg=msg)
-        self.assertNotIn(b"PRODUCER_STARTED", capture.diagnostic, msg=msg)
+    def test_t2_zero_or_absent_host_grants_are_unlimited(self):
+        diagnostic = (b"unlimited\x00\xff" * 100000) + b"tail"
+        request = {"stdout": encoded(diagnostic)}
+        expected = reference(request)
+        zeros = {field: 0 for _, _, field, _ in KNOBS}
+        zero_options = tuple(part for flag, _, _, _ in KNOBS for part in (flag, "0"))
+        for grants in ({}, zeros):
+            for options in ((), zero_options):
+                with self.subTest(grants=grants, options=options):
+                    capture = launch(request, grants=grants, options=options)
+                    msg = capture.failure_context()
+                    record = self.assert_fixture_delivery(capture, msg=msg)
+                    # The reference stdout begins with raw diagnostics.
+                    self.assertEqual(capture.report, expected.stdout[len(diagnostic):], msg=msg)
+                    self.assertEqual(capture.diagnostic, diagnostic, msg=msg)
+                    for _, _, field, _ in KNOBS:
+                        self.assertEqual(record["limits"][field], {
+                            "requested": 0 if options else None,
+                            "granted": grants.get(field), "effective": None}, msg=msg)
+                    for name in ("candidate", "report", "diagnostic"):
+                        self.assertIsNone(record["channels"][name]["limit_bytes"], msg=msg)
+                    self.assertEqual(record["channels"]["diagnostic"]["observed_bytes"],
+                                     len(diagnostic), msg=msg)
+                    self.assertEqual(record["report_charged_bytes"],
+                                     len(expected.stdout) - len(diagnostic), msg=msg)
+
+    def test_t2_host_grant_range_and_types(self):
+        for value in (0, 9007199254740990):
+            with self.subTest(valid_report_grant=value):
+                capture = launch(grants={"report_bytes": value})
+                msg = capture.failure_context()
+                record = self.assert_fixture_delivery(capture, msg=msg)
+                self.assertEqual(record["limits"]["report_bytes"], {
+                    "requested": None, "granted": value, "effective": value or None}, msg=msg)
+        for grants in ({"report_bytes": -1}, {"wall_ms": True}, {"stall_ms": 1.0},
+                       {"diagnostic_bytes": 9007199254740991}, {"unknown": 0}):
+            with self.subTest(grants=grants):
+                capture = launch({"stdout": encoded(b"PRODUCER_STARTED")}, grants=grants)
+                msg = capture.failure_context()
+                record = self.refusal(capture, "run_isolation_unavailable", {"reason": "policy"},
+                                      exit_class="resource_refusal", status=1, msg=msg)
+                self.assertIsNone(record["producer"]["stage"], msg=msg)
+                self.assertNotIn(b"PRODUCER_STARTED", capture.diagnostic, msg=msg)
+
+    def inactive_control_results(self, runner):
+        for name, value in INACTIVE_CONTROLS:
+            result = subprocess.run(
+                [sys.executable, "-B", str(runner), name, value],
+                capture_output=True, env=clean_environment(), timeout=10, check=False)
+            yield name, result
+        for name in INACTIVE_ENVIRONMENT:
+            environment = clean_environment()
+            environment[name] = "0"
+            # Main succeeds on help. A missing environment dispatch cannot
+            # masquerade as a missing-arguments usage refusal.
+            result = subprocess.run(
+                [sys.executable, "-B", str(runner), "--help"],
+                capture_output=True, env=environment, timeout=10, check=False)
+            yield name, result
+
+    def assert_dispatch_refusal(self, name, result):
+        msg = "channel dispatch refusal missing for " + name + "; " + json.dumps({
+            "terminal": None, "supervisor_wait_status": None,
+            "runner_wait_status": result.returncode, "report_bytes": repr(result.stdout),
+            "diagnostic_length_bytes": len(result.stderr),
+            "diagnostic_prefix": result.stderr[:4096].decode("utf-8", "replace"),
+        }, separators=(",", ":"))
+        expected_text = json.loads((ROOT / "docker/run_failure_codes.json").read_bytes())[
+            "codes"]["run_request_invalid"]["english"][0]
+        self.assertEqual(result.returncode, 2, msg=msg)
+        self.assertEqual(result.stderr, b"", msg=msg)
+        self.assertEqual(json.loads(result.stdout), {
+            "engine": "pineforge", "error": expected_text,
+            "code": "run_request_invalid", "args": {"option": "arguments"}}, msg=msg)
+        self.assertEqual(result.stdout.count(b"\n"), 1, msg=msg)
+        self.assertTrue(result.stdout.endswith(b"\n"), msg=msg)
 
     def test_t2_new_knobs_without_activation_are_usage_errors(self):
-        for name, value in (("--report-max-bytes", "0"), ("--diagnostic-max-bytes", "10"),
-                            ("--channel-wall-ms", "10"), ("--channel-stall-ms", "10"),
-                            ("--terminal-status-fd", "9")):
-            with self.subTest(name=name):
-                result = subprocess.run(
-                    [sys.executable, "-B", str(ROOT / "docker/run_json.py"), name, value],
-                    capture_output=True, env=clean_environment(), timeout=10, check=False)
-                msg = json.dumps({
-                    "terminal": None, "supervisor_wait_status": None,
-                    "runner_wait_status": result.returncode, "report_bytes": repr(result.stdout),
-                    "diagnostic_length_bytes": len(result.stderr),
-                    "diagnostic_prefix": result.stderr[:4096].decode("utf-8", "replace"),
-                }, separators=(",", ":"))
-                self.assertEqual(result.returncode, 2, msg=msg)
-                self.assertEqual(json.loads(result.stdout)["code"], "run_request_invalid", msg=msg)
-                self.assertEqual(json.loads(result.stdout)["args"], {"option": "arguments"}, msg=msg)
-        for name in ("PINEFORGE_REPORT_MAX_BYTES", "PINEFORGE_DIAGNOSTIC_MAX_BYTES",
-                     "PINEFORGE_CHANNEL_WALL_MS", "PINEFORGE_CHANNEL_STALL_MS",
-                     "PINEFORGE_TERMINAL_STATUS_FD"):
-            with self.subTest(environment=name):
-                environment = clean_environment()
-                environment[name] = "0"
-                result = subprocess.run(
-                    [sys.executable, "-B", str(ROOT / "docker/run_json.py")],
-                    capture_output=True, env=environment, timeout=10, check=False)
-                msg = json.dumps({
-                    "terminal": None, "supervisor_wait_status": None,
-                    "runner_wait_status": result.returncode, "report_bytes": repr(result.stdout),
-                    "diagnostic_length_bytes": len(result.stderr),
-                    "diagnostic_prefix": result.stderr[:4096].decode("utf-8", "replace"),
-                }, separators=(",", ":"))
-                self.assertEqual(result.returncode, 2, msg=msg)
-                self.assertEqual(json.loads(result.stdout)["code"], "run_request_invalid", msg=msg)
+        for name, result in self.inactive_control_results(ROOT / "docker/run_json.py"):
+            with self.subTest(control=name):
+                self.assert_dispatch_refusal(name, result)
+
+    def test_t2_inactive_knob_assertions_detect_removed_dispatch(self):
+        runner = ROOT / "docker/run_json.py"
+        original = runner.read_text(encoding="utf-8")
+        dispatch = (
+            '        if (any(token.partition("=")[0] in channel_flags for token in channel_tokens)\n'
+            '                or channel_environment.intersection(os.environ)):\n'
+            '            import pineforge_report_supervise\n'
+            '            return pineforge_report_supervise.main(\n'
+            '                pineforge_report_supervise.direct_arguments(tokens))\n'
+        )
+        self.assertEqual(original.count(dispatch), 1, "the real runner dispatch must be present")
+        with tempfile.TemporaryDirectory(prefix="pf-no-channel-dispatch-") as directory:
+            altered = Path(directory) / "run_json.py"
+            for sibling in runner.parent.iterdir():
+                if sibling != runner and sibling.suffix in (".py", ".json", ".def"):
+                    (altered.parent / sibling.name).symlink_to(sibling)
+            altered.write_text(original.replace(dispatch, "", 1), encoding="utf-8")
+            baseline = subprocess.run(
+                [sys.executable, "-B", str(altered), "--help"],
+                capture_output=True, env=clean_environment(), timeout=10, check=False)
+            self.assertEqual(baseline.returncode, 0, baseline.stderr.decode("utf-8", "replace"))
+            self.assertIn(b"--magnifier-samples", baseline.stdout)
+            self.assertEqual(baseline.stderr, b"")
+            tested = []
+            for name, result in self.inactive_control_results(altered):
+                with self.subTest(control=name):
+                    if name.startswith("--"):
+                        self.assertEqual(result.returncode, 2, result.stderr)
+                        self.assertIn(name.encode(), result.stderr)
+                        self.assertEqual(json.loads(result.stdout)["code"], "run_request_invalid")
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout, baseline.stdout)
+                        self.assertEqual(result.stderr, b"")
+                    with self.assertRaisesRegex(AssertionError, "channel dispatch refusal"):
+                        self.assert_dispatch_refusal(name, result)
+                    tested.append(name)
+            self.assertEqual(tested, [name for name, _ in INACTIVE_CONTROLS]
+                             + list(INACTIVE_ENVIRONMENT))
 
     def test_t3_duplicated_aliases_are_rejected_before_launch(self):
         for alias in ("report_diagnostic", "report_status", "diagnostic_status",
@@ -282,7 +396,7 @@ class Contract(unittest.TestCase):
                 else:
                     self.assertEqual(capture.packets, [], msg=msg)
         capture = launch()
-        self.assertEqual(capture.returncode, 0, msg=capture.failure_context())
+        self.assert_fixture_delivery(capture)
 
     def test_t3_wrong_direction_and_closed_sink_descriptors(self):
         for direction in ("report", "diagnostic", "sink"):
@@ -297,13 +411,180 @@ class Contract(unittest.TestCase):
         capture = launch(options=("--report-sink-fd", "2147483647"))
         self.refusal(capture, "run_request_invalid", {"option": "arguments"})
 
+    def test_inherited_data_flags_are_restored_on_every_outcome(self):
+        request = {"stdout": encoded(b"flag-check\x00\xff")}
+        candidate_bytes = len(reference({}).stdout)
+        cases = (
+            ("delivery", request, ()),
+            ("admission", request, ("--report-channel", "supervised/unknown")),
+            ("diagnostic-overflow", request, ("--diagnostic-max-bytes", "1")),
+            ("report-overflow", {}, ("--report-max-bytes", str(candidate_bytes - 1))),
+        )
+        for report_nonblocking in (False, True):
+            for diagnostic_nonblocking in (False, True):
+                for outcome, inputs, options in cases:
+                    with self.subTest(report_nonblocking=report_nonblocking,
+                                      diagnostic_nonblocking=diagnostic_nonblocking, outcome=outcome):
+                        capture = launch(
+                            inputs, options=options,
+                            grants={field: 9007199254740990 for _, _, field, _ in KNOBS},
+                            endpoint_nonblocking=(report_nonblocking, diagnostic_nonblocking))
+                        msg = capture.failure_context()
+                        self.assertEqual(set(capture.flags_before), {"report", "diagnostic"}, msg=msg)
+                        self.assertEqual(set(capture.flags_after), {"report", "diagnostic"}, msg=msg)
+                        for name, nonblocking in (
+                                ("report", report_nonblocking), ("diagnostic", diagnostic_nonblocking)):
+                            self.assertEqual(bool(capture.flags_before[name] & os.O_NONBLOCK),
+                                             nonblocking, msg=msg)
+                            self.assertEqual(capture.flags_after[name], capture.flags_before[name], msg=msg)
+                        if outcome == "delivery":
+                            self.assert_fixture_delivery(capture, msg=msg)
+                            self.assertEqual(capture.diagnostic, b"flag-check\x00\xff", msg=msg)
+                        elif outcome == "admission":
+                            self.refusal(capture, "run_request_invalid", {"option": "arguments"}, msg=msg)
+                        elif outcome == "diagnostic-overflow":
+                            self.refusal(capture, "diagnostic_budget_exceeded", {
+                                "cap_bytes": 1, "used_bytes": 1, "requested_bytes": 1},
+                                exit_class="resource_refusal", status=1, msg=msg)
+                            self.assertEqual(capture.diagnostic, b"f", msg=msg)
+                        else:
+                            self.refusal(capture, "report_budget_exceeded", {
+                                "channel": "json", "cap_bytes": candidate_bytes - 1,
+                                "used_bytes": candidate_bytes - 1, "requested_bytes": 1},
+                                exit_class="resource_refusal", status=1, msg=msg)
+                            self.assertEqual(capture.report, b"", msg=msg)
+
+    def test_inherited_alias_flags_are_restored_after_admission(self):
+        for nonblocking in (False, True):
+            with self.subTest(nonblocking=nonblocking):
+                capture = launch(alias="report_diagnostic",
+                                 endpoint_nonblocking=(nonblocking, nonblocking))
+                msg = capture.failure_context()
+                self.refusal(capture, "run_request_invalid", {"option": "arguments"}, msg=msg)
+                self.assertEqual(set(capture.flags_before), {"report", "diagnostic"}, msg=msg)
+                self.assertEqual(set(capture.flags_after), {"report", "diagnostic"}, msg=msg)
+                self.assertEqual(capture.flags_before["report"], capture.flags_before["diagnostic"],
+                                 msg=msg)
+                for name in ("report", "diagnostic"):
+                    self.assertEqual(bool(capture.flags_before[name] & os.O_NONBLOCK),
+                                     nonblocking, msg=msg)
+                    self.assertEqual(capture.flags_after[name], capture.flags_before[name], msg=msg)
+
+    def wait_fixture_child(self, pid, msg):
+        end = time.monotonic() + 1
+        while True:
+            reaped, status = os.waitpid(pid, os.WNOHANG)
+            if reaped:
+                self.assertEqual(reaped, pid, msg=msg)
+                return status
+            self.assertLess(time.monotonic(), end,
+                            msg=f"fixture child still present: {process_info(pid)}; {msg}")
+            time.sleep(0.01)
+
+    def cleanup_fixture_child(self, state_path):
+        if not state_path.exists():
+            return
+        identities = json.loads(state_path.read_text())
+        pid = identities["child"]
+        if process_info(pid) is not None:
+            try:
+                os.killpg(identities["leader"], signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            end = time.monotonic() + 2
+            while process_info(pid) is not None:
+                try:
+                    os.waitpid(pid, os.WNOHANG)
+                except ChildProcessError:
+                    pass  # Adoption can follow the leader's final exit.
+                if time.monotonic() >= end:
+                    raise AssertionError(f"TEST cleanup could not reap {process_info(pid)}")
+                time.sleep(0.01)
+
+    def test_diagnostic_refusal_stops_descendant_after_leader_exit(self):
+        with tempfile.TemporaryDirectory(prefix="pf-diagnostic-descendant-") as directory, fixture_subreaper():
+            state = Path(directory) / "child.json"
+            progress = Path(directory) / "after-leader"
+            try:
+                capture = launch({
+                    "diagnostic_child_state": str(state),
+                    "diagnostic_child_progress": str(progress),
+                }, grants={"report_bytes": 65536, "diagnostic_bytes": 65536,
+                           "wall_ms": 60000, "stall_ms": 1000},
+                   options=("--report-max-bytes", "65536", "--diagnostic-max-bytes", "64",
+                            "--channel-wall-ms", "60000", "--channel-stall-ms", "1000"))
+                msg = capture.failure_context()
+                identities = json.loads(state.read_text())
+                self.assertLess(capture.elapsed_seconds, 5, msg=msg)
+                record = self.refusal(capture, "diagnostic_budget_exceeded", {
+                    "cap_bytes": 64, "used_bytes": 64, "requested_bytes": 1},
+                    exit_class="resource_refusal", status=1, msg=msg)
+                self.assertEqual(record["producer"]["signal"], signal.SIGTERM, msg=msg)
+                self.assertEqual(record["channels"]["diagnostic"]["observed_bytes"], 65, msg=msg)
+                self.assertEqual(capture.diagnostic, (b"diagnostic child continues\n" * 3)[:64], msg=msg)
+                status = self.wait_fixture_child(identities["child"], msg)
+                self.assertTrue(os.WIFSIGNALED(status), msg=msg)
+                self.assertEqual(os.WTERMSIG(status), signal.SIGKILL, msg=msg)
+                self.assertIsNone(process_info(identities["child"]), msg=msg)
+                self.assertTrue(progress.exists(), msg=f"child never attempted D after U exited; {msg}")
+                self.assertTrue(any(
+                    sample["child"] is not None
+                    and sample["child"]["group"] == identities["leader"]
+                    and sample["child"]["state"] != "Z" and sample["leader"] is None
+                    for sample in capture.descendant_samples), msg=msg)
+            finally:
+                self.cleanup_fixture_child(state)
+
+    def test_diagnostic_drain_is_bounded_after_leader_exit(self):
+        with tempfile.TemporaryDirectory(prefix="pf-diagnostic-drain-") as directory, fixture_subreaper():
+            state = Path(directory) / "child.json"
+            progress = Path(directory) / "after-leader"
+            try:
+                capture = launch({
+                    "diagnostic_child_state": str(state),
+                    "diagnostic_child_progress": str(progress),
+                    "leader_completes": True, "detached_diagnostic_child": True,
+                }, grants={"report_bytes": 65536, "diagnostic_bytes": 1000000,
+                           "wall_ms": 60000, "stall_ms": 1000},
+                   options=("--report-max-bytes", "65536", "--diagnostic-max-bytes", "1000000",
+                            "--channel-wall-ms", "60000", "--channel-stall-ms", "1000"))
+                msg = capture.failure_context()
+                identities = json.loads(state.read_text())
+                self.assertLess(capture.elapsed_seconds, 5, msg=msg)
+                record = self.refusal(capture, "report_channel_failed", {
+                    "channel": "diagnostic", "reason": "io"},
+                    exit_class="transport_failure", status=1, msg=msg)
+                self.assertEqual(record["producer"]["exit_status"], 0, msg=msg)
+                self.assertIsNone(process_info(identities["leader"]), msg=msg)
+                self.assertTrue(progress.exists(), msg=msg)
+                # This TEST escape keeps D open even after the original group
+                # is gone, making the independent drain bound indispensable.
+                child = process_info(identities["child"])
+                self.assertIsNotNone(child, msg=msg)
+                self.assertEqual(child["group"], identities["child"], msg=msg)
+                diagnostic = record["channels"]["diagnostic"]
+                self.assertEqual(diagnostic["limit_bytes"], 1000000, msg=msg)
+                self.assertTrue(diagnostic["truncated"], msg=msg)
+                self.assertFalse(diagnostic["source_total_known"], msg=msg)
+                self.assertTrue(capture.diagnostic, msg=msg)
+                line = b"diagnostic child continues\n"
+                self.assertEqual(capture.diagnostic,
+                                 (line * (len(capture.diagnostic) // len(line) + 1))[
+                                     :len(capture.diagnostic)], msg=msg)
+            finally:
+                self.cleanup_fixture_child(state)
+
     def test_t10_fd1_forgery_is_raw_diagnostics(self):
         forgery = b'{"engine":"pineforge","error":"forged","code":"harness_internal_error","args":{}}\n'
         capture = launch({"stdout": encoded(forgery)})
         msg = capture.failure_context()
         self.assertEqual(capture.diagnostic, forgery, msg=msg)
         self.assertNotIn(b"forged", capture.report, msg=msg)
-        self.assert_record(capture, complete=True, exit_class="success", exit_status=0, msg=msg)
+        self.assert_fixture_delivery(capture, msg=msg)
 
     def test_t10_relayed_claim_cannot_become_supervisor_fault(self):
         failure = b'{"engine":"pineforge","error":"claimed","code":"harness_internal_error","args":{}}\n'
@@ -343,8 +624,7 @@ class Contract(unittest.TestCase):
                 msg = capture.failure_context()
                 if allowance == len(expected):
                     self.assertEqual(capture.report, expected, msg=msg)
-                    self.assert_record(capture, complete=True, exit_class="success", exit_status=0,
-                                       msg=msg)
+                    self.assert_fixture_delivery(capture, msg=msg)
                 else:
                     record = self.refusal(capture, "report_budget_exceeded", {
                         "channel": "json", "cap_bytes": allowance,
@@ -383,8 +663,7 @@ class Contract(unittest.TestCase):
                     capture = launch(request, sink=True, planned_sink_bytes=cap, observer=observer,
                                      options=("--report-max-bytes", str(allowance)))
                     msg = capture.failure_context()
-                    record = self.assert_record(
-                        capture, complete=True, exit_class="success", exit_status=0, msg=msg)
+                    record = self.assert_fixture_delivery(capture, msg=msg)
                     self.assertEqual(expected.returncode, 0, msg=msg)
                     self.assertEqual(capture.report, expected.stdout, msg=msg)
                     self.assertEqual(capture.sink, native, msg=msg)
@@ -392,6 +671,10 @@ class Contract(unittest.TestCase):
                     self.assertEqual(capture.finalizer_receipt(),
                                      sink_receipt(native, complete=True, equity_count=len(closes)),
                                      msg=msg)
+                    arguments = capture.finalizer_arguments()
+                    self.assertEqual(arguments.count(b"--max-bytes"), 1, msg=msg)
+                    self.assertEqual(arguments[arguments.index(b"--max-bytes") + 1],
+                                     str(cap).encode(), msg=msg)
                     self.assertEqual(len([event for event in capture.validator_events
                                           if event[:1] == b"S"]), 1, msg=msg)
                     logical = hashlib.sha256(
@@ -418,7 +701,7 @@ class Contract(unittest.TestCase):
                     job = record["usage"]["job"]["resources"]
                     for name, used, limit in (
                             ("report_bytes", allowance, allowance), ("sink_bytes", cap, cap),
-                            ("diagnostic_bytes", len(b"native\x00\xff"), 1048576)):
+                            ("diagnostic_bytes", len(b"native\x00\xff"), None)):
                         self.assertEqual(job[name]["used"], used, msg=msg)
                         self.assertEqual(job[name]["limit"], limit, msg=msg)
                         self.assertEqual(job[name]["state"], "measured", msg=msg)
@@ -532,8 +815,7 @@ class Contract(unittest.TestCase):
                     self.assertLess(len(native), allowance, msg=msg)
                     self.assertLess(len(expected), allowance, msg=msg)
                     if allowance == len(native) + len(expected):
-                        record = self.assert_record(
-                            capture, complete=True, exit_class="success", exit_status=0, msg=msg)
+                        record = self.assert_fixture_delivery(capture, msg=msg)
                         self.assertEqual(capture.report, expected, msg=msg)
                         self.assertEqual(capture.sink, native, msg=msg)
                         self.assertEqual(record["report_charged_bytes"], allowance, msg=msg)
@@ -600,7 +882,7 @@ class Contract(unittest.TestCase):
         capture = launch(
             {"inherited_sink": True, "closes": [9, 14, 11],
              "candidate_before_sink_close": True, "hold_sink_open_ms": 10000},
-            sink=True, options=("--channel-wall-ms", "3000"))
+            sink=True, options=("--channel-wall-ms", "3000", "--report-max-bytes", "65536"))
         msg = capture.failure_context()
         record = self.refusal(capture, "report_channel_failed", {
             "channel": "candidate", "reason": "protocol"},
@@ -611,7 +893,48 @@ class Contract(unittest.TestCase):
         self.assertEqual(candidate["accepted_bytes"], 0, msg=msg)
         self.assertFalse(candidate["source_total_known"], msg=msg)
         self.assertTrue(candidate["truncated"], msg=msg)
-        self.assertLessEqual(record["report_charged_bytes"], 67108864, msg=msg)
+        self.assertLessEqual(record["report_charged_bytes"], 65536, msg=msg)
+
+    def test_t12_unlimited_file_finalizer_omits_cap(self):
+        request = {"closes": [8, 13, 11, 17], "inherited_sink": True}
+        native = sink_wire(request["closes"])
+        expected = reference(request)
+        zero_options = tuple(part for flag, _, _, _ in KNOBS for part in (flag, "0"))
+        with validator_observer() as observer:
+            for grants, options, plan in (
+                    ({}, (), None),
+                    ({field: 0 for _, _, field, _ in KNOBS}, zero_options, None),
+                    ({}, (), len(native))):
+                with self.subTest(grants=grants, options=options, plan=plan):
+                    capture = launch(
+                        request, sink=True, grants=grants, options=options,
+                        planned_sink_bytes=plan, observer=observer)
+                    msg = capture.failure_context()
+                    record = self.assert_fixture_delivery(capture, msg=msg)
+                    self.assertEqual(expected.returncode, 0, msg=msg)
+                    self.assertEqual(capture.report, expected.stdout, msg=msg)
+                    self.assertEqual(capture.sink, native, msg=msg)
+                    self.assertEqual(record["report_charged_bytes"],
+                                     len(native) + len(expected.stdout), msg=msg)
+                    self.assertIsNone(record["limits"]["report_bytes"]["effective"], msg=msg)
+                    self.assertIsNone(record["limits"]["sink_bytes"], msg=msg)
+                    arguments = capture.finalizer_arguments()
+                    self.assertNotIn(b"--max-bytes", arguments, msg=msg)
+                    self.assertFalse(any(event[:1] == b"P" for event in capture.validator_events),
+                                     msg=msg)
+                    self.assertEqual(capture.finalizer_receipt(),
+                                     sink_receipt(native, complete=True,
+                                                  equity_count=len(request["closes"])), msg=msg)
+                    self.assertEqual(record["sink_verification"]["exit_status"], 0, msg=msg)
+                    self.assertTrue(record["sink_verification"]["complete"], msg=msg)
+                    sink = record["channels"]["sink"]
+                    self.assertIsNone(sink["limit_bytes"], msg=msg)
+                    for key in ("observed_bytes", "accepted_bytes", "written_bytes"):
+                        self.assertEqual(sink[key], len(native), msg=msg)
+                    self.assertEqual(sink["accepted_sha256"], hashlib.sha256(native).hexdigest(),
+                                     msg=msg)
+                    self.assertEqual(sink["sha256"], hashlib.sha256(native).hexdigest(), msg=msg)
+                    self.assertIsNone(record["channels"]["candidate"]["limit_bytes"], msg=msg)
 
     def test_t17_runner_startup_failure_closes_private_sink_before_candidate(self):
         argv = ["--an-unrecognized-runner-option"]
@@ -700,47 +1023,91 @@ class Contract(unittest.TestCase):
         self.assertIsNone(record["producer"]["failure"], msg=msg)
         self.assertTrue(record["producer"]["failure_claim_omitted"], msg=msg)
 
-    def test_t31_new_zero_resolves_to_host_grant_and_positive_is_exact(self):
+    def test_t31_positive_host_grants_are_optional_constraints(self):
         grants = {"report_bytes": 4096, "diagnostic_bytes": 64,
                   "wall_ms": 10000, "stall_ms": 2000}
-        knobs = (("--report-max-bytes", "report_bytes"),
-                 ("--diagnostic-max-bytes", "diagnostic_bytes"),
-                 ("--channel-wall-ms", "wall_ms"), ("--channel-stall-ms", "stall_ms"))
-        for flag, field in knobs:
-            other_options = tuple(part for other, _ in knobs if other != flag
-                                  for part in (other, "0"))
-            for value in ("0", str(grants[field] - 1)):
+        for flag, _, field, _ in KNOBS:
+            for value in (None, 0, grants[field] - 1, grants[field]):
                 with self.subTest(flag=flag, value=value):
-                    capture = launch(grants=grants, options=(*other_options, flag, value))
+                    capture = launch(grants=grants, options=() if value is None else (flag, str(value)))
                     msg = capture.failure_context()
-                    record = self.assert_record(
-                        capture, complete=True, exit_class="success", exit_status=0, msg=msg)
-                    self.assertEqual(record["limits"][field], {
-                        "requested": int(value), "granted": grants[field],
-                        "effective": grants[field] if value == "0" else int(value)}, msg=msg)
-            capture = launch(grants=grants,
-                             options=(*other_options, flag, str(grants[field] + 1)))
+                    record = self.assert_fixture_delivery(capture, msg=msg)
+                    for _, _, name, _ in KNOBS:
+                        requested = value if name == field else None
+                        self.assertEqual(record["limits"][name], {
+                            "requested": requested, "granted": grants[name],
+                            "effective": requested or grants[name]}, msg=msg)
+            capture = launch(grants=grants, options=(flag, str(grants[field] + 1)))
             msg = capture.failure_context()
             record = self.refusal(capture, "run_request_invalid", {"option": "arguments"}, msg=msg)
             self.assertIsNone(record["producer"]["stage"], msg=msg)
+            self.assertEqual(record["limits"][field], {
+                "requested": grants[field] + 1, "granted": grants[field], "effective": None},
+                msg=msg)
+
+    def test_t31_unlimited_grants_accept_exact_positive_requests(self):
+        for grants in ({}, {field: 0 for _, _, field, _ in KNOBS},
+                       {"report_bytes": 8192, "diagnostic_bytes": 0}):
+            for flag, environment, field, value in KNOBS:
+                for route in ("cli", "environment"):
+                    with self.subTest(grants=grants, flag=flag, route=route):
+                        capture = launch(
+                            grants=grants, options=(flag, str(value)) if route == "cli" else (),
+                            environment={environment: str(value)} if route == "environment" else {})
+                        msg = capture.failure_context()
+                        record = self.assert_fixture_delivery(capture, msg=msg)
+                        for _, _, name, _ in KNOBS:
+                            requested = value if name == field else None
+                            self.assertEqual(record["limits"][name], {
+                                "requested": requested, "granted": grants.get(name),
+                                "effective": requested or grants.get(name) or None}, msg=msg)
+
+    def test_t31_zero_environment_is_unlimited(self):
+        capture = launch(environment={environment: "0" for _, environment, _, _ in KNOBS})
+        msg = capture.failure_context()
+        record = self.assert_fixture_delivery(capture, msg=msg)
+        for _, _, field, _ in KNOBS:
+            self.assertEqual(record["limits"][field], {
+                "requested": 0, "granted": None, "effective": None}, msg=msg)
+
+    def test_t31_unlimited_stall_survives_delayed_diagnostic_reader(self):
+        diagnostic = bytes(range(256)) * 272 + b"z"
+        request = {"stderr": encoded(diagnostic)}
+        expected = reference(request)
+        zero_options = tuple(part for flag, _, _, _ in KNOBS for part in (flag, "0"))
+        for options in ((), zero_options):
+            with self.subTest(options=options):
+                # The host constrains its D pipe to 4096 bytes. U can exit
+                # with buffered input still behind S's fixed pending queue.
+                capture = launch(request, options=options, diagnostic_delay_ms=6000)
+                msg = capture.failure_context()
+                record = self.assert_fixture_delivery(capture, msg=msg)
+                self.assertGreaterEqual(capture.elapsed_seconds, 6, msg=msg)
+                self.assertEqual(expected.returncode, 0, msg=msg)
+                self.assertEqual(capture.report, expected.stdout, msg=msg)
+                self.assertEqual(capture.diagnostic, diagnostic, msg=msg)
+                self.assertEqual(expected.stderr, diagnostic, msg=msg)
+                for _, _, field, _ in KNOBS:
+                    self.assertEqual(record["limits"][field], {
+                        "requested": 0 if options else None, "granted": None, "effective": None},
+                        msg=msg)
+                self.assertEqual(record["channels"]["diagnostic"]["observed_bytes"],
+                                 len(diagnostic), msg=msg)
 
     def test_t31_cli_overrides_environment(self):
         capture = launch(options=("--report-max-bytes", "4096"), environment={
             "PINEFORGE_REPORT_MAX_BYTES": "invalid"})
         msg = capture.failure_context()
-        record = self.assert_record(capture, complete=True, exit_class="success", exit_status=0,
-                                    msg=msg)
+        record = self.assert_fixture_delivery(capture, msg=msg)
         self.assertEqual(record["limits"]["report_bytes"]["requested"], 4096, msg=msg)
 
     def test_t31_maximum_safe_ceiling_and_leading_zero(self):
-        grants = {"report_bytes": 9007199254740990, "diagnostic_bytes": 1048576,
-                  "wall_ms": 600000, "stall_ms": 5000}
+        grants = {"report_bytes": 9007199254740990}
         for value in ("9007199254740990", "00000000000000000000"):
             with self.subTest(value=value):
                 capture = launch(grants=grants, options=("--report-max-bytes", value))
                 msg = capture.failure_context()
-                record = self.assert_record(
-                    capture, complete=True, exit_class="success", exit_status=0, msg=msg)
+                record = self.assert_fixture_delivery(capture, msg=msg)
                 self.assertEqual(record["limits"]["report_bytes"], {
                     "requested": int(value), "granted": 9007199254740990,
                     "effective": 9007199254740990}, msg=msg)
@@ -764,8 +1131,7 @@ class Contract(unittest.TestCase):
                 msg = capture.failure_context()
                 self.assertEqual(capture.diagnostic, diagnostic[:allowance], msg=msg)
                 if allowance == len(diagnostic):
-                    self.assert_record(capture, complete=True, exit_class="success", exit_status=0,
-                                       msg=msg)
+                    self.assert_fixture_delivery(capture, msg=msg)
                 else:
                     record = self.refusal(capture, "diagnostic_budget_exceeded", {
                         "cap_bytes": allowance, "used_bytes": allowance, "requested_bytes": 1},

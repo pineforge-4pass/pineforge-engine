@@ -446,6 +446,20 @@ class OffIdentity(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "stdout bytes differ"):
             self.assert_identical(doctored, actual)
 
+    def test_off_identity_help_and_legacy_abbreviation(self):
+        reference, actual = self.compare(("--help",), "full", "legacy-help")
+        for result in (reference, actual):
+            self.assertEqual(result.exit_status, 0, result.detail())
+            self.assertTrue(result.stdout.startswith(b"usage:"), result.detail())
+            self.assertIn(b"--magnifier-samples", result.stdout)
+            self.assertEqual(result.stderr, b"")
+            self.assertIsNone(result.sink)
+        # This prefix identifies exactly one existing main-era argparse option.
+        request = (*self.requests[0], "--magnifier-sam", "3")
+        reference, actual = self.compare(request, "full", "legacy-abbreviation")
+        self.assert_success(reference, "full")
+        self.assert_success(actual, "full")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

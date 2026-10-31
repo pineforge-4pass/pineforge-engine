@@ -21,14 +21,27 @@ An ordinary invocation therefore refuses isolation before starting a producer,
 including when an arbitrary file purports to attest production isolation.
 --test-only-host-attestation-fd is expressly TEST infrastructure: a bounded
 pipe containing one pf-report-test-only-host-attestation/v1 object bound to
-attempt_id, test_only_unisolated_process_fixture=true, and positive grants.
+attempt_id, test_only_unisolated_process_fixture=true, and optional grants.
 It runs controlled process fixtures without claiming the deployed OS boundary.
 It must never be supplied by a billed/production launcher. The cleanup receipt
 leaves domain_empty unavailable; a PID or a reaped child is no domain proof.
+A delivered test fixture therefore has complete=false, failure=null and
+exit_class=resource_refusal, with the runtime-refusal facade exit 1 (4 for the
+entrypoint). Only measured-true domain_empty can permit complete=true.
+
+Unset and zero R/D/W/P requests impose no limit. A positive host grant is an
+optional constraint: omitted/zero requests resolve to it, positive requests
+above it are refused without clamping. An absent or zero host grant means
+unlimited, not a policy refusal. limits.*.effective is null for an unlimited
+dimension. Accounting continues and all polls use at most 50 ms slices.
 
 S counts/hashes K, relays through one 64 KiB queue to the real file finalizer,
 and publishes its private verified inode to N before R. N stays solely in S.
 Named sinks and the automatic internal snapshot handoff remain fail-closed.
+Until that handoff exists, supervised execution of a sink-capable module needs
+an external sink fd; its full projection is unavailable without one.
+With unlimited R, the FILE finalizer has no --max-bytes or overflow probes,
+including when a sink size was planned. A finite R retains the planned B.
 The synchronous deadline helpers handle attestation reads and stream publication.
 Metered ready reads, pipes, packet delivery and concurrent relay steps use
 nonblocking adapters with the same absolute Deadline and preserve every chunk.
@@ -70,10 +83,7 @@ TERMINAL_BYTES = 65536
 QUEUE_BYTES = 65536
 CLAIM_BYTES = 8192
 STOP_GRACE_MS = 1000
-DEFAULTS = {
-    "report_bytes": 67108864, "diagnostic_bytes": 1048576,
-    "wall_ms": 600000, "stall_ms": 5000,
-}
+DIMENSIONS = ("report_bytes", "diagnostic_bytes", "wall_ms", "stall_ms")
 CEILINGS = {
     "--report-max-bytes": ("PINEFORGE_REPORT_MAX_BYTES", "report_bytes"),
     "--diagnostic-max-bytes": ("PINEFORGE_DIAGNOSTIC_MAX_BYTES", "diagnostic_bytes"),
@@ -636,6 +646,49 @@ def stream_pair():
     return tuple(ends)
 
 
+def remaining_bytes(limit, used):
+    return None if limit is None else limit - used
+
+
+def read_size(allowance, room=QUEUE_BYTES):
+    return room if allowance is None else min(room, allowance + 1)
+
+
+class GroupStop:
+    """Stop owned sessions even after their leaders have been reaped."""
+    def __init__(self):
+        self.ends = {}
+
+    def request(self, process, now):
+        if process is None or process in self.ends:
+            return
+        self.ends[process] = now + STOP_GRACE_MS / 1000
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            self.ends[process] = None
+
+    def advance(self, now):
+        for process, end in self.ends.items():
+            if end is not None and now >= end:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                self.ends[process] = None
+
+    def pending(self):
+        return any(end is not None for end in self.ends.values())
+
+    def finish(self):
+        while self.pending():
+            self.advance(time.monotonic())
+            if self.pending():
+                time.sleep(min(0.05, max(
+                    0, min(end for end in self.ends.values() if end is not None)
+                    - time.monotonic())))
+
+
 class Supervisor:
     def __init__(self, argv):
         self.argv, self.started = list(argv), time.monotonic()
@@ -646,13 +699,13 @@ class Supervisor:
         self.invocation = (
             "entrypoint" if early_value(argv, "--invocation") == "entrypoint" else "run_json")
         self.attempt = early_value(argv, "--attempt-id", "PINEFORGE_REPORT_ATTEMPT_ID")
-        self.limits = {name: {"requested": None, "granted": default, "effective": default}
-                       for name, default in DEFAULTS.items()}
+        self.limits = {name: {"requested": None, "granted": None, "effective": None}
+                       for name in DIMENSIONS}
         self.channels = {
-            "candidate": Channel(DEFAULTS["report_bytes"]),
-            "report": Channel(DEFAULTS["report_bytes"]),
+            "candidate": Channel(None),
+            "report": Channel(None),
             "sink": Channel(None, absent=True),
-            "diagnostic": Channel(DEFAULTS["diagnostic_bytes"], absent=True),
+            "diagnostic": Channel(None, absent=True),
             "status": Channel(TERMINAL_BYTES),
         }
         self.status_socket = None
@@ -679,10 +732,11 @@ class Supervisor:
         self.cancelled = False
         self.external_closed = set()
         self.artifacts_removed = None
+        self.domain_empty = None
         self.operation = "report"
-        self.wall_end = self.started + DEFAULTS["wall_ms"] / 1000
-        self.stall_seconds = DEFAULTS["stall_ms"] / 1000
-        self.deadline = Deadline(DEFAULTS["wall_ms"], DEFAULTS["stall_ms"])
+        self.stall_seconds = math.inf
+        self.deadline = Deadline(None, None)
+        self.borrowed_flags = {}
         self.diagnostic_by_stage = {stage: 0 for stage in ("run", "finalize")}
         # A single raw syscall returns EINTR to S's deadline loop. Python's
         # convenience writes can retry it below that loop.
@@ -694,11 +748,28 @@ class Supervisor:
         self.raw_io.send.argtypes = (
             ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int)
         self.raw_io.send.restype = ctypes.c_ssize_t
-        for fd in (1, 2):
-            try:
-                os.set_blocking(fd, False)
-            except OSError:
-                pass
+
+    def nonblocking(self, fd):
+        if fd not in self.borrowed_flags:
+            self.borrowed_flags[fd] = fcntl.fcntl(fd, fcntl.F_GETFL)
+        os.set_blocking(fd, False)
+
+    def restore_flags(self, fd):
+        if fd not in self.borrowed_flags:
+            return
+        flags = self.borrowed_flags[fd]
+        fcntl.fcntl(fd, fcntl.F_SETFL, flags)
+        del self.borrowed_flags[fd]
+
+    def set_deadline(self, wall_ms, stall_ms):
+        # Admission may add a host constraint, but never a fresh wall interval.
+        remaining = None if not wall_ms else wall_ms - (time.monotonic() - self.started) * 1000
+        if remaining is not None and remaining <= 0:
+            self.latch("run_deadline_exceeded", {"stage": "prepare"})
+            return False
+        self.stall_seconds = stall_ms / 1000 if stall_ms else math.inf
+        self.deadline = Deadline(remaining, stall_ms)
+        return True
 
     def latch(self, code, args, exit_class=None, *, usage=False):
         if self.failure is not None:
@@ -734,7 +805,7 @@ class Supervisor:
 
     def stage(self):
         return "finalize" if (self.native_eof or (
-            self.sink_bound is None and self.process is not None
+            self.sink_fd is None and self.process is not None
             and self.process.poll() is not None)) else "run"
 
     def transfer_error(self, error, channel):
@@ -772,19 +843,10 @@ class Supervisor:
                     or document.get("attempt_id") != self.attempt
                     or document.get("test_only_unisolated_process_fixture") is not True):
                 raise UsageError("invalid TEST attestation")
-            grants = document["grants"]
-            if set(grants) != set(DEFAULTS) or any(
-                    type(value) is not int or not 1 <= value <= MAX_INTEGER
+            grants = document.get("grants", {})
+            if not isinstance(grants, dict) or grants.keys() - set(DIMENSIONS) or any(
+                    type(value) is not int or not 0 <= value <= MAX_INTEGER
                     for value in grants.values()):
-                for name in DEFAULTS:
-                    value = grants.get(name)
-                    known = type(value) is int and 0 <= value <= MAX_INTEGER
-                    self.limits[name].update(granted=value if known else None, effective=None)
-                report_grant = self.limits["report_bytes"]["granted"] or 0
-                for name in ("candidate", "report"):
-                    self.channels[name].limit = report_grant
-                self.channels["diagnostic"].limit = (
-                    self.limits["diagnostic_bytes"]["granted"] or 0)
                 raise UsageError("invalid host grant")
             planned = document.get("planned_sink_bytes")
             if planned is not None and (type(planned) is not int or not 1 <= planned <= MAX_INTEGER):
@@ -833,6 +895,13 @@ class Supervisor:
             for flag, (_, name) in CEILINGS.items():
                 text = getattr(options, flag[2:].replace("-", "_"))
                 self.limits[name]["requested"] = None if text is None else decimal(text)
+                self.limits[name]["effective"] = self.limits[name]["requested"] or None
+            for name in ("candidate", "report"):
+                self.channels[name].limit = self.limits["report_bytes"]["effective"]
+            self.channels["diagnostic"].limit = self.limits["diagnostic_bytes"]["effective"]
+            if not self.set_deadline(self.limits["wall_ms"]["effective"],
+                                     self.limits["stall_ms"]["effective"]):
+                return
             tokens = options.command
             names = {token.partition("=")[0] for token in tokens}
             if names & {"--help", "-h", "--run-phase-fd"} or "csv2bin" in tokens:
@@ -856,63 +925,49 @@ class Supervisor:
             grants = self._attestation(options.test_only_host_attestation_fd)
             if grants is None:
                 return
-            for name, grant in grants.items():
+            above_grant = set()
+            for name in DIMENSIONS:
+                grant = grants.get(name)
                 cell = self.limits[name]
                 requested = cell["requested"]
                 cell["granted"] = grant
-                cell["effective"] = grant if requested == 0 else (
-                    DEFAULTS[name] if requested is None else requested)
-            above_grant = False
-            for cell in self.limits.values():
-                if cell["effective"] > cell["granted"]:
+                cell["effective"] = requested or grant or None
+                if grant and requested and requested > grant:
                     cell["effective"] = None
-                    above_grant = True
+                    above_grant.add(name)
             # A rejected request is not silently recorded as an accepted clamp.
             # Its failure publication must nevertheless obey the host grant.
-            report_limit = (self.limits["report_bytes"]["effective"]
-                            if self.limits["report_bytes"]["effective"] is not None
-                            else self.limits["report_bytes"]["granted"])
+            report_limit = self.limits["report_bytes"][
+                "granted" if "report_bytes" in above_grant else "effective"]
             for name in ("candidate", "report"):
                 self.channels[name].limit = report_limit
-            self.channels["diagnostic"].limit = (
-                self.limits["diagnostic_bytes"]["effective"]
-                if self.limits["diagnostic_bytes"]["effective"] is not None
-                else self.limits["diagnostic_bytes"]["granted"])
+            self.channels["diagnostic"].limit = self.limits["diagnostic_bytes"][
+                "granted" if "diagnostic_bytes" in above_grant else "effective"]
             if above_grant:
                 raise UsageError("positive ceiling exceeds host grant")
-            if self.planned_sink_bytes is not None and self.planned_sink_bytes > report_limit:
+            if (report_limit is not None and self.planned_sink_bytes is not None
+                    and self.planned_sink_bytes > report_limit):
                 self.latch("report_budget_exceeded", {
                     "channel": "aggregate", "cap_bytes": report_limit,
                     "used_bytes": 0, "requested_bytes": self.planned_sink_bytes})
                 return
-            self.wall_end = self.started + self.limits["wall_ms"]["effective"] / 1000
-            self.stall_seconds = self.limits["stall_ms"]["effective"] / 1000
-            for name in ("candidate", "report"):
-                self.channels[name].limit = self.limits["report_bytes"]["effective"]
-            self.channels["diagnostic"].limit = self.limits["diagnostic_bytes"]["effective"]
             # A named target and the internal snapshot protocol need their own
             # handoff/publication adapters. Never let U open either target.
             if (options.report_sink is not None
                     or names & {"--report-sink", "--report-sink-fd", "--report-replay-sink"}):
                 self.latch("run_isolation_unavailable", {"reason": "descriptor"})
                 return
-            if time.monotonic() >= self.wall_end:
-                self.latch("run_deadline_exceeded", {"stage": "prepare"})
+            if not self.set_deadline(self.limits["wall_ms"]["effective"],
+                                     self.limits["stall_ms"]["effective"]):
                 return
-            # Resolve W once from the original start, before any covered work.
-            # No data phase or successful write constructs a fresh W.
-            self.deadline = Deadline(
-                (self.wall_end - time.monotonic()) * 1000,
-                self.limits["stall_ms"]["effective"])
             if self.sink_fd is not None:
-                self.sink_bound = self.planned_sink_bytes or report_limit
+                self.sink_bound = (None if report_limit is None
+                                   else self.planned_sink_bytes or report_limit)
                 self.channels["sink"] = Channel(self.sink_bound)
                 self.sink_verification = {
                     "exit_status": None, "signal": None, "complete": False,
                     "counts": {tag: None for tag in "ETOVKXH"},
                     "sha256": None, "finalizer_version": None}
-            os.set_blocking(1, False)
-            os.set_blocking(2, False)
         except (OSError, UsageError, ValueError):
             self.latch("run_request_invalid", {"option": "arguments"}, usage=True)
 
@@ -1017,7 +1072,9 @@ class Supervisor:
                      if "code" in receipt else set())
             if (set(receipt) != base | extra or type(receipt["complete"]) is not bool
                     or type(receipt["sink_bytes"]) is not int
-                    or not 0 <= receipt["sink_bytes"] <= self.sink_bound + 1
+                    or receipt["sink_bytes"] < 0
+                    or (self.sink_bound is not None
+                        and receipt["sink_bytes"] > self.sink_bound + 1)
                     or not isinstance(receipt["finalizer_version"], str)
                     or receipt["finalizer_version"] != "1.1.0"):
                 raise ProtocolError("invalid finalizer receipt")
@@ -1031,7 +1088,7 @@ class Supervisor:
                     or (not receipt["complete"] and digest != "")):
                 raise ProtocolError("invalid finalizer digest")
             if "reason" in receipt and (
-                    receipt["reason"] != "sink_exhausted"
+                    self.sink_bound is None or receipt["reason"] != "sink_exhausted"
                     or receipt["cap_bytes"] != self.sink_bound
                     or receipt["sink_bytes"] != self.sink_bound + 1):
                 raise ProtocolError("invalid exhaustion receipt")
@@ -1090,7 +1147,8 @@ class Supervisor:
         diagnostic_since = None
         candidate_waiting = False
         receipt_eof = validator_done = False
-        stopping = {}
+        stopping = GroupStop()
+        diagnostic_drain_end = receipt_drain_end = overflow_finish_end = None
 
         def release(fd):
             if fd in owned:
@@ -1100,15 +1158,6 @@ class Supervisor:
                     if name == "receipt":
                         name = "sink"
                     self.latch("report_channel_failed", {"channel": name, "reason": "io"})
-
-        def stop(process, now):
-            if process is None or process.poll() is not None:
-                return
-            if process not in stopping:
-                process.terminate()
-                stopping[process] = now
-            elif now - stopping[process] >= STOP_GRACE_MS / 1000:
-                process.kill()
 
         try:
             if self.sink_fd is not None:
@@ -1121,10 +1170,14 @@ class Supervisor:
                 environment["PINEFORGE_REPORT_NATIVE_SINK_FD"] = str(native_write)
                 self.sink_directory = tempfile.TemporaryDirectory(prefix="pf-supervised-sink-")
                 self.sink_target = str(Path(self.sink_directory.name) / "verified.sink")
+                validator_command = [
+                    sys.executable, "-B", str(Path(__file__).with_name("pineforge_sink_finalize.py")),
+                    "--in-fd", str(validator_read), "--out", self.sink_target,
+                    "--receipt-fd", "2"]
+                if self.sink_bound is not None:
+                    validator_command += ["--max-bytes", str(self.sink_bound)]
                 self.validator = subprocess.Popen(
-                    [sys.executable, "-B", str(Path(__file__).with_name("pineforge_sink_finalize.py")),
-                     "--in-fd", str(validator_read), "--out", self.sink_target,
-                     "--max-bytes", str(self.sink_bound), "--receipt-fd", "2"],
+                    validator_command,
                     stdin=subprocess.DEVNULL, stdout=diagnostic_write, stderr=receipt_write,
                     close_fds=True, pass_fds=(validator_read,), start_new_session=True)
                 release(validator_read)
@@ -1175,7 +1228,7 @@ class Supervisor:
                 for fd in readers:
                     os.set_blocking(fd, False)
                 while readers or self.process.poll() is None or diagnostic_pending or (
-                        self.validator is not None and self.validator.poll() is None):
+                        self.validator is not None and self.validator.poll() is None) or stopping.pending():
                     for fd, name in readers.items():
                         paused = (
                             (name == "sink" and bool(relay_pending))
@@ -1193,7 +1246,8 @@ class Supervisor:
                         watch(2, selectors.EVENT_WRITE, "diagnostic_output")
                     else:
                         unwatch(2)
-                    events = selector.select(min(0.02, self.deadline.remaining_wall_ms() / 1000))
+                    wall_remaining = self.deadline.remaining_wall_ms() / 1000
+                    events = selector.select(min(0.05, wall_remaining) if wall_remaining > 0 else 0.05)
                     ready = {key.fd for key, _ in events}
                     if self.cancelled:
                         self.latch("run_aborted", {})
@@ -1201,9 +1255,9 @@ class Supervisor:
                     # R19: diagnostic budget, native budget, candidate budget,
                     # independent validator/transport evidence, then W.
                     if diagnostic_read in ready and diagnostic_read in readers:
-                        allowance = diagnostic.limit - diagnostic.accepted
+                        allowance = remaining_bytes(diagnostic.limit, diagnostic.accepted)
                         room = QUEUE_BYTES - len(diagnostic_pending)
-                        data = read(diagnostic_read, min(room, allowance + 1), "diagnostic")
+                        data = read(diagnostic_read, read_size(allowance, room), "diagnostic")
                         if data == b"":
                             diagnostic.known = True
                             end_read(diagnostic_read)
@@ -1215,7 +1269,7 @@ class Supervisor:
                             if not diagnostic_pending and accepted:
                                 diagnostic_since = time.monotonic()
                             diagnostic_pending.extend(accepted)
-                            if len(data) > allowance:
+                            if allowance is not None and len(data) > allowance:
                                 diagnostic.truncated = True
                                 self.latch("diagnostic_budget_exceeded", {
                                     "cap_bytes": diagnostic.limit, "used_bytes": diagnostic.accepted,
@@ -1233,13 +1287,14 @@ class Supervisor:
                     if (native_read in ready and native_read in readers
                             and not relay_pending and self.failure is None):
                         sink = self.channels["sink"]
-                        allowance = sink.limit - sink.accepted
+                        allowance = remaining_bytes(sink.limit, sink.accepted)
                         native_progress = True
-                        data = read(native_read, min(QUEUE_BYTES, allowance + 1), "sink")
+                        data = read(native_read, read_size(allowance), "sink")
                         if data == b"":
                             sink.known = self.native_eof = True
                             self.finalize_started = time.monotonic()
-                            self.channels["candidate"].limit = self.channels["report"].limit - sink.accepted
+                            self.channels["candidate"].limit = remaining_bytes(
+                                self.channels["report"].limit, sink.accepted)
                             end_read(native_read)
                         elif data:
                             native_progress = True
@@ -1247,12 +1302,14 @@ class Supervisor:
                             accepted = data[:allowance]
                             sink.accept(accepted)
                             self.charged += len(accepted)
-                            self.channels["candidate"].limit = self.channels["report"].limit - sink.accepted
+                            self.channels["candidate"].limit = remaining_bytes(
+                                self.channels["report"].limit, sink.accepted)
                             # Unlike deadlines.relay(), V must receive the one
                             # probe too. It is queued, never approved/charged.
                             relay_pending.extend(data)
-                            if len(data) > allowance:
+                            if allowance is not None and len(data) > allowance:
                                 sink.truncated = self.sink_overflow = True
+                                overflow_finish_end = time.monotonic() + STOP_GRACE_MS / 1000
                                 self.latch("report_sink_failed", {
                                     "reason": "sink_exhausted", "sink_bytes": sink.observed,
                                     "cap_bytes": sink.limit})
@@ -1286,8 +1343,8 @@ class Supervisor:
                                     self.latch("report_channel_failed", {
                                         "channel": "candidate", "reason": "protocol"})
                         elif self.validator is None or validator_done:
-                            allowance = candidate.limit - candidate.accepted
-                            data = read(candidate_read, min(QUEUE_BYTES, allowance + 1), "candidate")
+                            allowance = remaining_bytes(candidate.limit, candidate.accepted)
+                            data = read(candidate_read, read_size(allowance), "candidate")
                             candidate_waiting = False
                             if data == b"":
                                 candidate.known = True
@@ -1299,7 +1356,7 @@ class Supervisor:
                                 if self.spool.write(accepted) != len(accepted):
                                     raise OSError("short candidate spool write")
                                 self.charged += len(accepted)
-                                if len(data) > allowance:
+                                if allowance is not None and len(data) > allowance:
                                     candidate.truncated = True
                                     self.latch("report_budget_exceeded", {
                                         "channel": "aggregate" if self.channels["sink"].accepted else "json",
@@ -1346,8 +1403,6 @@ class Supervisor:
                         diagnostic.truncated |= bool(diagnostic_pending)
                         diagnostic_pending.clear()
                         relay_pending.clear()
-                        if self.validator is not None and self.validator.poll() is None:
-                            self.validator.kill()
                     elif (diagnostic_pending and diagnostic_since is not None
                           and now - diagnostic_since >= self.stall_seconds):
                         diagnostic.truncated = True
@@ -1359,23 +1414,65 @@ class Supervisor:
                                 channel = self.channels[readers[fd]]
                                 channel.truncated |= bool(channel.accepted and not channel.known)
                                 end_read(fd)
-                        stop(self.process, now)
+                        stopping.request(self.process, now)
                         if not self.sink_overflow:
                             relay_pending.clear()
                             if relay_fd in owned:
                                 unwatch(relay_fd)
                                 release(relay_fd)
-                            stop(self.validator, now)
+                            stopping.request(self.validator, now)
+                        elif self.deadline.expired() or now >= overflow_finish_end:
+                            # Let V emit its existing overflow receipt first,
+                            # then stop its whole session under the same grace.
+                            relay_pending.clear()
+                            if relay_fd in owned:
+                                unwatch(relay_fd)
+                                release(relay_fd)
+                            stopping.request(self.validator, now)
                     if self.process.poll() is not None and self.run_finished is None:
                         self.run_finished = now
-                        if self.finalize_started is None and self.sink_bound is None:
+                        stopping.request(self.process, now)
+                        if self.finalize_started is None and self.sink_fd is None:
                             self.finalize_started = now
+                    validator_gone = self.validator is None or self.validator.poll() is not None
+                    if self.validator is not None and validator_gone:
+                        stopping.request(self.validator, now)
+                        if receipt_drain_end is None:
+                            receipt_drain_end = now + STOP_GRACE_MS / 1000
+                        if receipt_read in readers and now >= receipt_drain_end:
+                            end_read(receipt_read)
+                            self.latch("report_channel_failed", {"channel": "sink", "reason": "protocol"})
+                    if self.run_finished is not None and (self.failure is not None or validator_gone):
+                        if diagnostic_drain_end is None:
+                            diagnostic_drain_end = now + STOP_GRACE_MS / 1000
+                        if now >= diagnostic_drain_end:
+                            # G bounds a refused run's drain. Healthy pending
+                            # publication still honors P, including unlimited P;
+                            # let buffered source bytes/EOF be serviced first.
+                            if diagnostic_read in readers and (
+                                    self.failure is not None or (
+                                        not diagnostic_pending and not select.select(
+                                            [diagnostic_read], [], [], 0)[0])):
+                                diagnostic.truncated = True
+                                end_read(diagnostic_read)
+                                self.latch("report_channel_failed", {
+                                    "channel": "diagnostic", "reason": "io"})
+                            if self.failure is not None and diagnostic_pending:
+                                diagnostic.truncated = True
+                                diagnostic_pending.clear()
+                    stopping.advance(now)
                 self.process.wait(timeout=STOP_GRACE_MS / 1000)
                 if self.validator is not None:
                     self.validator.wait(timeout=STOP_GRACE_MS / 1000)
                     if not validator_done:
                         self.finish_sink(bytes(receipt), receipt_eof)
         finally:
+            for process in (self.process, self.validator):
+                stopping.request(process, time.monotonic())
+            stopping.finish()
+            for process in (self.process, self.validator):
+                if process is not None:
+                    process.wait(timeout=STOP_GRACE_MS / 1000)
             for fd in tuple(owned):
                 release(fd)
         diagnostic = self.channels["diagnostic"]
@@ -1418,11 +1515,12 @@ class Supervisor:
                     events.sort(key=lambda item: item[0].data != "diagnostic")
                     for key, _ in events:
                         channel = self.channels["diagnostic"]
-                        allowance = (channel.limit - channel.accepted if key.data == "diagnostic"
+                        allowance = (remaining_bytes(channel.limit, channel.accepted)
+                                     if key.data == "diagnostic"
                                      else TERMINAL_BYTES - len(data))
                         try:
                             chunk = self.read_ready(
-                                key.fd, min(QUEUE_BYTES, allowance + 1), "finalize")
+                                key.fd, read_size(allowance), "finalize")
                         except (BlockingIOError, InterruptedError):
                             continue
                         except DeadlineError as error:
@@ -1450,7 +1548,7 @@ class Supervisor:
                             accepted = chunk[:allowance]
                             channel.accept(accepted)
                             self.diagnostic_by_stage["finalize"] += len(accepted)
-                            if len(chunk) > allowance:
+                            if allowance is not None and len(chunk) > allowance:
                                 channel.truncated = True
                                 self.latch("diagnostic_budget_exceeded", {
                                     "cap_bytes": channel.limit, "used_bytes": channel.accepted,
@@ -1538,14 +1636,14 @@ class Supervisor:
         code, args = self.failure["code"], self.failure["args"]
         text = self.catalog[code]["english"][0]
         value = {"engine": "pineforge", "error": text, "code": code, "args": args}
-        allowance = self.channels["report"].limit - self.charged
-        if allowance < 1:
+        allowance = remaining_bytes(self.channels["report"].limit, self.charged)
+        if allowance is not None and allowance < 1:
             return None
         pieces, length = [], 1  # The final LF is part of R.
         encoder = json.JSONEncoder(separators=(",", ":"), ensure_ascii=True, allow_nan=False)
         for text in encoder.iterencode(value):
             piece = text.encode("utf-8")
-            if len(piece) > allowance - length:
+            if allowance is not None and len(piece) > allowance - length:
                 return None
             pieces.append(piece)
             length += len(piece)
@@ -1563,7 +1661,7 @@ class Supervisor:
         sink = self.channels["sink"]
         if self.sink_fd is not None and self.failure is None:
             try:
-                os.set_blocking(self.sink_fd, False)
+                self.nonblocking(self.sink_fd)
                 with open(self.sink_target, "rb") as source:
                     while data := source.read(QUEUE_BYTES):
                         self.bounded_write(self.sink_fd, data, "sink")
@@ -1609,6 +1707,11 @@ class Supervisor:
             if fd in self.external_closed:
                 continue
             self.external_closed.add(fd)
+            try:
+                self.restore_flags(fd)
+            except OSError:
+                self.latch("report_channel_failed", {"channel": name, "reason": "io"})
+                self.borrowed_flags.pop(fd, None)
             if not close_once(fd):
                 self.channels[name].complete = False
                 if name == "sink":
@@ -1666,7 +1769,7 @@ class Supervisor:
         if self.run_started is not None:
             measured(stages["run"]["resources"], "report_bytes",
                      self.channels["sink"].accepted +
-                     (0 if self.sink_bound is not None else self.channels["candidate"].accepted),
+                     (0 if self.sink_fd is not None else self.channels["candidate"].accepted),
                      "channel", limit=self.channels["report"].limit,
                      requested=self.limits["report_bytes"]["requested"])
             measured(stages["run"]["resources"], "sink_bytes",
@@ -1678,7 +1781,7 @@ class Supervisor:
                      requested=self.limits["diagnostic_bytes"]["requested"])
         if self.finalize_started is not None:
             measured(stages["finalize"]["resources"], "report_bytes",
-                     self.channels["candidate"].accepted if self.sink_bound is not None else 0,
+                     self.channels["candidate"].accepted if self.sink_fd is not None else 0,
                      "channel", limit=self.channels["candidate"].limit)
             measured(stages["finalize"]["resources"], "sink_bytes", 0, "channel",
                      limit=self.sink_bound, requested=self.planned_sink_bytes)
@@ -1706,11 +1809,13 @@ class Supervisor:
         return {
             "schema": "pf-run-terminal", "version": 1, "contract": CONTRACT,
             "attempt_id": self.attempt, "invocation": self.invocation,
-            "complete": (self.failure is None and self.channels["report"].complete
+            "complete": (self.domain_empty is True and self.failure is None
+                         and self.channels["report"].complete
                          and self.channels["candidate"].complete
                          and self.channels["diagnostic"].complete
                          and self.channels["sink"].complete),
-            "exit_class": self.exit_class if self.failure is not None else "success",
+            "exit_class": (self.exit_class if self.failure is not None else
+                           "success" if self.domain_empty is True else "resource_refusal"),
             "failure": self.failure, "exit_status": self.facade,
             "producer": {
                 "stage": None if self.process is None else "run",
@@ -1726,7 +1831,7 @@ class Supervisor:
             "sink_verification": self.sink_verification, "usage": self.usage(),
             "cleanup": {
                 "producer_reaped": cleanup(None if self.process is None else status is not None),
-                "domain_empty": cleanup(None),
+                "domain_empty": cleanup(self.domain_empty),
                 "artifacts_removed": cleanup(self.artifacts_removed),
             },
         }
@@ -1752,7 +1857,8 @@ class Supervisor:
             return
         # The helper's stream writer cannot send a packet atomically. This
         # adapter attempts exactly one packet within the reserved terminal P.
-        grace = Deadline(self.stall_seconds * 1000, self.stall_seconds * 1000)
+        stall_ms = self.limits["stall_ms"]["effective"]
+        grace = Deadline(stall_ms, stall_ms)
         with selectors.DefaultSelector() as selector:
             selector.register(self.status_socket, selectors.EVENT_WRITE)
             while True:
@@ -1772,6 +1878,32 @@ class Supervisor:
                 return
 
     def run(self):
+        try:
+            # Save both descriptions before changing either: admission can
+            # reject fd 1 and fd 2 aliases of the same open file description.
+            for fd in (1, 2):
+                try:
+                    self.borrowed_flags[fd] = fcntl.fcntl(fd, fcntl.F_GETFL)
+                except OSError:
+                    pass  # Admission still diagnoses a closed data endpoint.
+            for fd in self.borrowed_flags:
+                try:
+                    os.set_blocking(fd, False)
+                except OSError:
+                    self.latch("report_channel_failed", {
+                        "channel": "report" if fd == 1 else "diagnostic", "reason": "setup"})
+            self.run_channels()
+        finally:
+            for fd in tuple(self.borrowed_flags):
+                try:
+                    self.restore_flags(fd)
+                except OSError:
+                    self.latch("report_channel_failed", {
+                        "channel": "report" if fd == 1 else
+                        "diagnostic" if fd == 2 else "sink", "reason": "io"})
+        return self.facade
+
+    def run_channels(self):
         selected = None
         try:
             self.admit()
@@ -1780,12 +1912,13 @@ class Supervisor:
                 selected = self.choose_report()
         except Exception:
             self.latch("harness_internal_error", {})
-            if self.process is not None and self.process.poll() is None:
-                self.process.kill()
-                self.process.wait(timeout=STOP_GRACE_MS / 1000)
-            if self.validator is not None and self.validator.poll() is None:
-                self.validator.kill()
-                self.validator.wait(timeout=STOP_GRACE_MS / 1000)
+            stopping = GroupStop()
+            for process in (self.process, self.validator):
+                stopping.request(process, time.monotonic())
+            stopping.finish()
+            for process in (self.process, self.validator):
+                if process is not None:
+                    process.wait(timeout=STOP_GRACE_MS / 1000)
             if self.validator is not None:
                 status = self.validator.returncode
                 self.sink_verification["exit_status"] = status if status >= 0 else None
@@ -1795,6 +1928,8 @@ class Supervisor:
         except Exception:
             self.latch("harness_internal_error", {})
         self.close_data()
+        if self.failure is None and self.domain_empty is not True:
+            self.facade = 4 if self.invocation == "entrypoint" else 1
         self.send_terminal()
         if self.status_socket is not None:
             try:

@@ -18,6 +18,7 @@ static int trace_fd = -1;
 static int input_fd = -1;
 static int receipt_fd = -1;
 static uint64_t cap_bytes;
+static bool has_cap;
 static uint64_t input_bytes;
 static bool pause_probe;
 static bool paused;
@@ -69,12 +70,14 @@ static void observe(void)
             input_fd = atoi(arg);
         if (!strcmp(previous, "--receipt-fd"))
             receipt_fd = atoi(arg);
-        if (!strcmp(previous, "--max-bytes"))
+        if (!strcmp(previous, "--max-bytes")) {
             cap_bytes = strtoull(arg, NULL, 10);
+            has_cap = true;
+        }
         previous = arg;
         offset += length + 1;
     }
-    if (!finalizer || input_fd < 0 || receipt_fd < 0 || cap_bytes == 0) {
+    if (!finalizer || input_fd < 0 || receipt_fd < 0) {
         input_fd = receipt_fd = -1;
         return;
     }
@@ -91,6 +94,7 @@ static void observe(void)
     }
     pause_probe = getenv("PF_REPORT_TEST_PAUSE_PROBE") != NULL;
     pid_event('S');
+    event('A', command, (size_t)count);
 }
 
 ssize_t read(int fd, void *buffer, size_t length)
@@ -98,7 +102,7 @@ ssize_t read(int fd, void *buffer, size_t length)
     ssize_t count = syscall(SYS_read, fd, buffer, length);
     if (count > 0 && fd == input_fd) {
         input_bytes += (uint64_t)count;
-        if (input_bytes > cap_bytes && !paused) {
+        if (has_cap && input_bytes > cap_bytes && !paused) {
             paused = true;
             pid_event('P');
             if (pause_probe)

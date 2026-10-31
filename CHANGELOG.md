@@ -7,6 +7,11 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- An opt-in supervised report channel separates report and diagnostic output
+  and records terminal delivery facts. It is not yet host-attested and needs
+  an external sink for now, while the internal snapshot handoff is pending.
+  Unset or zero report, diagnostic, wall and stall limits are unlimited;
+  positive values apply exactly, subject to any positive host grant.
 - Container compile guards are opt-in and off when all three settings are
   unset. Once opted in, an unset or zero value is unlimited and a positive
   value is exact; when no dimension is limited, the original compile and

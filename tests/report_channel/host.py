@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import base64
 from contextlib import ExitStack, contextmanager
+import ctypes
 from dataclasses import dataclass, field
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -42,6 +44,32 @@ def clean_environment():
     return {key: value for key, value in os.environ.items()
             if not key.startswith(("PINEFORGE_REPORT_", "PINEFORGE_TERMINAL_",
                                    "PINEFORGE_DIAGNOSTIC_", "PINEFORGE_CHANNEL_"))}
+
+
+def process_info(pid):
+    """Read the real Linux process table from the external TEST host."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rpartition(") ")[2].split()
+    except FileNotFoundError:
+        return None
+    return {"pid": pid, "state": fields[0], "parent": int(fields[1]),
+            "group": int(fields[2]), "started": int(fields[19])}
+
+
+@contextmanager
+def fixture_subreaper():
+    """Let the TEST host reap a fixture orphan and prove its table entry gone."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    previous = ctypes.c_int()
+    if libc.prctl(37, ctypes.byref(previous), 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "cannot read TEST subreaper state")
+    if libc.prctl(36, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "cannot install TEST subreaper")
+    try:
+        yield
+    finally:
+        if libc.prctl(36, previous.value, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "cannot restore TEST subreaper")
 
 
 def sink_wire(closes, first_ts=1000):
@@ -123,9 +151,20 @@ class Capture:
     validator_events: list = field(default_factory=list)
     stopped_validators: set = field(default_factory=set)
     killed_validators: set = field(default_factory=set)
+    flags_before: dict = field(default_factory=dict)
+    flags_after: dict = field(default_factory=dict)
+    descendant_samples: list = field(default_factory=list)
+    elapsed_seconds: float | None = None
 
     def finalizer_receipt(self):
         return b"".join(event[1:] for event in self.validator_events if event[:1] == b"R")
+
+    def finalizer_arguments(self):
+        commands = [event[1:].rstrip(b"\0").split(b"\0")
+                    for event in self.validator_events if event[:1] == b"A"]
+        if len(commands) != 1:
+            raise AssertionError(f"expected one observed V argv; {self.failure_context()}")
+        return commands[0]
 
     def failure_context(self):
         """Keep the whole terminal record and bounded, loss-tolerant D text."""
@@ -145,6 +184,9 @@ class Capture:
             "supervisor_wait_status": self.returncode,
             "packet_flags": self.packet_flags,
             "eof": sorted(self.eof),
+            "flags_before": self.flags_before, "flags_after": self.flags_after,
+            "descendant_samples": self.descendant_samples,
+            "elapsed_seconds": self.elapsed_seconds,
             "diagnostic": {
                 "length_bytes": len(self.diagnostic),
                 "prefix": self.diagnostic[:4096].decode("utf-8", "replace"),
@@ -175,7 +217,8 @@ class Capture:
 def launch(request=None, *, options=(), environment=None, status="valid",
            alias=None, sink=False, attested=True, grants=None, command=None,
            direct=False, activate=True, wrong_direction=None, planned_sink_bytes=None,
-           observer=None, pause_probe=False, kill_stopped_probe=False):
+           observer=None, pause_probe=False, kill_stopped_probe=False,
+           endpoint_nonblocking=None, diagnostic_delay_ms=0):
     """Create R/D/M, launch S, and read every endpoint concurrently to EOF.
 
     ``status`` tests absent, pipe, stream, reserved, closed and wrong-direction
@@ -204,6 +247,9 @@ def launch(request=None, *, options=(), environment=None, status="valid",
 
         report_read, report_write = pipe()
         diagnostic_read, diagnostic_write = pipe()
+        if diagnostic_delay_ms:
+            if fcntl.fcntl(diagnostic_write, fcntl.F_SETPIPE_SZ, 4096) != 4096:
+                raise AssertionError("delayed diagnostic reader needs a 4096-byte pipe")
         if wrong_direction == "report":
             report_write = report_read
         elif wrong_direction == "diagnostic":
@@ -261,9 +307,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                 "version": 1,
                 "attempt_id": attempt,
                 "test_only_unisolated_process_fixture": True,
-                "grants": grants or {
-                    "report_bytes": 67108864, "diagnostic_bytes": 1048576,
-                    "wall_ms": 600000, "stall_ms": 5000},
+                "grants": {} if grants is None else grants,
             }
             if planned_sink_bytes is not None:
                 policy["planned_sink_bytes"] = planned_sink_bytes
@@ -303,6 +347,15 @@ def launch(request=None, *, options=(), environment=None, status="valid",
             env.update(LD_PRELOAD=str(observer), PF_REPORT_TEST_TRACE=str(Path(directory) / "trace"))
             if pause_probe:
                 env["PF_REPORT_TEST_PAUSE_PROBE"] = "1"
+        flag_probes, flags_before, flags_after = {}, {}, {}
+        if endpoint_nonblocking is not None:
+            for fd, nonblocking in zip((report_write, diagnostic_write), endpoint_nonblocking):
+                os.set_blocking(fd, not nonblocking)
+            for name, fd in (("report", report_write), ("diagnostic", diagnostic_write)):
+                probe = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 6)
+                flag_probes[name] = probe
+                flags_before[name] = fcntl.fcntl(probe, fcntl.F_GETFL)
+        launched = time.monotonic()
         process = subprocess.Popen(
             argv, stdin=subprocess.DEVNULL, stdout=report_write,
             stderr=diagnostic_write, pass_fds=tuple(set(inherited)),
@@ -327,24 +380,50 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                   "sink": bytearray(), "bad_status": bytearray()}
         packets, flags, eof = [], [], set()
         selector = selectors.DefaultSelector()
+        delayed_diagnostic = diagnostic_read if diagnostic_delay_ms else None
+        diagnostic_read_at = launched + diagnostic_delay_ms / 1000
         for name, fd in (("report", report_read), ("diagnostic", diagnostic_read),
                          ("sink", sink_read), *extra_readers.items()):
             if fd is not None:
                 os.set_blocking(fd, False)
-                selector.register(fd, selectors.EVENT_READ, name)
+                if fd != delayed_diagnostic:
+                    selector.register(fd, selectors.EVENT_READ, name)
         status_host.setblocking(False)
         selector.register(status_host, selectors.EVENT_READ, "status")
         validator_events, stopped_validators, killed_validators = [], set(), set()
+        descendant_samples = []
         if trace is not None:
             selector.register(trace, selectors.EVENT_READ, "trace")
         deadline = time.monotonic() + 20
         try:
-            while selector.get_map():
+            while selector.get_map() or delayed_diagnostic is not None:
+                if delayed_diagnostic is not None and time.monotonic() >= diagnostic_read_at:
+                    selector.register(delayed_diagnostic, selectors.EVENT_READ, "diagnostic")
+                    delayed_diagnostic = None
+                child_state = (request or {}).get("diagnostic_child_state")
+                if child_state is not None:
+                    try:
+                        identities = json.loads(Path(child_state).read_text())
+                        sample = {
+                            "leader": process_info(identities["leader"]),
+                            "child": process_info(identities["child"]),
+                        }
+                        if not descendant_samples or descendant_samples[-1] != sample:
+                            descendant_samples.append(sample)
+                    except (FileNotFoundError, ValueError):
+                        pass
+                if process.poll() is not None and flag_probes:
+                    for name, fd in flag_probes.items():
+                        flags_after[name] = fcntl.fcntl(fd, fcntl.F_GETFL)
+                        os.close(fd)
+                    flag_probes.clear()
                 if time.monotonic() >= deadline:
                     partial = Capture(
                         bytes(output["report"]), bytes(output["diagnostic"]),
                         bytes(output["sink"]), packets, flags, process.poll(), attempt, eof,
-                        validator_events, stopped_validators, killed_validators)
+                        validator_events, stopped_validators, killed_validators,
+                        flags_before, flags_after, descendant_samples,
+                        time.monotonic() - launched)
                     raise AssertionError(
                         f"TEST host watchdog expired; {partial.failure_context()}")
                 for key, _ in selector.select(0.05):
@@ -400,11 +479,15 @@ def launch(request=None, *, options=(), environment=None, status="valid",
             status_host.close()
             if trace is not None:
                 trace.close()
+            for fd in flag_probes.values():
+                os.close(fd)
             for fd in owned_readers:
                 os.close(fd)
         return Capture(bytes(output["report"]), bytes(output["diagnostic"]),
                        bytes(output["sink"]), packets, flags, wait, attempt, eof,
-                       validator_events, stopped_validators, killed_validators)
+                       validator_events, stopped_validators, killed_validators,
+                       flags_before, flags_after, descendant_samples,
+                       time.monotonic() - launched)
 
 
 def reference(request):

@@ -5,6 +5,7 @@ import base64
 import json
 import os
 from pathlib import Path
+import signal
 import sys
 import time
 
@@ -24,6 +25,37 @@ def main():
     request = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     reference = "--reference" in sys.argv[2:]
     fragment = request.get("fragment_bytes", 65536)
+    if "diagnostic_child_state" in request:
+        leader = os.getpid()
+        ready_read, ready_write = os.pipe()
+        child = os.fork()
+        if child == 0:
+            os.close(ready_read)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            if request.get("detached_diagnostic_child"):
+                os.setsid()
+            for name in ("PINEFORGE_REPORT_CANDIDATE_FD", "PINEFORGE_REPORT_NATIVE_SINK_FD"):
+                if name in os.environ:
+                    os.close(int(os.environ[name]))
+            Path(request["diagnostic_child_state"]).write_text(
+                json.dumps({"leader": leader, "child": os.getpid()}))
+            os.write(ready_write, b"1")
+            os.close(ready_write)
+            while True:
+                try:
+                    os.write(2, b"diagnostic child continues\n")
+                except BrokenPipeError:
+                    # Continue attempting diagnostics after S closes its reader.
+                    pass
+                if os.getppid() != leader:
+                    Path(request["diagnostic_child_progress"]).touch()
+                time.sleep(0.01)
+        os.close(ready_write)
+        if os.read(ready_read, 1) != b"1":
+            raise AssertionError("diagnostic child did not become ready")
+        os.close(ready_read)
+        if not request.get("leader_completes"):
+            time.sleep(120)
     for name, fd in (("stdout", 1), ("stderr", 2)):
         if name in request:
             write_all(fd, base64.b64decode(request[name]), fragment)
