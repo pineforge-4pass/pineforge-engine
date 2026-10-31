@@ -1551,7 +1551,7 @@ bool source::PineStrategyHost::set_recorded_series_impl(
     }
     // n == 0 is a request that returned na on every chart bar (a tape with a
     // header only): installed, so every read is na rather than a failure.
-    pineforge::detail::FeedProjectionBuilder<RecordedSeriesRow> builder;
+    pineforge::detail::FeedProjectionBuilder<RecordedSeriesRow> builder(report_scratch_directory(), true);
     for (int i = 0; i < n; ++i)
         builder.append(RecordedSeriesRow{chart_open_ms[i], values[i]});
     RecordedSeries series{builder.finish(cache_capacity_bytes.value_or(

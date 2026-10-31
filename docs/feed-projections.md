@@ -60,9 +60,10 @@ selection. An idle policy change takes effect on inheriting tapes at the next
 preparation without resizing their previous caches. No policy bytes are added
 to a per-tape budget, and page tags are charged exactly once.
 
-The default producer writes complete rows sequentially to an unlinked
-`ScratchFile`, with one mandatory transfer page per producer. Publication
-explicitly finishes the final partial page. Destruction performs no flush.
+Production builders keep projections of at most one fixed transfer page in an
+in-memory reader and spill larger projections through an unlinked `ScratchFile`
+in the report-sink scratch directory (or the default when empty); publication
+finishes tails and destruction never flushes.
 Ordinary file failures retain `scratch_io_failed` and errno. An attached
 arena retains its existing typed backing and exhaustion failures; arena
 backing is still memory. Selecting a smaller cache cannot increase the

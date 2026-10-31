@@ -803,9 +803,9 @@ bool build_native_day_partition(NativeDayPartition& out,
                                 const std::string& tz,
                                 const std::string& session,
                                 const std::vector<int64_t>& stamps,
-                                const Bar* input_bars, int n_input) {
+                                const Bar* input_bars, int n_input, const std::string& scratch_directory) {
     return build_native_day_partition(out, tz, session, stamps, input_bars,
-                                      n_input, detail::kFeedProjectionCacheBytes);
+                                      n_input, detail::kFeedProjectionCacheBytes, scratch_directory);
 }
 
 bool build_native_day_partition(NativeDayPartition& out,
@@ -813,7 +813,7 @@ bool build_native_day_partition(NativeDayPartition& out,
                                 const std::string& session,
                                 const std::vector<int64_t>& stamps,
                                 const Bar* input_bars, int n_input,
-                                std::size_t projection_cache_bytes) {
+                                std::size_t projection_cache_bytes, const std::string& scratch_directory) {
     out = NativeDayPartition{};
     if (stamps.empty()) return false;
     for (std::size_t k = 1; k < stamps.size(); ++k) {
@@ -830,7 +830,7 @@ bool build_native_day_partition(NativeDayPartition& out,
     p.last_bound = session_day_close_real_ms(
         session_day_index_nominal(stamps.back(), tz, session), tz, session);
     const std::size_t n = stamps.size();
-    detail::FeedProjectionBuilder<int64_t> trade_days, week_opens, month_opens;
+    detail::FeedProjectionBuilder<int64_t> trade_days(scratch_directory, true), week_opens(scratch_directory, true), month_opens(scratch_directory, true);
     // Trade instants in one merge pass: the last input bar before the next
     // stamp (before the last bound for the last stamp), the stamp itself
     // when no input bar lies in the period.

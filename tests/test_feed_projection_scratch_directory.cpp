@@ -272,6 +272,28 @@ void configured_directory_case() {
     check_calendar(host, input);
 }
 
+void configured_spill_failure_case() {
+    Directory default_directory("pineforge-feed-default-failure");
+    Environment temporary("TMPDIR", default_directory.path);
+    char unavailable[] = "/tmp/pineforge-feed-reader-XXXXXX";
+    require(::mkdtemp(unavailable) != nullptr, "cannot create unavailable directory");
+    require(::rmdir(unavailable) == 0, "cannot remove unavailable directory");
+    CreationWatch watch(default_directory.path, default_directory.path);
+
+    detail::FeedProjectionBuilder<std::int64_t> builder(unavailable, true);
+    for (std::size_t i = 0; i < Calendar::rows_per_page(); ++i)
+        builder.append(static_cast<std::int64_t>(i));
+    bool typed_failure = false;
+    try {
+        builder.append(static_cast<std::int64_t>(Calendar::rows_per_page()));
+    } catch (const detail::AuxiliaryScratchIoError& error) {
+        typed_failure = error.code().value() == ENOENT;
+    }
+    CHECK(typed_failure);
+    watch.collect();
+    CHECK(watch.default_feed_creations() == 0);
+}
+
 void default_small_case() {
     Directory default_directory("pineforge-feed-default-small");
     Environment temporary("TMPDIR", default_directory.path);
@@ -300,6 +322,7 @@ int main() {
     using namespace feed_projection_scratch_directory_test;
     try {
         configured_directory_case();
+        configured_spill_failure_case();
         default_small_case();
     } catch (const std::exception& error) {
         std::fprintf(stderr, "projection scratch-directory setup failed: %s\n", error.what());

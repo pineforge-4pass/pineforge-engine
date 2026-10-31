@@ -283,7 +283,7 @@ bool build_native_day_partition(NativeDayPartition& out,
                                 const std::string& tz,
                                 const std::string& session,
                                 const std::vector<int64_t>& stamps,
-                                const Bar* input_bars, int n_input);
+                                const Bar* input_bars, int n_input, const std::string& scratch_directory = {});
 
 /// As above, with an inclusive optional cache budget for EACH of the three
 /// projection columns. Zero/sub-page budgets read directly from backing.
@@ -293,7 +293,7 @@ bool build_native_day_partition(NativeDayPartition& out,
                                 const std::string& session,
                                 const std::vector<int64_t>& stamps,
                                 const Bar* input_bars, int n_input,
-                                std::size_t projection_cache_bytes);
+                                std::size_t projection_cache_bytes, const std::string& scratch_directory = {});
 
 /// Index of the native period holding `ms` under `p`: -1 before the first
 /// stamp and at / after the last stamp's nominal session-day close.

@@ -1984,9 +1984,9 @@ protected:
     // replaced by its native sibling.
     void prepare_native_security_feeds(const Bar* input_bars, int n_input);
     void prepare_chart_day_partition(const Bar* input_bars, int n_input);
+    const std::string& report_scratch_directory() const noexcept { return report_sink_state_.scratch_dir; }
     bool substitute_native_security_bar(SecurityEvalState& state, Bar& bar,
                                         bool count_miss = true);
-
 
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     virtual bool source_aux_security_feed_enabled() const;

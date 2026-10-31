@@ -276,37 +276,92 @@ private:
     mutable std::uint64_t read_bytes_ = 0;
 };
 
+// Immutable provider for a production projection that fits in its one
+// transfer page. The owner is bounded by Row and never grows with input.
+template<class Row>
+class ResidentFeedReader final : public FeedReader<Row> {
+    static_assert(std::is_trivially_copyable_v<Row>);
+    static_assert(std::is_nothrow_default_constructible_v<Row>);
+    static_assert(sizeof(Row) <= 4096);
+    static constexpr std::size_t kRows = 4096 / sizeof(Row);
+public:
+    ResidentFeedReader(const Row* rows, std::size_t count) : count_(count) {
+        if (count > kRows)
+            throw std::invalid_argument("resident feed projection extent");
+        if (count != 0)
+            std::memcpy(rows_.data(), rows, count * sizeof(Row));
+    }
+    std::size_t size() const noexcept override { return count_; }
+    void read(std::size_t first, Row* destination,
+              std::size_t count) const override {
+        if (first > count_ || count > count_ - first)
+            throw std::out_of_range("resident feed range");
+        if (count && !destination)
+            throw std::invalid_argument("resident feed destination");
+        if (count == 0) return;
+        std::memcpy(destination, rows_.data() + first, count * sizeof(Row));
+    }
+private:
+    std::array<Row, kRows> rows_{};
+    std::size_t count_ = 0;
+};
+
 // Sequential production uses one mandatory transfer page, independent of
-// input length and optional read capacity. finish() flushes before publishing
-// the immutable reader; destruction never flushes or commits.
+// input length and optional read capacity. Resident mode publishes that page
+// in memory until a later append requires scratch; finish() flushes any
+// pending scratch page, and destruction never flushes or commits.
 template<class Row>
 class FeedProjectionBuilder {
     static_assert(std::is_trivially_copyable_v<Row>);
     static_assert(sizeof(Row) <= 4096);
     static constexpr std::size_t kRows = 4096 / sizeof(Row);
 public:
-    explicit FeedProjectionBuilder(const std::string& directory = {})
-        : reader_(std::make_shared<ScratchFeedReader<Row>>(directory)) {}
+    explicit FeedProjectionBuilder(const std::string& directory = {},
+                                   bool resident_if_single_page = false)
+        : directory_(directory),
+          resident_if_single_page_(resident_if_single_page) {
+        if (!resident_if_single_page_)
+            reader_ = std::make_shared<ScratchFeedReader<Row>>(directory_);
+    }
     FeedProjectionBuilder(const FeedProjectionBuilder&) = delete;
     FeedProjectionBuilder& operator=(const FeedProjectionBuilder&) = delete;
 
     void append(const Row& row) {
-        if (!reader_) throw std::logic_error("feed projection already published");
+        if (published_) throw std::logic_error("feed projection already published");
+        if (resident_if_single_page_ && !reader_ && buffered_ == kRows)
+            spill_to_scratch();
         if (buffered_ == kRows) flush();
-        if (reader_->count_ > std::numeric_limits<std::size_t>::max() - buffered_ - 1)
-            throw AuxiliaryScratchIoError(EFBIG, "feed projection extent");
-        const auto offset = ScratchFeedReader<Row>::byte_offset(reader_->count_ + buffered_);
-        ScratchFile::check_extent(offset, sizeof(Row), false, ScratchFile::IoRaiser::auxiliary);
+        if (reader_) {
+            if (reader_->count_ > std::numeric_limits<std::size_t>::max()
+                                      - buffered_ - 1)
+                throw AuxiliaryScratchIoError(EFBIG, "feed projection extent");
+            const auto offset =
+                ScratchFeedReader<Row>::byte_offset(reader_->count_ + buffered_);
+            ScratchFile::check_extent(offset, sizeof(Row), false,
+                                      ScratchFile::IoRaiser::auxiliary);
+        }
         std::memcpy(&buffer_[buffered_++], &row, sizeof(Row));
     }
     FeedProjection<Row> finish(std::size_t capacity_bytes = kFeedProjectionCacheBytes) {
-        if (!reader_) throw std::logic_error("feed projection already published");
-        flush();
-        FeedProjection<Row> result(reader_, capacity_bytes);
+        if (published_) throw std::logic_error("feed projection already published");
+        std::shared_ptr<const FeedReader<Row>> provider;
+        if (reader_) {
+            flush();
+            provider = reader_;
+        } else {
+            provider = std::make_shared<ResidentFeedReader<Row>>(buffer_.data(), buffered_);
+        }
+        FeedProjection<Row> result(std::move(provider), capacity_bytes);
+        published_ = true;
         reader_.reset();
         return result;
     }
 private:
+    void spill_to_scratch() {
+        reader_ = std::make_shared<ScratchFeedReader<Row>>(directory_);
+        flush();
+    }
+
     void flush() {
         if (buffered_ == 0) return;
         reader_->file_.open("pineforge-feed");
@@ -316,6 +371,9 @@ private:
         reader_->count_ += buffered_;
         buffered_ = 0;
     }
+    std::string directory_;
+    bool resident_if_single_page_ = false;
+    bool published_ = false;
     std::shared_ptr<ScratchFeedReader<Row>> reader_;
     std::array<Row, kRows> buffer_;
     std::size_t buffered_ = 0;
