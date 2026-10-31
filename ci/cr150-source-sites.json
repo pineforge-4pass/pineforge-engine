@@ -2024,6 +2024,31 @@
   },
   {
    "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "quota_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFileQuota #1",
+    "public : explicit ScratchFileQuota ( QuotaArtifact artifact ) : quota_ ( RunQuota :: from_environment ( ) ) , artifact_ ( artifact ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "quota_ . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "quota_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFileQuota #1",
+    "class Growth #1",
+    "public : Growth ( ScratchFileQuota & owner , std :: uint64_t requested_end ) : owner_ ( owner ) , realized_ ( owner . extent_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "quota_ . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
    "symbol": "directory_",
    "scope": [
     "namespace pineforge :: detail #1",
@@ -2045,6 +2070,18 @@
    ],
    "cls": "assign",
    "spelling": "directory_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "reservation",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFile #1",
+    "void truncate ( std :: uint64_t bytes ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "reservation . emplace ( . . . )",
    "ordinal": 1
   },
   {
@@ -2106,6 +2143,56 @@
    "cls": "append",
    "spelling": "name + = . . .",
    "ordinal": 3
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "quota_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFile #1",
+    "void open ( const char * prefix ) #1",
+    "if ( mode ( ) = = QuotaMode :: managed ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "reservation",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFile #1",
+    "void ensure_size ( std :: uint64_t bytes , std :: uint64_t needed_bytes_lower_bound = 0 ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "reservation . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "reservation",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFile #1",
+    "ssize_t write_some ( std :: uint64_t offset , const void * data , std :: size_t length ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "reservation . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_file.hpp",
+   "symbol": "reservation",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ScratchFile #1",
+    "void write ( std :: uint64_t offset , const void * data , std :: size_t length ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "reservation . emplace ( . . . )",
+   "ordinal": 1
   },
   {
    "file": "include/pineforge/detail/scratch_file.hpp",
@@ -13263,6 +13350,19 @@
    "cls": "append",
    "spelling": "path + = . . .",
    "ordinal": 2
+  },
+  {
+   "file": "src/command_scratch_production.cpp",
+   "symbol": "quota_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #2",
+    "class CommandScratchFile final : public ScratchBacking #1",
+    "public : CommandScratchFile ( std :: size_t size , ScratchIoObserver observer ) : ScratchBacking ( ScratchBackingKind :: disk , size , observer ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
   },
   {
    "file": "src/command_scratch_production.cpp",

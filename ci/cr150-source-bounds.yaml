@@ -74,7 +74,7 @@ scan:
   generated_files:
     - "tutorial/**/generated*.cpp"
 ceilings:
-  unreviewed: 1343
+  unreviewed: 1346
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1299,6 +1299,8 @@ entries:
   - {id: "U1254", file: "include/pineforge/detail/scratch_file.hpp", symbol: "directory_", ops: ["assign", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 50}
   - {id: "U1255", file: "include/pineforge/detail/scratch_file.hpp", symbol: "name", ops: ["append", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 137}
   - {id: "U1256", file: "include/pineforge/detail/scratch_file.hpp", symbol: "refusal", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 135}
+  - {id: "U1628", file: "include/pineforge/detail/scratch_file.hpp", symbol: "quota_", ops: ["alloc", "grow"], container: "unresolved by the index: quota_.reserve(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 53}
+  - {id: "U1629", file: "include/pineforge/detail/scratch_file.hpp", symbol: "reservation", ops: ["grow"], container: "unresolved by the index: reservation.emplace(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 298}
   - {id: "U1257", file: "include/pineforge/detail/scratch_sequence.hpp", symbol: "<temp:const_iterator>", ops: ["temp"], container: "unresolved by the index: const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 26}
   - {id: "U1258", file: "include/pineforge/detail/scratch_sequence.hpp", symbol: "begin", ops: ["decl"], container: "const_iterator", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 91}
   - {id: "U1259", file: "include/pineforge/detail/scratch_sequence.hpp", symbol: "directory_", ops: ["assign", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 52}
@@ -1359,6 +1361,7 @@ entries:
   - {id: "U1317", file: "src/command_scratch_production.cpp", symbol: "budget", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 390}
   - {id: "U1318", file: "src/command_scratch_production.cpp", symbol: "budget_", ops: ["grow"], container: "unresolved by the index: budget_.reserve(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 175}
   - {id: "U1319", file: "src/command_scratch_production.cpp", symbol: "make_unique", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 397}
+  - {id: "U1630", file: "src/command_scratch_production.cpp", symbol: "quota_", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 232}
   - {id: "U1320", file: "src/command_scratch_production.cpp", symbol: "path", ops: ["append", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 226}
   - {id: "U1321", file: "src/command_scratch_production.cpp", symbol: "refusal", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 224}
   - {id: "U1322", file: "src/command_scratch_production.cpp", symbol: "set_command_scratch_byte_cap", ops: ["alloc"], container: "unresolved by the index: make_shared", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 368}
