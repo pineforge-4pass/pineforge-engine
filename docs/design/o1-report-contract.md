@@ -55,7 +55,7 @@ diagnostic must contain `unsupported report mode: SUMMARY_ONLY`. Refuse before
 execution; never retry with FULL, drop the option or infer support from an empty
 legacy array. This is a transport negotiation error, not a new broker failure code.
 
-For the SM-CX HPO host, after negotiating an implemented provider, the first
+For the HPO host, after negotiating an implemented provider, the first
 native contract call is
 `engine.set_report_mode_v1(pineforge::ReportMode::SUMMARY_ONLY)` before
 begin/run. Require `PF_REPORT_MODE_ACCEPTED`; any refusal ends that request.

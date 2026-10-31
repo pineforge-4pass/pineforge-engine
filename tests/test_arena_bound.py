@@ -1109,7 +1109,7 @@ def corpus_run(build: Path, corpus: Path, work: Path, arena_directory: Path,
     # This is a bound-proof guard, not production admission/routing. COMPUTE
     # uses its default attempt-0 arena and escalation when facts are missing.
     # A guessed arena here could not prove actual <= certified bound.
-    check(probes, "RETURN TO CORE-TOP: no corpus probe has a certified FACTS record")
+    check(probes, "RETURN TO MAINTAINERS: no corpus probe has a certified FACTS record")
     expected_pin = subprocess.check_output(
         ["git", "rev-parse", "HEAD:corpus"], cwd=ROOT, text=True).strip()
     actual_pin = subprocess.check_output(
@@ -1148,7 +1148,7 @@ def corpus_run(build: Path, corpus: Path, work: Path, arena_directory: Path,
           str(len({row["probe"] for row in rows if row["childPrivate"]["unbounded"]})) +
           " (informational)", flush=True)
     check(not unclassified,
-          "RETURN TO CORE-TOP: incomplete corpus certification: " + ", ".join(unclassified))
+          "RETURN TO MAINTAINERS: incomplete corpus certification: " + ", ".join(unclassified))
     return rows
 
 

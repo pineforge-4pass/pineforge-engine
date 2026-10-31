@@ -226,7 +226,7 @@ The producer must be trusted build tooling, never user-supplied assertions.
 The compiler owner must additionally bind imported library closures, the
 target/compiler profile and any external request/environment identity not
 already in the resolved plan. **That producer and external provenance
-integration remain RETURN TO CORE-TOP.**
+integration remain with the maintainers for a decision.**
 
 ## Compiler facts the bound needs
 
@@ -716,8 +716,8 @@ Slab allocation failure or unrepresentable optional geometry bypasses
 without refusing a valid backing read. No I/O-time allocation is needed.
 Charge K (prose ledger; scripts/arena_bound.py has no K input) alongside existing workspaces/inner backings, replacing the old read-cache allowance; K changes no arena-storage formula or certification.
 
-CORE-TOP's A5-WIDER brief reports a **44.4–46.2 MB pre-flat-port resident
-constant**, referring to Q2 at 15:43. That is a historical measurement,
+The maintainers' wider A5 note reports a **44.4–46.2 MB pre-flat-port resident
+constant**, citing an earlier note. That is a historical measurement,
 not a source-derived upper bound for this merged tree or arbitrary
 compiled strategy state. No P_as measurement was supplied. The calculator
 therefore installs neither value by default. A supplied historical RSS
@@ -966,7 +966,7 @@ The full mode enumerates every source-marked validation directory plus
 every parity-baseline probe, uses the same manifest reader before each
 run, and drives the canonical run_strategy CLI. Missing proofs are printed
 and cause incomplete proof coverage to fail. The
-`RETURN TO CORE-TOP: no corpus probe has a certified FACTS record` guard is
+`RETURN TO MAINTAINERS: no corpus probe has a certified FACTS record` guard is
 retained: this lab harness must not pass without any certified arena to
 compare with actual usage. It is a certification failure, not a production
 admission or sizing decision. Production still uses the default attempt-0
