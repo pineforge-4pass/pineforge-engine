@@ -35,10 +35,12 @@ CachedScratchBacking::CachedScratchBacking(std::unique_ptr<ScratchBacking> inner
     if (slot_count_ != 0) {
         bytes_.reset(new (std::nothrow) std::byte[kCacheBytes]);
         if (!bytes_)
-            throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
-                std::system_error(ENOMEM, std::generic_category(), "command scratch cache allocate"));
+            throw scratch_out_of_memory_failure();
+        page_ids_.reset(new (std::nothrow) ScratchPageId[slot_count_]());
+        if (!page_ids_)
+            throw scratch_out_of_memory_failure();
+        std::fill_n(page_ids_.get(), slot_count_, scratch_no_page);
     }
-    page_ids_.fill(scratch_no_page);
 }
 
 CachedScratchBacking::~CachedScratchBacking() noexcept {

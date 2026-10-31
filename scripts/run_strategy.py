@@ -3430,13 +3430,24 @@ def _tv_metrics_path(strategy_dir: Path, meta: dict, tv_path: Path) -> Path:
     return tv_path.parent / "metrics.json"
 
 
+def _metrics_range_provenance(metrics: dict) -> tuple[dict | None, str | None]:
+    """The rangeProvenance dict and its member name, or (None, None)."""
+    if not isinstance(metrics, dict):
+        return None, None
+    for member in ("rangeProvenance", "wsProvenance"):
+        provenance = metrics.get(member)
+        if isinstance(provenance, dict):
+            return provenance, member
+    return None, None
+
+
 def _tv_metrics_range_end(metrics: dict) -> tuple[int, str] | None:
     """TradingView's backtest range END from a tape's metrics.json, in ms,
     with the key it was read from: the ``to`` of the deep-backtest window,
     as 00:00 UTC of that date.
 
     Two spellings carry it. One records the exact requested
-    window as ``wsProvenance.requestedRange.to`` (ms
+    window as ``rangeProvenance.requestedRange.to`` (ms
     UTC), and every campaign tape's value is 1777593600000 = 2026-05-01
     00:00 UTC for ``"to": "2026-05-01"``; the other (ETH, AAPL 15,
     EURUSD) carries only the date. They agree wherever both exist, and the
@@ -3444,13 +3455,13 @@ def _tv_metrics_range_end(metrics: dict) -> tuple[int, str] | None:
     range (a hand-made metrics.json, or none)."""
     if not isinstance(metrics, dict):
         return None
-    ws = metrics.get("wsProvenance")
-    if isinstance(ws, dict):
-        requested = ws.get("requestedRange")
+    provenance, member = _metrics_range_provenance(metrics)
+    if isinstance(provenance, dict):
+        requested = provenance.get("requestedRange")
         if isinstance(requested, dict):
             to_ms = requested.get("to")
             if isinstance(to_ms, int) and not isinstance(to_ms, bool):
-                return int(to_ms), "metrics.json wsProvenance.requestedRange.to"
+                return int(to_ms), f"metrics.json {member}.requestedRange.to"
     to_date = str(metrics.get("to", "") or "").strip()
     if to_date:
         try:
@@ -3582,7 +3593,7 @@ def _load_tv_range_end(strategy_dir: Path, meta: dict) -> tuple[int, str] | None
     marked.
 
     Source: the tape's metrics.json (_tv_metrics_path) —
-    ``wsProvenance.requestedRange.to`` (ms) when present, else ``to``
+    ``rangeProvenance.requestedRange.to`` (ms) when present, else ``to``
     (YYYY-MM-DD, UTC midnight). A metrics.json without a range (or none at
     all) falls back to the tape's latest row (_tv_tape_last_row_ms), which
     is right whenever that row is the range-end row and merely early
@@ -3623,7 +3634,7 @@ def _apply_range_end_regime(strategy_dir: Path, meta: dict, run_kwargs: dict) ->
     logs. One regime for every tape (v5, 2026-09-03):
 
       -> bound the feed at TradingView's range end (_load_tv_range_end:
-         metrics.json ``wsProvenance.requestedRange.to`` / ``to`` as 00:00
+         metrics.json ``rangeProvenance.requestedRange.to`` / ``to`` as 00:00
          UTC inclusive, the tape's last row as the fallback) so the engine's
          final bar is TV's last bar, and WRITE the range-end close rows,
          each marked in the CSV's ``Engine range-end`` column
@@ -3933,7 +3944,7 @@ def _feed_timestamps(csv_path: Path, *, ohlcv_start_ms: int | None = None,
 
 def _tv_first_bar(strategy_dir: Path, meta: dict) -> tuple[int, str] | None:
     """TradingView's first computed chart bar for the tape (UTC ms), with
-    where it was read: metrics.json ``wsProvenance.returnedRange.from``.
+    where it was read: metrics.json ``rangeProvenance.returnedRange.from``.
 
     TradingView's deep backtest in a recorded reference run computes the
     script from the first chart bar at or after the requested ``from`` and
@@ -3962,12 +3973,12 @@ def _tv_first_bar(strategy_dir: Path, meta: dict) -> tuple[int, str] | None:
             metrics = json.load(f)
     except (OSError, ValueError):
         return None
-    ws = metrics.get("wsProvenance") if isinstance(metrics, dict) else None
-    returned = ws.get("returnedRange") if isinstance(ws, dict) else None
+    provenance, member = _metrics_range_provenance(metrics)
+    returned = provenance.get("returnedRange") if isinstance(provenance, dict) else None
     first = returned.get("from") if isinstance(returned, dict) else None
     if isinstance(first, bool) or not isinstance(first, int) or first <= 0:
         return None
-    return int(first), "metrics.json wsProvenance.returnedRange.from"
+    return int(first), f"metrics.json {member}.returnedRange.from"
 
 
 class TvEntryWindow(NamedTuple):

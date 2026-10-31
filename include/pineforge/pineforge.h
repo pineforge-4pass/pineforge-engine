@@ -1340,9 +1340,9 @@ PF_API int64_t strategy_position_cycle_seq(pf_strategy_t s);
  *  same REPORT row space as #strategy_closed_trade_entry_incarnation
  *  (`trades_` then the range-end rows, `open_at_end`). The returned pointer
  *  is valid until the next run() (or stream call) on this handle, like
- *  #strategy_get_last_error. NULL on a NULL @p s or an out-of-range
- *  @p trade_index. This legacy borrowed-pointer API materializes each
- *  requested row until the next run; full-history requests use growing RAM. */
+ *  #strategy_get_last_error. NULL on NULL @p s, out-of-range @p trade_index
+ *  or policy-erased rows; retained sealed rows are readable. This legacy API
+ *  materializes rows until the next run; full-history reads use growing RAM. */
 PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_index);
 /** See #strategy_closed_trade_entry_id for the row-space/lifetime/NULL
  *  contract. The returned string is the engine's own INTERNAL exit id, not
@@ -1444,6 +1444,20 @@ PF_API double strategy_current_equity(pf_strategy_t s);
  *  #strategy_current_equity's invalid-handle sentinel so a failed query is
  *  not mistaken for a capital value. */
 PF_API double strategy_initial_capital(pf_strategy_t s);
+/** Raw whole-lot realized P&L, excluding initial capital and report-only
+ *  terminal rows. Reads the engine accumulator directly, including before
+ *  report retrieval; independent of report sorting and global-exit recuts.
+ *  Nonvirtual, additive accessor; ABI version unchanged. NaN when @p s is NULL. */
+PF_API double strategy_net_profit_sum(pf_strategy_t s);
+/** Effective symbol pointvalue used by the engine report. NaN on NULL. */
+PF_API double strategy_report_pointvalue(pf_strategy_t s);
+/** Opt in to the separate pf-report-replay/v1 companion before a run.
+ *  Copies @p path and @p run_id (at most 64 KiB each; NULL run ID means empty).
+ *  NULL path disables.
+ *  Does not modify primary sink descriptors or existing C layouts.
+ *  Returns 0 on success, -1 for invalid arguments, -2 during streaming,
+ *  -3 during an active call or after ledger retirement. Check the result. */
+PF_API int strategy_set_report_replay_v1(pf_strategy_t s, const char* path, const char* run_id);
 /** Task 9: total SCRIPT bars dispatched by the most recent run() (mirrors
  *  `pf_report_t::script_bars_processed`, engine_report.cpp) -- includes a
  *  stream's warmup leg and every realtime tick-driven bar dispatched
@@ -1996,6 +2010,19 @@ PF_API int strategy_signal_safety_receipt(pf_strategy_t s, char* json, size_t ca
 PF_API int strategy_set_symbol_feed_borrowed_v1(
     pf_strategy_t s, const char* key, const char* timeframe,
     const pf_bar_t* bars, const int64_t* close_ms, int n);
+
+/** Exact C++ engine layout accepted by the live report accumulator.
+ *  Bump whenever that layout changes, independently of #PF_ABI_VERSION. */
+#define PF_STREAM_ENGINE_LAYOUT_VERSION 1u
+
+/** Optional module declaration that its strategy handles point directly to
+ *  a BacktestEngine with the returned #PF_STREAM_ENGINE_LAYOUT_VERSION.
+ *  The engine runtime exports this with its streaming implementation.
+ *  Modules with opaque or wrapped handles must omit it or return 0.
+ *  Absence or a different version requires using #strategy_stream_fill_report;
+ *  stream ABI and execution-capabilities versions alone do not prove layout.
+ *  This query reads no strategy state and changes no report or hash. */
+PF_API uint32_t strategy_stream_engine_layout_version(void);
 
 #ifdef __cplusplus
 } /* extern "C" */

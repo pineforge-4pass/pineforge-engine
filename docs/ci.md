@@ -38,7 +38,7 @@ The classifier uses exact `.github/` and `docs/` prefixes, so lookalike
 directories and the classifier itself cannot create a skip.
 
 `--tier github-only` runs `shellcheck-version`, `actionlint-runner-labels`,
-`workflow-lint`, `ci-workflow-contract`, `docs-workflow-contract` and
+`runner-allowlist`, `workflow-lint`, `ci-workflow-contract`, `docs-workflow-contract` and
 `docs-workflow-contract-tests`, plus the usual actionlint version check.
 It excludes source guards and the general preflight test suite. A failed
 classification selects the ordinary fast tier and fails the aggregate.
@@ -49,7 +49,7 @@ also avoids the Doxygen build.
 `unittest-shards-tests` and `run-json-harness-tests`; `preflight-slow` runs
 exactly those stages with `--tier slow`. Toolchain setup and the hash-pinned
 pytest install stay in the slow job. A plain local invocation below retains
-all stages and its existing event-aware verifier-class selection. `preflight-tests` runs every discovered method across up to eight shards, sized to available CPUs, with separate logs in `build-ci-preflight/preflight-tests-shards/`.
+all stages and its existing event-aware verifier-class selection. `runner-allowlist` independently scans workflow runner labels against the committed mirror in the fast tier's parallel group; `preflight-tests` runs every discovered method across up to eight shards, sized to available CPUs, with separate logs in `build-ci-preflight/preflight-tests-shards/`.
 
 The smoke configures Release, builds `pineforge_pr_smoke` and directly runs
 `ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error`.
@@ -94,7 +94,7 @@ Python refuse a system-wide install (PEP 668), and `.venv/` is ignored. The
 and fails, never skips, without it.
 
 Actionlint only accepts declared custom self-hosted runner labels; preflight
-checks the declarations in `.github/actionlint.yaml`.
+checks the declarations in `.github/actionlint.yaml`. Before a workflow file moves onto a gke- or gkp- label, add its line to `.github/runner-group-allowlist.txt` and ask for the org runner-group entry; the merge waits for both.
 
 ORG-ACTIONPINS is enforced by preflight's `ci-workflow-contract`: every
 third-party `uses:` in `.github/workflows/*.yml` (also `.yaml`) and nested
@@ -259,8 +259,8 @@ registry-name or exclusion-name fields; the default exclusion still adds
 selected discovery and strict `ctest-exclusion` checks.
 
 **Slow-label bound, 2026-10-24:** `PINNED_SLOW_TEST_ROWS` in
-`scripts/ci_verify.py` pins all 66 source-labelled names: 43 from the
-`PINEFORGE_PR_SLOW_TESTS` loop and 23 direct CMake `LABELS` assignments; the four report slices replace one direct name (+3), and the report and command-after covers remain outside the slow set.
+`scripts/ci_verify.py` pins all 69 source-labelled names: 43 from the
+`PINEFORGE_PR_SLOW_TESTS` loop and 26 direct CMake `LABELS` assignments; the four report slices replace one direct name (+3), and the report and command-after covers remain outside the slow set.
 Every name listed by `ctest -N -L slow` must belong to that set; conditional
 registration may omit names. An unpinned name fails `ctest-exclusion` on
 plain and 1/1 runs, or `ctest-shard-discovery` for multiple shards, with the
@@ -1401,9 +1401,9 @@ fewer of the 43 than Release does. `live-sanitizers`, `live-tsan` and the
 parity subset keep their existing selections.
 
 **The slow-label inventory also includes rows with direct labels:**
-The timing list contains 43 names, and 23 additional names are pinned for
+The timing list contains 43 names, and 26 additional names are pinned for
 direct `LABELS` assignments in `tests/CMakeLists.txt` and
-`tests/cr150.d/*.cmake`, making 66 distinct pinned slow names.
+`tests/cr150.d/*.cmake`, making 69 distinct pinned slow names.
 `PINNED_SLOW_TEST_ROWS` bounds the discovered exclusion by those names,
 independent of the registered count; each profile may register a subset.
 

@@ -2,11 +2,11 @@
 //
 // PURPOSE. Script-owned state (arrays, strings, map payloads, matrices, UDT graphs,
 // drawing records) grows with bars or with objects the script creates. This header
-// fixes the one interface every A5 lane consumes so that state lives in a fixed
+// defines the shared store interface so that state lives in a fixed
 // resident working set over a spilling backing, addressed by stable ids, with exact
 // transactional versions for calc-on-fill rollback.
 //
-// RULES THIS CONTRACT ENCODES (owner-settled, 1.7.0):
+// STORE GUARANTEES:
 //  - A write or resize never fails because the resident window is full; it spills.
 //    Creation is bounded by Shape::max_live_objects, independent of lifetime ids.
 //  - Resident bytes are bounded by the ScratchStore workspace picked at open,
@@ -18,7 +18,7 @@
 //  - Every read and write is exact: no approximation, no dropped old element, no
 //    reordering that a script can observe.
 //
-// IMPLEMENTATION SHAPE (CORE-TOP ruling L6, 2026-10-21). This interface is a THIN
+// IMPLEMENTATION SHAPE. This interface is a THIN
 // OBJECT LAYER over pineforge::detail::ScratchStore, so the project has one page
 // cache and one backing boundary. An object is a header record plus fixed-size data
 // chunk records, each record keyed by the 16-byte big-endian pair (object id, chunk
@@ -27,8 +27,8 @@
 // chunk's value is its data bytes. The layer keeps no per-object, per-chunk or
 // per-byte heap state: an id counter, a few scalars and fixed buffers only.
 //
-// DECLARATIONS ONLY. The single implementation is src/detail/o1_store.cpp on the
-// lane that owns this file; other lanes bind to this header and must not fork it.
+// DECLARATIONS ONLY. The single implementation is src/detail/o1_store.cpp;
+// all store consumers use this header rather than separate implementations.
 
 #ifndef PINEFORGE_DETAIL_O1_STORE_HPP
 #define PINEFORGE_DETAIL_O1_STORE_HPP
@@ -50,8 +50,8 @@ inline constexpr Id kNullId = UINT64_C(0);
 // Fixed chunk-byte and resident-page-COUNT bounds, not a resident-byte cap.
 // ScratchStore resident = (resident_pages + 6 work pages + metadata in pages)
 // x page_bytes: at most about 1 GiB at its own 1 MiB page-size limit.
-// Larger chunk_bytes/resident_pages are caller errors; raising either bound
-// needs CR150-CX's review.
+// Larger chunk_bytes/resident_pages are caller errors. These fixed limits
+// bound the supported chunk size and resident page count, respectively.
 inline constexpr std::uint32_t kMaxChunkBytes = 64u * 1024u;
 inline constexpr std::uint32_t kMaxResidentPages = 1024u;
 // Live-object default and cap: 1,048,576. Zero selects the default; larger

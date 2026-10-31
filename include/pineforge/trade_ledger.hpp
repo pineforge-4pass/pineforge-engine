@@ -1,5 +1,4 @@
 #pragma once
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -7,6 +6,7 @@
 #include <iterator>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace pineforge {
 
@@ -51,8 +51,8 @@ public:
     static constexpr size_type kDefaultCacheRows = 65536;
     static constexpr size_type kMaxCacheRows = 1048576;
     // A report-sink run has the same declared constant cap as the default:
-    // 65,536 x 312 = 20,447,232 entry bytes, plus sizeof(TradeLedger)+sizeof(State).
-    // Allocation remains lazy and grows by powers of two up to this cap.
+    // 20,447,232 entry bytes + 2,048 table bytes + sizeof(TradeLedger)+sizeof(State).
+    // Pages allocate lazily up to this cap, clipping the final page to fit.
     static constexpr size_type kSinkCacheRows = kDefaultCacheRows;
     using Visitor = std::function<bool(size_type, const Trade&)>;
 
@@ -97,15 +97,15 @@ public:
     // bytes on 64-bit targets; maximum: 1,048,576 rows, 327,155,712 entry bytes.
     void set_cache_rows(size_type rows);
     size_type cache_rows() const;
-    // Accounted ledger/cache storage: rows*kLedgerEntryBytes + a fixed base
-    // (sizeof ledger + State). Excludes allocator overhead, scratch/OS pages,
+    // Accounted storage: sizeof(TradeLedger)+sizeof(State)+rows*kLedgerEntryBytes
+    // + ceil(rows/256)*sizeof(void*). Excludes allocator overhead, scratch/OS pages,
     // configured directory strings, returned owning Trades and the explicit
     // legacy materialize() map. Validates the same row range as the setter.
     static size_type resident_cache_bytes(size_type rows);
-    // Actual allocation: fixed base plus allocated capacity*kLedgerEntryBytes.
-    // Allocated on the first read, at min(cache_rows(), the next power of two
-    // >= max(64,size())). Further growth invalidates entries; capacity stays
-    // bounded by cache_rows(), not the bars (a retiring ledger: retained rows).
+    // Actual allocation: fixed base + ceil(cache_rows()/256) owning pointers
+    // after first read + min(256,cache_rows()-256*p)*kLedgerEntryBytes per page p.
+    // Slot mapping stays fixed; page growth preserves entries. Writes only
+    // fill an existing cache; retirement frees pages outside retained rows.
     size_type cache_resident_bytes() const;
     // Occupied decoded entries only; separate from resident_size()'s legacy
     // descriptor/materialization accounting.
@@ -120,10 +120,10 @@ public:
     size_type resident_base() const;
     bool empty() const;
 
-    // read() spans the retained source; a read below base() on an explicitly
-    // retiring sink run refuses with coded logic_error engine_invariant.
-    // at()/[] retain the checked
-    // unsealed-window contract for existing settlement callers.
+    // read()/at()/[] span the retained source, including sealed rows on a
+    // non-retiring ledger. An explicitly retiring ledger refuses reads below
+    // base() with a coded std::logic_error (engine_invariant).
+    // Writers still reject sealed rows below the publication boundary.
     // Hits allocate only the owning strings already required by read().
     // Direct-mapped eviction above cache_rows(), or oversized strings, retains
     // the existing scratch path; a history loop can still cost O(T).
@@ -131,12 +131,12 @@ public:
     Trade operator[](size_type global) const;
     Trade at(size_type global) const;
     Trade back() const;
-    // Same checked unsealed-row contract as at(). numeric_at() returns every
+    // Same retained-row read contract as at(). numeric_at() returns every
     // numeric field and flag with empty strings, reading only the descriptor.
     // entry_id_at() returns only that string and shares the field read cache.
     Trade numeric_at(size_type global) const;
     std::string entry_id_at(size_type global) const;
-    // Pine field reads use the same check(global,true) as at(). A numeric
+    // Pine field reads use the same check(global) as at(). A numeric
     // hit loads just its Record member, without constructing/copying a Trade
     // or any string. A string hit copies only the requested packed bytes.
     // Misses retain the numeric record and all strings fitting the allowance.
@@ -157,6 +157,16 @@ public:
     std::string entry_comment_at(size_type global) const;
     std::string exit_comment_at(size_type global) const;
     std::string exit_id_at(size_type global) const;
+    // Same checked retained-row contract as the owning text getters. Compare
+    // exact bytes (including NUL); empty fields equal an empty rhs. Return a
+    // plain bool: no pointer escapes. Warm reads allocate no owning strings;
+    // oversized text uses fixed stack chunks and consumes the whole extent,
+    // even on mismatch, so later I/O errors propagate. As with existing const
+    // reads, all access to the same ledger requires external synchronization.
+    bool entry_id_equals(size_type global, std::string_view rhs) const;
+    bool exit_id_equals(size_type global, std::string_view rhs) const;
+    bool entry_comment_equals(size_type global, std::string_view rhs) const;
+    bool exit_comment_equals(size_type global, std::string_view rhs) const;
     void replace(size_type global, const Trade&);
     void modify(size_type global, const std::function<void(Trade&)>&);
 
@@ -189,6 +199,13 @@ public:
     // Historical bytes remain readable unless the engine admitted retirement
     // from an explicit no-history generated-module capability.
     void seal(size_type global_end);
+
+    // Signed-index comparisons: an index outside [0,size()) compares as empty.
+    // Valid indices keep the checked retained-row contract of *_equals.
+    bool entry_id_matches(int index, std::string_view rhs) const;
+    bool exit_id_matches(int index, std::string_view rhs) const;
+    bool entry_comment_matches(int index, std::string_view rhs) const;
+    bool exit_comment_matches(int index, std::string_view rhs) const;
 
 private:
     friend class BacktestEngine;

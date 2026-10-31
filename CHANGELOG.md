@@ -7,6 +7,323 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+## 1.9.1 — 2026-10-31
+
+- A script container (string, array, map or object store) whose scratch
+  growth or commit fails now reports the typed scratch failure instead of
+  `engine_unclassified_error` with the text `o1 store: put/commit: io_error`.
+  When the scratch arena is exhausted the run fails with `report_sink_failed`
+  and `reason: arena_exhausted`; when the disk scratch fails (a zero
+  `RLIMIT_FSIZE`, `ENOSPC` or `EIO` on the unjailed route) it fails with
+  `report_sink_failed` and `reason: scratch_io`. Runs that did not fail are
+  unchanged.
+- A failed memory allocation in the scratch layer now fails the run with the
+  typed `out_of_memory` code. A `std::bad_alloc`, or a `nothrow` allocation
+  that returned null, in the command and script scratch backings, the page
+  cache, the arena directories and metadata, the store workspace, the
+  external-opening readbacks, the owning journal decoders and the spilled
+  order book used to end as `scratch_io_failed`, `report_sink_failed`,
+  `engine_invariant` or an unclassified error. A real operating-system
+  `ENOMEM` from a mapping or a disk operation, an extent limit and arena
+  exhaustion keep their existing codes. Runs that did not fail are unchanged.
+  The two owning journal-decode helpers declared in `native_order.hpp` and
+  `source/market_admission.hpp` are no longer `noexcept`: an allocation failure
+  in them throws the typed `out_of_memory` failure instead of returning an I/O
+  status. A caller that binds one of these functions to a `noexcept` function
+  pointer must update it (since C++17, `noexcept` is part of the function
+  type); the same goes for code that asserts they are `noexcept`, and a caller
+  inside a `noexcept` function now terminates if an allocation fails.
+  Otherwise the change is source-compatible, and every C++ object must be
+  rebuilt against the new headers as for any release.
+- The container entrypoint no longer compiles a mounted `/in/strategy.cpp` on
+  trust. With no `/in/strategy.pine`, it compiles the file only when the
+  environment holds `PINEFORGE_STRATEGY_CPP_SHA256` equal to the sha256 of
+  exactly those bytes (taken over the frozen copy g++ reads). Otherwise it ends
+  with exit 2 and one `run_request_invalid` line (option `generated_cpp`) before
+  any compile. `PINEFORGE_ALLOW_UNATTESTED_CPP=1` keeps the old behaviour for
+  local use; a hosted caller must not set it. Mounting `strategy.pine` is
+  unchanged.
+- The container's report wrapper (`docker/run_json.py`, `docker/pf_sink.py`)
+  does less work per row. It validates sink trade lines with one plan per
+  verified header instead of a generic per-field function, with the same
+  accepted set, the same left-to-right refusal order and the same error text;
+  it encodes bulk equity rows without a per-row template, with the same write
+  boundaries and bytes; and bar tapes whose volume column holds integers, or
+  whose prices are written with fixed decimals such as `100.00`, now take the
+  packed loader instead of being declined, with the same bars, count and feed
+  hash as the slower reader. Trade rows are encoded once and queued before
+  they are written (the queue of each column file keeps the existing bounds of
+  512 records and 256 KiB, so nothing grows with the number of trades or bars),
+  and the equity proof derives the repeat allowed by the run pattern once
+  instead of once per batch. A write can therefore be attempted later than the
+  row that queued it; a write failure is still published as the same typed
+  `report_sink_failed` refusal with reason `scratch_io`, at the same point
+  relative to the other refusals. The final report artifact, which the wrapper
+  writes once and reads back into stdout, now has a 1 MiB aligned I/O window
+  instead of 64 KiB; the columns, the spools and the sink reader keep 64 KiB,
+  and the bytes written are unchanged. That is one fixed 1 MiB window buffer
+  per report prepared, independent of the report size, the number of recorded
+  output series and the number of trades. Reports are byte-identical. The
+  change is in the container's Python files only; no C++ object and no C ABI
+  header is affected.
+- A cohort's target is read from an index built once per generation. A strategy
+  that keeps many lots open and has live exits used to canonicalize every
+  physical opening again for each cohort target it read, several times per
+  ordinary OHLC point. The engine now canonicalizes each physical opening once
+  per populated generation, indexes the openings by root in a private
+  fixed-size array (at most 4,096 rows of 16 bytes, 64 KiB, kept across
+  invalidations), and answers a cohort's target read from the range of its own
+  root. The original reader stays as the complete fallback: above 4,096 open
+  lots, on an allocation failure, for intrabar and tick input, inside the
+  source host's applied callback, and when the index cannot be built for the
+  current state. The array is reserved on the first indexed cohort read, even
+  for a few lots, and its size does not depend on bars, trades or lots.
+  Reports, fills, ids and hashes are unchanged. This entry makes no speed
+  claim.
+- The closed-cohort origin release searches the roster union once per pass.
+  After a close, the adapter's origin-release pass decides which request
+  origins can be released. For each open lot it asked, roster by roster,
+  whether the lot's opening was a member of that roster, so a pass could touch
+  every roster once for each lot. It now collects the origins of all rosters
+  once into one vector, sorts it, removes duplicates and answers each lot with
+  a binary search; the ordered commands the pass produces are unchanged. The
+  vector is private to the adapter, holds at most 8 bytes per stored roster
+  origin (up to about 16 bytes per origin while it grows), is cleared at the
+  start of every pass and keeps its capacity between passes; it has no fixed
+  cap, because its size follows the number of roster origins the engine
+  already stores, and it is at most about twice that count (the capacity
+  high-water mark), so it adds no growth with bars or trades beyond what the
+  rosters already hold. No public header changes and no installed class
+  changes layout. This entry makes no speed claim.
+- `is_na()` and `na()` accept strings, containers and nullable handles. In
+  `include/pineforge/na.hpp`, only arithmetic types had an `is_na` overload, so
+  generated code that called `is_na` on a `std::vector`, a `std::string` or a
+  `std::map` did not compile. `is_na(const std::string&)` now returns whether
+  the string is empty (an empty string is the string `na`, as generated code
+  already read it). Only `std::string` itself is read as a string: a type that
+  merely converts to a string, or another engine string handle, is present like
+  any other type without a missingness protocol. A `ScriptArray` is `na` when
+  it is not backed by a store. A plain container such as a `std::vector` or a
+  `std::map` is never `na`, so even an empty one is present. A type with an
+  `is_na()` member, or with a free `is_na` found by argument-dependent lookup,
+  answers through it. `na<T>()` returns `T::na()` for a type that supplies both
+  an `is_na()` member and a static `na()`, and `T{}` otherwise, as before.
+  Every existing scalar and handle overload keeps its answer. The change is
+  header-only templates in a public C++ header: no class gains a member, base
+  or virtual, and no C header changes, so `PF_ABI_VERSION` stays 5.
+- The command-store cache can be built larger than 64 KiB. The size of the
+  command scratch cache is a build-time constant (64 KiB by default). Raising
+  it above the default did not compile, because the slot table was an array
+  inside the cache object. The slot table is now one allocation made at
+  construction, beside the page buffer, with one entry per slot of the store's
+  own page size; a failed allocation reports the same typed `out_of_memory`
+  failure as the page buffer. The class sets no upper cap on the constant (on
+  64-bit targets the sizes are `std::size_t` and the page ids are 64-bit); the
+  only limit is memory. At the default size nothing changes: the slot
+  function, the admission rule, the resident prefix, hits and misses and the
+  bytes are the same, and the documented fixed bound still charges the worst
+  case, 198 KiB (202,752 bytes). With the constant raised to 1 GiB and to
+  4 GiB the library and every test target build. Seven tests were run once at
+  each of those sizes: five pass, and the two that do not are limits of the
+  tests (one assumes the cache buffer is smaller than the report curve, one
+  needs real file media that the scratch filesystem of those runs, an
+  overlay, could not provide), not of the cache. Nothing broader is claimed. The class is in a source-only header: no
+  public header or ABI declaration changes.
+
+### Closed-trade reads
+
+- `TradeLedger` gains `entry_id_matches`, `exit_id_matches`,
+  `entry_comment_matches` and `exit_comment_matches`: one call checks the index
+  and compares the text (an index outside [0,size()) compares as empty). The
+  `*_equals` members stay, and the four `BacktestEngine::closed_trade_*_equals`
+  wrappers now call the new members, so a script that compares
+  `closedtrades.entry_id(i)` with a literal over every closed trade on every bar
+  does less work per visit.
+- The closed-trade read cache is paged. It no longer doubles with the number of
+  trades and discards its entries at each doubling; slots keep a fixed mapping
+  and the storage comes in 256-slot pages, so a whole-history scan no longer
+  re-reads every row from disk after each cache growth. A non-retiring run of 64
+  rows or fewer holds about 62 KB more (one 256-slot page of 312-byte entries
+  plus the 2,048-byte page table, against 64 entries before), and a retiring
+  run holds at most (retained rows / 256, rounded up, plus 2) pages: three pages
+  (about 240 KB, plus the table) for the default 64-row window; both amounts
+  depend on the retained window, not on the number of trades.
+  `cache_resident_bytes()` and `resident_cache_bytes(rows)` both count the page
+  table (2,048 bytes at the default cap of 65,536 rows).
+  `docs/pages/memory-management.md` describes the paged cache and its charge.
+- Fewer scratch writes per closed trade: a row is written back only when its
+  close cause changes (or the row is below the sealed base), an identical
+  stored descriptor is not stored again, and the texts of one appended row go
+  out as one contiguous write; retirement no longer zeroes on disk what the same
+  operation's head release zeroes or truncates again. Reports are unchanged.
+- The closed-trade ledger writes about half as often to its scratch files in
+  the measured case. In the measured case each closed trade cost four writes
+  on the disk scratch route, two to the index file and two to the payload
+  file, because the retired head of each file was zeroed after every
+  publication. The retired head is now zeroed in whole 4,096-byte blocks
+  behind a per-file watermark. Counted on the closed-trade stream test fixture
+  (a strategy that closes one trade on every bar: 6,400 closed trades, both
+  ids 4 bytes, a report sink writing to a disk file; not a general rate)
+  against the engine just before this change, which already includes the
+  fewer-writes change above (1.9.0 was not measured), the write system calls
+  to the ledger's two scratch files, index and payload together, fell from
+  4.004 to 2.048 per closed trade (from about 2 to about 1 on each file). Up
+  to 4,095 bytes of the newest retired index bytes (about 24 index records)
+  and up to 4,095 bytes of the newest retired payload bytes per file stay
+  un-zeroed until the next block completes or a complete chunk is returned;
+  the scratch files are anonymous, unlinked and never reopened, and a hosted
+  arena keeps those bytes in the run's own chunk (until it is returned or the
+  run ends). Reports are byte-identical (pinned on the stream test fixture;
+  the 312-probe parity sweep did not move). No public header, class layout,
+  `PF_ABI_VERSION` or stream layout changes. The arena routes make no
+  `pwrite`; the same block rule applies to their memory writes, where the
+  saving is a memory copy of 4 KiB of zeros, not a syscall.
+- Class layouts are unchanged and `PF_ABI_VERSION` stays 5; the C ABI
+  (`pineforge.h`) is unchanged by 1.9.1.
+
+## 1.9.0 — 2026-10-30
+
+- On macOS, `CMakeLists.txt` now lets one symbol,
+  `strategy_reads_trade_history`, stay undefined when linking the shared
+  window-plan library (the 1.8.0 known issue). macOS is not supported and no CI
+  job builds or tests it.
+- Register seven failure codes for the planned supervised report channel.
+  With the three run-quota codes they form the ten codes added in 1.9.0,
+  numbered 70 to 79 in name order after the existing codes. Nothing emits the
+  seven yet; no existing code, argument or exit status changes.
+
+### Closed-trade reads
+
+- C++ callers can compare closed-trade ids and comments in place, including
+  embedded NUL bytes, without allocating owning strings. Oversized fields use
+  fixed stack chunks.
+- Non-retiring ledgers serve sealed closed-trade rows from retained storage.
+  Numeric, text and C string accessors return the stored row after sealing;
+  writes to sealed rows and reads of physically retired history still refuse.
+- Range checks and cache hits cost less on the closed-trade read path. Class
+  layouts and `PF_ABI_VERSION` 5 are unchanged; existing 1.8.0 strategy modules
+  require no rebuild for these changes.
+
+### Native live webhook transport ownership
+
+An independent curl-owner thread now drives HTTP while the delivery worker
+handles the ledger. This addresses accepted deliveries timing out while the
+delivery worker waited for the ledger mutex during a checkpoint.
+Commands and completed results cross two 256-entry rings, one in each direction.
+While idle, each direction can wait up to 20 ms for the other thread to notice
+work; there is no wakeup. Queued batches and ledger stalls can add further delay.
+`ended_at` is stamped when the delivery worker records the result in the ledger,
+so after a ledger stall a successful attempt's `ended_at - started_at` can exceed
+`total_timeout_ms`. Timeout settings, retry policy, acknowledgement and recovery
+semantics are unchanged.
+
+### Live ledger report-checkpoint layouts
+
+- The ledger open derives the table layouts it accepts from one list of the
+  ledger's tables, including report checkpoints: every layout a runner has
+  written, each also without `report_integrity`; any other table count is
+  refused. A ledger without integrity digests, including one that already has
+  the delivery summaries, opens and needs one verified `run` replay before export.
+
+### Native live report checkpoints
+
+The live runner now writes immutable cumulative report checkpoints at K, 2K,
+4K, ... committed inputs. `--checkpoint-interval K` sets the first/base interval
+(default 1024). For fixed K and bounded per-input report growth, geometric
+checkpoints use linear payload storage. Report export starts at the nearest
+verified checkpoint P, reading its witness snapshot and C-P tail deltas for
+cursor C; the tail approaches half the history just before the next doubling.
+The runner README gives the exact report-row and stored-payload bounds.
+
+Checkpoint preparation precedes input admission, which reserves its serialized
+cumulative payload. Its separate insert transaction runs after the input
+commit and admits its pages within that reservation. A failed checkpoint records
+a typed diagnostic and counter and leaves that input durable so the service can
+continue. An old ledger gets its first checkpoint
+during open/startup recovery, before new inputs; this initial reconstruction
+reads the full history. Each boundary still builds an O(T) document for a
+report of size T.
+
+Default export and restart verify the report chain only from the nearest
+checkpoint onward. `report --verify-full` re-verifies the whole committed chain.
+A payload or integrity witness failure falls back to full report
+reconstruction; startup failures are published on stderr and in the service
+status file's `checkpoint_diagnostic` field.
+That diagnostic adds `reason` (`budget`, `build`, `io`) and separate `budget_count`, `build_count` and `io_count` fields while retaining every existing key and the total `count`.
+
+The checkpoint contains report state only. The engine has no state restore
+entry point, so restart recovery still replays committed strategy inputs and
+validates their state hashes and actions. The diagnostic measurement row prints
+the lab's file, WAL, RSS, descriptor and timing values; this release does not
+claim those unmeasured values in its documentation.
+
+### Native live report stream updates
+
+All stream modes now retain the cumulative fold for checkpoint
+verification. For modules with a matching engine-layout stamp, interval-mode
+cumulative documents also carry `ratios_as_of_input` and `ratio_context`; export
+refreshes the ratios and marker without changing stored checkpoints.
+
+- **Optional engine-layout query.** The runtime C surface adds
+  `strategy_stream_engine_layout_version`. The carried accumulator and
+  ratio-interval scheduling described below apply only when this optional
+  module export matches `PF_STREAM_ENGINE_LAYOUT_VERSION`. Modules without a
+  matching stamp keep the public-report path: full `strategy_stream_fill_report`
+  snapshots and exact ratios at every input, even for K > 1. They add neither
+  `ratios_as_of_input` nor `ratio_context` and emit no terminal interval refresh.
+  The runner prints no warning about a missing or mismatched stamp.
+- **Delta JSONL is opt-in; the default stream is unchanged.**
+  `pineforge-live run --report-jsonl` and `--report-jsonl=full` emit one
+  cumulative `pineforge-native-report/v1` document per committed input, with the
+  same bytes and field order as before. `--report-jsonl=delta` is the opt-in
+  mode: it emits the ledger's `pineforge-native-report-delta/v1` patch with an
+  additional top-level integer `input_cursor`. Other values are refused.
+- **Non-ratio per-input report work is flat in appended rows.** For modules
+  with the matching stamp, the runner carries a closed-trade high-water mark
+  and no longer scans the full closed trade prefix for every input. Delta
+  serialization keeps scalar state and array counts; the report accumulator
+  carries the equity series for ratios, while every mode keeps the cumulative
+  JSON document, accumulator curve and ratio workspace, and engine arrays
+  resident with O(report) growth in equity
+  points and trades as the cost of one cumulative-document builder, measured
+  by `test_native_live_report_memory`: on the lab 10-28 with the default stream
+  and default ratio interval, the runner's own `VmHWM` peak RSS was 22,880 KiB
+  at 1,000 inputs and 40,024 KiB at 10,000 inputs, about 1.9 KiB per additional
+  input, for a native test host that records one equity point per bar (22,472
+  KiB and 29,828 KiB, about 0.82 KiB per additional input, for the native market
+  example that records none), consistent with the per-bar equity series being
+  the difference (the two hosts differ in other ways too); the process
+  measurement includes the accumulator curve, retained cumulative document
+  and engine arrays; the row omitted
+  100,000 inputs because its
+  cumulative-stream projection assumes output volume quadratic in the input
+  count, exceeding the work deadline for that build. These two points do not
+  establish a flat memory bound.
+  For modules with the matching stamp, the ordinary live path uses an
+  engine-side carried report accumulator for trade materialization, trade
+  statistics, equity high-water, drawdown/run-up and the other non-ratio scalars,
+  updating only appended rows and replacement tails.
+  The batch `fill_report` and existing C exports retain their behaviour;
+  `strategy_stream_engine_layout_version` is additive.
+- **Optional ratio interval.** `--ratio-interval K` is a positive integer,
+  default 1. K = 1 (the default) is unchanged behaviour: every input carries
+  the exact batch ratios. For modules with the matching stamp, K > 1 trades
+  per-input freshness of `sharpe_monthly`, `sharpe_bar`, `sortino_bar` and
+  `sortino_monthly` for work: the same batch routine refreshes them at divisible
+  input cursors, the final input and
+  export; intermediate deltas retain the last values and add
+  `ratios_as_of_input`. An additive `ratio_context.chart_timezone` preserves
+  the month clock for export. A pipe/socket whose EOF is discovered after its
+  last commit emits a final refresh at the same cursor; stored deltas remain
+  immutable. Replay saves a separate full marker parse only for canonical
+  deltas whose report equality is checked; rows below a verified checkpoint
+  keep the full syntax parse. Exact ratio recomputation remains O(series), at
+  every input for K = 1 and at the scheduled boundaries for K > 1. Other ordinary-live
+  per-input report work is O(new/replaced rows), including current open lots
+  and diagnostics; full JSONL still writes the whole cumulative document.
+
+## 1.8.0 — 2026-10-29
+
 **[1.8.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.8.0)**,
 paired with [pineforge-codegen 1.8.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.8.0).
 A minor release. It speeds up the `run_json` wrapper (the wrapper only, not the
@@ -20,6 +337,17 @@ ABI number in `strategy_library_incompatible`'s message. The report keys are
 unchanged except for two additive diagnostics keys, described below.
 
 - Monthly Sharpe/Sortino month keys for timestamps beyond about 34,800 years from the epoch no longer overflow; in-range results are unchanged.
+- The report's annualization diagnostic now uses the engine's initial capital
+  on every report path. The path-sink report route (named or unnamed)
+  previously omitted it and could drop the diagnostic when the compounded
+  return overflowed; metric values are unchanged.
+- Strategies that reversed on an entry id the other side had used before kept the wrong position: the reversal's new lot was erased from its entry, so later percentage exits were sized from zero units and closed nothing, the position stayed open, later entries could exceed the pyramiding limit, and the closed-trade rows for those exits were missing. Affected releases: v1.1.0 through v1.7.0. Fixed in 1.8.0. Release 1.0.0 handles percentage exits after a reversal differently for an older, unrelated reason, so it is not a safe version to stay on either. For strategies that reverse on a reused entry id, the per-bar state hash values change (the fix changes position bookkeeping); compare state hashes only between runs of one release, as before.
+- In-process callers can again iterate the report's trades and equity curve on
+  the default path, as well as the outputs rows, and take their length. Rows
+  decode lazily; trades and equity also support `[i]` (new for sink trades).
+  The first read freezes the report spool, which then accepts no more rows.
+  Iterate before the report's resources close; afterwards iteration raises
+  `ValueError`.
 
 ### Compatibility and migration
 
@@ -84,6 +412,11 @@ unchanged except for two additive diagnostics keys, described below.
   earlier runners cannot open the migrated database. The summaries add one
   row and up to three partial-index entries per action, plus per-target rows
   and indexes.
+- The ledger open derives the table layouts it accepts from one list of the
+  ledger's tables: every layout a runner has written, each also without
+  `report_integrity`; any other table count is refused as before. A ledger
+  without integrity digests, including one that already has the delivery
+  summaries, opens and needs one verified `run` replay before export.
 
 ### Run profile in the report diagnostics
 
@@ -127,6 +460,27 @@ unchanged except for two additive diagnostics keys, described below.
   with unique ids. The gap to 1.6.3 is **not** closed. The engine's own
   per-record sink parse and the dense-script close path are separate work, not in
   this release.
+
+### Metrics-only `run_json` request
+
+- **`--metrics-only[=auto|legacy]` prints the report without its per-bar and per-trade arrays.**
+  The document is the ordinary document without `trades`, `equity_curve`,
+  `elapsed_seconds` and the two scratch-arena byte counters; every other key
+  keeps its name, value and order. A bare option means `auto`. With `auto`, a
+  native module that certifies itself takes the engine's no-curve metrics route
+  (Sharpe, Sortino, the monthly ratios, the equity summary and the trade
+  statistics are computed as the run goes), which saves at least 12 bytes of
+  resident memory per bar (the bound the acceptance test asserts); the document
+  is byte for byte the one `legacy` prints. A module certifies itself through one new optional export,
+  `strategy_metrics_only_capability_v1`; a module without it, `legacy`, or a
+  result the runner cannot accept keeps the actual equity curve, as before. The
+  option is refused together with, among others, an explicit report sink, a
+  phase stream, selected-window options, outputs, a benchmark run or symbol
+  feeds. Without the option nothing changes.
+- **The reference-run scripts read the renamed range-provenance member.** They
+  read a tape's `metrics.json` range-provenance member as `rangeProvenance`
+  first; the member's previous name is still accepted until the next minor
+  release, and the label the scripts print names the member they read.
 
 ### Native live report stream
 

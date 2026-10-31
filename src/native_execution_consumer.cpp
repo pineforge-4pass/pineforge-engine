@@ -29,7 +29,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
-
+#include "native_cohort_target_work.hpp"
 namespace pineforge {
 inline namespace engine_script_run_v19 {
 namespace {
@@ -1281,8 +1281,8 @@ struct NativeExecutionConsumer::RunCommandScratch {
                                         detail::ScratchOpenMode::create_empty},
               backing.get())) {
         if (store->status() != detail::ScratchStatus::ok) {
-            if (store->status() == detail::ScratchStatus::io_error)
-                detail::rethrow_carried_scratch_failure(backing->carried_failure());
+            if (store->status() == detail::ScratchStatus::io_error) // the store carries a refused workspace allocation
+                detail::rethrow_carried_scratch_failure(store->carried_failure() ? store->carried_failure() : backing->carried_failure());
             throw coded<std::logic_error>(
                 store->status() == detail::ScratchStatus::io_error
                     ? RunFailureCode::scratch_io_failed : RunFailureCode::engine_invariant,
@@ -3031,7 +3031,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // Capture needs full trade/equity rows or a sink. Check both mode settings
     // before reset/admission and the first host callback.
     if ((engine.report_mode_ == ReportMode::SUMMARY_ONLY
-         || engine.pending_equity_report_mode_ == ReportMode::SUMMARY_ONLY)
+         || engine.pending_equity_report_mode() == ReportMode::SUMMARY_ONLY)
         && !engine.report_sink_state_.enabled
         && (selected_epoch_.observer_registered || selected_epoch_.window_configured)) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
@@ -3675,7 +3675,7 @@ void NativeExecutionConsumer::read_target_into(
         const BacktestEngine& engine, const native_order::LiveRequest* live,
         native_order::TargetObservation& out,
         std::vector<native_order::RequestHandle>& handles) const {
-    out.current_position = read_position(engine);
+    PF_COHORT_WORK(Target); out.current_position = read_position(engine);
     out.opening.reset();
     out.openings.clear();
     if (!live) return;
@@ -3684,13 +3684,13 @@ void NativeExecutionConsumer::read_target_into(
     } else if (const auto* openings = std::get_if<native_order::OpeningsClose>(&live->authority)) {
         read_openings_into(engine, openings->openings, openings->cycle, out.openings);
     } else if (const auto* cohort = std::get_if<native_order::CohortClose>(&live->authority)) {
-        const auto* position = std::get_if<native_order::PositionNonflat>(&out.current_position);
-        if (!position) return;
+        const auto cohort_handle = cohort->cohort; const auto* position = std::get_if<native_order::PositionNonflat>(&out.current_position);
+        if (!position || read_indexed_cohort_target(engine, cohort_handle, *position, out.openings)) return;
         handles.clear();
         handles.reserve(engine.pyramid_entries_.size());
-        for (const auto& lot : engine.pyramid_entries_) {
+        for (const auto& lot : engine.pyramid_entries_) { PF_COHORT_WORK(TargetLot);
             native_order::RequestHandle handle{requests_.identity(), lot.entry_incarnation};
-            if (requests_.cohort_contains(cohort->cohort, handle)) {
+            if (requests_.cohort_contains(cohort_handle, handle)) {
                 handles.push_back(std::move(handle));
             }
         }
@@ -3759,7 +3759,7 @@ const native_order::TargetObservation* NativeExecutionConsumer::cached_cohort_ta
 }
 
 void NativeExecutionConsumer::clear_cohort_target_cache() noexcept {
-    cohort_target_cache_size_ = 0;
+    cohort_target_cache_size_ = 0; cohort_opening_index_valid_ = false; cohort_opening_index_attempted_ = false; cohort_opening_index_.clear();
 }
 
 void NativeExecutionConsumer::retarget_cohort_target_cache(
@@ -5526,13 +5526,13 @@ void NativeExecutionConsumer::read_openings_into(
 
 void NativeExecutionConsumer::refresh_openings(const BacktestEngine& engine,
         std::vector<native_order::OpeningObservation>& openings) const noexcept {
-    const auto position = read_position(engine);
+    PF_COHORT_WORK(Refresh); const auto position = read_position(engine);
     for (auto& row : openings) {
         row.current_position = position;
         row.has_live_matching_lot = false;
     }
     if (engine.position_side_ == PositionSide::FLAT || engine.position_cycle_seq_ <= 0) return;
-    for (const auto& lot : engine.pyramid_entries_) {
+    for (const auto& lot : engine.pyramid_entries_) { PF_COHORT_WORK(RefreshLot);
         auto it = std::lower_bound(openings.begin(), openings.end(), lot.entry_incarnation,
             [](const auto& row, uint64_t incarnation) {
                 return row.queried_opening.incarnation < incarnation;
@@ -6607,13 +6607,14 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             notification.point.price = resolved_price;
             notification.point.quote_origin_ordinal = applied_id.ordinal;
         }
+        const bool carry_current = staged && staged_generation == settlement_generation_;
+        ++settlement_generation_;
         std::optional<execution::Result> carried;
-        if (staged && staged_generation == settlement_generation_) {
+        if (carry_current) {
             carried = staged->settle_kept(engine, candidate.fill, ctx);
             if (carried) ++carried_settlements_;
         }
-        const auto settled = carried ? *carried
-            : std::get_if<execution::ReverseTo>(&candidate.physical)
+        const auto settled = carried ? *carried : std::get_if<execution::ReverseTo>(&candidate.physical)
             ? engine.settle_native_reversal_at_v1(*std::get_if<execution::ReverseTo>(
                   &candidate.physical), candidate.fill, ctx)
             : candidate.selected
@@ -6621,7 +6622,6 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
                     narrow_action(candidate.physical), candidate.fill, ctx, *candidate.selected)
                 : engine.settle_native_execution_scoped_at(
                     narrow_action(candidate.physical), candidate.fill, ctx, candidate.financial_scope);
-        ++settlement_generation_;
         if (settled.status != execution::Status::Applied) {
             fail(engine, NativeFailure{NativeFailureCode::SettlementFailure,
                 NativeFailureOperation::Settlement, P, static_cast<uint32_t>(settled.status)});
@@ -8305,7 +8305,7 @@ void NativeExecutionConsumer::finish_callback(BacktestEngine& engine, uint64_t o
 
 void NativeExecutionConsumer::invoke_applied_callback(
         BacktestEngine& engine, const AppliedNotification& notification) {
-    try {
+    CohortLotsWrite lots_write(*this); try {
         auto* host = native_host(engine);
         if (!host) throw std::logic_error("native notification requires native host");
         // Owning event and frame values survive submit/replace and further
@@ -13462,7 +13462,7 @@ int NativeExecutionConsumer::set_execution_observer_v1(
         // Refuse either SUMMARY_ONLY mode before binding or replacing an observer.
         // Only the pending legacy mode configures the next run.
         if (engine->report_mode_ == ReportMode::SUMMARY_ONLY
-            || engine->pending_equity_report_mode_ == ReportMode::SUMMARY_ONLY)
+            || engine->pending_equity_report_mode() == ReportMode::SUMMARY_ONLY)
             return -2;
     }
     NativeExecutionConsumer* consumer = nullptr;
@@ -13712,13 +13712,13 @@ void NativeExecutionConsumer::restore_report_sink_equity_curve(BacktestEngine& e
 }
 
 void BacktestEngine::store_equity_point(const pf_equity_point_t& point) {
+    if (report_replay_state()) record_report_replay_point(point);
     if (report_sink_state_.equity_scratch && !equity_curve_.empty())
         equity_curve_.back() = point;
     else
         equity_curve_.push_back(point);
     if (report_sink_state_.equity_scratch) report_sink_state_.equity_tail_stored = false;
 }
-
 bool BacktestEngine::prepare_equity_point() {
     const auto* held = last_equity_point();
     auto& sink = report_sink_state_;
@@ -13748,6 +13748,7 @@ bool BacktestEngine::prepare_equity_point() {
         if (!selected) {
             sink.writer->write_e(*held);
             ++sink.receipt.count_e;
+            if (report_replay_state()) write_report_replay_equity(*held);
         }
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
@@ -13758,7 +13759,6 @@ bool BacktestEngine::prepare_equity_point() {
     }
     return false;
 }
-
 void BacktestEngine::fold_report_equity_extreme(double equity) {
     if (report_sink_state_.enabled) {
         auto& prefix = report_sink_state_.equity_prefix;
@@ -13917,6 +13917,7 @@ bool NativeExecutionConsumer::capture_selected_sink(BacktestEngine& engine) {
         // presented prefix, including the anchor even for M = 0 or M = 1.
         for (int64_t i = 0; i < presentation_.equity_curve_len; ++i) {
             sink.writer->write_e(point_at(i));
+            if (engine.report_replay_state()) engine.write_report_replay_equity(point_at(i));
             ++sink.receipt.count_e;
         }
         presentation_sink_equity_written_ = true;
@@ -14041,6 +14042,7 @@ void NativeExecutionConsumer::write_streamed_trade(
         sink.writer->write_t(static_cast<std::int64_t>(global) + 1, wire,
             identity.entry_incarnation, engine.closed_trade_close_cause(static_cast<int>(global)),
             identity.entry_id, identity.exit_id, identity.exit_comment);
+        if (engine.report_replay_state()) engine.write_report_replay_trade(global, false);
         ++sink.receipt.count_t;
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
@@ -14091,6 +14093,7 @@ void NativeExecutionConsumer::seal_closed_rows(
         engine.fold_trade_percent_prefix(row);
     }
     engine.trades_.seal(global_end);
+    if (engine.report_replay_state()) engine.retire_report_replay_trades(global_end);
     const std::size_t checkpoint_base = closed_rows_digested_ - closed_row_prefix_.size();
     if (global_end > checkpoint_base) {
         const auto retired = std::min(global_end - checkpoint_base, closed_row_prefix_.size());
@@ -14653,6 +14656,92 @@ void NativeExecutionConsumer::prepare_match_book_scratch() {
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "native dormant scratch binding is not live");
     static_cast<DormantBookScratchBacking&>(*run->backing).prepare();
+}
+
+}  // namespace pineforge::engine_script_run_v19
+
+namespace pineforge::engine_script_run_v19 {
+
+bool NativeExecutionConsumer::cohort_opening_index_current() const noexcept {
+    // settlement_generation_ advances before EVERY settlement attempt,
+    // including a carried stage, before its status check and either install.
+    // Throws and failed settlements/installs cannot reuse the previous view.
+    return cohort_opening_index_valid_
+        && cohort_opening_index_settlement_ == settlement_generation_
+        && cohort_opening_index_lots_ == cohort_lots_generation_;
+}
+
+bool NativeExecutionConsumer::read_indexed_cohort_target(
+        const BacktestEngine& engine, native_order::CohortHandle cohort,
+        const native_order::PositionNonflat& position,
+        std::vector<native_order::OpeningObservation>& out) const {
+    const auto* spec = spec_ptr();
+    if (!spec || !spec->intrabar.is_none() || input_mode_ == InputMode::ObservedTicks
+        || callback_phase_ == CallbackPhase::Tick || callback_phase_ == CallbackPhase::Applied
+        || !std::holds_alternative<NativeRunning>(state_)) return false;
+    constexpr std::size_t max_rows = kCohortOpeningIndexBytes / sizeof(CohortOpeningIndexRow);
+    const auto row_budget = std::min(cohort_opening_index_bytes_, kCohortOpeningIndexBytes)
+        / sizeof(CohortOpeningIndexRow);
+    if (position.cycle <= 0 || engine.pyramid_entries_.size() > row_budget
+        || !requests_.cohort_exists(cohort)) return false;
+
+    if (!cohort_opening_index_current()) {
+        if (cohort_opening_index_settlement_ != settlement_generation_
+            || cohort_opening_index_lots_ != cohort_lots_generation_)
+            cohort_opening_index_attempted_ = false;
+        cohort_opening_index_valid_ = false;
+        cohort_opening_index_.clear();
+        if (cohort_opening_index_attempted_) return false;
+        cohort_opening_index_attempted_ = true;
+        cohort_opening_index_settlement_ = settlement_generation_;
+        cohort_opening_index_lots_ = cohort_lots_generation_;
+        // Reserve one fixed payload, once. Only this optional allocation may
+        // fall back on bad_alloc; root/backing errors remain authoritative.
+        try {
+            cohort_opening_index_.reserve(max_rows);
+        } catch (const std::bad_alloc&) {
+            return false;
+        }
+        cohort_opening_index_.clear();
+        native_order::RequestHandle opening{requests_.identity(), 0};
+        for (const auto& lot : engine.pyramid_entries_) {
+            opening.incarnation = lot.entry_incarnation;
+            const auto root = requests_.canonical_cohort_origin(opening);
+            if (!root) return false; // Unknown physical origin: complete reader.
+            cohort_opening_index_.emplace_back(root->incarnation, opening.incarnation);
+        }
+        std::sort(cohort_opening_index_.begin(), cohort_opening_index_.end());
+        cohort_opening_index_.erase(
+            std::unique(cohort_opening_index_.begin(), cohort_opening_index_.end()),
+            cohort_opening_index_.end());
+        cohort_opening_index_valid_ = true; // Publish only a complete generation.
+    }
+
+    // Roster membership is read anew for this cohort, never cached by request.
+    // The by-value cohort argument survives any spilled-row backing reads above.
+    const auto roster = requests_.cohorts_.find(cohort.value);
+    if (roster == requests_.cohorts_.end()) return true;
+    for (const auto& origin : roster->second.origins) {
+        auto it = std::lower_bound(cohort_opening_index_.begin(), cohort_opening_index_.end(),
+            origin.incarnation, [](const CohortOpeningIndexRow& row, std::uint64_t root) {
+                return row.first < root;
+            });
+        for (; it != cohort_opening_index_.end() && it->first == origin.incarnation; ++it) {
+            native_order::OpeningObservation observation;
+            observation.queried_opening = {requests_.identity(), it->second};
+            observation.queried_cycle = position.cycle;
+            observation.current_position = position;
+            observation.has_live_matching_lot = true;
+            out.push_back(std::move(observation));
+        }
+    }
+    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
+        return a.queried_opening.incarnation < b.queried_opening.incarnation;
+    });
+    out.erase(std::unique(out.begin(), out.end(), [](const auto& a, const auto& b) {
+        return a.queried_opening == b.queried_opening;
+    }), out.end());
+    return true;
 }
 
 }  // namespace pineforge::engine_script_run_v19

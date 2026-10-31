@@ -25,6 +25,9 @@
 // until the best small leg has 100 ms of CPU, retaining the x6 bound and the
 // mutant margin. A timed leg that still comes in under it doubles the repeats
 // and times both legs again (R5 lane CI-FLAKE, tests/ratio_timing.hpp).
+// Shared-runner sampling takes the best of five user-CPU samples per
+// leg. A ratio in [6, 12) gets one fresh measurable pair and keeps the smaller
+// ratio; a quadratic ratio at or above 12 fails without re-measurement.
 //
 // The sample is the process's USER CPU time (ratio_timing::user_cpu_seconds,
 // R5 lane INT27). Process CPU time (std::clock, which the runtime-budget
@@ -239,9 +242,11 @@ double run_cpu(int count, int repeats) {
     return ratio_timing::user_cpu_seconds() - started;
 }
 
-double best_of_three(int count, int repeats) {
+constexpr int kTimingSamples = 5;
+
+double best_of_samples(int count, int repeats) {
     double best = 0.0;
-    for (int attempt = 0; attempt < 3; ++attempt) {
+    for (int attempt = 0; attempt < kTimingSamples; ++attempt) {
         const double sample = run_cpu(count, repeats);
         if (attempt == 0 || sample < best) best = sample;
     }
@@ -265,27 +270,81 @@ constexpr bool kUnderAsan = false;
 constexpr bool kUnderAsan = false;
 #endif
 
+void a_noisy_ratio_uses_one_quiet_remeasurement() {
+    int remeasurements = 0;
+    const double ratio = ratio_timing::ratio_with_remeasurement(
+        0.1140, 0.6934, kShapeBound, [&] {
+            ++remeasurements;
+            return ratio_timing::LegSeconds{0.1140, 0.4800};
+        });
+    CHECK(remeasurements == 1);
+    CHECK(ratio == 0.4800 / 0.1140);
+    CHECK(ratio < kShapeBound);
+}
+
+void a_persistently_high_ratio_still_fails_the_bound() {
+    int remeasurements = 0;
+    const double ratio = ratio_timing::ratio_with_remeasurement(
+        0.1140, 0.6934, kShapeBound, [&] {
+            ++remeasurements;
+            return ratio_timing::LegSeconds{0.1140, 0.7000};
+        });
+    CHECK(remeasurements == 1);
+    CHECK(ratio == 0.6934 / 0.1140);
+    CHECK(ratio >= kShapeBound);
+}
+
+void a_quadratic_ratio_is_not_remeasured() {
+    int remeasurements = 0;
+    const double ratio = ratio_timing::ratio_with_remeasurement(
+        0.1140, 1.8200, kShapeBound, [&] {
+            ++remeasurements;
+            return ratio_timing::LegSeconds{0.1140, 0.4800};
+        });
+    CHECK(remeasurements == 0);
+    CHECK(ratio == 1.8200 / 0.1140);
+    CHECK(ratio >= kShapeBound);
+}
+
+void a_linear_ratio_is_not_remeasured() {
+    int remeasurements = 0;
+    const double ratio = ratio_timing::ratio_with_remeasurement(
+        0.1140, 0.4600, kShapeBound, [&] {
+            ++remeasurements;
+            return ratio_timing::LegSeconds{0.1140, 1.8200};
+        });
+    CHECK(remeasurements == 0);
+    CHECK(ratio == 0.4600 / 0.1140);
+    CHECK(ratio < kShapeBound);
+}
+
 int calibrated_repeats() {
     return ratio_timing::presized(1, kMaxRepeats, kMinLegSeconds,
-                                  [](int repeats) { return best_of_three(kBars, repeats); });
+                                  [](int repeats) { return best_of_samples(kBars, repeats); });
 }
 
 void the_lower_feed_lookup_is_linear_in_the_run() {
     int repeats = calibrated_repeats();
-    double small = 0.0;
-    double large = 0.0;
-    ratio_timing::time_measurable_legs(repeats, kMaxRepeats, kMinLegSeconds, [&](int count) {
-        small = best_of_three(kBars, count);
-        large = best_of_three(kBars * 4, count);
-        return std::min(small, large);
-    });
-    const double ratio = small > 0.0 ? large / small : 0.0;
-    std::printf("lower-feed run: %d bars x%d %.4fs, %d bars x%d %.4fs, ratio %.2f "
-                "(bound %.1f)\n", kBars, repeats, small, kBars * 4, repeats, large,
-                ratio, kShapeBound);
-    CHECK(small > 0.0);
-    CHECK(small >= kMinLegSeconds);
-    CHECK(large >= kMinLegSeconds);
+    const auto measure_pair = [&] {
+        double small = 0.0;
+        double large = 0.0;
+        ratio_timing::time_measurable_legs(repeats, kMaxRepeats, kMinLegSeconds, [&](int count) {
+            small = best_of_samples(kBars, count);
+            large = best_of_samples(kBars * 4, count);
+            return std::min(small, large);
+        });
+        std::printf("lower-feed run: %d bars x%d %.4fs, %d bars x%d %.4fs, ratio %.2f "
+                    "(bound %.1f)\n", kBars, repeats, small, kBars * 4, repeats, large,
+                    small > 0.0 ? large / small : 0.0, kShapeBound);
+        CHECK(small > 0.0);
+        CHECK(small >= kMinLegSeconds);
+        CHECK(large >= kMinLegSeconds);
+        return ratio_timing::LegSeconds{small, large};
+    };
+    const auto first = measure_pair();
+    const double ratio = ratio_timing::ratio_with_remeasurement(
+        first.small, first.large, kShapeBound, measure_pair);
+    std::printf("lower-feed judged ratio %.2f (bound %.1f)\n", ratio, kShapeBound);
     if (kUnderAsan) {
         std::printf("lower-feed shape bound skipped under AddressSanitizer (timing is not representative)\n");
     } else {
@@ -405,6 +464,10 @@ void the_selected_sub_bars_feed_the_same_run() {
 int main() {
     the_selected_sub_bars_feed_the_same_run();
 #ifndef PINEFORGE_K24_HARVEST
+    a_noisy_ratio_uses_one_quiet_remeasurement();
+    a_persistently_high_ratio_still_fails_the_bound();
+    a_quadratic_ratio_is_not_remeasured();
+    a_linear_ratio_is_not_remeasured();
 // K-IDX follow-up: re-pins the v19 coordinate/input-coordinate hash witness.
     the_lower_feed_lookup_is_linear_in_the_run();
 #endif

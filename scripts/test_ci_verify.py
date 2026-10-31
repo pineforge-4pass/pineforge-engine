@@ -2746,8 +2746,8 @@ class CAbiRuntimeInventory(unittest.TestCase):
         header = [name for relative in RUNTIME_HEADERS
                   for name in _pf_api_names(ROOT / 'include/pineforge' / relative)]
         runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
-        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 114)
-        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 94)
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 118)
+        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 98)
         self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
         self.assertEqual(len(header), len(set(header)))
@@ -4476,7 +4476,7 @@ class PrivateFixtureFloors(unittest.TestCase):
             {name for name in ci_verify.PINNED_SLOW_TEST_ROWS
              if name.startswith('test_native_command_after')},
             {f'test_native_command_after_slice_{index}' for index in range(1, 9)})
-        self.assertEqual(len(ci_verify.PINNED_SLOW_TEST_ROWS), 76)
+        self.assertEqual(len(ci_verify.PINNED_SLOW_TEST_ROWS), 79)
         self.assertEqual(LIVE_SANITIZERS_MIN_TESTS, 21)
         for name, (full, pinned) in ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS.items():
             with self.subTest(profile=name):

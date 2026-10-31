@@ -38,6 +38,18 @@ int failures = 0;
 #define CHECK(cond) do { if (!(cond)) { \
     std::fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #cond); ++failures; } } while (0)
 
+#define CHECK_OP(actual, operation, expected) do { \
+    const auto actual_value = (actual); \
+    const auto expected_value = (expected); \
+    if (!(actual_value operation expected_value)) { \
+        std::fprintf(stderr, "FAIL %s:%d %s %s %s actual=%llu expected=%llu\n", \
+            __FILE__, __LINE__, #actual, #operation, #expected, \
+            static_cast<unsigned long long>(actual_value), \
+            static_cast<unsigned long long>(expected_value)); \
+        ++failures; \
+    } \
+} while (false)
+
 template<class F> bool throws(F&& f) {
     try { f(); } catch (const std::exception&) { return true; }
     return false;
@@ -233,6 +245,350 @@ std::uint64_t snapshot_bytes(const LedgerFiles& files) {
     std::uint64_t total = 0;
     for (const auto& file : files) if (file) total += file->size();
     return total;
+}
+
+// Independent arithmetic from the admission contract. FULL fixtures use D=C1;
+// the default-cache fixture enumerates allowed requests without measuring Q.
+// Small input rows fit existing roots: C1=C0, checked after the write.
+// Neither refusal receipts nor the production estimator supply expectations.
+std::uint64_t checkpoint_contract_request(const LedgerFiles& files, std::uint64_t page,
+                                          std::uint64_t prior_pages, std::uint64_t changed_pages,
+                                          std::uint64_t payload_bytes = 0) {
+    const auto size = [&](std::size_t index) -> std::uint64_t {
+        return files[index] ? files[index]->size() : 0;
+    };
+    const auto additional = payload_bytes ? 8 * payload_bytes / (page - 64) + 4 : 0;
+    const auto frames = changed_pages + additional + (65536 + page + 23) / (page + 24);
+    const auto logical_bytes = prior_pages * page;
+    const auto index_bytes = 32768 * (2 + 8 * (size(1) / (page + 24) + frames) / 32768);
+    return 2 * frames * (page + 24) + 32 +
+        (logical_bytes > size(0) ? logical_bytes - size(0) : 0) +
+        (index_bytes > size(2) ? index_bytes - size(2) : 0);
+}
+
+void prepare_checkpoint_budget_ledger(const std::string& path, std::uint64_t page) {
+    execute_sql(path, ("PRAGMA page_size=" + std::to_string(page) +
+        "; PRAGMA auto_vacuum=FULL; VACUUM;").c_str());
+    CHECK_OP(std::stoull(scalar_text(path, "PRAGMA page_size")), ==, page);
+    CHECK_OP(std::stoull(scalar_text(path, "PRAGMA auto_vacuum")), ==, 1u);
+}
+
+void scheduled_checkpoint_budget() {
+    TempDir temp;
+    for (const auto page : {4096U, 65536U}) {
+        for (const bool delta : {false, true}) {
+            const auto path = temp.file("checkpoint-" + std::to_string(page) +
+                                       (delta ? "-delta.sqlite" : "-full.sqlite"));
+            prepare_checkpoint_budget_ledger(path, page);
+            LedgerOptions options;
+            options.report_checkpoint_interval = 1;
+            Ledger ledger(path, "checkpoint-budget", options);
+            const std::string retained(700, 'r');
+            const auto initial = "{\"retained\":\"" + retained + "\",\"value\":0}";
+            const auto expected = "{\"retained\":\"" + retained + "\",\"value\":1}";
+            const std::string patch = "{\"schema_version\":\"pineforge-native-report-delta/v1\","
+                "\"fields\":{\"value\":1},\"arrays\":{}}";
+            const auto report = delta ? patch : expected;
+            ledger.verify_report(0, initial);
+            const auto pages = std::stoull(scalar_text(path, "PRAGMA page_count"));
+            ledger.input_count(); // Establish the WAL reader mark before snapshotting SHM.
+            const auto before = ledger_files(path);
+            const auto used = snapshot_bytes(before);
+            const auto request = checkpoint_contract_request(before, page, pages, pages, expected.size());
+            const auto input_only = checkpoint_contract_request(before, page, pages, pages);
+            CHECK_OP(request, >, input_only);
+            const auto commit = [&] { ledger.commit_input(0, "{}", 1, {}, report); };
+            const auto refuse = [&](std::uint64_t limit) {
+                ledger.set_byte_budget(limit);
+                bool refused = false;
+                try { commit(); }
+                catch (const LedgerBudgetExceeded& error) {
+                    refused = true;
+                    CHECK_OP(error.used, ==, used);
+                    CHECK_OP(error.requested, ==, request);
+                    CHECK_OP(error.limit, ==, limit);
+                    const auto typed = pineforge::classify_run_failure(error);
+                    CHECK_OP(static_cast<int>(typed.code), ==,
+                             static_cast<int>(pineforge::RunFailureCode::scratch_capacity_exceeded));
+                    CHECK_OP(typed.args && *typed.args == "{\"resource\":\"layout\"}", ==, true);
+                }
+                CHECK_OP(refused, ==, true);
+                CHECK_OP(ledger_files(path) == before, ==, true);
+                CHECK_OP(ledger.input_count(), ==, 0u);
+                CHECK_OP(std::stoull(scalar_text(path, "SELECT COUNT(*) FROM report_checkpoints")), ==, 0u);
+            };
+            // The identical boundary write refuses twice, with the independently
+            // derived request, and cannot consume even one byte on either retry.
+            refuse(used + request - 1);
+            refuse(used + request - 1);
+            // The input's own pages fit here; its scheduled cumulative payload
+            // does not. Refusal must happen at the input, before it is durable.
+            refuse(used + input_only);
+            ledger.set_byte_budget(used + request);
+            commit();
+            const auto after = snapshot_bytes(ledger_files(path));
+            CHECK_OP(ledger.input_count(), ==, 1u);
+            CHECK_OP(ledger.verified_report_checkpoint(1).value_or(0), ==, 1u);
+            CHECK_OP(ledger.checkpoint_diagnostic().has_value(), ==, false);
+            CHECK_OP(after, <=, used + request);
+            CHECK_OP(after > used ? after - used : 0, <=, request);
+            CHECK_OP(std::stoull(scalar_text(path, "PRAGMA page_count")), ==, pages);
+            CHECK_OP(scalar_text(path, "SELECT payload FROM report_checkpoints WHERE input_cursor=1") ==
+                     expected, ==, true);
+            CHECK_OP(LedgerView(path).report_json(1) == expected, ==, true);
+
+            // Show the smaller independently computed limit actually admits
+            // the same input when this cursor has no scheduled checkpoint.
+            const auto plain_path = temp.file("plain-" + std::to_string(page) +
+                                             (delta ? "-delta.sqlite" : "-full.sqlite"));
+            prepare_checkpoint_budget_ledger(plain_path, page);
+            options.report_checkpoint_interval = 2;
+            Ledger plain(plain_path, "checkpoint-budget", options);
+            plain.verify_report(0, initial);
+            const auto plain_pages = std::stoull(scalar_text(plain_path, "PRAGMA page_count"));
+            plain.input_count();
+            const auto plain_before = ledger_files(plain_path);
+            const auto plain_limit = snapshot_bytes(plain_before) +
+                checkpoint_contract_request(plain_before, page, plain_pages, plain_pages);
+            plain.set_byte_budget(plain_limit);
+            plain.commit_input(0, "{}", 1, {}, report);
+            CHECK_OP(plain.input_count(), ==, 1u);
+            CHECK_OP(snapshot_bytes(ledger_files(plain_path)), <=, plain_limit);
+            CHECK_OP(std::stoull(scalar_text(plain_path, "PRAGMA page_count")), ==, plain_pages);
+            CHECK_OP(std::stoull(scalar_text(plain_path, "SELECT COUNT(*) FROM report_checkpoints")), ==, 0u);
+        }
+    }
+}
+
+// This row checks that the observed production-default request belongs to the
+// contract's allowed set and is no larger than the logical-page (FULL) request.
+// Admission at used + request and growth at most request show exact-limit
+// safety; this does not pin the estimator to the resident-page count.
+void cached_checkpoint_budget() {
+    TempDir temp;
+    constexpr std::uint64_t page = 4096;
+    const std::string retained(700, 'r');
+    const auto initial = "{\"retained\":\"" + retained + "\",\"value\":0}";
+    const auto expected = "{\"retained\":\"" + retained + "\",\"value\":1}";
+    const std::string patch = "{\"schema_version\":\"pineforge-native-report-delta/v1\","
+        "\"fields\":{\"value\":1},\"arrays\":{}}";
+    std::uint64_t full_request = 0;
+    for (const bool full : {true, false}) {
+        const auto path = temp.file(full ? "cache-control.sqlite" : "cache-default.sqlite");
+        if (full) prepare_checkpoint_budget_ledger(path, page);
+        else prepare_empty_ledger(path, page);
+        LedgerOptions options;
+        options.report_checkpoint_interval = 1;
+        Ledger ledger(path, "checkpoint-cache", options);
+        ledger.verify_report(0, initial);
+        const auto pages = std::stoull(scalar_text(path, "PRAGMA page_count"));
+        ledger.input_count();
+        const auto before = ledger_files(path);
+        const auto used = snapshot_bytes(before);
+        // The input changes three existing table roots: inputs, snapshots and
+        // integrity. D is at least three and at most C1=C0; clean pinned pages
+        // may also remain. Enumerate the contract's possible requests BEFORE
+        // observing a refusal, including D=C1 if cache observation falls back.
+        std::vector<std::uint64_t> expected_requests;
+        for (std::uint64_t dirty = full ? pages : 3; dirty <= pages; ++dirty)
+            expected_requests.push_back(
+                checkpoint_contract_request(before, page, pages, dirty, expected.size()));
+        CHECK_OP(expected_requests.empty(), ==, false);
+        if (expected_requests.empty()) continue;
+        if (full) full_request = checkpoint_contract_request(before, page, pages, pages, expected.size());
+        ledger.set_byte_budget(used + 1);
+        bool refused = false;
+        std::uint64_t request_observed = 0;
+        try { ledger.commit_input(0, "{}", 1, {}, patch); }
+        catch (const LedgerBudgetExceeded& error) {
+            refused = true;
+            request_observed = error.requested;
+            CHECK_OP(error.used, ==, used);
+            CHECK_OP(error.limit, ==, used + 1);
+        }
+        CHECK_OP(refused, ==, true);
+        CHECK_OP(request_observed, >, 1u);
+        CHECK_OP(request_observed, >=, expected_requests.front());
+        CHECK_OP(request_observed, <=, expected_requests.back());
+        CHECK_OP(std::find(expected_requests.begin(), expected_requests.end(), request_observed) !=
+                 expected_requests.end(), ==, true);
+        CHECK_OP(request_observed, <=, full_request);
+        if (full) CHECK_OP(request_observed, ==, full_request);
+        CHECK_OP(ledger_files(path) == before, ==, true);
+        CHECK_OP(ledger.input_count(), ==, 0u);
+        // The observed request chooses only the exact-limit retry. Expected
+        // request sizes above, payload bytes and real growth are independent.
+        ledger.set_byte_budget(used + request_observed);
+        ledger.commit_input(0, "{}", 1, {}, patch);
+        const auto after = snapshot_bytes(ledger_files(path));
+        CHECK_OP(ledger.input_count(), ==, 1u);
+        CHECK_OP(ledger.verified_report_checkpoint(1).value_or(0), ==, 1u);
+        CHECK_OP(ledger.checkpoint_diagnostic().has_value(), ==, false);
+        CHECK_OP(after, <=, used + request_observed);
+        CHECK_OP(after > used ? after - used : 0, <=, request_observed);
+        CHECK_OP(std::stoull(scalar_text(path, "PRAGMA page_count")), ==, pages);
+        CHECK_OP(scalar_text(path, "SELECT payload FROM report_checkpoints WHERE input_cursor=1") ==
+                 expected, ==, true);
+        CHECK_OP(LedgerView(path).report_json(1) == expected, ==, true);
+        CHECK_OP(std::stoull(scalar_text(path, "PRAGMA auto_vacuum")), ==, full ? 1u : 0u);
+    }
+}
+
+void checkpoint_reservation_ceiling_is_optional() {
+    TempDir temp;
+    const auto path = temp.file("checkpoint-ceiling.sqlite");
+    constexpr std::uint64_t page = 4096, limit = 64000000;
+    prepare_checkpoint_budget_ledger(path, page);
+    LedgerOptions options;
+    options.report_checkpoint_interval = 2;
+    Ledger ledger(path, "checkpoint-ceiling", limit, options);
+    ledger.verify_report(0, "{}");
+    ledger.commit_input(0, "{}", 1, {}, "{}");
+    // A checkpoint-only trigger deliberately requires more cached pages than
+    // its payload margin. Even a generous configured limit must not let this
+    // optional transaction spend outside the input's reserved byte ceiling.
+    execute_sql(path, "CREATE TRIGGER expand_checkpoint BEFORE INSERT ON report_checkpoints BEGIN "
+        "INSERT INTO routing_configuration VALUES(1,zeroblob(1048576)); END;");
+    const auto pages = std::stoull(scalar_text(path, "PRAGMA page_count"));
+    ledger.input_count();
+    const auto before = ledger_files(path);
+    const auto used = snapshot_bytes(before);
+    const auto request = checkpoint_contract_request(before, page, pages, pages, 2); // "{}"
+    CHECK_OP(used + request, <, limit);
+    ledger.commit_input(1, "{}", 2, {}, "{}");
+    CHECK_OP(ledger.input_count(), ==, 2u);
+    CHECK_OP(ledger.input(1).has_value(), ==, true);
+    CHECK_OP(std::stoull(scalar_text(path, "SELECT COUNT(*) FROM report_checkpoints")), ==, 0u);
+    CHECK_OP(std::stoull(scalar_text(path, "SELECT COUNT(*) FROM routing_configuration")), ==, 0u);
+    CHECK_OP(snapshot_bytes(ledger_files(path)), <=, used + request);
+    const auto diagnostic = ledger.checkpoint_diagnostic();
+    CHECK_OP(diagnostic.has_value(), ==, true);
+    if (diagnostic) {
+        CHECK_OP(static_cast<int>(diagnostic->code), ==, static_cast<int>(CheckpointFailureCode::write_failed));
+        CHECK_OP(diagnostic->cursor, ==, 2u);
+        CHECK_OP(diagnostic->count, ==, 1u);
+        CHECK_OP(diagnostic->reason == CheckpointWriteFailureReason::budget, ==, true);
+        CHECK_OP(diagnostic->budget_count, ==, 1u);
+        CHECK_OP(diagnostic->build_count, ==, 0u);
+        CHECK_OP(diagnostic->io_count, ==, 0u);
+        CHECK_OP(diagnostic->budget_count + diagnostic->build_count + diagnostic->io_count,
+                 ==, diagnostic->count);
+    }
+    // No reset of the configured budget or latched failure between writes.
+    ledger.commit_input(2, "{}", 3, {}, "{}");
+    CHECK_OP(ledger.input_count(), ==, 3u);
+    CHECK_OP(LedgerView(path).report_json(3) == "{}", ==, true);
+}
+
+void startup_and_recovery_checkpoint_budget() {
+    TempDir temp;
+    for (const bool startup : {false, true}) {
+        const auto path = temp.file(startup ? "startup-budget.sqlite" : "recovery-budget.sqlite");
+        constexpr std::uint64_t page = 4096;
+        prepare_checkpoint_budget_ledger(path, page);
+        LedgerOptions options;
+        options.report_checkpoint_interval = 100;
+        auto ledger = std::make_unique<Ledger>(path, "checkpoint-retry", 64000000, options);
+        ledger->verify_report(0, "{}");
+        const auto report = "{\"retained\":\"" + std::string(16385, 'r') + "\"}";
+        ledger->commit_input(0, "{}", 1, {}, report);
+        // Retain the WAL reader and sidecars across the owner's close/reopen.
+        sqlite3* reader = nullptr;
+        if (sqlite3_open_v2(path.c_str(), &reader, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK)
+            throw std::runtime_error("checkpoint budget reader open failed");
+        std::unique_ptr<sqlite3, decltype(&sqlite3_close_v2)> keep_reader(reader, &sqlite3_close_v2);
+        if (sqlite3_exec(reader, "BEGIN; SELECT MAX(input_index) FROM inputs;", nullptr, nullptr, nullptr) != SQLITE_OK)
+            throw std::runtime_error("checkpoint budget reader failed");
+        if (startup) ledger.reset();
+        const auto pages = std::stoull(scalar_text(path, "PRAGMA page_count"));
+        const auto before = ledger_files(path);
+        const auto used = snapshot_bytes(before);
+        // A routing insert needs no new pages; copying the large cumulative
+        // report into the empty checkpoint tree necessarily needs overflow.
+        const auto limit = used + checkpoint_contract_request(before, page, pages, pages);
+        if (startup) ledger = std::make_unique<Ledger>(path, "checkpoint-retry", limit, options);
+        else {
+            ledger->set_byte_budget(limit);
+            ledger->input_count();
+            const auto before_attempt = ledger_files(path);
+            ledger->checkpoint_recovered_report(1);
+            CHECK_OP(ledger_files(path) == before_attempt, ==, true);
+        }
+        CHECK_OP(ledger->input_count(), ==, 1u);
+        CHECK_OP(std::stoull(scalar_text(path, "SELECT COUNT(*) FROM report_checkpoints")), ==, 0u);
+        auto diagnostic = ledger->checkpoint_diagnostic();
+        CHECK_OP(diagnostic.has_value(), ==, true);
+        if (diagnostic) {
+            CHECK_OP(static_cast<int>(diagnostic->code), ==, static_cast<int>(CheckpointFailureCode::write_failed));
+            CHECK_OP(diagnostic->cursor, ==, 1u);
+            CHECK_OP(diagnostic->count, ==, 1u);
+            CHECK_OP(diagnostic->reason == CheckpointWriteFailureReason::budget, ==, true);
+            CHECK_OP(diagnostic->budget_count, ==, 1u);
+            CHECK_OP(diagnostic->build_count, ==, 0u);
+            CHECK_OP(diagnostic->io_count, ==, 0u);
+            CHECK_OP(diagnostic->budget_count + diagnostic->build_count + diagnostic->io_count,
+                     ==, diagnostic->count);
+        }
+        ledger->input_count();
+        const auto before_retry = ledger_files(path);
+        ledger->checkpoint_recovered_report(1);
+        CHECK_OP(ledger_files(path) == before_retry, ==, true);
+        diagnostic = ledger->checkpoint_diagnostic();
+        CHECK_OP(diagnostic.has_value(), ==, true);
+        if (diagnostic) {
+            CHECK_OP(diagnostic->count, ==, 2u);
+            CHECK_OP(diagnostic->reason == CheckpointWriteFailureReason::budget, ==, true);
+            CHECK_OP(diagnostic->budget_count, ==, 2u);
+            CHECK_OP(diagnostic->build_count, ==, 0u);
+            CHECK_OP(diagnostic->io_count, ==, 0u);
+            CHECK_OP(diagnostic->budget_count + diagnostic->build_count + diagnostic->io_count,
+                     ==, diagnostic->count);
+        }
+        // A refused accelerator did not latch a refusal for a required write
+        // that fits the same unchanged configured budget.
+        ledger->bind_routing("{}");
+        CHECK_OP(LedgerView(path).routing_document() == "{}", ==, true);
+        CHECK_OP(snapshot_bytes(ledger_files(path)), <=, limit);
+        CHECK_OP(LedgerView(path).report_json(1) == report, ==, true);
+        ledger->set_byte_budget(64000000);
+        ledger->checkpoint_recovered_report(1);
+        CHECK_OP(ledger->verified_report_checkpoint(1).value_or(0), ==, 1u);
+        CHECK_OP(snapshot_bytes(ledger_files(path)), <=, 64000000u);
+        CHECK_OP(scalar_text(path, "SELECT payload FROM report_checkpoints WHERE input_cursor=1") ==
+                 report, ==, true);
+    }
+}
+
+void over_budget_open_never_checkpoints() {
+    TempDir temp;
+    const auto path = temp.file("over-budget-open.sqlite");
+    LedgerOptions options;
+    options.report_checkpoint_interval = 100;
+    {
+        Ledger ledger(path, "over-budget-open", options);
+        ledger.verify_report(0, "{}");
+        ledger.commit_input(0, "{}", 1, {}, "{}");
+    }
+    const auto before = ledger_files(path);
+    const auto used = snapshot_bytes(before);
+    CHECK_OP(used, >, 1u);
+    for (unsigned retry = 0; retry < 2; ++retry) {
+        bool refused = false;
+        try { Ledger ledger(path, "over-budget-open", used - 1, options); }
+        catch (const LedgerBudgetExceeded& error) {
+            refused = true;
+            CHECK_OP(error.used, ==, used);
+            CHECK_OP(error.limit, ==, used - 1);
+            const auto typed = pineforge::classify_run_failure(error);
+            CHECK_OP(static_cast<int>(typed.code), ==,
+                     static_cast<int>(pineforge::RunFailureCode::scratch_capacity_exceeded));
+            CHECK_OP(typed.args && *typed.args == "{\"resource\":\"layout\"}", ==, true);
+        }
+        CHECK_OP(refused, ==, true);
+        CHECK_OP(ledger_files(path) == before, ==, true);
+    }
+    CHECK_OP(std::stoull(scalar_text(path, "SELECT COUNT(*) FROM report_checkpoints")), ==, 0u);
+    CHECK_OP(std::stoull(scalar_text(path, "SELECT COUNT(*) FROM inputs")), ==, 1u);
 }
 
 template<class Write>
@@ -745,7 +1101,8 @@ void delivery_summary_migration() {
     CHECK(source_rows(path, "SELECT * FROM inputs ORDER BY input_index") == input_bytes);
     CHECK(source_rows(path, "SELECT * FROM events ORDER BY ordinal") == action_bytes);
     CHECK(source_rows(path, "SELECT * FROM delivery_log ORDER BY log_id") == log_bytes);
-    CHECK(scalar_text(path, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'") == "12");
+    // Nine legacy tables, three delivery summary tables and report_checkpoints.
+    CHECK_OP(std::stoull(scalar_text(path, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'")), ==, 13u);
     execute_sql(path, "CREATE TRIGGER reject_rebuild BEFORE INSERT ON delivery_state "
         "BEGIN SELECT RAISE(ABORT,'summary rebuilt twice'); END;");
     {
@@ -782,7 +1139,8 @@ void previous_binary_ledger(const std::string& path) {
             static_cast<unsigned long long>(limit));
         CHECK(after <= limit);
     }
-    CHECK(scalar_text(path, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'") == "12");
+    // Nine legacy tables, three delivery summary tables and report_checkpoints.
+    CHECK_OP(std::stoull(scalar_text(path, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'")), ==, 13u);
     CHECK(source_rows(path, "SELECT * FROM inputs ORDER BY input_index") == inputs);
     CHECK(source_rows(path, "SELECT * FROM events ORDER BY ordinal") == events);
     CHECK(source_rows(path, "SELECT * FROM delivery_log ORDER BY log_id") == attempts);
@@ -861,6 +1219,157 @@ void cumulative_reports() {
     resumed.verify_report(0, "{\"input_cursor\":0}");
     resumed.verify_report(1, "{\"input_cursor\":1}");
     CHECK(LedgerView(path).report_json() == "{\"input_cursor\":1}");
+}
+
+std::string table_count(const std::string& path) {
+    return scalar_text(path, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'");
+}
+
+// The open's refusal text, or empty when the ledger opens.
+std::string open_refusal(const std::string& path, const std::string& identity) {
+    try { Ledger ledger(path, identity); }
+    catch (const std::exception& error) { return error.what(); }
+    return "";
+}
+
+// The delivery-summary and checkpoint layouts without report_integrity,
+// prepared as the report and checkpoint end-to-end tests do. Each opens,
+// export refuses until one verified replay populates the digests, and the
+// replay restores the digests and the export the ledger had.
+void pre_integrity_ledger() {
+    TempDir temp;
+    const std::vector<std::string> reports{"{\"input_cursor\":0}", "{\"input_cursor\":1}", "{\"input_cursor\":2}"};
+    for (const bool checkpoints : {false, true}) {
+        const auto* tables = checkpoints ? "12" : "11";
+        const auto path = temp.file(std::string("pre-integrity-") + tables + ".sqlite");
+        {
+            Ledger ledger(path, "pre-integrity");
+            ledger.verify_report(0, reports[0]);
+            ledger.commit_input(0, "{}", 1, {{"first", "{}"}}, reports[1]);
+            ledger.commit_input(1, "{}", 2, {}, reports[2]);
+        }
+        const auto exported = LedgerView(path).report_json();
+        const auto digests = source_rows(path, "SELECT input_cursor,digest FROM report_integrity ORDER BY input_cursor");
+        CHECK(digests.size() == reports.size());
+        if (!checkpoints) execute_sql(path, "DROP TABLE report_checkpoints;");
+        execute_sql(path, "DROP TABLE report_integrity;");
+        CHECK(table_count(path) == tables);
+        CHECK(throws([&] { LedgerView(path).report_json(); }));
+        std::unique_ptr<Ledger> resumed;
+        try { resumed = std::make_unique<Ledger>(path, "pre-integrity"); }
+        catch (const std::exception& error) { std::fprintf(stderr, "%s-table ledger refused: %s\n", tables, error.what()); }
+        CHECK(resumed);
+        if (!resumed) continue;
+        CHECK(table_count(path) == "13");
+        CHECK(throws([&] { LedgerView(path).report_json(); }));
+        for (std::uint64_t cursor = 0; cursor < reports.size(); ++cursor)
+            resumed->verify_report(cursor, reports[cursor]);
+        CHECK(source_rows(path, "SELECT input_cursor,digest FROM report_integrity ORDER BY input_cursor") == digests);
+        CHECK(LedgerView(path).report_json() == exported);
+        resumed.reset();
+        CHECK(open_refusal(path, "pre-integrity").empty());
+    }
+}
+
+// Each table layout a runner wrote, built with that runner's own statements,
+// opens and leaves the current layout. Any other table count is refused and
+// keeps its tables: a written layout plus unrelated tables would otherwise open.
+void ledger_layouts() {
+    TempDir temp;
+    const char* const first =
+        "CREATE TABLE metadata (singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
+        "schema_version INTEGER NOT NULL CHECK(schema_version=1),identity TEXT NOT NULL);"
+        "CREATE TABLE inputs (input_index INTEGER PRIMARY KEY CHECK(input_index>=0),"
+        "canonical_json TEXT NOT NULL,state_hash TEXT NOT NULL);"
+        "CREATE TABLE events (ordinal INTEGER PRIMARY KEY CHECK(ordinal>0),"
+        "input_index INTEGER NOT NULL REFERENCES inputs(input_index),"
+        "input_position INTEGER NOT NULL CHECK(input_position>=0),"
+        "event_id TEXT NOT NULL UNIQUE,payload TEXT NOT NULL,"
+        "attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts BETWEEN 0 AND 4294967295),"
+        "acknowledged INTEGER NOT NULL DEFAULT 0 CHECK(acknowledged IN (0,1)),"
+        "last_error TEXT NOT NULL DEFAULT '',UNIQUE(input_index,input_position));"
+        "CREATE INDEX pending_events ON events(ordinal) WHERE acknowledged=0;"
+        "INSERT INTO metadata VALUES(1,1,'layouts');"
+        "INSERT INTO inputs VALUES(0,'{}','1');"
+        "INSERT INTO events(ordinal,input_index,input_position,event_id,payload) VALUES(1,0,0,'first','{}');";
+    const char* const routing =
+        "CREATE TABLE IF NOT EXISTS routing_configuration (singleton INTEGER PRIMARY KEY CHECK(singleton=1),document TEXT NOT NULL);"
+        "CREATE TABLE IF NOT EXISTS event_routes (ordinal INTEGER PRIMARY KEY REFERENCES events(ordinal),"
+        "target_id TEXT,delivery_id TEXT NOT NULL);"
+        "CREATE TABLE IF NOT EXISTS delivery_log (log_id INTEGER PRIMARY KEY,event_id TEXT NOT NULL REFERENCES events(event_id),"
+        "target_id TEXT NOT NULL,delivery_id TEXT NOT NULL,attempt INTEGER NOT NULL CHECK(attempt>0),"
+        "phase TEXT NOT NULL CHECK(phase IN ('started','completed')),started_at INTEGER NOT NULL,ended_at INTEGER,"
+        "http_status INTEGER NOT NULL DEFAULT 0,error_category TEXT NOT NULL DEFAULT '',success INTEGER NOT NULL DEFAULT 0 CHECK(success IN (0,1)),"
+        "UNIQUE(event_id,attempt,phase));"
+        "CREATE INDEX IF NOT EXISTS delivery_results ON delivery_log(event_id,phase,log_id);"
+        "CREATE TRIGGER IF NOT EXISTS delivery_log_no_update BEFORE UPDATE ON delivery_log BEGIN SELECT RAISE(ABORT,'delivery log is append-only'); END;"
+        "CREATE TRIGGER IF NOT EXISTS delivery_log_no_delete BEFORE DELETE ON delivery_log BEGIN SELECT RAISE(ABORT,'delivery log is append-only'); END;"
+        "INSERT INTO event_routes(ordinal,target_id,delivery_id) SELECT ordinal,'default',event_id FROM events "
+        "WHERE ordinal NOT IN (SELECT ordinal FROM event_routes);";
+    const char* const reports =
+        "CREATE TABLE IF NOT EXISTS report_snapshots (input_cursor INTEGER PRIMARY KEY CHECK(input_cursor>=0),payload TEXT NOT NULL);"
+        "CREATE TRIGGER IF NOT EXISTS report_no_update BEFORE UPDATE ON report_snapshots BEGIN SELECT RAISE(ABORT,'reports are immutable'); END;"
+        "CREATE TRIGGER IF NOT EXISTS report_no_delete BEFORE DELETE ON report_snapshots BEGIN SELECT RAISE(ABORT,'reports are immutable'); END;";
+    const char* const redelivery =
+        "ALTER TABLE events ADD COLUMN created_at_ms INTEGER NOT NULL DEFAULT 0;"
+        "ALTER TABLE delivery_log ADD COLUMN request_id TEXT NOT NULL DEFAULT '';"
+        "CREATE TABLE IF NOT EXISTS redelivery_requests (request_order INTEGER PRIMARY KEY,request_id TEXT NOT NULL UNIQUE,"
+        "target_id TEXT NOT NULL,from_ordinal INTEGER NOT NULL,through_ordinal INTEGER NOT NULL,"
+        "failed_only INTEGER NOT NULL CHECK(failed_only IN (0,1)),snapshot_log INTEGER NOT NULL,"
+        "selected INTEGER NOT NULL,accepted_at INTEGER NOT NULL);"
+        "CREATE TRIGGER IF NOT EXISTS redelivery_no_update BEFORE UPDATE ON redelivery_requests BEGIN SELECT RAISE(ABORT,'requests are immutable'); END;"
+        "CREATE TRIGGER IF NOT EXISTS redelivery_no_delete BEFORE DELETE ON redelivery_requests BEGIN SELECT RAISE(ABORT,'requests are immutable'); END;"
+        "CREATE INDEX IF NOT EXISTS delivery_request_results ON delivery_log(request_id,event_id,phase);";
+    const char* const integrity =
+        "CREATE TABLE IF NOT EXISTS report_integrity (input_cursor INTEGER PRIMARY KEY REFERENCES report_snapshots(input_cursor),digest TEXT NOT NULL);"
+        "CREATE TRIGGER IF NOT EXISTS report_integrity_no_update BEFORE UPDATE ON report_integrity BEGIN SELECT RAISE(ABORT,'report integrity is immutable'); END;"
+        "CREATE TRIGGER IF NOT EXISTS report_integrity_no_delete BEFORE DELETE ON report_integrity BEGIN SELECT RAISE(ABORT,'report integrity is immutable'); END;";
+    // The first runner's tables, then webhook routing, cumulative reports,
+    // redelivery requests and integrity digests; later runners add the
+    // delivery summaries and report checkpoints.
+    const std::vector<std::pair<const char*, const char*>> stages{
+        {"3", first}, {"6", routing}, {"7", reports}, {"8", redelivery}, {"9", integrity}};
+    for (std::size_t written = 1; written <= stages.size(); ++written) {
+        const auto* tables = stages[written - 1].first;
+        const auto path = temp.file(std::string(tables) + "-tables.sqlite");
+        for (std::size_t stage = 0; stage < written; ++stage) execute_sql(path, stages[stage].second);
+        CHECK(table_count(path) == tables);
+        const auto refusal = open_refusal(path, "layouts");
+        if (!refusal.empty()) std::fprintf(stderr, "%s-table layout refused: %s\n", tables, refusal.c_str());
+        CHECK(refusal.empty());
+        CHECK(table_count(path) == "13");
+        CHECK(open_refusal(path, "layouts").empty());
+    }
+    const auto current = temp.file("13-tables.sqlite");
+    { Ledger ledger(current, "layouts"); }
+    CHECK(table_count(current) == "13");
+    CHECK(open_refusal(current, "layouts").empty());
+
+    // The delivery-summary runner wrote the current layout minus checkpoints.
+    const auto summaries = temp.file("12-tables.sqlite");
+    { Ledger ledger(summaries, "layouts"); }
+    execute_sql(summaries, "DROP TABLE report_checkpoints;");
+    CHECK(table_count(summaries) == "12");
+    CHECK(open_refusal(summaries, "layouts").empty());
+    CHECK(table_count(summaries) == "13");
+    CHECK(open_refusal(summaries, "layouts").empty());
+
+    const std::string unsupported = "native ledger is not an empty or supported ledger database";
+    const char* const unrelated = "CREATE TABLE unrelated (value TEXT);";
+    const auto refused = [&](const char* tables, const std::vector<const char*>& statements) {
+        const auto path = temp.file(std::string("refused-") + tables + ".sqlite");
+        for (const auto* statement : statements) execute_sql(path, statement);
+        CHECK(table_count(path) == tables);
+        CHECK(open_refusal(path, "layouts") == unsupported);
+        CHECK(table_count(path) == tables);
+    };
+    refused("4", {first, unrelated});
+    refused("5", {first, unrelated, "CREATE TABLE other (value TEXT);"});
+    refused("10", {first, routing, reports, redelivery, integrity, unrelated});
+    execute_sql(current, unrelated);
+    CHECK(table_count(current) == "14");
+    CHECK(open_refusal(current, "layouts") == unsupported);
+    CHECK(table_count(current) == "14");
 }
 
 void ledger_transactions() {
@@ -1146,6 +1655,11 @@ int main(int argc, char** argv) {
         if (argc == 3 && std::strcmp(argv[1], "--previous-ledger") == 0) {
             previous_binary_ledger(argv[2]);
         } else {
+            scheduled_checkpoint_budget();
+            cached_checkpoint_budget();
+            checkpoint_reservation_ceiling_is_optional();
+            startup_and_recovery_checkpoint_budget();
+            over_budget_open_never_checkpoints();
             ledger_budget_admission();
             ledger_budget_repeatability();
             ledger_budget_action_batches();
@@ -1156,6 +1670,8 @@ int main(int argc, char** argv) {
             delivery_summary_migration();
             ledger_transactions();
             cumulative_reports();
+            pre_integrity_ledger();
+            ledger_layouts();
             incremental_reports();
             crash_recovery(argv[0]);
             native_http();

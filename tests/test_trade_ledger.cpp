@@ -154,10 +154,10 @@ void global_window() {
     ledger.seal(3);
     matches(ledger, expected, 3);
     const TradeLedger& read = ledger;
-    invariant([&] { (void)ledger[2]; });
-    invariant([&] { (void)read[2]; });
-    invariant([&] { (void)ledger.at(2); });
-    invariant([&] { (void)read.at(2); });
+    same_trade(ledger[2], expected[2]);
+    same_trade(read[2], expected[2]);
+    same_trade(ledger.at(2), expected[2]);
+    same_trade(read.at(2), expected[2]);
     invariant([&] { (void)ledger.at(9); });
     invariant([&] { (void)read.at(9); });
     invariant([&] { (void)ledger[9]; });
@@ -179,8 +179,8 @@ void global_window() {
     CHECK(!ledger.empty());
     CHECK(ledger.begin() == ledger.end());
     CHECK(read.begin() == read.end());
-    invariant([&] { (void)ledger.back(); });
-    invariant([&] { (void)read.back(); });
+    same_trade(ledger.back(), expected.back());
+    same_trade(read.back(), expected.back());
     ledger.reserve(4);
     ledger.push_back(row(21));
     expected.push_back(row(21));
@@ -480,7 +480,29 @@ void native_retention_and_reuse() {
 
 } // namespace
 
+namespace pineforge::detail {
+struct TradeLedgerStorageProbe {
+    static void retire_history(TradeLedger& ledger) { ledger.set_history_retirement(true); }
+};
+} // namespace pineforge::detail
+
+namespace {
+void fully_sealed_retiring_back_refuses() {
+    TradeLedger ledger;
+    detail::TradeLedgerStorageProbe::retire_history(ledger);
+    // Two descriptor blocks force the last row out of the ring on sealing.
+    for (std::size_t index = 0; index < 2 * TradeLedger::kResidentRows; ++index)
+        ledger.push_back(row(static_cast<int>(index)));
+    ledger.seal(ledger.size());
+    REQUIRE(ledger.base() == ledger.size());
+    const TradeLedger& read = ledger;
+    invariant([&] { (void)ledger.back(); });
+    invariant([&] { (void)read.back(); });
+}
+} // namespace
+
 int main() {
+    test("fully sealed retiring back refuses", fully_sealed_retiring_back_refuses);
     test("retaining tail matches vector", retaining_tail);
     test("global resident window", global_window);
     test("copy and move ownership", copies_and_moves);

@@ -735,6 +735,11 @@ public:
 class RCI {
     int length_;
     std::deque<double> buffer_;
+    std::vector<double> prices_;
+    std::vector<int> order_;
+    std::vector<double> price_rank_;
+
+    double calculate();
 
 public:
     explicit RCI(int length);
@@ -760,6 +765,9 @@ public:
 class Median {
     int length_;
     std::deque<double> buffer_;
+    std::vector<double> scratch_;
+
+    double calculate();
 
 public:
     explicit Median(int length);
@@ -799,6 +807,7 @@ class ALMA {
     double offset_, sigma_;
     bool floor_;
     std::deque<double> buffer_;
+    std::vector<double> weights_;
 
 public:
     ALMA(int length, double offset = 0.85, double sigma = 6.0, bool floor = false);
@@ -824,14 +833,14 @@ public:
 
 class MFI {
     int length_;
-    std::deque<double> pos_buffer_, neg_buffer_;
+    DynamicRingBuffer<double> pos_buffer_, neg_buffer_;
     double prev_src_;
     int bar_count_;
 
     // saved state for recompute
     double saved_prev_src_;
     int saved_bar_count_;
-    std::deque<double> saved_pos_buffer_, saved_neg_buffer_;
+    DynamicRingBuffer<double> saved_pos_buffer_, saved_neg_buffer_;
 
 public:
     explicit MFI(int length);
@@ -843,14 +852,14 @@ public:
 
 class CMO {
     int length_;
-    std::deque<double> up_buffer_, down_buffer_;
+    DynamicRingBuffer<double> up_buffer_, down_buffer_;
     double prev_src_;
     int bar_count_;
 
     // saved state for recompute
     double saved_prev_src_;
     int saved_bar_count_;
-    std::deque<double> saved_up_buffer_, saved_down_buffer_;
+    DynamicRingBuffer<double> saved_up_buffer_, saved_down_buffer_;
 
 public:
     explicit CMO(int length);
@@ -1282,10 +1291,22 @@ public:
 
 // --- Statistical ---
 class Mode {
+    struct CountEntry {
+        double value = na<double>();
+        int count = 0;
+        unsigned char state = 0;  // 0 empty, 1 occupied, 2 deleted
+    };
+
     int length_;
     std::deque<double> buffer_;
+    std::vector<CountEntry> counts_;
+
+    void add_count(double value);
+    void remove_count(double value);
+    double current_mode() const;
+
 public:
-    explicit Mode(int length) : length_(length) {}
+    explicit Mode(int length);
     double compute(double src);
     double recompute(double src);
 };

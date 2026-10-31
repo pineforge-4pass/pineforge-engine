@@ -212,6 +212,9 @@ public:
     std::size_t cancels = 0, replacements = 0, partials = 0, brackets = 0;
     std::size_t base() const { return trades_.base(); }
     void refuse_old_field() const { (void)closed_trade_profit(0); }
+    bool old_entry_id_equals(std::string_view rhs) const {
+        return closed_trade_entry_id_equals(0, rhs);
+    }
     void check_copy() const {
         TradeLedger copied(trades_);
         TradeLedger moved(std::move(copied));
@@ -405,9 +408,9 @@ inline Sample run(const std::string& directory, const std::string& name, int pop
                         "retained first closed trade changed");
                 if (sink_on && host.base() != 0) {
                     require(strategy_closed_trade_close_cause(
-                                static_cast<BacktestEngine*>(&host), 0) == -1
+                                static_cast<BacktestEngine*>(&host), 0) == static_cast<int>(execution::CloseCause::Script)
                                 && run_failure_value_of(host).code == RunFailureCode::none,
-                            "legacy sealed metadata sentinel/failure behavior changed");
+                            "retained sealed metadata value/failure behavior changed");
                 }
             }
             if (sink_on) {

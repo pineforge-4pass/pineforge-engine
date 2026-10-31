@@ -35,7 +35,7 @@ verified sink + garbage summary exits 0, billing=normal. Missing presentation
 is omitted; missing output labels are null, never fabricated identifiers.
 Trade numbers/counts, rows, constants and receipt values never come from it.
 Metrics' non-count statistics, diagnostics, bar counts, report_window and
-provenance are schema-checked PRESENTATION under APP ruling B, not receipts.
+provenance are schema-checked presentation metadata, not receipt evidence.
 
 RAM is O(MAX_LINE_BYTES + STDOUT_JSON_MAX_BYTES), independent of sink length,
 with Python's bounded decoded-object/encoder overhead. The 64 KiB I/O buffer
@@ -57,8 +57,8 @@ OUTPUT COMMIT CONTRACT: the consumer MUST discard stdout on ANY nonzero exit
 and publish only after exit 0. A pipe cannot retract an accepted prefix after
 EPIPE, a late I/O error or a converter crash. Preflight does not make a pipe
 transactional. Zero stdout is guaranteed for verification failures before
-emission, not for arbitrary failures after emission starts. The lane report
-returns that unavoidable limitation to CORE-TOP explicitly.
+emission, not for arbitrary failures after emission starts.
+Callers must therefore treat stdout as uncommitted until the converter exits 0.
 """
 from __future__ import annotations
 

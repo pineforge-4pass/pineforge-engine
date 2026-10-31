@@ -933,6 +933,10 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_local_time_fields',
     'test_magnifier_endpoints4',
     'test_native_bar_open_hook',
+    # tests/cr150.d/native-cohort-target-*.cmake: three direct slow LABELS (+3).
+    'test_native_cohort_target_bypass',
+    'test_native_cohort_target_cost',
+    'test_native_cohort_target_transcript',
     'test_native_command_after_slice_1',
     'test_native_command_after_slice_2',
     'test_native_command_after_slice_3',

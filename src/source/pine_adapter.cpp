@@ -2354,6 +2354,9 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
     for (auto at = held.begin(); at != held.end();) {
         const auto current = at++;
         auto& cohort = *current;
+        // The flip cleared every held cohort before this opening was credited,
+        // so the reversal's cohort can only hold the new credit.
+        if (cohort.first == reversal.source_id) continue;
         if (cohort_opened_on_side(cohort.second, prior_long)) {
             if (position_tail_summary_) {
                 for (const auto& origin : cohort.second.live_units_by_origin)
@@ -2571,7 +2574,7 @@ void PineExecutionAdapter::revive_brackets_after_margin(
 
 void PineExecutionAdapter::reset_for_run() {
     position_tail_spill_.reset();
-    position_tail_summary_ = std::make_shared<detail::PositionTailSummary>();
+    position_tail_summary_ = std::make_shared<detail::AdapterPositionTailSummary>();
     exit_scratch_ = nullptr;
     pine_view_host_ = nullptr;
     // Incarnations start over with the run.
@@ -4449,12 +4452,17 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
         }
         if (every_member_bound) return;
     }
+    PINEFORGE_LOOKUP_INDEX_WORK("cohort_origin_pass", this, run_counter_, 1);
     auto& working = scratch.working_roots;
     auto& lots = scratch.lot_openings;
+    if (!position_tail_summary_) position_tail_summary_ = std::make_shared<detail::AdapterPositionTailSummary>();
+    auto& roster_roots = static_cast<detail::AdapterPositionTailSummary&>(
+        *position_tail_summary_).roster_roots;
     auto& successor_lots = scratch.successor_lots;
     auto& released = scratch.released_origins;
     working.clear();
     lots.clear();
+    roster_roots.clear();
     successor_lots.clear();
     released.clear();
     for (const auto& live : core.live()) working.push_back(root_of(live));
@@ -4462,26 +4470,21 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     for (const auto& lot : pine->pyramid_entries_) lots.push_back(lot.entry_incarnation);
     std::sort(lots.begin(), lots.end());
     lots.erase(std::unique(lots.begin(), lots.end()), lots.end());
-    const auto member = [](const std::vector<native_order::RequestHandle>& origins,
-                           std::uint64_t incarnation) {
-        const auto at = std::lower_bound(origins.begin(), origins.end(), incarnation,
-            [](const native_order::RequestHandle& origin, std::uint64_t value) {
-                return origin.incarnation < value;
-            });
-        return at != origins.end() && at->incarnation == incarnation;
-    };
+    for (const auto& roster : core.cohorts()) {
+        PINEFORGE_LOOKUP_INDEX_WORK("cohort_origin_roster", this, run_counter_, 1);
+        for (const auto& origin : roster.origins)
+            roster_roots.push_back(origin.incarnation);
+    }
+    std::sort(roster_roots.begin(), roster_roots.end());
+    roster_roots.erase(std::unique(roster_roots.begin(), roster_roots.end()),
+                       roster_roots.end());
     // The lots no roster names as a root: a replace successor's (or an
     // opening no roster holds).
     for (const auto opening : lots) {
         if (opening == 0) continue;
-        bool root = false;
-        for (const auto& roster : core.cohorts()) {
-            if (member(roster.origins, opening)) {
-                root = true;
-                break;
-            }
+        if (!std::binary_search(roster_roots.begin(), roster_roots.end(), opening)) {
+            successor_lots.push_back(opening);
         }
-        if (!root) successor_lots.push_back(opening);
     }
     auto& probe = scratch.lot_probe;
     for (const auto& roster : core.cohorts()) {
@@ -12097,7 +12100,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         const std::size_t base = pine ? pine->trades_.base() : 0;
         observe_position_tail_rows();
         if (!position_tail_summary_)
-            position_tail_summary_ = std::make_shared<detail::PositionTailSummary>();
+            position_tail_summary_ = std::make_shared<detail::AdapterPositionTailSummary>();
         auto& summary = *position_tail_summary_;
 #ifdef PINEFORGE_POSITION_TAIL_BEFORE_QUERY
         PINEFORGE_POSITION_TAIL_BEFORE_QUERY(summary);
@@ -26087,7 +26090,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     }
     const bool current_debit_observed =
         current_debited_applied_ordinals_.erase(event.ordinal) != 0;
-    if (!current_debit_observed && event.closed_trade_count > 0)
+    if (!flipped_position && !current_debit_observed && event.closed_trade_count > 0)
         consume_closed_trade_rows(event,
             placement_snapshot ? &*placement_snapshot : nullptr);
     // The margin call's units have left their cohorts: the exits' queue
@@ -28686,7 +28689,7 @@ void PineExecutionAdapter::observe_position_tail_rows() {
 
 void PineExecutionAdapter::begin_position_tail_summary() {
     if (!position_tail_summary_)
-        position_tail_summary_ = std::make_shared<detail::PositionTailSummary>();
+        position_tail_summary_ = std::make_shared<detail::AdapterPositionTailSummary>();
     auto* pine = pine_view_of(host_);
     if (!pine || short_seed_.final_short.incarnation != 0) {
         position_tail_summary_->invalidate(
@@ -28990,7 +28993,7 @@ void PineExecutionAdapter::set_id_tables_directory(const std::string& directory)
     placement_.set_auxiliary_tables_directory(directory);
     consumed_partial_exit_cycles_.set_directory(directory);
     if (!position_tail_summary_)
-        position_tail_summary_ = std::make_shared<detail::PositionTailSummary>();
+        position_tail_summary_ = std::make_shared<detail::AdapterPositionTailSummary>();
     position_tail_summary_->set_directory(directory);
 }
 

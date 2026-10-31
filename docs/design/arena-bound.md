@@ -155,12 +155,12 @@ overrides or imported libraries, its receipt must bind those inputs too.
 
 The carried declaration fields are visible in `PineStrategyConfig` at
 `include/pineforge/source/pine_adapter.hpp:78`. Their `project` projection starts at
-`src/source/pine_adapter.cpp:2911`. The relevant rules are:
+`src/source/pine_adapter.cpp:2914`. The relevant rules are:
 
 | Declaration / native fact | Sizing consequence and evidence |
 | --- | --- |
-| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2830`). Do not assume this caps strategy.order or use it as an unconditional H. |
-| calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3011`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:76`. The native point budget is a callback bound, not a total fill bound. |
+| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2833`). Do not assume this caps strategy.order or use it as an unconditional H. |
+| calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3014`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:76`. The native point budget is a callback bound, not a total fill bound. |
 | max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:7770`. |
 | first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:888`. Count this source path; a native budget of 8 is not Pine's bound. |
 | process_orders_on_close | Adds a matching opportunity after calculation; projection at `src/source/pine_adapter.cpp:2823`. It does not impose an order/trade count. |
@@ -347,8 +347,8 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2727`; joined key at `src/source/pine_adapter.cpp:25357` |
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:573` |
 | Ordered consumed-cycle fold | 136*leaves + 2088*branches + 2096*savedPath | `include/pineforge/detail/id_pair_ordered_fold.hpp:161`, `:165`, `:172`, size assertion for `Leaf`, `Branch` and `Snapshot` at `:183` |
-| Successor-root rows | 16*R | `src/native_order.cpp:7984`, row assertion for `Row` at `:7981`, 64-row tail bound `kTailRows` at `:7986` |
-| Frozen external openings | **0 in this certified profile** | Stock source builds owned vectors at `src/source/pine_adapter.cpp:7032`, `:6995`, `:9669`; generic external owners are excluded below |
+| Successor-root rows | 16*R | `src/native_order.cpp:8057`, row assertion for `Row` at `:8054`, 64-row tail bound `kTailRows` at `:8059` |
+| Frozen external openings | **0 in this certified profile** | Stock source builds owned vectors at `src/source/pine_adapter.cpp:7035`, `:6995`, `:9669`; generic external owners are excluded below |
 
 The AVL node is seven uint64 words = 56 bytes, then its value and exact key
 bytes. CohortFacts::Record is handle, cycle, origin_count, origin_digest and
@@ -376,7 +376,7 @@ exit_time (8), qty (8), entry_incarnation (8), side (1), margin flag (1)
 and ID length (4), after the ID bytes. This is not sizeof(Row).
 
 Successor rows are two uint64 values. The WorkingRequestCore method `index_committed`
-defined at `src/native_order.cpp:2960` omits kept-handle replacements and appends a
+defined at `src/native_order.cpp:3029` omits kept-handle replacements and appends a
 root only when a newly issued definition has one. The 64-row RAM tail makes
 charging every issued row conservative. Partial closes create one trade
 row per affected lot: `src/engine_execution.cpp:1241`. Bracket definitions
@@ -557,7 +557,7 @@ non-command certificates exactly.
 
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
-writer (`equity_scratch` append at `src/engine_report.cpp:1525`), and capture transfers that writer as `metric_curve`
+writer (`equity_scratch` append at `src/engine_report.cpp:1562`), and capture transfers that writer as `metric_curve`
 instead of copying its prefix (`src/native_execution_consumer.cpp:13135`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
@@ -610,7 +610,7 @@ feed/copy inventory makes the entire OHLCV term unbounded/unknown.
 The finalizer receives the sink, not the arena. Its spool bound includes
 the header, all records, trailer and LF bytes. It is not its private heap
 bound. The hard successful-line ceiling is 1,048,576 including LF:
-`src/report_sink_writer.cpp:27` and `src/report_sink_writer.cpp:29`.
+`src/report_sink_writer.cpp:28` and `src/report_sink_writer.cpp:44`.
 The ceiling is already enforced by the writer; this calculator adds no
 new run-capacity gate.
 
@@ -631,7 +631,7 @@ nX = S*tracePerBar + traceFixed            if trace else 0
 nH = S*hashesPerBar + hashesFixed          if hashes else 0
 ```
 
-K is at most one by `src/report_sink_writer.cpp:531`. The compiler can
+K is at most one by `src/report_sink_writer.cpp:705`. The compiler can
 tighten other counts only with a proof; finite E/T does not bound event
 or trace calls made inside an unknown loop.
 
@@ -640,17 +640,17 @@ characters, and f64 conservatively uses <=64 characters: the formatter
 `f64` at `src/report_sink_writer.cpp:285` (its worker `real` at `src/report_sink_writer.cpp:71`) builds scientific output with a fixed
 buffer then performs bounded exponent relayout. Each input string byte
 becomes at most six JSON bytes, plus two quotes; see
-`src/report_sink_writer.cpp:207`. Counting delimiters and the LF gives:
+`src/report_sink_writer.cpp:126`. Counting delimiters and the LF gives:
 
 | Tag | Maximum line bytes, before taking the hard ceiling | Builder |
 | --- | --- | --- |
-| E | 154 | `src/report_sink_writer.cpp:503` |
-| T | 675 + 12*L + 6*commentBytes | `src/report_sink_writer.cpp:398` |
-| O | 60 + 65*seriesSlots | `src/report_sink_writer.cpp:603` |
-| V | 239 + 6*messageBytes | `src/report_sink_writer.cpp:513` |
-| K | 6 + 65*constantSlots | `src/report_sink_writer.cpp:527` |
-| X | 110 + 6*traceNameBytes | `src/report_sink_writer.cpp:537` |
-| H | 25 | `src/report_sink_writer.cpp:545` |
+| E | 154 | `src/report_sink_writer.cpp:563` |
+| T | 675 + 12*L + 6*commentBytes | `src/report_sink_writer.cpp:587` |
+| O | 60 + 65*seriesSlots | `src/report_sink_writer.cpp:669` |
+| V | 239 + 6*messageBytes | `src/report_sink_writer.cpp:682` |
+| K | 6 + 65*constantSlots | `src/report_sink_writer.cpp:702` |
+| X | 110 + 6*traceNameBytes | `src/report_sink_writer.cpp:711` |
+| H | 25 | `src/report_sink_writer.cpp:722` |
 
 For variable-width rows use min(expression,1048576). Missing comment,
 message or trace-name byte proofs use the existing full-line ceiling,
@@ -692,11 +692,11 @@ the resident-cap change changes no per-user storage term, command share, closed 
 The unbound journal's `ExtFile` uses `ScratchFile`, which can claim arena regions; earlier spill
 does not certify its lifetime extent. The bound codec's existing command share supplies no private RSS/AS certification.
 
-The command-scratch resident/cache ledger term is fixed **K = 202,752 bytes/run**:
-`3 * (65536 + 2048)`, named at `src/command_scratch_cache.hpp:28`, including three
-64-KiB buffers and their decorator/slot-key objects (`static_assert(sizeof(CachedScratchBacking)` at `src/command_scratch_cache.hpp:76`).
+The command-scratch resident/cache ledger term is fixed **K = `3 * (kCacheBytes + kMaxSlots * sizeof(ScratchPageId) + kFixedObjectBytes)`**:
+at the default this is **202,752 bytes/run**, `3 * (65536 + 1024 + 1024)`, named at
+`src/command_scratch_cache.hpp:28`, including three 64-KiB buffers, slot tables allocated with each wrapped backing's page slot count (K is charged at the worst case of 512-byte pages) and fixed objects (`static_assert(sizeof(CachedScratchBacking)` at `src/command_scratch_cache.hpp:76`).
 Each disk store reuses one buffer for its resident prefix, then its read cache;
-crossing 64 KiB spills once. Attached arenas retain direct mapped admission.
+crossing `kCacheBytes` (64 KiB at default) spills once. Attached arenas retain direct mapped admission.
 Charge K (prose ledger; scripts/arena_bound.py has no K input) alongside existing workspaces/inner backings, replacing the old read-cache allowance; K changes no arena-storage formula or certification.
 
 CORE-TOP's A5-WIDER brief reports a **44.4–46.2 MB pre-flat-port resident

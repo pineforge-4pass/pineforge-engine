@@ -1,4 +1,4 @@
-"""Replay converter tests; execution belongs on lab remote / SM-CX only.
+"""Replay converter tests; synthetic and native differential byte checks.
 
 The synthetic oracle is today's run_json.build_report_dict and
 build_outputs_block, driven by generated native-layout values, not saved JSON
@@ -189,7 +189,7 @@ def compare_derivable(expected, actual):
 
 def differential(cases_path, artifacts_path):
     cases = json.loads(Path(cases_path).read_bytes())
-    assert type(cases) is list and cases, "CORE-TOP must supply a nonempty corpus subset"
+    assert type(cases) is list and cases, "the corpus subset must be nonempty"
     artifacts = Path(artifacts_path).resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
     names = set()
@@ -750,7 +750,7 @@ def test_stdout_epipe_is_exit_five_and_never_success(tmp_path, late):
     assert line["event"] == "converter_io" and line["sink_verified"] is True
     if late:
         # A pipe cannot retract this prefix. The caller MUST discard it on 5;
-        # this pins the exact remaining CORE-TOP contract question honestly.
+        # a late pipe failure can leave a partial JSON document on stdout.
         assert prefix.startswith(b"{") and not prefix.endswith(b"}\n")
 
 

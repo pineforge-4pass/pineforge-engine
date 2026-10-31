@@ -2315,6 +2315,18 @@
    "symbol": "state_",
    "scope": [
     "namespace pineforge :: detail #1",
+    "inline CommandScratchStore :: CommandScratchStore ( ScratchStoreConfig config , ScratchBacking * backing ) noexcept #1",
+    "if ( block = = nullptr ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "state_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/scratch_store_impl.hpp",
+   "symbol": "state_",
+   "scope": [
+    "namespace pineforge :: detail #1",
     "inline CommandScratchStore :: CommandScratchStore ( ScratchStoreConfig config , ScratchBacking * backing ) noexcept #1"
    ],
    "cls": "assign",
@@ -6297,12 +6309,24 @@
   },
   {
    "file": "include/pineforge/native_module.hpp",
+   "symbol": "value_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace native_module #1",
+    "class MetricsBindingHashV1 #1"
+   ],
+   "cls": "assign",
+   "spelling": "value_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/native_module.hpp",
    "symbol": "<temp:string>",
    "scope": [
     "namespace pineforge #1",
     "namespace native_module #1",
     "template < typename Host > class Module final : public Host #1",
-    "public : void note_error ( const char * text , const RunFailureValue & value ) noexcept #1",
+    "void note_error ( const char * text , const RunFailureValue & value ) noexcept #1",
     "try #1"
    ],
    "cls": "temp",
@@ -11763,6 +11787,42 @@
   },
   {
    "file": "include/pineforge/ta.hpp",
+   "symbol": "prices_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "class RCI #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/ta.hpp",
+   "symbol": "order_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "class RCI #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/ta.hpp",
+   "symbol": "price_rank_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "class RCI #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/ta.hpp",
    "symbol": "buffer_",
    "scope": [
     "namespace pineforge #1",
@@ -11787,6 +11847,18 @@
   },
   {
    "file": "include/pineforge/ta.hpp",
+   "symbol": "scratch_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "class Median #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/ta.hpp",
    "symbol": "buffer_",
    "scope": [
     "namespace pineforge #1",
@@ -11795,6 +11867,18 @@
    ],
    "cls": "decl",
    "spelling": "std :: deque < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/ta.hpp",
+   "symbol": "weights_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "class ALMA #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < double >",
    "ordinal": 1
   },
   {
@@ -11818,7 +11902,7 @@
     "class MFI #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "DynamicRingBuffer < double >",
    "ordinal": 1
   },
   {
@@ -11830,7 +11914,7 @@
     "class MFI #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "DynamicRingBuffer < double >",
    "ordinal": 1
   },
   {
@@ -11842,7 +11926,7 @@
     "class CMO #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "DynamicRingBuffer < double >",
    "ordinal": 1
   },
   {
@@ -11854,7 +11938,7 @@
     "class CMO #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "DynamicRingBuffer < double >",
    "ordinal": 1
   },
   {
@@ -11939,6 +12023,18 @@
    ],
    "cls": "decl",
    "spelling": "std :: deque < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/ta.hpp",
+   "symbol": "counts_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "class Mode #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < CountEntry >",
    "ordinal": 1
   },
   {
@@ -13080,6 +13176,18 @@
   },
   {
    "file": "src/command_scratch_cache.cpp",
+   "symbol": "reset",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "CachedScratchBacking :: CachedScratchBacking ( std :: unique_ptr < ScratchBacking > inner , ScratchIoObserver observer , std :: size_t resident_bytes , std :: shared_ptr < CommandScratchByteBudget > budget ) : ScratchBacking ( inner ? inner -> kind ( ) : ScratchBackingKind :: disk , inner ? inner -> page_size ( ) : 0 , observer ) , inner_ ( std :: move ( inner ) ) , slot_count_ ( page_size ( ) > = kMinPageBytes && page_size ( ) < = kCacheBytes ? kCacheBytes / page_size ( ) : 0 ) , resident_pages_ ( slot_count_ ! = 0 ? std :: min ( resident_bytes , kCacheBytes ) / page_size ( ) : 0 ) , resident_ ( resident_pages_ ! = 0 && inner_ -> page_count ( ) = = 0 ) , budget_ ( std :: move ( budget ) ) #1",
+    "if ( slot_count_ ! = 0 ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new",
+   "ordinal": 2
+  },
+  {
+   "file": "src/command_scratch_cache.cpp",
    "symbol": "budget_",
    "scope": [
     "namespace pineforge :: detail #1",
@@ -14112,6 +14220,23 @@
   },
   {
    "file": "src/engine_metrics.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "namespace #1",
+    "namespace streaming_v1 #1",
+    "class MonthEndReplay #1",
+    "private : bool close_month ( ) #1",
+    "if ( count_ = = capacity_ ) #1",
+    "try #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_metrics.cpp",
    "symbol": "returns",
    "scope": [
     "namespace pineforge #1",
@@ -14124,6 +14249,36 @@
    ],
    "cls": "grow",
    "spelling": "returns . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_metrics.cpp",
+   "symbol": "months",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "namespace #1",
+    "namespace streaming_v1 #1",
+    "class Fold final : public StreamingEquityRatiosV1 #1",
+    "public : Fold ( MetricsStreamingConfigV1 config , MetricsExtentPlanV1 plan , MetricsRatioTraceSinkV1 sink ) : config_ ( config ) , plan_ ( plan ) , sink_ ( sink ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_metrics.cpp",
+   "symbol": "months",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace metrics #1",
+    "namespace #1",
+    "namespace streaming_v1 #1",
+    "class Fold final : public StreamingEquityRatiosV1 #1",
+    "MetricsStreamingStatusV1 enable_months ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
    "ordinal": 1
   },
   {
@@ -14327,7 +14482,21 @@
     "namespace pineforge #1",
     "inline namespace engine_script_run_v19 #1",
     "struct TradeLedger :: State #1",
-    "void ensure_cache ( size_type population ) const #1"
+    "void ensure_cache ( ) const #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_orders.cpp",
+   "symbol": "page",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "struct TradeLedger :: State #1",
+    "CacheEntry & ensure_cache_entry ( size_type global ) const #1",
+    "if ( ! page ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_unique",
@@ -15260,6 +15429,261 @@
    ],
    "cls": "temp",
    "spelling": "RunFailureArgs",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "curve",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "struct LiveReportAccumulator :: State #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: deque < pf_equity_point_t >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "trade_rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "struct LiveReportAccumulator :: State #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < TradeC >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "ratio_curve",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "struct LiveReportAccumulator :: State #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < pf_equity_point_t >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "state_",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "const auto fallback = [ & ] #1",
+    "const auto suffix = [ ] ( auto & to , const auto * rows , std :: size_t n , std :: size_t start , std :: uint64_t & counter ) #1",
+    "+ + i ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "const auto fallback = [ & ] #1",
+    "+ + i ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "all",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "if ( ! state . owner ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "longs",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "if ( ! state . owner ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "shorts",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "if ( ! state . owner ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "+ + i ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "curve",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "+ + i ) #2",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "curve . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "ratio_curve",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "+ + i ) #2",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "ratio_curve . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "+ + i ) #2"
+   ],
+   "cls": "grow",
+   "spelling": "rows . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "for ( const auto & row : rows ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "for ( const auto & s : engine . security_eval_states_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "rows . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "+ + i ) #4"
+   ],
+   "cls": "grow",
+   "spelling": "rows . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
+    "+ + i ) #5"
+   ],
+   "cls": "grow",
+   "spelling": "rows . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report_patch.hpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge :: report #1",
+    "template < class Row > struct ReportArrayPatch #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < Row >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/live_report_patch.hpp",
+   "symbol": "chart_timezone",
+   "scope": [
+    "namespace pineforge :: report #1",
+    "struct LiveReportPatch #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
    "ordinal": 1
   },
   {
@@ -17814,7 +18238,7 @@
     "void NativeExecutionConsumer :: read_target_into ( const BacktestEngine & engine , const native_order :: LiveRequest * live , native_order :: TargetObservation & out , std :: vector < native_order :: RequestHandle > & handles ) const #1",
     "else if ( const auto * cohort = std :: get_if < native_order :: CohortClose > ( & live -> authority ) ) #1",
     "for ( const auto & lot : engine . pyramid_entries_ ) #1",
-    "if ( requests_ . cohort_contains ( cohort -> cohort , handle ) ) #1"
+    "if ( requests_ . cohort_contains ( cohort_handle , handle ) ) #1"
    ],
    "cls": "grow",
    "spelling": "handles . push_back ( . . . )",
@@ -19837,6 +20261,45 @@
    "ordinal": 1
   },
   {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "cohort_opening_index_",
+   "scope": [
+    "namespace pineforge :: engine_script_run_v19 #2",
+    "bool NativeExecutionConsumer :: read_indexed_cohort_target ( const BacktestEngine & engine , native_order :: CohortHandle cohort , const native_order :: PositionNonflat & position , std :: vector < native_order :: OpeningObservation > & out ) const #1",
+    "if ( ! cohort_opening_index_current ( ) ) #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "cohort_opening_index_ . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "cohort_opening_index_",
+   "scope": [
+    "namespace pineforge :: engine_script_run_v19 #2",
+    "bool NativeExecutionConsumer :: read_indexed_cohort_target ( const BacktestEngine & engine , native_order :: CohortHandle cohort , const native_order :: PositionNonflat & position , std :: vector < native_order :: OpeningObservation > & out ) const #1",
+    "if ( ! cohort_opening_index_current ( ) ) #1",
+    "for ( const auto & lot : engine . pyramid_entries_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "cohort_opening_index_ . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge :: engine_script_run_v19 #2",
+    "bool NativeExecutionConsumer :: read_indexed_cohort_target ( const BacktestEngine & engine , native_order :: CohortHandle cohort , const native_order :: PositionNonflat & position , std :: vector < native_order :: OpeningObservation > & out ) const #1",
+    "for ( const auto & origin : roster -> second . origins ) #1",
+    "+ + it ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
    "file": "src/native_execution_consumer.hpp",
    "symbol": "working_requests",
    "scope": [
@@ -20327,6 +20790,18 @@
    ],
    "cls": "decl",
    "spelling": "std :: vector < std :: pair < native_order :: EventId , native_order :: RequestHandle > >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.hpp",
+   "symbol": "cohort_opening_index_",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "class NativeExecutionConsumer final : public IExecutionConsumer #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < CohortOpeningIndexRow >",
    "ordinal": 1
   },
   {
@@ -23505,6 +23980,417 @@
    "ordinal": 1
   },
   {
+   "file": "src/report_replay.cpp",
+   "symbol": "integer",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "namespace #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "namespace #1",
+    "std :: string integer ( std :: uint64_t value ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "real",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "namespace #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "namespace #1",
+    "struct ReplayRegistry #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: map < const void * , std :: unique_ptr < ReportReplay > >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void install_replay ( const void * key , std :: unique_ptr < ReportReplay > replay ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "owners . insert_or_assign ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void copy_replay ( const void * from , const void * to ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "owners . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "owners",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void move_replay ( const void * from , const void * to ) noexcept #1",
+    "if ( ! node . empty ( ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "owners . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "path",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "run_id",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "make_unique",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "std :: unique_ptr < ReportReplay > ReportReplay :: configuration_copy ( ) const #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "directory_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: begin ( const std :: string & scratch_dir , double capital , double pointvalue , bool selected , std :: int64_t start , std :: int64_t end ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "directory_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "points_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: begin ( const std :: string & scratch_dir , double capital , double pointvalue , bool selected , std :: int64_t start , std :: int64_t end ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "points_ . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "writer_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: begin ( const std :: string & scratch_dir , double capital , double pointvalue , bool selected , std :: int64_t start , std :: int64_t end ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "trades_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: close ( std :: size_t global ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "trades_ . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "trades_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: resize_trades ( std :: size_t global_end ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "trades_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "points_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: point ( const pf_equity_point_t & value , double net ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "points_ . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "line",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: write_q ( const pf_equity_point_t & point ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: write_q ( const pf_equity_point_t & point ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "line",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: write_q ( const pf_equity_point_t & point ) #1"
+   ],
+   "cls": "append",
+   "spelling": "line + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "line",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: write_q ( const pf_equity_point_t & point ) #1"
+   ],
+   "cls": "append",
+   "spelling": "line + = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "line",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: write_q ( const pf_equity_point_t & point ) #1"
+   ],
+   "cls": "append",
+   "spelling": "line + = . . .",
+   "ordinal": 3
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "line",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: write_r ( std :: size_t global , bool terminal ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "line",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: write_r ( std :: size_t global , bool terminal ) #1",
+    "if ( ! row . marked ) #1"
+   ],
+   "cls": "append",
+   "spelling": "line + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "line",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: write_r ( std :: size_t global , bool terminal ) #1",
+    "else #1"
+   ],
+   "cls": "append",
+   "spelling": "line + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: write_r ( std :: size_t global , bool terminal ) #1",
+    "else #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "line",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: write_r ( std :: size_t global , bool terminal ) #1",
+    "else #1"
+   ],
+   "cls": "append",
+   "spelling": "line + = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "line",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: write_r ( std :: size_t global , bool terminal ) #1",
+    "else #1"
+   ],
+   "cls": "append",
+   "spelling": "line + = . . .",
+   "ordinal": 3
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "line",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "void ReportReplay :: write_r ( std :: size_t global , bool terminal ) #1"
+   ],
+   "cls": "append",
+   "spelling": "line + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "replay",
+   "scope": [
+    "namespace pineforge #1",
+    "int BacktestEngine :: set_report_replay_v1 ( const char * path , const char * run_id ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "path",
+   "scope": [
+    "namespace pineforge #1",
+    "BacktestEngine :: ReportSinkState & BacktestEngine :: ReportSinkState :: operator = ( ReportSinkState && other ) noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "path = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.cpp",
+   "symbol": "run_id",
+   "scope": [
+    "namespace pineforge #1",
+    "BacktestEngine :: ReportSinkState & BacktestEngine :: ReportSinkState :: operator = ( ReportSinkState && other ) noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "run_id = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.hpp",
+   "symbol": "path",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "class ReportReplay #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.hpp",
+   "symbol": "run_id",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "class ReportReplay #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_replay.hpp",
+   "symbol": "path_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "class ReportReplay #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
    "file": "src/report_scratch.cpp",
    "symbol": "state_",
    "scope": [
@@ -24219,6 +25105,98 @@
    "cls": "alloc",
    "spelling": "make_unique",
    "ordinal": 2
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "scratch",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "void LineWriter :: begin_companion ( std :: string_view header_text ) #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "scratch . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "scratch",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "void LineWriter :: companion_record ( std :: string_view record_text ) #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "scratch . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "line",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "void LineWriter :: finish_companion ( std :: string_view counts , std :: string_view base_sha256 ) #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "line . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "line",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "void LineWriter :: finish_companion ( std :: string_view counts , std :: string_view base_sha256 ) #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "line . append ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "line",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "void LineWriter :: finish_companion ( std :: string_view counts , std :: string_view base_sha256 ) #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "line . append ( . . . )",
+   "ordinal": 3
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "line",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "void LineWriter :: finish_companion ( std :: string_view counts , std :: string_view base_sha256 ) #1",
+    "try #1",
+    "if ( ! base_sha256 . empty ( ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "line . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/report_sink_writer.cpp",
+   "symbol": "line",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1",
+    "void LineWriter :: finish_companion ( std :: string_view counts , std :: string_view base_sha256 ) #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "line . append ( . . . )",
+   "ordinal": 4
   },
   {
    "file": "src/report_sink_writer.cpp",
@@ -25223,6 +26201,197 @@
    ],
    "cls": "append",
    "spelling": "text + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_quota.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "QuotaSnapshot read_snapshot ( const QuotaMessage & message ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "RunFailureArgs",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_quota.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "QuotaSnapshot read_snapshot ( const QuotaMessage & message ) #1",
+    "if ( status = = static_cast < std :: uint64_t > ( QuotaStatus :: resource_exceeded ) || status = = static_cast < std :: uint64_t > ( QuotaStatus :: descriptors_exceeded ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "args . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_quota.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "QuotaSnapshot read_snapshot ( const QuotaMessage & message ) #1",
+    "if ( status = = static_cast < std :: uint64_t > ( QuotaStatus :: resource_exceeded ) || status = = static_cast < std :: uint64_t > ( QuotaStatus :: descriptors_exceeded ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "args . emplace_back ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/run_quota.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "QuotaSnapshot read_snapshot ( const QuotaMessage & message ) #1",
+    "if ( status = = static_cast < std :: uint64_t > ( QuotaStatus :: resource_exceeded ) || status = = static_cast < std :: uint64_t > ( QuotaStatus :: descriptors_exceeded ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "args . emplace_back ( . . . )",
+   "ordinal": 3
+  },
+  {
+   "file": "src/run_quota.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "QuotaSnapshot read_snapshot ( const QuotaMessage & message ) #1",
+    "if ( status = = static_cast < std :: uint64_t > ( QuotaStatus :: resource_exceeded ) || status = = static_cast < std :: uint64_t > ( QuotaStatus :: descriptors_exceeded ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "args . emplace_back ( . . . )",
+   "ordinal": 4
+  },
+  {
+   "file": "src/run_quota.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "QuotaSnapshot read_snapshot ( const QuotaMessage & message ) #1",
+    "if ( status = = static_cast < std :: uint64_t > ( QuotaStatus :: resource_exceeded ) || status = = static_cast < std :: uint64_t > ( QuotaStatus :: descriptors_exceeded ) ) #1",
+    "if ( descriptors ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "args . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_quota.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "QuotaSnapshot read_snapshot ( const QuotaMessage & message ) #1",
+    "if ( status = = static_cast < std :: uint64_t > ( QuotaStatus :: resource_exceeded ) || status = = static_cast < std :: uint64_t > ( QuotaStatus :: descriptors_exceeded ) ) #1",
+    "if ( descriptors ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "args . emplace_back ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/run_quota.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "QuotaSnapshot read_snapshot ( const QuotaMessage & message ) #1",
+    "if ( status = = static_cast < std :: uint64_t > ( QuotaStatus :: resource_exceeded ) || status = = static_cast < std :: uint64_t > ( QuotaStatus :: descriptors_exceeded ) ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "args . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_quota.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "QuotaSnapshot read_snapshot ( const QuotaMessage & message ) #1",
+    "if ( status = = static_cast < std :: uint64_t > ( QuotaStatus :: resource_exceeded ) || status = = static_cast < std :: uint64_t > ( QuotaStatus :: descriptors_exceeded ) ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "args . emplace_back ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/run_quota.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "QuotaSnapshot read_snapshot ( const QuotaMessage & message ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "args . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_quota.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1",
+    "QuotaSnapshot read_snapshot ( const QuotaMessage & message ) #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "args . emplace_back ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/run_quota.cpp",
+   "symbol": "endpoints",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "namespace #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: map < EndpointKey , std :: weak_ptr < RunQuotaEndpoint > >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_quota.cpp",
+   "symbol": "refusal",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "struct RunQuotaEndpoint #1",
+    "[ [ noreturn ] ] void fail ( QuotaSnapshot snapshot ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_quota.cpp",
+   "symbol": "endpoints",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "RunQuota RunQuota :: from_fd ( int fd , QuotaRole role ) #1"
+   ],
+   "cls": "subscript",
+   "spelling": "endpoints [ . . . ]",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_quota.cpp",
+   "symbol": "endpoint",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "RunQuota RunQuota :: from_fd ( int fd , QuotaRole role ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
    "ordinal": 1
   },
   {
@@ -28916,6 +30085,17 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "position_tail_summary_",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "working",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -28938,11 +30118,24 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "roster_roots",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
+    "for ( const auto & roster : core . cohorts ( ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "roster_roots . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "successor_lots",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto opening : lots ) #1"
+    "for ( const auto opening : lots ) #1",
+    "if ( ! std :: binary_search ( roster_roots . begin ( ) , roster_roots . end ( ) , opening ) ) #1"
    ],
    "cls": "grow",
    "spelling": "successor_lots . push_back ( . . . )",
@@ -28954,7 +30147,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & roster : core . cohorts ( ) ) #1"
+    "for ( const auto & roster : core . cohorts ( ) ) #2"
    ],
    "cls": "assign",
    "spelling": "origins = . . .",
@@ -28966,7 +30159,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & roster : core . cohorts ( ) ) #1",
+    "for ( const auto & roster : core . cohorts ( ) ) #2",
     "for ( const auto & origin : origins ) #1"
    ],
    "cls": "grow",
@@ -38752,6 +39945,17 @@
    "ordinal": 1
   },
   {
+   "file": "src/source/pine_position_tail_summary.hpp",
+   "symbol": "roster_roots",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "struct AdapterPositionTailSummary final : PositionTailSummary #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < std :: uint64_t >",
+   "ordinal": 1
+  },
+  {
    "file": "src/source/pine_scheduler.cpp",
    "symbol": "historical_projections",
    "scope": [
@@ -40964,6 +42168,30 @@
   },
   {
    "file": "src/source/pine_strategy_host.cpp",
+   "symbol": "replay_rows",
+   "scope": [
+    "namespace pineforge #1",
+    "void source :: PineStrategyHost :: order_global_exit_children ( const native_order :: ExecutionAppliedEvent & event ) #1",
+    "if ( replay ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_strategy_host.cpp",
+   "symbol": "replay_rows",
+   "scope": [
+    "namespace pineforge #1",
+    "void source :: PineStrategyHost :: order_global_exit_children ( const native_order :: ExecutionAppliedEvent & event ) #1",
+    "const auto annotate = [ & ] ( std :: size_t lot , std :: size_t child , double transaction_qty , bool fifo , bool fees , double exit_fee , double transaction_fee ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "replay_rows . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_strategy_host.cpp",
    "symbol": "trades_",
    "scope": [
     "namespace pineforge #1",
@@ -42300,14 +43528,83 @@
   },
   {
    "file": "src/ta_extremes_volume.cpp",
-   "symbol": "sorted",
+   "symbol": "counts_",
    "scope": [
     "namespace pineforge #1",
     "namespace ta #1",
-    "double Median :: compute ( double src ) #1"
+    "void Mode :: add_count ( double value ) #1",
+    "+ + probe ) #1"
+   ],
+   "cls": "subscript",
+   "spelling": "counts_ [ . . . ]",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_extremes_volume.cpp",
+   "symbol": "counts_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "void Mode :: add_count ( double value ) #1",
+    "+ + probe ) #1",
+    "else #1"
+   ],
+   "cls": "subscript",
+   "spelling": "counts_ [ . . . ]",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_extremes_volume.cpp",
+   "symbol": "counts_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "void Mode :: add_count ( double value ) #1",
+    "if ( first_deleted ! = slot_count ) #1"
+   ],
+   "cls": "subscript",
+   "spelling": "counts_ [ . . . ]",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_extremes_volume.cpp",
+   "symbol": "counts_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "void Mode :: remove_count ( double value ) #1",
+    "+ + probe ) #1"
+   ],
+   "cls": "subscript",
+   "spelling": "counts_ [ . . . ]",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_extremes_volume.cpp",
+   "symbol": "counts",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "double Mode :: current_mode ( ) const #1",
+    "for ( double value : buffer_ ) #1",
+    "if ( is_na ( value ) ) #1"
    ],
    "cls": "decl",
-   "spelling": "std :: vector < double >",
+   "spelling": "std :: unordered_map < double , int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_extremes_volume.cpp",
+   "symbol": "counts",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "double Mode :: current_mode ( ) const #1",
+    "for ( double value : buffer_ ) #1",
+    "if ( is_na ( value ) ) #1"
+   ],
+   "cls": "subscript",
+   "spelling": "counts [ . . . ]",
    "ordinal": 1
   },
   {
@@ -42320,66 +43617,6 @@
    ],
    "cls": "grow",
    "spelling": "buffer_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "counts",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Mode :: compute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: unordered_map < double , int >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "counts",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Mode :: compute ( double src ) #1"
-   ],
-   "cls": "subscript",
-   "spelling": "counts [ . . . ]",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "sorted",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Median :: recompute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "counts",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Mode :: recompute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: unordered_map < double , int >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_extremes_volume.cpp",
-   "symbol": "counts",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double Mode :: recompute ( double src ) #1"
-   ],
-   "cls": "subscript",
-   "spelling": "counts [ . . . ]",
    "ordinal": 1
   },
   {
@@ -42453,6 +43690,19 @@
    ],
    "cls": "grow",
    "spelling": "y_buffer_ . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_misc.cpp",
+   "symbol": "ranked_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace ta #1",
+    "PercentileWindow :: PercentileWindow ( int length ) : length_ ( length ) #1",
+    "if ( length_ > 0 ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "ranked_ . reserve ( . . . )",
    "ordinal": 1
   },
   {
@@ -42696,6 +43946,18 @@
   },
   {
    "file": "src/ta_moving_averages.cpp",
+   "symbol": "weights_",
+   "scope": [
+    "namespace pineforge #2",
+    "namespace ta #1",
+    "ALMA :: ALMA ( int length , double offset , double sigma , bool floor ) : length_ ( length ) , offset_ ( offset ) , sigma_ ( sigma ) , floor_ ( floor ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "weights_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_moving_averages.cpp",
    "symbol": "buffer_",
    "scope": [
     "namespace pineforge #2",
@@ -42804,42 +44066,6 @@
   },
   {
    "file": "src/ta_oscillators.cpp",
-   "symbol": "prices",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: compute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "order",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: compute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < int >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "price_rank",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: compute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
    "symbol": "saved_pos_buffer_",
    "scope": [
     "namespace pineforge #1",
@@ -42859,7 +44085,7 @@
     "double MFI :: compute ( double src , double vol ) #1"
    ],
    "cls": "grow",
-   "spelling": "pos_buffer_ . push_back ( . . . )",
+   "spelling": "pos_buffer_ . push_front ( . . . )",
    "ordinal": 1
   },
   {
@@ -42871,7 +44097,7 @@
     "double MFI :: compute ( double src , double vol ) #1"
    ],
    "cls": "grow",
-   "spelling": "neg_buffer_ . push_back ( . . . )",
+   "spelling": "neg_buffer_ . push_front ( . . . )",
    "ordinal": 1
   },
   {
@@ -42895,7 +44121,7 @@
     "double CMO :: compute ( double src ) #1"
    ],
    "cls": "grow",
-   "spelling": "up_buffer_ . push_back ( . . . )",
+   "spelling": "up_buffer_ . push_front ( . . . )",
    "ordinal": 1
   },
   {
@@ -42907,7 +44133,7 @@
     "double CMO :: compute ( double src ) #1"
    ],
    "cls": "grow",
-   "spelling": "down_buffer_ . push_back ( . . . )",
+   "spelling": "down_buffer_ . push_front ( . . . )",
    "ordinal": 1
   },
   {
@@ -42920,42 +44146,6 @@
    ],
    "cls": "grow",
    "spelling": "buffer_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "prices",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: recompute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "order",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: recompute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < int >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/ta_oscillators.cpp",
-   "symbol": "price_rank",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "double RCI :: recompute ( double src ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
    "ordinal": 1
   },
   {

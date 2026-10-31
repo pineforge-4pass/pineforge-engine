@@ -21,7 +21,7 @@ written, a fill on the signal bar itself (which TV did not report) is not,
 and on a gapless feed nothing changes at all.
 
 Lane RUN-HARNESS: TradingView's deep backtest computes the script from its
-first bar (metrics.json wsProvenance.returnedRange.from) and no earlier one,
+first bar (metrics.json rangeProvenance.returnedRange.from) and no earlier one,
 its broker live from there, so an order placed hours before the signal bar
 can make TV's first fill (tests/fixtures/run_harness_window). A run whose
 feed starts on that bar opens its window there -- unless it enters before
@@ -120,7 +120,7 @@ WS_METRICS = {
     "symbol": "NYSE:F", "interval": "1D",
     "from": "2025-04-01", "to": "2026-05-01",
     "deepBacktesting": True, "tapeChannel": "ws-report-v1",
-    "wsProvenance": {
+    "rangeProvenance": {
         "schemaVersion": 1,
         "requestedRange": {"from": 1743465600000, "to": 1777593600000},
         "returnedRange": {"from": 1743514200000, "to": 1777555800000},
@@ -470,7 +470,7 @@ ETH_METRICS = {
     "symbol": "BINANCE:ETHUSDT.P", "interval": "15",
     "from": "2025-04-01", "to": "2025-04-08",
     "deepBacktesting": True, "tapeChannel": "ws-report-v1",
-    "wsProvenance": {
+    "rangeProvenance": {
         "schemaVersion": 1,
         "requestedRange": {"from": ETH_FIRST_BAR, "to": _utc_ms(2025, 4, 8)},
         "returnedRange": {"from": ETH_FIRST_BAR, "to": _utc_ms(2025, 4, 8)},
@@ -525,7 +525,8 @@ class TradingViewFirstBarTapeTests(unittest.TestCase):
             with self.subTest(lane=lane):
                 d = WINDOW_TAPES / f"rh-diag-firstbar2-{lane}"
                 metrics = json.loads((d / "metrics.json").read_text(encoding="utf-8"))
-                self.assertEqual(metrics["wsProvenance"]["requestedRange"]["from"],
+                provenance, _ = run_strategy._metrics_range_provenance(metrics)
+                self.assertEqual(provenance["requestedRange"]["from"],
                                  _utc_ms(2025, 4, 1))
                 self.assertEqual(run_strategy._tv_first_bar(d, {})[0], first_bar)
                 b0 = _tape_trades(d)[0]["entry"]
@@ -565,10 +566,38 @@ class TvFirstBarTests(unittest.TestCase):
             d = Path(tmp)
             (d / "metrics.json").write_text(json.dumps(ETH_METRICS), encoding="utf-8")
             self.assertEqual(run_strategy._tv_first_bar(d, {}), (
-                ETH_FIRST_BAR, "metrics.json wsProvenance.returnedRange.from"))
+                ETH_FIRST_BAR, "metrics.json rangeProvenance.returnedRange.from"))
             # A session-bound lane: NYSE:F's range opens at 13:30 UTC.
             (d / "metrics.json").write_text(json.dumps(WS_METRICS), encoding="utf-8")
             self.assertEqual(run_strategy._tv_first_bar(d, {})[0], _utc_ms(2025, 4, 1, 13, 30))
+
+    def test_range_provenance_members_and_sources(self) -> None:
+        returned = {"returnedRange": {"from": ETH_FIRST_BAR}}
+        old_member = "wsProvenance"
+        new_result = (ETH_FIRST_BAR, "metrics.json rangeProvenance.returnedRange.from")
+        old_result = (ETH_FIRST_BAR, f"metrics.json {old_member}.returnedRange.from")
+        cases = [
+            ("new member", {"rangeProvenance": returned}, new_result),
+            ("old member", {old_member: returned}, old_result),
+            ("both members", {"rangeProvenance": returned,
+                              old_member: {"returnedRange": {"from": ETH_FIRST_BAR + MIN15}}},
+             new_result),
+            ("neither member", {}, None),
+            ("empty new dict", {"rangeProvenance": {}, old_member: returned}, None),
+            ("invalid new range", {"rangeProvenance": {"returnedRange": None},
+                                   old_member: returned}, None),
+            ("neither member is a dict", {"rangeProvenance": [], old_member: "invalid"}, None),
+        ]
+        cases.extend(
+            (f"new member {value!r}", {"rangeProvenance": value, old_member: returned}, old_result)
+            for value in (None, False, True, 0, "", "invalid", [], [1])
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            for name, metrics, expected in cases:
+                with self.subTest(case=name):
+                    (d / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+                    self.assertEqual(run_strategy._tv_first_bar(d, {}), expected)
 
     def test_none_without_a_returned_range(self) -> None:
         browser = {"symbol": "BINANCE:ETHUSDT.P", "interval": "15",
@@ -576,10 +605,10 @@ class TvFirstBarTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             self.assertIsNone(run_strategy._tv_first_bar(d, {}))
-            for metrics in (browser, {"wsProvenance": {"returnedRange": None}},
-                            {"wsProvenance": {"returnedRange": {"from": True}}},
-                            {"wsProvenance": {"returnedRange": {"from": "1743465600000"}}},
-                            {"wsProvenance": {"returnedRange": {"from": 0}}}, []):
+            for metrics in (browser, {"rangeProvenance": {"returnedRange": None}},
+                            {"rangeProvenance": {"returnedRange": {"from": True}}},
+                            {"rangeProvenance": {"returnedRange": {"from": "1743465600000"}}},
+                            {"rangeProvenance": {"returnedRange": {"from": 0}}}, []):
                 with self.subTest(metrics=metrics):
                     (d / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
                     self.assertIsNone(run_strategy._tv_first_bar(d, {}))
@@ -860,7 +889,7 @@ class MainEmitWindowTests(unittest.TestCase):
         # No returned range: TradingView's first bar is not on record.
         stamps = list(range(ETH_FIRST_BAR, _utc_ms(2025, 4, 4) + 1, MIN15))
         browser = {k: v for k, v in ETH_METRICS.items()
-                   if k not in ("tapeChannel", "wsProvenance")}
+                   if k not in ("tapeChannel", "rangeProvenance")}
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             feed, out = _probe(d, stamps, self._eth_tape(), metrics=browser)

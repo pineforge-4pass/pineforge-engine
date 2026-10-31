@@ -15,6 +15,20 @@ V170_ADDITIONS = {
     "scratch_configuration_invalid": 68,
     "scratch_io_failed": 69,
 }
+# Every code added after 1.8.0 shares `since` 1.9.0, so the generator numbers
+# the group by name.
+V190_ADDITIONS = {
+    "diagnostic_budget_exceeded": 70,
+    "report_budget_exceeded": 71,
+    "report_channel_failed": 72,
+    "run_deadline_exceeded": 73,
+    "run_descriptor_limit_exceeded": 74,
+    "run_isolation_unavailable": 75,
+    "run_process_refused": 76,
+    "run_producer_failed": 77,
+    "run_quota_configuration_invalid": 78,
+    "run_resource_quota_exceeded": 79,
+}
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import check_run_failure_codes as registry
@@ -60,6 +74,10 @@ def test_run_failure_code_numbers_stable():
     assert len(set(current.values())) == len(current)
     assert all(value > 64 for name, value in current.items() if name not in released)
     assert {name: current.get(name) for name in V170_ADDITIONS} == V170_ADDITIONS
+    assert {name: current.get(name) for name in V190_ADDITIONS} == V190_ADDITIONS
+    assert set(current.values()) == set(range(80))
+    header = (ROOT / HEADER).read_text()
+    assert re.search(r"kRunFailureCodeCount = ([0-9]+);", header).group(1) == "80"
 
 
 def test_run_failure_generator_appends_after_released_numbers():
@@ -68,6 +86,7 @@ def test_run_failure_generator_appends_after_released_numbers():
     generated = numbers(registry.render_codes_header(catalogue))
     assert {name: generated.get(name) for name in released} == released
     assert {name: generated.get(name) for name in V170_ADDITIONS} == V170_ADDITIONS
+    assert {name: generated.get(name) for name in V190_ADDITIONS} == V190_ADDITIONS
     for path, rendered in registry.generated(catalogue).items():
         assert (ROOT / path).read_text(encoding="utf-8") == rendered, str(path)
     # A future alphabetically earlier addition cannot shift any existing code.
@@ -102,3 +121,72 @@ def test_run_failure_generator_orders_later_release_groups_numerically():
     assert [appended[name] for name in (
         "aaa_second_release", "zzz_second_release", "aaa_tenth_release",
     )] == [first, first + 1, first + 2]
+
+
+def test_report_channel_catalog_contract():
+    # Independent literals from the report-channel contract's catalog table.
+    # The released 1.8.0 is already the baseline; these rows target 1.9.0.
+    integer = {"kind": "integer"}
+    optional_integer = {"kind": "integer", "optional": True}
+    expected = {
+        "report_budget_exceeded": (
+            "resource",
+            {
+                "channel": {"kind": "vocab", "values": ["json", "aggregate"]},
+                "cap_bytes": integer, "used_bytes": integer, "requested_bytes": integer,
+            },
+            "The report exceeds its admitted byte budget.",
+        ),
+        "diagnostic_budget_exceeded": (
+            "resource",
+            {"cap_bytes": integer, "used_bytes": integer, "requested_bytes": integer},
+            "The diagnostics exceed their admitted byte budget.",
+        ),
+        "report_channel_failed": (
+            "resource",
+            {
+                "channel": {"kind": "vocab", "values": [
+                    "report", "sink", "candidate", "diagnostic", "status",
+                ]},
+                "reason": {"kind": "vocab", "values": [
+                    "setup", "io", "peer_closed", "deadline", "protocol",
+                ]},
+            },
+            "A report transport could not complete.",
+        ),
+        "run_isolation_unavailable": (
+            "unsupported",
+            {"reason": {"kind": "vocab", "values": ["platform", "policy", "descriptor"]}},
+            "The requested report isolation is unavailable.",
+        ),
+        "run_process_refused": (
+            "resource",
+            {"operation": {"kind": "vocab", "values": ["fork", "vfork", "clone", "clone3"]}},
+            "The native process attempted forbidden process creation.",
+        ),
+        "run_deadline_exceeded": (
+            "resource",
+            {"stage": {"kind": "vocab", "values": [
+                "prepare", "compile", "run", "finalize", "publish",
+            ]}},
+            "The admitted channel lifetime expired.",
+        ),
+        "run_producer_failed": (
+            "resource",
+            {
+                "reason": {"kind": "vocab", "values": ["exit", "signal", "claim"]},
+                "exit_status": optional_integer, "signal": optional_integer,
+            },
+            "The native report producer did not complete successfully.",
+        ),
+    }
+    catalogue, _ = registry.load_catalog(ROOT)
+    assert len(catalogue["codes"]) == 79
+    for name, (cls, args, english) in expected.items():
+        entry = catalogue["codes"].get(name)
+        assert entry is not None, name
+        assert entry["class"] == cls, name
+        assert entry["retryable"] is False, name
+        assert entry["since"] == "1.9.0", name
+        assert entry["args"] == args, name
+        assert entry["english"] == [english], name

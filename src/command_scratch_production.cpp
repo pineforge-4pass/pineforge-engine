@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <limits>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -195,8 +196,11 @@ private:
             // JSON. Both the status and the original arena verdict survive.
             failure_ = error;
             return ScratchStatus::io_error;
+        } catch (const std::bad_alloc&) {
+            failure_ = scratch_out_of_memory_failure();
+            return ScratchStatus::io_error;
         } catch (...) {
-            // All backing faults obey the L6 io_error ruling. Caller contract
+            // All backing faults return io_error. Caller contract
             // violations are checked before reaching ScratchFile.
             return ScratchStatus::io_error;
         }

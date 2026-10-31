@@ -24,12 +24,51 @@
 #include <system_error>
 #include <utility>
 #include <variant>
-
+#include "native_cohort_target_work.hpp"
 namespace pineforge::native_order {
 inline namespace native_order_v8 {
 
 namespace {
 using ReadStatus = detail::ScratchStatus;
+
+// A synchronous throwing consumer owns the slot. No failure survives outside
+// that operation; nested operations restore the previous slot on every exit.
+// The noexcept readers never publish a thread-wide remembered failure.
+class OpeningFailureScope {
+public:
+    OpeningFailureScope() noexcept : previous_(current_) { current_ = this; }
+    ~OpeningFailureScope() { current_ = previous_; }
+    OpeningFailureScope(const OpeningFailureScope&) = delete;
+    OpeningFailureScope& operator=(const OpeningFailureScope&) = delete;
+
+    static void remember(const std::exception& error) noexcept {
+        if (!current_) return;
+        const auto* typed = dynamic_cast<const RunFailureInfo*>(&error);
+        if (dynamic_cast<const std::bad_alloc*>(&error)
+            || (typed && typed->run_failure_code() == RunFailureCode::out_of_memory))
+            current_->allocation_failed_ = true;
+    }
+    void rethrow_if_failed() const {
+        if (allocation_failed_) throw detail::scratch_out_of_memory_failure();
+    }
+private:
+    inline static thread_local OpeningFailureScope* current_ = nullptr;
+    OpeningFailureScope* const previous_;
+    bool allocation_failed_ = false;
+};
+
+template<class Operation>
+auto with_opening_failure(Operation operation) -> decltype(operation()) {
+    OpeningFailureScope failure;
+    try {
+        auto result = operation();
+        // Consult the operation's cause before interpreting its bare status.
+        failure.rethrow_if_failed();
+        return result;
+    } catch (const std::bad_alloc&) {
+        throw detail::scratch_out_of_memory_failure();
+    }
+}
 
 struct OpeningFile {
     detail::ScratchFile storage;
@@ -41,6 +80,9 @@ struct OpeningFile {
             storage.set_directory(directory);
             storage.open("pineforge-openings");
             return ReadStatus::ok;
+        } catch (const std::exception& error) {
+            OpeningFailureScope::remember(error);
+            return ReadStatus::io_error;
         } catch (...) {
             return ReadStatus::io_error;
         }
@@ -56,6 +98,9 @@ ReadStatus write_opening_word(detail::ScratchFile& file, std::uint64_t index,
         bytes[i] = static_cast<unsigned char>(value >> (i * 8));
     try {
         file.write(index * 8, bytes.data(), bytes.size());
+    } catch (const std::exception& error) {
+        OpeningFailureScope::remember(error);
+        return ReadStatus::io_error;
     } catch (...) {
         return ReadStatus::io_error;
     }
@@ -69,6 +114,9 @@ ReadStatus read_opening_word(const detail::ScratchFile& file, std::uint64_t inde
     std::array<unsigned char, 8> bytes{};
     try {
         file.read(index * 8, bytes.data(), bytes.size());
+    } catch (const std::exception& error) {
+        OpeningFailureScope::remember(error);
+        return ReadStatus::io_error;
     } catch (...) {
         return ReadStatus::io_error;
     }
@@ -106,6 +154,9 @@ ReadStatus OpeningInputCursor::opening_at(
         const auto status = reader_(context_, index, value);
         if (status == ReadStatus::ok) out = value;
         return status;
+    } catch (const std::exception& error) {
+        OpeningFailureScope::remember(error);
+        return ReadStatus::programming_error;
     } catch (...) {
         return ReadStatus::programming_error;
     }
@@ -175,11 +226,19 @@ static ReadStatus freeze_openings_in_directory(
     return ReadStatus::ok;
 }
 
+static ReadStatus freeze_openings_checked(
+        const RunIdentity& run, const OpeningReadback& input,
+        std::shared_ptr<const OpeningReadback>& out, const std::string& directory) {
+    return with_opening_failure([&] {
+        return freeze_openings_in_directory(run, input, out, directory);
+    });
+}
+
 ReadStatus freeze_openings(const RunIdentity& run, const OpeningReadback& input,
                            std::shared_ptr<const OpeningReadback>& out) {
     // Standalone readbacks use ScratchFile's TMPDIR policy. Core-owned
     // freezes below also honor the core's explicitly configured directory.
-    return freeze_openings_in_directory(run, input, out, {});
+    return freeze_openings_checked(run, input, out, {});
 }
 
 std::uint64_t opening_count(const std::vector<RequestHandle>& owned,
@@ -378,7 +437,7 @@ bool checked_sub_cap(double before, double deduct, double* after, bool* exhauste
 
 // A group deduction binary64 cannot take off what it is taken from: `deduct`
 // is below `before`, and fl(before - deduct) is `before` again -- at most half
-// an ulp of it (R5 lane K-ULP5). The deduction is absorbed: the units stay as
+// an ulp of it. The deduction is absorbed: the units stay as
 // they are, which is the exact binary64 result of the subtraction, and the
 // event that records it deducts nothing.
 bool absorbed_deduction(double before, double deduct) noexcept {
@@ -389,8 +448,8 @@ bool absorbed_deduction(double before, double deduct) noexcept {
 // A deferred recipient's pending total is the binary64 sum of the fills
 // deducted into it, in commit order. A delta the total absorbs is not added
 // (absorbed_pending_delta); a total below half an ulp of a later delta rounds
-// into it, as the addition does; only a sum that overflows is unrepresentable
-// (R5 lane K-ULP5; until then both absorbing sums stopped the run too).
+// into it, as the addition does; overflowing sums are refused as
+// unrepresentable.
 bool pending_sum(double total, double delta, double* out) noexcept {
     if (!std::isfinite(total) || !std::isfinite(delta) || total < 0.0 || !(delta > 0.0)) {
         return false;
@@ -452,7 +511,7 @@ bool opening_close_alive(const TargetObservation& observation, const OpeningClos
 }
 
 bool handle_less(const RequestHandle& a, const RequestHandle& b) noexcept {
-    // Accepted cohorts are run-homogeneous.
+    PF_COHORT_WORK(HandleCompare); // Accepted cohorts are run-homogeneous.
     return a.incarnation < b.incarnation;
 }
 
@@ -461,7 +520,7 @@ void canonicalize_owner(Request& request, const RunIdentity& run, const std::str
         if (bind->external_openings) {
             if (!dynamic_cast<const FrozenOpenings*>(bind->external_openings.get())) {
                 std::shared_ptr<const OpeningReadback> frozen;
-                const auto status = freeze_openings_in_directory(
+                const auto status = freeze_openings_checked(
                     run, *bind->external_openings, frozen, directory);
                 if (status != ReadStatus::ok)
                     throw detail::ScratchIoError(EIO, "native opening freeze");
@@ -649,6 +708,14 @@ std::optional<CoreFailure> observe_openings(const TargetObservation& observation
                             close.external_openings.get(), observation.external_openings);
 }
 
+std::optional<CoreFailure> observe_openings_checked(const TargetObservation& observation,
+                                                   const OpeningsClose& close,
+                                                   std::size_t* live_count) {
+    return with_opening_failure([&] {
+        return observe_openings(observation, close, live_count);
+    });
+}
+
 bool current_shape(const LiveRequest& live) noexcept {
     const auto& request = live.request();
     if (!std::holds_alternative<Market>(request.trigger)
@@ -719,7 +786,7 @@ native_matching::GridThreshold matcher_grid(const ActivationGrid& grid) noexcept
 }
 
 // A buy activation needs the print at or above its level, a sell one at or
-// below. Under an activation grid (L8b) the test is the matcher's own: the
+// below. Under an activation grid the test is the matcher's own: the
 // level itself, or a print inside the tick-quantized region the matcher
 // reported, so a hit it accepted is never refused here.
 bool stop_price_reached(bool is_buy, double level, double reached,
@@ -924,11 +991,11 @@ inline bool names_run(const RequestHandle& handle, const RunIdentity& run) noexc
 // does. The working book is in strictly increasing priority order
 // (LiveRequest::priority), so a long book is bisected down to a short run and
 // the run is walked up to the first row not older than the one asked for
-// (R5 lane PERF-K3). WorkingRequestCore::commit and the direct forms keep that
+// by the caller. WorkingRequestCore::commit and the direct forms keep that
 // order: a push and an erase-push append a row born under a fresh number of
 // the request sequence, which usable_incarnation makes larger than every one
 // the run took before; a keep_handle re-price takes such a number too and
-// moves its row to the back (R5 lane V19-D); an erase keeps the rest in
+// moves its row to the back; an erase keeps the rest in
 // order; an update rewrites a row in place under its own priority.
 template <bool ByPriority>
 inline std::size_t book_position(const std::vector<LiveRequest>& live, uint64_t key) noexcept {
@@ -941,7 +1008,7 @@ inline std::size_t book_position(const std::vector<LiveRequest>& live, uint64_t 
     constexpr std::size_t kWalk = 16;
     std::size_t first = 0;
     std::size_t count = live.size();
-    while (count > kWalk) {
+    while (count > kWalk) { PF_COHORT_WORK(ResidentStep);
         const std::size_t half = count / 2;
         if (key_of(live[first + half]) < key) {
             first += half + 1;
@@ -950,7 +1017,7 @@ inline std::size_t book_position(const std::vector<LiveRequest>& live, uint64_t 
             count = half;
         }
     }
-    for (std::size_t i = first; i < live.size(); ++i) {
+    for (std::size_t i = first; i < live.size(); ++i) { PF_COHORT_WORK(ResidentStep);
         const uint64_t row = key_of(live[i]);
         if (row < key) continue;
         return row == key ? i : live.size();
@@ -961,7 +1028,7 @@ inline std::size_t book_position(const std::vector<LiveRequest>& live, uint64_t 
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// CR-221 O1-E2. The command journal, the group-effect keys and the long
+// The command journal, the group-effect keys and the long
 // deferred chains' id lists keep a fixed resident part and write the rest to
 // run-owned scratch files: detail::ScratchFile, an unlinked close-on-exec file
 // read and written by position. A store that outgrows its resident part spills;
@@ -1376,7 +1443,8 @@ void snapshot_refused_openings(Request& request) {
     const std::uint64_t count = given.count();
     for (std::uint64_t index = 0; index != count; ++index) {
         RequestHandle opening;
-        if (given.opening_at(index, opening) != ReadStatus::ok) break;
+        if (with_opening_failure([&] { return given.opening_at(index, opening); })
+            != ReadStatus::ok) break;
         rows.push_back(opening);
     }
     bind->external_openings = std::make_shared<StoredOpenings>(std::move(rows));
@@ -1420,7 +1488,8 @@ void archive_external_openings(Ar& ar, std::shared_ptr<const OpeningReadback>& e
         ar.raw(&count, sizeof count);
         for (std::uint64_t index = 0; index != count; ++index) {
             RequestHandle opening;
-            if (external->opening_at(index, opening) != ReadStatus::ok) {
+            if (with_opening_failure([&] { return external->opening_at(index, opening); })
+                != ReadStatus::ok) {
                 throw detail::ScratchIoError(EIO, "native opening readback");
             }
             ar(opening);
@@ -1450,7 +1519,7 @@ void archive_external_openings(Ar& ar, std::shared_ptr<const OpeningReadback>& e
                     return ReadStatus::ok;
                 });
         std::shared_ptr<const OpeningReadback> frozen;
-        if (freeze_openings_in_directory(openings.front().run, input, frozen, {})
+        if (freeze_openings_checked(openings.front().run, input, frozen, {})
             != ReadStatus::ok) {
             throw detail::ScratchIoError(EIO, "native opening freeze");
         }
@@ -1663,7 +1732,7 @@ struct WorkingRequestCore::JournalStore {
     // throwing phase of the command that needs the room (make_room, from
     // reserve_plan and seal_direct), and nothing changes; the event stays
     // resident, so every later command that must page past it is refused the
-    // same way. This bound is documented, not lifted (lane b1 round 4, N-02):
+    // same way. The per-event byte limit applies only when paging is required:
     // an event the journal never pages is never refused, so a journal that
     // stays within kMaxResident events behaves exactly as before.
     static constexpr std::size_t kSpillPageBytes = 32768;
@@ -2037,7 +2106,7 @@ struct WorkingRequestCore::ChainSegments {
 
 #include "native_order_book.hpp"
 
-// What the stores know about the core (E02--E05). The core keeps no copy of
+// What the stores know about the core. The core keeps no copy of
 // it: the spilled count is the book spill's, the journal's length the
 // journal's, the keys' base and count the key log's.
 std::size_t WorkingRequestCore::spilled_count() const noexcept {
@@ -2060,7 +2129,7 @@ std::size_t WorkingRequestCore::group_effect_receipt_count() const noexcept {
     return receipt_store_ ? static_cast<std::size_t>(receipt_store_->log.size()) : 0;
 }
 
-// ---- the working book's tiers (E02) ---------------------------------------
+// ---- the working book's resident and spilled tiers ------------------------
 
 void WorkingRequestCore::forget_repriced(uint64_t incarnation) noexcept {
     const auto it = std::lower_bound(
@@ -2688,7 +2757,7 @@ PreparedMutation WorkingRequestCore::finish_mutation(MutationPlan plan) {
     return PreparedMutation(std::move(impl));
 }
 
-// The direct forms (R5 lane L3) do what a plan's prepare and install do, in
+// The direct forms do what a plan's prepare and install do, in
 // the order they do it, without the plan: begin_plan's checks where the
 // prepare_* makes them, then seal_plan's reservation and epoch, then commit's
 // appends, row change, receipt and counters, then commit's epoch. Every event
@@ -2797,7 +2866,7 @@ const LiveRequest* WorkingRequestCore::find_repriced(uint64_t incarnation) const
 // classify's lookup without the call to classify: every lookup the consumer
 // makes passes through here.
 const LiveRequest* WorkingRequestCore::find_live(const RequestHandle& handle) const {
-    if (!names_run(handle, identity_)) return nullptr;
+    PF_COHORT_WORK(FindLive); if (!names_run(handle, identity_)) return nullptr;
     const LiveRequest* resident = nullptr;
     if (!repriced_.empty()) {
         resident = find_repriced(handle.incarnation);
@@ -2978,11 +3047,11 @@ void WorkingRequestCore::index_committed(const CommandEvent& event) noexcept {
 }
 
 bool WorkingRequestCore::issued(const RequestHandle& handle) const noexcept {
-    if (handle.incarnation == 0 || handle.run != identity_) return false;
+    PF_COHORT_WORK(Issued); if (handle.incarnation == 0 || handle.run != identity_) return false;
     const auto it = std::upper_bound(
             issued_.begin(), issued_.end(), handle.incarnation,
             [](uint64_t incarnation, const std::pair<uint64_t, uint64_t>& range) {
-                return incarnation < range.first;
+                PF_COHORT_WORK(IssuedComparison); return incarnation < range.first;
             });
     return it != issued_.begin() && handle.incarnation <= std::prev(it)->second;
 }
@@ -2994,7 +3063,7 @@ bool WorkingRequestCore::issued(const RequestHandle& handle) const noexcept {
 // answer), so a membership test needs nothing but it.
 std::optional<RequestHandle> WorkingRequestCore::canonical_cohort_origin(
         const RequestHandle& origin) const {
-    if (!issued(origin)) return std::nullopt;
+    PF_COHORT_WORK(Canonical); if (!issued(origin)) return std::nullopt;
     if (const auto* live = find_live(origin)) {
         const auto& root = live->definition->root;
         return root ? *root : live->handle();
@@ -3095,7 +3164,7 @@ void WorkingRequestCore::cohort_remove(CohortHandle cohort, RequestHandle origin
 
 bool WorkingRequestCore::cohort_contains(
         CohortHandle cohort, const RequestHandle& opening) const {
-    if (!cohort_exists(cohort)) return false;
+    PF_COHORT_WORK(Contains); if (!cohort_exists(cohort)) return false;
     const auto root = canonical_cohort_origin(opening);
     if (!root) return false;
     const auto found = cohorts_.find(cohort.value);
@@ -3140,7 +3209,7 @@ bool WorkingRequestCore::authenticate_receipt_outcome(const CommandEvent& event,
     return false;
 }
 
-// The chain walk of a request that resolves its units (E04). Two passes and
+// The chain walk of a request that resolves its units. Two passes and
 // no vector of every id: back from the tail the receipts are checked link by
 // link (their ids go inline for a short chain; for a longer one they are
 // written in blocks into an external list, backward into their final places so
@@ -3389,7 +3458,7 @@ bool WorkingRequestCore::trail_level_ok(double best, double offset, bool is_buy,
     if (!valid_trail_offset(offset) || !std::isfinite(best)) return false;
     // Shared with the matcher: finite, zero riding the best, positive strictly
     // beyond it, and a whole tick count from a best on the run's ladder
-    // naming that ladder point (R5 lane E16). The core re-validates an
+    // naming that ladder point. The core re-validates an
     // activation the matcher reported, so a second spelling here would refuse
     // a hit the matcher just booked.
     double level = 0.0;
@@ -3724,7 +3793,9 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         }
         for (std::uint64_t i = 0; i < count; ++i) {
             RequestHandle member;
-            if (opening_at(*cohort, bind->external_openings.get(), i, member)
+            if (with_opening_failure([&] {
+                    return opening_at(*cohort, bind->external_openings.get(), i, member);
+                })
                     != ReadStatus::ok
                 || !member.incarnation || member.run != identity_)
                 return RequestRejectReason::InvalidOwner;
@@ -3741,9 +3812,11 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         const auto* nonflat = std::get_if<PositionNonflat>(&position);
         if (!nonflat || nonflat->cycle != bind->cycle) return RequestRejectReason::InvalidOwner;
         std::size_t live_count = 0;
-        if (observe_openings(*cohort, bind->cycle, nonflat->side, position,
-                             context.openings, &live_count, bind->external_openings.get(),
-                             context.external_openings)
+        if (with_opening_failure([&] {
+                return observe_openings(*cohort, bind->cycle, nonflat->side, position,
+                                        context.openings, &live_count,
+                                        bind->external_openings.get(), context.external_openings);
+            })
             || live_count != count) return RequestRejectReason::InvalidOwner;
     } else if (const auto* bind = std::get_if<BindCohort>(&request.owner)) {
         if (!host_sized || host_sized->kind != HostSizedKind::Close
@@ -4344,7 +4417,7 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
     canonicalize_owner(staged, identity_, scratch_directory());
     const TriggerState retained = live_[live_index].trigger_state;
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
-    // A replace that keeps the handle or carries a binding (R5 lane V19-D)
+    // A replace that keeps the handle or carries a binding
     // takes its own path; a plain one is the path below, unchanged -- as is
     // a keep_binding replace of a request that cannot carry one.
     if (options.keep_handle || (options.keep_binding && starts_unbound_close(staged))) {
@@ -4387,7 +4460,7 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
 }
 
 // prepare_replace for a replace that keeps the handle or carries a binding
-// (ReplaceOptions::keep_handle / keep_binding, R5 lane V19-D), from the point
+// (ReplaceOptions::keep_handle / keep_binding), from the point
 // the checks have passed: the successor definition, its live row and the
 // ReplacedEvent. A re-price that keeps the handle keeps the request's
 // lineage and takes the number a successor would have been issued as its
@@ -4609,8 +4682,8 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
     canonicalize_owner(staged, identity_, scratch_directory());
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     if constexpr (Kept) {
-        // A replace that keeps the handle or carries a binding (R5 lane
-        // V19-D): the successor row kept_successor makes, and a re-price that
+        // A replace that keeps the handle or carries a binding uses
+        // the successor row kept_successor makes, and a re-price that
         // keeps the handle takes a number no handle is issued under.
         LiveRequest live = kept_successor(live_index, staged_target, std::move(staged), ordinal,
                                           incarnation, context, options);
@@ -4681,7 +4754,7 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
 
 // A plain replace compiles to apply_replace_as<false>, the code it had before
 // the options existed; a replace that keeps the handle or carries a binding
-// (ReplaceOptions::keep_handle / keep_binding, R5 lane V19-D) to
+// (ReplaceOptions::keep_handle / keep_binding) to
 // apply_replace_as<true>, kept out of line so it perturbs neither.
 CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace(
         const RequestHandle& target, const Request& request, const CommandContext& context,
@@ -4930,7 +5003,7 @@ bool WorkingRequestCore::refresh_allowance(
         if (!opening_close_alive(observation, *close)) return false;
     } else if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
         std::size_t live_count = 0;
-        if (observe_openings(observation, *close, &live_count) || live_count == 0) return false;
+        if (observe_openings_checked(observation, *close, &live_count) || live_count == 0) return false;
     } else if (std::holds_alternative<UnboundBookClose>(live.authority)) {
         // An unbound close binds here only when it carried a binding the
         // book still has (ReplaceOptions::keep_binding) and the caller hands
@@ -5004,7 +5077,7 @@ bool WorkingRequestCore::effective_host_units(const PendingAdjustments& pending,
     if (resolved_units == 0.0 || computed_exhausted) {
         computed_after = 0.0;
     } else if (absorbed_deduction(resolved_units, computed_deduction)) {
-        // Absorbed (K-ULP5): the resolved units stand and nothing is deducted.
+        // Absorbed: the resolved units stand and nothing is deducted.
         computed_deduction = 0.0;
     } else if (computed_deduction > 0.0) {
         if (!checked_sub_cap(resolved_units, computed_deduction, &computed_after,
@@ -5138,7 +5211,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_evaluation(
 
     if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
         std::size_t live_count = 0;
-        if (const auto error = observe_openings(observation, *close, &live_count)) {
+        if (const auto error = observe_openings_checked(observation, *close, &live_count)) {
             return PreparationError{*error, EventId{identity_, 0}, target};
         }
         if (live_count == 0) {
@@ -5256,7 +5329,7 @@ Preparation<Installed> WorkingRequestCore::apply_evaluation(
 
     if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
         std::size_t live_count = 0;
-        if (const auto error = observe_openings(observation, *close, &live_count)) {
+        if (const auto error = observe_openings_checked(observation, *close, &live_count)) {
             return PreparationError{*error, EventId{identity_, 0}, target};
         }
         if (live_count == 0) {
@@ -5321,7 +5394,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
     const native_matching::GridThreshold grid = matcher_grid(activation_grid);
     // The run's own tick ladder, which is a separate fact from whether prints
     // are tested on it: a trailing level spelled a whole number of ticks away
-    // names a ladder point under either mode (R5 lane E16).
+    // names a ladder point under either mode.
     const double ladder_tick = activation_grid.ladder_tick;
     MutationPlan plan = begin_plan();
 
@@ -6131,7 +6204,7 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
     // The plan form's event is final only inside install_execution, after
     // settlement, and that install cannot throw: a journal codec's store
     // write there would have no phase to fail in. So with a codec bound the
-    // plan form is refused (1.7.0), before anything moves -- not even a
+    // plan form is refused before anything moves -- not even a
     // spilled target is brought back; check_execution and apply_execution,
     // which write before they publish, serve such a core.
     if (journal_ && journal_->codec) {
@@ -6307,7 +6380,7 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
         }
     } else if (selected_auth) {
         std::size_t live_count = 0;
-        if (const auto error = observe_openings(proposal.pre_target, *selected_auth, &live_count)) {
+        if (const auto error = observe_openings_checked(proposal.pre_target, *selected_auth, &live_count)) {
             return PreparationError{*error, EventId{identity_, 0}, target};
         }
         if (!same_position(proposal.pre_fill, proposal.pre_target.current_position)) {
@@ -6597,7 +6670,7 @@ InstallResult WorkingRequestCore::install_execution(PreparedExecution&& prepared
     return commit(impl.terminal);
 }
 
-// prepare_execution's checks, as values (R5 lane L3): the same tests in the
+// prepare_execution's checks, as values: the same tests in the
 // same order, answering what the token's events and retained row are made of.
 Preparation<WorkingRequestCore::ExecutionValues> WorkingRequestCore::execution_values(
         const RequestHandle& target,
@@ -6775,7 +6848,7 @@ Preparation<WorkingRequestCore::ExecutionValues> WorkingRequestCore::execution_v
         }
     } else if (selected_auth) {
         std::size_t live_count = 0;
-        if (const auto error = observe_openings(proposal.pre_target, *selected_auth, &live_count)) {
+        if (const auto error = observe_openings_checked(proposal.pre_target, *selected_auth, &live_count)) {
             return PreparationError{*error, EventId{identity_, 0}, target};
         }
         if (!same_position(proposal.pre_fill, proposal.pre_target.current_position)) {
@@ -7013,7 +7086,7 @@ InstallResult WorkingRequestCore::apply_execution(
     bool retain = can_retain;
     if (const auto* selected = std::get_if<OpeningsClose>(&live.authority)) {
         std::size_t live_count = 0;
-        if (observe_openings(facts.post_target, *selected, &live_count)) {
+        if (observe_openings_checked(facts.post_target, *selected, &live_count)) {
             return InstallError::WrongCoreOrRun;
         }
         if (live_count == 0) retain = false;
@@ -7140,7 +7213,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_group_effect(
         const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
         PendingDeferred after;
         PendingAdjustments before = live.pending;
-        // A fill the pending total absorbs (K-ULP5) joins no chain: the total,
+        // A fill the pending total absorbs joins no chain: the total,
         // its count and its tail stay, and the event defers nothing.
         bool absorbed = false;
         if (const auto* pending = std::get_if<PendingDeferred>(&live.pending)) {
@@ -7200,7 +7273,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_group_effect(
     double after_q = before_q;
     bool exhausted = false;
     // A deduction binary64 cannot take off the remaining units is absorbed
-    // (K-ULP5): the units stand, the event records a deduction of 0, and the
+    // without changing the units; the event records a deduction of 0, and the
     // row is not touched.
     const bool absorbed = absorbed_deduction(before_q, deduct);
     if (!absorbed && !checked_sub_cap(before_q, deduct, &after_q, &exhausted)) {
@@ -7531,7 +7604,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
         bool exhausted = deduct == source;
         if (deduct > 0.0 && !exhausted) {
             if (absorbed_deduction(source, deduct)) {
-                // Absorbed (K-ULP5): the owner's units stand, nothing deducted.
+                // Absorbed: the owner's units stand, nothing deducted.
                 deduct = 0.0;
             } else if (!checked_sub_cap(source, deduct, &after, &exhausted)) {
                 return PreparationError{CoreFailure::UnrepresentableReservation, applied, child};
@@ -7834,7 +7907,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_bound_expiry(
         gone = !opening_close_alive(observation, *close);
     } else if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
         std::size_t live_count = 0;
-        if (const auto error = observe_openings(observation, *close, &live_count)) {
+        if (const auto error = observe_openings_checked(observation, *close, &live_count)) {
             return PreparationError{*error, physical_cause, child};
         }
         gone = live_count == 0;
@@ -7909,7 +7982,7 @@ Preparation<Installed> WorkingRequestCore::apply_bound_expiry(
         gone = !opening_close_alive(observation, *close);
     } else if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
         std::size_t live_count = 0;
-        if (const auto error = observe_openings(observation, *close, &live_count)) {
+        if (const auto error = observe_openings_checked(observation, *close, &live_count)) {
             return PreparationError{*error, physical_cause, child};
         }
         gone = live_count == 0;
@@ -8070,7 +8143,7 @@ struct WorkingRequestCore::SuccessorRootIndex {
     }
 
     Row read(uint64_t index) const {
-        assert((slab || file.opened()) && index < disk_rows);
+        PF_COHORT_WORK(RootDiskRead); assert((slab || file.opened()) && index < disk_rows);
         Row row;
         if (slab) {
             slab->read_at(detail::ScratchResource::successor_roots,
@@ -8092,7 +8165,7 @@ struct WorkingRequestCore::SuccessorRootIndex {
         if (tail_size != 0 && successor >= tail[0].successor) {
             const auto end = tail.begin() + static_cast<std::ptrdiff_t>(tail_size);
             const auto where = std::lower_bound(tail.begin(), end, successor,
-                    [](const Row& row, uint64_t key) { return row.successor < key; });
+                    [](const Row& row, uint64_t key) { PF_COHORT_WORK(RootTailComparison); return row.successor < key; });
             return where != end && where->successor == successor
                     ? std::optional<uint64_t>{where->root} : std::nullopt;
         }
@@ -8224,7 +8297,7 @@ void WorkingRequestCore::append_successor_root(uint64_t incarnation, uint64_t ro
 }
 
 std::optional<uint64_t> WorkingRequestCore::successor_root(uint64_t incarnation) const {
-    return successor_roots_ ? successor_roots_->find(incarnation) : std::nullopt;
+    PF_COHORT_WORK(Successor); return successor_roots_ ? successor_roots_->find(incarnation) : std::nullopt;
 }
 
 // The consumer folds at commit and pins every queued cause before retiring the

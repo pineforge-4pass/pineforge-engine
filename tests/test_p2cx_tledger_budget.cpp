@@ -7,6 +7,10 @@
 namespace {
 using namespace p2cx_tledger;
 using Size = TradeLedger::size_type;
+constexpr Size kPageSlots = 256;
+constexpr Size kPageBytes = kPageSlots * TradeLedger::kLedgerEntryBytes;
+constexpr Size page_count(Size rows) { return (rows + kPageSlots - 1) / kPageSlots; }
+constexpr Size table_bytes(Size rows) { return page_count(rows) * sizeof(void*); }
 
 // The sink heap-flatness witness (test_selected_metrics_l17b) accounts for
 // this declared cache cap separately from its two 64 KiB scratch windows.
@@ -71,11 +75,12 @@ void budgets_and_accounting() {
     CHECK(TradeLedger::kMaxCacheRows == 1048576);
     const TradeLedger empty;
     const auto sink_bound = TradeLedger::resident_cache_bytes(TradeLedger::kSinkCacheRows);
-    CHECK(sink_bound == empty.cache_resident_bytes() + 20447232);
+    CHECK(sink_bound == empty.cache_resident_bytes() + 20447232
+                       + table_bytes(TradeLedger::kSinkCacheRows));
     CHECK(sink_bound <= TradeLedger::resident_cache_bytes(TradeLedger::kDefaultCacheRows));
     // Exceed the small/default caps. For the maximum setting, verify real
     // lazy allocation with 129 rows instead of constructing a million-row run.
-    for (const Size budget : {Size{4}, Size{7}, TradeLedger::kDefaultCacheRows,
+    for (const Size budget : {Size{4}, Size{7}, Size{128}, Size{300}, TradeLedger::kDefaultCacheRows,
                               TradeLedger::kMaxCacheRows}) {
         TradeLedger ledger;
         CHECK(ledger.cache_rows() == TradeLedger::kDefaultCacheRows);
@@ -85,9 +90,8 @@ void budgets_and_accounting() {
         CHECK(ledger.cache_size() == 0);
         const auto fixed_bytes = ledger.cache_resident_bytes();
         CHECK(TradeLedger::resident_cache_bytes(budget)
-              == fixed_bytes + budget * TradeLedger::kLedgerEntryBytes);
+              == fixed_bytes + budget * TradeLedger::kLedgerEntryBytes + table_bytes(budget));
         const Size population = budget == TradeLedger::kMaxCacheRows ? 129 : budget + 3;
-        const Size allocated_rows = budget == TradeLedger::kMaxCacheRows ? 256 : budget;
         std::vector<Trade> expected;
         for (Size i = 0; i < population; ++i) {
             expected.push_back(row(static_cast<int>(i)));
@@ -98,16 +102,20 @@ void budgets_and_accounting() {
         CHECK(ledger.cache_resident_bytes() == fixed_bytes);
         for (Size i = 0; i < expected.size(); ++i) {
             same_trade(ledger.read(i), expected[i]);
-            CHECK(ledger.cache_size() == std::min(i + 1, allocated_rows));
+            CHECK(ledger.cache_size() == std::min(i + 1, budget));
+            // Contiguous reads touch ceil(min(reads,cap)/256) pages, with
+            // the final page clipped to cap. Full final pages fail this row.
             CHECK(ledger.cache_resident_bytes()
-                  == fixed_bytes + allocated_rows * TradeLedger::kLedgerEntryBytes);
+                  == fixed_bytes + table_bytes(budget)
+                     + std::min(budget, page_count(std::min(i + 1, budget)) * kPageSlots)
+                           * TradeLedger::kLedgerEntryBytes);
             bounded(ledger);
         }
         // Reverse traversal reuses/evicts the direct-mapped entries and
         // checks the value of colliding keys against independent rows.
         for (Size i = expected.size(); i != 0; --i) {
             same_trade(ledger.read(i - 1), expected[i - 1]);
-            CHECK(ledger.cache_size() == std::min(population, allocated_rows));
+            CHECK(ledger.cache_size() == std::min(population, budget));
             bounded(ledger);
         }
         CHECK(ledger.resident_size()
@@ -133,23 +141,35 @@ void lazy_growth_boundaries() {
         CHECK(ledger.cache_resident_bytes() == fixed_bytes); // No read yet.
         matches(ledger, expected);
         CHECK(ledger.cache_size() == 64);
-        CHECK(ledger.cache_resident_bytes() == fixed_bytes + 64 * TradeLedger::kLedgerEntryBytes);
+        const auto one_page_bytes = fixed_bytes + table_bytes(budget) + kPageBytes;
+        CHECK(ledger.cache_resident_bytes() == one_page_bytes);
         expected[0] = row(700);
         ledger.replace(0, expected[0]);
         same_numeric_fields(ledger, 0, expected[0]);
         same_string_fields(ledger, 0, expected[0]);
         CHECK(ledger.cache_size() == 64);
         expected.push_back(row(64));
-        ledger.push_back(expected.back()); // Crossing 64 grows to 128.
-        CHECK(ledger.cache_size() == 0);
-        CHECK(ledger.cache_resident_bytes() == fixed_bytes + 128 * TradeLedger::kLedgerEntryBytes);
+        ledger.push_back(expected.back()); // Crossing 64 preserves old entries.
+        CHECK(ledger.cache_size() == expected.size());
+        CHECK(ledger.cache_resident_bytes() == one_page_bytes);
         matches(ledger, expected);
         for (int n = 65; n < 129; ++n) {
             expected.push_back(row(n));
             ledger.push_back(expected.back());
         }
-        CHECK(ledger.cache_size() == 0); // Crossing 128 invalidates again.
-        CHECK(ledger.cache_resident_bytes() == fixed_bytes + 256 * TradeLedger::kLedgerEntryBytes);
+        CHECK(ledger.cache_size() == expected.size()); // Append fills without discarding.
+        CHECK(ledger.cache_resident_bytes() == one_page_bytes);
+        matches(ledger, expected);
+        for (Size n = expected.size(); n <= kPageSlots; ++n) {
+            expected.push_back(row(static_cast<int>(n)));
+            ledger.push_back(expected.back());
+            CHECK(ledger.cache_size() == expected.size());
+            // The second page appears only on writing slot 256; the first
+            // page and all its occupants survive. Discard-on-growth fails.
+            CHECK(ledger.cache_resident_bytes()
+                  == fixed_bytes + table_bytes(budget)
+                     + page_count(expected.size()) * kPageBytes);
+        }
         matches(ledger, expected);
         ledger.resize(64);
         expected.resize(64);
@@ -160,6 +180,56 @@ void lazy_growth_boundaries() {
         same_string_fields(ledger, 64, expected[64]);
         matches(ledger, expected);
         bounded(ledger);
+    }
+}
+
+void sparse_page_touches() {
+    constexpr Size budget = 2 * kPageSlots + 3; // Partial last page, modulo cap.
+    TradeLedger ledger;
+    ledger.set_scratch_directory(".");
+    ledger.set_cache_rows(budget);
+    const auto fixed = ledger.cache_resident_bytes();
+    for (Size i = 0; i < budget; ++i) ledger.push_back(row(static_cast<int>(i)));
+    CHECK(ledger.cache_resident_bytes() == fixed);
+    Size touched = 0, allocated_slots = 0;
+    for (const Size index : {budget - 1, Size{0}, kPageSlots}) {
+        const auto expected = row(static_cast<int>(index));
+        CHECK(ledger.entry_id_equals(index, expected.entry_id));
+        ++touched;
+        allocated_slots += std::min(kPageSlots, budget - (index / kPageSlots) * kPageSlots);
+        CHECK(ledger.cache_size() == touched);
+        // Distinct pages contribute 3, 256, 256 slots in this order.
+        // An unclipped last page or allocation by population fails this row.
+        CHECK(ledger.cache_resident_bytes()
+              == fixed + table_bytes(budget) + allocated_slots * TradeLedger::kLedgerEntryBytes);
+        bounded(ledger);
+    }
+    // These hits also prefetch into absent pages on the first two reads.
+    CHECK(ledger.entry_id_equals(budget - 1, row(static_cast<int>(budget - 1)).entry_id));
+    CHECK(ledger.cache_size() == touched);
+    bounded(ledger);
+}
+
+void append_preserves_cached_rows() {
+    for (const Size budget : {Size{4}, Size{7}, Size{512}, Size{515}}) {
+        TradeLedger ledger;
+        ledger.set_scratch_directory(".");
+        ledger.set_cache_rows(budget);
+        ledger.push_back(row(0));
+        same_trade(ledger.read(0), row(0));
+        // Fill the cap, wrap every slot, then reuse its first key once more.
+        // Occupancy is min(population,cap); a discarded generation fails at
+        // the first old growth boundary, before a read can hide the discard.
+        for (Size i = 1; i <= 2 * budget; ++i) {
+            const Trade value = row(static_cast<int>(i));
+            ledger.push_back(value);
+            CHECK(ledger.cache_size() == std::min(i + 1, budget));
+            same_trade(ledger.read(i), value);
+            const auto oldest = i + 1 > budget ? i + 1 - budget : 0;
+            same_trade(ledger.read(oldest), row(static_cast<int>(oldest)));
+            CHECK(ledger.cache_size() == std::min(i + 1, budget));
+            bounded(ledger);
+        }
     }
 }
 
@@ -231,26 +301,26 @@ void replacements_and_rewinds() {
     // Publication changes no row content: the cached entries stay valid.
     CHECK(ledger.cache_size() == cached_before_seal);
     matches(ledger, expected); // read() still serves the sealed prefix.
-    sealed_refusal([&] { (void)ledger.at(0); });
-    sealed_refusal([&] { (void)ledger.numeric_at(0); });
-    sealed_refusal([&] { (void)ledger.entry_id_at(0); });
-    sealed_refusal([&] { (void)ledger.pnl_at(0); });
-    sealed_refusal([&] { (void)ledger.pnl_pct_at(0); });
-    sealed_refusal([&] { (void)ledger.commission_at(0); });
-    sealed_refusal([&] { (void)ledger.entry_bar_index_at(0); });
-    sealed_refusal([&] { (void)ledger.exit_bar_index_at(0); });
-    sealed_refusal([&] { (void)ledger.entry_incarnation_at(0); });
-    sealed_refusal([&] { (void)ledger.entry_price_at(0); });
-    sealed_refusal([&] { (void)ledger.exit_price_at(0); });
-    sealed_refusal([&] { (void)ledger.entry_time_at(0); });
-    sealed_refusal([&] { (void)ledger.exit_time_at(0); });
-    sealed_refusal([&] { (void)ledger.qty_at(0); });
-    sealed_refusal([&] { (void)ledger.max_runup_at(0); });
-    sealed_refusal([&] { (void)ledger.max_drawdown_at(0); });
-    sealed_refusal([&] { (void)ledger.is_long_at(0); });
-    sealed_refusal([&] { (void)ledger.entry_comment_at(0); });
-    sealed_refusal([&] { (void)ledger.exit_comment_at(0); });
-    sealed_refusal([&] { (void)ledger.exit_id_at(0); });
+    same_trade(ledger.at(0), expected[0]);
+    same_numeric(ledger.numeric_at(0), expected[0]);
+    CHECK(ledger.entry_id_at(0) == expected[0].entry_id);
+    CHECK(same_bits(ledger.pnl_at(0), expected[0].pnl));
+    CHECK(same_bits(ledger.pnl_pct_at(0), expected[0].pnl_pct));
+    CHECK(same_bits(ledger.commission_at(0), expected[0].commission));
+    CHECK(ledger.entry_bar_index_at(0) == expected[0].entry_bar_index);
+    CHECK(ledger.exit_bar_index_at(0) == expected[0].exit_bar_index);
+    CHECK(ledger.entry_incarnation_at(0) == expected[0].entry_incarnation);
+    CHECK(same_bits(ledger.entry_price_at(0), expected[0].entry_price));
+    CHECK(same_bits(ledger.exit_price_at(0), expected[0].exit_price));
+    CHECK(ledger.entry_time_at(0) == expected[0].entry_time);
+    CHECK(ledger.exit_time_at(0) == expected[0].exit_time);
+    CHECK(same_bits(ledger.qty_at(0), expected[0].qty));
+    CHECK(same_bits(ledger.max_runup_at(0), expected[0].max_runup));
+    CHECK(same_bits(ledger.max_drawdown_at(0), expected[0].max_drawdown));
+    CHECK(ledger.is_long_at(0) == expected[0].is_long);
+    CHECK(ledger.entry_comment_at(0) == expected[0].entry_comment);
+    CHECK(ledger.exit_comment_at(0) == expected[0].exit_comment);
+    CHECK(ledger.exit_id_at(0) == expected[0].exit_id);
     sealed_refusal([&] { (void)ledger.pnl_at(ledger.size()); });
     sealed_refusal([&] { (void)ledger.exit_id_at(ledger.size()); });
     ledger.clear();
@@ -273,7 +343,7 @@ void copies_and_moves_start_cold() {
     original.seal(2);
     matches(original, expected);
     const auto fixed_bytes = TradeLedger::resident_cache_bytes(4)
-        - 4 * TradeLedger::kLedgerEntryBytes;
+        - 4 * TradeLedger::kLedgerEntryBytes - table_bytes(4);
     TradeLedger copy(original);
     CHECK(copy.cache_rows() == 4 && copy.cache_size() == 0);
     CHECK(copy.cache_resident_bytes() == fixed_bytes);
@@ -361,15 +431,76 @@ void exact_string_allowance_and_numeric_bits() {
     same_trade(ledger.read(2), empty);
     bounded(ledger);
 }
+
+void entry_id_length_oracle() {
+    for (const Size budget : {Size{4}, Size{7}}) {
+        TradeLedger ledger;
+        ledger.set_scratch_directory(".");
+        ledger.set_cache_rows(budget);
+        const auto compare = [&](Size index, const Trade& value) {
+            std::vector<std::string> operands{
+                value.entry_id, "", value.entry_id + "!"};
+            if (!value.entry_id.empty()) {
+                operands.push_back(value.entry_id.substr(0, value.entry_id.size() - 1));
+                auto changed = value.entry_id;
+                changed.back() ^= 1;
+                operands.push_back(changed);
+            }
+            for (const auto& operand : operands) {
+                const std::string_view rhs(operand.data(), operand.size());
+                CHECK(ledger.entry_id_equals(index, rhs)
+                      == (std::string_view(value.entry_id.data(), value.entry_id.size()) == rhs));
+            }
+            same_string_fields(ledger, index, value);
+        };
+        // All short-word cases, then both sides of the seven-bit sentinel.
+        // Repeat with overflowing packed text to require the chunk fallback
+        // even when the entry ID alone fits the stored length.
+        for (const Size length : {Size{0}, Size{1}, Size{2}, Size{3}, Size{4},
+                                   Size{5}, Size{6}, Size{7}, Size{8}, Size{9},
+                                   Size{126}, Size{127}, Size{128}, Size{129}}) {
+            for (const bool oversized : {false, true}) {
+                Trade value{};
+                value.entry_id.assign(length, 'a');
+                if (length != 0) value.entry_id[length / 2] = '\0';
+                if (oversized)
+                    value.exit_comment.assign(TradeLedger::kCacheStringBytes + 1, 'z');
+                ledger.clear();
+                ledger.push_back(value);
+                // Miss, then warm hit: remember() copies scratch text first.
+                compare(0, value);
+                compare(0, value);
+                // The next key occupies the same slot under the fixed cap.
+                // Append-time fill copies memory text, including embedded NULs.
+                for (Size i = 1; i <= budget; ++i) ledger.push_back(value);
+                compare(budget, value);
+                Trade replacement = value;
+                if (length != 0) replacement.entry_id.back() ^= 1;
+                else replacement.entry_id = "replacement";
+                ledger.replace(budget, replacement);
+                compare(budget, replacement);
+                compare(0, value); // Reload an evicted key, not the replacement.
+                ledger.resize(budget);
+                sealed_refusal([&] { (void)ledger.entry_id_equals(budget, value.entry_id); });
+                ledger.push_back(replacement);
+                compare(budget, replacement);
+                bounded(ledger);
+            }
+        }
+    }
+}
 } // namespace
 
 int main() {
     test("small/default/maximum budgets and exact allocation accounting", budgets_and_accounting);
-    test("lazy 64/128/256 growth and reused-key oracle", lazy_growth_boundaries);
+    test("page growth preserves entries and reused-key oracle", lazy_growth_boundaries);
+    test("sparse reads allocate only touched pages", sparse_page_touches);
+    test("append preserves cached rows across growth and capped key reuse", append_preserves_cached_rows);
     test("typed invalid and frozen budget refusals", invalid_and_late_budgets);
     test("replace/modify/resize/seal/clear preserve oracle values", replacements_and_rewinds);
     test("copy/move discard cache and preserve independent ledgers", copies_and_moves_start_cold);
     test("inline string boundary and exact numeric representations", exact_string_allowance_and_numeric_bits);
+    test("entry ID length tags preserve exact byte equality and key reuse", entry_id_length_oracle);
     std::printf("test_p2cx_tledger_budget: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
