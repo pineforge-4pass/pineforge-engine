@@ -19,12 +19,31 @@
 #include <stdexcept>
 #include <string>
 
+#include <unistd.h>
+
 namespace {
 using namespace command_arena_test;
 using pineforge::NativeExecutionConsumer;
 using pineforge::RunFailureCode;
 
 constexpr auto kDisabled = std::numeric_limits<std::size_t>::max();
+
+enum class EntryKind { run, exit };
+
+// The cache decorator allocates its slot table with the slot count of the page
+// size of the store it wraps: kCacheBytes / page_size entries. The run entry
+// opens its command store with 512-byte pages (the minimum cached page), the
+// exit entry with the platform page size (the same sysconf call the production
+// exit run makes). The expectation is derived from that page size.
+std::size_t cache_page_size(EntryKind kind) {
+    return kind == EntryKind::run
+        ? CachedScratchBacking::kMinPageBytes
+        : static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
+}
+
+std::size_t expected_slot_table_bytes(EntryKind kind) {
+    return CachedScratchBacking::kCacheBytes / cache_page_size(kind) * sizeof(ScratchPageId);
+}
 
 struct AllocationFault {
     const std::size_t before = global_allocation::refused;
@@ -66,16 +85,16 @@ struct Environment {
     }
 };
 
-enum class EntryKind { run, exit };
-
 // Observe successful setup allocations with the existing allocator callback.
 // No ordinal countdown is armed across owner, file or cache construction.
 struct WorkspaceBoundary {
-    enum class Next { cache, store_object, workspace, done };
+    enum class Next { cache, slot_table, store_object, workspace, done };
     EntryKind kind;
     AllocationFault* fault = nullptr;
+    bool fail_slot_table = false;
     Next next = Next::cache;
     unsigned boundaries = 0;
+    bool slot_table_matches = true;
     bool store_object_matches = true;
     std::size_t workspace_bytes = 0;
 
@@ -94,9 +113,19 @@ struct WorkspaceBoundary {
         switch (next) {
         case Next::cache:
             if (bytes == CachedScratchBacking::kCacheBytes) {
-                if (kind == EntryKind::run) next = Next::store_object;
-                else before_workspace();
+                if (fault && fail_slot_table) {
+                    // The page buffer succeeded; the next new is the slot table.
+                    ++boundaries;
+                    fault->arm();
+                    next = Next::done;
+                } else next = Next::slot_table;
             }
+            break;
+        case Next::slot_table:
+            slot_table_matches = bytes == expected_slot_table_bytes(kind);
+            if (!slot_table_matches) next = Next::done;
+            else if (kind == EntryKind::run) next = Next::store_object;
+            else before_workspace();
             break;
         case Next::store_object:
             store_object_matches = bytes == sizeof(CommandScratchStore);
@@ -112,7 +141,7 @@ struct WorkspaceBoundary {
         }
     }
     void check() const {
-        require(boundaries == 1 && store_object_matches && next == Next::done,
+        require(boundaries == 1 && slot_table_matches && store_object_matches && next == Next::done,
                 "observe the final setup allocation immediately before the workspace");
     }
 };
@@ -190,7 +219,7 @@ std::exception_ptr enter(Entry& entry, WorkspaceBoundary& boundary) {
 }
 
 void require_memory(std::exception_ptr failure) {
-    require(failure != nullptr, "the production run entry must throw its workspace failure");
+    require(failure != nullptr, "the production run entry must throw its allocation failure");
     try { std::rethrow_exception(failure); }
     catch (const std::exception& error) {
         const auto* typed = dynamic_cast<const pineforge::RunFailureInfo*>(&error);
@@ -200,7 +229,7 @@ void require_memory(std::exception_ptr failure) {
             throw std::runtime_error(std::string("expected out_of_memory, observed ")
                 + pineforge::run_failure_code_name(observed));
         require(observed != RunFailureCode::scratch_io_failed,
-                "workspace allocation failure must not become scratch_io_failed");
+                "scratch allocation failure must not become scratch_io_failed");
     }
 }
 
@@ -224,13 +253,16 @@ void workspace_allocation_failure(EntryKind kind) {
                 "the unarmed production entry refuses no allocation");
     }
 
-    Entry failed;
-    AllocationFault fault;
-    WorkspaceBoundary boundary{kind, &fault};
-    const auto error = enter(failed, boundary);
-    fault.finish();
-    boundary.check();
-    require_memory(error);
+    const bool slot_table_faults[] = {true, false};
+    for (const bool fail_slot_table : slot_table_faults) {
+        Entry failed;
+        AllocationFault fault;
+        WorkspaceBoundary boundary{kind, &fault, fail_slot_table};
+        const auto error = enter(failed, boundary);
+        fault.finish();
+        boundary.check();
+        require_memory(error);
+    }
 }
 
 void run_scratch_workspace_allocation_failure() {
