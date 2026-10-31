@@ -60,10 +60,14 @@ selection. An idle policy change takes effect on inheriting tapes at the next
 preparation without resizing their previous caches. No policy bytes are added
 to a per-tape budget, and page tags are charged exactly once.
 
-Production builders keep projections of at most one fixed transfer page in an
-in-memory reader and spill larger projections through an unlinked `ScratchFile`
-in the report-sink scratch directory (or the default when empty); publication
-finishes tails and destruction never flushes.
+Production builders use an in-memory reader for up to one 4096-byte page
+**per calendar column or recorded tape**: 512 int64 rows per calendar column,
+or 256 recorded rows of 16 bytes (`{timestamp,value}`). Each of the three
+calendar columns is its own projection. Larger projections spill through an
+unlinked `ScratchFile` in the report-sink scratch directory (or the default
+when empty), and an attached arena supplies those pages, reporting its typed
+exhaustion error at the limit; publication finishes tails and destruction
+never flushes.
 Ordinary file failures retain `scratch_io_failed` and errno. An attached
 arena retains its existing typed backing and exhaustion failures; arena
 backing is still memory. Selecting a smaller cache cannot increase the

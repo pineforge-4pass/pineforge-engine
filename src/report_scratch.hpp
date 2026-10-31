@@ -119,6 +119,8 @@ void read_scratch_points(const metrics::ScratchCurveRegion& region,
 class ScratchCurveWindow {
 public:
     // Byte payload budget; complete shared line metadata is additional.
+    // Adjacent backing misses fill aligned blocks of up to kScratchWindowPoints.
+    // One fixed 65,520-byte block workspace is included in cache_control_bytes().
     // Sub-point sizes and optional allocation failure bypass.
     // An optional counter must outlive this reader.
     explicit ScratchCurveWindow(const metrics::ScratchCurveRegion& region,

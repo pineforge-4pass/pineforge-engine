@@ -1973,13 +1973,17 @@ void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
         const auto window = report_sink::kScratchWindowBytes;
         // The ordinary reader keeps kScratchWindowPoints complete shared
         // lines, each with its own metadata (docs/design/tail-page-windows.md).
-        // Preserve the original two-window allowance and add only those tags.
+        // Preserve the original two-window allowance, adding the line tags
+        // and State's separate kScratchWindowPoints block workspace.
         // Selected/observed budgets retain their existing two-window bound.
         const auto curve_metadata = selected || observed ? std::size_t{0}
             : report_sink::kScratchWindowPoints * (curve_line_bytes - point_bytes);
+        const auto curve_workspace = selected || observed ? std::size_t{0}
+            : report_sink::kScratchWindowPoints * point_bytes;
         const auto small_budget = page_table_bytes + 1024 * TradeLedger::kLedgerEntryBytes
-            + 2 * window + curve_metadata;
-        const auto budget = cache_bound - fixed_bytes + 2 * window + curve_metadata;
+            + 2 * window + curve_metadata + curve_workspace;
+        const auto budget = cache_bound - fixed_bytes + 2 * window + curve_metadata
+            + curve_workspace;
         CHECK(small.largest_request > 0 && small.peak_live > 0);
         CHECK(capped.largest_request > 0 && capped.peak_live > 0);
         CHECK(large.largest_request > 0 && large.peak_live > 0);
