@@ -773,6 +773,142 @@ void check_read_cache_cold_warm_literals() {
   std::printf("O1STORE cold/warm literal bytes, clipping and regrowth zeroes ok\n");
 }
 
+// ---------------------------------------------------------------- lazy chunk creation
+
+void check_lazy_chunk_creation() {
+  Shape shape = default_shape();
+  shape.resident_pages = 4;
+  shape.chunk_bytes = 1024;
+  MemoryBacking backing(32768, shape.page_bytes);
+  std::unique_ptr<Store> store = Store::open(shape, backing.get());
+  const Stats before = store->stats();
+  constexpr std::uint64_t declared_bytes = UINT64_C(4) * 1024 * 1024;
+  const Id id = store->create(declared_bytes, 8);
+  const Stats after_create = store->stats();
+
+  REQUIRE(after_create.bytes_live == declared_bytes);
+  REQUIRE(after_create.objects_live == 1);
+  REQUIRE(after_create.bytes_backing >= before.bytes_backing);
+  REQUIRE(after_create.bytes_backing - before.bytes_backing <= UINT64_C(256) * 1024);
+
+  std::array<unsigned char, 32> zero_probe{};
+  zero_probe.fill(0xa5);
+  REQUIRE(store->read(id, 1024 + 7, zero_probe.data(), zero_probe.size()) ==
+          zero_probe.size());
+  REQUIRE(std::all_of(zero_probe.begin(), zero_probe.end(),
+                      [](unsigned char byte) { return byte == 0; }));
+
+  const std::uint64_t marker = UINT64_C(0x1122334455667788);
+  REQUIRE(store->write(id, 3 * 1024 + 5, &marker, sizeof marker) == sizeof marker);
+  std::uint64_t echoed = 0;
+  REQUIRE(store->read(id, 3 * 1024 + 5, &echoed, sizeof echoed) == sizeof echoed);
+  REQUIRE(echoed == marker);
+
+  {
+    auto transaction = store->begin();
+    const std::uint64_t pending = UINT64_C(0xaabbccddeeff0011);
+    REQUIRE(store->write(id, 7 * 1024 + 3, &pending, sizeof pending) == sizeof pending);
+    REQUIRE(store->read(id, 7 * 1024 + 3, &echoed, sizeof echoed) == sizeof echoed);
+    REQUIRE(echoed == pending);
+    transaction->rollback();
+  }
+  echoed = marker;
+  REQUIRE(store->read(id, 7 * 1024 + 3, &echoed, sizeof echoed) == sizeof echoed);
+  REQUIRE(echoed == 0);
+  REQUIRE(store->read(id, 3 * 1024 + 5, &echoed, sizeof echoed) == sizeof echoed);
+  REQUIRE(echoed == marker);
+
+  store->release(id);
+  REQUIRE(store->stats().bytes_live == 0);
+  REQUIRE(store->stats().objects_live == 0);
+  std::printf("O1STORE lazy create, zero reads, first write and rollback ok\n");
+}
+
+void check_sparse_chunk_straddling_read() {
+  Shape shape = default_shape();
+  shape.chunk_bytes = 1024;
+  MemoryBacking backing(256, shape.page_bytes);
+  std::unique_ptr<Store> store = Store::open(shape, backing.get());
+  const Id id = store->create(4096, 8);
+
+  const std::array<unsigned char, 4> first{{0x11, 0x22, 0x33, 0x44}};
+  const std::array<unsigned char, 4> third{{0x55, 0x66, 0x77, 0x88}};
+  REQUIRE(store->write(id, 1020, first.data(), first.size()) == 4);
+  REQUIRE(store->write(id, 2055, third.data(), third.size()) == 4);
+
+  // One read crosses present chunk 0, absent chunk 1, present chunk 2,
+  // and absent chunk 3. Every byte outside the two literal markers is zero.
+  std::array<unsigned char, 4096> expected{};
+  expected[1020] = 0x11;
+  expected[1021] = 0x22;
+  expected[1022] = 0x33;
+  expected[1023] = 0x44;
+  expected[2055] = 0x55;
+  expected[2056] = 0x66;
+  expected[2057] = 0x77;
+  expected[2058] = 0x88;
+  std::array<unsigned char, 4096> actual{};
+  actual.fill(0xa5);
+  REQUIRE(store->read(id, 0, actual.data(), actual.size()) == 4096);
+  REQUIRE(actual == expected);
+
+  store->release(id);
+  REQUIRE(!store->alive(id));
+  REQUIRE(store->stats().bytes_live == 0);
+  REQUIRE(store->stats().objects_live == 0);
+  std::printf("O1STORE read straddles present and absent chunks ok\n");
+}
+
+void check_sparse_resize_and_release() {
+  Shape shape = default_shape();
+  shape.chunk_bytes = 1024;
+  MemoryBacking backing(256, shape.page_bytes);
+  std::unique_ptr<Store> store = Store::open(shape, backing.get());
+  REQUIRE(store->stats().bytes_live == 0);
+  REQUIRE(store->stats().objects_live == 0);
+  const Id id = store->create(8192, 8);
+
+  // Only chunk 5 has data; chunks 1..4 and 6..7 have no records.
+  const std::array<unsigned char, 4> marker{{0xde, 0xad, 0xbe, 0xef}};
+  REQUIRE(store->write(id, 5127, marker.data(), marker.size()) == 4);
+  std::array<unsigned char, 8> before_shrink{};
+  before_shrink.fill(0xa5);
+  const std::array<unsigned char, 8> expected_marker{{
+      0, 0, 0xde, 0xad, 0xbe, 0xef, 0, 0}};
+  REQUIRE(store->read(id, 5125, before_shrink.data(), before_shrink.size()) == 8);
+  REQUIRE(before_shrink == expected_marker);
+  REQUIRE(store->stats().bytes_live == 8192);
+  REQUIRE(store->stats().objects_live == 1);
+
+  REQUIRE(store->resize(id, 3072));
+  REQUIRE(store->size(id) == 3072);
+  REQUIRE(store->stats().bytes_live == 3072);
+  REQUIRE(store->stats().objects_live == 1);
+  std::array<unsigned char, 3072> shrunk{};
+  shrunk.fill(0xa5);
+  REQUIRE(store->read(id, 0, shrunk.data(), shrunk.size()) == 3072);
+  REQUIRE(std::all_of(shrunk.begin(), shrunk.end(),
+                      [](unsigned char byte) { return byte == 0; }));
+  REQUIRE(store->read(id, 5127, before_shrink.data(), before_shrink.size()) == 0);
+
+  REQUIRE(store->resize(id, 8192));
+  REQUIRE(store->size(id) == 8192);
+  REQUIRE(store->stats().bytes_live == 8192);
+  REQUIRE(store->stats().objects_live == 1);
+  std::array<unsigned char, 8192> regrown{};
+  regrown.fill(0xa5);
+  REQUIRE(store->read(id, 0, regrown.data(), regrown.size()) == 8192);
+  REQUIRE(std::all_of(regrown.begin(), regrown.end(),
+                      [](unsigned char byte) { return byte == 0; }));
+
+  // Chunks 1 and 2 are still absent after regrowth.
+  store->release(id);
+  REQUIRE(!store->alive(id));
+  REQUIRE(store->stats().bytes_live == 0);
+  REQUIRE(store->stats().objects_live == 0);
+  std::printf("O1STORE sparse shrink, zero regrowth and release ok\n");
+}
+
 // ---------------------------------------------------------------- lifecycle
 
 void check_lifecycle() {
@@ -1516,14 +1652,20 @@ void check_flattened_transactions() {
   const Id usable = small->create(16, 1);
   REQUIRE(small->alive(usable));
   auto failed_allocation_tx = small->begin();
-  bool allocation_failed = false;
-  try {
-    (void)small->create(UINT64_C(4) * 1024 * 1024, 1);
-  } catch (const std::runtime_error&) {
-    allocation_failed = true;
-  }
-  REQUIRE(allocation_failed);
+  constexpr std::size_t failed_allocation_bytes =
+      static_cast<std::size_t>(UINT64_C(4) * 1024 * 1024);
+  const Id failed_allocation =
+      small->create(failed_allocation_bytes, 1);
+  const std::vector<unsigned char> allocation_payload(
+      failed_allocation_bytes, 0x5a);
+  REQUIRE(throws_runtime_error([&] {
+    (void)small->write(failed_allocation, 0, allocation_payload.data(),
+                       allocation_payload.size());
+  }));
   failed_allocation_tx->rollback();
+  REQUIRE(!small->alive(failed_allocation));
+  REQUIRE(small->alive(usable));
+  REQUIRE(object_checksum(*small, victim) == victim_baseline);
   const Id after_failed_allocation = small->create(16, 1);
   REQUIRE(after_failed_allocation > usable + 1);
 
@@ -2240,6 +2382,9 @@ int main() {
     check_read_cache_collisions();
     check_read_cache_page_eviction();
     check_read_cache_cold_warm_literals();
+    check_lazy_chunk_creation();
+    check_sparse_chunk_straddling_read();
+    check_sparse_resize_and_release();
     check_lifecycle();
     check_shape_caps();
     check_chunk_boundaries_and_rollback();

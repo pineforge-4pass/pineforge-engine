@@ -14,6 +14,17 @@ version number follows semantic versioning over the surfaces the
   fixed 384 bytes per Store to `bytes_resident` whatever the number of objects
   or chunks, and are cleared before every scratch put, erase and rollback and
   on every scratch failure. Results are unchanged.
+- Creating an empty map now writes two header records; its arena and index
+  data chunks are published on first write. The Store does this for every
+  script container: an object is created with its header record only, so a
+  string created with a bound and a UDT object made without a payload behave
+  the same way. Declared sizes, the 50,000-pair
+  capacity, iteration order and the refusal at the cap are unchanged. Scratch
+  exhaustion from publishing a container's data chunks now surfaces at the
+  first operation that publishes them (for a map `put`, `remove`, `clear`,
+  `copy`, `snapshot` or `restore`) instead of at creation, with the same typed failure
+  `report_sink_failed` and `reason: arena_exhausted`. Scripts that create maps
+  they never fill can now run where they used to fail at `map.new`.
 
 ## 1.9.1 — 2026-10-31
 

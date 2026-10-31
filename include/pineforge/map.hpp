@@ -121,7 +121,9 @@ struct PineMapKeyHash<Key, true> {
 // held in its slot as bytes. Any other
 // value (a handle to a collection or to another map) is a handle of a few
 // words that the map keeps in a heap table indexed by slot: the payload behind
-// such a handle belongs to its own container.
+// such a handle belongs to its own container. Store objects keep their declared
+// bounds, but materialize data chunks only when a write reaches them; an
+// unmaterialized chunk reads as zero.
 
 inline constexpr const char* kMapStoreTransferError = "map store transfer is short";
 inline constexpr const char* kMapSequenceRangeError = "map sequence index out of range";
@@ -597,8 +599,8 @@ inline constexpr bool is_pine_map_snapshot_value_v =
 // hash chains that keeps get/put/remove/contains constant-time on average.  Both
 // are sized once when the map is created, from the existing 50,000-pair limit:
 // a put never allocates a node or rehashes, and a removed slot is the next one
-// a put reuses. Main's Store creates every zero-filled chunk at preparation;
-// this is backing allocation, with a fixed resident page cache.
+// a put reuses. The Store's fixed chunk step makes backing allocation grow only
+// as slots and buckets are written, with a fixed resident page cache.
 template <typename Key, typename Value>
 class PineMap {
     static_assert(detail::is_pine_map_key_v<Key>,
@@ -1098,13 +1100,9 @@ private:
         detail::o1::Store& store = storage.store();
         storage.entries.id = store.create(kHeaderBytes + kCapacity * kSlotBytes, 8);
         storage.index.id = store.create(kBucketBytes, 8);
-        // Only the header needs a defined value: the slots below the high-water
-        // mark are written before they are read, and the index is validated
-        // against them.
-        save_header(storage, detail::MapHeader{});
-        // The table of a handle-valued map is sized for the same limit once, so
-        // a put never reallocates it.
-        if constexpr (kHeapValue) storage.heap_values.reserve(static_cast<std::size_t>(kCapacity));
+        // A missing entry chunk reads as zero, so the all-zero MapHeader needs
+        // no data record until the first map mutation.
+        // Handle values grow their bounded table as slots are used.
     }
 
     static void read_exact(const detail::o1::Store& store, StoreId id, std::uint64_t offset,

@@ -1,3 +1,6 @@
+#define PINEFORGE_TEST_ALLOCATION_BYTES
+#include "global_allocation_replacement.hpp"
+
 #include <pineforge/map.hpp>
 
 #include <pineforge/na.hpp>
@@ -76,6 +79,16 @@ struct has_public_snapshot<
     : std::true_type {};
 
 struct SnapshotUnsafeUdt {
+    int value = 0;
+};
+
+struct HeapValueProbe {
+    inline static std::size_t default_constructed = 0;
+
+    HeapValueProbe() { ++default_constructed; }
+    explicit HeapValueProbe(int input) : value(input) {}
+
+    std::string payload;
     int value = 0;
 };
 
@@ -937,6 +950,145 @@ static void test_hot_cache_read_views_preserve_hits() {
                               std::string(66, 'w'), 2, 1);
 }
 
+static void test_empty_maps_materialize_fixed_headers_only() {
+    using Map = PineMap<std::string, double>;
+    using Holder = pineforge::detail::MapStoreHolder;
+    using Stats = pineforge::detail::o1::Stats;
+
+    auto holder = std::make_shared<Holder>();
+    pineforge::detail::MapStoreScope scope(holder);
+    const Stats baseline = holder->store->stats();
+    constexpr std::size_t map_count = 2000;
+    constexpr std::uint64_t logical_bytes_per_map = UINT64_C(3862176);
+    constexpr std::uint64_t max_backing_bytes_per_map = UINT64_C(512) * 1024;
+    constexpr std::array<std::size_t, 3> marks{{1, 100, map_count}};
+    std::vector<Map> maps;
+    maps.reserve(map_count);
+
+    std::size_t next_mark = 0;
+    for (std::size_t index = 0; index < map_count; ++index) {
+        maps.push_back(Map::new_());
+        if (index + 1 == marks[next_mark]) {
+            const Stats checkpoint = holder->store->stats();
+            const std::uint64_t count = marks[next_mark];
+            assert(checkpoint.objects_live == 2 * count);
+            assert(checkpoint.bytes_live == count * logical_bytes_per_map);
+            assert(checkpoint.bytes_backing >= baseline.bytes_backing);
+            assert(checkpoint.bytes_backing - baseline.bytes_backing <=
+                   count * max_backing_bytes_per_map);
+            ++next_mark;
+        }
+    }
+
+    assert(next_mark == marks.size());
+    assert(maps.back().size() == 0);
+
+    // The same handles can execute a real put/get workload after the empty
+    // construction checkpoints. These values are inline, so no payload object
+    // changes the two-map-object accounting above.
+    for (std::size_t index = 0; index < maps.size(); index += 500) {
+        maps[index].put("bar", static_cast<double>(index));
+        assert(maps[index].get("bar") == static_cast<double>(index));
+    }
+}
+
+static void test_map_growth_rolls_back_and_abandons_cleanly() {
+    using Map = PineMap<std::string, int>;
+    auto holder = std::make_shared<pineforge::detail::MapStoreHolder>();
+    pineforge::detail::MapStoreScope scope(holder);
+    auto map = Map::new_();
+    const auto fill = [](Map& target) {
+        for (int index = 0; index < 40; ++index)
+            target.put("k" + std::to_string(index), index);
+    };
+
+    {
+        auto transaction = holder->store->begin();
+        fill(map);
+        assert(map.size() == 40);
+        assert(map.get("k39") == 39);
+        transaction->rollback();
+    }
+    assert(map.size() == 0);
+    assert(!map.contains("k39"));
+
+    {
+        auto transaction = holder->store->begin();
+        fill(map);
+        assert(map.size() == 40);
+    }
+    assert(map.size() == 0);
+    assert(!map.contains("k0"));
+
+    {
+        auto transaction = holder->store->begin();
+        fill(map);
+        auto joined = holder->store->begin();
+        joined->rollback();
+        bool rollback_only = false;
+        try {
+            transaction->commit();
+        } catch (const pineforge::detail::o1::RollbackOnly&) {
+            rollback_only = true;
+        }
+        assert(rollback_only);
+    }
+    assert(map.size() == 0);
+    assert(!map.contains("k20"));
+}
+
+static void test_map_clear_copy_and_snapshot_cross_growth_step() {
+    using Map = PineMap<std::string, int>;
+    auto map = Map::new_();
+    const std::vector<std::string> expected_keys{
+        "k0",  "k1",  "k2",  "k3",  "k4",  "k5",  "k6",  "k7",
+        "k8",  "k9",  "k10", "k11", "k12", "k13", "k14", "k15"};
+    const std::vector<int> expected_values{
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+    for (int index = 0; index < 16; ++index)
+        map.put("k" + std::to_string(index), index);
+
+    auto independent = map.copy();
+    auto snapshot = map.snapshot();
+    map.clear();
+    assert(map.size() == 0);
+    assert(independent.keys() == expected_keys);
+    assert(independent.values() == expected_values);
+
+    map.restore(snapshot);
+    assert(map.keys() == expected_keys);
+    assert(map.values() == expected_values);
+    map.put("k16", 16);
+    assert(map.size() == 17);
+    map.restore(snapshot);
+    assert(map.keys() == expected_keys);
+    assert(map.values() == expected_values);
+}
+
+static void test_heap_value_maps_grow_the_value_table_on_use() {
+    using Map = PineMap<int, HeapValueProbe>;
+    // Open the shared Store before counting this map's own allocations.
+    auto holder = std::make_shared<pineforge::detail::MapStoreHolder>();
+    pineforge::detail::MapStoreScope scope(holder);
+    HeapValueProbe::default_constructed = 0;
+    const std::size_t bytes_before = global_allocation::live_bytes;
+    global_allocation::recording = true;
+    {
+        auto map = Map::new_();
+        const std::size_t creation_bytes = global_allocation::live_bytes - bytes_before;
+        // reserve() constructs no probes, but its full-capacity allocation
+        // alone reaches this limit on the eager implementation.
+        assert(creation_bytes < std::size_t{50000} * sizeof(HeapValueProbe));
+        assert(HeapValueProbe::default_constructed == 0);
+
+        map.put(7, HeapValueProbe{42});
+        assert(map.size() == 1);
+        assert(map.get(7).value == 42);
+    }
+    // Destroy every recorded block while byte accounting is still enabled.
+    global_allocation::recording = false;
+}
+
 int main() {
     static_assert(std::is_copy_constructible_v<PineMap<int, double>>);
     static_assert(std::is_copy_assignable_v<PineMap<int, double>>);
@@ -974,6 +1126,10 @@ int main() {
     test_hot_cache_outer_transaction_rollback();
     test_hot_cache_rollback_only_commit_and_abandonment();
     test_hot_cache_read_views_preserve_hits();
+    test_empty_maps_materialize_fixed_headers_only();
+    test_map_growth_rolls_back_and_abandons_cleanly();
+    test_map_clear_copy_and_snapshot_cross_growth_step();
+    test_heap_value_maps_grow_the_value_table_on_use();
 
     std::printf("All test_map tests passed.\n");
     return 0;

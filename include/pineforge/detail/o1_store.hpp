@@ -24,8 +24,10 @@
 // chunk records, each record keyed by the 16-byte big-endian pair (object id, chunk
 // number) and ordered by a plain bytewise compare. Chunk 0's value is the 16-byte
 // header (logical size, alignment) followed by that chunk's data bytes; every later
-// chunk's value is its data bytes. The layer keeps no per-object, per-chunk or
-// per-byte heap state: an id counter, a few scalars and fixed buffers only.
+// chunk's value is its data bytes. Creation records only the header chunk.
+// Unmaterialized data chunks read as zero and are published on first write. The
+// layer keeps no per-object, per-chunk or per-byte heap state: an id counter,
+// a few scalars and fixed buffers only.
 //
 // DECLARATIONS ONLY. The single implementation is src/detail/o1_store.cpp;
 // all store consumers use this header rather than separate implementations.
@@ -170,6 +172,7 @@ class Store {
 
   // Exact page-granular access. Return the byte count moved; a short count means
   // the request crossed the logical end, which the caller must treat as an error.
+  // An unmaterialized data chunk reads as zero bytes.
   // A mutating call outside a transaction runs as its own one-call transaction.
   virtual std::size_t read(Id, std::uint64_t off, void* dst, std::size_t n) const = 0;
   virtual std::size_t write(Id, std::uint64_t off, const void* src, std::size_t n) = 0;
