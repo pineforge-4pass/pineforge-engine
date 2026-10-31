@@ -1314,10 +1314,47 @@
    "symbol": "reader_",
    "scope": [
     "namespace pineforge :: detail #1",
-    "template < class Row > class FeedProjectionBuilder #1"
+    "template < class Row > class FeedProjectionBuilder #1",
+    ", bool resident_if_single_page = false ) : directory_ ( directory ) , resident_if_single_page_ ( resident_if_single_page ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/feed_projection.hpp",
+   "symbol": "reader_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Row > class FeedProjectionBuilder #1",
+    "private : void spill_to_scratch ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/feed_projection.hpp",
+   "symbol": "provider",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Row > class FeedProjectionBuilder #1",
+    "FeedProjection < Row > finish ( std :: size_t capacity_bytes = kFeedProjectionCacheBytes ) #1",
+    "else #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/feed_projection.hpp",
+   "symbol": "directory_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Row > class FeedProjectionBuilder #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
    "ordinal": 1
   },
   {
