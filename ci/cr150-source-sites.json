@@ -21124,35 +21124,6 @@
   },
   {
    "file": "src/native_order.cpp",
-   "symbol": "at_",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "namespace #3",
-    "class ByteReader #1",
-    "void raw ( void * out , std :: size_t length ) #1",
-    "while ( length ) #1",
-    "if ( at_ = = end_ ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "at_ = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "namespace #3",
-    "class ByteReader #1"
-   ],
-   "cls": "assign",
-   "spelling": "buffer_ = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
    "symbol": "text",
    "scope": [
     "namespace pineforge :: native_order #1",
@@ -21466,8 +21437,7 @@
     "namespace pineforge :: native_order #1",
     "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
-    "void spill_front_chunk ( ) #1",
-    "else #1"
+    "void spill_front_chunk ( ) #1"
    ],
    "cls": "grow",
    "spelling": "data . append ( . . . )",
@@ -44373,7 +44343,7 @@
    "symbol": "tz",
    "scope": [
     "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes ) #1"
+    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes , const std :: string & scratch_directory ) #1"
    ],
    "cls": "assign",
    "spelling": "tz = . . .",
@@ -44384,7 +44354,7 @@
    "symbol": "stamps",
    "scope": [
     "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes ) #1"
+    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes , const std :: string & scratch_directory ) #1"
    ],
    "cls": "assign",
    "spelling": "stamps = . . .",
@@ -44395,7 +44365,7 @@
    "symbol": "trade_days",
    "scope": [
     "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes ) #1",
+    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes , const std :: string & scratch_directory ) #1",
     "+ + k ) #2"
    ],
    "cls": "grow",
@@ -44407,7 +44377,7 @@
    "symbol": "week_opens",
    "scope": [
     "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes ) #1",
+    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes , const std :: string & scratch_directory ) #1",
     "+ + k ) #2"
    ],
    "cls": "grow",
@@ -44419,7 +44389,7 @@
    "symbol": "month_opens",
    "scope": [
     "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes ) #1",
+    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes , const std :: string & scratch_directory ) #1",
     "+ + k ) #2"
    ],
    "cls": "grow",
@@ -44431,7 +44401,7 @@
    "symbol": "late_opens",
    "scope": [
     "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes ) #1"
+    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes , const std :: string & scratch_directory ) #1"
    ],
    "cls": "assign",
    "spelling": "late_opens = . . .",
