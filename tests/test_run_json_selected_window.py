@@ -2040,6 +2040,26 @@ class AbbreviationTests(unittest.TestCase):
                 self.assertEqual(line["code"], "run_request_invalid")
                 self.assertIn("ambiguous", line["error"])
 
+    def test_the_limit_options_join_the_ambiguous_prefix_lists(self):
+        # The three limit options share the --ma / --t prefixes with older options,
+        # so the refusal text names them too. Exit status, code and args are unchanged.
+        expected = {
+            "--ma": "ambiguous option: --ma could match --magnifier-samples, --magnifier-dist, "
+                    "--magnifier-volume-weighted, --max-symbol-feeds, --max-inventory-bytes",
+            "--t": "ambiguous option: --t could match --transpiled, --trade-start-ms, --tv-compat",
+        }
+        for prefix, text in expected.items():
+            for argv in ([prefix, "1"],):
+                with self.subTest(argv=argv):
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()), \
+                            self.assertRaises(SystemExit) as caught:
+                        run_json.main(["--so", "x.so", "--ohlcv", "y.csv", *argv])
+                    self.assertEqual(caught.exception.code, 2)
+                    line = last_line(out.getvalue())
+                    self.assertEqual((line["code"], line["args"]), ("run_request_invalid", {"option": "arguments"}))
+                    self.assertTrue(line["error"].endswith("error: " + text), line["error"])
+
     def test_the_new_full_flags_work_normally_beside_the_old_prefixes(self):
         with Counters() as poison:
             status, out, _ = run_main(["--so", "x.so", "--ohlcv", "y.csv", "--rep", "2",
