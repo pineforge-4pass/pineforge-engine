@@ -1,6 +1,7 @@
 """Outside-in report-channel contract rows. Run with unittest discovery."""
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -152,7 +153,48 @@ class Contract(unittest.TestCase):
         self.assertIsNotNone(control["exited_at"], msg=msg)
         self.assertGreaterEqual(
             control["cancelled_at"] - control["stalled_at"][phase], 0.15, msg=msg)
+        self.assertGreaterEqual(control["exited_at"], control["cancelled_at"], msg=msg)
         self.assertLess(control["exited_at"] - control["cancelled_at"], 0.75, msg=msg)
+        self.assertIn("pre_cancel", control, msg=msg)
+        before = control["pre_cancel"]
+        self.assertEqual(before["phase"], phase, msg=msg)
+        self.assertLessEqual(control["stalled_at"][phase], before["at"], msg=msg)
+        self.assertLessEqual(before["at"], control["cancelled_at"], msg=msg)
+        if phase in ("report", "sink"):
+            self.assertEqual(before["pending_bytes"], 4096, msg=msg)
+
+    def assert_status_stall(self, capture, *, released):
+        msg = capture.failure_context()
+        control = capture.control
+        observation = control["status_pending_send"]
+        self.assertEqual(observation["pid"], control["supervisor_pid"], msg=msg)
+        self.assertIn(observation["send_errno"], (errno.EAGAIN, errno.EWOULDBLOCK), msg=msg)
+        self.assertGreater(observation["packet_bytes"], 0, msg=msg)
+        self.assertLessEqual(observation["packet_bytes"], 65536, msg=msg)
+        self.assertEqual(len([event for event in capture.validator_events
+                              if event[:1] == b"M"]), 1, msg=msg)
+        self.assertGreater(control["status_prefill_packets"], 0, msg=msg)
+        self.assertEqual(control["status_prefill_packets"],
+                         control["status_prefill"]["packets"], msg=msg)
+        self.assertIn(control["status_prefill"]["eagain_errno"],
+                      (errno.EAGAIN, errno.EWOULDBLOCK), msg=msg)
+        self.assertIn(control["status_probe_errno"], (errno.EAGAIN, errno.EWOULDBLOCK), msg=msg)
+        before = control["pre_cancel"]
+        self.assertIn(before["status_probe_errno"], (errno.EAGAIN, errno.EWOULDBLOCK), msg=msg)
+        self.assertEqual(before["status_gate"]["process"]["pid"],
+                         control["supervisor_pid"], msg=msg)
+        self.assertEqual(before["status_gate"]["process"]["state"], "S", msg=msg)
+        self.assertLessEqual(control["status_gate_observed"]["at"],
+                             control["stalled_at"]["status_ready" if released else "status"],
+                             msg=msg)
+        if released:
+            self.assertIs(before["status_writable"], True, msg=msg)
+            self.assertEqual(control["status_release_packets"],
+                             control["status_prefill_packets"], msg=msg)
+            self.assertLessEqual(control["status_released_at"], before["at"], msg=msg)
+            self.assertEqual(control["held_until_exit"], [], msg=msg)
+        else:
+            self.assertNotIn("status_released_at", control, msg=msg)
 
     def assert_cancel_record(self, capture, invocation):
         record = self.refusal(
@@ -236,6 +278,7 @@ class Contract(unittest.TestCase):
                         cancel_channel="status", cancel_signal=signum, watchdog_seconds=5)
                     msg = capture.failure_context()
                     self.assert_cancel_bound(capture, "status")
+                    self.assert_status_stall(capture, released=False)
                     self.assert_producer_group_gone(capture, identity)
                     self.assertEqual(capture.returncode, 4 if invocation == "entrypoint" else 1,
                                      msg=msg)
@@ -262,12 +305,9 @@ class Contract(unittest.TestCase):
                             cancel_signal=signum, watchdog_seconds=5)
                         msg = capture.failure_context()
                         self.assert_cancel_bound(capture, "status_ready")
+                        self.assert_status_stall(capture, released=True)
                         record = self.assert_cancel_record(capture, invocation)
                         self.assert_producer_group_gone(capture, identity)
-                        self.assertEqual(capture.control["status_gate_pid"],
-                                         capture.control["supervisor_pid"], msg=msg)
-                        self.assertEqual(len([event for event in capture.validator_events
-                                              if event[:1] == b"M"]), 1, msg=msg)
                         self.assertEqual(capture.report, expected, msg=msg)
                         self.assertTrue(record["channels"]["report"]["complete"], msg=msg)
 
@@ -384,6 +424,12 @@ class Contract(unittest.TestCase):
                 sink=True, pause_validator_until_wall=True,
                 options=("--channel-wall-ms", "1800"), watchdog_seconds=5)
             msg = capture.failure_context()
+            self.assertIn("native_release_precondition", capture.control, msg=msg)
+            before = capture.control["native_release_precondition"]
+            self.assertEqual(before["validator"]["state"], "T", msg=msg)
+            self.assertLessEqual(before["at"], capture.control["native_released_at"], msg=msg)
+            self.assertLess(capture.control["native_released_at"],
+                            capture.control["exited_at"], msg=msg)
             record = self.refusal(
                 capture, "run_deadline_exceeded", {"stage": "finalize"},
                 exit_class="resource_refusal", status=1, msg=msg)
@@ -873,7 +919,7 @@ class Contract(unittest.TestCase):
             progress = Path(directory) / "after-parent"
             child_exit = Path(directory) / "child-exit.json"
             inputs = {"closes": [5, 9, 6]}
-            expected, _ = reference(inputs)
+            expected = reference(inputs)
             request = {
                 **inputs, "diagnostic_child_state": str(state),
                 "diagnostic_child_progress": str(progress), "diagnostic_child_exit": str(child_exit),
@@ -1217,14 +1263,14 @@ class Contract(unittest.TestCase):
                 options=("--report-max-bytes", "65536", "--channel-wall-ms", "2000",
                          "--channel-stall-ms", "500"))
         msg = capture.failure_context()
-        record = self.refusal(capture, "report_sink_failed", {
-            "reason": "sink_exhausted", "sink_bytes": cap + 1, "cap_bytes": cap},
-            exit_class="transport_failure", status=1, msg=msg)
         probes = {int(event[1:]) for event in capture.validator_events if event[:1] == b"P"}
         self.assertEqual(len(probes), 1, msg=f"real V never read the overflow probe; {msg}")
         self.assertEqual(capture.stopped_validators, probes,
                          msg=f"real V was not observed stopped; {msg}")
         self.assertEqual(capture.control["host_paused_validators"], [], msg=msg)
+        record = self.refusal(capture, "report_sink_failed", {
+            "reason": "sink_exhausted", "sink_bytes": cap + 1, "cap_bytes": cap},
+            exit_class="transport_failure", status=1, msg=msg)
         self.assertLess(capture.elapsed_seconds, 3.5, msg=msg)
         for pid in probes:
             self.assertIsNone(process_info(pid), msg=msg)
@@ -1376,6 +1422,9 @@ class Contract(unittest.TestCase):
         self.assertGreaterEqual(gate["released_at"] - gate["stopped_at"], 0.2, msg=msg)
         self.assertEqual(gate["report_bytes_while_stopped"], 0, msg=msg)
         self.assertEqual(gate["sink_bytes_while_stopped"], 0, msg=msg)
+        self.assertEqual(gate["report_queued_while_stopped"], 0, msg=msg)
+        self.assertEqual(gate["sink_queued_while_stopped"], 0, msg=msg)
+        self.assertLessEqual(gate["release_checked_at"], gate["released_at"], msg=msg)
         self.assertEqual(gate["receipt_bytes_while_stopped"],
                          0 if hold == "before" else len(receipt), msg=msg)
         self.assertEqual(len(set(gate["stdio"].values())), 3, msg=msg)
@@ -1401,7 +1450,7 @@ class Contract(unittest.TestCase):
                                           arguments=arguments):
                             request = {"closes": [7, 13, 9, 18], "first_ts": 73000,
                                        "fragment_bytes": 17, "inherited_sink": True}
-                            expected, _ = reference(request)
+                            expected = reference(request)
                             self.assertEqual(expected.returncode, 0, msg=repr(expected.stderr))
                             native = sink_wire(request["closes"], request["first_ts"])
                             capture = launch(
@@ -1441,7 +1490,7 @@ class Contract(unittest.TestCase):
 
     def test_jailed_missing_plan_derives_actual_validator_cap_from_positive_report(self):
         request = {"closes": [2, 5, 4], "inherited_sink": True}
-        expected, _ = reference(request)
+        expected = reference(request)
         native = sink_wire(request["closes"])
         allowance = len(native) + len(expected.stdout)
         with validator_observer() as observer:
@@ -1461,7 +1510,7 @@ class Contract(unittest.TestCase):
 
     def test_jailed_planned_sink_cli_and_environment_supply_the_bound(self):
         request = {"closes": [11, 16, 12], "inherited_sink": True}
-        expected, _ = reference(request)
+        expected = reference(request)
         bound = len(sink_wire(request["closes"]))
         with validator_observer() as observer:
             for options, environment in (
@@ -1566,7 +1615,7 @@ class Contract(unittest.TestCase):
 
     def test_validator_environment_is_explicit_and_excludes_supervisor_variable(self):
         request = {"closes": [6, 12, 8], "inherited_sink": True}
-        expected, _ = reference(request)
+        expected = reference(request)
         native = sink_wire(request["closes"])
         capture = launch(
             request, sink=True, planned_sink_bytes=len(native), audit_stdout=True,
@@ -1590,7 +1639,7 @@ class Contract(unittest.TestCase):
 
     def test_effective_profile_cli_overrides_environment_for_unjailed_file_route(self):
         request = {"closes": [9, 14, 10], "inherited_sink": True}
-        expected, _ = reference(request)
+        expected = reference(request)
         native = sink_wire(request["closes"])
         with validator_observer() as observer:
             for environment, arguments in (

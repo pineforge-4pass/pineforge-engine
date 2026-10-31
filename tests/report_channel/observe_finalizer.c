@@ -26,6 +26,8 @@ static bool pause_probe;
 static bool paused;
 static int status_fd = -1;
 static int status_gate_fd = -1;
+static struct stat status_identity;
+static bool status_identity_valid;
 static bool status_waited;
 static bool finalizer_process;
 static bool stdout_audit;
@@ -93,8 +95,11 @@ static void observe(void)
         offset += length + 1;
     }
     const char *gate = getenv("PF_REPORT_TEST_STATUS_GATE_FD");
-    if (supervisor && gate && status_fd >= 0)
+    if (supervisor && gate && status_fd >= 0) {
         status_gate_fd = atoi(gate);
+        /* Match the open socket description across S's admission duplicate. */
+        status_identity_valid = fstat(status_fd, &status_identity) == 0;
+    }
     if (!finalizer || input_fd < 0 || receipt_fd < 0) {
         input_fd = receipt_fd = -1;
         if (status_gate_fd < 0)
@@ -240,17 +245,30 @@ ssize_t write(int fd, const void *buffer, size_t length)
 
 ssize_t send(int fd, const void *buffer, size_t length, int flags)
 {
-    if (fd == status_fd && status_gate_fd >= 0 && !status_waited) {
+    ssize_t count = syscall(SYS_sendto, fd, buffer, length, flags, NULL, 0);
+    int send_error = errno;
+    struct stat identity;
+    if (count < 0 && (send_error == EAGAIN || send_error == EWOULDBLOCK)
+            && status_gate_fd >= 0 && status_identity_valid && !status_waited
+            && fstat(fd, &identity) == 0
+            && identity.st_dev == status_identity.st_dev
+            && identity.st_ino == status_identity.st_ino) {
         status_waited = true;
-        pid_event('M');
-        /* A real host signal interrupts this one pending test syscall.
-           M itself remains writable for the product's next packet attempt. */
+        char observation[256];
+        int size = snprintf(observation, sizeof(observation),
+            "{\"pid\":%ld,\"fd\":%d,\"gate_fd\":%d,\"read_syscall\":%ld,"
+            "\"send_errno\":%d,\"packet_bytes\":%zu}",
+            (long)getpid(), fd, status_gate_fd, (long)SYS_read, send_error, length);
+        if (size > 0 && (size_t)size < sizeof(observation))
+            event('M', observation, (size_t)size);
+        /* Hold only after the real terminal send returned EAGAIN.
+           The host proves this read is pending before changing M or signalling. */
         char byte;
-        ssize_t count = syscall(SYS_read, status_gate_fd, &byte, 1);
-        if (count < 0)
+        if (syscall(SYS_read, status_gate_fd, &byte, 1) < 0)
             return -1;
-        errno = EAGAIN;
+        errno = EIO;
         return -1;
     }
-    return syscall(SYS_sendto, fd, buffer, length, flags, NULL, 0);
+    errno = send_error;
+    return count;
 }

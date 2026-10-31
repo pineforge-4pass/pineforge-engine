@@ -11,10 +11,12 @@ import base64
 from contextlib import ExitStack, contextmanager
 import ctypes
 from dataclasses import dataclass, field
+import errno
 import fcntl
 import json
 import os
 from pathlib import Path
+import select
 import selectors
 import signal
 import socket
@@ -280,16 +282,22 @@ def launch(request=None, *, options=(), environment=None, status="valid",
 
     ``status`` tests absent, pipe, stream, reserved, closed and wrong-direction
     endpoints. ``alias`` duplicates real open endpoints, not just fd numbers.
+    Both status stall modes prefill M to EAGAIN and hold S after its real
+    failed send. ``gate_status`` drains that backlog before cancellation;
+    ``saturate_status`` keeps it unread through S's exit.
     The process timeout is the TEST host watchdog, independent of S's clock.
     """
     require_supervisor()
+    status_stall = saturate_status or gate_status
+    if saturate_status and gate_status:
+        raise AssertionError("choose one TEST status release policy")
     attempt = uuid.uuid4().hex
     with ExitStack() as fixtures, tempfile.TemporaryDirectory(
             prefix="pf-report-channel-") as directory, ExitStack() as stack:
         # Every sink row needs actual receipt bytes in a failure message,
         # including rows that do not otherwise inspect observer events.
         if observer is None and (
-                sink or gate_status or alias in ("report_sink", "diagnostic_sink", "status_sink")):
+                sink or status_stall or alias in ("report_sink", "diagnostic_sink", "status_sink")):
             observer = fixtures.enter_context(validator_observer())
         request_path = Path(directory) / "request.json"
         request_path.write_text(json.dumps(request or {}), encoding="utf-8")
@@ -320,23 +328,39 @@ def launch(request=None, *, options=(), environment=None, status="valid",
         stack.callback(status_host.close)
         stack.callback(status_child.close)
         status_backlog = []
-        if saturate_status:
+        status_prefill = {}
+        status_probe = None
+        if status_stall:
+            # Allow a whole terminal packet, then fill the actual granted queue.
+            # Linux doubles/clamps these requests; a small request is not a stall.
+            status_child.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+            status_host.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+            status_prefill = {
+                "send_buffer_bytes": status_child.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF),
+                "receive_buffer_bytes": status_host.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF),
+            }
+            if status_prefill["send_buffer_bytes"] <= 65536 + 32:
+                raise AssertionError(f"TEST M cannot hold a terminal packet: {status_prefill}")
             status_child.setblocking(False)
-            for size in (65536, 1):
+            for size in (min(65536, status_prefill["send_buffer_bytes"] // 4), 1):
                 filler = b"q" * size
                 while True:
                     try:
                         count = status_child.send(filler)
-                    except BlockingIOError:
+                    except BlockingIOError as error:
+                        status_prefill["eagain_errno"] = error.errno
                         break
                     if count != size:
                         raise AssertionError("short TEST status prefill")
                     status_backlog.append(filler)
             if not status_backlog:
                 raise AssertionError("TEST status queue was not saturated")
+            status_prefill.update(
+                packets=len(status_backlog), payload_bytes=sum(map(len, status_backlog)))
+            status_probe = fixtures.enter_context(status_child.dup())
         inherited = [status_child.fileno()]
         gate_read = gate_write = None
-        if gate_status:
+        if status_stall:
             gate_read, gate_write = os.pipe()
             all_fds.update((gate_read, gate_write))
             stack.callback(os.close, gate_read)
@@ -429,18 +453,26 @@ def launch(request=None, *, options=(), environment=None, status="valid",
         trace = None
         if observer is not None:
             trace = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            fixtures.callback(trace.close)
             trace.bind(str(Path(directory) / "trace"))
             trace.setblocking(False)
             env.update(LD_PRELOAD=str(observer), PF_REPORT_TEST_TRACE=str(Path(directory) / "trace"))
             if pause_probe:
                 env["PF_REPORT_TEST_PAUSE_PROBE"] = "1"
-            if gate_status:
+            if status_stall:
                 env["PF_REPORT_TEST_STATUS_GATE_FD"] = str(gate_read)
             if audit_stdout:
                 env["PF_REPORT_TEST_STDOUT_AUDIT"] = "1"
             if receipt_hold is not None:
                 env["PF_REPORT_TEST_HOLD_RECEIPT"] = receipt_hold
         flag_probes, flags_before, flags_after = {}, {}, {}
+
+        def close_flag_probes():
+            while flag_probes:
+                _, fd = flag_probes.popitem()
+                os.close(fd)
+
+        fixtures.callback(close_flag_probes)
         if endpoint_nonblocking is not None:
             for fd, nonblocking in zip((report_write, diagnostic_write), endpoint_nonblocking):
                 os.set_blocking(fd, not nonblocking)
@@ -476,34 +508,94 @@ def launch(request=None, *, options=(), environment=None, status="valid",
         delayed_diagnostic = diagnostic_read if diagnostic_delay_ms else None
         diagnostic_read_at = launched + diagnostic_delay_ms / 1000
         held_readers = {}
-        for name, fd in (("report", report_read), ("diagnostic", diagnostic_read),
-                         ("sink", sink_read), *extra_readers.items()):
-            if fd is not None:
-                os.set_blocking(fd, False)
-                if name in stalled_channels:
-                    held_readers[name] = fd
-                elif fd != delayed_diagnostic:
-                    selector.register(fd, selectors.EVENT_READ, name)
-        status_host.setblocking(False)
-        if saturate_status:
-            held_readers["status"] = status_host.fileno()
-        else:
-            selector.register(status_host, selectors.EVENT_READ, "status")
         validator_events, stopped_validators = [], set()
         host_paused_validators = set()
         control = {"stalled_at": {}, "cancelled_at": None, "exited_at": None,
                    "host_paused_validators": [], "held_until_exit": [],
-                   "status_prefill_packets": len(status_backlog), "supervisor_pid": process.pid}
+                   "status_prefill_packets": len(status_backlog), "status_prefill": status_prefill,
+                   "supervisor_pid": process.pid}
         descendant_samples = []
-        if trace is not None:
-            selector.register(trace, selectors.EVENT_READ, "trace")
+
+        def unwatch(fd):
+            if fd in selector.get_map():
+                selector.unregister(fd)
+
+        def pending_bytes(fd):
+            pending = array.array("i", [0])
+            fcntl.ioctl(fd, termios.FIONREAD, pending, True)
+            return pending[0]
+
+        def current_capture():
+            return Capture(
+                bytes(output["report"]), bytes(output["diagnostic"]),
+                bytes(output["sink"]), packets, flags, process.poll(), attempt, eof,
+                validator_events, stopped_validators, flags_before, flags_after,
+                descendant_samples, time.monotonic() - launched, control)
+
+        def require_precondition(condition, message):
+            if not condition:
+                raise AssertionError(f"{message}; {current_capture().failure_context()}")
+
+        def status_gate_state():
+            observation = control.get("status_pending_send")
+            if observation is None:
+                return None
+            info = process_info(process.pid)
+            if info is None or info["state"] != "S":
+                return None
+            try:
+                syscall = Path(f"/proc/{process.pid}/syscall").read_text().strip()
+            except FileNotFoundError:
+                return None
+            fields = syscall.split()
+            if (len(fields) < 4 or fields[0] == "running"
+                    or int(fields[0], 0) != observation["read_syscall"]
+                    or int(fields[1], 0) != gate_read or int(fields[3], 0) != 1):
+                return None
+            socket_target = os.readlink(f"/proc/{process.pid}/fd/{observation['fd']}")
+            gate_target = os.readlink(f"/proc/{process.pid}/fd/{gate_read}")
+            require_precondition(
+                socket_target == f"socket:[{os.fstat(status_probe.fileno()).st_ino}]"
+                and gate_target == f"pipe:[{os.fstat(gate_write).st_ino}]",
+                "pending send does not own the host's M socket and gate")
+            return {"at": time.monotonic() - launched, "process": info,
+                    "syscall": syscall, "socket": socket_target, "gate": gate_target}
+
+        def require_full_status():
+            try:
+                status_probe.send(b"q", socket.MSG_DONTWAIT)
+            except BlockingIOError as error:
+                require_precondition(
+                    error.errno in (errno.EAGAIN, errno.EWOULDBLOCK),
+                    "unexpected TEST status probe error")
+                return error.errno
+            raise AssertionError(
+                f"M accepted a host probe before cancellation; {current_capture().failure_context()}")
+
         deadline = time.monotonic() + watchdog_seconds
         try:
+            for name, fd in (("report", report_read), ("diagnostic", diagnostic_read),
+                             ("sink", sink_read), *extra_readers.items()):
+                if fd is not None:
+                    os.set_blocking(fd, False)
+                    if name in stalled_channels:
+                        held_readers[name] = fd
+                    elif fd != delayed_diagnostic:
+                        selector.register(fd, selectors.EVENT_READ, name)
+            status_host.setblocking(False)
+            if status_stall:
+                held_readers["status"] = status_host.fileno()
+            else:
+                selector.register(status_host, selectors.EVENT_READ, "status")
+            if trace is not None:
+                selector.register(trace, selectors.EVENT_READ, "trace")
             while selector.get_map() or delayed_diagnostic is not None or held_readers:
                 now = time.monotonic()
                 ended = process.poll() is not None
                 if ended and control["exited_at"] is None:
                     control["exited_at"] = now - launched
+                if ended and status_probe is not None:
+                    status_probe.close()
                 for name, fd in tuple(held_readers.items()):
                     if ended:
                         selector.register(
@@ -511,19 +603,55 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                         control["held_until_exit"].append(name)
                         del held_readers[name]
                     elif name != "status" and name not in control["stalled_at"]:
-                        pending = array.array("i", [0])
-                        fcntl.ioctl(fd, termios.FIONREAD, pending, True)
-                        if pending[0] == 4096:
+                        if pending_bytes(fd) == 4096:
                             control["stalled_at"][name] = now - launched
-                if (saturate_status and not ended and {"report", "diagnostic"} <= eof
-                        and "status" not in control["stalled_at"]):
-                    # Both data fds are closed by S before terminal delivery.
-                    # The inherited M send queue is still full and unread.
-                    control["stalled_at"]["status"] = now - launched
+                status_phase = "status_ready" if gate_status else "status"
+                if (status_stall and not ended and {"report", "diagnostic"} <= eof
+                        and status_phase not in control["stalled_at"]):
+                    state = status_gate_state()
+                    if state is not None:
+                        control["status_gate_observed"] = state
+                        control["status_probe_errno"] = require_full_status()
+                        control["stalled_at"][status_phase] = time.monotonic() - launched
                 stalled_at = control["stalled_at"].get(cancel_channel)
                 if (cancel_channel is not None and not ended
                         and control["cancelled_at"] is None and stalled_at is not None
                         and now - launched >= stalled_at + cancel_delay_ms / 1000):
+                    before = {"phase": cancel_channel}
+                    if cancel_channel in ("status", "status_ready"):
+                        state = status_gate_state()
+                        require_precondition(state is not None, "S left its pending M send")
+                        before.update(status_gate=state, status_probe_errno=require_full_status())
+                        if gate_status:
+                            drained = 0
+                            while status_backlog:
+                                data, ancillary, packet_flags, _ = status_host.recvmsg(65537)
+                                require_precondition(
+                                    data == status_backlog[0] and not ancillary and not packet_flags,
+                                    "TEST status backlog changed before cancellation")
+                                status_backlog.pop(0)
+                                drained += 1
+                            require_precondition(
+                                bool(select.select([], [status_probe], [], 0)[1]),
+                                "M did not become writable after draining TEST backlog")
+                            require_precondition(
+                                status_gate_state() is not None,
+                                "S left the pending send before M became writable")
+                            control["status_released_at"] = time.monotonic() - launched
+                            control["status_release_packets"] = drained
+                            before["status_writable"] = True
+                            selector.register(status_host, selectors.EVENT_READ, "status")
+                            del held_readers["status"]
+                        status_probe.close()
+                    else:
+                        require_precondition(
+                            cancel_channel in held_readers
+                            and pending_bytes(held_readers[cancel_channel]) == 4096,
+                            "data pipe was not still full before cancellation")
+                        before["pending_bytes"] = 4096
+                    require_precondition(not packets, "S sent a terminal packet before cancellation")
+                    before["at"] = time.monotonic() - launched
+                    control["pre_cancel"] = before
                     os.kill(process.pid, cancel_signal)
                     control["cancelled_at"] = time.monotonic() - launched
                 if delayed_diagnostic is not None and time.monotonic() >= diagnostic_read_at:
@@ -545,10 +673,9 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                     except (FileNotFoundError, ValueError):
                         pass
                 if process.poll() is not None and flag_probes:
-                    for name, fd in flag_probes.items():
+                    for name, fd in tuple(flag_probes.items()):
                         flags_after[name] = fcntl.fcntl(fd, fcntl.F_GETFL)
-                        os.close(fd)
-                    flag_probes.clear()
+                        os.close(flag_probes.pop(name))
                 if time.monotonic() >= deadline:
                     control["watchdog_pending_bytes"] = {}
                     for name, fd in held_readers.items():
@@ -586,7 +713,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                             flags.append(packet_flags | (socket.MSG_CTRUNC if ancillary else 0))
                         else:
                             eof.add("status")
-                            selector.unregister(key.fileobj)
+                            unwatch(key.fd)
                     else:
                         data = os.read(key.fd, 65536)
                         if data:
@@ -599,7 +726,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                             output[key.data].extend(data)
                         else:
                             eof.add(key.data)
-                            selector.unregister(key.fileobj)
+                            unwatch(key.fd)
                 for event in validator_events:
                     if event[:1] == b"G":
                         pid = int(event[1:])
@@ -621,9 +748,16 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                             }
                         continue
                     if event[:1] == b"M":
-                        control.setdefault("status_gate_pid", int(event[1:]))
-                        control["stalled_at"].setdefault(
-                            "status_ready", time.monotonic() - launched)
+                        observation = json.loads(event[1:])
+                        require_precondition(
+                            status_stall and observation["pid"] == process.pid
+                            and observation["gate_fd"] == gate_read
+                            and observation["send_errno"] in (errno.EAGAIN, errno.EWOULDBLOCK)
+                            and 0 < observation["packet_bytes"] <= 65536,
+                            "observer did not report a real pending terminal send")
+                        require_precondition(
+                            observation == control.setdefault("status_pending_send", observation),
+                            "more than one terminal send entered the TEST gate")
                         continue
                     if event[:1] == b"S" and pause_validator_until_wall:
                         pid = int(event[1:])
@@ -643,44 +777,72 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                         stopped_validators.add(pid)
                         if (pause_validator_until_wall
                                 and not control.get("native_released_at")):
+                            info = process_info(pid)
+                            require_precondition(
+                                info is not None and info["state"] == "T",
+                                "V was not stopped before releasing native input")
+                            control["native_release_precondition"] = {
+                                "at": time.monotonic() - launched, "validator": info}
                             Path(request["native_release_path"]).touch()
                             control["native_released_at"] = time.monotonic() - launched
                 hold = control.get("receipt_hold")
                 if (hold is not None and "released_at" not in hold
                         and time.monotonic() - launched >= hold["stopped_at"] + 0.2):
+                    info = process_info(hold["pid"])
+                    require_precondition(
+                        info is not None and info["state"] == "T",
+                        "V was not stopped before releasing its receipt hold")
+                    receipt = b"".join(
+                        event[1:] for event in validator_events if event[:1] == b"R")
+                    report_queued = pending_bytes(report_read)
+                    sink_queued = pending_bytes(sink_read)
+                    require_precondition(
+                        not output["report"] and not output["sink"]
+                        and report_queued == 0 and sink_queued == 0,
+                        "publication occurred while V was held")
+                    require_precondition(
+                        not receipt if receipt_hold == "before" else
+                        bool(receipt) and json.loads(receipt)["complete"] is True,
+                        "V did not reach the requested receipt boundary")
                     hold.update(
                         report_bytes_while_stopped=len(output["report"]),
                         sink_bytes_while_stopped=len(output["sink"]),
-                        receipt_bytes_while_stopped=len(b"".join(
-                            event[1:] for event in validator_events if event[:1] == b"R")),
-                        released_at=time.monotonic() - launched,
-                        validator_before_release=process_info(hold["pid"]))
+                        report_queued_while_stopped=report_queued,
+                        sink_queued_while_stopped=sink_queued,
+                        receipt_bytes_while_stopped=len(receipt),
+                        release_checked_at=time.monotonic() - launched,
+                        validator_before_release=info)
                     os.kill(hold["pid"], signal.SIGCONT)
-                if (trace is not None and process.poll() is not None
+                    hold["released_at"] = time.monotonic() - launched
+                if (trace is not None and trace.fileno() in selector.get_map()
+                        and process.poll() is not None
                         and all(key.data == "trace" for key in selector.get_map().values())):
                     while True:
                         try:
                             validator_events.append(trace.recv(65537))
                         except BlockingIOError:
                             break
-                    selector.unregister(trace)
+                    unwatch(trace.fileno())
             wait = process.wait(timeout=max(0.01, deadline - time.monotonic()))
             if control["exited_at"] is None:
                 control["exited_at"] = time.monotonic() - launched
             if status_backlog:
                 raise AssertionError("TEST status backlog did not drain after S exit")
         finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=2)
-            selector.close()
-            status_host.close()
-            if trace is not None:
-                trace.close()
-            for fd in flag_probes.values():
-                os.close(fd)
-            for fd in owned_readers:
-                os.close(fd)
+            try:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=2)
+            finally:
+                for fd in tuple(selector.get_map()):
+                    unwatch(fd)
+                selector.close()
+                status_host.close()
+                if trace is not None:
+                    trace.close()
+                close_flag_probes()
+                for fd in owned_readers:
+                    os.close(fd)
         return Capture(bytes(output["report"]), bytes(output["diagnostic"]),
                        bytes(output["sink"]), packets, flags, wait, attempt, eof,
                        validator_events, stopped_validators,
@@ -699,16 +861,16 @@ def reference(request):
             reader, writer = os.pipe()
             environment["PINEFORGE_REPORT_REFERENCE_SINK_FD"] = str(writer)
         try:
-            result = subprocess.run(
-                [sys.executable, "-B", str(PRODUCER), str(path), "--reference"],
-                capture_output=True, env=environment, check=False, timeout=10,
-                pass_fds=() if writer is None else (writer,))
-        finally:
-            if writer is not None:
-                os.close(writer)
-        try:
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-B", str(PRODUCER), str(path), "--reference"],
+                    capture_output=True, env=environment, check=False, timeout=10,
+                    pass_fds=() if writer is None else (writer,))
+            finally:
+                if writer is not None:
+                    os.close(writer)
             result.sink = b"" if reader is None else os.read(reader, 65536)
+            return result
         finally:
             if reader is not None:
                 os.close(reader)
-        return result
