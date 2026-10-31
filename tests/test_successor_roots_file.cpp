@@ -3,6 +3,7 @@
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
 
+#include <pineforge/cache_policy.hpp>
 #include <pineforge/native_order.hpp>
 
 #include <array>
@@ -42,6 +43,12 @@ struct Driver {
     std::uint64_t incarnation = 1;
     std::uint64_t ordinal = 1;
     no::CommandContext context{};
+
+    Driver() = default;
+    explicit Driver(pineforge::CacheCapacity root_cache)
+        : core({"roots", 1}, root_cache,
+               pineforge::CacheDefaults{}.receipt_tail_pages,
+               pineforge::CacheDefaults{}.chain_segment_pages) {}
 
     no::RequestHandle submit() {
         const auto result = core.submit(request(), 0, incarnation, ordinal);
@@ -347,7 +354,11 @@ void partial_write_is_retryable() {
 
 void truncated_read_fails() {
     ScratchDirectory scratch;
-    Driver driver;
+    // A one-row cache cannot retain an entire binary-search path. In
+    // particular, the next search starts at row 32 and must reload row 63
+    // after the healthy lookup, observing the real truncated backing.
+    const auto root_cache = pineforge::CacheDefaults::lines(2 * sizeof(std::uint64_t), 1);
+    Driver driver(root_cache);
     driver.core.set_successor_roots_directory(scratch.path);
     auto tail = driver.submit();
     no::RequestHandle last_on_disk;
@@ -358,15 +369,24 @@ void truncated_read_fails() {
     const auto cohort = driver.core.cohort_open();
     driver.core.cohort_add(cohort, tail);
     require(driver.core.cohort_contains(cohort, last_on_disk), "last disk row is readable");
+    const auto healthy = driver.core.tail_read_cache_stats(no::TailWindowKind::successor_roots);
+    require(healthy.current_bytes == root_cache.capacity_bytes && healthy.evictions != 0,
+            "healthy binary search uses and evicts the one-row cache");
     const int fd = root_file_descriptor(64 * 16);
     require(::ftruncate(fd, 63 * 16 + 8) == 0, "test cuts the last row midway");
     bool failed = false;
     try {
         (void)driver.core.cohort_contains(cohort, last_on_disk);
     } catch (const std::system_error& error) {
-        failed = error.code().value() == EIO;
+        failed = error.code() == std::error_code(EIO, std::generic_category());
+        require(pineforge::classify_run_failure(error).code
+                    == pineforge::RunFailureCode::scratch_io_failed,
+                "truncated authoritative read retains its typed scratch failure");
     }
     require(failed, "truncated read fails instead of inventing a different root");
+    require(driver.core.tail_read_cache_stats(no::TailWindowKind::successor_roots).io_errors
+                == healthy.io_errors + 1,
+            "truncated row reaches the cache reader and propagates");
 }
 
 }  // namespace

@@ -271,9 +271,13 @@ Journal::Prefix Journal::folded_window() const {
     auto retained_rejected_bar = retired_prefix_.last_rejected_command_bar;
     const auto append = [&](const detail::ScratchByteSource& source, detail::ScratchBuffer page) {
         JournalRecordSummary summary;
-        CodecState::check(scan_journal_record(source,page,summary), codec_.get());
+        std::optional<detail::ReportScratchIoError> failure;
+        const auto status = fold_validated_journal_record(source,page,summary,result.digest,
+                                                          result.last_sequence,&failure);
+        if (status == detail::ScratchStatus::io_error && failure)
+            detail::rethrow_carried_scratch_failure(&*failure);
+        CodecState::check(status, codec_.get());
         if (summary.sequence <= result.last_sequence) return;
-        CodecState::check(fold_journal_record(source,page,result.digest), codec_.get());
         if (result.count == std::numeric_limits<std::size_t>::max())
             throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
                                               "admission event count exhausted");

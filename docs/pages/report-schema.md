@@ -421,6 +421,20 @@ The replay converter retains valid supplied fields and reads older reports
 without them, without inferring a profile or successful admission.
 These diagnostics leave sink wire and fingerprint versions unchanged.
 
+When the module exports `pf_report_cache_stats`, the host queries it after report
+assembly and before strategy release for ordinary and selected runs:
+
+| JSON pointer | JSON type | Presence and meaning |
+| --- | --- | --- |
+| `/diagnostics/cache_resident_bytes` | integer | Present only with the getter and a positive allocation bypass count, together with the bypass fields: current live command-cache control/slabs plus the ledger's fixed workspace, allocated private directory and entry pages, each counted once. Separate from arena claims and backing-file bytes. |
+| `/diagnostics/cache_bypass_reason` | string | Present only with a positive bypass count; exactly `"alloc_failed"`. |
+| `/diagnostics/allocation_bypass_count` | integer | Present only when greater than zero: the admitted run's total optional command-slab and ledger-directory/page allocation bypasses, including released command owners. Repeated reads of a sticky bypass do not add events. |
+
+All three cache fields are absent at zero; a cache disabled by policy adds no event.
+Older modules without the getter omit all three fields. Admission starts a new
+accounting lifetime. These diagnostics add no fields to `pf_report_t` or the
+72-byte `pf_report_sink_diagnostics_v1`, and leave ABI 5 unchanged.
+
 `report_sink` is a reference, not an embedded sink header. Its members are
 present in exactly this order, matching `REFERENCE_KEYS` in
 `tests/test_run_json_sink_summary.py` and the selected pin's assertion:

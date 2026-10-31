@@ -21,6 +21,23 @@
 
 namespace pineforge::detail {
 
+void CommandScratchPhysicalIoStats::charge(void* context, const ScratchIoCharge& io) noexcept {
+    auto& self = *static_cast<CommandScratchPhysicalIoStats*>(context);
+    const auto add = [](std::uint64_t& counter, std::uint64_t value) noexcept {
+        const auto maximum = std::numeric_limits<std::uint64_t>::max();
+        counter = value > maximum - counter ? maximum : counter + value;
+    };
+    if (io.operation == ScratchIoOperation::read_page) {
+        add(self.reads, 1);
+        add(self.read_bytes, io.bytes);
+        if (io.status == ScratchStatus::ok) add(self.completed_reads, 1);
+    } else if (io.operation == ScratchIoOperation::write_page) {
+        add(self.writes, 1);
+        add(self.write_bytes, io.bytes);
+    } else add(self.syncs, 1);
+    if (io.status != ScratchStatus::ok) add(self.failures, 1);
+}
+
 bool CommandScratchByteBudget::reserve(std::uint64_t bytes) noexcept {
     if (limit == 0) return true;
     auto used = live_bytes.load(std::memory_order_relaxed);
@@ -71,6 +88,7 @@ std::uint64_t scale_bytes(std::uint64_t value, std::uint64_t multiplier,
 }
 
 thread_local ScratchIoObserver command_scratch_observer{};
+thread_local ScratchIoObserver command_scratch_physical_observer{};
 thread_local CommandScratchByteCap command_scratch_byte_cap;
 thread_local std::weak_ptr<CommandScratchByteBudget> command_scratch_environment_budget;
 
@@ -393,6 +411,12 @@ pineforge::detail::ScratchIoObserver set_command_scratch_io_observer(
     return previous;
 }
 
+ScratchIoObserver set_command_scratch_physical_io_observer(ScratchIoObserver observer) noexcept {
+    const auto previous = command_scratch_physical_observer;
+    command_scratch_physical_observer = observer;
+    return previous;
+}
+
 CommandScratchByteCap set_command_scratch_byte_cap(std::uint64_t bytes) {
     return set_command_scratch_byte_cap(std::make_shared<CommandScratchByteBudget>(bytes));
 }
@@ -407,8 +431,19 @@ std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
     return make_command_scratch_backing(page_size, CachedScratchBacking::kCacheBytes);
 }
 
+std::unique_ptr<ScratchBacking> make_command_scratch_backing(
+    std::size_t page_size, CacheCapacity capacity) {
+    const auto payload = capacity.payload_bytes(page_size);
+    return make_command_scratch_backing(page_size, payload, payload);
+}
+
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
     std::size_t page_size, std::size_t resident_bytes) {
+    return make_command_scratch_backing(page_size, resident_bytes, CachedScratchBacking::kCacheBytes);
+}
+
+std::unique_ptr<ScratchBacking> make_command_scratch_backing(
+    std::size_t page_size, std::size_t resident_bytes, std::size_t cache_bytes) {
     if (page_size == 0)
         throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
                                            "command scratch page size is zero");
@@ -425,16 +460,18 @@ std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
             command_scratch_environment_budget = budget;
         }
     }
-    // The cache decorator owns the logical I/O observer (it charges hits too):
-    // the inner backing, file or arena, is constructed with NO observer.
+    // Only the cache decorator owns the logical observer (it charges hits too).
+    // The independent diagnostic observer sees inner operations, never hits.
+    // Its optional allocation may bypass caching. Disk byte admission still
+    // belongs to the decorator; arena admission still belongs to the inner.
     if (const auto* arena = ScratchArena::attached())
         return std::make_unique<CachedScratchBacking>(
             std::make_unique<CommandScratchArena>(
-                page_size, ScratchIoObserver{}, std::move(budget), arena->stats()),
-            command_scratch_observer);
+                page_size, command_scratch_physical_observer, std::move(budget), arena->stats()),
+            command_scratch_observer, 0, CommandScratchByteCap{}, cache_bytes);
     return std::make_unique<CachedScratchBacking>(
-        std::make_unique<CommandScratchFile>(page_size, ScratchIoObserver{}),
-        command_scratch_observer, resident_bytes, std::move(budget));
+        std::make_unique<CommandScratchFile>(page_size, command_scratch_physical_observer),
+        command_scratch_observer, resident_bytes, std::move(budget), cache_bytes);
 }
 
 } // namespace pineforge::detail

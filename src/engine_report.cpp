@@ -3,6 +3,7 @@
  */
 
 #include "engine_internal.hpp"
+#include <pineforge/cache_policy.hpp>
 #include "native_execution_consumer.hpp"
 #include "selected_report_view.hpp"
 #include <pineforge/metrics_stream.hpp>
@@ -960,15 +961,15 @@ namespace pineforge {
 namespace {
 
 constexpr double kUnwrittenOutput = std::numeric_limits<double>::quiet_NaN();
-// TradingView Pine Script, Writing scripts > Limitations > Chart visuals > Plot limits:
-// "A maximum of 64 plot counts are allowed per script".
-constexpr int kMaxOutputSeries = 64;
+// The optional operator limit is snapshotted before a host constructor runs.
+// Its typed refusal remains readable even when the factory returns no handle.
+[[noreturn]] void refuse_series_limit(std::int64_t maximum);
 
 [[noreturn]] void refuse_output(const std::string& text) {
     throw coded<std::logic_error>(RunFailureCode::engine_invariant, {}, "outputs: " + text);
 }
 
-[[noreturn]] void refuse_output_limit(const char* reason, const char* text, int max = INT_MAX) {
+[[noreturn]] void refuse_output_limit(const char* reason, const char* text, std::int64_t max = INT_MAX) {
     throw coded<std::runtime_error>(RunFailureCode::outputs_limit,
                                     {{"reason", reason}, {"max", max}}, text);
 }
@@ -1052,9 +1053,9 @@ void BacktestEngine::declare_outputs(int series_slots, int outputs, int run_cons
     if (series_slots < 0 || outputs < 0 || run_constants < 0)
         refuse_output("declared counts must not be negative");
     if (output_host_running()) refuse_output("declare_outputs while a run is in progress");
-    if (series_slots > kMaxOutputSeries)
-        refuse_output_limit("too_many_series", "outputs: the series count is at its limit",
-                            kMaxOutputSeries);
+    if (max_output_series_ && series_slots > *max_output_series_)
+        refuse_series_limit(*max_output_series_);
+
     if (outputs_declared_) {
         if (series_slots != outputs_slots_ || outputs != outputs_count_
             || run_constants != outputs_constants_) {
@@ -1788,14 +1789,15 @@ void BacktestEngine::stage_report_sink_equity_tail(const ReportC* out) const {
 }
 
 void BacktestEngine::compute_report_sink_metrics(ReportC* out,
-                                                std::int64_t equity_count) const {
+                                                std::int64_t equity_count,
+                                                CacheCapacity equity_capacity) const {
     try {
         const auto region = report_sink_state_.equity_scratch->region();
         if (region.point_count != equity_count)
             throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                 "ordinary sink metric curve differs from its captured point count");
         compute_report_sink_trade_metrics(out, out->trades, out->trades_len);
-        const report_sink::ScratchCurveWindow curve(region);
+        const report_sink::ScratchCurveWindow curve(region, equity_capacity);
         out->metrics.equity = metrics::compute_equity_stats(
             curve, equity_count, initial_capital_, chart_timezone_, first_bar_open_,
             current_bar_.close, bars_in_market_, out->net_profit);
@@ -1816,7 +1818,8 @@ void BacktestEngine::fill_report_sink_metrics_section(ReportC* out) const {
         out->equity_curve = held ? new pf_equity_point_t[1]{*held} : nullptr;
         present_report_equity_tail(out);
         stage_report_sink_equity_tail(out);
-        compute_report_sink_metrics(out, report_sink_state_.equity_scratch->size());
+        compute_report_sink_metrics(out, report_sink_state_.equity_scratch->size(),
+                                    cache_policy_for_run().equity_curve_pages);
     } catch (...) {
         free_report(out);
         *out = {};
@@ -2483,4 +2486,40 @@ int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
     return PF_REPORT_MODE_ACCEPTED;
 }
 
+}  // namespace pineforge
+
+#include <pineforge/checked_settings.hpp>
+
+namespace pineforge {
+namespace {
+thread_local std::optional<std::int64_t> output_series_default;
+thread_local std::optional<std::int64_t> output_series_refused_max;
+
+[[noreturn]] void refuse_series_limit(std::int64_t maximum) {
+    output_series_refused_max = maximum;
+    refuse_output_limit("too_many_series", "outputs: the series count is at its limit", maximum);
+}
+}  // namespace
+
+int BacktestEngine::set_output_series_limit_checked(
+        const std::int64_t* maximum, char* error, std::size_t capacity) noexcept {
+    return checked_settings::boundary(error, capacity, [&] {
+        checked_settings::require(!maximum || *maximum >= 0,
+                                  "max output series must not be negative");
+        output_series_default = maximum && *maximum > 0
+            ? std::optional<std::int64_t>(*maximum) : std::nullopt;
+        output_series_refused_max.reset();
+    });
+}
+
+int BacktestEngine::output_series_limit_failure(std::int64_t* maximum) noexcept {
+    if (!maximum) return -1;
+    if (!output_series_refused_max) return 0;
+    *maximum = *output_series_refused_max;
+    return 1;
+}
+
+std::optional<std::int64_t> BacktestEngine::default_output_series_limit() noexcept {
+    return output_series_default;
+}
 }  // namespace pineforge
