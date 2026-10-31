@@ -305,6 +305,70 @@ void failed_refill(const char* directory, std::size_t bytes) {
             "failed refill preserves every unchanged early point");
     require(equal(curve[curve.size() - 1], points.back()), "repaired cold backing is retryable");
 }
+
+void failed_adjacent_block_refill(const char* directory) {
+    rs::ScratchFile backing(directory);
+    const auto points = bit_pattern_points(2 * rs::kScratchWindowPoints + 1);
+    backing.write(0, points.data(), points.size() * sizeof(points[0]));
+    const pineforge::metrics::ScratchCurveRegion region{
+        backing.descriptor(), 0, static_cast<std::int64_t>(points.size())};
+    rs::ScratchReadStats inner;
+    rs::ScratchCurveWindow curve(region, sizeof(pf_equity_point_t), &inner);
+    // One point of payload reserves exactly one complete shared cache line.
+    require(curve.cache_capacity_bytes() == sizeof(pf_equity_point_t),
+            "adjacent short-read row uses a single point cache line");
+    // The recovery probe must distinguish the old block from its replacement.
+    require(!equal(points[5], points[rs::kScratchWindowPoints + 5]),
+            "old and replacement block probes have distinct bits");
+    // Lookup 0 reads and retains one point; lookup 1 is already an adjacent
+    // miss and fills block 0. Every expected point was written above verbatim.
+    for (std::size_t i = 0; i != rs::kScratchWindowPoints; ++i)
+        require(equal(curve[static_cast<std::int64_t>(i)], points[i]),
+                "prime the complete old block with exact point bytes");
+    // One initial point plus one complete block; later misses use that block.
+    require(inner.bytes == (rs::kScratchWindowPoints + 1) * sizeof(points[0]),
+            "forward walk fills the aligned old block");
+
+    const auto cut = (rs::kScratchWindowPoints + 2000) * sizeof(points[0])
+        + sizeof(points[0]) / 2;
+    // This open descriptor can be shortened inside block 1, after point 5
+    // of that block and halfway through its point 2000.
+    require(::ftruncate(backing.descriptor(), static_cast<off_t>(cut)) == 0,
+            "truncate the adjacent block inside a point");
+    const auto before = inner.calls;
+    const auto before_bytes = inner.bytes;
+    bool failed = false;
+    try {
+        // The preceding lookup was the last point of block 0, so this miss
+        // requests all of block 1 rather than its intact first point alone.
+        (void)curve[static_cast<std::int64_t>(rs::kScratchWindowPoints)];
+    } catch (const std::system_error& error) {
+        const auto failure = pineforge::classify_run_failure(error);
+        // read_exact reaches EOF after a positive prefix and raises EIO
+        // through ReportScratchIoError, whose code is report_sink_failed.
+        require(error.code().value() == EIO
+                    && failure.code == pineforge::RunFailureCode::report_sink_failed,
+                "adjacent short block keeps its typed I/O failure");
+        failed = true;
+    }
+    // EOF must throw after reaching the raw descriptor, not publish a block.
+    require(failed && inner.calls > before,
+            "short adjacent block read fails at the actual backing");
+    // read_exact counts the 2000 complete points and half-point before EOF.
+    require(inner.bytes - before_bytes
+                == cut - rs::kScratchWindowPoints * sizeof(points[0]),
+            "failed adjacent fill overwrites a positive block prefix");
+
+    const auto retry_bytes = inner.bytes;
+    // Point 5's file bytes are intact and its shared line is cold. Clearing
+    // count forces a reread; retaining block 0's tag would return point
+    // kScratchWindowPoints + 5 from the overwritten array element instead.
+    require(equal(curve[5], points[5]),
+            "failed adjacent fill leaves no partially overwritten block in use");
+    // Index 5 is nonadjacent to the last successful lookup, so only it is read.
+    require(inner.bytes == retry_bytes + sizeof(points[0]),
+            "recovery reads the intact early point from backing");
+}
 } // namespace
 
 int main() {
@@ -337,6 +401,7 @@ int main() {
         for (const auto bytes : {std::size_t{0}, sizeof(pf_equity_point_t),
                                  2 * sizeof(pf_equity_point_t), rs::kScratchWindowBytes})
             failed_refill(directory.path, bytes);
+        failed_adjacent_block_refill(directory.path);
         std::puts("curve capacity sweep passed");
         return 0;
     } catch (const std::exception& error) {

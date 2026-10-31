@@ -338,7 +338,7 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 
 | Physical user | Logical peak bytes | Code evidence |
 | --- | --- | --- |
-| Equity writer / selected hold-back / SpillCurve | 24*E | `pf_equity_point_t` size assertion `include/pineforge/metrics_stream.hpp:16`; `src/report_scratch.cpp:232` |
+| Equity writer / selected hold-back / SpillCurve | 24*E | `pf_equity_point_t` size assertion `include/pineforge/metrics_stream.hpp:16`; `src/report_scratch.cpp:238` |
 | Position tail | (30+L)*T | `src/source/pine_position_tail.hpp:20`; footer packing at `src/source/pine_position_tail.cpp:94` |
 | Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `include/pineforge/detail/disk_id_table.hpp:109`; `CohortFacts::Record` at `include/pineforge/source/pine_adapter.hpp:2059-2062` |
 | Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:6773-6774`; `include/pineforge/detail/disk_id_table.hpp:109` |
