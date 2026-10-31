@@ -1306,6 +1306,7 @@ int run(Config c) {
                     last_data = std::chrono::steady_clock::now();
                     if (pending.empty()) message_started = last_data;
                     pending.append(buffer, static_cast<std::size_t>(n));
+                    bool consumed = false;
                     for (;;) {
                         auto end = pending.find('\n');
                         if (end == std::string::npos)
@@ -1316,8 +1317,10 @@ int run(Config c) {
                         pending.erase(0, end + 1);
                         intake_bytes = pending.size();
                         message_started = std::chrono::steady_clock::now();
-                        if (!blank(message))
+                        if (!blank(message)) {
                             consume_message(message, index);
+                            consumed = true;
+                        }
                         if (stopped || storage_stop || (c.max_events && processed >= c.max_events))
                             break;
                     }
@@ -1325,7 +1328,7 @@ int run(Config c) {
                         throw std::runtime_error("input line exceeds 1 MiB");
                     // Feed deadlines count waiting, excluding the consume pass.
                     last_data = std::chrono::steady_clock::now();
-                    if (!pending.empty()) message_started = last_data;
+                    if (consumed && !pending.empty()) message_started = last_data;
                 }
             } else {
                 std::ifstream input(c.feed);
