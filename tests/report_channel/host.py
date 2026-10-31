@@ -54,7 +54,7 @@ def clean_environment():
 def main_blob(path):
     """Read the finalizer/catalog contract from main's committed text."""
     return subprocess.run(
-        ["git", "show", f"fc62dd921:{path}"], cwd=ROOT,
+        ["git", "show", f"a86dbdc0949c5e9b49f62ff2aeac83641a22b72f:{path}"], cwd=ROOT,
         capture_output=True, check=True, timeout=30).stdout
 
 

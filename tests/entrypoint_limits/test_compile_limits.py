@@ -18,7 +18,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-BASE = "fc0a2df5deca07f8a7e59995a17e71203fb19f34"
+BASE = "a86dbdc0949c5e9b49f62ff2aeac83641a22b72f"
 ENTRYPOINT = Path(os.environ.get("PINEFORGE_ENTRYPOINT_UNDER_TEST",
                                 str(ROOT / "docker/entrypoint.sh"))).resolve()
 WALL = "PINEFORGE_COMPILE_WALL_MS"
