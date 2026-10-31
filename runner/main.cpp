@@ -90,7 +90,8 @@ void help() {
                  "         --report-jsonl=delta (mirror committed report deltas to stdout)\n"
                  "         --ratio-interval K (positive; default 1 keeps exact ratios at every input)\n"
                  "         --status-file PATH --status-interval 1 (seconds, 1..300)\n"
-                 "         --feed-idle-timeout 15 --feed-message-timeout 15 (seconds, 1..300)\n"
+                 "         --feed-idle-timeout 15 --feed-message-timeout 15 (seconds)\n"
+                 "           stdin: 0 = no limit, no upper cap; network feeds: 1..300\n"
                  "         --control-dir PATH --max-ledger-bytes N (0 disables budget)\n"
                  "         --ledger-unbounded (explicit unlimited service ledger)\n"
                  "JSONL: {\"type\":\"tick\",\"ts\":60000,\"seq\":1,\"price\":100,\"qty\":1}\n"
@@ -240,8 +241,8 @@ Config args(int argc, char **argv) {
         else if (a == "--status-file") c.status_file = v;
         else if (a == "--control-dir") c.control_dir = v;
         else if (a == "--status-interval") c.status_interval = seconds_arg(v);
-        else if (a == "--feed-idle-timeout") c.feed_idle_timeout = seconds_arg(v);
-        else if (a == "--feed-message-timeout") c.feed_message_timeout = seconds_arg(v);
+        else if (a == "--feed-idle-timeout") c.feed_idle_timeout = unsigned_arg(v);
+        else if (a == "--feed-message-timeout") c.feed_message_timeout = unsigned_arg(v);
         else if (a == "--max-ledger-bytes") {
             c.max_ledger_bytes = unsigned_arg(v);
             if (c.max_ledger_bytes > static_cast<std::uint64_t>(INT64_MAX))
@@ -278,6 +279,13 @@ Config args(int argc, char **argv) {
     }
     if (!c.feed_url.empty() && seen.count("--feed"))
         throw std::runtime_error("choose feed or feed-url");
+    const auto validate_feed_timeout = [&](const char* flag, std::uint64_t seconds) {
+        if ((!c.feed_url.empty() || c.feed != "-") && (!seconds || seconds > 300))
+            throw std::runtime_error(std::string(flag) + " must be 1..300 seconds" +
+                (c.feed_url.empty() ? " for file feeds" : "; bound stays for network feeds"));
+    };
+    validate_feed_timeout("--feed-idle-timeout", c.feed_idle_timeout);
+    validate_feed_timeout("--feed-message-timeout", c.feed_message_timeout);
     const bool websocket = c.feed_url.rfind("ws://", 0) == 0 || c.feed_url.rfind("wss://", 0) == 0;
     if (!c.feed_url.empty() && !websocket && c.from_input)
         throw std::runtime_error("HTTP snapshots require from-input 0");
@@ -1265,8 +1273,13 @@ int run(Config c) {
                     pulse();
                     if (storage_stop) break;
                     const auto now = std::chrono::steady_clock::now();
-                    if (now - last_data >= std::chrono::seconds(c.feed_idle_timeout) ||
-                        (!pending.empty() && now - message_started >= std::chrono::seconds(c.feed_message_timeout)))
+                    // Convert elapsed time, so large unsigned bounds never narrow.
+                    const auto idle_seconds = static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::seconds>(now - last_data).count());
+                    const auto message_seconds = static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::seconds>(now - message_started).count());
+                    if ((c.feed_idle_timeout && idle_seconds >= c.feed_idle_timeout) ||
+                        (c.feed_message_timeout && !pending.empty() && message_seconds >= c.feed_message_timeout))
                         throw std::runtime_error("native stdin idle or message timeout");
                     pollfd fd{STDIN_FILENO, POLLIN, 0};
                     int rc = poll(&fd, 1, 100);
