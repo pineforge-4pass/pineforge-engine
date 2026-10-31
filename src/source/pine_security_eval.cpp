@@ -1335,11 +1335,17 @@ double source::PineStrategyHost::recorded_series_value(const std::string& key) c
                                             + key + "'");
     }
     const RecordedSeries& series = found->second;
-    const auto at = std::lower_bound(series.open_ms.begin(), series.open_ms.end(),
-                                     current_bar_.timestamp);
-    if (at == series.open_ms.end() || *at != current_bar_.timestamp)
+    std::size_t first = 0, last = series.rows.size();
+    while (first < last) {
+        const auto middle = first + (last - first) / 2;
+        if (series.rows[middle].open_ms < current_bar_.timestamp) first = middle + 1;
+        else last = middle;
+    }
+    if (first == series.rows.size())
         return std::numeric_limits<double>::quiet_NaN();
-    return series.values[static_cast<std::size_t>(at - series.open_ms.begin())];
+    const RecordedSeriesRow row = series.rows[first];
+    return row.open_ms == current_bar_.timestamp
+        ? row.value : std::numeric_limits<double>::quiet_NaN();
 }
 
 // ---- the request-data doors ------------------------------------------------
@@ -1514,6 +1520,19 @@ bool source::PineStrategyHost::set_symbol_facts(const std::string& key,
 bool source::PineStrategyHost::set_recorded_series(const std::string& key,
                                                    const int64_t* chart_open_ms,
                                                    const double* values, int n) {
+    return set_recorded_series_impl(key, chart_open_ms, values, n, std::nullopt);
+}
+
+bool source::PineStrategyHost::set_recorded_series(const std::string& key,
+                                                   const int64_t* chart_open_ms,
+                                                   const double* values, int n,
+                                                   std::size_t cache_capacity_bytes) {
+    return set_recorded_series_impl(key, chart_open_ms, values, n, cache_capacity_bytes);
+}
+
+bool source::PineStrategyHost::set_recorded_series_impl(
+        const std::string& key, const int64_t* chart_open_ms, const double* values, int n,
+        std::optional<std::size_t> cache_capacity_bytes) {
     guard_native_mutation("set_recorded_series");
     const auto refuse = [this](const char* reason, const std::string& why) {
         note_run_failure(*this, "strategy_set_recorded_series: " + why,
@@ -1532,17 +1551,62 @@ bool source::PineStrategyHost::set_recorded_series(const std::string& key,
     }
     // n == 0 is a request that returned na on every chart bar (a tape with a
     // header only): installed, so every read is na rather than a failure.
-    RecordedSeries series;
-    if (n > 0) {
-        series.open_ms.assign(chart_open_ms, chart_open_ms + n);
-        series.values.assign(values, values + n);
-    }
+    pineforge::detail::FeedProjectionBuilder<RecordedSeriesRow> builder;
+    for (int i = 0; i < n; ++i)
+        builder.append(RecordedSeriesRow{chart_open_ms[i], values[i]});
+    RecordedSeries series{builder.finish(cache_capacity_bytes.value_or(
+        pineforge::detail::kFeedProjectionCacheBytes)), cache_capacity_bytes};
     // As in set_symbol_facts: the bytes back before the digest, after every
     // refusal.
     if (const std::string why = restore_symbol_feeds_reason(); !why.empty())
         return refuse("restore_failed", why);
+    const auto digest = calculate_symbol_data_digest(&key, &series);
     recorded_series_[key] = std::move(series);
-    refresh_symbol_data_digest();
+    symbol_data_digest_ = digest;
+    clear_run_failure(*this);
+    return true;
+}
+
+bool source::PineStrategyHost::set_recorded_series_reader(
+        const std::string& key, std::shared_ptr<const FeedReader<RecordedSeriesRow>> reader) {
+    return set_recorded_series_reader_impl(key, std::move(reader), std::nullopt);
+}
+
+bool source::PineStrategyHost::set_recorded_series_reader(
+        const std::string& key, std::shared_ptr<const FeedReader<RecordedSeriesRow>> reader,
+        std::size_t cache_capacity_bytes) {
+    return set_recorded_series_reader_impl(key, std::move(reader), cache_capacity_bytes);
+}
+
+bool source::PineStrategyHost::set_recorded_series_reader_impl(
+        const std::string& key, std::shared_ptr<const FeedReader<RecordedSeriesRow>> reader,
+        std::optional<std::size_t> cache_capacity_bytes) {
+    guard_native_mutation("set_recorded_series_reader");
+    const auto refuse = [this](const char* reason, const std::string& why) {
+        note_run_failure(*this, "set_recorded_series_reader: " + why,
+                         RunFailureCode::recorded_request_refused, {{"reason", reason}});
+        return false;
+    };
+    if (run_in_progress(*this)) return refuse("run_in_progress", kRunInProgress);
+    if (key.empty()) return refuse("empty_key", "empty key");
+    if (!reader) return refuse("invalid_arrays", "missing reader");
+    RecordedSeries series{pineforge::detail::FeedProjection<RecordedSeriesRow>(
+        std::move(reader), cache_capacity_bytes.value_or(
+            pineforge::detail::kFeedProjectionCacheBytes)), cache_capacity_bytes};
+    std::int64_t previous = 0;
+    for (std::size_t i = 0; i < series.rows.size(); ++i) {
+        const auto open = series.rows[i].open_ms;
+        if (i && open <= previous)
+            return refuse("times_not_increasing",
+                          "chart open times must be strictly increasing (row "
+                          + std::to_string(i) + ")");
+        previous = open;
+    }
+    if (const std::string why = restore_symbol_feeds_reason(); !why.empty())
+        return refuse("restore_failed", why);
+    const auto digest = calculate_symbol_data_digest(&key, &series);
+    recorded_series_[key] = std::move(series);
+    symbol_data_digest_ = digest;
     clear_run_failure(*this);
     return true;
 }
@@ -1550,7 +1614,12 @@ bool source::PineStrategyHost::set_recorded_series(const std::string& key,
 // The facts and tapes as the extension folds them, and the feeds' keys and
 // sizes (their bars are the projected spec's, which the continuation digest
 // folds). Taken whenever the stores change, never during a run.
-void source::PineStrategyHost::refresh_symbol_data_digest() noexcept {
+void source::PineStrategyHost::refresh_symbol_data_digest() {
+    symbol_data_digest_ = calculate_symbol_data_digest();
+}
+
+std::uint64_t source::PineStrategyHost::calculate_symbol_data_digest(
+        const std::string* replacement_key, const RecordedSeries* replacement) const {
     BrokerStateHashSink f;
     f.u(symbol_feeds_.size());
     for (const auto& feed : symbol_feeds_) {
@@ -1577,16 +1646,30 @@ void source::PineStrategyHost::refresh_symbol_data_digest() noexcept {
         f.s(facts.currency);
         f.d(facts.mintick);
     }
-    f.u(recorded_series_.size());
-    for (const auto& [key, series] : recorded_series_) {
+    const bool inserting = replacement_key && recorded_series_.find(*replacement_key)
+        == recorded_series_.end();
+    f.u(recorded_series_.size() + (inserting ? 1 : 0));
+    const auto fold_series = [&f](const std::string& key, const RecordedSeries& series) {
         f.s(key);
-        f.u(series.open_ms.size());
-        for (std::size_t i = 0; i < series.open_ms.size(); ++i) {
-            f.i(series.open_ms[i]);
-            f.d(series.values[i]);
+        f.u(series.rows.size());
+        for (std::size_t i = 0; i < series.rows.size(); ++i) {
+            const RecordedSeriesRow row = series.rows[i];
+            f.i(row.open_ms);
+            f.d(row.value);
         }
+    };
+    // Stage a replacement in the same lexical key order as the original map,
+    // without publishing it before every provider read and the fold succeed.
+    bool emitted = false;
+    for (const auto& [key, series] : recorded_series_) {
+        if (replacement_key && !emitted && *replacement_key <= key) {
+            fold_series(*replacement_key, *replacement);
+            emitted = true;
+        }
+        if (!replacement_key || key != *replacement_key) fold_series(key, series);
     }
-    symbol_data_digest_ = f.h;
+    if (replacement_key && !emitted) fold_series(*replacement_key, *replacement);
+    return f.h;
 }
 
 }  // namespace pineforge

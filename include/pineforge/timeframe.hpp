@@ -4,6 +4,7 @@
 #include <vector>
 #include <memory>
 #include "bar.hpp"
+#include <pineforge/detail/feed_projection.hpp>
 
 namespace pineforge {
 // ─── Day-length constants ──────────────────────────────────────────────────────
@@ -246,9 +247,9 @@ struct NativeDayPartition {
     std::string tz;
     std::string session;
     std::vector<int64_t> stamps;       // native daily stamps, strictly increasing
-    std::vector<int64_t> trade_day;    // per stamp: session_day_index of its trade day
-    std::vector<int64_t> week_open;    // per stamp: the W group's first stamp
-    std::vector<int64_t> month_open;   // per stamp: the M group's first stamp
+    detail::FeedProjection<int64_t> trade_day;  // per stamp: session-day ordinal
+    detail::FeedProjection<int64_t> week_open;  // per stamp: W group's first stamp
+    detail::FeedProjection<int64_t> month_open; // per stamp: M group's first stamp
     int64_t last_bound = 0;            // nominal session-day close of the last stamp
     std::vector<int64_t> late_opens;   // the stamps that open their session-day late
     bool empty() const { return stamps.empty(); }
@@ -283,6 +284,16 @@ bool build_native_day_partition(NativeDayPartition& out,
                                 const std::string& session,
                                 const std::vector<int64_t>& stamps,
                                 const Bar* input_bars, int n_input);
+
+/// As above, with an inclusive optional cache budget for EACH of the three
+/// projection columns. Zero/sub-page budgets read directly from backing.
+/// Stamps, late opens and caller input bars retain their existing ownership.
+bool build_native_day_partition(NativeDayPartition& out,
+                                const std::string& tz,
+                                const std::string& session,
+                                const std::vector<int64_t>& stamps,
+                                const Bar* input_bars, int n_input,
+                                std::size_t projection_cache_bytes);
 
 /// Index of the native period holding `ms` under `p`: -1 before the first
 /// stamp and at / after the last stamp's nominal session-day close.

@@ -5,6 +5,8 @@
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/detail/journal_codec.hpp>
 #include "native_journal_codec.hpp"
+#include "optional_window.hpp"
+#include "read_through_window.hpp"
 #include <pineforge/native_host.hpp>
 #include "native_execution_consumer.hpp"
 #include <cassert>
@@ -1032,9 +1034,9 @@ inline std::size_t book_position(const std::vector<LiveRequest>& live, uint64_t 
 // deferred chains' id lists keep a fixed resident part and write the rest to
 // run-owned scratch files: detail::ScratchFile, an unlinked close-on-exec file
 // read and written by position. A store that outgrows its resident part spills;
-// a failed write/read or an oversized serialized journal event is a
-// ScratchIoError. Spill preparation can open the journal files before the first
-// spill; a run whose reservation stays resident never touches them. Every spill
+// a failed write/read is a ScratchIoError. Spill preparation can open the
+// journal files before the first spill; a run whose reservation stays resident
+// never touches them. Every spill
 // is made where the caller may still throw (reserve_plan, seal_direct), never
 // in commit.
 namespace {
@@ -1054,6 +1056,8 @@ public:
         file_.set_directory(directory);
     }
     uint64_t size() const noexcept { return end_; }
+    uint64_t read_count() const noexcept { return reads_; }
+    uint64_t read_bytes() const noexcept { return read_bytes_; }
     // Physical backing only: do not publish any logical records. In arena mode
     // this also claims the first chunk/table entry before a bounded operation.
     void prepare(uint64_t bytes) {
@@ -1072,6 +1076,14 @@ public:
         write(at, data, length);
         return at;
     }
+    // A continued journal append writes bounded pieces without publishing a
+    // partial logical extent. On failure the next attempt overwrites the same
+    // unused tail; no resident event or directory entry has been released.
+    void write_pending(uint64_t offset, const void* data, std::size_t length) {
+        file_.open("pineforge-o1e2");
+        file_.write(offset, data, length);
+    }
+    void publish_append(uint64_t length) noexcept { end_ += length; }
     // Forgets everything written and closes the file; the next write opens a
     // fresh one (in the same directory).
     void reset() noexcept {
@@ -1090,12 +1102,16 @@ public:
         if (offset > end_ || length > end_ - offset) {
             throw detail::ScratchIoError(EIO, "native o1 store read past its end");
         }
+        ++reads_;
         file_.read(offset, out, length);
+        read_bytes_ += length;
     }
 
 private:
     detail::ScratchFile file_;
     uint64_t end_ = 0;
+    mutable uint64_t reads_ = 0;
+    mutable uint64_t read_bytes_ = 0;
 };
 
 // Fixed-width records addressed by absolute index. The newest records stay in
@@ -1109,67 +1125,95 @@ private:
 template <class Record, std::size_t kTail>
 class TailLog {
     static_assert(std::is_trivially_copyable_v<Record>, "log records are raw bytes");
-    static_assert(kTail >= 4 && kTail % 2 == 0, "the tail flushes in halves");
 
 public:
-    TailLog() { tail_.reserve(kTail); }
+    explicit TailLog(std::size_t rows = kTail, bool cache_reads = false)
+        : tail_(rows), cache_(sizeof(Record),
+              cache_reads ? detail::window_payload_bytes(rows, sizeof(Record)) : 0,
+              this, read_backing) {}
+    TailLog(std::size_t rows, CacheCapacity capacity)
+        : tail_(rows), cache_(sizeof(Record), capacity, this, read_backing) {}
     void set_directory(const std::string& directory) { file_.set_directory(directory); }
     uint64_t base() const noexcept { return base_; }
-    uint64_t size() const noexcept { return flushed_ + tail_.size(); }
+    uint64_t size() const noexcept { return flushed_ + tail_size_; }
     // The number of records not yet retired.
     uint64_t retained() const noexcept { return size() - base_; }
     // How many records the process holds in memory.
-    std::size_t resident() const noexcept { return tail_.size(); }
+    std::size_t resident() const noexcept { return tail_size_; }
+    std::size_t capacity() const noexcept { return tail_.size(); }
+    uint64_t read_count() const noexcept { return file_.read_count(); }
+    uint64_t read_bytes() const noexcept { return file_.read_bytes(); }
+    std::size_t pending_bytes() const noexcept { return tail_.cache_bytes() + sizeof(Record); }
+    detail::ReadThroughCacheStats cache_stats() const noexcept { return cache_.stats(); }
     void prepare() {
-        file_.prepare((flushed_ - origin_ + kTail / 2) * sizeof(Record));
+        file_.prepare((flushed_ - origin_ + flush_rows()) * sizeof(Record));
     }
     void make_room() {
-        if (tail_.size() < kTail) return;
-        const std::size_t half = kTail / 2;
+        if (tail_size_ < tail_.size()) return;
+        const std::size_t half = flush_rows();
+        cache_.invalidate();
         file_.write((flushed_ - origin_) * sizeof(Record), tail_.data(), half * sizeof(Record));
-        tail_.erase(tail_.begin(), tail_.begin() + static_cast<std::ptrdiff_t>(half));
+        drop_front(half);
         flushed_ += half;
     }
-    void push(const Record& record) noexcept { tail_.push_back(record); }
+    void push(const Record& record) noexcept {
+        assert(tail_size_ < tail_.size());
+        tail_[tail_size_++] = record;
+    }
     Record get(uint64_t index) const {
+        // Explicit retirement changes the valid index domain. It is a caller
+        // error to read below base; an evicted but retained row reads the file.
         if (index < base_ || index >= size()) {
             throw std::out_of_range("native o1 log index is not retained");
         }
         if (index >= flushed_) return tail_[static_cast<std::size_t>(index - flushed_)];
         Record record{};
-        file_.read((index - origin_) * sizeof(Record), &record, sizeof record);
+        cache_.get(index - origin_, &record, sizeof record);
         return record;
     }
     void retire_to(uint64_t new_base) noexcept {
         if (new_base <= base_) return;
         base_ = new_base;
         if (base_ > flushed_) {
-            const uint64_t drop = std::min<uint64_t>(base_ - flushed_, tail_.size());
-            tail_.erase(tail_.begin(), tail_.begin() + static_cast<std::ptrdiff_t>(drop));
+            const uint64_t drop = std::min<uint64_t>(base_ - flushed_, tail_size_);
+            drop_front(static_cast<std::size_t>(drop));
             flushed_ += drop;
         }
-        if (tail_.empty() && base_ == flushed_) {
+        if (tail_size_ == 0 && base_ == flushed_) {
             // Every record is retired: nothing in the file is read again.
             origin_ = flushed_;
+            cache_.invalidate();
             file_.reset();
         }
     }
     // Forgets every record, retired or not, and the file behind them; the
     // next record is index 0 again.
     void reset() noexcept {
-        tail_.clear();
+        tail_size_ = 0;
         flushed_ = 0;
         base_ = 0;
         origin_ = 0;
+        cache_.invalidate();
         file_.reset();
     }
 
 private:
-    std::vector<Record> tail_;
+    static void read_backing(void* context, uint64_t offset, void* out, std::size_t bytes) {
+        static_cast<TailLog*>(context)->file_.read(offset, out, bytes);
+    }
+    std::size_t flush_rows() const noexcept { return std::max<std::size_t>(1, tail_.size() / 2); }
+    void drop_front(std::size_t count) noexcept {
+        tail_size_ -= count;
+        if (tail_size_ != 0)
+            std::memmove(tail_.data(), tail_.data() + count, tail_size_ * sizeof(Record));
+    }
+    detail::TailWindowStorage<Record> tail_;
+    std::size_t tail_size_ = 0;
     uint64_t flushed_ = 0;   // records before the tail: written to the file or retired
     uint64_t base_ = 0;      // the first record not retired
     uint64_t origin_ = 0;    // the index the file's first record has
     ExtFile file_;
+    mutable detail::ReadThroughWindow cache_;
 };
 
 class ByteWriter {
@@ -1179,7 +1223,21 @@ public:
     ByteWriter() = default;
     ByteWriter(unsigned char* buffer, std::size_t capacity) noexcept
         : fixed_(buffer), capacity_(capacity) {}
+    ByteWriter(unsigned char* buffer, std::size_t capacity, ExtFile& file) noexcept
+        : fixed_(buffer), capacity_(capacity), file_(&file), offset_(file.size()) {}
     void raw(const void* data, std::size_t length) {
+        if (file_) {
+            const auto* bytes = static_cast<const unsigned char*>(data);
+            while (length) {
+                const auto count = std::min(length, capacity_ - used_);
+                std::memcpy(fixed_ + used_, bytes, count);
+                used_ += count;
+                bytes += count;
+                length -= count;
+                if (used_ == capacity_) flush();
+            }
+            return;
+        }
         if (fixed_) {
             if (length > capacity_ - used_) {
                 throw CapacityExceeded{};
@@ -1192,7 +1250,14 @@ public:
         buffer_.insert(buffer_.end(), bytes, bytes + length);
     }
     const unsigned char* data() const noexcept { return fixed_ ? fixed_ : buffer_.data(); }
-    std::size_t size() const noexcept { return fixed_ ? used_ : buffer_.size(); }
+    uint64_t size() const noexcept { return fixed_ ? flushed_ + used_ : buffer_.size(); }
+    // No destructor I/O: the caller explicitly completes all chunks before
+    // publishing the directory entry, then drops the resident event.
+    uint64_t finish() {
+        flush();
+        file_->publish_append(flushed_);
+        return flushed_;
+    }
     // Only the fixed journal writer rewinds, to the last complete event.
     void rewind(std::size_t size) noexcept { used_ = size; }
 
@@ -1201,24 +1266,62 @@ private:
     unsigned char* fixed_ = nullptr;
     std::size_t capacity_ = 0;
     std::size_t used_ = 0;
+    ExtFile* file_ = nullptr;
+    uint64_t offset_ = 0;
+    uint64_t flushed_ = 0;
+
+    void flush() {
+        if (!used_) return;
+        // ScratchFile checks off_t/disk/arena bounds before each transfer;
+        // there is no record-size ceiling at the transfer-buffer boundary.
+        file_->write_pending(offset_ + flushed_, fixed_, used_);
+        flushed_ += used_;
+        used_ = 0;
+    }
 };
 
 class ByteReader {
 public:
     ByteReader(const unsigned char* data, std::size_t length) noexcept
-        : at_(data), end_(data + length) {}
+        : at_(data), end_(data + length), left_(length) {}
+    ByteReader(const ExtFile& file, uint64_t offset, uint64_t length,
+               unsigned char* buffer, std::size_t capacity)
+        : at_(buffer), end_(buffer), left_(length), file_(&file),
+          offset_(offset), buffer_(buffer), capacity_(capacity) {
+        if (!capacity || offset > file.size() || length > file.size() - offset)
+            throw detail::ScratchIoError(EIO, "native o1 journal invalid extent");
+    }
     void raw(void* out, std::size_t length) {
-        if (static_cast<std::size_t>(end_ - at_) < length) {
+        if (length > left_) {
             throw detail::ScratchIoError(EIO, "native o1 store record is truncated");
         }
-        if (length != 0) std::memcpy(out, at_, length);
-        at_ += length;
+        auto* destination = static_cast<unsigned char*>(out);
+        while (length) {
+            if (at_ == end_) {
+                const auto count = static_cast<std::size_t>(std::min<uint64_t>(capacity_, left_));
+                file_->read(offset_, buffer_, count);
+                offset_ += count;
+                at_ = buffer_;
+                end_ = buffer_ + count;
+            }
+            const auto count = std::min(length, static_cast<std::size_t>(end_ - at_));
+            std::memcpy(destination, at_, count);
+            destination += count;
+            at_ += count;
+            left_ -= count;
+            length -= count;
+        }
     }
-    std::size_t remaining() const noexcept { return static_cast<std::size_t>(end_ - at_); }
+    uint64_t remaining() const noexcept { return left_; }
 
 private:
     const unsigned char* at_;
     const unsigned char* end_;
+    uint64_t left_;
+    const ExtFile* file_ = nullptr;
+    uint64_t offset_ = 0;
+    unsigned char* buffer_ = nullptr;
+    std::size_t capacity_ = 0;
 };
 
 // One field list per type serves both directions, so what a spill writes and
@@ -1243,7 +1346,7 @@ struct LoadAr {
     // external openings come back as they were journaled, never frozen.
     bool openings_as_stored = false;
     void raw(void* data, std::size_t length) { in.raw(data, length); }
-    std::size_t remaining() const noexcept { return in.remaining(); }
+    uint64_t remaining() const noexcept { return in.remaining(); }
     template <class T>
     void operator()(T& item);
 };
@@ -1291,7 +1394,7 @@ void archive_string(Ar& ar, std::string& text) {
     if constexpr (Ar::saving) {
         ar.raw(text.data(), text.size());
     } else {
-        if (length > ar.remaining()) {
+        if (length > ar.remaining() || length > std::numeric_limits<std::size_t>::max()) {
             throw detail::ScratchIoError(EIO, "native o1 store string is truncated");
         }
         text.resize(static_cast<std::size_t>(length));
@@ -1320,7 +1423,7 @@ void archive_vector(Ar& ar, std::vector<Item>& items) {
     uint64_t count = items.size();
     ar.raw(&count, sizeof count);
     if constexpr (!Ar::saving) {
-        if (count > ar.remaining()) {
+        if (count > ar.remaining() || count > std::numeric_limits<std::size_t>::max()) {
             throw detail::ScratchIoError(EIO, "native o1 store vector is truncated");
         }
         items.clear();
@@ -1478,8 +1581,8 @@ void archive_refused(Ar& ar, T& item) {
 // A refused request's list was never frozen and is read back as stored; it
 // was copied when its event was built (snapshot_refused_openings), so what is
 // written here is never read through a caller's cursor. Each opening takes
-// 24 bytes inline: see JournalStore::kSpillPageBytes for the list length past
-// which an event cannot be paged.
+// 24 bytes inline; the journal continues the event across transfer pages when
+// the list does not fit in one.
 template <class Ar>
 void archive_external_openings(Ar& ar, std::shared_ptr<const OpeningReadback>& external) {
     std::uint64_t count = 0;
@@ -1502,7 +1605,7 @@ void archive_external_openings(Ar& ar, std::shared_ptr<const OpeningReadback>& e
         }
         // Every handle takes at least a byte: a count past the bytes left is
         // a damaged record, never an allocation.
-        if (count > ar.remaining()) {
+        if (count > ar.remaining() || count > std::numeric_limits<std::size_t>::max()) {
             throw detail::ScratchIoError(EIO, "native o1 store record is truncated");
         }
         std::vector<RequestHandle> openings(static_cast<std::size_t>(count));
@@ -1631,8 +1734,9 @@ template <class Ar> void archive_io(Ar& ar, MarginCallEvent& item) {
     ar(item.position_after);
 }
 
-// One page of spilled journal events: the absolute positions and ordinals it
-// covers (both ascend from page to page) and where its serialized events are.
+// One extent of spilled journal events: the absolute positions and ordinals it
+// covers (both ascend from extent to extent) and where its serialized events
+// are. A single large event spans consecutive bounded transfer chunks.
 struct JournalPage {
     uint64_t first_position = 0;
     uint64_t count = 0;
@@ -1671,6 +1775,10 @@ constexpr std::size_t kBookMax = 4096;
 // their chunk. Positions are absolute (the core's history_base()..
 // history_end()), ordinals ascend with positions.
 struct WorkingRequestCore::JournalStore {
+    // Construction policy for the three lazy tail stores. Keeping physical
+    // policy in this existing opaque owner preserves the public core layout.
+    TailWindowConfig tail_windows;
+    std::optional<std::array<CacheCapacity, 3>> tail_cache_capacities;
     detail::CommandScratchStore* codec = nullptr; // borrowed, run-owned backing
     mutable std::vector<std::byte> codec_page; // allocated once from store geometry
     mutable std::array<std::optional<CommandEvent>, 4> codec_values;
@@ -1707,8 +1815,9 @@ struct WorkingRequestCore::JournalStore {
         codec_positions[slot] = position;
         return *codec_values[slot];
     }
-    // A page holds a contiguous prefix of one chunk, bounded by bytes as well
-    // as kChunk events. Before appending a command's events, make_room spills
+    // An ordinary page holds a contiguous prefix of one chunk, bounded by
+    // bytes as well as kChunk events. A larger event has its own continued
+    // extent. Before appending a command's events, make_room spills
     // while resident_count() + incoming exceeds kMaxResident and the existing
     // resident count exceeds kKeepResident. The final chunk prefix can take
     // that count below kKeepResident by up to kChunk - 1 events; this is a
@@ -1716,25 +1825,24 @@ struct WorkingRequestCore::JournalStore {
     static constexpr std::size_t kChunk = 32;
     static constexpr std::size_t kMaxResident = 2048;
     static constexpr std::size_t kKeepResident = 128;
-    // Page layout: concatenated events, each starting with a uint32_t
-    // alternative and a uint64_t ordinal, followed by its fields. This 32,768 B
-    // buffer is sized by the largest single serialized CommandEvent we admit:
-    // an event above it is refused with ScratchIoError(EFBIG). Request
-    // label/comment, BindOpenings/OpeningsClose opening vectors,
-    // SelectedExposure incarnations and TermsResolvedEvent/QuantityBoundEvent
-    // adjustment-id vectors have no finite schema bound. A full page closes
-    // before the next event; no per-event size estimate is used.
+    std::size_t max_resident = kMaxResident;   // internal fixture override only
+    std::size_t keep_resident = kKeepResident;
+    // Run-private layout: concatenated events, each starting with a uint32_t
+    // alternative and a uint64_t ordinal, followed by its fields. Request
+    // label/comment, BindOpenings/OpeningsClose opening vectors, SelectedExposure
+    // incarnations and TermsResolvedEvent/QuantityBoundEvent adjustment-id
+    // vectors have no finite schema bound. Ordinary pages close before the
+    // next event; no per-event size estimate is used. An event larger than
+    // the 32,768 B buffer is streamed through consecutive chunks of this size
+    // and has one directory entry for its complete extent. Strings, opening
+    // lists and adjustment vectors have no transfer-page admission ceiling.
     // The external openings of a BindOpenings/OpeningsClose are written inline
     // too (archive_external_openings): 8 bytes of count, then 24 per opening
-    // (sizeof(RequestHandle)). So an event whose request or definition names
-    // about 1,360 or more external openings, accepted or refused, cannot be
-    // paged: the spill below refuses it with that EFBIG, typed, in the
-    // throwing phase of the command that needs the room (make_room, from
-    // reserve_plan and seal_direct), and nothing changes; the event stays
-    // resident, so every later command that must page past it is refused the
-    // same way. The per-event byte limit applies only when paging is required:
-    // an event the journal never pages is never refused, so a journal that
-    // stays within kMaxResident events behaves exactly as before.
+    // (sizeof(RequestHandle)), for accepted and refused events alike. Actual
+    // backing failures still propagate in the throwing phase of the command
+    // that needs room (make_room, from reserve_plan and seal_direct), before
+    // publishing the page or changing the resident prefix; the event stays
+    // resident on failure.
     static constexpr std::size_t kSpillPageBytes = 32768;
     static_assert(sizeof(uint32_t) == 4 && sizeof(uint64_t) == 8,
                   "journal event tag/ordinal byte widths");
@@ -1865,8 +1973,9 @@ struct WorkingRequestCore::JournalStore {
         if (chunks.empty()) chunk0_base = first;
     }
     // Writes the oldest resident events that fit, up to their chunk's end,
-    // as one page and drops exactly that prefix. Everything that can throw
-    // comes before publishing the page or changing the resident prefix.
+    // or one large event across continuation chunks, and drops exactly that
+    // prefix. Everything that can throw comes before publishing the page or
+    // changing the resident prefix.
     void spill_front_chunk() {
         const uint64_t chunk_end = std::min<uint64_t>(end, chunk0_base + kChunk);
         if (chunk_end <= first) return;
@@ -1880,21 +1989,27 @@ struct WorkingRequestCore::JournalStore {
                 ar(resident_at(page_end));
             } catch (const ByteWriter::CapacityExceeded&) {
                 out.rewind(event_start);
-                if (page_end == first) {
-                    throw detail::ScratchIoError(
-                            EFBIG, "native o1 journal event exceeds the spill page byte bound");
-                }
                 break;
             }
         }
+        const bool continued = page_end == first;
+        if (continued) ++page_end;
         JournalPage page;
         page.first_position = first;
         page.count = page_end - first;
         page.first_ordinal = event_ordinal(resident_at(first));
         page.last_ordinal = event_ordinal(resident_at(page_end - 1));
         pages.make_room();
-        page.offset = data.append(out.data(), out.size());
-        page.length = out.size();
+        page.offset = data.size();
+        if (continued) {
+            ByteWriter chunks_out(spill->write.data(), spill->write.size(), data);
+            SaveAr chunks_ar{chunks_out};
+            chunks_ar(resident_at(first));
+            page.length = chunks_out.finish();
+        } else {
+            data.append(out.data(), static_cast<std::size_t>(out.size()));
+            page.length = out.size();
+        }
         pages.push(page);
         // drop_front keeps a partly occupied chunk and its original slot base;
         // the next spill starts at page_end, even when it is not aligned.
@@ -1904,7 +2019,7 @@ struct WorkingRequestCore::JournalStore {
     // pass its bound, then make sure the chunks that will hold them exist.
     void make_room(std::size_t incoming) {
         if (codec) return;
-        while (resident_count() + incoming > kMaxResident && resident_count() > kKeepResident) {
+        while (resident_count() + incoming > max_resident && resident_count() > keep_resident) {
             spill_front_chunk();
         }
         if (chunks.empty()) chunk0_base = end;
@@ -1929,7 +2044,7 @@ struct WorkingRequestCore::JournalStore {
         }
         if (low == pages.base()) return false;
         const JournalPage found = pages.get(low - 1);
-        if (position >= found.first_position + found.count) return false;
+        if (position - found.first_position >= found.count) return false;
         *page_no = low - 1;
         *page = found;
         return true;
@@ -1938,8 +2053,9 @@ struct WorkingRequestCore::JournalStore {
         for (const Cached& slot : cache) {
             if (slot.valid && slot.page_no == page_no) return slot.events;
         }
-        if (!spill || page.length > kSpillPageBytes || page.count > kChunk) {
-            throw detail::ScratchIoError(EFBIG, "native o1 journal page exceeds byte bound");
+        if (!spill || !page.length || !page.count || page.count > kChunk
+            || (page.length > kSpillPageBytes && page.count != 1)) {
+            throw detail::ScratchIoError(EIO, "native o1 journal invalid page");
         }
         Cached& slot = cache[cache_next];
         auto& bytes = spill->read[cache_next];
@@ -1947,11 +2063,14 @@ struct WorkingRequestCore::JournalStore {
         // leave a partially replaced event vector under its old cache key.
         slot.valid = false;
         slot.events.clear();
-        data.read(page.offset, bytes.data(), static_cast<std::size_t>(page.length));
-        ByteReader in(bytes.data(), static_cast<std::size_t>(page.length));
+        ByteReader in(data, page.offset, page.length, bytes.data(), bytes.size());
         LoadAr ar{in};
         slot.events.resize(static_cast<std::size_t>(page.count));
         for (CommandEvent& event : slot.events) ar(event);
+        if (in.remaining() || event_ordinal(slot.events.front()) != page.first_ordinal
+            || event_ordinal(slot.events.back()) != page.last_ordinal) {
+            throw detail::ScratchIoError(EIO, "native o1 journal invalid page contents");
+        }
         cache_next = (cache_next + 1) % cache.size();
         slot.page_no = page_no;
         slot.first_position = page.first_position;
@@ -2077,6 +2196,7 @@ const detail::ScratchReadback& journal_readback(const WorkingRequestCore& core) 
 // The group-effect keys: a resident tail over an external fixed-record log.
 struct WorkingRequestCore::ReceiptStore {
     TailLog<ReceiptRec, 64> log;
+    ReceiptStore(std::size_t rows, CacheCapacity capacity) : log(rows, capacity) {}
 };
 
 // The id lists of resolutions that spent a long chain, and the index that
@@ -2084,6 +2204,7 @@ struct WorkingRequestCore::ReceiptStore {
 struct WorkingRequestCore::ChainSegments {
     ExtFile ids;
     TailLog<ChainSegmentRec, 16> index;
+    ChainSegments(std::size_t rows, CacheCapacity capacity) : index(rows, capacity) {}
     void set_directory(const std::string& directory) {
         ids.set_directory(directory);
         index.set_directory(directory);
@@ -2734,13 +2855,13 @@ void WorkingRequestCore::seal_plan(MutationPlan& plan) {
 // reservation also prepares the fixed page buffers and initial scratch extents;
 // it does not raise the resident event bound.
 void WorkingRequestCore::reserve(std::size_t expected_events) {
-    if (journal_ && !journal_->codec && expected_events > JournalStore::kMaxResident) {
+    if (journal_ && !journal_->codec && expected_events > journal_->max_resident) {
         journal_->prepare_spill();
     }
     if (journal_ && expected_events > journal_->end - history_base_) {
         const auto resident = journal_->resident_count();
-        if (resident < JournalStore::kMaxResident) {
-            const auto available = JournalStore::kMaxResident - resident;
+        if (resident < journal_->max_resident) {
+            const auto available = journal_->max_resident - resident;
             const auto incoming = std::min<std::size_t>(
                 expected_events - (static_cast<std::size_t>(journal_->end) - history_base_),
                 available);
@@ -2990,7 +3111,8 @@ void WorkingRequestCore::apply_receipt_base(std::size_t base) noexcept {
 
 void WorkingRequestCore::ensure_receipt_store() {
     if (receipt_store_) return;
-    auto store = std::make_shared<ReceiptStore>();
+    auto store = std::make_shared<ReceiptStore>(
+        tail_window_config().receipt_rows, tail_cache_capacity(TailWindowKind::receipts));
     const std::string& directory = scratch_directory();
     if (!directory.empty()) store->log.set_directory(directory);
     receipt_store_ = std::move(store);
@@ -3013,7 +3135,8 @@ void WorkingRequestCore::prepare_codec_frames() {
 
 void WorkingRequestCore::ensure_chain_segments() {
     if (chain_segments_) return;
-    auto segments = std::make_shared<ChainSegments>();
+    auto segments = std::make_shared<ChainSegments>(
+        tail_window_config().chain_segment_rows, tail_cache_capacity(TailWindowKind::chain_segments));
     const std::string& directory = scratch_directory();
     if (!directory.empty()) segments->set_directory(directory);
     chain_segments_ = std::move(segments);
@@ -3521,11 +3644,53 @@ InstallResult WorkingRequestCore::commit(MutationPlan& plan) noexcept {
     return Installed{EventRange{first, count}};
 }
 
-WorkingRequestCore::WorkingRequestCore(RunIdentity identity) {
+WorkingRequestCore::WorkingRequestCore(RunIdentity identity)
+    : WorkingRequestCore(std::move(identity), TailWindowConfig{}) {}
+
+WorkingRequestCore::WorkingRequestCore(RunIdentity identity, TailWindowConfig windows) {
     require_identity(identity);
     identity_ = std::move(identity);
     instance_ = std::make_shared<InstanceBinding>();
     journal_ = std::make_shared<JournalStore>();
+    journal_->tail_windows = windows;
+}
+
+WorkingRequestCore::WorkingRequestCore(RunIdentity identity, CacheCapacity successor_roots,
+                                      CacheCapacity receipts, CacheCapacity chain_segments)
+    : WorkingRequestCore(std::move(identity), TailWindowConfig{}) {
+    journal_->tail_cache_capacities =
+        std::array<CacheCapacity, 3>{{successor_roots, receipts, chain_segments}};
+}
+
+TailWindowConfig WorkingRequestCore::tail_window_config() const noexcept {
+    return journal_ ? journal_->tail_windows : TailWindowConfig{};
+}
+
+CacheCapacity WorkingRequestCore::tail_cache_capacity(TailWindowKind kind) const noexcept {
+    const auto windows = tail_window_config();
+    std::size_t index = 0, rows = 0, width = 0;
+    switch (kind) {
+    case TailWindowKind::successor_roots:
+        index = 0;
+        rows = windows.successor_root_rows;
+        width = 2 * sizeof(uint64_t);
+        break;
+    case TailWindowKind::receipts:
+        index = 1;
+        rows = windows.receipt_rows;
+        width = sizeof(ReceiptRec);
+        break;
+    case TailWindowKind::chain_segments:
+        index = 2;
+        rows = windows.chain_segment_rows;
+        width = sizeof(ChainSegmentRec);
+        break;
+    default:
+        return {};
+    }
+    if (journal_ && journal_->tail_cache_capacities)
+        return (*journal_->tail_cache_capacities)[index];
+    return CacheCapacity::from_payload(width, detail::window_payload_bytes(rows, width));
 }
 
 WorkingRequestCore::WorkingRequestCore(WorkingRequestCore&& other) noexcept {
@@ -3597,7 +3762,8 @@ void WorkingRequestCore::reset(RunIdentity identity) {
         prepare_codec_frames();
         return;
     }
-    WorkingRequestCore next(std::move(identity));
+    WorkingRequestCore next(std::move(identity), tail_window_config());
+    if (journal_) next.journal_->tail_cache_capacities = journal_->tail_cache_capacities;
     *this = std::move(next);
 }
 
@@ -8061,7 +8227,7 @@ struct WorkingRequestCore::SuccessorRootIndex {
     // These are storage metadata, not additional broker state: the prefix
     // and tail partition the root sequence already in chain_roots_. The slab,
     // backing, directory and partition boundary do not enter its digest.
-    std::array<Row, kTailRows> tail{};
+    detail::TailWindowStorage<Row> tail;
     std::size_t tail_size = 0;
     uint64_t disk_rows = 0;
     detail::ScratchFile file{detail::ScratchFile::IoRaiser::auxiliary};
@@ -8069,10 +8235,17 @@ struct WorkingRequestCore::SuccessorRootIndex {
     std::shared_ptr<detail::ScratchSlab> slab;
     // Transient input for one bounded-memory preparation, never a root count.
     bool next_adds_root = true;
+    mutable std::uint64_t reads = 0;
+    mutable std::uint64_t read_bytes = 0;
+    mutable detail::ReadThroughWindow cache;
 
-    SuccessorRootIndex() { file.set_store(detail::ScratchStore::successor_roots); }
-    explicit SuccessorRootIndex(const std::shared_ptr<detail::ScratchSlab>& owner) noexcept
-        : SuccessorRootIndex() { slab = owner; }
+    SuccessorRootIndex(std::size_t rows, CacheCapacity capacity)
+        : tail(rows), cache(sizeof(Row), capacity, this, read_backing) {
+        file.set_store(detail::ScratchStore::successor_roots);
+    }
+    explicit SuccessorRootIndex(const std::shared_ptr<detail::ScratchSlab>& owner,
+                                std::size_t rows, CacheCapacity capacity) noexcept
+        : SuccessorRootIndex(rows, capacity) { slab = owner; }
     SuccessorRootIndex(const SuccessorRootIndex&) = delete;
     SuccessorRootIndex& operator=(const SuccessorRootIndex&) = delete;
 
@@ -8113,6 +8286,7 @@ struct WorkingRequestCore::SuccessorRootIndex {
         }
         if (tail_size < tail.size()) return;
         const std::size_t length = tail_size * sizeof(Row);
+        cache.invalidate();
         if (slab) {
             slab->write_at(detail::ScratchResource::successor_roots,
                            disk_rows * sizeof(Row), tail.data(), length);
@@ -8142,9 +8316,10 @@ struct WorkingRequestCore::SuccessorRootIndex {
         tail[tail_size++] = Row{successor, root};
     }
 
-    Row read(uint64_t index) const {
+    Row read_uncached(uint64_t index) const {
         PF_COHORT_WORK(RootDiskRead); assert((slab || file.opened()) && index < disk_rows);
         Row row;
+        ++reads;
         if (slab) {
             slab->read_at(detail::ScratchResource::successor_roots,
                           index * sizeof(Row), &row, sizeof(Row));
@@ -8155,9 +8330,22 @@ struct WorkingRequestCore::SuccessorRootIndex {
                 throw detail::AuxiliaryScratchIoError(error.code().value(), "native successor roots read");
             }
         }
+        read_bytes += sizeof(Row);
         if (row.root == 0 || row.root >= row.successor) {
             throw detail::AuxiliaryScratchIoError(EIO, "native successor roots invalid row");
         }
+        return row;
+    }
+
+    static void read_backing(void* context, uint64_t offset, void* out, std::size_t bytes) {
+        assert(bytes == sizeof(Row));
+        const auto row = static_cast<SuccessorRootIndex*>(context)->read_uncached(offset / sizeof(Row));
+        std::memcpy(out, &row, bytes);
+    }
+
+    Row read(uint64_t index) const {
+        Row row;
+        cache.get(index, &row, sizeof(Row));
         return row;
     }
 
@@ -8181,6 +8369,47 @@ struct WorkingRequestCore::SuccessorRootIndex {
         return std::nullopt;
     }
 };
+
+TailWindowStats WorkingRequestCore::tail_window_stats() const noexcept {
+    TailWindowStats stats;
+    if (successor_roots_) {
+        stats.successor_root_capacity_rows = successor_roots_->tail.size();
+        stats.successor_root_reads = successor_roots_->reads;
+        stats.successor_root_read_bytes = successor_roots_->read_bytes;
+        stats.successor_root_pending_bytes = successor_roots_->tail.cache_bytes()
+            + sizeof(SuccessorRootIndex::Row);
+        stats.successor_root_control_bytes = sizeof(SuccessorRootIndex) - sizeof(SuccessorRootIndex::Row);
+    }
+    if (receipt_store_) {
+        stats.receipt_capacity_rows = receipt_store_->log.capacity();
+        stats.receipt_reads = receipt_store_->log.read_count();
+        stats.receipt_read_bytes = receipt_store_->log.read_bytes();
+        stats.receipt_pending_bytes = receipt_store_->log.pending_bytes();
+        stats.receipt_control_bytes = sizeof(ReceiptStore) - sizeof(ReceiptRec);
+    }
+    if (chain_segments_) {
+        stats.chain_index_capacity_rows = chain_segments_->index.capacity();
+        stats.chain_index_reads = chain_segments_->index.read_count();
+        stats.chain_id_reads = chain_segments_->ids.read_count();
+        stats.chain_index_read_bytes = chain_segments_->index.read_bytes();
+        stats.chain_index_pending_bytes = chain_segments_->index.pending_bytes();
+        stats.chain_index_control_bytes = sizeof(ChainSegments) - sizeof(ChainSegmentRec);
+    }
+    return stats;
+}
+
+detail::ReadThroughCacheStats WorkingRequestCore::tail_read_cache_stats(
+        TailWindowKind kind) const noexcept {
+    switch (kind) {
+    case TailWindowKind::successor_roots:
+        return successor_roots_ ? successor_roots_->cache.stats() : detail::ReadThroughCacheStats{};
+    case TailWindowKind::receipts:
+        return receipt_store_ ? receipt_store_->log.cache_stats() : detail::ReadThroughCacheStats{};
+    case TailWindowKind::chain_segments:
+        return chain_segments_ ? chain_segments_->index.cache_stats() : detail::ReadThroughCacheStats{};
+    }
+    return {};
+}
 
 // These reservations need the complete private helper to stage its transient
 // ticket. Their declarations and all callers keep their existing signatures.
@@ -8259,14 +8488,19 @@ void WorkingRequestCore::seal_direct(std::size_t events, bool push_live, bool ad
 void WorkingRequestCore::bind_scratch_slab(
         const std::shared_ptr<::pineforge::detail::ScratchSlab>& slab) {
     if (slab) {
-        successor_roots_ = std::make_shared<SuccessorRootIndex>(slab);
+        successor_roots_ = std::make_shared<SuccessorRootIndex>(
+            slab, tail_window_config().successor_root_rows,
+            tail_cache_capacity(TailWindowKind::successor_roots));
     } else if (successor_roots_ && successor_roots_->slab) {
         successor_roots_.reset();
     }
 }
 
 void WorkingRequestCore::set_successor_roots_directory(const std::string& directory) {
-    if (!successor_roots_) successor_roots_ = std::make_shared<SuccessorRootIndex>();
+    if (!successor_roots_)
+        successor_roots_ = std::make_shared<SuccessorRootIndex>(
+            tail_window_config().successor_root_rows,
+            tail_cache_capacity(TailWindowKind::successor_roots));
     successor_roots_->set_directory(directory);
     // The journal's pages, the group-effect keys, the long chains' id lists
     // and the working book's spilled rows spill beside the successor roots;
@@ -8287,7 +8521,10 @@ const std::string& WorkingRequestCore::scratch_directory() const noexcept {
 }
 
 void WorkingRequestCore::reserve_successor_root() {
-    if (!successor_roots_) successor_roots_ = std::make_shared<SuccessorRootIndex>();
+    if (!successor_roots_)
+        successor_roots_ = std::make_shared<SuccessorRootIndex>(
+            tail_window_config().successor_root_rows,
+            tail_cache_capacity(TailWindowKind::successor_roots));
     successor_roots_->prepare_append();
 }
 
@@ -8643,6 +8880,16 @@ std::uint64_t NativeExecutionConsumer::match_book_class_guard_failures() const n
 
 std::uint64_t NativeExecutionConsumer::dormant_watermark_for_test() const noexcept {
     return requests_.book_spill_ ? requests_.book_spill_->watermark_for_test() : 0;
+}
+
+void NativeExecutionConsumer::set_journal_residency_for_test(
+        native_order::WorkingRequestCore& core, std::size_t maximum, std::size_t keep) {
+    if (!core.journal_ || core.journal_->codec || core.journal_->end != 0
+        || maximum == 0 || keep >= maximum) {
+        throw std::invalid_argument("journal residency fixture requires an empty unbound journal");
+    }
+    core.journal_->max_resident = maximum;
+    core.journal_->keep_resident = keep;
 }
 
 std::uint64_t NativeExecutionConsumer::match_book_index_poisonings() const noexcept {

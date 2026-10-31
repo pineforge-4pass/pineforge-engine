@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_native_journal_continuations)
+pineforge_add_unit_test(test_native_journal_continuations)

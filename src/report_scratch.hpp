@@ -9,6 +9,8 @@
 #include <string>
 
 namespace pineforge {
+struct CacheCapacity;
+namespace detail { struct ReadThroughCacheStats; }
 namespace report_sink {
 
 // Internal storage helpers for DESIGN 3.8. The installed point-source API
@@ -18,6 +20,13 @@ namespace report_sink {
 inline constexpr std::size_t kScratchWindowBytes = 64U * 1024U;
 inline constexpr std::size_t kScratchWindowPoints =
     kScratchWindowBytes / sizeof(pf_equity_point_t);
+
+// Inner positional-reader traffic. A cache lookup never updates these.
+// Facade reads count one backing operation; raw-fd reads count pread calls.
+struct ScratchReadStats {
+    std::uint64_t calls = 0;
+    std::uint64_t bytes = 0;
+};
 
 // One positional store through the detail::ScratchFile facade. Startup
 // explicitly attaches an arena; otherwise the facade uses a private, unlinked,
@@ -40,6 +49,8 @@ public:
 
     // File mode only; arena-backed stores return -1. Readers use curve_region().
     int descriptor() const noexcept;
+    std::uint64_t read_count() const noexcept { return read_count_; }
+    std::uint64_t read_bytes() const noexcept { return read_bytes_; }
     void write(std::int64_t byte_offset, const void* bytes, std::size_t length);
     void read(std::int64_t byte_offset, void* bytes, std::size_t length) const;
     void truncate(std::int64_t byte_count);
@@ -53,6 +64,8 @@ public:
 
 private:
     detail::ScratchFile file_;
+    mutable std::uint64_t read_count_ = 0;
+    mutable std::uint64_t read_bytes_ = 0;
 };
 
 // A binary curve with at most one 64 KiB RAM batch (2730 complete points).
@@ -96,7 +109,7 @@ private:
 // is EIO, never a manufactured zero/NaN point.
 void read_scratch_points(const metrics::ScratchCurveRegion& region,
                          std::int64_t first, pf_equity_point_t* points,
-                         std::int64_t count);
+                         std::int64_t count, ScratchReadStats* inner_reads = nullptr);
 
 // Internal implementation of the bounded reader window; it has the P00
 // point-source shape and returns values independent of later refills. Its
@@ -105,12 +118,23 @@ void read_scratch_points(const metrics::ScratchCurveRegion& region,
 // caller synchronization. No writer may mutate the borrowed region.
 class ScratchCurveWindow {
 public:
-    explicit ScratchCurveWindow(const metrics::ScratchCurveRegion& region);
+    // Byte payload budget; complete shared line metadata is additional.
+    // Sub-point sizes and optional allocation failure bypass.
+    // An optional counter must outlive this reader.
+    explicit ScratchCurveWindow(const metrics::ScratchCurveRegion& region,
+                                std::size_t cache_bytes = kScratchWindowBytes,
+                                ScratchReadStats* inner_reads = nullptr);
+    // Inclusive allowance for complete shared 24-byte point lines.
+    ScratchCurveWindow(const metrics::ScratchCurveRegion& region,
+                       CacheCapacity capacity, ScratchReadStats* inner_reads = nullptr);
     ~ScratchCurveWindow();
     ScratchCurveWindow(const ScratchCurveWindow&) = delete;
     ScratchCurveWindow& operator=(const ScratchCurveWindow&) = delete;
 
     std::int64_t size() const noexcept;
+    std::size_t cache_capacity_bytes() const noexcept;
+    detail::ReadThroughCacheStats cache_stats() const noexcept;
+    std::size_t cache_control_bytes() const noexcept;
     pf_equity_point_t operator[](std::int64_t index) const;
 
 private:

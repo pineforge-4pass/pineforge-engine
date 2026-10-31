@@ -4,43 +4,68 @@
 #include <pineforge/run_failure.hpp>
 
 #include <algorithm>
-#include <cerrno>
 #include <cstring>
 #include <limits>
 #include <new>
 #include <stdexcept>
-#include <system_error>
 #include <sys/types.h>
 #include <utility>
 
 namespace pineforge::detail {
 
+std::size_t CachedScratchBacking::cache_allocation_bytes(
+        std::size_t geometry, std::size_t capacity) noexcept {
+    const auto maximum = static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max());
+    if (geometry < kMinPageBytes || capacity > maximum) return 0;
+    const auto slots = capacity / geometry;
+    const auto line = ReadThroughCache::line_bytes(geometry);
+    if (!slots || !line) return 0;
+    const auto metadata = line - geometry;
+    if (metadata > (maximum - capacity) / slots) return 0;
+    // Preserve the old payload capacity, including its trailing sub-page
+    // slack, and add every shared tag/pin/replacement byte explicitly.
+    return capacity + slots * metadata;
+}
+
+const std::size_t CachedScratchBacking::kCommandScratchMemoryBytes =
+    5 * (cache_allocation_bytes(kMinPageBytes) + 2 * 1024);
+
+ReadThroughCachePolicy CachedScratchBacking::cache_policy(
+        std::size_t geometry, std::size_t capacity) noexcept {
+    const auto storage = cache_allocation_bytes(geometry, capacity);
+    const auto bytes = storage ? (capacity / geometry) * ReadThroughCache::line_bytes(geometry) : 0;
+    return {bytes, geometry, ReadThroughCacheReplacement::direct_mapped,
+            ReadThroughCacheWritePolicy::write_through};
+}
+
 CachedScratchBacking::CachedScratchBacking(std::unique_ptr<ScratchBacking> inner,
                                          ScratchIoObserver observer,
                                          std::size_t resident_bytes,
-                                         std::shared_ptr<CommandScratchByteBudget> budget)
+                                         std::shared_ptr<CommandScratchByteBudget> budget,
+                                         std::size_t cache_bytes)
     : ScratchBacking(inner ? inner->kind() : ScratchBackingKind::disk,
                      inner ? inner->page_size() : 0, observer),
       inner_(std::move(inner)),
-      slot_count_(page_size() >= kMinPageBytes && page_size() <= kCacheBytes
-                      ? kCacheBytes / page_size() : 0),
-      resident_pages_(slot_count_ != 0 ? std::min(resident_bytes, kCacheBytes) / page_size() : 0),
-      // A null inner gives page_size() 0, so resident_pages_ is 0 and the
-      // short-circuit skips the dereference: keep this order in the list.
-      resident_(resident_pages_ != 0 && inner_->page_count() == 0),
-      budget_(std::move(budget)) {
+      cache_bytes_(cache_bytes),
+      storage_bytes_(cache_allocation_bytes(page_size(), cache_bytes)),
+      resident_pages_(storage_bytes_ != 0
+                          ? std::min(resident_bytes / page_size(), cache_bytes / page_size()) : 0),
+      resident_(false),
+      budget_(std::move(budget)),
+      cache_(cache_policy(page_size(), cache_bytes),
+             {inner_.get(), read_inner, write_inner},
+             {this, borrow_storage, release_storage}) {
     if (!inner_)
         throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
                                            "command scratch cache requires a backing");
-    if (slot_count_ != 0) {
-        bytes_.reset(new (std::nothrow) std::byte[kCacheBytes]);
-        if (!bytes_)
-            throw scratch_out_of_memory_failure();
-        page_ids_.reset(new (std::nothrow) ScratchPageId[slot_count_]());
-        if (!page_ids_)
-            throw scratch_out_of_memory_failure();
-        std::fill_n(page_ids_.get(), slot_count_, scratch_no_page);
+    if (storage_bytes_ != 0) {
+        bytes_.reset(new (std::nothrow) std::byte[storage_bytes_]);
+        if (!bytes_) cache_diagnostics_.allocation_bypassed();
     }
+    // No prefix has been admitted if the optional allocation failed. Core's
+    // allocator will return null once, permanently selecting direct I/O.
+    // read_cache_stats() exposes that failure even before the first access.
+    resident_ = bytes_ && resident_pages_ != 0 && inner_->page_count() == 0;
 }
 
 CachedScratchBacking::~CachedScratchBacking() noexcept {
@@ -51,15 +76,32 @@ std::uint64_t CachedScratchBacking::page_count() const noexcept {
     return resident_ ? resident_extent_ : inner_->page_count();
 }
 
-std::size_t CachedScratchBacking::slot(ScratchPageId id) const noexcept {
-    return static_cast<std::size_t>(id % slot_count_);
+void* CachedScratchBacking::borrow_storage(void* context, std::size_t size) noexcept {
+    auto& self = *static_cast<CachedScratchBacking*>(context);
+    // Never construct shared tags over authoritative resident bytes.
+    return !self.resident_ && size <= self.storage_bytes_ ? self.bytes_.get() : nullptr;
 }
 
-void CachedScratchBacking::remember(ScratchPageId id, const std::byte* bytes) const noexcept {
-    if (slot_count_ == 0) return;
-    const auto index = slot(id);
-    std::memcpy(bytes_.get() + index * page_size(), bytes, page_size());
-    page_ids_[index] = id;
+void CachedScratchBacking::release_storage(void*, void*, std::size_t) noexcept {
+    // The owning slab outlives the shared cache and releases the allocation.
+}
+
+ReadThroughCacheIoResult CachedScratchBacking::read_inner(
+        void* context, ReadThroughCacheKey key, ScratchBuffer destination) noexcept {
+    auto& inner = *static_cast<ScratchBacking*>(context);
+    const auto status = inner.read_page(key.page_number, destination);
+    return {status, status == ScratchStatus::ok ? destination.size : 0, false,
+            status == ScratchStatus::ok ? nullptr : inner.carried_failure()};
+}
+
+ReadThroughCacheIoResult CachedScratchBacking::write_inner(
+        void* context, ReadThroughCacheKey key, ScratchBytes source) noexcept {
+    auto& inner = *static_cast<ScratchBacking*>(context);
+    const auto status = inner.write_page(key.page_number, source);
+    // A failed write may have changed a prefix or extended the backing.
+    // ScratchBacking exposes no unchanged-on-failure guarantee.
+    return {status, status == ScratchStatus::ok ? source.size : 0, false,
+            status == ScratchStatus::ok ? nullptr : inner.carried_failure()};
 }
 
 ScratchStatus CachedScratchBacking::do_read_page(
@@ -72,16 +114,10 @@ ScratchStatus CachedScratchBacking::do_read_page(
     }
     // Extent belongs to the inner, even if an entry happens to be cached.
     // Forward misses (including out-of-extent reads) for its exact status.
-    if (slot_count_ != 0 && id < inner_->page_count()) {
-        const auto index = slot(id);
-        if (page_ids_[index] == id) {
-            std::memcpy(destination.data, bytes_.get() + index * page_size(), page_size());
-            return ScratchStatus::ok;
-        }
-    }
-    const auto status = inner_->read_page(id, destination);
-    if (status == ScratchStatus::ok) remember(id, destination.data);
-    return status;
+    if (id >= inner_->page_count()) return inner_->read_page(id, destination);
+    // This cache owns one immutable backing/generation. Zero identity fields
+    // retain the original direct mapping exactly: page_number % slot_count.
+    return cache_.get({0, 0, id}, destination);
 }
 
 ScratchStatus CachedScratchBacking::do_write_page(
@@ -130,10 +166,7 @@ ScratchStatus CachedScratchBacking::write(ScratchPageId id, ScratchBytes source)
     // A failed/short write may already have changed disk bytes or extended
     // the file. Never serve the old bytes and never publish the new ones
     // until the inner reports that the entire page was written.
-    if (slot_count_ != 0) page_ids_[slot(id)] = scratch_no_page;
-    const auto status = inner_->write_page(id, source);
-    if (status == ScratchStatus::ok) remember(id, source.data);
-    return status;
+    return cache_.put({0, 0, id}, source);
 }
 
 ScratchStatus CachedScratchBacking::do_sync(ScratchDurability durability) noexcept {

@@ -39,7 +39,9 @@
  *     strategy_set_selected_window_v1, strategy_selected_window_counts_v1,
  *     strategy_set_report_sink_v1, strategy_set_report_sink_fd_v1, strategy_report_sink_receipt_v1,
  *     strategy_set_scratch_tables_v1, strategy_report_sink_summary_v1,
- *     pf_report_scratch_arena_stats, strategy_require_report_scratch_arena_v1,
+ *     strategy_set_cache_policy_v1,
+ *     pf_report_scratch_arena_stats, pf_report_cache_stats,
+ *     strategy_require_report_scratch_arena_v1,
  *     strategy_report_sink_diagnostics_v1,
  *     pf_run_abort_install_sigterm_v1, pf_run_abort_requested_v1,
  *     pf_run_abort_restore_sigterm_v1 — the
@@ -205,6 +207,23 @@ int configure_native_fx_curve_cabi(
 namespace pineforge {
 const pf_field_desc_t* pending_order_layout(int* count);
 }  // namespace pineforge
+
+static_assert(offsetof(pf_cache_policy_v1, struct_size) == 0,
+              "cache policy size must be the first field");
+static_assert(offsetof(pf_cache_policy_entry_v1, kind) == 0,
+              "cache policy entry kind must be the first field");
+static_assert(sizeof(void*) != 8 ||
+              (sizeof(pf_cache_policy_entry_v1) == 16
+               && alignof(pf_cache_policy_entry_v1) == 8
+               && offsetof(pf_cache_policy_entry_v1, reserved) == 4
+               && offsetof(pf_cache_policy_entry_v1, capacity_bytes) == 8
+               && sizeof(pf_cache_policy_v1) == 32
+               && alignof(pf_cache_policy_v1) == 8
+               && offsetof(pf_cache_policy_v1, version) == 4
+               && offsetof(pf_cache_policy_v1, entry_count) == 8
+               && offsetof(pf_cache_policy_v1, entries) == 16
+               && offsetof(pf_cache_policy_v1, reserved) == 24),
+              "cache policy LP64 layout must match the host descriptor");
 
 /* ── Bar layout parity ──────────────────────────────────────────── */
 
@@ -1478,6 +1497,13 @@ PF_API int pf_report_scratch_arena_stats(uint64_t* high_water_bytes, uint64_t* a
     }
 }
 
+PF_API int pf_report_cache_stats(pf_strategy_t s, uint64_t* resident_bytes,
+                                 uint64_t* allocation_bypass_count) {
+    if (!s) return -1;
+    return static_cast<const pineforge::BacktestEngine*>(s)->report_cache_stats(
+        resident_bytes, allocation_bypass_count);
+}
+
 PF_API int strategy_require_report_scratch_arena_v1(pf_strategy_t s) {
     return pf_cabi_int(s, [&] {
         if (!s) return -1;
@@ -1542,6 +1568,13 @@ PF_API int strategy_set_scratch_tables_v1(pf_strategy_t s, const pf_scratch_tabl
     return pf_cabi_int(s, [&] {
         if (!s) return -1;
         return static_cast<pineforge::BacktestEngine*>(s)->set_scratch_tables_v1(config);
+    });
+}
+
+PF_API int strategy_set_cache_policy_v1(pf_strategy_t s, const pf_cache_policy_v1* policy) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->set_cache_policy_v1(policy);
     });
 }
 

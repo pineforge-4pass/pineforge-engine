@@ -7952,6 +7952,25 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
         "-Wl,--wrap=_ZnamRKSt9nothrow_t")
 endif()
 # --- CR-150 resident-command-scratch end ---
+# --- CR-150 cache-policy-v1 begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    add_library(cache_policy_module MODULE cache_policy_module.cpp)
+    target_link_libraries(cache_policy_module PRIVATE pineforge)
+    target_compile_options(cache_policy_module PRIVATE -ffp-contract=off -fvisibility=hidden)
+    target_link_libraries(test_cache_policy_v1 PRIVATE ${CMAKE_DL_LIBS})
+    target_compile_definitions(test_cache_policy_v1 PRIVATE
+        PF_CACHE_POLICY_MODULE_PATH="$<TARGET_FILE:cache_policy_module>")
+    add_dependencies(test_cache_policy_v1 cache_policy_module)
+endif()
+# --- CR-150 cache-policy-v1 end ---
+# --- CR-150 ta-history-cache begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    target_link_options(test_ta_history_cache_faults PRIVATE
+        "-Wl,--wrap=pread" "-Wl,--wrap=pwrite"
+        "-Wl,--wrap=_ZnwmRKSt9nothrow_t")
+endif()
+# --- CR-150 ta-history-cache end ---
+
 # --- CR-150 core-cr150-replay begin ---
 # Test-only strategy orders for the real-library JSON replay test. The module
 # links the actual runtime; it supplies no replay accessor or replay option.

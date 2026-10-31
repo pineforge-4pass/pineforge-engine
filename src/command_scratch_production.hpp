@@ -2,6 +2,7 @@
 
 #include <pineforge/detail/scratch_backing.hpp>
 #include <pineforge/detail/scratch_store.hpp>
+#include <pineforge/detail/cache_capacity.hpp>
 
 #include <atomic>
 #include <cstddef>
@@ -106,5 +107,13 @@ std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
 // admission/claim/durability policy, independently of this disk-front cap.
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
     std::size_t page_size, std::size_t resident_bytes);
+
+// Inclusive physical allowance, independent of backing admission. Both the
+// resident prefix and subsequent read cache use this same instance policy.
+std::unique_ptr<ScratchBacking> make_command_scratch_backing(
+    std::size_t page_size, CacheCapacity capacity);
+// Payload seam supplied by the configurable backing decorator.
+std::unique_ptr<ScratchBacking> make_command_scratch_backing(
+    std::size_t page_size, std::size_t resident_bytes, std::size_t cache_bytes);
 
 } // namespace pineforge::detail

@@ -110,14 +110,17 @@ class ExportListTests(unittest.TestCase):
                 for symbol in source_symbols(include_dir / header)
             )
         self.assertEqual(runtime, sorted(expected_runtime))
-        self.assertEqual(len(runtime), 118)
-        self.assertEqual(len(implemented_names), 98)
+        # Independently read PF_API rows: 109 + 3 + 3 + 5 declarations;
+        # c_abi.cpp defines 100, leaving twenty generated declarations.
+        self.assertEqual(len(runtime), 120)
+        self.assertEqual(len(implemented_names), 100)
         self.assertIn(
             ["strategy_stream_engine_layout_version", "pineforge.h", "yes"],
             runtime,
         )
+        self.assertIn(["pf_report_cache_stats", "pineforge.h", "yes"], runtime)
         yes_count = sum(row[2] == "yes" for row in runtime)
-        self.assertEqual(yes_count, 98)
+        self.assertEqual(yes_count, 100)
         self.assertEqual(yes_count, len(implemented_names))
         for symbol, header, _ in runtime + native:
             with self.subTest(symbol=symbol, header=header):

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <pineforge/cache_policy.hpp>
+
 #include <pineforge/detail/scratch_store.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/execution_consumer.hpp>
@@ -11,6 +13,7 @@
 #include "native_selected_epoch.hpp"
 #include "runtime_ambient.hpp"
 #include "native_calc_plan.hpp"
+#include "run_cache_diagnostics.hpp"
 #include <array>
 #include <cstdint>
 #include <exception>
@@ -89,7 +92,13 @@ inline constexpr bool kRetireEveryPointDefault = false;
 #endif
 
 class NativeExecutionConsumer final : public IExecutionConsumer {
+    // Declared first so embedded cache registrations detach before this sink
+    // dies. Its destructor also detaches the engine's longer-lived ledger.
+    detail::RunCacheDiagnostics run_cache_diagnostics_;
 public:
+    static int report_cache_stats(const BacktestEngine& engine,
+                                  std::uint64_t* resident_bytes,
+                                  std::uint64_t* allocation_bypass_count) noexcept;
     enum class CommandScratchBinding : std::size_t {
         Trade, Dependency, Book, Exit, Count
     };
@@ -197,6 +206,13 @@ public:
     // (NativeStrategyHost::native_state, out of line and by value). running()
     // is the branch view() takes.
     bool running() const noexcept { return running_spec_ != nullptr; }
+    const CacheDefaults& cache_policy_config() const noexcept { return cache_policy_config_; }
+    const CacheDefaults& cache_policy_for_run() const noexcept {
+        return cache_policy_preparing_ ? cache_policy_attempt_ : cache_policy_run_;
+    }
+    void set_cache_policy_config(const CacheDefaults& policy) noexcept {
+        cache_policy_config_ = policy;
+    }
     // Whether the configured spec's script bars are buckets gathered from its
     // input under the resolved pairing (native_aggregates_input_bars).
     bool aggregates_input() const noexcept {
@@ -1789,6 +1805,12 @@ private:
     bool running_tolerant_labels_ = false;
     bool running_raw_labels_ = false;
     void cache_running_policy() noexcept;
+    // Physical settings only. Each attempt snapshots before any host provider
+    // can construct a run store; an idle replacement leaves that copy intact.
+    CacheDefaults cache_policy_config_{};
+    CacheDefaults cache_policy_attempt_{};
+    CacheDefaults cache_policy_run_{};
+    bool cache_policy_preparing_ = false;
     void leave_running() noexcept { running_spec_ = nullptr; }
     // The caches beside the lookups they replace, compared bit for bit by
     // tests/test_native_callback_caches.cpp.
@@ -2483,16 +2505,17 @@ private:
         const int uncaught_;
         const bool nested_;
         const bool allow_live_;
+        detail::RunCacheDiagnosticsScope cache_diagnostics_scope_;
     public:
-        // Inline: the stream pushes are per-input entries, and an untracked
-        // handle must pay only these loads.
+        // Inline: stream pushes are per-input entries. Keep the lifecycle
+        // guard and the run's allocation-owner binding in the same scope.
         EntryExitGuard(NativeExecutionConsumer& c, BacktestEngine& engine,
                        bool allow_live) noexcept
             : c_(c), engine_(engine), tracked_(c.selected_epoch_tracked()),
               uncaught_(tracked_ ? std::uncaught_exceptions() : 0),
               nested_(c.in_attempt_call_ || c.preparing_begin_ || c.in_callback_
                          || c.processing_input_ || c.selected_epoch_.dispatching),
-              allow_live_(allow_live) {}
+              allow_live_(allow_live), cache_diagnostics_scope_(c.run_cache_diagnostics_) {}
         ~EntryExitGuard() {
             if (nested_) return;
             if (tracked_)
@@ -2695,6 +2718,11 @@ public:
     // The transcript witness reads the Limit-class resident watermark only.
     std::uint64_t dormant_watermark_for_test() const noexcept;
 
+    // Internal fixture seam, frozen before the first event. Production uses
+    // the journal's existing defaults; these sizes never enter run state.
+    static void set_journal_residency_for_test(native_order::WorkingRequestCore&,
+                                              std::size_t maximum, std::size_t keep);
+
     using DormantReach = bool (*)(bool ge, double level, double lo,
                                  double hi, double delta) noexcept;
     // GE means level >= lo - delta; LE means level <= hi + delta.
@@ -2876,6 +2904,7 @@ private:
 class DormantBookScratchBacking final : public detail::ScratchBacking {
 public:
     explicit DormantBookScratchBacking(std::size_t page_size) noexcept;
+    DormantBookScratchBacking(std::size_t page_size, CacheCapacity capacity) noexcept;
     void prepare();
     std::uint64_t page_count() const noexcept override;
     std::optional<std::uint64_t> arena_capacity_bytes() const noexcept override;
@@ -2889,6 +2918,7 @@ protected:
     detail::ScratchStatus do_sync(detail::ScratchDurability) noexcept override;
 
 private:
+    CacheCapacity cache_capacity_;
     std::unique_ptr<detail::ScratchBacking> inner_;
 };
 
