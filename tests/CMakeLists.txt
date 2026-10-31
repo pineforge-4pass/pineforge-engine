@@ -2518,6 +2518,12 @@ add_test(
 )
 
 add_test(
+    NAME test_parity_packaged_paths
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_parity_packaged_paths.py
+)
+
+add_test(
     NAME test_fingerprint
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/fingerprint_self_test.py
@@ -7447,6 +7453,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_jailed_temp_files_witness
             -- -q -p no:cacheprovider
             ${PROJECT_SOURCE_DIR}/tests/test_jailed_temp_files_witness.py)
+    add_test(NAME test_parity_jailed_adapter
+        COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/run_pytest_no_skips.py
+            --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_parity_jailed_adapter
+            -- -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_parity_jailed_adapter.py)
 endif()
 
 # Property reads and the diagnostic belong before the lane loop;
