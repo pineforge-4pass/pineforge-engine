@@ -4,6 +4,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -19,12 +20,31 @@ from host import (
     require_supervisor, sink_receipt, sink_wire, supervisor_fixture, validator_observer,
 )
 
-# The test host's hang guard for the launches below: it ends a HUNG launch and nothing is
-# asserted against it, except the one mutation control that expects the guard to expire
-# (it needs only "the guard expired", then checks the elapsed time against a floor of 2 s).
-# A sanitizer ctest leg runs this file beside ~1350 other rows, where a launch can need
-# longer than the former 4-8 s to reach its stalled state. Unset = 30 s.
-HANG_GUARD_SECONDS = float(os.environ.get("PINEFORGE_REPORT_TEST_HANG_GUARD_SECONDS") or 30)
+HANG_GUARD_ENVIRONMENT = "PINEFORGE_REPORT_TEST_HANG_GUARD_SECONDS"
+
+
+def hang_guard_from_environment(environment=os.environ):
+    """The test host's deadline for the launches below, as a parameter: unset, empty or 0 = no
+    deadline (None); a positive number of seconds applies exactly; anything else is a usage error
+    naming the variable. A real hang is caught by the CI runner's own no-new-output guard."""
+    text = environment.get(HANG_GUARD_ENVIRONMENT, "")
+    if text.strip() == "":
+        return None
+    try:
+        value = float(text)
+    except ValueError:
+        value = float("nan")
+    if not math.isfinite(value) or value < 0:
+        raise SystemExit(
+            f"{HANG_GUARD_ENVIRONMENT} must be a finite number of seconds >= 0 "
+            f"(unset or 0 = no deadline), not {text!r}")
+    return value or None
+
+
+HANG_GUARD_SECONDS = hang_guard_from_environment()
+# The mutation control SETS a finite guard itself: HostWatchdogExpired firing is the feature
+# under test there, not a limit on a real run.
+MUTATION_CONTROL_GUARD_SECONDS = 4
 
 KNOBS = (
     ("--report-max-bytes", "PINEFORGE_REPORT_MAX_BYTES", "report_bytes", 4096),
@@ -385,14 +405,14 @@ class Contract(unittest.TestCase):
                         self.assertEqual(capture.report, expected, msg=msg)
                         self.assertTrue(record["channels"]["report"]["complete"], msg=msg)
 
-    def assert_finite_report_stall(self, *, supervisor_path=None):
+    def assert_finite_report_stall(self, *, supervisor_path=None, guard=HANG_GUARD_SECONDS):
         expected = reference({"label": "finite-report-" + "x" * 16384}).stdout
         with tempfile.TemporaryDirectory(prefix="pf-finite-report-") as directory:
             identity = Path(directory) / "producer.json"
             capture = launch(
                 {"candidate": encoded(expected), "producer_identity_path": str(identity)},
                 options=("--channel-stall-ms", "600", "--channel-wall-ms", "60000"),
-                stalled_channels=("report",), supervisor_path=supervisor_path, watchdog_seconds=HANG_GUARD_SECONDS)
+                stalled_channels=("report",), supervisor_path=supervisor_path, watchdog_seconds=guard)
             msg = capture.failure_context()
             record = self.refusal(
                 capture, "report_channel_failed", {"channel": "report", "reason": "deadline"},
@@ -414,6 +434,24 @@ class Contract(unittest.TestCase):
     def test_finite_stall_expires_through_supervisor_report_pipe(self):
         self.assert_finite_report_stall()
 
+    def test_host_hang_guard_none_or_zero_means_no_deadline(self):
+        # Before the host honoured it, 0 expired the very first poll and None failed on the sum.
+        for guard in (None, 0):
+            with self.subTest(guard=guard):
+                self.assert_finite_report_stall(guard=guard)
+
+    def test_hang_guard_environment_parse(self):
+        parse = hang_guard_from_environment
+        self.assertIsNone(parse({}))
+        self.assertIsNone(parse({HANG_GUARD_ENVIRONMENT: ""}))
+        self.assertIsNone(parse({HANG_GUARD_ENVIRONMENT: "0"}))
+        self.assertEqual(parse({HANG_GUARD_ENVIRONMENT: "4"}), 4.0)
+        self.assertEqual(parse({HANG_GUARD_ENVIRONMENT: "0.5"}), 0.5)
+        for text in ("nan", "inf", "-1", "-0.5", "soon", "4s"):
+            with self.subTest(value=text), self.assertRaises(SystemExit) as refused:
+                parse({HANG_GUARD_ENVIRONMENT: text})
+            self.assertIn(HANG_GUARD_ENVIRONMENT, str(refused.exception))
+
     def test_finite_report_stall_assertions_reject_removed_pipe_deadline(self):
         self.assert_finite_report_stall()
         original = SUPERVISOR.read_text(encoding="utf-8")
@@ -426,8 +464,10 @@ class Contract(unittest.TestCase):
                     (altered.parent / sibling.name).symlink_to(sibling)
             altered.write_text(
                 original.replace(line, '                if False:\n', 1), encoding="utf-8")
+            # This control SETS the guard itself: HostWatchdogExpired firing is what it proves.
             with self.assertRaises(HostWatchdogExpired) as rejected:
-                self.assert_finite_report_stall(supervisor_path=altered)
+                self.assert_finite_report_stall(
+                    supervisor_path=altered, guard=MUTATION_CONTROL_GUARD_SECONDS)
             partial = rejected.exception.capture
             msg = partial.failure_context()
             self.assertEqual(partial.control["watchdog_pending_bytes"], {"report": 4096}, msg=msg)

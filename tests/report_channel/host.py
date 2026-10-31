@@ -652,7 +652,11 @@ def launch(request=None, *, options=(), environment=None, status="valid",
             raise AssertionError(
                 f"M accepted a host probe before cancellation; {current_capture().failure_context()}")
 
-        deadline = time.monotonic() + watchdog_seconds
+        # watchdog_seconds None or 0 = no host deadline: the launch ends when the supervisor does
+        # (a real hang is caught by the CI runner's own no-new-output guard, not by a limit here).
+        if watchdog_seconds is not None and watchdog_seconds < 0:
+            raise ValueError("watchdog_seconds must be None, 0 or a positive number of seconds")
+        deadline = time.monotonic() + watchdog_seconds if watchdog_seconds else None
         try:
             for name, fd in (("report", report_read), ("diagnostic", diagnostic_read),
                              ("sink", sink_read), *extra_readers.items()):
@@ -782,7 +786,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                             descendant_samples.append(sample)
                     except (FileNotFoundError, ValueError):
                         pass
-                if time.monotonic() >= deadline:
+                if deadline is not None and time.monotonic() >= deadline:
                     control["watchdog_pending_bytes"] = {}
                     for name, fd in held_readers.items():
                         if name != "status":
@@ -962,10 +966,12 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                 if (ended and not selector.get_map()
                         and delayed_diagnostic is None and not held_readers):
                     break
-            wait = process.wait(timeout=max(0.01, deadline - time.monotonic()))
+            wait = process.wait(
+                timeout=None if deadline is None else max(0.01, deadline - time.monotonic()))
             observe_supervisor_exit(time.monotonic())
             for name, observation in exit_observers.items():
-                observation.thread.join(timeout=max(0.01, deadline - time.monotonic()))
+                observation.thread.join(
+                    timeout=None if deadline is None else max(0.01, deadline - time.monotonic()))
                 collect_exit_observations()
                 require_precondition(
                     observation.error is None and observation.result is not None,
