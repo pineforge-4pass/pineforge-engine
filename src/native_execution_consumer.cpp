@@ -3117,6 +3117,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     requests_.reset(spec.identity);
     requests_.bind_scratch_slab(engine.scratch_table_run_.slab);
     order_gauge_enabled = gauge::attach_from_environment();
+    if (order_gauge_enabled) gauge::reset_counters();
     host_cache_.reset();
     clear_cohort_target_cache();
     terminal_receipt_high_water_ = 0;
@@ -9608,9 +9609,19 @@ void NativeExecutionConsumer::seal_script(BacktestEngine& engine, NativeCompleti
     ++next_script_index_;
     if (order_gauge_enabled && !failed()) {
         std::uint64_t live_exit_requests = 0;
-        for (const auto& live : requests_.live()) {
-            if (std::holds_alternative<native_order::CohortClose>(live.authority))
-                ++live_exit_requests;
+        try {
+            // Telemetry must not read spilled rows or rethrow a carried book
+            // failure. A spilled book reports zero exit requests for this bar.
+            if (!requests_.book_spilled()) {
+                for (const auto& live : requests_.live()) {
+                    if (std::holds_alternative<native_order::CohortClose>(live.authority))
+                        ++live_exit_requests;
+                }
+            }
+        } catch (...) {
+            // Drop only this sample. The resident walk consumes no carried
+            // failure; the existing engine reads still surface those failures.
+            return;
         }
         // Display-only telemetry. None of these values feeds a run decision.
         gauge::note_state(static_cast<std::uint64_t>(engine.pyramid_entries_.size()),

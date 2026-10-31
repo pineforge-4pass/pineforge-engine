@@ -81,6 +81,13 @@ inline bool attached() noexcept {
     return attached_block != nullptr;
 }
 
+// Attached engine runs reset all counters at begin_ready, including updates,
+// sums and peaks. The mapping and publication sequence continue across runs;
+// the reset becomes visible in the mapped payload at the next sampled bar.
+inline void reset_counters() noexcept {
+    counters = Counters{};
+}
+
 namespace detail {
 
 inline std::uint64_t saturating_add(std::uint64_t left, std::uint64_t right) noexcept {
@@ -107,7 +114,10 @@ void reset_for_test() noexcept;
 
 // Callers must check attached() before these mutators. Exactly once per
 // completed bar, exit requests count live native exit legs, not source exit
-// calls. Extra publish() calls must not charge another bar.
+// calls. When the book has spilled rows, the engine skips the walk and records
+// live_exit_requests as 0 for that bar, so match work is also 0; peaks retain
+// earlier samples. A resident-walk exception drops the sample and leaves the
+// published image unchanged. Extra publish() calls must not charge another bar.
 inline void note_state(std::uint64_t open_lots, std::uint64_t live_orders,
                        std::uint64_t live_exit_requests) noexcept {
     counters.open_lots = open_lots;
@@ -121,11 +131,17 @@ inline void note_state(std::uint64_t open_lots, std::uint64_t live_orders,
     counters.match_work_sum = detail::saturating_add(counters.match_work_sum, work);
 }
 
+// Charges only the exposure fold in cohort_exposure_for(const CohortFacts&):
+// units is live_units_by_origin.size(), with units * (units + 1) work per fold.
+// Other live_units_by_origin walks are not charged.
 inline void add_fold_work(std::uint64_t units) noexcept {
     const auto work = detail::saturating_multiply(units, detail::saturating_add(units, 1));
     counters.fold_work_sum = detail::saturating_add(counters.fold_work_sum, work);
 }
 
+// Charges only comparator probes in the roster membership searches of
+// release_closed_cohort_origins. Other cohort_contains calls and the direct
+// scan shortcut are not charged.
 inline void add_roster_work(std::uint64_t calls) noexcept {
     counters.roster_work_sum = detail::saturating_add(counters.roster_work_sum, calls);
 }
@@ -139,7 +155,8 @@ inline void note_bars(std::uint64_t bars_done, std::uint64_t bars_total) noexcep
 // Invalid configuration silently leaves the gauge detached. The caller owns
 // the fd and must retain the backing's size until exit (or test reset).
 // Once attached, further calls in this image succeed without replacing the
-// first mapping. A new process or image must provide a fresh zeroed backing;
+// first mapping. A new process or image must provide a backing that does not
+// carry a valid gauge header. Only one engine may run at a time in an image.
 // reset_for_test unmaps but deliberately does not erase a published backing.
 bool attach_from_environment() noexcept;
 

@@ -8,6 +8,7 @@
 
 #include "global_allocation_replacement.hpp"
 #include "native_report_truth_fixture.hpp"
+#include "../src/native_execution_consumer.hpp"
 
 #include <array>
 #include <atomic>
@@ -167,11 +168,21 @@ bool accepts_pread_copy(const Bytes& bytes) {
         && (u64(bytes, 16) & 1) == 0;
 }
 
+constexpr std::uint32_t little_endian(std::uint32_t value) noexcept {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    return __builtin_bswap32(value);
+#else
+    return value;
+#endif
+}
+
 void write_valid_header(const Backing& backing) {
     Bytes bytes{};
     std::memcpy(bytes.data(), "PFGAUGE1", 8);
-    bytes[8] = 1;
-    bytes[12] = 128;
+    const auto version = little_endian(std::uint32_t{1});
+    const auto length = little_endian(std::uint32_t{128});
+    std::memcpy(bytes.data() + 8, &version, sizeof version);
+    std::memcpy(bytes.data() + 12, &length, sizeof length);
     REQUIRE(::pwrite(backing.fd, bytes.data(), bytes.size(), 0)
             == static_cast<ssize_t>(bytes.size()));
 }
@@ -344,11 +355,13 @@ void valid_backing_is_refused() {
 }
 
 void feed_counters() noexcept {
-    if (!gauge::attached()) return;
-    gauge::note_state(7, 9, 2);
-    gauge::note_bars(3, 11);
-    gauge::add_fold_work(4);
-    gauge::add_roster_work(6);
+    if (gauge::attached()) {
+        gauge::note_state(7, 9, 2);
+        gauge::note_bars(3, 11);
+        gauge::add_fold_work(4);
+        gauge::add_roster_work(6);
+    }
+    // Exercise detached publication too; only the mutators require attachment.
     gauge::publish();
 }
 
@@ -362,6 +375,8 @@ void expect_disabled(const char* value, const Backing& sentinel) {
     feed_counters();
     const auto output = capture.finish();
     CHECK(!attached);
+    CHECK(!gauge::attached());
+    CHECK(counters_zero());
     CHECK(output[0] == 0);
     CHECK(output[1] == 0);
     CHECK(sentinel.image() == before);
@@ -859,18 +874,149 @@ void native_run_publishes_gauge() {
     const auto bars = l2_fixture::feed(4);
     l2_fixture::run_feed(host, run_spec, bars);
     r4_test::completed(host);
-    CHECK(host.lots().size() > 0);
+    CHECK(host.lots().size() == 1);
 
     const auto bytes = read_block(backing.fd);
     CHECK(std::memcmp(bytes.data(), "PFGAUGE1", 8) == 0);
     CHECK(u32(bytes, 8) == 1);
     CHECK(u32(bytes, 12) == 128);
-    CHECK((u64(bytes, 16) & 1) == 0);
-    CHECK(u64(bytes, 24) > 0);
-    CHECK(u64(bytes, 40) > 0);
+    CHECK(u64(bytes, 16) == 8);
+    CHECK(u64(bytes, 24) == 1);
+    CHECK(u64(bytes, 40) == 1);
     CHECK(u64(bytes, 56) == 4);
     CHECK(u64(bytes, 64) == 0);
-    CHECK(u64(bytes, 72) >= 4);
+    CHECK(u64(bytes, 72) == 4);
+}
+
+no::Request resting_cohort_exit(no::CohortHandle cohort) {
+    no::Request request{no::HostSized{no::HostSizedKind::Close, std::nullopt},
+                        "resting-exit", ""};
+    request.owner = no::BindCohort{cohort};
+    request.trigger = no::Limit{1000};
+    return request;
+}
+
+struct GaugeHost : r4_test::Host {
+    const no::WorkingRequestCore& core() {
+        return pineforge::as_native_consumer(execution_consumer()).request_core();
+    }
+};
+
+void spilled_book_skips_exit_sample() {
+    Environment environment;
+    gauge::detail::reset_for_test();
+    Backing backing;
+    select_fd(backing.fd);
+    GaugeHost host;
+    host.calculation = [&](r4_test::Host& current) {
+        if (current.calculations == 1) {
+            r4_test::put(current, resting_cohort_exit(current.cohort_open()));
+        } else if (current.calculations == 2) {
+            REQUIRE(!host.core().book_spilled());
+            const auto resident = read_block(backing.fd);
+            CHECK(u64(resident, 16) == 2);
+            CHECK(u64(resident, 32) == 1);
+            CHECK(u64(resident, 72) == 1);
+            CHECK(u64(resident, 80) == 1);
+            CHECK(u64(resident, 88) == 1);
+            no::Request resting{no::Transact{1}, "resting-entry", ""};
+            resting.trigger = no::Limit{1};
+            // One exit plus the actual 4096-row resident bound forces a spill.
+            for (std::size_t i = 0; i < 4096; ++i)
+                r4_test::put(current, resting);
+            REQUIRE(host.core().book_spilled());
+            CHECK(host.core().live_size() == 4097);
+        }
+    };
+    l2_fixture::run_feed(host, r4_test::spec("order-gauge-spilled-book"),
+                        l2_fixture::feed(2));
+    r4_test::completed(host);
+    CHECK(host.calculations == 2);
+    REQUIRE(host.core().book_spilled());
+    CHECK(host.core().live_size() == 4097);
+    CHECK(host.lots().empty());
+    const auto bytes = read_block(backing.fd);
+    CHECK(accepts_pread_copy(bytes));
+    CHECK(u64(bytes, 16) == 4);
+    CHECK(u64(bytes, 24) == 0);
+    CHECK(u64(bytes, 32) == 4097);
+    CHECK(u64(bytes, 40) == 0);
+    CHECK(u64(bytes, 48) == 4097);
+    CHECK(u64(bytes, 56) == 2);
+    CHECK(u64(bytes, 64) == 0);
+    CHECK(u64(bytes, 72) == 2);
+    // A spilled book publishes 0 for this bar, retaining the resident peak.
+    CHECK(u64(bytes, 80) == 0);
+    CHECK(u64(bytes, 88) == 1);
+    CHECK(u64(bytes, 96) == 0);
+    CHECK(u64(bytes, 104) == 0);
+    CHECK(u64(bytes, 112) == 0);
+    CHECK(u64(bytes, 120) == 0);
+}
+
+void native_runs_reset_counters() {
+    Environment environment;
+    gauge::detail::reset_for_test();
+    Backing backing;
+    select_fd(backing.fd);
+    r4_test::Host host;
+    host.beginning = [](r4_test::Host& current) {
+        current.calculations = 0;
+        CHECK(gauge::attached());
+        CHECK(counters_zero());
+    };
+    host.calculation = [](r4_test::Host& current) {
+        if (current.calculations != 1) return;
+        const auto cohort = current.cohort_open();
+        const auto opening = r4_test::put(current, l2_fixture::market(1, "first-open"));
+        current.cohort_add(cohort, opening);
+        r4_test::put(current, resting_cohort_exit(cohort));
+    };
+    auto run_spec = r4_test::spec("order-gauge-repeated-runs");
+    l2_fixture::run_feed(host, run_spec, l2_fixture::feed(4));
+    r4_test::completed(host);
+    CHECK(host.calculations == 4);
+    CHECK(host.lots().size() == 1);
+    const auto first = read_block(backing.fd);
+    CHECK(accepts_pread_copy(first));
+    CHECK(u64(first, 16) == 8);
+    CHECK(u64(first, 24) == 1);
+    CHECK(u64(first, 32) == 1);
+    CHECK(u64(first, 40) == 1);
+    CHECK(u64(first, 48) == 1);
+    CHECK(u64(first, 56) == 4);
+    CHECK(u64(first, 64) == 0);
+    CHECK(u64(first, 72) == 4);
+    CHECK(u64(first, 80) == 1);
+    CHECK(u64(first, 88) == 1);
+    CHECK(u64(first, 96) == 1);
+    CHECK(u64(first, 104) == 4);
+    CHECK(u64(first, 112) == 0);
+    CHECK(u64(first, 120) == 0);
+
+    // Reuse this host, image and backing without a test reset or re-attach.
+    host.calculation = nullptr;
+    run_spec.identity.run_number = 2;
+    l2_fixture::run_feed(host, run_spec, l2_fixture::feed(2));
+    r4_test::completed(host);
+    CHECK(host.calculations == 2);
+    CHECK(host.lots().empty());
+    const auto second = read_block(backing.fd);
+    CHECK(accepts_pread_copy(second));
+    CHECK(u64(second, 16) == 12);
+    CHECK(u64(second, 24) == 0);
+    CHECK(u64(second, 32) == 0);
+    CHECK(u64(second, 40) == 0);
+    CHECK(u64(second, 48) == 0);
+    CHECK(u64(second, 56) == 2);
+    CHECK(u64(second, 64) == 0);
+    CHECK(u64(second, 72) == 2);
+    CHECK(u64(second, 80) == 0);
+    CHECK(u64(second, 88) == 0);
+    CHECK(u64(second, 96) == 0);
+    CHECK(u64(second, 104) == 0);
+    CHECK(u64(second, 112) == 0);
+    CHECK(u64(second, 120) == 0);
 }
 
 void report_rule(r4_test::Host& host) {
@@ -990,14 +1136,14 @@ void allocation_free_updates() {
         const auto allocations = global_allocation::allocations;
         const auto refusals = global_allocation::refused;
         global_allocation::refusing = true;
-        if (attached) {
-            for (std::uint64_t k = 1; k <= 1000000; ++k) {
+        for (std::uint64_t k = 1; k <= 1000000; ++k) {
+            if (gauge::attached()) {
                 gauge::note_state(k, k, k);
                 gauge::note_bars(k, 1000000);
                 gauge::add_fold_work(1);
                 gauge::add_roster_work(3);
-                gauge::publish();
             }
+            gauge::publish();
         }
         global_allocation::refusing = false;
         CHECK(global_allocation::allocations == allocations);
@@ -1044,6 +1190,8 @@ int main() {
     test("order_gauge_concurrent_publication", concurrent_publication);
     test("order_gauge_saturating_work_and_peaks", saturating_work_and_peaks);
     test("order_gauge_native_run_publishes_gauge", native_run_publishes_gauge);
+    test("order_gauge_spilled_book_skips_exit_sample", spilled_book_skips_exit_sample);
+    test("order_gauge_native_runs_reset_counters", native_runs_reset_counters);
     test("order_gauge_report_bytes_are_unchanged", report_bytes_are_unchanged);
     test("order_gauge_allocation_free_updates", allocation_free_updates);
     std::printf("test_order_gauge: %d checks, %d failures\n", checks, failures);

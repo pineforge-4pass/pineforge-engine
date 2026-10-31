@@ -322,6 +322,7 @@ to EOF got exit status 0 and a complete verified trailer.
 | `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES` | environment, positive decimal `uint64` | unset: no cap | Caps the bytes the command-store backings of one thread may extend, in total. A malformed value fails the run with `scratch_configuration_invalid`; exceeding it fails with `scratch_io_failed` |
 | `PINEFORGE_COMMAND_SCRATCH_DIR`, `TMPDIR` | environment, a directory | `TMPDIR`, else `/tmp` | Where scratch files go when no arena is attached: `TMPDIR` for the trade ledger, the report files and the command stores; `PINEFORGE_COMMAND_SCRATCH_DIR` for the command stores only (when `run_json.py` is invoked directly, `--spill-dir` also sets the directory for engine scratch and unlinked report temporaries, below). An explicit directory never falls back; a tmpfs or ramfs is refused |
 | `PF_SCRATCH_ARENA_FD`, `PF_SCRATCH_ARENA_BYTES` | environment | none | The inherited arena: descriptor 5 (only 5 is accepted) and its size in bytes, in whole 1 MiB chunks (under 1 MiB is refused). A run that crosses it fails with `report_sink_failed`, reason `arena_exhausted`, and the failure carries a lower bound of the bytes needed |
+| `PF_GAUGE_FD` | environment | unset | Optional inherited descriptor for a 128-byte order-book gauge. The launcher supplies a sealed memfd under the contract below; invalid configuration silently leaves the run without a gauge |
 | `PF_SCRATCH_WINDOW_BYTES` | environment | 32 MiB | Total cap on the arena bytes mapped at one time, rounded down to whole pages. Mapped pages count toward the resident size while mapped |
 | `pf_scratch_tables_v1` through `strategy_set_scratch_tables_v1` | descriptor of eleven maxima | disk tables; with `bounded_memory`, the policy values of [Scratch tables](@ref scratch_tables) | Sizes the fixed slab of the historical tables: `K_e`, `B_e`, `K_c`, `B_c`, `U`, `B_U`, `V`, `B_V`, `R` and the unused q pair. Exceeding a maximum fails the run with `scratch_capacity_exceeded` |
 | A report sink (`strategy_set_report_sink_v1`, `strategy_set_report_sink_fd_v1`) | setter | none | Streams the trades and the equity curve to the sink instead of keeping them in the report. See [Report schema](@ref report_schema) |
@@ -330,6 +331,20 @@ to EOF got exit status 0 and a complete verified trailer.
 | `PINEFORGE_REPORT_SINK_FD` | environment, read by the release entrypoint (`PINEFORGE_REPORT_SINK_FD` at `docker/entrypoint.sh:296`) | unset | When set, the entrypoint passes `--report-sink-fd <value>` to `run_json.py`, so the report records stream to that inherited descriptor. `run_json.py` validates the value: a descriptor number from 3 through `INT_MAX`, not 5, not combined with `--report-sink`, not in a benchmark run (`PINEFORGE_BENCH`), not in a validate-only run and not the same number as `--run-phase-fd` (`_validate_sink_options` at `docker/run_json.py:5921-5964`); a refusal is a `run_request_invalid` failure with exit status 2. Unset, nothing changes |
 | Resident sizes of the ledger, journal, book and id caches | none in this tree | fixed constants (next section) | There is no setter for a resident size in this release. The trade-ledger read cache is chosen by the engine itself (up to 65,536 entries with or without a report sink; `src/native_execution_consumer.cpp:3192`); the command journal, the order book, the position-tail window and the id tables have fixed constants (next section) |
 | `PF_SCRATCH_ARENA_JAILED` | environment, exactly `1` or `0` | unset | Read with the arena variables by `ScratchArena::attach_from_environment` (declared at `include/pineforge/detail/scratch_arena.hpp:142`, defined in `src/scratch_arena.cpp`). `1` additionally requires the attached arena to be a sealed memfd at attachment, else the attach fails with `EINVAL`; `0` or unset adds no requirement (a direct attach may then use ordinary files); any other value fails with `EINVAL`. The separate admission call `strategy_require_report_scratch_arena_v1` requires a sealed memfd on Linux whatever this variable says (stated in the comment on the `ScratchArena` class in `include/pineforge/detail/scratch_arena.hpp`; see [Scratch tables](@ref scratch_tables)) |
+
+For `PF_GAUGE_FD`, pass an `O_RDWR` memfd of at least 128 bytes, sealed with
+`F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL`, without `F_SEAL_WRITE` or
+`F_SEAL_FUTURE_WRITE`. Supply fresh backing for each process: it must not
+carry a valid gauge header (`PFGAUGE1`, version 1, length 128); zeroing is not
+required. Backing that already carries that header is refused, and the
+process silently runs without a gauge. Descriptors 0, 1, 2 and 5, aliases of
+standard streams, and descriptors that alias either quota backing
+(`PF_RUN_QUOTA_NATIVE_FD`, `PF_RUN_QUOTA_PYTHON_FD`) or the arena backing
+(`PF_SCRATCH_ARENA_FD`) are refused. Run only one engine at a time per image;
+two concurrently running engines in one image must never share this
+descriptor. A same-image re-attach keeps the first mapping. Each engine run
+resets its counters, sums and peaks, while the publication sequence continues.
+These values are display telemetry only; no run decision may depend on them.
 
 ## Fixed resident bounds {#memory_fixed}
 
