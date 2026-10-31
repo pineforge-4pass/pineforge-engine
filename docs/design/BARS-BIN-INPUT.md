@@ -299,7 +299,7 @@ docker/pf_bars.py:365; `bar_close_ms` docker/pf_bars.py:218).
 
 **Publication:** the CLI uses the default `fresh_private_directory=False`
 of `convert_csv` docker/pf_bars.py:296 (`convert_csv`
-docker/run_json.py:5232). The parent directory must exist;
+docker/run_json.py:5236). The parent directory must exist;
 the converter opens it rather than creating it (`os.open`
 docker/pf_bars.py:272).
 
@@ -310,7 +310,7 @@ docker/pf_bars.py:272).
 | Stage | Fixed temporary names: `OUT.bin.tmp`, `OUT.close.bin.tmp` for feeds, and `OUT.bin.json.tmp`. One writer must own those names; no locking or unique-generation-name allocation is present. | `bar_tmp` docker/pf_bars.py:328; `close_tmp` docker/pf_bars.py:332; `sidecar_tmp` docker/pf_bars.py:369 |
 | Publish data | Flushes/fsyncs the bar temp, replaces the bar file, then fsyncs the directory; repeats for the feed-close file. | `sync` docker/pf_bars.py:249; `bars.sync` docker/pf_bars.py:357; `os.replace` docker/pf_bars.py:358; `directory.sync` docker/pf_bars.py:359; `closes.sync` docker/pf_bars.py:361; `os.replace` docker/pf_bars.py:362; `directory.sync` docker/pf_bars.py:363 |
 | Publish sidecar last | Writes canonical JSON to its temp, flushes/fsyncs it, replaces the sidecar, then fsyncs the directory. These are individual atomic replacements, not a single atomic replacement of the file set. | `sidecar_bytes` docker/pf_bars.py:371; `fsync` docker/pf_bars.py:373; `os.replace` docker/pf_bars.py:374; `directory.sync` docker/pf_bars.py:375 |
-| Python-only fresh-directory mode | `fresh_private_directory=True` refuses any existing final name and omits directory fsync; file fsync remains. No CLI flag enables it. | `fresh` docker/pf_bars.py:261; `fresh` docker/pf_bars.py:271; `fd` docker/pf_bars.py:276; `fsync` docker/pf_bars.py:252; `convert_csv` docker/run_json.py:5232 |
+| Python-only fresh-directory mode | `fresh_private_directory=True` refuses any existing final name and omits directory fsync; file fsync remains. No CLI flag enables it. | `fresh` docker/pf_bars.py:261; `fresh` docker/pf_bars.py:271; `fd` docker/pf_bars.py:276; `fsync` docker/pf_bars.py:252; `convert_csv` docker/run_json.py:5236 |
 
 Failures can leave partial `.tmp` files or already-replaced data files;
 `convert_csv` has no rollback or temp cleanup (docker/pf_bars.py:296).
@@ -323,10 +323,10 @@ docker/pf_bars.py:378). The comment is therefore stronger than the code.
 
 | Converter result | Exit / output / code | Source |
 |---|---|---|
-| Success | Exit 0; no stdout/stderr success record. | `_csv2bin_main` docker/run_json.py:5211; `return` docker/run_json.py:5244 |
-| Usage error | Exit 2; one JSON failure line on stderr, empty stdout; `run_request_invalid`, `args.option = "arguments"`. | `RunFailure` docker/run_json.py:2196; `sys.stderr.write` docker/run_json.py:5235 |
+| Success | Exit 0; no stdout/stderr success record. | `_csv2bin_main` docker/run_json.py:5215; `return` docker/run_json.py:5248 |
+| Usage error | Exit 2; one JSON failure line on stderr, empty stdout; `run_request_invalid`, `args.option = "arguments"`. | `RunFailure` docker/run_json.py:2196; `sys.stderr.write` docker/run_json.py:5239 |
 | Chart input/output refusal | Exit 2; same stderr framing; `chart_bars_unreadable`, `args.reason`. Converter reasons: `io`, `columns`, `value`, `empty`, `count`, `order`, `timeframe_invalid`. | `code` docker/pf_bars.py:53; `_csv_rows` docker/pf_bars.py:174; `check_order` docker/pf_bars.py:119; `canonical_timeframe` docker/pf_bars.py:57; `BarsError` docker/pf_bars.py:316; `BarsError` docker/pf_bars.py:347 |
-| Feed input/output refusal | Exit 2; same stderr framing; `symbol_feeds_refused`, `args.reason`. Converter reasons: `feed_columns_missing`, `feed_value_not_number`, `feed_value_invalid`, `feed_time_out_of_range`, `feed_not_increasing`, `feed_close_time_invalid`, `feed_unreadable`, `feed_not_utf8_csv`, `empty`, `count`, `io`, `timeframe_invalid`. | `code` docker/pf_bars.py:53; `_csv_rows` docker/pf_bars.py:174; `_feed_pair_error` docker/pf_bars.py:284; `BarsError` docker/pf_bars.py:355; `BarsError` docker/pf_bars.py:378; `return` docker/run_json.py:5237 |
+| Feed input/output refusal | Exit 2; same stderr framing; `symbol_feeds_refused`, `args.reason`. Converter reasons: `feed_columns_missing`, `feed_value_not_number`, `feed_value_invalid`, `feed_time_out_of_range`, `feed_not_increasing`, `feed_close_time_invalid`, `feed_unreadable`, `feed_not_utf8_csv`, `empty`, `count`, `io`, `timeframe_invalid`. | `code` docker/pf_bars.py:53; `_csv_rows` docker/pf_bars.py:174; `_feed_pair_error` docker/pf_bars.py:284; `BarsError` docker/pf_bars.py:355; `BarsError` docker/pf_bars.py:378; `return` docker/run_json.py:5241 |
 | Unexpected exception | Exit 1; one stderr JSON failure line, `harness_internal_error`. | `sys.stderr.write` docker/run_json.py:5239 |
 
 Failure JSON uses `engine`, `error`, `code`, `args` (`doc`
@@ -360,7 +360,7 @@ docker/run_json_pfbar_test.py:737; `pytest.skip`
 docker/run_json_pfbar_test.py:740).
 The chart CLI test's “today's harness has no csv2bin” docstring is historical
 (comment's `csv2bin` docker/run_json_pfbar_test.py:79); the actual dispatch
-exists (`_csv2bin_main` docker/run_json.py:5211).
+exists (`_csv2bin_main` docker/run_json.py:5215).
 
 ## 6. Release and support detection
 
@@ -371,13 +371,13 @@ on a later release**
 History inspection with `git log -S` identifies converter commit
 `0157156d6a` (`BAR_RECORD` docker/pf_bars.py:28) and mapped-loader/capability
 commit `0d05bfa7a8` (`load_bars_bin` docker/run_json.py:2893;
-`bars_bin_version` docker/run_json.py:4881).
+`bars_bin_version` docker/run_json.py:4885).
 `git tag --contains` returns no tags for either commit in this checkout,
 including no `v1.6.2-rc.1`. The checked-in value remains `1.6.1` (VERSION:1;
 version-file reader `_pineforge_read_version_file`
 cmake/PineForgeVersion.cmake:29).
 The `1.7.0` wording in the loader's selected-window comment is not an
-emitted release version (comment's `QC6a` docker/run_json.py:4916).
+emitted release version (comment's `QC6a` docker/run_json.py:4920).
 
 APP can query the actual runner/library pair without supplying bars:
 
@@ -387,9 +387,9 @@ python3 docker/run_json.py --so LIB --capabilities-json
 
 The exact support field already exists: **`capabilities.bars_bin_version`**,
 JSON integer **`1`**, emitted by `_capabilities_main`
-docker/run_json.py:4870 and `bars_bin_version` docker/run_json.py:4881.
+docker/run_json.py:4874 and `bars_bin_version` docker/run_json.py:4885.
 It is added to the base `swr.capabilities_record` document
-(`capabilities_record` docker/run_json.py:4876;
+(`capabilities_record` docker/run_json.py:4880;
 `capabilities_record` docker/selected_window_report.py:756).
 
 `capabilities.bars_bin_version` does **not** mean selected-window mode accepts
@@ -399,10 +399,10 @@ selected-window `.bin` reader lands.
 
 | Probe condition / interpretation | Source |
 |---|---|
-| Loads `LIB` through the normal strategy-library/ABI checks. Constructs no strategy and reads no bar tape in this path. | `load_strategy` docker/run_json.py:2940; `_capabilities_main` docker/run_json.py:4870 |
-| Emits `bars_bin_version` only when the host is little-endian, `sizeof(BarC) == 48`, and the library has `strategy_set_symbol_facts`, `strategy_set_symbol_feed` and `strategy_set_symbol_feed_borrowed_v1`. Otherwise the field is absent, not `0` or `false`. | `byteorder` docker/run_json.py:4879; `hasattr` docker/run_json.py:4880; `_SYMBOL_FEED_SETTERS` docker/run_json.py:3441; `bars_bin_version` docker/run_json.py:4881 |
-| The binary capability is independent of the selected-window support result; it does not remove the CSV-chart requirement for selected windows. | `capabilities_record` docker/run_json.py:4876; `bars_bin_version` docker/run_json.py:4881; `_request_invalid` docker/run_json.py:5501 |
-| Always emits `capabilities.selected_window_bars_bin_version = 0`, including when the borrowed runtime export is absent. | `selected_window_bars_bin_version` docker/run_json.py:4883; `selected_window_bars_bin_version` tests/test_run_json_bin.py:462 |
+| Loads `LIB` through the normal strategy-library/ABI checks. Constructs no strategy and reads no bar tape in this path. | `load_strategy` docker/run_json.py:2940; `_capabilities_main` docker/run_json.py:4874 |
+| Emits `bars_bin_version` only when the host is little-endian, `sizeof(BarC) == 48`, and the library has `strategy_set_symbol_facts`, `strategy_set_symbol_feed` and `strategy_set_symbol_feed_borrowed_v1`. Otherwise the field is absent, not `0` or `false`. | `byteorder` docker/run_json.py:4883; `hasattr` docker/run_json.py:4884; `_SYMBOL_FEED_SETTERS` docker/run_json.py:3441; `bars_bin_version` docker/run_json.py:4885 |
+| The binary capability is independent of the selected-window support result; it does not remove the CSV-chart requirement for selected windows. | `capabilities_record` docker/run_json.py:4880; `bars_bin_version` docker/run_json.py:4885; `_request_invalid` docker/run_json.py:5505 |
+| Always emits `capabilities.selected_window_bars_bin_version = 0`, including when the borrowed runtime export is absent. | `selected_window_bars_bin_version` docker/run_json.py:4887; `selected_window_bars_bin_version` tests/test_run_json_bin.py:462 |
 
 Version/info surfaces are separate: the C API exposes `pf_version_get`
 include/pineforge/pineforge.h:1761 and `pf_version_string`
