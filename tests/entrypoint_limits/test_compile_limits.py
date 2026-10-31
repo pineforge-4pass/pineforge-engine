@@ -224,7 +224,7 @@ def assert_tree_gone(result):
 def original_process_present(record):
     try:
         fields = Path(f"/proc/{record['pid']}/stat").read_text().rsplit(")", 1)[1].split()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return False
     return fields[19] == record["start_ticks"]
 

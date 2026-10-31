@@ -625,7 +625,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                 return None
             try:
                 syscall = Path(f"/proc/{process.pid}/syscall").read_text().strip()
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
                 return None
             fields = syscall.split()
             if (len(fields) < 4 or fields[0] == "running"
@@ -915,7 +915,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                             "pid": pid, "at": time.monotonic(), "process": info}
                     try:
                         state = Path(f"/proc/{pid}/status").read_text()
-                    except FileNotFoundError:
+                    except (FileNotFoundError, ProcessLookupError):
                         continue
                     if any(line.startswith("State:\tT") for line in state.splitlines()):
                         stopped_validators.add(pid)
