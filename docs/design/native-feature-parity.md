@@ -884,7 +884,7 @@ between the halves. The mark itself is the same bar on both.
 (engine.hpp:714) is initialised NaN, reset to NaN at run start
 (`fold_exit_trail_peak_` engine_run.cpp:109) and **never assigned a finite value anywhere in the
 tree**, so the `fold_exit_trail_peak_` checks
-(engine_execution.cpp:1120, :1135; `fold_exit_trail_peak_` engine_report.cpp:2288)
+(engine_execution.cpp:1120, :1135; `fold_exit_trail_peak_` engine_report.cpp:2294)
 and the shared producer's `preceding_exit_trail_peak` check (engine_orders.cpp:193)
 are inert. The shared producer keeps the carry so it folds exactly what the kernel's settling path folds; removing the member is an epoch question (it is
 hashed as `fold_exit_trail_peak_` at engine_state_hash.cpp:86) and is left to a lane that budgets one.

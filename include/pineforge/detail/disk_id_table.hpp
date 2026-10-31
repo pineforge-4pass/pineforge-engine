@@ -209,12 +209,12 @@ public:
 
 private:
     void read(Offset offset, void* data, std::size_t length) const {
-        // descriptor() is -1 for any arena, even an unjailed file arena,
+        // disk_backed() is false for any arena, even an unjailed file arena,
         // and for a slab. Never use the attached arena's inherited fd here.
-        read_cache_.read(file_, file_.descriptor() >= 0, end_, 0, offset, data, length);
+        read_cache_.read(file_, file_.disk_backed(), end_, 0, offset, data, length);
     }
     void write(Offset offset, const void* data, std::size_t length) {
-        if (file_.descriptor() >= 0) read_cache_.before_write(0, end_, offset, length);
+        if (file_.disk_backed()) read_cache_.before_write(0, end_, offset, length);
         file_.write(offset, data, length); // Always immediate, including errors.
     }
     void require_id_size(std::size_t key_size) const {

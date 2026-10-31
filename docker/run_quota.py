@@ -38,7 +38,7 @@ MANAGED_LINE = "quota=managed enforcement=" + ENFORCEMENT
 UNMANAGED_LINE = "quota=unmanaged"
 _HEADER = struct.Struct("<4sHHQ")
 _PAYLOAD = struct.Struct("<30Q")
-_CREDENTIALS = struct.Struct("3i")
+_CREDENTIALS = struct.Struct("=iII")
 
 
 class Opcode(IntEnum):
@@ -1110,6 +1110,10 @@ def prepare_socket(channel):
     channel.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
 
 
+def _credentials_match(raw, owner):
+    return _CREDENTIALS.unpack(raw) == (owner.pid, owner.uid, owner.gid)
+
+
 def serve(ledger, channel, owner):
     """Serve a host-registered actor. A bad frame/credential terminates the channel."""
     if mode() == "unmanaged":
@@ -1131,7 +1135,7 @@ def serve(ledger, channel, owner):
                 credentials = [value for level, kind, value in controls
                                if level == socket.SOL_SOCKET and kind == socket.SCM_CREDENTIALS]
                 if (len(credentials) != 1 or len(credentials[0]) != _CREDENTIALS.size
-                        or _CREDENTIALS.unpack(credentials[0]) != (owner.pid, owner.uid, owner.gid)):
+                        or not _credentials_match(credentials[0], owner)):
                     raise _invalid(Status.PROTOCOL, Setting.CHANNEL)
                 if request.sequence != sequence + 1 or request[Slot.ROLE] != owner.role:
                     raise _invalid()
