@@ -2358,9 +2358,10 @@
     }
    },
    "class": "input",
-   "description": "The requested pre-roll is outside the range of zero to 5000 script bars.",
+   "description": "The requested pre-roll does not fit an unsigned 32-bit count or exceeds a configured positive operator limit.",
    "english": [
-    "Pre-roll must be between zero and 5000 script bars."
+    "Pre-roll must be between zero and 5000 script bars.",
+    "Pre-roll must fit an unsigned 32-bit count and the operator's configured limit."
    ],
    "retryable": false,
    "since": "1.5.0"

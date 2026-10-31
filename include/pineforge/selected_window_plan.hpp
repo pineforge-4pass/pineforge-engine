@@ -31,20 +31,21 @@
 //
 // Admission order: the script token (one of the first build's eight intraday
 // primary tokens) and an explicit input timeframe; T/E/F as signed 53-bit
-// integers with T < E and F <= T; preroll_bars <= 5000; the row array; the
+// integers with T < E and F <= T; the row array; the
 // conservative clock identity (after the empty default only the exact spellings
 // UTC, GMT, Etc/UTC and Etc/GMT fold together, every other zone string is
 // compared exactly, and the one session string serves both clocks); the native
 // session, timezone and timeframe grammar and the pairing;
 // T, E and F each equal to the nominal open of the native script interval that
 // holds them, independent of the rows; then the rows (strictly increasing, each
-// F <= timestamp < E). Nothing snaps a boundary.
+// F <= timestamp < E). Nothing snaps a boundary. Pre-roll is a uint32 count
+// with no built-in ceiling; callers may apply an operator limit before planning.
 //
 // On a refusal only status, option, bound, value_ms, previous_boundary_ms and
 // next_boundary_ms are set; every count is zero. `option` names the faulty
 // request member:
 //   RequestInvalid       script_tf, input_tf, start_ms, end_ms, fed_start_ms,
-//                        preroll_bars (value_ms = the count), rows. A bound
+//                        rows. A bound
 //                        carries bound 0/1/2 and value_ms; end_ms <= start_ms
 //                        carries previous_boundary_ms = T, fed_start_ms > T
 //                        carries next_boundary_ms = T.
@@ -115,7 +116,7 @@ SelectedPrimaryPlan plan_selected_primary(const Bar* rows, std::size_t count,
 // plan_selected_primary's fed_script_bars for a feed that plan would not trim
 // further, taken from the same clock admission, boundary check and consumer
 // bucket walk (no second calendar), with no F boundary, no pre-roll request and
-// no 5000 cap: a native caller's retained prehistory is its own. Every group
+// no ceiling: a native caller's retained prehistory is its own. Every group
 // that opens before T is counted (each is executed, a last pending one by the
 // completion at the accepted T) together with every window group the consumer's
 // seal rules execute; an unsealed window tail adds none. Pure and read-only like

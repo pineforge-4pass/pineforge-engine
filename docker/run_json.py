@@ -4894,7 +4894,8 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         policy=args.report_policy, window_start_ms=args.window_start_ms,
         window_end_ms=args.window_end_ms, preroll_bars=args.preroll_bars,
         fed_start_ms=args.fed_start_ms, trade_start_ms=args.trade_start_ms,
-        input_tf=input_tf.decode("utf-8"), script_tf=script_tf.decode("utf-8"))
+        input_tf=input_tf.decode("utf-8"), script_tf=script_tf.decode("utf-8"),
+        limit_preroll_bars=getattr(args, "limit_preroll_bars", 0))
     if args.bench:
         raise _request_invalid(
             "error: --bench cannot be combined with selected-window mode", "bench")
@@ -5408,7 +5409,7 @@ def _main(argv, binary_inputs) -> int:
     ap.add_argument("--window-end-ms", default=None,
                     help="Selected window end E (unix ms, calendar-aligned), T < E.")
     ap.add_argument("--preroll-bars", default=None,
-                    help="Requested pre-roll N in script bars (0..5000).")
+                    help="Requested pre-roll N in the supplied script bars (uint32; no default ceiling).")
     ap.add_argument("--fed-start-ms", default=None,
                     help="Frozen start F of the supplied primary feed (unix ms), F <= T.")
     ap.add_argument("--capabilities-json", action="store_true",
@@ -5450,7 +5451,7 @@ def _main(argv, binary_inputs) -> int:
     argv = _legacy_abbreviations(argv, pre_metrics_long, all_long)
     if not argv:
         ap.error("the following arguments are required: --so, --ohlcv")
-    args = _parse_output_series_limit(ap, argv)
+    args = _parse_operator_limits(ap, argv)
     if args.profile not in ("unjailed", "jailed"):
         raise _request_invalid("PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed", "arguments")
     missing = []
@@ -9263,7 +9264,19 @@ def _output_series_count(text):
     return int(text)
 
 
-def _parse_output_series_limit(parser, argv):
+def _preroll_limit_count(text):
+    import selected_window_report as swr
+    if (len(text) > len(str(swr.I53_MAX)) or re.fullmatch(r"[0-9]+", text) is None
+            or int(text) > swr.I53_MAX):
+        raise argparse.ArgumentTypeError("expected a nonnegative JSON-safe integer pre-roll limit")
+    return int(text)
+
+
+def _parse_operator_limits(parser, argv):
+    parser.add_argument(
+        "--limit-preroll-bars", dest="limit_preroll_bars", type=_preroll_limit_count,
+        default=0, metavar="N",
+        help="Maximum requested pre-roll script bars (N >= 0); 0 or omitted means no limit.")
     parser.add_argument(
         "--limit-output-series", dest="max_output_series", type=_output_series_count,
         default=None, metavar="N",

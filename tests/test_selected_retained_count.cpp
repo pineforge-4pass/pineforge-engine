@@ -366,10 +366,9 @@ void fixture_empty_array() {
 
 void fixture_no_cap_on_retained_prehistory() {
     // 6000 hourly rows before T and three in the window, 60m input and script.
-    // The planner caps its pre-roll request at 5000 and keeps the last 5000
-    // groups; the count has no request and no cap, and what the planner keeps is
-    // counted to the planner's own fed_script_bars.
-    scenario = "no 5000 cap on a native caller's retained prehistory";
+    // A planner request may keep all 6000 groups. The retained count has no
+    // pre-roll request; it counts every group the caller supplies.
+    scenario = "unlimited planner and retained prehistory";
     constexpr std::int64_t kBefore = 6000;
     std::vector<Bar> rows;
     rows.reserve(static_cast<std::size_t>(kBefore + 3));
@@ -382,6 +381,14 @@ void fixture_no_cap_on_retained_prehistory() {
         expect_equals_plan(rows, request, kBase, 0);
         expect_equals_plan(rows, request, kBase, 1);
         expect_equals_plan(rows, request, kBase, 5000);
+        const SelectedPrimaryPlan all = pineforge::plan_selected_primary(
+            rows.data(), rows.size(), plan_request_of(request, kBase, 6000));
+        CHECK(all.status == SelectedPlanStatus::Ok);
+        CHECK(all.available_script_bars == 6000);
+        CHECK(all.used_script_bars == 6000);
+        CHECK(all.trim_index == 0);
+        CHECK(all.fed_input_bars == 6003);
+        CHECK(all.fed_script_bars == 6003);
     }
 }
 

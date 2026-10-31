@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tup
 import request_feed_inventory as _inventory
 
 __all__ = [
-    "CAPABILITY", "CONTRACT_REVISIONS", "FINGERPRINT_VERSION", "I53_MAX", "MAX_PREROLL_BARS",
+    "CAPABILITY", "CONTRACT_REVISIONS", "FINGERPRINT_VERSION", "I53_MAX",
     "METERING_BASIS", "POLICY", "REPORT_SHAPE", "SelectedWindowAbi", "SelectedWindowConfigC",
     "SelectedWindowCountsC", "SelectedWindowError", "WIRE_VERSION", "WindowRequest",
     "build_report_window", "calendar_record", "calendar_session", "calendar_timezone",
@@ -67,7 +67,6 @@ FINGERPRINT_VERSION = 2
 CONTRACT_REVISIONS = ("1.3",)
 REPORT_SHAPE = "full/v1"
 METERING_BASIS = "window-primary-input-bars/v1"
-MAX_PREROLL_BARS = 5000
 I53_MAX = (1 << 53) - 1
 # A request number is at most this many decimal digits (I53_MAX has 16). Every int() of request
 # text is preceded by a length test against it, so a number of thousands of digits is a typed
@@ -96,7 +95,8 @@ _FIXED_TEXT = {
     "window_mode_unsupported": "This runner does not support the requested window mode.",
     "window_request_invalid": "The selected-window request is invalid.",
     "window_range_invalid": "The selected-window range is invalid.",
-    "window_preroll_out_of_range": "Pre-roll must be between zero and 5000 script bars.",
+    "window_preroll_out_of_range":
+        "Pre-roll must fit an unsigned 32-bit count and the operator's configured limit.",
     "window_legacy_flag_conflict":
         "The legacy trade-start option cannot be combined with selected-window mode.",
     "window_calendar_unsupported": "The requested window calendar is unsupported.",
@@ -199,11 +199,12 @@ def _integer(text: Any, option: str) -> int:
 
 def validate_request(*, policy: Any, window_start_ms: Any, window_end_ms: Any,
                      preroll_bars: Any, fed_start_ms: Any, trade_start_ms: Any,
-                     input_tf: str, script_tf: str) -> WindowRequest:
+                     input_tf: str, script_tf: str, limit_preroll_bars: int = 0) -> WindowRequest:
     """Validate the documented flags of a selected-window request, in this order: the policy, the
     four window arguments (present, written as integers, i53), the two explicit timeframes
-    (present and timeframe tokens), the legacy trade-start conflict, the pre-roll range, the
-    ranges T < E and F <= T. Raises SelectedWindowError with the window catalog code; the
+    (present and timeframe tokens), the legacy trade-start conflict, the uint32 pre-roll range
+    and any positive operator limit (0 means unlimited), then T < E and F <= T.
+    Raises SelectedWindowError with the window catalog code; the
     caller refuses before any feed, library or phase work."""
     if policy != POLICY:
         raise _invalid("report_policy")
@@ -224,7 +225,8 @@ def validate_request(*, policy: Any, window_start_ms: Any, window_end_ms: Any,
         raise _invalid("input_tf")
     if trade_start_ms is not None:
         raise _error("window_legacy_flag_conflict", option="trade_start_ms")
-    if not 0 <= preroll <= MAX_PREROLL_BARS:
+    if (not 0 <= preroll < (1 << 32)
+            or (limit_preroll_bars > 0 and preroll > limit_preroll_bars)):
         raise _error("window_preroll_out_of_range", requested=preroll)
     if start >= end or fed_start > start:
         raise _error("window_range_invalid", start_ms=start, end_ms=end, fed_start_ms=fed_start)
@@ -280,7 +282,6 @@ def refusal_for_plan(plan: Mapping[str, Any], request: WindowRequest, *, timezon
 
       1 RequestInvalid        script_tf / input_tf  -> window_request_invalid{option}
                               start_ms / end_ms / fed_start_ms -> window_range_invalid
-                              preroll_bars          -> window_preroll_out_of_range{requested}
                               any other option (rows, ...) -> harness_internal_error
       2 CalendarUnsupported   -> window_calendar_unsupported{timezone, session}
       3 BoundaryUnaligned     -> window_boundary_unaligned{bound, value_ms, previous, next}
@@ -301,8 +302,6 @@ def refusal_for_plan(plan: Mapping[str, Any], request: WindowRequest, *, timezon
         if option in ("start_ms", "end_ms", "fed_start_ms"):
             return _error("window_range_invalid", start_ms=request.start_ms,
                           end_ms=request.end_ms, fed_start_ms=request.fed_start_ms)
-        if option == "preroll_bars":
-            return _error("window_preroll_out_of_range", requested=request.preroll_bars)
         return _internal(f"the selected primary planner refused the call as invalid ({option!r})")
     if status == 2:
         return _error("window_calendar_unsupported", timezone=timezone, session=session)

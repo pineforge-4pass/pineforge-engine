@@ -133,6 +133,16 @@ that capture cannot be exact in this mode. Begin refuses before callbacks or
 bars. Drop the window or the observer, or select `FULL`; bounded capture uses
 `STREAMED` with a sink.
 
+Selected-window pre-roll is unlimited by default. `--limit-preroll-bars N`
+applies an operator ceiling only when N is positive; 0 or omission means no
+limit. `window_preroll_out_of_range` keeps its single `requested` integer
+argument for requests above that N, negative requests or counts that do not fit
+the uint32 wire field. Non-integer requests and values outside the existing
+`2^53 - 1` JSON integer safety bounds remain `window_request_invalid`.
+Pre-roll reads the user's own input bars like any other bar. The generated
+catalog row below describes the current admission rule; its English templates
+keep the published legacy range wording and add the current refusal text.
+
 The 26 codes first released in 1.5.0 comprise `outputs_limit`,
 `outputs_rejected`, and the 24 selected-window and report-contract rows
 described [after the tables](#run_failure_codes_selected_window).
@@ -243,7 +253,7 @@ other `strategy_create_failed` lines omit it.
 | `window_lineage_mismatch` | `input` | no | `actual` (scalar), `expected` (scalar), `field` (string) | A requested window field differs from the study's lineage. |
 | `window_mode_unsupported` | `unsupported` | no | `capability` (string), `requested` (integer, optional), `timeframe` (string, optional) | The runner does not support the requested selected-window mode or a limit its build declares on it. capability names what is unsupported; timeframe carries the offending canonical timeframe and requested the offending pre-roll length where the refusal names one. Which optional argument goes with which capability is the trusted raisers' duty, not the registry's. |
 | `window_no_observations` | `input` | no | `end_ms` (integer), `start_ms` (integer) | The selected window holds no observations to score. |
-| `window_preroll_out_of_range` | `input` | no | `requested` (integer) | The requested pre-roll is outside the range of zero to 5000 script bars. |
+| `window_preroll_out_of_range` | `input` | no | `requested` (integer) | The requested pre-roll does not fit an unsigned 32-bit count or exceeds a configured positive operator limit. |
 | `window_prestart_fill` | `engine_fault` | no | `fill_ms` (integer), `start_ms` (integer) | A fill was dated before the selected window: an engine invariant failure. |
 | `window_prestart_state_violation` | `engine_fault` | no | `position_size` (number), `resting_orders` (integer), `time_ms` (integer) | A position or a resting order existed before the selected window started: an engine invariant failure. |
 | `window_pruner_unsupported` | `unsupported` | no | `pruner` (string) | A study that requests a selected window together with a trial pruner other than none is refused before any trial is allocated; pruner is the requested pruner's name as the caller sent it. Optimizer-only: run_json never raises it, because a backtest has no pruner. |
@@ -411,12 +421,15 @@ catalog is not proof that the source paths it names enforce anything.
   or the deployed capability for `window_mode_unsupported`,
   `report_shape_unsupported` and `results_digest_unsupported`; the caller's
   request, bounds, calendar, feed or lineage for `window_request_invalid`,
-  `window_range_invalid`, `window_preroll_out_of_range`,
+  `window_range_invalid`,
   `window_legacy_flag_conflict`, `window_calendar_unsupported`,
   `window_boundary_unaligned`, `window_feed_range_invalid`,
   `window_no_observations`, `window_lineage_mismatch`,
   `window_feed_identity_changed` and `report_shape_request_invalid`; the
-  caller's study configuration for `window_pruner_unsupported`; the
+  caller's study configuration for `window_pruner_unsupported`;
+  the caller's pre-roll count representation or positive operator
+  `--limit-preroll-bars N` for `window_preroll_out_of_range` (0 or omission is
+  unlimited; `requested` is the requested count, and the ceiling is that N); the
   supplied-input cap for `window_input_cap_exceeded`; the engine's window
   invariants for `window_prestart_state_violation` and `window_prestart_fill`;
   a broken image before any strategy code loads for
@@ -435,9 +448,11 @@ catalog is not proof that the source paths it names enforce anything.
   adapter raise `engine_command_value_invalid` for invalid execution values.
   The Python wrappers under `docker/` raise `window_mode_unsupported`; the
   selected-window request refusals `window_request_invalid`,
-  `window_range_invalid`, `window_preroll_out_of_range`,
+  `window_range_invalid`,
   `window_legacy_flag_conflict`, `window_calendar_unsupported`,
-  `window_boundary_unaligned` and `window_feed_range_invalid`; the report-option
+  `window_boundary_unaligned` and `window_feed_range_invalid`;
+  `window_preroll_out_of_range` for a negative or non-uint32 count or a request
+  above a positive `--limit-preroll-bars N`, with no default ceiling; the report-option
   refusals `report_shape_request_invalid`, `report_shape_unsupported` and
   `results_digest_unsupported`; `report_result_invalid`, for a non-finite
   canonical result; and `report_post_execution_failed`, for a failure after

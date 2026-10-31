@@ -43,7 +43,6 @@ namespace {
 namespace nc = native_calendar;
 
 constexpr std::int64_t kI53Max = (std::int64_t{1} << 53) - 1;
-constexpr std::uint32_t kMaxPrerollBars = 5000;
 // The first build's eight intraday primary tokens, exactly as a request spells
 // them: no alias, no second token, no daily or weekly token.
 constexpr const char* kPrimaryTokens[] = {"1", "3", "5", "15", "30", "60", "120", "240"};
@@ -508,10 +507,6 @@ SelectedPrimaryPlan plan_selected_primary(const Bar* rows, std::size_t count,
     }
     if (!(fed_start_ms <= start_ms)) {
         return refusal(Status::RequestInvalid, "fed_start_ms", 2, fed_start_ms, 0, start_ms);
-    }
-    if (request.preroll_bars > kMaxPrerollBars) {
-        return refusal(Status::RequestInvalid, "preroll_bars", -1,
-                       static_cast<std::int64_t>(request.preroll_bars));
     }
     if ((rows == nullptr && count != 0)
         || static_cast<std::uint64_t>(count) > static_cast<std::uint64_t>(kI53Max)) {
