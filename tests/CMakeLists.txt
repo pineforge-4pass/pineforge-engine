@@ -8033,6 +8033,32 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8
 endif()
 # --- CR-150 ledger-block-zeroing end ---
 
+# --- CR-150 outputs-series-limit begin ---
+target_link_libraries(test_outputs_series_limit PRIVATE ${CMAKE_DL_LIBS})
+if(APPLE)
+    target_link_options(test_outputs_series_limit PRIVATE "-Wl,-export_dynamic")
+elseif(UNIX)
+    target_link_options(test_outputs_series_limit PRIVATE "-Wl,--export-dynamic")
+endif()
+if(UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(outputs_series_fixture_strategy MODULE outputs_series_fixture_strategy.cpp)
+    target_link_libraries(outputs_series_fixture_strategy PRIVATE pineforge)
+    target_compile_options(outputs_series_fixture_strategy PRIVATE -ffp-contract=off -UNDEBUG)
+    if(APPLE)
+        target_link_options(outputs_series_fixture_strategy PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(outputs_series_fixture_strategy PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    add_test(NAME test_run_json_output_series_parameter
+        COMMAND ${CMAKE_COMMAND} -E env
+            "PINEFORGE_OUTPUT_SERIES_SO=$<TARGET_FILE:outputs_series_fixture_strategy>"
+            ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/docker/run_json_window_budget_test.py
+            -k "declared_series_determine_real_run_window_bound or operator_limit_fails_typed_through_real_cli or cli_option_accepts_the_edge_and_default_remains_unlimited")
+endif()
+# --- CR-150 outputs-series-limit end ---
 # --- CR-150 roster-pass-work begin ---
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     # The fixture includes the real adapter translation unit before linking

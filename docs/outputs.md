@@ -67,7 +67,7 @@ off, so a module can call them unconditionally; generated code tests
 
 | Member | Call it | Fails when |
 |---|---|---|
-| `declare_outputs(slots, outputs, run_constants = 0)` | once, before the first run (a generated constructor) | a count is negative; the host is running; `slots` exceeds 64; a second call names other counts |
+| `declare_outputs(slots, outputs, run_constants = 0)` | once, before the first run (a generated constructor) | a count is negative; the host is running; `slots` exceeds an operator-set maximum; a second call names other counts |
 | `output_run_begin()` | at the start of every run, before any bar; a C++ host calls it in `on_native_run_begin` | never; calling it twice is calling it once |
 | `output_bar(open_ms, close_ms)` | first, in every calculation the host publishes | `output_run_begin()` was never called; `open_ms` is below the last row's; the row count reaches `INT_MAX` |
 | `output_value(slot, value)` | after `output_bar` | no row is open; `slot` is out of range |
@@ -81,14 +81,15 @@ lands in the previous bar's row.
 Each failure carries a run-failure code (`docs/pages/run-failure-codes.md`)
 beside its text. A broken recorder precondition, other than a capacity limit,
 is a host or generated-code defect, thrown as `std::logic_error` and coded
-`engine_invariant`. Declaring more than 64 series slots (Pine's plot-count
-limit) throws `std::runtime_error` coded `outputs_limit` with reason
-`too_many_series` and `max` 64, before the declaration changes any state,
-even with recording off. Exactly 64 series slots are accepted. `declare_outputs`
-is C++ only: the typed failure reaches the C++ caller. A generated strategy
-whose constructor declares more than 64 slots fails strategy creation, and
-`run_json` reports `strategy_create_failed` (it reads no code from the
-creation message). An event queue
+`engine_invariant`. Recorded series are unlimited by default. An operator may
+set `--limit-output-series N` (`N >= 0`); 0 or omitted means unlimited. Exceeding
+a positive N throws `std::runtime_error` coded `outputs_limit`, reason
+`too_many_series`, with canonical arguments `{"max":N,"reason":"too_many_series"}`,
+where N is the operator's positive limit, before declaration state changes, even
+with recording off. A positive N accepts up to N slots; zero means unlimited.
+A constructor that exceeds the limit fails strategy creation. `run_json`
+reports `strategy_create_failed` with a typed `cause` containing `outputs_limit`
+and those arguments; it does not parse the creation message. An event queue
 or a row count that reaches `INT_MAX` throws `std::runtime_error` coded
 `outputs_limit` (reason `too_many_events` or `too_many_rows`, `max` `INT_MAX`).
 A recalculation of a bar after a caller cleared that
@@ -254,12 +255,43 @@ and `scripts/test_run_json_outputs.py` runs the harness end to end.
 
 ## Costs and limits
 
-- A host can declare at most 64 series slots, matching
-  [Pine's plot-count limit](https://www.tradingview.com/pine-script-docs/writing/limitations/#plot-limits):
-  "A maximum of 64 plot counts are allowed per script". Exactly 64 is accepted;
-  65 or more is refused as `outputs_limit`, reason `too_many_series`, `max` 64.
-- A row costs 8 bytes per slot and is kept for the whole run or stream.
+- A host has no series limit by default. `--limit-output-series N` (`N >= 0`) sets an
+  optional maximum before strategy creation; 0 or omission means unlimited. For
+  a positive N, a refusal reports `max` N; for example, 64 accepts 64 and
+  refuses 65 as `outputs_limit`, reason `too_many_series`, `max` 64. "Unlimited"
+  means up to the report sink's wire bounds: one sink line is at most 1 MiB
+  including its line feed, and the sink header refuses more than 1,048,576
+  declared series slots or constants; beyond those bounds, a run fails with
+  `engine_invariant`, not a typed limit. The C creation-time setting is described below.
+- A row costs 8 bytes per slot and is kept for the whole run or stream; each
+  recorded series costs one 64 KiB report window in `run_json` (so 1,000 declared
+  series hold 64 MB of windows), independent of the number of bars; this memory
+  follows the script's own declared structure.
 - The event queue holds at most `INT_MAX` events between clears, and a run
   at most `INT_MAX` rows; one more fails the run as `outputs_limit`.
 - Recording is a branch per writer call while it is off, and generated code
   takes that branch once per call site.
+
+Set `pf_output_series_limit_set_checked(&maximum, error, capacity)` before
+`strategy_create`, `strategy_create_checked`, or C++ host construction.
+`maximum` is a nonnegative `int64_t`; NULL or 0 means unlimited, the default.
+The checked setter returns `PF_SETTINGS_INVALID_ARGUMENT` for a negative value
+without replacing the previous setting. It follows the checked-settings error
+buffer protocol. C++ callers can use
+`BacktestEngine::set_output_series_limit_checked` with the same arguments.
+The setting belongs to the calling thread and the loaded runtime module.
+Each base engine snapshots it before the derived constructor declares, so a
+setter called after a generated factory returns is too late for that handle.
+Read `pf_output_series_limit_failure(&maximum)` on the creation thread before
+restoring NULL: 1 identifies `outputs_limit` / `too_many_series` and its positive operator maximum,
+0 means no refusal since the last successful setter, and -1 means a NULL
+destination. Restore NULL after the factory; existing hosts keep their snapshot.
+Both ordinary and selected-window `run_json` runs, including fresh benchmark
+and recovery handles, and `pineforge-live --limit-output-series N` apply the setting
+before creation and restore the default afterwards. Relink older strategy
+modules to obtain this option; an explicit limit requires both runtime exports.
+
+With the default I/O sizes, the unjailed report route's artifact windows plus
+reader require at most **6 MiB + 64 KiB × S + 64 KiB**, where S is the run's
+declared series count. An operator limit N bounds S by N. Without a limit,
+this allowance follows the strategy's own declaration.

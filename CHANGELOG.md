@@ -7,6 +7,7 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- Recorded output series are unlimited by default; 0 or omission of `--limit-output-series` means no limit, while a positive N is the operator's cap and any refusal reports that positive N as `max`. Report-window memory follows the declared count: 6 MiB + 64 KiB × S + a 64 KiB reader with the default I/O sizes.
 - Reading a map is cheaper: each map now keeps a fixed read cache of 8 slots
   for the keys and values it has just read, so a repeated `get` or `contains`
   of the same key no longer reads the Store again. The cache adds a fixed 528
