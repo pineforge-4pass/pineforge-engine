@@ -225,17 +225,17 @@ references; L15a must maintain these anchors and mechanically pin every current
 |---|---|---|
 | Kernel instrument-feed pump: current bar, close, next open, count | `NativeExecutionConsumer::pump_instrument_subscription` `src/native_execution_consumer.hpp:1230` | 357-358 |
 | Host feed lookup/delivery and column reads | `installed_symbol_feed` `src/source/pine_security_eval.cpp:1059-1068`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1291-1301`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1320-1328` | 359-360 |
-| Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `feed.bars` `src/native_run_spec.cpp:259-290`; `instrument_feed_shapes` `src/native_run_spec.cpp:743`; `validate_native_instrument_feeds` `src/native_run_spec.cpp:1019-1022`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:10029`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:10054` | 361-363 |
-| Adapter projection validation: use the context normalizer; host stages after lending and before projection, using a context built from its store | `normalize_projected_spec` `src/source/pine_adapter.cpp:3192` | 361-363; V1/V2 change 5 |
-| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:330`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2909`; `native_run_spec_digest` `src/native_execution_consumer.cpp:14290` | 364-365 |
+| Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `feed.bars` `src/native_run_spec.cpp:259-290`; `instrument_feed_shapes` `src/native_run_spec.cpp:743`; `validate_native_instrument_feeds` `src/native_run_spec.cpp:1019-1022`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:10061`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:10086` | 361-363 |
+| Adapter projection validation: use the context normalizer; host stages after lending and before projection, using a context built from its store | `normalize_projected_spec` `src/source/pine_adapter.cpp:3194` | 361-363; V1/V2 change 5 |
+| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:336`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2915`; `native_run_spec_digest` `src/native_execution_consumer.cpp:14322` | 364-365 |
 | Staged feed counts in host state and its hash | `installed_symbol_feed` `src/source/pine_strategy_host.cpp:536-546`; `staged_.instrument_feeds` `src/source/pine_state_hash.cpp:339-346` | 366-367 |
 | Refresh of symbol-data digest and host hash fold | `refresh_symbol_data_digest` `src/source/pine_security_eval.cpp:1553-1566`; `symbol_data_digest_` `src/source/pine_state_hash.cpp:1238-1244` | 367-368 |
 | Restore/store upkeep and column-setter length check | `held.bars` `src/source/pine_security_eval.cpp:1091-1101`; `data.bars` `src/source/pine_security_eval.cpp:1433-1439` | 369-370 |
 | Lower-path preflight/validation | `NativeExecutionConsumer::preflight_intrabar_path` `src/native_execution_consumer.hpp:1189` | 371,1221-1222 |
-| Lower-path digest (count first) and continuation hash | `native_intrabar_path_digest` `src/native_run_spec.cpp:891-919`; `native_intrabar_path_digest` `src/native_execution_consumer.cpp:295` | 371,1223-1224 |
-| Per-script-bar lower-path binary search/walk | `candidate` `src/native_execution_consumer.cpp:9094-9127` | 371,1225 |
+| Lower-path digest (count first) and continuation hash | `native_intrabar_path_digest` `src/native_run_spec.cpp:891-919`; `native_intrabar_path_digest` `src/native_execution_consumer.cpp:301` | 371,1223-1224 |
+| Per-script-bar lower-path binary search/walk | `candidate` `src/native_execution_consumer.cpp:9102-9135` | 371,1225 |
 | Scheduler sub-bar lookup and one-bar look-ahead | `PineScheduler::lower_path_bar_at` `src/source/pine_scheduler_native.cpp:265-287`; `next_open` `src/source/pine_scheduler_native.cpp:328-329` | 371,1226-1227 |
-| Lower-path emptiness test | `inactive_sampler_path` `src/source/pine_adapter.cpp:3623` | 371,1228 |
+| Lower-path emptiness test | `inactive_sampler_path` `src/source/pine_adapter.cpp:3625` | 371,1228 |
 
 Every count/digest must fold the same bytes/order for copied and borrowed
 feeds, including cached and uncached paths (2.2:372-375). Views replace storage;
@@ -318,14 +318,14 @@ L17c/d and L8c use one report path. `fill_trades_section`
 open rows for a sink. `report_closed_net_profit`
 (`src/engine_report.cpp:536`) starts at `ClosedTradePrefix::pnl` and adds the
 resident suffix in order. `finish_streamed_trade_metrics`
-(`src/native_execution_consumer.cpp:14110`) finishes copies of the sealed
+(`src/native_execution_consumer.cpp:14142`) finishes copies of the sealed
 accumulators over resident closed rows, then the presented open rows. The
 source host's terminal-quote presentation continues that same closed-row PnL
 fold before adding its edited open rows (`net_profit`
 `src/source/pine_strategy_host.cpp:2250-2251`).
 
 Selected carry-in validation includes the minimum entry time folded at seal
-(`first_entry_time` `src/native_execution_consumer.cpp:12984`), so a
+(`first_entry_time` `src/native_execution_consumer.cpp:13016`), so a
 window starting after a sealed entry refuses with the existing typed
 `engine_invariant`. Validation never indexes a retired row. `write_report_sink_trades`
 (`src/engine_report.cpp:1699`) resumes at the global T cursor: sealed rows
