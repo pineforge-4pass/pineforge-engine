@@ -3,6 +3,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import select
 import sqlite3
 import subprocess
@@ -13,7 +14,22 @@ import time
 from native_live_report_e2e import equal, write_csv
 
 
+def hang_guard():
+    """Return the optional host wait bound, independently of runner deadlines."""
+    parameter = "PINEFORGE_STDIN_TEST_HANG_GUARD_SECONDS"
+    value = os.environ.get(parameter, "")
+    if value in ("", "0"):
+        return None
+    if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", value):
+        seconds = float(value)
+        if math.isfinite(seconds) and seconds > 0:
+            return seconds
+    raise SystemExit(
+        f"{parameter} must be empty, 0, or a positive decimal number of seconds; got {value!r}")
+
+
 def main():
+    hang_guard_seconds = hang_guard()
     runner, oracle, library = sys.argv[1:]
     with tempfile.TemporaryDirectory(prefix="pineforge-stdin-idle-") as temporary:
         root = Path(temporary)
@@ -52,13 +68,13 @@ def main():
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                        text=True)
         try:
-            readable, _, _ = select.select([process.stdout], [], [], 180)
-            assert readable, "burst produced no stdout within 180 seconds"
+            readable, _, _ = select.select([process.stdout], [], [], hang_guard_seconds)
+            assert readable, f"burst produced no stdout within {hang_guard_seconds} seconds"
             # Deliberate slow stdout consumer: leave reports unread for two
             # seconds, blocking write() inside the consume pass as in production.
             # Readiness starts this stimulus after warmup, without draining bytes.
             time.sleep(2)
-            output, errors = process.communicate(timeout=180)
+            output, errors = process.communicate(timeout=hang_guard_seconds)
             reports = 0
             summary = None
             final = None
@@ -144,8 +160,9 @@ def main():
                 # Start the dribble after warmup and the first committed report.
                 process.stdin.write(json.dumps(dict(type="bar", bar=bars[30])) + "\n")
                 process.stdin.flush()
-                readable, _, _ = select.select([process.stdout], [], [], 180)
-                assert readable, (name, "readiness bar produced no stdout within 180 seconds")
+                readable, _, _ = select.select([process.stdout], [], [], hang_guard_seconds)
+                assert readable, (
+                    name, f"readiness bar produced no stdout within {hang_guard_seconds} seconds")
                 committed = json.loads(process.stdout.readline())
                 assert committed["input_cursor"] == 1, committed
                 sent_at = time.monotonic()
@@ -173,7 +190,7 @@ def main():
                     assert time.monotonic() - sent_at > 1
                     process.stdin.close()
                     process.stdin = None
-                output, errors = process.communicate(timeout=60)
+                output, errors = process.communicate(timeout=hang_guard_seconds)
                 expected_count = 1 if expect_timeout else 2
                 assert process.returncode == (1 if expect_timeout else 0), (
                     name, process.returncode, output, errors)
@@ -224,7 +241,7 @@ def main():
                     process.stdin.flush()
                     process.stdin.close()
                     process.stdin = None
-                output, errors = process.communicate(timeout=15)
+                output, errors = process.communicate(timeout=hang_guard_seconds)
                 assert process.returncode == (1 if idle else 0), (
                     name, process.returncode, output, errors)
                 if idle:
@@ -257,8 +274,8 @@ def main():
         try:
             process.stdin.write(json.dumps(dict(type="bar", bar=bars[30])) + "\n")
             process.stdin.flush()
-            readable, _, _ = select.select([process.stdout], [], [], 180)
-            assert readable, "default stdin produced no stdout within 180 seconds"
+            readable, _, _ = select.select([process.stdout], [], [], hang_guard_seconds)
+            assert readable, f"default stdin produced no stdout within {hang_guard_seconds} seconds"
             committed = json.loads(process.stdout.readline())
             assert committed["schema_version"] == "pineforge-native-report/v1", committed
             assert committed["input_cursor"] == 1, committed
