@@ -153,19 +153,25 @@ class Case(unittest.TestCase):
             content = content.encode("utf-8")
         self.inventory_path.write_bytes(content)
 
-    def resolve(self, content=None, inputs=DEFAULT, primary="15"):
+    def resolve(self, content=None, inputs=DEFAULT, primary="15", max_inventory_bytes=DEFAULT):
         if content is not None:
             self.write(content)
+        limits = ({} if max_inventory_bytes is DEFAULT
+                  else {"max_inventory_bytes": max_inventory_bytes})
         return inventory.resolve_request_feed_inventory(
             self.inventory_path, self.artifact_path, {} if inputs is DEFAULT else inputs,
-            primary_timeframe=primary)
+            primary_timeframe=primary, **limits)
 
-    def admit(self, content=None, inputs=DEFAULT, primary="15", support=DEFAULT):
+    def admit(self, content=None, inputs=DEFAULT, primary="15", support=DEFAULT,
+              max_inventory_bytes=DEFAULT):
         if content is not None:
             self.write(content)
+        limits = ({} if max_inventory_bytes is DEFAULT
+                  else {"max_inventory_bytes": max_inventory_bytes})
         return inventory.admit_selected_request(
             primary, self.inventory_path, self.artifact_path,
-            {} if inputs is DEFAULT else inputs, policy() if support is DEFAULT else support)
+            {} if inputs is DEFAULT else inputs, policy() if support is DEFAULT else support,
+            **limits)
 
     def refused(self, detail, call, *args, **kwargs):
         with self.assertRaises(Error) as caught:
@@ -198,15 +204,22 @@ class ErrorAndSurfaceTests(unittest.TestCase):
                           "resolve_request_feed_inventory"])
         resolve = inspect.signature(inventory.resolve_request_feed_inventory)
         self.assertEqual(list(resolve.parameters), ["inventory_path", "artifact_path",
-                                                    "validated_inputs", "primary_timeframe"])
+                                                    "validated_inputs", "primary_timeframe",
+                                                    "max_inventory_bytes"])
         self.assertIs(resolve.parameters["primary_timeframe"].kind,
                       inspect.Parameter.KEYWORD_ONLY)
+        self.assertIs(resolve.parameters["max_inventory_bytes"].kind,
+                      inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(resolve.parameters["max_inventory_bytes"].default)
         admit = inspect.signature(inventory.admit_selected_request)
         self.assertEqual(list(admit.parameters), ["primary_timeframe", "inventory_path",
                                                   "artifact_path", "validated_inputs",
-                                                  "support_policy"])
-        for parameter in admit.parameters.values():
-            self.assertIs(parameter.kind, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+                                                  "support_policy", "max_inventory_bytes"])
+        for name in ("primary_timeframe", "inventory_path", "artifact_path",
+                     "validated_inputs", "support_policy"):
+            self.assertIs(admit.parameters[name].kind, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        self.assertIs(admit.parameters["max_inventory_bytes"].kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(admit.parameters["max_inventory_bytes"].default)
 
 
 class SourceTests(unittest.TestCase):
@@ -388,13 +401,41 @@ class InventoryFileTests(Case):
                 self.incomplete(self.resolve, content)
 
     def test_an_oversize_inventory_is_incomplete(self):
-        content = json.dumps(inv([token("1")]))
-        size = len(content.encode("utf-8"))
-        self.write(content)
-        with mock.patch.object(inventory, "_INVENTORY_MAX_BYTES", size):
-            self.assertEqual(self.resolve(), ["1"])
-        with mock.patch.object(inventory, "_INVENTORY_MAX_BYTES", size - 1):
-            self.incomplete(self.resolve)
+        document = json.dumps(inv([token("1")])).encode()
+        content = b" " * (8388608 - len(document)) + document
+        self.assertEqual(len(content), 8388608)
+        for read in (self.resolve, self.admit):
+            with self.subTest(reader=read.__name__):
+                self.assertEqual(read(content, max_inventory_bytes=8388608), ["1"])
+                error = self.incomplete(read, b" " + content, max_inventory_bytes=8388608)
+                self.assertEqual(str(error), "the request-feed inventory is incomplete: "
+                                            "the inventory is over 8388608 bytes")
+
+    def test_default_inventory_over_eight_mib_is_accepted_in_full(self):
+        document = json.dumps(inv([token("D"), token("1")])).encode()
+        content = b" " * (8388609 - len(document)) + document
+        self.assertEqual(len(content), 8388609)
+        self.assertEqual(self.resolve(content), ["1", "D"])
+        self.assertEqual(self.admit(), ["1", "D"])
+        self.assertEqual(self.inventory_path.read_bytes(), content)
+
+    def test_zero_inventory_limit_reads_the_whole_file(self):
+        document = json.dumps(inv([token("D"), token("1")])).encode()
+        content = b" " * (8388609 - len(document)) + document
+        self.assertEqual(self.resolve(content, max_inventory_bytes=0), ["1", "D"])
+        self.assertEqual(self.admit(max_inventory_bytes=0), ["1", "D"])
+        for limit in (DEFAULT, 0):
+            with self.subTest(limit=limit):
+                self.incomplete(self.resolve, content + b"{}", max_inventory_bytes=limit)
+
+    def test_inventory_limit_diagnostic_uses_the_supplied_number(self):
+        document = json.dumps(inv([token("1")])).encode()
+        content = b" " * (512 - len(document)) + document
+        self.assertEqual(len(content), 512)
+        self.assertEqual(self.resolve(content, max_inventory_bytes=512), ["1"])
+        error = self.incomplete(self.resolve, max_inventory_bytes=511)
+        self.assertEqual(str(error), "the request-feed inventory is incomplete: "
+                                    "the inventory is over 511 bytes")
 
     def test_duplicate_keys_are_refused_even_when_the_values_agree(self):
         self.assertEqual(self.resolve(raw('[{"kind": "token", "timeframe": "1"}]')), ["1"])

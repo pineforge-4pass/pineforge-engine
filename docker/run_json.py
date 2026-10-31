@@ -3432,7 +3432,6 @@ _SYMBOL_FEED_HASH_PREFIX = b"pineforge:symbol-feed:barc-close-le:v1\0"
 _SYMBOL_FEED_RECORD = struct.Struct("<5dqq")
 # The requests manifest's timeframe spelling and caps (scripts/run_strategy.py).
 _SYMBOL_TF_RE = re.compile(r"(?:[1-9][0-9]{0,4}|[1-9][0-9]{0,3}[DWMS])")
-_SYMBOL_FEEDS_MAX = 256
 _SYMBOL_KEY_MAX = 256
 _SYMBOL_STAMP_MAX = 2**53 - 1  # unix ms; the record is fingerprinted as a JSON number
 # Catalog syminfo key -> the strategy_set_symbol_facts field it sets.
@@ -3686,7 +3685,7 @@ def _resolve_chart_source(args):
         args.ohlcv = binary  # the effective input path used by the report
 
 
-def load_symbol_feeds(index_path: Path, *, verify_bin="full") -> list:
+def load_symbol_feeds(index_path: Path, *, verify_bin="full", max_symbol_feeds=None) -> list:
     """Read all CSV/binary feeds before state construction, relative to the index.
 
     Each exact symbol key holds facts and feeds as before. Binary feed records
@@ -3696,14 +3695,15 @@ def load_symbol_feeds(index_path: Path, *, verify_bin="full") -> list:
     doc = _read_symbol_index(index_path)
     _index_chart_path(doc, index_path)
     with ExitStack() as pending:
-        result = _load_index_feeds(index_path, doc["symbols"], verify_bin, pending)
+        result = _load_index_feeds(index_path, doc["symbols"], verify_bin, pending,
+                                   max_symbol_feeds)
         pending.pop_all()  # success transfers ownership to the returned records
         return result
 
 
-def _load_index_feeds(index_path, symbols, verify_bin, pending):
-    if len(symbols) > _SYMBOL_FEEDS_MAX:
-        raise SymbolFeedsError(f"--symbol-feeds: more than {_SYMBOL_FEEDS_MAX} symbols",
+def _load_index_feeds(index_path, symbols, verify_bin, pending, max_symbol_feeds):
+    if max_symbol_feeds and len(symbols) > max_symbol_feeds:
+        raise SymbolFeedsError(f"--symbol-feeds: more than {max_symbol_feeds} symbols",
                                "too_many_symbols")
     out, total = [], 0
     for symbol, entry in symbols.items():
@@ -3717,8 +3717,8 @@ def _load_index_feeds(index_path, symbols, verify_bin, pending):
             raise SymbolFeedsError(f"--symbol-feeds: {symbol}: feeds must be an object",
                                    "feeds_not_object")
         total += len(feeds)
-        if total > _SYMBOL_FEEDS_MAX:
-            raise SymbolFeedsError(f"--symbol-feeds: more than {_SYMBOL_FEEDS_MAX} feeds",
+        if max_symbol_feeds and total > max_symbol_feeds:
+            raise SymbolFeedsError(f"--symbol-feeds: more than {max_symbol_feeds} feeds",
                                    "too_many_feeds")
         named = {}
         for tf, file in feeds.items():
@@ -3757,8 +3757,12 @@ def _run_symbol_feeds(args, binary_inputs):
     if not args.symbol_feeds:
         return None
     # Keep the legacy call shape on the default path, including host test seams.
-    symbols = (load_symbol_feeds(args.symbol_feeds) if args.verify_bin == "full"
-               else load_symbol_feeds(args.symbol_feeds, verify_bin=args.verify_bin))
+    options = {}
+    if args.verify_bin != "full":
+        options["verify_bin"] = args.verify_bin
+    if getattr(args, "max_symbol_feeds", None):
+        options["max_symbol_feeds"] = args.max_symbol_feeds
+    symbols = load_symbol_feeds(args.symbol_feeds, **options)
     binary_inputs.callback(close_symbol_feeds, symbols)
     return symbols
 
@@ -4905,10 +4909,12 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
     #    artifact's request-feed inventory (this --so, hashed and never loaded; the inventory
     #    beside it). Raises InventoryAdmissionError (window_mode_unsupported) before any feed,
     #    ctypes library, strategy or phase record. The refusal keeps its code and detail.
+    inventory_limits = ({"max_inventory_bytes": args.max_inventory_bytes}
+                        if args.max_inventory_bytes else {})
     try:
         request_feed_inventory.admit_selected_request(
             request.script_tf, args.request_feed_inventory, args.so, inputs,
-            swr.support_policy())
+            swr.support_policy(), **inventory_limits)
     except request_feed_inventory.InventoryAdmissionError as error:
         raise RunFailure(error.message, error.code, error.detail) from None
 
@@ -5313,6 +5319,21 @@ def _legacy_abbreviations(argv, legacy_long, all_long):
     return out
 
 
+# Opt-in compatibility defaults; explicit values, including zero, always win.
+# The binder imports this table so both inventory readers use the same set.
+TV_COMPAT_LIMITS = {"max_symbol_feeds": 256, "max_inventory_bytes": 8 * 1024 * 1024}
+
+
+def nonnegative_limit(value):
+    try:
+        limit = int(value)
+        if limit >= 0:
+            return limit
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError("must be a nonnegative integer (0 means unlimited)")
+
+
 def _main(argv, binary_inputs) -> int:
     # Host startup only: freeze the profile before any library/handle/run.
     environment_profile = os.environ.get("PINEFORGE_RUN_JSON_PROFILE", "unjailed")
@@ -5377,6 +5398,12 @@ def _main(argv, binary_inputs) -> int:
     # The long options of the command line BEFORE the selected-window flags below; see
     # _legacy_abbreviations (the option strings of the parser, captured here and not typed out).
     legacy_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
+    ap.add_argument("--max-symbol-feeds", type=nonnegative_limit, default=None, metavar="N",
+                    help="Maximum symbols and total extra feeds; unset or 0 = unlimited.")
+    ap.add_argument("--max-inventory-bytes", type=nonnegative_limit, default=None, metavar="N",
+                    help="Maximum request-feed inventory bytes; unset or 0 = unlimited.")
+    ap.add_argument("--tv-compat", action="store_true",
+                    help="Use TradingView compatibility limits as defaults; explicit limits win.")
     ap.add_argument("--ohlcv-bin", type=Path, default=None,
                     help="pf_bar_t/v1 binary chart (or the symbol index chart); alternative to --ohlcv.")
     ap.add_argument("--verify-bin", choices=("full", "sidecar"), default="full",
@@ -5451,6 +5478,10 @@ def _main(argv, binary_inputs) -> int:
     if not argv:
         ap.error("the following arguments are required: --so, --ohlcv")
     args = ap.parse_args(argv)
+    if args.tv_compat:
+        for name, limit in TV_COMPAT_LIMITS.items():
+            if getattr(args, name) is None:
+                setattr(args, name, limit)
     if args.profile not in ("unjailed", "jailed"):
         raise _request_invalid("PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed", "arguments")
     missing = []
