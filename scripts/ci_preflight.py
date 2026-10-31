@@ -893,6 +893,68 @@ PROMOTE_GUARD = r'''  promote-guard:
 '''
 PROMOTE_IF = ("${{ needs.promote-guard.result == 'success' && "
               "needs.promote-guard.outputs.ok == 'true' }}")
+# Pin executable lines from the campaign template: a successful status takes
+# precedence over the check-run fallback, and only the newest check per app/name
+# may veto codegen promotion. A snippet match could leave a later bypass intact.
+PROMOTE_HEAD_GATE = r'''      - name: Confirm the gate on the PR head
+        id: ci
+        if: steps.exacttree.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ needs.promote-guard.outputs.head_sha }}
+          AXIS: ${{ steps.axis.outputs.repo }}
+        run: |
+          set -euo pipefail
+          if [ "$AXIS" = engine ]; then
+            statuses=$(gh api --paginate \
+              "repos/${{ github.repository }}/commits/$HEAD_SHA/statuses?per_page=100")
+            if ! jq -es '
+              reduce (.[][]) as $s ({};
+                if has($s.context) then . else .[$s.context] = $s.state end)
+              | .["pineforge/verify"] == "success"
+                and .["pineforge/parity"] == "success"
+            ' <<< "$statuses" >/dev/null; then
+              echo "::notice::pineforge/verify and pineforge/parity must both be success on $HEAD_SHA — skipping"
+              echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+          else
+            runs=$(gh api --paginate \
+              "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100")
+            gate=$(jq -s '[.[].check_runs[] | select(.name == "gate" and .conclusion == "success")] | length' <<< "$runs")
+            statuses=$(gh api --paginate \
+              "repos/${{ github.repository }}/commits/$HEAD_SHA/statuses?per_page=100")
+            gate_status=$(jq -sr '[.[][] | select(.context == "gate")][0].state // "absent"' <<< "$statuses")
+            if { [ "$gate_status" = absent ] && [ "$gate" = "0" ]; } || { [ "$gate_status" != absent ] && [ "$gate_status" != success ]; }; then
+              echo "::notice::the required gate context has not succeeded on $HEAD_SHA — not green; skipping"
+              echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            bad=$(jq -s '[[.[].check_runs[]] | group_by([.app.id, .name])[] | max_by(.id) | select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out" or .conclusion=="action_required")] | length' <<< "$runs")
+            if [ "$bad" != "0" ]; then
+              echo "::notice::$bad failing check-run(s) on $HEAD_SHA — not green; skipping"
+              echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+          fi
+          echo "green=true" >> "$GITHUB_OUTPUT"
+'''
+PROMOTE_PROXY_STEP = r'''      - name: Start cloud-sql-proxy
+        if: steps.ci.outputs.green == 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSLo /tmp/cloud-sql-proxy \
+            https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.1/cloud-sql-proxy.linux.amd64
+          chmod +x /tmp/cloud-sql-proxy
+          /tmp/cloud-sql-proxy --port 5433 \
+            gen-lang-client-0864094636:asia-east1:pineforge-workflow-pg &
+          proxy_pid=$!
+          while true; do
+            if (exec 3<>/dev/tcp/127.0.0.1/5433) 2>/dev/null; then exit 0; fi
+            if ! kill -0 "$proxy_pid" 2>/dev/null; then
+              echo "cloud-sql-proxy exited before it became ready" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+'''
 GATE_NEEDS = 'needs: [authz, changes, preflight, build, corpus-parity-subset]'
 POST_GATE_NEEDS = ('needs: [authz, changes, preflight, build, build-arm, sanitizers, native-live, kernel-only, '
                    'corpus-parity-subset, preflight-slow, corpus-parity]')
@@ -3602,10 +3664,10 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             if any(_CONTINUE_ON_ERROR.match(line) for line in _code(body)):
                 findings.append(f'{name} job {job} must not continue on error')
     # Baseline promotion is pineforge-workflow's campaign/ci/promote-baseline.yml,
-    # installed unchanged. Main's own copy runs on push to main and resolves
+    # installed with engine runner/concurrency/ref pins. Main's own copy resolves
     # exactly one merged PR in the guard before authorizing its API identities.
     # PR objects are fetched only for tree comparison. Both events retain
-    # the newest two engine head statuses and the codegen check-run rule.
+    # the newest two engine head statuses and the codegen gate/newest-check rule.
     promote_job = _jobs(promote).get('promote', '')
     guard_job = _jobs(promote).get('promote-guard', '')
     guard_steps = _steps(guard_job)
@@ -3614,6 +3676,10 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     authorized = _step_named(guard_steps, '        id: authorize')
     exacttree = _step_named(promote_steps, '        id: exacttree')
     head_gate = _step_named(promote_steps, '        id: ci')
+    campaign_checkout = _step_named(
+        promote_steps, '      - name: Checkout campaign tooling (pineforge-workflow)')
+    proxy = _step_named(promote_steps, '      - name: Start cloud-sql-proxy')
+    baseline = _step_named(promote_steps, '      - name: Promote baseline')
     if (_job_values(promote, 'concurrency') != [
             'group: promote-baseline cancel-in-progress: false']
             or _job_values(promote_job, 'concurrency')):
@@ -3682,8 +3748,23 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or 'if has($s.context) then . else .[$s.context] = $s.state end' not in head_gate
             or '.["pineforge/verify"] == "success"' not in head_gate
             or '.["pineforge/parity"] == "success"' not in head_gate
-            or head_gate.count('echo "green=false" >> "$GITHUB_OUTPUT"; exit 0') != 2):
+            or head_gate.count('echo "green=false" >> "$GITHUB_OUTPUT"; exit 0') != 3):
         findings.append("baseline promotion must run main's copy and require the latest two head statuses")
+    if _code(head_gate) != _code(PROMOTE_HEAD_GATE):
+        findings.append('baseline promotion must require the codegen gate context and '
+                        'only the newest check per app and name')
+    checkout_inputs = '\n'.join(_step_block(campaign_checkout, 'with')[1:])
+    if (len(_step_values(campaign_checkout, 'with')) != 1
+            or not any(value.startswith('actions/checkout@')
+                       for value in _step_values(campaign_checkout, 'uses'))
+            or _job_values(checkout_inputs, 'persist-credentials', unquote=False) != ['false']):
+        findings.append('baseline promotion campaign checkout must set persist-credentials: false')
+    baseline_env = '\n'.join(_step_block(baseline, 'env')[1:])
+    if (len(_step_values(baseline, 'env')) != 1
+            or _job_values(baseline_env, 'GH_TOKEN', unquote=False) != ['${{ github.token }}']):
+        findings.append('baseline promotion Promote baseline step must use its own read-only GH_TOKEN')
+    if _code(proxy) != _code(PROMOTE_PROXY_STEP):
+        findings.append('baseline promotion proxy must wait for readiness while its process lives')
     # The job pin cannot see inherited workflow settings.
     for key in ('defaults', 'env'):
         if _job_values(promote, key):

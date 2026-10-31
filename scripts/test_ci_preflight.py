@@ -1749,7 +1749,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
 
     def test_post_fleet_docs_match_runner_policy(self):
         docs = (ROOT / 'docs/ci.md').read_text()
-        self.assertEqual(len(docs.splitlines()), 2016)
+        self.assertEqual(len(docs.splitlines()), 2035)
         requirements = (
             'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
             'profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
@@ -3930,7 +3930,7 @@ class PreflightFailures(unittest.TestCase):
 
     def test_documented_slow_row_counts_match_literal_population(self):
         text = (ROOT / 'docs/ci.md').read_text()
-        self.assertEqual(len(text.splitlines()), 2016)
+        self.assertEqual(len(text.splitlines()), 2035)
         counts = re.findall(
             r'^the (\d+) CTest rows labelled `slow` in `tests/CMakeLists.txt`$'
             r'|^The label `slow` (?:is|includes) `PINEFORGE_PR_SLOW_TESTS` '
@@ -6647,6 +6647,128 @@ finally:
             '"+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-head"',
             '"$HEAD_SHA:refs/remotes/origin/pr-head"')
         self.assertIn('baseline promotion must admit a squash merge by tree equality only', findings)
+
+    def test_baseline_promotion_requires_codegen_gate_context_and_newest_checks(self):
+        original, others = self.ci_sources(), self.other_sources()
+        self.assertEqual(ci_workflow_findings(*original, others=others), [])
+        name = 'Confirm the gate on the PR head'
+        step = ci_preflight._step_named(ci_preflight._steps(_jobs(original[2])['promote']),
+                                       '      - name: ' + name)
+        start = step.index('          else\n') + len('          else\n')
+        end = step.index('          fi\n          echo "green=true"', start)
+        codegen = step[start:end]
+        old_codegen = r'''            bad=$(gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs" \
+              --jq '[.check_runs[] | select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out" or .conclusion=="action_required")] | length')
+            if [ "$bad" != "0" ]; then
+              echo "::notice::$bad failing check-run(s) on $HEAD_SHA — not green; skipping"
+              echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+'''
+        finding = ('baseline promotion must require the codegen gate context and '
+                   'only the newest check per app and name')
+        mutations = (
+            ('old guard', codegen, old_codegen),
+            ('check pagination', 'check-runs?per_page=100', 'check-runs'),
+            ('required gate', 'select(.name == "gate" and .conclusion == "success")',
+             'select(.conclusion == "success")'),
+            ('newest status', 'select(.context == "gate")][0].state',
+             'select(.context == "gate")][-1].state'),
+            ('status precedence',
+             'if { [ "$gate_status" = absent ] && [ "$gate" = "0" ]; } || '
+             '{ [ "$gate_status" != absent ] && [ "$gate_status" != success ]; }; then',
+             'if [ "$gate" = "0" ]; then'),
+            ('per app and name', 'group_by([.app.id, .name])', 'group_by(.name)'),
+            ('newest check', 'max_by(.id)', 'min_by(.id)'),
+            ('refuse before green',
+             'echo "green=false" >> "$GITHUB_OUTPUT"; exit 0',
+             'echo "green=false" >> "$GITHUB_OUTPUT"'),
+        )
+        for label, before, after in mutations:
+            with self.subTest(property=label):
+                changed = original.copy()
+                changed[2] = in_step(original[2], 'promote', name, before, after)
+                self.assertNotEqual(changed[2], original[2])
+                self.assertIn(finding, ci_workflow_findings(*changed, others=others))
+
+    def test_baseline_promotion_requires_its_own_read_only_gh_token(self):
+        original, others = self.ci_sources(), self.other_sources()
+        self.assertEqual(ci_workflow_findings(*original, others=others), [])
+        token = '          GH_TOKEN: ${{ github.token }}\n'
+        finding = 'baseline promotion Promote baseline step must use its own read-only GH_TOKEN'
+        for replacement in ('', '          GH_TOKEN: ${{ steps.app.outputs.token }}\n',
+                            '          GH_TOKEN: ${{ secrets.GH_TOKEN }}\n',
+                            token + '          GH_TOKEN: ${{ steps.app.outputs.token }}\n'):
+            with self.subTest(token=replacement):
+                changed = original.copy()
+                changed[2] = in_step(original[2], 'promote', 'Promote baseline',
+                                     token, replacement)
+                self.assertNotEqual(changed[2], original[2])
+                self.assertIn(finding, ci_workflow_findings(*changed, others=others))
+        # Other API steps already have this token; a token moved to another
+        # step cannot supply the campaign tool's environment.
+        changed = original.copy()
+        changed[2] = in_step(original[2], 'promote', 'Promote baseline', token, '')
+        changed[2] = in_step(changed[2], 'promote', 'Install campaign dependencies',
+                             '        run:', '        env:\n' + token + '        run:')
+        self.assertIn(finding, ci_workflow_findings(*changed, others=others))
+
+    def test_baseline_promotion_campaign_checkout_never_persists_credentials(self):
+        original, others = self.ci_sources(), self.other_sources()
+        self.assertEqual(ci_workflow_findings(*original, others=others), [])
+        setting = '          persist-credentials: false'
+        finding = 'baseline promotion campaign checkout must set persist-credentials: false'
+        for replacement in ('', '          persist-credentials: true',
+                            '          persist-credentials: ${{ false }}',
+                            setting + '\n          persist-credentials: true'):
+            with self.subTest(persistence=replacement):
+                changed = original.copy()
+                changed[2] = in_step(original[2], 'promote',
+                                     'Checkout campaign tooling (pineforge-workflow)',
+                                     setting, replacement)
+                self.assertNotEqual(changed[2], original[2])
+                self.assertIn(finding, ci_workflow_findings(*changed, others=others))
+        # Setting it on the public main checkout cannot protect the private
+        # campaign checkout's App token.
+        changed = original.copy()
+        changed[2] = in_step(original[2], 'promote',
+                             'Checkout campaign tooling (pineforge-workflow)', setting, '')
+        changed[2] = in_job(changed[2], 'promote', '          fetch-depth: 0',
+                            '          fetch-depth: 0\n' + setting)
+        self.assertIn(finding, ci_workflow_findings(*changed, others=others))
+
+    def test_baseline_promotion_proxy_wait_requires_process_liveness(self):
+        original, others = self.ci_sources(), self.other_sources()
+        self.assertEqual(ci_workflow_findings(*original, others=others), [])
+        name = 'Start cloud-sql-proxy'
+        wait = r'''          proxy_pid=$!
+          while true; do
+            if (exec 3<>/dev/tcp/127.0.0.1/5433) 2>/dev/null; then exit 0; fi
+            if ! kill -0 "$proxy_pid" 2>/dev/null; then
+              echo "cloud-sql-proxy exited before it became ready" >&2
+              exit 1
+            fi
+            sleep 1
+          done'''
+        old_wait = r'''          for _ in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/5433) 2>/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "cloud-sql-proxy did not become ready" >&2
+          exit 1'''
+        finding = 'baseline promotion proxy must wait for readiness while its process lives'
+        for label, before, after in (
+                ('old bounded wait', wait, old_wait),
+                ('capture proxy pid', '          proxy_pid=$!\n', ''),
+                ('unbounded wait', 'while true; do', 'for _ in $(seq 1 30); do'),
+                ('probe proxy pid', 'kill -0 "$proxy_pid"', 'kill -0 "$$"'),
+                ('liveness refusal', 'if ! kill -0 "$proxy_pid" 2>/dev/null; then', 'if false; then'),
+                ('readiness probe', '3<>/dev/tcp/127.0.0.1/5433', '3<>/dev/tcp/127.0.0.1/5432'),
+                ('dead proxy exit', '              exit 1\n', '              exit 0\n')):
+            with self.subTest(property=label):
+                changed = original.copy()
+                changed[2] = in_step(original[2], 'promote', name, before, after)
+                self.assertNotEqual(changed[2], original[2])
+                self.assertIn(finding, ci_workflow_findings(*changed, others=others))
 
     def test_baseline_promotion_pins_python_selection_and_unique_match(self):
         for before, after in (
