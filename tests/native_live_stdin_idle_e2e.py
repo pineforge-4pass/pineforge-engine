@@ -141,6 +141,13 @@ def main():
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                        stderr=subprocess.PIPE, text=True)
             try:
+                # Start the dribble after warmup and the first committed report.
+                process.stdin.write(json.dumps(dict(type="bar", bar=bars[30])) + "\n")
+                process.stdin.flush()
+                readable, _, _ = select.select([process.stdout], [], [], 180)
+                assert readable, (name, "readiness bar produced no stdout within 180 seconds")
+                committed = json.loads(process.stdout.readline())
+                assert committed["input_cursor"] == 1, committed
                 sent_at = time.monotonic()
                 for index, chunk in enumerate(chunks):
                     if index:
@@ -166,8 +173,8 @@ def main():
                     assert time.monotonic() - sent_at > 1
                     process.stdin.close()
                     process.stdin = None
-                output, errors = process.communicate(timeout=15)
-                expected_count = 0 if expect_timeout else 1
+                output, errors = process.communicate(timeout=60)
+                expected_count = 1 if expect_timeout else 2
                 assert process.returncode == (1 if expect_timeout else 0), (
                     name, process.returncode, output, errors)
                 if expect_timeout:
@@ -177,9 +184,9 @@ def main():
                     documents = [json.loads(line) for line in output.splitlines()]
                     assert len(documents) == 2, (name, documents)
                     assert documents[0]["schema_version"] == "pineforge-native-report/v1"
-                    assert documents[0]["input_cursor"] == 1, documents[0]
-                    assert documents[1]["inputs_committed"] == 1, documents[1]
-                    assert documents[1]["inputs_processed"] == 1, documents[1]
+                    assert documents[0]["input_cursor"] == 2, documents[0]
+                    assert documents[1]["inputs_committed"] == 2, documents[1]
+                    assert documents[1]["inputs_processed"] == 2, documents[1]
                 with sqlite3.connect(ledger) as database:
                     assert database.execute("SELECT count(*) FROM inputs").fetchone() == (
                         expected_count,), name
@@ -190,7 +197,7 @@ def main():
             print(f"PASS stdin {name}: {expected_count} committed inputs", flush=True)
 
         dribble("partial-dribble", ["{"] + [" "] * 8, 1, True)
-        valid_line = json.dumps(dict(type="bar", bar=bars[30]), separators=(",", ":")) + "\n"
+        valid_line = json.dumps(dict(type="bar", bar=bars[31]), separators=(",", ":")) + "\n"
         chunks = [valid_line[index:index + 12] for index in range(0, len(valid_line), 12)]
         dribble("valid-dribble-unlimited", chunks, 0, False)
         dribble("valid-dribble-bounded", chunks, 1, True)
