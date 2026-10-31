@@ -3,6 +3,7 @@
 // Compile/run this complete unit remotely; that red is predicted, not observed.
 #include "global_allocation_replacement.hpp"
 
+#include <pineforge/cache_policy.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/native_order.hpp>
 #include <pineforge/run_failure.hpp>
@@ -121,6 +122,10 @@ struct Driver {
     explicit Driver(const std::shared_ptr<pd::ScratchSlab>& owner = {}) {
         core.bind_scratch_slab(owner);
     }
+    explicit Driver(pineforge::CacheCapacity root_cache)
+        : core({"roots", 1}, root_cache,
+               pineforge::CacheDefaults{}.receipt_tail_pages,
+               pineforge::CacheDefaults{}.chain_segment_pages) {}
 
     void retire() {
         core.retire_history(core.last_ordinal());
@@ -551,7 +556,11 @@ void ram_needs_neither_directory_nor_file_extent() {
 
 void disk_failures_are_typed() {
     ScratchDirectory scratch;
-    Driver driver;
+    // One complete cached row forces binary-search probes to evict each
+    // other. The healthy lookup still warms a real cache, but cannot hide
+    // the later out-of-band corruption/truncation behind 64 retained rows.
+    const auto root_cache = pineforge::CacheDefaults::lines(2 * sizeof(std::uint64_t), 1);
+    Driver driver(root_cache);
     driver.core.set_successor_roots_directory(scratch.path + "/missing");
     auto tail = driver.submit();
     no::RequestHandle first;
@@ -574,6 +583,9 @@ void disk_failures_are_typed() {
     tail = driver.replace(tail, true);
     require(root_descriptor(64 * 16) == partial, "disk retry overwrites the original partial prefix");
     require(driver.core.cohort_contains(cohort, first), "successful disk retry preserves old aliases");
+    const auto healthy = driver.core.tail_read_cache_stats(no::TailWindowKind::successor_roots);
+    require(healthy.current_bytes == root_cache.capacity_bytes && healthy.evictions != 0,
+            "healthy binary search uses and evicts the one-row cache");
     // The first binary-search probe for 2 is row 32. A zero root is corrupt
     // under root<successor and must surface as typed I/O, not an absent alias.
     const std::array<std::uint64_t, 2> corrupt{{34, 0}};
@@ -581,9 +593,15 @@ void disk_failures_are_typed() {
                 == static_cast<ssize_t>(sizeof(corrupt)), "test corrupts a disk prefix row");
     expect_io([&] { (void)driver.core.cohort_contains(cohort, first); }, EIO,
               "native successor roots invalid row");
+    const auto corrupt_read = driver.core.tail_read_cache_stats(no::TailWindowKind::successor_roots);
+    require(corrupt_read.io_errors == healthy.io_errors + 1,
+            "corrupt backing row reaches the cache reader and propagates");
     require(::ftruncate(partial, 0) == 0, "test truncates the disk prefix");
     expect_io([&] { (void)driver.core.cohort_contains(cohort, first); }, EIO,
               "native successor roots read");
+    require(driver.core.tail_read_cache_stats(no::TailWindowKind::successor_roots).io_errors
+                == corrupt_read.io_errors + 1,
+            "truncated backing reaches the cache reader and propagates");
 }
 
 } // namespace

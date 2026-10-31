@@ -2974,6 +2974,7 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
         lib.strategy_set_report_replay_v1.restype = ctypes.c_int
 
     _bind_scratch_tables(lib)  # optional unless the host selects the jailed profile
+    _bind_cache_policy(lib)
 
     if hasattr(lib, "strategy_get_last_error"):
         lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
@@ -3063,6 +3064,27 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     lib.strategy_free.argtypes = [ctypes.c_void_p]
     lib.report_free.argtypes   = [ctypes.POINTER(ReportC)]
     return lib
+
+
+class CachePolicyEntryC(ctypes.Structure):
+    """Native C alignment; mirrors pf_cache_policy_entry_v1."""
+    _fields_ = [("kind", ctypes.c_uint32),
+                ("capacity_bytes", ctypes.c_uint64)]
+
+
+class CachePolicyC(ctypes.Structure):
+    """Caller-owned descriptor; the runtime copies entries during the setter."""
+    _fields_ = [("struct_size", ctypes.c_uint32),
+                ("version", ctypes.c_uint32),
+                ("entry_count", ctypes.c_uint64),
+                ("entries", ctypes.POINTER(CachePolicyEntryC))]
+
+
+def _bind_cache_policy(lib) -> None:
+    if hasattr(lib, "strategy_set_cache_policy_v1"):
+        lib.strategy_set_cache_policy_v1.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(CachePolicyC)]
+        lib.strategy_set_cache_policy_v1.restype = ctypes.c_int
 
 
 class ScratchTablesC(ctypes.Structure):
@@ -5126,6 +5148,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
+        _add_cache_diagnostics(lib, state, out["diagnostics"])
         out["report_window"] = window
         out["report_shape"] = swr.report_shape_full(
             equity_points, sink.counts["T"] if sink is not None else len(out["trades"]))
@@ -5761,6 +5784,7 @@ def _main(argv, binary_inputs) -> int:
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
+        _add_cache_diagnostics(lib, state, out["diagnostics"])
         if timing is not None:
             out["diagnostics"]["timing"] = timing
             out["diagnostics"]["throughput"] = _throughput_block(
@@ -5884,6 +5908,9 @@ def _bind_report_sink(lib) -> None:
         "pf_report_sink_version": (ctypes.c_uint32, []),
         "pf_report_scratch_arena_stats": (ctypes.c_int, [
             ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64)]),
+        "pf_report_cache_stats": (ctypes.c_int, [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint64),
+            ctypes.POINTER(ctypes.c_uint64)]),
         "strategy_require_report_scratch_arena_v1": (ctypes.c_int, [ctypes.c_void_p]),
         "strategy_set_report_sink_v1": (ctypes.c_int, [
             ctypes.c_void_p, ctypes.POINTER(ReportSinkC)]),
@@ -5921,6 +5948,21 @@ def _add_scratch_arena_counters(lib, diagnostics):
         raise _engine_invariant("the engine's scratch arena statistics could not be read")
     diagnostics["scratch_arena_high_water_bytes"] = high_water.value
     diagnostics["scratch_arena_bytes"] = arena_bytes.value
+
+
+def _add_cache_diagnostics(lib, state, diagnostics):
+    # Per-run counters: report assembly can read the ledger and fill its cache.
+    # Query afterwards, while its strategy and allocation owners are still live.
+    getter = getattr(lib, "pf_report_cache_stats", None)
+    if getter is None:
+        return  # older modules have no such diagnostics
+    resident_bytes, bypasses = ctypes.c_uint64(), ctypes.c_uint64()
+    if getter(state, ctypes.byref(resident_bytes), ctypes.byref(bypasses)) != 0:
+        raise _engine_invariant("the engine's cache statistics could not be read")
+    if bypasses.value > 0:
+        diagnostics["cache_resident_bytes"] = resident_bytes.value
+        diagnostics["cache_bypass_reason"] = "alloc_failed"
+        diagnostics["allocation_bypass_count"] = bypasses.value
 
 
 def _refuse_jailed_path_sink(args):

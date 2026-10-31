@@ -259,8 +259,8 @@ registry-name or exclusion-name fields; the default exclusion still adds
 selected discovery and strict `ctest-exclusion` checks.
 
 **Slow-label bound, 2026-10-24:** `PINNED_SLOW_TEST_ROWS` in
-`scripts/ci_verify.py` pins all 69 source-labelled names: 43 from the
-`PINEFORGE_PR_SLOW_TESTS` loop and 26 direct CMake `LABELS` assignments; the four report slices replace one direct name (+3), and the report and command-after covers remain outside the slow set.
+`scripts/ci_verify.py` pins all 71 source-labelled names: 43 from the
+`PINEFORGE_PR_SLOW_TESTS` loop and 28 direct CMake `LABELS` assignments; the four report slices replace one direct name (+3), and the report and command-after covers remain outside the slow set.
 Every name listed by `ctest -N -L slow` must belong to that set; conditional
 registration may omit names. An unpinned name fails `ctest-exclusion` on
 plain and 1/1 runs, or `ctest-shard-discovery` for multiple shards, with the
@@ -1401,9 +1401,9 @@ fewer of the 43 than Release does. `live-sanitizers`, `live-tsan` and the
 parity subset keep their existing selections.
 
 **The slow-label inventory also includes rows with direct labels:**
-The timing list contains 43 names, and 26 additional names are pinned for
+The timing list contains 43 names, and 28 additional names are pinned for
 direct `LABELS` assignments in `tests/CMakeLists.txt` and
-`tests/cr150.d/*.cmake`, making 69 distinct pinned slow names.
+`tests/cr150.d/*.cmake`, making 71 distinct pinned slow names.
 `PINNED_SLOW_TEST_ROWS` bounds the discovered exclusion by those names,
 independent of the registered count; each profile may register a subset.
 

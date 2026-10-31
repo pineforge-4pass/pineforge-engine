@@ -268,6 +268,32 @@ def report_of(text):
     return rep
 
 
+@pytest.mark.parametrize("count", [0, 3])
+def test_success_report_reads_cache_diagnostics_before_strategy_release(harness, count):
+    def cache_stats(state, resident, bypasses):
+        assert state == ST
+        assert "run_backtest_full" in lib.names()
+        assert "strategy_free" not in lib.names()
+        ctypes.cast(resident, ctypes.POINTER(ctypes.c_uint64))[0] = 160_704
+        ctypes.cast(bypasses, ctypes.POINTER(ctypes.c_uint64))[0] = count
+        return 0
+
+    lib = fake_lib(impl={"pf_report_cache_stats": cache_stats})
+    status, text = harness(lib)
+    assert status == 0, text
+    diagnostics = json.loads(text)["diagnostics"]
+    if count:
+        assert diagnostics["cache_resident_bytes"] == 160_704
+        assert diagnostics["cache_bypass_reason"] == "alloc_failed"
+        assert diagnostics["allocation_bypass_count"] == count
+    else:
+        assert "cache_resident_bytes" not in diagnostics
+        assert "cache_bypass_reason" not in diagnostics
+        assert "allocation_bypass_count" not in diagnostics
+    assert lib.names().count("pf_report_cache_stats") == 1
+    assert lib.names().index("pf_report_cache_stats") < lib.names().index("strategy_free")
+
+
 # --- the line ----------------------------------------------------------------
 
 def test_line_shape_and_key_order():

@@ -66,15 +66,15 @@ struct SourceExitScratchRun {
     // The native consumer retains this run through source-adapter destruction.
     // Geometry is fixed independently of the bar and order populations.
     const std::size_t page_size = command_scratch_page_size();
-    std::unique_ptr<::pineforge::detail::ScratchBacking> exit_backing =
-        source::detail::make_command_scratch_backing(page_size);
+    std::unique_ptr<::pineforge::detail::ScratchBacking> exit_backing;
     ::pineforge::detail::CommandScratchStore exit{
         command_scratch_config(page_size, source::detail::exit_scratch_key_order()),
         exit_backing.get()};
     source::detail::ExitScratchContext exit_context{exit, {}};
     source::detail::ExitScratchVersionsProduction exit_versions{exit};
 
-    SourceExitScratchRun() {
+    explicit SourceExitScratchRun(CacheCapacity capacity)
+        : exit_backing(source::detail::make_command_scratch_backing(page_size, capacity)) {
         if (exit.status() != ::pineforge::detail::ScratchStatus::ok) {
             if (exit.status() == ::pineforge::detail::ScratchStatus::io_error) // the store carries a refused workspace allocation
                 ::pineforge::detail::rethrow_carried_scratch_failure(exit.carried_failure() ? exit.carried_failure() : exit_backing->carried_failure());
@@ -632,10 +632,14 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
             "timestamped account-currency FX is not supported with bar magnifier");
 
     adapter_.reset_for_run();
+    adapter_.set_cache_policy_for_run(cache_policy_for_run());
+    for (auto& tape : recorded_series_)
+        tape.second.rows.set_capacity_bytes(tape.second.cache_capacity_override.value_or(
+            cache_policy_for_run().recorded_series_pages.capacity_bytes));
     const auto& scratch = scratch_tables_for_run();
     ::pineforge::detail::bind_tree_scratch_tables(adapter_, scratch);
     ::pineforge::detail::bind_id_pair_scratch_tables(adapter_, scratch);
-    auto command_scratch = std::make_shared<SourceExitScratchRun>();
+    auto command_scratch = std::make_shared<SourceExitScratchRun>(cache_policy_for_run().exit_pages);
     auto& consumer = NativeExecutionConsumer::bound(*this);
     using ScratchBinding = NativeExecutionConsumer::CommandScratchBinding;
     // Reserve placement evidence by incarnation once for the disclosed batch:
