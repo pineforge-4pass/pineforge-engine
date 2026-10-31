@@ -1,0 +1,307 @@
+"""TEST host for real-process report-channel contract rows.
+
+This fixture deliberately does not install the deployed OS isolation policy.
+Its explicitly named test-only attestation exercises the channel core, never
+certifies an image/launcher pairing. No product module is imported here.
+"""
+from __future__ import annotations
+
+import base64
+from contextlib import ExitStack
+from dataclasses import dataclass
+import json
+import os
+from pathlib import Path
+import selectors
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SUPERVISOR = ROOT / "docker/pineforge_report_supervise.py"
+PRODUCER = Path(__file__).with_name("producer.py")
+
+
+def require_supervisor():
+    if not SUPERVISOR.is_file():
+        raise AssertionError(
+            "report-channel red-first prerequisite: "
+            "docker/pineforge_report_supervise.py does not exist on main")
+
+
+def encoded(data):
+    return base64.b64encode(data).decode("ascii")
+
+
+def clean_environment():
+    return {key: value for key, value in os.environ.items()
+            if not key.startswith(("PINEFORGE_REPORT_", "PINEFORGE_TERMINAL_",
+                                   "PINEFORGE_DIAGNOSTIC_", "PINEFORGE_CHANNEL_"))}
+
+
+def sink_wire(closes, first_ts=1000):
+    """Independent frozen E/T wire fixture, including a real logical digest."""
+    columns = {
+        "E": (("time_ms", "i64", "unix_ms"), ("equity", "f64?", "account_ccy"),
+              ("open_profit", "f64?", "account_ccy")),
+        "T": (("n", "i64", ""), ("side", "str", ""),
+              ("entry_time", "i64", "unix_ms"), ("exit_time", "i64", "unix_ms"),
+              ("entry_price", "f64?", "quote_ccy"), ("exit_price", "f64?", "quote_ccy"),
+              ("qty", "f64?", "qty"), ("pnl", "f64?", "account_ccy"),
+              ("pnl_pct", "f64?", "percent"), ("max_runup", "f64?", "account_ccy"),
+              ("max_drawdown", "f64?", "account_ccy"), ("commission", "f64?", "account_ccy"),
+              ("entry_bar_index", "i64", "script_bar"), ("exit_bar_index", "i64", "script_bar"),
+              ("open_at_end", "bool", ""), ("entry_incarnation", "u64", ""),
+              ("close_cause", "i64", ""), ("entry_id", "str", ""),
+              ("exit_id", "str", ""), ("exit_comment", "str", "")),
+    }
+
+    def line(value):
+        return json.dumps(value, separators=(",", ":"), allow_nan=False).encode() + b"\n"
+
+    header = {"schema": "pf-report-sink", "version": 1, "run_id": "report-channel-fixture",
+              "engine": "pineforge", "records": [
+                  {"type": tag, "fields": [column[0] for column in values],
+                   "types": [column[1] for column in values],
+                   "units": [column[2] for column in values]}
+                  for tag, values in columns.items()]}
+    prefix = line(header) + b"".join(
+        line(["E", first_ts + index * 60000, close, 0])
+        for index, close in enumerate(closes))
+    import hashlib
+    return prefix + line({"trailer": "pf-report-sink", "version": 1,
+                          "counts": {"E": len(closes), "T": 0},
+                          "sha256": hashlib.sha256(prefix).hexdigest()})
+
+
+@dataclass
+class Capture:
+    report: bytes
+    diagnostic: bytes
+    sink: bytes
+    packets: list
+    packet_flags: list
+    returncode: int
+    attempt_id: str
+    eof: set
+
+    def terminal(self):
+        if len(self.packets) != 1:
+            raise AssertionError(
+                f"expected exactly one terminal packet, got {self.packets!r}; "
+                f"wait={self.returncode}, R={self.report!r}, D={self.diagnostic!r}")
+        if self.packet_flags != [0]:
+            raise AssertionError(f"truncated/ancillary terminal packet: {self.packet_flags!r}")
+        return json.loads(self.packets[0])
+
+
+def launch(request=None, *, options=(), environment=None, status="valid",
+           alias=None, sink=False, attested=True, grants=None, command=None,
+           direct=False, activate=True, wrong_direction=None, planned_sink_bytes=None):
+    """Create R/D/M, launch S, and read every endpoint concurrently to EOF.
+
+    ``status`` tests absent, pipe, stream, reserved, closed and wrong-direction
+    endpoints. ``alias`` duplicates real open endpoints, not just fd numbers.
+    The process timeout is the TEST host watchdog, independent of S's clock.
+    """
+    require_supervisor()
+    attempt = uuid.uuid4().hex
+    with tempfile.TemporaryDirectory(prefix="pf-report-channel-") as directory, ExitStack() as stack:
+        request_path = Path(directory) / "request.json"
+        request_path.write_text(json.dumps(request or {}), encoding="utf-8")
+        all_fds = set()
+
+        def pipe():
+            reader, writer = os.pipe()
+            all_fds.update((reader, writer))
+            stack.callback(os.close, reader)
+            stack.callback(os.close, writer)
+            return reader, writer
+
+        report_read, report_write = pipe()
+        diagnostic_read, diagnostic_write = pipe()
+        if wrong_direction == "report":
+            report_write = report_read
+        elif wrong_direction == "diagnostic":
+            diagnostic_write = diagnostic_read
+        status_host, status_child = socket.socketpair(
+            socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        stack.callback(status_host.close)
+        stack.callback(status_child.close)
+        inherited = [status_child.fileno()]
+        terminal_fd = status_child.fileno()
+        extra_readers = {}
+        if status in ("pipe", "read_end"):
+            bad_read, bad_write = pipe()
+            terminal_fd = bad_read if status == "read_end" else bad_write
+            inherited.append(terminal_fd)
+            extra_readers["bad_status"] = bad_read
+        elif status == "stream":
+            stream_host, stream_child = socket.socketpair()
+            stack.callback(stream_host.close)
+            stack.callback(stream_child.close)
+            terminal_fd = stream_child.fileno()
+            inherited.append(terminal_fd)
+        elif status == "reserved":
+            terminal_fd = 5
+        elif status == "closed":
+            terminal_fd = 2147483647
+        if alias == "report_diagnostic":
+            diagnostic_write = report_write
+        elif alias in ("report_status", "diagnostic_status"):
+            terminal_fd = os.dup(
+                report_write if alias == "report_status" else diagnostic_write)
+            all_fds.add(terminal_fd)
+            stack.callback(os.close, terminal_fd)
+            inherited.append(terminal_fd)
+
+        sink_read = sink_write = None
+        if sink or alias in ("report_sink", "diagnostic_sink", "status_sink"):
+            sink_read, sink_write = pipe()
+            if wrong_direction == "sink":
+                sink_write = sink_read
+            if alias is not None and alias.endswith("_sink"):
+                source = {"report_sink": report_write,
+                          "diagnostic_sink": diagnostic_write,
+                          "status_sink": status_child.fileno()}[alias]
+                sink_write = os.dup(source)
+                all_fds.add(sink_write)
+                stack.callback(os.close, sink_write)
+            inherited.append(sink_write)
+
+        policy_read = policy_write = None
+        if attested:
+            policy_read, policy_write = pipe()
+            policy = {
+                "schema": "pf-report-test-only-host-attestation",
+                "version": 1,
+                "attempt_id": attempt,
+                "test_only_unisolated_process_fixture": True,
+                "grants": grants or {
+                    "report_bytes": 67108864, "diagnostic_bytes": 1048576,
+                    "wall_ms": 600000, "stall_ms": 5000},
+            }
+            if planned_sink_bytes is not None:
+                policy["planned_sink_bytes"] = planned_sink_bytes
+            data = json.dumps(policy, separators=(",", ":")).encode() + b"\n"
+            if os.write(policy_write, data) != len(data):
+                raise AssertionError("short TEST attestation write")
+            inherited.append(policy_read)
+
+        argv = [sys.executable, "-B", str(SUPERVISOR)]
+        if direct:
+            argv = [sys.executable, "-B", str(ROOT / "docker/run_json.py")]
+        if status != "absent":
+            argv += ["--terminal-status-fd", str(terminal_fd)]
+        argv += ["--attempt-id", attempt]
+        if attested:
+            argv += ["--test-only-host-attestation-fd", str(policy_read)]
+        if sink_write is not None:
+            argv += ["--report-sink-fd", str(sink_write)]
+        argv += list(options)
+        if activate and not any(
+                value == "--report-channel" or value.startswith("--report-channel=")
+                for value in options):
+            argv += ["--report-channel", "supervised/v1"]
+        producer_command = command or [
+            sys.executable, "-B", str(PRODUCER), str(request_path)]
+        if direct:
+            argv += producer_command
+        else:
+            argv += ["--", *producer_command]
+        env = clean_environment()
+        env.update(environment or {})
+        process = subprocess.Popen(
+            argv, stdin=subprocess.DEVNULL, stdout=report_write,
+            stderr=diagnostic_write, pass_fds=tuple(set(inherited)),
+            env=env, cwd=ROOT)
+        # Parent copies of all writing endpoints must disappear before waiting
+        # for EOF. Detach ExitStack callbacks by replacing it with reader owners.
+        owned_readers = {report_read, diagnostic_read}
+        if sink_read is not None:
+            owned_readers.add(sink_read)
+        owned_readers.update(extra_readers.values())
+        keep_sockets = {status_host.fileno()}
+        stack.pop_all()
+        for fd in all_fds | set(inherited):
+            if fd not in owned_readers and fd not in keep_sockets:
+                os.close(fd)
+        # Socket objects no longer own their closed child descriptors.
+        status_child.detach()
+        if status == "stream":
+            stream_child.detach()
+            stream_host.close()
+        output = {"report": bytearray(), "diagnostic": bytearray(),
+                  "sink": bytearray(), "bad_status": bytearray()}
+        packets, flags, eof = [], [], set()
+        selector = selectors.DefaultSelector()
+        for name, fd in (("report", report_read), ("diagnostic", diagnostic_read),
+                         ("sink", sink_read), *extra_readers.items()):
+            if fd is not None:
+                os.set_blocking(fd, False)
+                selector.register(fd, selectors.EVENT_READ, name)
+        status_host.setblocking(False)
+        selector.register(status_host, selectors.EVENT_READ, "status")
+        deadline = time.monotonic() + 20
+        try:
+            while selector.get_map():
+                if time.monotonic() >= deadline:
+                    raise AssertionError(
+                        f"TEST host watchdog expired: {output!r}, packets={packets!r}")
+                for key, _ in selector.select(0.05):
+                    if key.data == "status":
+                        data, ancillary, packet_flags, _ = status_host.recvmsg(65537)
+                        if data:
+                            packets.append(data)
+                            flags.append(packet_flags | (socket.MSG_CTRUNC if ancillary else 0))
+                        else:
+                            eof.add("status")
+                            selector.unregister(key.fileobj)
+                    else:
+                        data = os.read(key.fd, 65536)
+                        if data:
+                            output[key.data].extend(data)
+                        else:
+                            eof.add(key.data)
+                            selector.unregister(key.fileobj)
+            wait = process.wait(timeout=max(0.01, deadline - time.monotonic()))
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=2)
+            selector.close()
+            status_host.close()
+            for fd in owned_readers:
+                os.close(fd)
+        return Capture(bytes(output["report"]), bytes(output["diagnostic"]),
+                       bytes(output["sink"]), packets, flags, wait, attempt, eof)
+
+
+def reference(request):
+    """Run the same input-driven producer directly, without S."""
+    with tempfile.TemporaryDirectory(prefix="pf-report-reference-") as directory:
+        path = Path(directory) / "request.json"
+        path.write_text(json.dumps(request), encoding="utf-8")
+        environment = clean_environment()
+        reader = writer = None
+        if request.get("inherited_sink"):
+            reader, writer = os.pipe()
+            environment["PINEFORGE_REPORT_REFERENCE_SINK_FD"] = str(writer)
+        try:
+            result = subprocess.run(
+                [sys.executable, "-B", str(PRODUCER), str(path), "--reference"],
+                capture_output=True, env=environment, check=False, timeout=10,
+                pass_fds=() if writer is None else (writer,))
+        finally:
+            if writer is not None:
+                os.close(writer)
+        try:
+            result.sink = b"" if reader is None else os.read(reader, 65536)
+        finally:
+            if reader is not None:
+                os.close(reader)
+        return result

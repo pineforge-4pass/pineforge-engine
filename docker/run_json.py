@@ -2360,9 +2360,9 @@ def failure_line(text, code=None, code_args=None) -> str:
     return line + "\n"
 
 
-def write_failure(text, code=None, code_args=None) -> None:
+def write_failure(text, code=None, code_args=None, *, destination=None) -> None:
     line = failure_line(text, code, code_args)
-    _publish_failure(line)
+    _publish_failure(line, destination=destination)
 
 
 def _c_text(raw) -> str:
@@ -4794,7 +4794,7 @@ def _syminfo_clock(syminfo_path) -> tuple:
     return clock[0], clock[1]
 
 
-def _write_report(text, phases=None) -> int:
+def _write_report(text, phases=None, *, destination=None) -> int:
     """Write the whole document to the report channel and flush: 0, or 1 when it cannot
     take it. No failure line (no second JSON document) may follow part of a report, so the reason
     goes to stderr, the report descriptor is discarded, the exit status is 1 and the phase writer is left
@@ -4803,29 +4803,33 @@ def _write_report(text, phases=None) -> int:
     outcome, and the stderr line names it as report_post_execution_failed with the real
     phase and the reason (resource, io or exception); without one, the line is the ordinary
     one and library calls retain their OSError/ValueError handling."""
-    caught = (OSError, ValueError) if phases is None and _REPORT_OUTPUT is None else Exception
-    already_published = _report_published()
+    caught = ((OSError, ValueError)
+              if phases is None and _REPORT_OUTPUT is None and destination is None else Exception)
+    already_published = _report_published(destination)
     try:
-        _begin_report()
+        _begin_report(destination)
         if isinstance(text, str):
-            _report_output().write(text)
+            _report_output(destination).write(text)
         else:
             # A fully prepared, ASCII JSON temporary. No report byte is
             # published until serialization and native cleanup have succeeded.
             try:
                 while chunk := text.read(1024 * 1024):
-                    written = _report_output().write(chunk)
+                    written = _report_output(destination).write(chunk)
                     if written is not None and written != len(chunk):
                         raise OSError("short report write")
             finally:
                 # Close errors after publication obey the same stderr-only
                 # rule as report-channel errors; the outer resource stack is idempotent.
                 text.close()
-        _finish_report()
+        _finish_report(destination)
     except caught as error:
         # A rejected second library publication must not discard the caller's stdout.
-        if _REPORT_OUTPUT is not None or not already_published:
-            _discard_stdout()
+        if destination is not None or _REPORT_OUTPUT is not None or not already_published:
+            if destination is None:
+                _discard_stdout()
+            else:
+                _discard_stdout(destination)
         if phases is None:
             print(f"run_json: the report could not be written: {error}", file=sys.stderr)
         else:
@@ -8348,26 +8352,57 @@ class _ReportOutput:
                     raise
 
 
-def _report_output():
+class _CandidateOutput(_ReportOutput):
+    """Own only S's private candidate writer; stdio is already isolated by S."""
+
+    def __init__(self, text):
+        if (not isinstance(text, str) or re.fullmatch(r"[0-9]{1,10}", text) is None
+                or not 3 <= int(text) <= (1 << 31) - 1 or int(text) == 5):
+            raise ValueError("invalid private candidate descriptor")
+        fd = int(text)
+        os.fstat(fd)
+        if _same_open_file(fd, 1) or _same_open_file(fd, 2):
+            raise ValueError("candidate aliases producer diagnostics")
+        os.set_inheritable(fd, False)
+        self.fd = fd
+        self._state = "open"
+
+    def discard(self):
+        self._state = "published"
+        fd, self.fd = self.fd, None
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _report_output(destination=None):
     # Library callers may replace sys.stdout between writes or between runs.
+    if destination is not None:
+        return destination
     return sys.stdout if _REPORT_OUTPUT is None else _REPORT_OUTPUT
 
 
-def _report_published():
+def _report_published(destination=None):
+    if destination is not None:
+        return destination.published
     if _REPORT_OUTPUT is not None:
         return _REPORT_OUTPUT.published
     return _LIBRARY_REPORT_RUN is not None and _LIBRARY_REPORT_RUN.published
 
 
-def _begin_report():
-    if _report_published():
+def _begin_report(destination=None):
+    if _report_published(destination):
         raise OSError("the report channel has already been published")
-    if _REPORT_OUTPUT is None and _LIBRARY_REPORT_RUN is not None:
+    if destination is None and _REPORT_OUTPUT is None and _LIBRARY_REPORT_RUN is not None:
         _LIBRARY_REPORT_RUN.published = True
 
 
-def _finish_report():
-    if _REPORT_OUTPUT is None:
+def _finish_report(destination=None):
+    if destination is not None:
+        destination.finish()
+    elif _REPORT_OUTPUT is None:
         sys.stdout.flush()
     else:
         _REPORT_OUTPUT.finish()
@@ -8427,8 +8462,38 @@ _REPORT_MAIN = main
 
 def _host_main(argv=None) -> int:
     global _REPORT_OUTPUT
+    candidate_fd = None
+    if os.environ.get("PINEFORGE_REPORT_PRODUCER") == "supervised/v1":
+        candidate_fd = os.environ.pop("PINEFORGE_REPORT_CANDIDATE_FD", None)
+        os.environ.pop("PINEFORGE_REPORT_PRODUCER")
+        if candidate_fd is None:
+            _write_diagnostic("run_json: missing private candidate destination\n")
+            return 1
+    else:
+        # Keep the OFF parser, help bytes and legacy abbreviations untouched.
+        # Import the supervisor only when an exact new control is supplied.
+        tokens = list(sys.argv[1:] if argv is None else argv)
+        if argv is not None:
+            argv = tokens
+        channel_flags = {
+            "--report-channel", "--terminal-status-fd", "--report-max-bytes",
+            "--diagnostic-max-bytes", "--channel-wall-ms", "--channel-stall-ms",
+            "--attempt-id", "--host-attestation-fd", "--test-only-host-attestation-fd",
+        }
+        channel_environment = {
+            "PINEFORGE_REPORT_CHANNEL", "PINEFORGE_TERMINAL_STATUS_FD",
+            "PINEFORGE_REPORT_MAX_BYTES", "PINEFORGE_DIAGNOSTIC_MAX_BYTES",
+            "PINEFORGE_CHANNEL_WALL_MS", "PINEFORGE_CHANNEL_STALL_MS",
+            "PINEFORGE_REPORT_ATTEMPT_ID", "PINEFORGE_REPORT_HOST_ATTESTATION_FD",
+        }
+        channel_tokens = tokens[:tokens.index("--")] if "--" in tokens else tokens
+        if (any(token.partition("=")[0] in channel_flags for token in channel_tokens)
+                or channel_environment.intersection(os.environ)):
+            import pineforge_report_supervise
+            return pineforge_report_supervise.main(
+                pineforge_report_supervise.direct_arguments(tokens))
     try:
-        output = _ReportOutput()
+        output = _ReportOutput() if candidate_fd is None else _CandidateOutput(candidate_fd)
     except Exception as error:
         sys.stderr.write(f"run_json: report channel setup failed: {error}\n")
         sys.stderr.flush()
@@ -8471,26 +8536,32 @@ def _write_diagnostic(text):
     sys.stderr.flush()
 
 
-def _publish_failure(line):
-    if _report_published():
+def _publish_failure(line, *, destination=None):
+    if _report_published(destination):
         _write_diagnostic(f"run_json: fault after report publication: {line}")
         return
-    _begin_report()
-    if _REPORT_OUTPUT is None:
+    _begin_report(destination)
+    if destination is None and _REPORT_OUTPUT is None:
         sys.stdout.write(line)
         sys.stdout.flush()
         return
     try:
-        output = _report_output()
+        output = _report_output(destination)
         output.write(line)
         output.finish()
     except (OSError, ValueError) as error:
-        _discard_stdout()
+        if destination is None:
+            _discard_stdout()
+        else:
+            _discard_stdout(destination)
         _write_diagnostic(f"run_json: the failure could not be written: {error}\n")
 
 
-def _discard_stdout() -> None:
+def _discard_stdout(destination=None) -> None:
     """Discard the host's report descriptor, or the library caller's current stdout."""
+    if destination is not None:
+        destination.discard()
+        return
     if _REPORT_OUTPUT is not None:
         _REPORT_OUTPUT.discard()
         return
