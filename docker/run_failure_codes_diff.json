@@ -1,8 +1,8 @@
 {
   "schema": "pineforge-run-failure-catalog-diff/v1",
   "from": {
-    "version": "1.9.0",
-    "tag": "v1.9.0",
+    "version": "1.9.1",
+    "tag": "v1.9.1",
     "catalogSha256": "811f5e5bccacc6fe7d33544bcb3ff04a231fc9843b37613cdc72b180a53cd21f"
   },
   "to": {
