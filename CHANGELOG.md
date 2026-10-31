@@ -12,6 +12,23 @@ version number follows semantic versioning over the surfaces the
   an external sink for now, while the internal snapshot handoff is pending.
   Unset or zero report, diagnostic, wall and stall limits are unlimited;
   positive values apply exactly, subject to any positive host grant.
+- The supervised channel's `--post-exit-drain-ms`
+  (`PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS`) controls how long diagnostic and
+  receipt pipes may stay open after their owners exit. The default is 1000 ms;
+  zero waits without a drain deadline. This guards against a leaked descendant
+  that outlives its parent and keeps an output pipe open. Progress does not
+  renew the grace; expiry names the parameter in terminal diagnostics.
+  TERM-to-KILL cleanup retains its separate fixed 1000 ms grace.
+- Sink validation preserves the effective producer profile in an explicit
+  environment. Under the jailed profile it uses provisional binary stdout,
+  with no sink spool or file, and buffers at most the planned sink bound in
+  memory. `--planned-sink-bytes` (`PINEFORGE_REPORT_PLANNED_SINK_BYTES`) or
+  attested `planned_sink_bytes` supplies that bound; unset or zero uses a
+  positive report allowance when available, otherwise admission refuses before
+  launching the producer. On a jailed profile the arena is fixed, so an
+  unlimited sink has no meaning there. Publication requires exit 0, a complete
+  receipt, and independent byte-count and hash agreement. Unjailed validation
+  keeps file mode and an unlimited report allowance supplies no finalizer cap.
 - Container compile guards are opt-in and off when all three settings are
   unset. Once opted in, an unset or zero value is unlimited and a positive
   value is exact; when no dimension is limited, the original compile and

@@ -39,14 +39,21 @@ def main():
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
             if request.get("detached_diagnostic_child"):
                 os.setsid()
+            if request.get("double_fork_diagnostic_child"):
+                descendant = os.fork()
+                if descendant:
+                    os._exit(0)
             for name in ("PINEFORGE_REPORT_CANDIDATE_FD", "PINEFORGE_REPORT_NATIVE_SINK_FD"):
                 if name in os.environ:
                     os.close(int(os.environ[name]))
             Path(request["diagnostic_child_state"]).write_text(
-                json.dumps({"leader": leader, "child": os.getpid()}))
+                json.dumps({"leader": leader, "child": os.getpid(),
+                            "group": os.getpgrp(), "started": time.monotonic()}))
             os.write(ready_write, b"1")
             os.close(ready_write)
-            while True:
+            lifetime_ms = request.get("diagnostic_child_lifetime_ms")
+            end = None if lifetime_ms is None else time.monotonic() + lifetime_ms / 1000
+            while end is None or time.monotonic() < end:
                 try:
                     os.write(2, b"diagnostic child continues\n")
                 except BrokenPipeError:
@@ -55,10 +62,18 @@ def main():
                 if os.getppid() != leader:
                     Path(request["diagnostic_child_progress"]).touch()
                 time.sleep(0.01)
+            if "diagnostic_child_exit" in request:
+                Path(request["diagnostic_child_exit"]).write_text(
+                    json.dumps({"exited": time.monotonic()}))
+            os._exit(0)
         os.close(ready_write)
         if os.read(ready_read, 1) != b"1":
             raise AssertionError("diagnostic child did not become ready")
         os.close(ready_read)
+        if request.get("double_fork_diagnostic_child"):
+            waited, status = os.waitpid(child, 0)
+            if waited != child or status:
+                raise AssertionError("diagnostic intermediate child did not exit cleanly")
         if not request.get("leader_completes"):
             time.sleep(120)
     for name, fd in (("stdout", 1), ("stderr", 2)):

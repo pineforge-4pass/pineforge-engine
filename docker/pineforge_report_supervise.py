@@ -34,15 +34,42 @@ optional constraint: omitted/zero requests resolve to it, positive requests
 above it are refused without clamping. An absent or zero host grant means
 unlimited, not a policy refusal. limits.*.effective is null for an unlimited
 dimension. Accounting continues and all polls use at most 50 ms slices.
-post-exit drain grace: fixed cleanup bound, see the release notes.
+--post-exit-drain-ms (PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS) bounds the diagnostic
+and receipt drains after their owners exit. Its default is 1000 ms; zero means
+unlimited, subject to a positive host grant. Like the other ceilings it accepts
+only unsigned decimal integers in 0..9007199254740990. A leaked descendant can
+outlive its parent and keep an output pipe open. Expiry refuses that drain with
+report_channel_failed and names --post-exit-drain-ms in terminal diagnostics.
+Output progress never renews this interval. limits.post_exit_drain_ms reports
+requested/granted/effective, with effective=null for unlimited. The separate
+fixed stop_grace_ms still controls TERM-to-KILL cleanup.
 
-S counts/hashes K, relays through one 64 KiB queue to the real file finalizer,
-and publishes its private verified inode to N before R. N stays solely in S.
+S counts/hashes K and relays through one 64 KiB queue to the real finalizer V.
+V receives an explicit environment containing PINEFORGE_RUN_JSON_PROFILE.
+An exact producer --profile (either argument form) overrides the environment
+default, which is unjailed when absent. Conflicting repeated profiles, missing
+values, abbreviations and invalid effective profiles refuse before launch.
+Only the explicit TEST adapter additionally admits its observer environment.
+Unjailed V uses FILE mode and a private target. Jailed V uses --out - with a
+positive --max-bytes B, stdin for the relay, stdout for provisional sink bytes,
+and a distinct receipt pipe on fd 2; diagnostics never share binary stdout.
+S buffers at most B stdout bytes in memory and publishes only after V exits 0,
+receipt completion and independent K/buffer length and hash agreement.
+--planned-sink-bytes (PINEFORGE_REPORT_PLANNED_SINK_BYTES), or the attestation's
+planned_sink_bytes, supplies B. Unset or zero means no plan. Under jailed, B
+otherwise derives from positive effective R; without either, admission refuses
+and names --planned-sink-bytes. On a jailed profile the arena is fixed, so an
+unlimited sink has no meaning there. Unjailed with unlimited R retains FILE
+mode without --max-bytes, including when a sink size was planned.
+S publishes the verified sink to N before R. N stays solely in S.
 Named sinks and the automatic internal snapshot handoff remain fail-closed.
 Until that handoff exists, supervised execution of a sink-capable module needs
 an external sink fd; its full projection is unavailable without one.
-With unlimited R, the FILE finalizer has no --max-bytes or overflow probes,
-including when a sink size was planned. A finite R retains the planned B.
+A failure line may additionally carry cause only on strategy_create_failed:
+exactly {"code":"outputs_limit","args":{"max":N,"reason":"too_many_series"}},
+where N is an integer >= 1 and both code and args pass the installed catalog.
+It remains a producer claim, relayed without re-encoding; a claim exceeding
+8 KiB is omitted from the terminal record under the existing omission rule.
 The deadline module has no cancellation callback. S uses its own nonblocking
 I/O loops around the same absolute Deadline, checking host cancellation between
 poll slices of at most 50 ms. Cancellation stops data publication; M gets one
@@ -52,6 +79,7 @@ stalled status reader. Metered reads preserve every observed chunk.
 from __future__ import annotations
 
 import argparse
+import array
 import codecs
 import ctypes
 from dataclasses import dataclass
@@ -71,6 +99,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import termios
 import time
 
 from pineforge_report_deadlines import (
@@ -85,12 +114,15 @@ TERMINAL_BYTES = 65536
 QUEUE_BYTES = 65536
 CLAIM_BYTES = 8192
 STOP_GRACE_MS = 1000
-DIMENSIONS = ("report_bytes", "diagnostic_bytes", "wall_ms", "stall_ms")
+DEFAULT_POST_EXIT_DRAIN_MS = 1000
+DIMENSIONS = ("report_bytes", "diagnostic_bytes", "wall_ms", "stall_ms",
+              "post_exit_drain_ms")
 CEILINGS = {
     "--report-max-bytes": ("PINEFORGE_REPORT_MAX_BYTES", "report_bytes"),
     "--diagnostic-max-bytes": ("PINEFORGE_DIAGNOSTIC_MAX_BYTES", "diagnostic_bytes"),
     "--channel-wall-ms": ("PINEFORGE_CHANNEL_WALL_MS", "wall_ms"),
     "--channel-stall-ms": ("PINEFORGE_CHANNEL_STALL_MS", "stall_ms"),
+    "--post-exit-drain-ms": ("PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS", "post_exit_drain_ms"),
 }
 CONTROLS = {
     "--report-channel": "PINEFORGE_REPORT_CHANNEL",
@@ -98,6 +130,7 @@ CONTROLS = {
     "--attempt-id": "PINEFORGE_REPORT_ATTEMPT_ID",
     "--host-attestation-fd": "PINEFORGE_REPORT_HOST_ATTESTATION_FD",
     "--test-only-host-attestation-fd": None,
+    "--planned-sink-bytes": "PINEFORGE_REPORT_PLANNED_SINK_BYTES",
 }
 NEW_OPTIONS = frozenset((*CEILINGS, *CONTROLS))
 CATALOG = Path(__file__).with_name("run_failure_codes.json")
@@ -211,6 +244,35 @@ def parse(argv, environ):
     if not options.command:
         raise UsageError("a producer command is required")
     return options
+
+
+def effective_profile(command, environ):
+    """Resolve the runner's CLI-over-environment profile before any launch."""
+    profiles = []
+    index = 0
+    while index < len(command):
+        token = command[index]
+        if token == "--":
+            break
+        name, equals, suffix = token.partition("=")
+        if name != "--profile" and name.startswith("--") and "--profile".startswith(name):
+            raise UsageError("ambiguous producer --profile abbreviation; use --profile")
+        if name == "--profile":
+            if not equals:
+                index += 1
+                if index == len(command):
+                    raise UsageError("ambiguous producer --profile: missing value")
+            profile = suffix if equals else command[index]
+            if profile not in ("unjailed", "jailed"):
+                raise UsageError("invalid producer --profile; expected unjailed or jailed")
+            profiles.append(profile)
+        index += 1
+    if len(set(profiles)) > 1:
+        raise UsageError("ambiguous producer --profile: conflicting repeated values")
+    profile = profiles[-1] if profiles else environ.get("PINEFORGE_RUN_JSON_PROFILE", "unjailed")
+    if profile not in ("unjailed", "jailed"):
+        raise UsageError("PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed")
+    return profile
 
 
 def early_value(argv, flag, environment=None):
@@ -386,7 +448,7 @@ class JSONScanner:
             if key or length <= CLAIM_BYTES:
                 result.append(char)
 
-    def value(self, depth=0):
+    def value(self, depth=0, path=()):
         self.space()
         char = self.peek()
         if not char:
@@ -412,8 +474,8 @@ class JSONScanner:
                 seen.add(key)
                 self.space()
                 self.expect(":")
-                child = self.value(depth + 1)
-                if depth <= 1:
+                child = self.value(depth + 1, path + (key,) if depth < 2 else ())
+                if depth <= 1 or path == ("cause", "args"):
                     retained[key] = child
                 self.space()
                 separator = self.take()
@@ -481,8 +543,26 @@ def validate_candidate(stream, catalog, operation):
                 raise ProtocolError("invalid failure object")
             if fields.keys() - {
                     "engine", "error", "code", "args", "reason", "high_water_bytes",
-                    "arena_bytes", "bars", "strategy_started"}:
+                    "arena_bytes", "bars", "strategy_started", "cause"}:
                 raise ProtocolError("extra failure-object member")
+            cause = None
+            if "cause" in fields:
+                node = fields["cause"]
+                if (fields.get("code") != Value("string", "strategy_create_failed")
+                        or node.kind != "object" or node.value.keys() != {"code", "args"}):
+                    raise ProtocolError("invalid failure cause")
+                cause_code, cause_args = node.value["code"], node.value["args"]
+                if cause_code.kind != "string" or cause_args.kind != "object":
+                    raise ProtocolError("invalid failure cause code or args")
+                typed_args(catalog, cause_code.value, cause_args.value)
+                values = cause_args.value
+                if (cause_code.value != "outputs_limit" or values.keys() != {"max", "reason"}
+                        or values["max"].kind != "integer" or values["max"].value is None
+                        or values["max"].value < 1
+                        or values["reason"] != Value("string", "too_many_series")):
+                    raise ProtocolError("invalid operator series-limit cause")
+                cause = {"code": cause_code.value,
+                         "args": {name: value.value for name, value in values.items()}}
             claim, omitted = None, False
             if "code" in fields:
                 code, args = fields["code"], fields["args"]
@@ -491,12 +571,15 @@ def validate_candidate(stream, catalog, operation):
                 typed_args(catalog, code.value, args.value)
                 omitted = any(value.oversized for value in args.value.values())
                 values = {name: value.value for name, value in args.value.items()}
+                proposed = {"code": code.value, "args": values,
+                            **({"cause": cause} if cause is not None else {}),
+                            "authority": "producer"}
                 if not omitted:
-                    omitted = len(wire(values)) - 1 > CLAIM_BYTES
+                    omitted = len(wire(proposed if cause is not None else values)) - 1 > CLAIM_BYTES
                 if not omitted:
-                    claim = {"code": code.value, "args": values, "authority": "producer"}
+                    claim = proposed
             return True, False, True, claim, omitted
-        if "code" in fields or "args" in fields:
+        if "code" in fields or "args" in fields or "cause" in fields:
             raise ProtocolError("failure metadata without an error")
         if operation == "capabilities":
             required = {"capabilities": "object"}
@@ -701,6 +784,7 @@ class Supervisor:
         self.catalog = json.loads(CATALOG.read_text(encoding="utf-8"))["codes"]
         self.options = None
         self.failure = None
+        self.diagnostics = []
         self.facade = 0
         self.invocation = (
             "entrypoint" if early_value(argv, "--invocation") == "entrypoint" else "run_json")
@@ -718,7 +802,11 @@ class Supervisor:
         self.status_fd = None
         self.sink_fd = None
         self.planned_sink_bytes = None
+        self.planned_sink_request = None
         self.sink_bound = None
+        self.profile = None
+        self.test_adapter_admitted = False
+        self.sink_buffer = None
         self.validator = None
         self.sink_directory = None
         self.sink_target = None
@@ -874,9 +962,10 @@ class Supervisor:
                     for value in grants.values()):
                 raise UsageError("invalid host grant")
             planned = document.get("planned_sink_bytes")
-            if planned is not None and (type(planned) is not int or not 1 <= planned <= MAX_INTEGER):
+            if planned is not None and (type(planned) is not int or not 0 <= planned <= MAX_INTEGER):
                 raise UsageError("invalid planned sink allowance")
-            self.planned_sink_bytes = planned
+            self.planned_sink_bytes = planned or None
+            self.test_adapter_admitted = True
             return grants
         except (OSError, DeadlineError, ValueError, UnicodeError, KeyError, TypeError, UsageError):
             self.latch("run_isolation_unavailable", {"reason": "policy"})
@@ -920,7 +1009,12 @@ class Supervisor:
             for flag, (_, name) in CEILINGS.items():
                 text = getattr(options, flag[2:].replace("-", "_"))
                 self.limits[name]["requested"] = None if text is None else decimal(text)
-                self.limits[name]["effective"] = self.limits[name]["requested"] or None
+                self.limits[name]["effective"] = (
+                    DEFAULT_POST_EXIT_DRAIN_MS
+                    if name == "post_exit_drain_ms" and text is None
+                    else self.limits[name]["requested"] or None)
+            if options.planned_sink_bytes is not None:
+                self.planned_sink_request = decimal(options.planned_sink_bytes)
             for name in ("candidate", "report"):
                 self.channels[name].limit = self.limits["report_bytes"]["effective"]
             self.channels["diagnostic"].limit = self.limits["diagnostic_bytes"]["effective"]
@@ -928,6 +1022,7 @@ class Supervisor:
                                      self.limits["stall_ms"]["effective"]):
                 return
             tokens = options.command
+            self.profile = effective_profile(tokens, os.environ)
             names = {token.partition("=")[0] for token in tokens}
             if names & {"--help", "-h", "--run-phase-fd"} or "csv2bin" in tokens:
                 raise UsageError("excluded producer protocol")
@@ -957,6 +1052,8 @@ class Supervisor:
                 requested = cell["requested"]
                 cell["granted"] = grant
                 cell["effective"] = requested or grant or None
+                if name == "post_exit_drain_ms" and requested is None and grant is None:
+                    cell["effective"] = DEFAULT_POST_EXIT_DRAIN_MS
                 if grant and requested and requested > grant:
                     cell["effective"] = None
                     above_grant.add(name)
@@ -970,6 +1067,11 @@ class Supervisor:
                 "granted" if "diagnostic_bytes" in above_grant else "effective"]
             if above_grant:
                 raise UsageError("positive ceiling exceeds host grant")
+            if self.planned_sink_request:
+                if (self.planned_sink_bytes is not None
+                        and self.planned_sink_bytes != self.planned_sink_request):
+                    raise UsageError("--planned-sink-bytes conflicts with attested planned_sink_bytes")
+                self.planned_sink_bytes = self.planned_sink_request
             if (report_limit is not None and self.planned_sink_bytes is not None
                     and self.planned_sink_bytes > report_limit):
                 self.latch("report_budget_exceeded", {
@@ -986,15 +1088,46 @@ class Supervisor:
                                      self.limits["stall_ms"]["effective"]):
                 return
             if self.sink_fd is not None:
-                self.sink_bound = (None if report_limit is None
-                                   else self.planned_sink_bytes or report_limit)
+                if self.profile == "jailed":
+                    self.sink_bound = self.planned_sink_bytes or report_limit
+                else:
+                    self.sink_bound = (None if report_limit is None
+                                       else self.planned_sink_bytes or report_limit)
+                if self.profile == "jailed" and self.sink_bound is None:
+                    raise UsageError(
+                        "jailed sink requires --planned-sink-bytes "
+                        "(PINEFORGE_REPORT_PLANNED_SINK_BYTES or attested planned_sink_bytes), "
+                        "or positive --report-max-bytes")
                 self.channels["sink"] = Channel(self.sink_bound)
                 self.sink_verification = {
                     "exit_status": None, "signal": None, "complete": False,
                     "counts": {tag: None for tag in "ETOVKXH"},
                     "sha256": None, "finalizer_version": None}
-        except (OSError, UsageError, ValueError):
+        except (OSError, UsageError, ValueError) as error:
+            if isinstance(error, UsageError):
+                self.diagnostics.append(str(error)[:1024])
             self.latch("run_request_invalid", {"option": "arguments"}, usage=True)
+
+    def validator_environment(self):
+        environment = {"PINEFORGE_RUN_JSON_PROFILE": self.profile}
+        if self.test_adapter_admitted:
+            # Only the explicitly unisolated TEST adapter admits instrumentation.
+            # No production environment, path search or Python path is inherited.
+            for name in ("LD_PRELOAD", "PF_REPORT_TEST_TRACE", "PF_REPORT_TEST_PAUSE_PROBE",
+                         "PF_REPORT_TEST_STDOUT_AUDIT", "PF_REPORT_TEST_HOLD_RECEIPT",
+                         "PF_REPORT_TEST_FAIL_AFTER_RECEIPT", "PF_REPORT_TEST_CORRUPT_STDOUT",
+                         "PF_REPORT_TEST_EXCESS_STDOUT"):
+                if name in os.environ:
+                    environment[name] = os.environ[name]
+        return environment
+
+    def drain_expired(self, channel):
+        self.diagnostics.append(
+            "--post-exit-drain-ms (PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS) ended the "
+            + ("diagnostic" if channel == "diagnostic" else "validator output/receipt")
+            + " drain: a descendant can outlive its parent and keep an output pipe open.")
+        self.latch("report_channel_failed", {
+            "channel": channel, "reason": "io" if channel == "diagnostic" else "protocol"})
 
     def send_ready(self, fd, data, *, socket_endpoint):
         """One raw nonblocking syscall, including EINTR, with bounded scratch."""
@@ -1075,6 +1208,51 @@ class Supervisor:
         if self.deadline.expired():
             raise TransferError(channel, "deadline", wall=True)
 
+    def sink_hashes(self):
+        """Hash the retained wire independently of V's receipt."""
+        whole, logical = hashlib.sha256(), hashlib.sha256()
+        if self.sink_buffer is not None:
+            length = len(self.sink_buffer)
+            if not self.sink_buffer.endswith(b"\n"):
+                raise ProtocolError("incomplete buffered sink")
+            prefix_end = self.sink_buffer.rfind(b"\n", 0, length - 1) + 1
+            view = memoryview(self.sink_buffer)
+            for offset in range(0, length, QUEUE_BYTES):
+                self.check_cancelled()
+                if self.deadline.expired():
+                    self.latch("run_deadline_exceeded", {"stage": "finalize"})
+                    raise ProtocolError("wall expired during buffered-sink verification")
+                chunk = view[offset:offset + QUEUE_BYTES]
+                whole.update(chunk)
+                logical.update(chunk[:max(0, min(len(chunk), prefix_end - offset))])
+            return length, whole.hexdigest(), logical.hexdigest()
+        with open(self.sink_target, "rb") as source:
+            length = os.fstat(source.fileno()).st_size
+            source.seek(max(0, length - 1))
+            if source.read(1) != b"\n":
+                raise ProtocolError("incomplete retained sink")
+            position, prefix_end = max(0, length - 1), 0
+            while position:
+                self.check_cancelled()
+                start = max(0, position - QUEUE_BYTES)
+                source.seek(start)
+                previous = source.read(position - start).rfind(b"\n")
+                if previous >= 0:
+                    prefix_end = start + previous + 1
+                    break
+                position = start
+            source.seek(0)
+            offset = 0
+            while chunk := source.read(QUEUE_BYTES):
+                self.check_cancelled()
+                if self.deadline.expired():
+                    self.latch("run_deadline_exceeded", {"stage": "finalize"})
+                    raise ProtocolError("wall expired during retained-sink verification")
+                whole.update(chunk)
+                logical.update(chunk[:max(0, min(len(chunk), prefix_end - offset))])
+                offset += len(chunk)
+            return length, whole.hexdigest(), logical.hexdigest()
+
     def finish_sink(self, data, receipt_eof):
         """Interpret V only after its actual wait and receipt EOF are known."""
         status = self.validator.returncode
@@ -1120,9 +1298,12 @@ class Supervisor:
                 raise ProtocolError("finalizer receipt disagrees with actual wait")
             sink = self.channels["sink"]
             if status == 0:
+                length, wire_hash, logical_hash = self.sink_hashes()
                 if (not self.native_eof or sink.truncated
                         or receipt["sink_bytes"] != sink.accepted
-                        or os.stat(self.sink_target).st_size != sink.accepted):
+                        or length != sink.accepted
+                        or wire_hash != sink.accepted_hash.hexdigest()
+                        or logical_hash != digest):
                     raise ProtocolError("finalizer completion differs from K")
                 verification["complete"] = True
                 sink.logical_hash = digest
@@ -1147,6 +1328,9 @@ class Supervisor:
                 self.latch("report_channel_failed", {"channel": "sink", "reason": "protocol"})
         except (OSError, ValueError, TypeError, KeyError, ProtocolError):
             self.latch("report_channel_failed", {"channel": "sink", "reason": "protocol"})
+        finally:
+            if status != 0 or self.failure is not None:
+                self.sink_buffer = None
 
     def capture(self):
         candidate_read, candidate_write = pipe()
@@ -1154,6 +1338,7 @@ class Supervisor:
         owned = {candidate_read, candidate_write, diagnostic_read, diagnostic_write}
         readers = {candidate_read: "candidate", diagnostic_read: "diagnostic"}
         native_read = native_write = relay_fd = validator_read = receipt_read = None
+        sink_output_read = None
         environment = dict(os.environ)
         for name in tuple(environment):
             if name.startswith(("PINEFORGE_REPORT_", "PINEFORGE_TERMINAL_",
@@ -1161,6 +1346,7 @@ class Supervisor:
                 environment.pop(name)
         environment["PINEFORGE_REPORT_PRODUCER"] = CONTRACT
         environment["PINEFORGE_REPORT_CANDIDATE_FD"] = str(candidate_write)
+        environment["PINEFORGE_RUN_JSON_PROFILE"] = self.profile
         self.spool = tempfile.TemporaryFile(mode="w+b")
         self.artifacts_removed = False
         diagnostic_pending, relay_pending, receipt = bytearray(), bytearray(), bytearray()
@@ -1169,39 +1355,55 @@ class Supervisor:
         receipt_eof = validator_done = False
         stopping = GroupStop()
         diagnostic_drain_end = receipt_drain_end = overflow_finish_end = None
+        diagnostic_tail_remaining = None
+        drain_ms = self.limits["post_exit_drain_ms"]["effective"]
+        drain_seconds = drain_ms / 1000 if drain_ms else math.inf
 
         def release(fd):
             if fd in owned:
                 owned.remove(fd)
                 if not close_once(fd):
                     name = readers.get(fd, "sink")
-                    if name == "receipt":
+                    if name in ("receipt", "sink_output"):
                         name = "sink"
                     self.latch("report_channel_failed", {"channel": name, "reason": "io"})
 
         try:
             if self.sink_fd is not None:
                 native_read, native_write = pipe()
-                relay_fd, validator_read = stream_pair()
                 receipt_read, receipt_write = pipe()
+                jailed = self.profile == "jailed"
+                if jailed:
+                    validator_read, relay_fd = pipe()
+                    sink_output_read, sink_output_write = pipe()
+                    owned.update((sink_output_read, sink_output_write))
+                    readers[sink_output_read] = "sink_output"
+                    self.sink_buffer = bytearray()
+                else:
+                    relay_fd, validator_read = stream_pair()
+                    self.sink_directory = tempfile.TemporaryDirectory(prefix="pf-supervised-sink-")
+                    self.sink_target = str(Path(self.sink_directory.name) / "verified.sink")
                 owned.update((native_read, native_write, relay_fd, validator_read,
                               receipt_read, receipt_write))
                 readers.update({native_read: "sink", receipt_read: "receipt"})
                 environment["PINEFORGE_REPORT_NATIVE_SINK_FD"] = str(native_write)
-                self.sink_directory = tempfile.TemporaryDirectory(prefix="pf-supervised-sink-")
-                self.sink_target = str(Path(self.sink_directory.name) / "verified.sink")
                 validator_command = [
                     sys.executable, "-B", str(Path(__file__).with_name("pineforge_sink_finalize.py")),
-                    "--in-fd", str(validator_read), "--out", self.sink_target,
+                    "--in-fd", "0" if jailed else str(validator_read),
+                    "--out", "-" if jailed else self.sink_target,
                     "--receipt-fd", "2"]
                 if self.sink_bound is not None:
                     validator_command += ["--max-bytes", str(self.sink_bound)]
                 self.validator = subprocess.Popen(
                     validator_command,
-                    stdin=subprocess.DEVNULL, stdout=diagnostic_write, stderr=receipt_write,
-                    close_fds=True, pass_fds=(validator_read,), start_new_session=True)
+                    stdin=validator_read if jailed else subprocess.DEVNULL,
+                    stdout=sink_output_write if jailed else diagnostic_write, stderr=receipt_write,
+                    close_fds=True, pass_fds=() if jailed else (validator_read,),
+                    env=self.validator_environment(), start_new_session=True)
                 release(validator_read)
                 release(receipt_write)
+                if jailed:
+                    release(sink_output_write)
                 os.set_blocking(relay_fd, False)
             launch_started = time.monotonic()
             self.process = subprocess.Popen(
@@ -1277,11 +1479,18 @@ class Supervisor:
                     if diagnostic_read in ready and diagnostic_read in readers:
                         allowance = remaining_bytes(diagnostic.limit, diagnostic.accepted)
                         room = QUEUE_BYTES - len(diagnostic_pending)
+                        if (diagnostic_drain_end is not None
+                                and time.monotonic() >= diagnostic_drain_end
+                                and diagnostic_tail_remaining):
+                            room = min(room, diagnostic_tail_remaining)
                         data = read(diagnostic_read, read_size(allowance, room), "diagnostic")
                         if data == b"":
                             diagnostic.known = True
                             end_read(diagnostic_read)
                         elif data:
+                            if diagnostic_tail_remaining is not None:
+                                diagnostic_tail_remaining = max(
+                                    0, diagnostic_tail_remaining - len(data))
                             diagnostic.observed += len(data)
                             accepted = data[:allowance]
                             diagnostic.accept(accepted)
@@ -1347,6 +1556,21 @@ class Supervisor:
                                 self.latch("report_channel_failed", {"channel": "sink", "reason": "protocol"})
                                 end_read(receipt_read)
 
+                    if sink_output_read in ready and sink_output_read in readers:
+                        room = self.sink_bound - len(self.sink_buffer)
+                        data = read(sink_output_read, min(QUEUE_BYTES, room + 1), "sink")
+                        if data == b"":
+                            end_read(sink_output_read)
+                        elif data:
+                            if len(data) > room:
+                                # The probe is never retained beyond the certified B.
+                                self.latch("report_channel_failed", {
+                                    "channel": "sink", "reason": "protocol"})
+                                self.sink_buffer.clear()
+                                end_read(sink_output_read)
+                            else:
+                                self.sink_buffer.extend(data)
+
                     if candidate_waiting and candidate_read in readers and self.failure is None:
                         candidate = self.channels["candidate"]
                         if native_read in readers:
@@ -1411,7 +1635,8 @@ class Supervisor:
                         unwatch(relay_fd)
                         release(relay_fd)
                     if (self.validator is not None and not validator_done
-                            and self.validator.poll() is not None and receipt_read not in readers):
+                            and self.validator.poll() is not None and receipt_read not in readers
+                            and sink_output_read not in readers):
                         self.finish_sink(bytes(receipt), receipt_eof)
                         validator_done = True
 
@@ -1458,25 +1683,33 @@ class Supervisor:
                     if self.validator is not None and validator_gone:
                         stopping.request(self.validator, now)
                         if receipt_drain_end is None:
-                            receipt_drain_end = now + STOP_GRACE_MS / 1000
-                        if receipt_read in readers and now >= receipt_drain_end:
-                            end_read(receipt_read)
-                            self.latch("report_channel_failed", {"channel": "sink", "reason": "protocol"})
+                            receipt_drain_end = now + drain_seconds
+                        if now >= receipt_drain_end and (
+                                receipt_read in readers or sink_output_read in readers):
+                            for fd in (receipt_read, sink_output_read):
+                                if fd in readers:
+                                    end_read(fd)
+                            self.drain_expired("sink")
                     if self.run_finished is not None and (self.failure is not None or validator_gone):
                         if diagnostic_drain_end is None:
-                            diagnostic_drain_end = now + STOP_GRACE_MS / 1000
+                            diagnostic_drain_end = now + drain_seconds
+                            if diagnostic_read in readers:
+                                queued = array.array("i", [0])
+                                fcntl.ioctl(diagnostic_read, termios.FIONREAD, queued, True)
+                                diagnostic_tail_remaining = queued[0]
                         if now >= diagnostic_drain_end:
-                            # G bounds a refused run's drain. Healthy pending
-                            # publication still honors P, including unlimited P;
-                            # let buffered source bytes/EOF be serviced first.
+                            # Bytes already queued at owner exit keep their P.
+                            # A continuing descendant cannot renew the grace.
                             if diagnostic_read in readers and (
-                                    self.failure is not None or (
-                                        not diagnostic_pending and not select.select(
-                                            [diagnostic_read], [], [], 0)[0])):
-                                diagnostic.truncated = True
+                                    self.failure is not None or not diagnostic_tail_remaining):
+                                tail = read(diagnostic_read, 1, "diagnostic")
+                                if tail == b"":
+                                    diagnostic.known = True
+                                else:
+                                    diagnostic.observed += len(tail or b"")
+                                    diagnostic.truncated = True
+                                    self.drain_expired("diagnostic")
                                 end_read(diagnostic_read)
-                                self.latch("report_channel_failed", {
-                                    "channel": "diagnostic", "reason": "io"})
                             if self.failure is not None and diagnostic_pending:
                                 diagnostic.truncated = True
                                 diagnostic_pending.clear()
@@ -1487,6 +1720,8 @@ class Supervisor:
                     if not validator_done:
                         self.finish_sink(bytes(receipt), receipt_eof)
         finally:
+            if self.failure is not None:
+                self.sink_buffer = None
             for process in (self.process, self.validator):
                 stopping.request(process, time.monotonic())
             stopping.finish()
@@ -1683,9 +1918,14 @@ class Supervisor:
         if self.sink_fd is not None and self.failure is None:
             try:
                 self.nonblocking(self.sink_fd)
-                with open(self.sink_target, "rb") as source:
-                    while data := source.read(QUEUE_BYTES):
-                        self.bounded_write(self.sink_fd, data, "sink")
+                if self.sink_buffer is not None:
+                    view = memoryview(self.sink_buffer)
+                    for offset in range(0, len(view), QUEUE_BYTES):
+                        self.bounded_write(self.sink_fd, view[offset:offset + QUEUE_BYTES], "sink")
+                else:
+                    with open(self.sink_target, "rb") as source:
+                        while data := source.read(QUEUE_BYTES):
+                            self.bounded_write(self.sink_fd, data, "sink")
                 sink.complete = (
                     self.sink_verification["complete"] and sink.known
                     and sink.written == sink.accepted and not sink.truncated)
@@ -1729,6 +1969,7 @@ class Supervisor:
             self.publish_finished = time.monotonic()
 
     def close_data(self):
+        self.sink_buffer = None
         endpoints = [(1, "report"), (2, "diagnostic")]
         if self.sink_fd is not None:
             endpoints.append((self.sink_fd, "sink"))
@@ -1846,6 +2087,7 @@ class Supervisor:
             "exit_class": (self.exit_class if self.failure is not None else
                            "success" if self.domain_empty is True else "resource_refusal"),
             "failure": self.failure, "exit_status": self.facade,
+            "diagnostics": self.diagnostics,
             "producer": {
                 "stage": None if self.process is None else "run",
                 "exit_status": status if status is not None and status >= 0 else None,

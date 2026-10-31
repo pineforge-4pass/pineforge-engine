@@ -44,8 +44,33 @@ def encoded(data):
 
 def clean_environment():
     return {key: value for key, value in os.environ.items()
-            if not key.startswith(("PINEFORGE_REPORT_", "PINEFORGE_TERMINAL_",
-                                   "PINEFORGE_DIAGNOSTIC_", "PINEFORGE_CHANNEL_"))}
+            if key != "PINEFORGE_RUN_JSON_PROFILE"
+            and not key.startswith(("PINEFORGE_REPORT_", "PINEFORGE_TERMINAL_",
+                                    "PINEFORGE_DIAGNOSTIC_", "PINEFORGE_CHANNEL_"))}
+
+
+def main_blob(path):
+    """Read the finalizer/catalog contract from main's committed text."""
+    return subprocess.run(
+        ["git", "show", f"fc62dd921:{path}"], cwd=ROOT,
+        capture_output=True, check=True, timeout=30).stdout
+
+
+def supervisor_fixture(directory, *, main_finalizer=False, main_catalog=False, text=None):
+    """Materialize a real temporary supervisor closure on the executing host."""
+    destination = Path(directory) / "docker"
+    destination.mkdir()
+    for name in ("pineforge_report_supervise.py", "pineforge_report_deadlines.py",
+                 "pineforge_sink_finalize.py", "pf_sink.py", "run_failure_codes.json"):
+        source = ROOT / "docker" / name
+        data = (main_blob("docker/" + name)
+                if (main_finalizer and name in ("pineforge_sink_finalize.py", "pf_sink.py"))
+                or (main_catalog and name == "run_failure_codes.json")
+                else source.read_bytes())
+        if name == "pineforge_report_supervise.py" and text is not None:
+            data = text.encode("utf-8")
+        (destination / name).write_bytes(data)
+    return destination / "pineforge_report_supervise.py"
 
 
 def process_info(pid):
@@ -178,6 +203,16 @@ class Capture:
             raise AssertionError(f"expected one observed V argv; {self.failure_context()}")
         return commands[0]
 
+    def finalizer_stdout(self):
+        return b"".join(event[1:] for event in self.validator_events if event[:1] == b"O")
+
+    def finalizer_environment_names(self):
+        observations = [event[1:].rstrip(b"\0").split(b"\0")
+                        for event in self.validator_events if event[:1] == b"E"]
+        if len(observations) != 1:
+            raise AssertionError(f"expected one observed V environment; {self.failure_context()}")
+        return {name.decode("ascii") for name in observations[0]}
+
     def failure_context(self):
         """Keep the whole terminal record and bounded, loss-tolerant D text."""
         records = []
@@ -240,7 +275,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
            endpoint_nonblocking=None, diagnostic_delay_ms=0, stalled_channels=(),
            cancel_channel=None, cancel_signal=signal.SIGTERM, cancel_delay_ms=150,
            saturate_status=False, gate_status=False, watchdog_seconds=20,
-           supervisor_path=None):
+           supervisor_path=None, producer_arguments=(), audit_stdout=False, receipt_hold=None):
     """Create R/D/M, launch S, and read every endpoint concurrently to EOF.
 
     ``status`` tests absent, pipe, stream, reserved, closed and wrong-direction
@@ -384,6 +419,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
             argv += ["--report-channel", "supervised/v1"]
         producer_command = command or [
             sys.executable, "-B", str(PRODUCER), str(request_path)]
+        producer_command = [*producer_command, *producer_arguments]
         if direct:
             argv += producer_command
         else:
@@ -400,6 +436,10 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                 env["PF_REPORT_TEST_PAUSE_PROBE"] = "1"
             if gate_status:
                 env["PF_REPORT_TEST_STATUS_GATE_FD"] = str(gate_read)
+            if audit_stdout:
+                env["PF_REPORT_TEST_STDOUT_AUDIT"] = "1"
+            if receipt_hold is not None:
+                env["PF_REPORT_TEST_HOLD_RECEIPT"] = receipt_hold
         flag_probes, flags_before, flags_after = {}, {}, {}
         if endpoint_nonblocking is not None:
             for fd, nonblocking in zip((report_write, diagnostic_write), endpoint_nonblocking):
@@ -494,10 +534,13 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                     try:
                         identities = json.loads(Path(child_state).read_text())
                         sample = {
+                            "at": now - launched,
                             "leader": process_info(identities["leader"]),
                             "child": process_info(identities["child"]),
                         }
-                        if not descendant_samples or descendant_samples[-1] != sample:
+                        if (not descendant_samples or any(
+                                descendant_samples[-1][name] != sample[name]
+                                for name in ("leader", "child"))):
                             descendant_samples.append(sample)
                     except (FileNotFoundError, ValueError):
                         pass
@@ -547,11 +590,36 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                     else:
                         data = os.read(key.fd, 65536)
                         if data:
+                            if key.data in ("report", "sink"):
+                                pid = control.get("receipt_hold", {}).get("pid")
+                                if pid is not None:
+                                    control.setdefault("first_publication", {}).setdefault(
+                                        key.data, {"at": time.monotonic() - launched,
+                                                   "validator": process_info(pid)})
                             output[key.data].extend(data)
                         else:
                             eof.add(key.data)
                             selector.unregister(key.fileobj)
                 for event in validator_events:
+                    if event[:1] == b"G":
+                        pid = int(event[1:])
+                        info = process_info(pid)
+                        if (info is not None and info["state"] == "T"
+                                and "receipt_hold" not in control):
+                            control["receipt_hold"] = {
+                                "pid": pid, "stopped_at": time.monotonic() - launched,
+                                "stdio": {str(fd): os.readlink(f"/proc/{pid}/fd/{fd}")
+                                          for fd in (0, 1, 2)},
+                                "environment_names": [
+                                    item.partition(b"=")[0].decode("ascii")
+                                    for item in Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+                                    if item],
+                                "supervisor_environment_names": [
+                                    item.partition(b"=")[0].decode("ascii")
+                                    for item in Path(f"/proc/{process.pid}/environ").read_bytes().split(b"\0")
+                                    if item],
+                            }
+                        continue
                     if event[:1] == b"M":
                         control.setdefault("status_gate_pid", int(event[1:]))
                         control["stalled_at"].setdefault(
@@ -577,6 +645,17 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                                 and not control.get("native_released_at")):
                             Path(request["native_release_path"]).touch()
                             control["native_released_at"] = time.monotonic() - launched
+                hold = control.get("receipt_hold")
+                if (hold is not None and "released_at" not in hold
+                        and time.monotonic() - launched >= hold["stopped_at"] + 0.2):
+                    hold.update(
+                        report_bytes_while_stopped=len(output["report"]),
+                        sink_bytes_while_stopped=len(output["sink"]),
+                        receipt_bytes_while_stopped=len(b"".join(
+                            event[1:] for event in validator_events if event[:1] == b"R")),
+                        released_at=time.monotonic() - launched,
+                        validator_before_release=process_info(hold["pid"]))
+                    os.kill(hold["pid"], signal.SIGCONT)
                 if (trace is not None and process.poll() is not None
                         and all(key.data == "trace" for key in selector.get_map().values())):
                     while True:

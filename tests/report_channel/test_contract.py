@@ -15,7 +15,7 @@ import unittest
 from host import (
     ROOT, SUPERVISOR, HostWatchdogExpired, clean_environment, encoded,
     fixture_subreaper, group_members, launch, process_info, reference,
-    require_supervisor, sink_receipt, sink_wire, validator_observer,
+    require_supervisor, sink_receipt, sink_wire, supervisor_fixture, validator_observer,
 )
 
 
@@ -29,11 +29,13 @@ INACTIVE_CONTROLS = (
     *((flag, "0") for flag, _, _, _ in KNOBS),
     ("--terminal-status-fd", "9"), ("--attempt-id", "0"),
     ("--host-attestation-fd", "9"), ("--test-only-host-attestation-fd", "9"),
+    ("--post-exit-drain-ms", "0"), ("--planned-sink-bytes", "0"),
 )
 INACTIVE_ENVIRONMENT = (
     *(environment for _, environment, _, _ in KNOBS),
     "PINEFORGE_TERMINAL_STATUS_FD", "PINEFORGE_REPORT_ATTEMPT_ID",
     "PINEFORGE_REPORT_HOST_ATTESTATION_FD",
+    "PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS", "PINEFORGE_REPORT_PLANNED_SINK_BYTES",
 )
 
 
@@ -49,7 +51,8 @@ class Contract(unittest.TestCase):
         self.assertEqual(set(record), {
             "schema", "version", "contract", "attempt_id", "invocation", "complete",
             "exit_class", "failure", "exit_status", "producer", "limits",
-            "report_charged_bytes", "channels", "sink_verification", "usage", "cleanup"},
+            "report_charged_bytes", "channels", "sink_verification", "usage", "cleanup",
+            "diagnostics"},
             msg=msg)
         self.assertEqual(record["schema"], "pf-run-terminal", msg=msg)
         self.assertEqual(record["version"], 1, msg=msg)
@@ -59,6 +62,8 @@ class Contract(unittest.TestCase):
         self.assertIs(record["complete"], complete, msg=msg)
         self.assertEqual(record["exit_class"], exit_class, msg=msg)
         self.assertEqual(record["exit_status"], exit_status, msg=msg)
+        self.assertIsInstance(record["diagnostics"], list, msg=msg)
+        self.assertTrue(all(isinstance(text, str) for text in record["diagnostics"]), msg=msg)
         self.assertEqual(capture.returncode, exit_status, msg=msg)
         self.assertTrue({"report", "diagnostic", "status"} <= capture.eof, msg=msg)
         self.assertEqual(set(record["producer"]), {
@@ -112,6 +117,7 @@ class Contract(unittest.TestCase):
         record = self.assert_record(
             capture, complete=False, exit_class="resource_refusal", exit_status=1, msg=msg)
         self.assertIsNone(record["failure"], msg=msg)
+        self.assertEqual(record["diagnostics"], [], msg=msg)
         self.assertEqual(record["cleanup"]["domain_empty"], {
             "value": None, "measurement_state": "unavailable"}, msg=msg)
         self.assertEqual(record["producer"]["exit_status"], 0, msg=msg)
@@ -486,6 +492,8 @@ class Contract(unittest.TestCase):
             self.assertIsNone(record["channels"][name]["limit_bytes"], msg=msg)
         self.assertEqual(limits["terminal_bytes"], 65536, msg=msg)
         self.assertEqual(limits["stop_grace_ms"], 1000, msg=msg)
+        self.assertEqual(limits["post_exit_drain_ms"], {
+            "requested": None, "granted": None, "effective": 1000}, msg=msg)
         self.assertEqual(limits["relay_queue_bytes"], 65536, msg=msg)
         self.assertEqual(limits["producer_claim_bytes"], 8192, msg=msg)
         self.assertIsNone(limits["sink_bytes"], msg=msg)
@@ -858,6 +866,160 @@ class Contract(unittest.TestCase):
             finally:
                 self.cleanup_fixture_child(state)
 
+    def assert_post_exit_drain(self, *, options=(), environment=None, grants=None,
+                               requested=None, effective=1000, supervisor_path=None):
+        with tempfile.TemporaryDirectory(prefix="pf-drain-parameter-") as directory, fixture_subreaper():
+            state = Path(directory) / "child.json"
+            progress = Path(directory) / "after-parent"
+            child_exit = Path(directory) / "child-exit.json"
+            inputs = {"closes": [5, 9, 6]}
+            expected, _ = reference(inputs)
+            request = {
+                **inputs, "diagnostic_child_state": str(state),
+                "diagnostic_child_progress": str(progress), "diagnostic_child_exit": str(child_exit),
+                "leader_completes": True, "detached_diagnostic_child": True,
+                "double_fork_diagnostic_child": True,
+                "diagnostic_child_lifetime_ms": 2200 if effective is None else 5000,
+            }
+            try:
+                capture = launch(
+                    request, options=options, environment=environment, grants=grants,
+                    supervisor_path=supervisor_path, watchdog_seconds=8)
+                msg = capture.failure_context()
+                identities = json.loads(state.read_text())
+                orphan_observations = [
+                    sample["at"] for sample in capture.descendant_samples
+                    if sample["leader"] is None and sample["child"] is not None
+                    and sample["child"]["state"] != "Z"]
+                self.assertTrue(orphan_observations, msg=msg)
+                waited = capture.control["exited_at"] - min(orphan_observations)
+                if effective is not None:
+                    self.assertGreaterEqual(
+                        waited, effective / 1000 - 0.15,
+                        msg=f"drain grace timing: returned too soon; {msg}")
+                    self.assertLess(
+                        waited, effective / 1000 + 0.35,
+                        msg=f"drain grace timing: returned too late; {msg}")
+                else:
+                    self.assertGreaterEqual(
+                        waited, 1.9, msg=f"unlimited drain did not wait for the descendant; {msg}")
+                    self.assertLess(waited, 2.65, msg=msg)
+                self.assertIsNone(process_info(identities["leader"]), msg=msg)
+                self.assertEqual(group_members(identities["leader"]), [], msg=msg)
+                self.assertNotEqual(identities["group"], identities["leader"], msg=msg)
+                self.assertNotEqual(identities["child"], identities["group"], msg=msg)
+                self.assertTrue(progress.exists(), msg=msg)
+                if effective is None:
+                    self.assertTrue(child_exit.exists(), msg=msg)
+                    status = self.wait_fixture_child(identities["child"], msg)
+                    self.assertTrue(os.WIFEXITED(status), msg=msg)
+                    self.assertEqual(os.WEXITSTATUS(status), 0, msg=msg)
+                    self.assertIsNone(process_info(identities["child"]), msg=msg)
+                    record = self.assert_fixture_delivery(capture, msg=msg)
+                    self.assertEqual(capture.report, expected.stdout, msg=msg)
+                    self.assertFalse(record["channels"]["diagnostic"]["truncated"], msg=msg)
+                    self.assertTrue(record["channels"]["diagnostic"]["source_total_known"], msg=msg)
+                else:
+                    self.assertFalse(child_exit.exists(), msg=msg)
+                    child = process_info(identities["child"])
+                    self.assertIsNotNone(child, msg=msg)
+                    self.assertNotEqual(child["state"], "Z", msg=msg)
+                    self.assertEqual(child["group"], identities["group"], msg=msg)
+                    record = self.refusal(capture, "report_channel_failed", {
+                        "channel": "diagnostic", "reason": "io"},
+                        exit_class="transport_failure", status=1, msg=msg)
+                    self.assertEqual(record["producer"]["exit_status"], 0, msg=msg)
+                    self.assertIn("--post-exit-drain-ms", " ".join(record["diagnostics"]), msg=msg)
+                    self.assertIn("PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS",
+                                  " ".join(record["diagnostics"]), msg=msg)
+                    self.assertTrue(record["channels"]["diagnostic"]["truncated"], msg=msg)
+                    self.assertFalse(record["channels"]["diagnostic"]["source_total_known"], msg=msg)
+                self.assertEqual(record["limits"]["post_exit_drain_ms"], {
+                    "requested": requested, "granted": (grants or {}).get("post_exit_drain_ms"),
+                    "effective": effective}, msg=msg)
+                self.assertEqual(record["limits"]["stop_grace_ms"], 1000, msg=msg)
+                self.assertTrue(capture.diagnostic, msg=msg)
+                line = b"diagnostic child continues\n"
+                self.assertEqual(
+                    capture.diagnostic,
+                    (line * (len(capture.diagnostic) // len(line) + 1))[:len(capture.diagnostic)],
+                    msg=msg)
+                return capture
+            finally:
+                self.cleanup_fixture_child(state)
+
+    def test_post_exit_drain_default_names_parameter_and_expires_after_one_second(self):
+        self.assert_post_exit_drain()
+
+    def test_post_exit_drain_larger_cli_and_environment_values_are_not_renewed_by_output(self):
+        self.assert_post_exit_drain(
+            options=("--post-exit-drain-ms", "2200"), requested=2200, effective=2200)
+        self.assert_post_exit_drain(
+            environment={"PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS": "2200"},
+            requested=2200, effective=2200)
+
+    def test_post_exit_drain_zero_waits_until_the_double_fork_descendant_exits_cleanly(self):
+        self.assert_post_exit_drain(
+            options=("--post-exit-drain-ms", "0"), requested=0, effective=None)
+        self.assert_post_exit_drain(
+            environment={"PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS": "0"},
+            requested=0, effective=None)
+
+    def test_post_exit_drain_default_assertions_reject_a_doctored_grace(self):
+        self.assert_post_exit_drain()
+        text = SUPERVISOR.read_text(encoding="utf-8")
+        original = "DEFAULT_POST_EXIT_DRAIN_MS = 1000"
+        self.assertEqual(text.count(original), 1)
+        with tempfile.TemporaryDirectory(prefix="pf-drain-mutation-") as directory:
+            changed = supervisor_fixture(
+                directory, text=text.replace(original, "DEFAULT_POST_EXIT_DRAIN_MS = 3000"))
+            with self.assertRaisesRegex(AssertionError, "drain grace timing: returned too late"):
+                self.assert_post_exit_drain(supervisor_path=changed)
+
+    def test_post_exit_drain_parameter_grammar_precedence_and_grants(self):
+        maximum = 9007199254740990
+        cases = (
+            ((), {}, {}, None, None, 1000),
+            (("--post-exit-drain-ms", "0"), {}, {}, 0, None, None),
+            ((), {"PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS": "0"}, {}, 0, None, None),
+            (("--post-exit-drain-ms", "0002300"),
+             {"PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS": "invalid"}, {}, 2300, None, 2300),
+            (("--post-exit-drain-ms", str(maximum)), {}, {}, maximum, None, maximum),
+            ((), {}, {"post_exit_drain_ms": 2700}, None, 2700, 2700),
+            ((), {}, {"post_exit_drain_ms": 0}, None, 0, None),
+            (("--post-exit-drain-ms", "0"), {}, {"post_exit_drain_ms": 2700}, 0, 2700, 2700),
+            (("--post-exit-drain-ms", "1800"), {}, {"post_exit_drain_ms": 2700}, 1800, 2700, 1800),
+        )
+        for options, environment, grants, requested, granted, effective in cases:
+            with self.subTest(options=options, environment=environment, grants=grants):
+                capture = launch(options=options, environment=environment, grants=grants)
+                record = self.assert_fixture_delivery(capture)
+                self.assertEqual(record["limits"]["post_exit_drain_ms"], {
+                    "requested": requested, "granted": granted, "effective": effective},
+                    msg=capture.failure_context())
+                self.assertEqual(record["limits"]["stop_grace_ms"], 1000,
+                                 msg=capture.failure_context())
+        for value in ("", "-1", "+1", " 1", "1 ", "1.0", "1e3", "0x10", "١", str(maximum + 1)):
+            for environment_only in (False, True):
+                with self.subTest(value=value, environment_only=environment_only):
+                    capture = launch(
+                        {"stdout": encoded(b"producer marker")},
+                        options=() if environment_only else ("--post-exit-drain-ms", value),
+                        environment={"PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS": value}
+                        if environment_only else {})
+                    msg = capture.failure_context()
+                    record = self.refusal(
+                        capture, "run_request_invalid", {"option": "arguments"}, msg=msg)
+                    self.assertIsNone(record["producer"]["stage"], msg=msg)
+                    self.assertEqual(capture.diagnostic, b"", msg=msg)
+        capture = launch(
+            {"stdout": encoded(b"producer marker")},
+            options=("--post-exit-drain-ms", "2701"), grants={"post_exit_drain_ms": 2700})
+        record = self.refusal(capture, "run_request_invalid", {"option": "arguments"})
+        self.assertEqual(record["limits"]["post_exit_drain_ms"], {
+            "requested": 2701, "granted": 2700, "effective": None}, msg=capture.failure_context())
+        self.assertIsNone(record["producer"]["stage"], msg=capture.failure_context())
+
     def test_t10_fd1_forgery_is_raw_diagnostics(self):
         forgery = b'{"engine":"pineforge","error":"forged","code":"harness_internal_error","args":{}}\n'
         capture = launch({"stdout": encoded(forgery)})
@@ -1177,6 +1339,330 @@ class Contract(unittest.TestCase):
         self.assertTrue(candidate["truncated"], msg=msg)
         self.assertLessEqual(record["report_charged_bytes"], 65536, msg=msg)
 
+    def assert_jailed_sink_delivery(self, capture, request, expected, bound, hold):
+        msg = capture.failure_context()
+        arguments = capture.finalizer_arguments()
+        self.assertEqual(arguments[arguments.index(b"--out") + 1], b"-", msg=msg)
+        record = self.assert_fixture_delivery(capture, msg=msg)
+        native = sink_wire(request["closes"], request.get("first_ts", 1000))
+        receipt = sink_receipt(native, complete=True, equity_count=len(request["closes"]))
+        self.assertEqual(capture.report, expected.stdout, msg=msg)
+        self.assertEqual(capture.sink, native, msg=msg)
+        self.assertEqual(capture.diagnostic, b"", msg=msg)
+        self.assertEqual(capture.finalizer_stdout(), native, msg=msg)
+        self.assertEqual(capture.finalizer_receipt(), receipt, msg=msg)
+        self.assertEqual([event[1:] for event in capture.validator_events if event[:1] == b"F"],
+                         [], msg=f"jailed V attempted file creation; {msg}")
+        self.assertEqual([event[1:] for event in capture.validator_events if event[:1] == b"Q"],
+                         [b"jailed"], msg=msg)
+        for flag, value in ((b"--out", b"-"), (b"--in-fd", b"0"),
+                            (b"--max-bytes", str(bound).encode()), (b"--receipt-fd", b"2")):
+            self.assertEqual(arguments[arguments.index(flag) + 1], value, msg=msg)
+        self.assertEqual(record["limits"]["sink_bytes"], bound, msg=msg)
+        self.assertEqual(record["report_charged_bytes"], len(native) + len(expected.stdout), msg=msg)
+        cell = record["channels"]["sink"]
+        for name in ("observed_bytes", "accepted_bytes", "written_bytes"):
+            self.assertEqual(cell[name], len(native), msg=msg)
+        self.assertEqual(cell["accepted_sha256"], hashlib.sha256(native).hexdigest(), msg=msg)
+        self.assertEqual(cell["sha256"], hashlib.sha256(native).hexdigest(), msg=msg)
+        logical_hash = hashlib.sha256(b"".join(native.splitlines(keepends=True)[:-1])).hexdigest()
+        self.assertEqual(cell["logical_sha256"], logical_hash, msg=msg)
+        self.assertEqual(record["sink_verification"]["sha256"], logical_hash, msg=msg)
+        self.assertEqual(record["sink_verification"]["exit_status"], 0, msg=msg)
+        self.assertTrue(record["sink_verification"]["complete"], msg=msg)
+        self.assertIn("receipt_hold", capture.control, msg=msg)
+        gate = capture.control["receipt_hold"]
+        self.assertEqual(gate["validator_before_release"]["state"], "T", msg=msg)
+        self.assertGreaterEqual(gate["released_at"] - gate["stopped_at"], 0.2, msg=msg)
+        self.assertEqual(gate["report_bytes_while_stopped"], 0, msg=msg)
+        self.assertEqual(gate["sink_bytes_while_stopped"], 0, msg=msg)
+        self.assertEqual(gate["receipt_bytes_while_stopped"],
+                         0 if hold == "before" else len(receipt), msg=msg)
+        self.assertEqual(len(set(gate["stdio"].values())), 3, msg=msg)
+        self.assertTrue(all(value.startswith("pipe:[") for value in gate["stdio"].values()),
+                        msg=msg)
+        for name in ("report", "sink"):
+            observation = capture.control["first_publication"][name]
+            self.assertGreaterEqual(observation["at"], gate["released_at"], msg=msg)
+            self.assertIsNone(observation["validator"], msg=msg)
+        return record
+
+    def test_jailed_stdout_route_has_no_file_and_waits_for_receipt_and_exit(self):
+        with tempfile.TemporaryDirectory(prefix="pf-jailed-finalizer-") as directory, \
+                validator_observer() as observer:
+            main_supervisor = supervisor_fixture(directory, main_finalizer=True)
+            for script in (None, main_supervisor):
+                for hold in ("before", "after"):
+                    for environment, arguments in (
+                            ({"PINEFORGE_RUN_JSON_PROFILE": "jailed"}, ()),
+                            ({"PINEFORGE_RUN_JSON_PROFILE": "unjailed"}, ("--profile", "jailed")),
+                            ({"PINEFORGE_RUN_JSON_PROFILE": "invalid"}, ("--profile=jailed",))):
+                        with self.subTest(script=script, hold=hold, environment=environment,
+                                          arguments=arguments):
+                            request = {"closes": [7, 13, 9, 18], "first_ts": 73000,
+                                       "fragment_bytes": 17, "inherited_sink": True}
+                            expected, _ = reference(request)
+                            self.assertEqual(expected.returncode, 0, msg=repr(expected.stderr))
+                            native = sink_wire(request["closes"], request["first_ts"])
+                            capture = launch(
+                                request, sink=True, environment=environment,
+                                producer_arguments=arguments, planned_sink_bytes=len(native),
+                                observer=observer, audit_stdout=True, receipt_hold=hold,
+                                supervisor_path=script)
+                            self.assert_jailed_sink_delivery(
+                                capture, request, expected, len(native), hold)
+
+    def test_jailed_unlimited_sink_refuses_before_any_producer_marker(self):
+        with tempfile.TemporaryDirectory(prefix="pf-jailed-admission-") as directory, \
+                validator_observer() as observer:
+            marker = Path(directory) / "producer.json"
+            for options, grants, plan in (
+                    ((), {}, None), (("--report-max-bytes", "0"), {}, None),
+                    (("--planned-sink-bytes", "0"), {"report_bytes": 0}, None),
+                    ((), {}, 0)):
+                with self.subTest(options=options, grants=grants, plan=plan):
+                    capture = launch(
+                        {"producer_identity_path": str(marker),
+                         "stdout": encoded(b"producer must not start")},
+                        sink=True, observer=observer, grants=grants, options=options,
+                        planned_sink_bytes=plan,
+                        environment={"PINEFORGE_RUN_JSON_PROFILE": "jailed"})
+                    msg = capture.failure_context()
+                    self.assertFalse(marker.exists(), msg=msg)
+                    self.assertIsNone(capture.terminal()["producer"]["stage"], msg=msg)
+                    record = self.refusal(
+                        capture, "run_request_invalid", {"option": "arguments"}, msg=msg)
+                    self.assertEqual(capture.diagnostic, b"", msg=msg)
+                    self.assertIsNone(record["producer"]["stage"], msg=msg)
+                    self.assertIsNone(record["limits"]["report_bytes"]["effective"], msg=msg)
+                    self.assertIn("--planned-sink-bytes", " ".join(record["diagnostics"]), msg=msg)
+                    self.assertEqual(capture.validator_events, [], msg=msg)
+                    self.assertEqual(capture.sink, b"", msg=msg)
+
+    def test_jailed_missing_plan_derives_actual_validator_cap_from_positive_report(self):
+        request = {"closes": [2, 5, 4], "inherited_sink": True}
+        expected, _ = reference(request)
+        native = sink_wire(request["closes"])
+        allowance = len(native) + len(expected.stdout)
+        with validator_observer() as observer:
+            for options, environment, grants in (
+                    (("--report-max-bytes", str(allowance)), {}, {}),
+                    (("--planned-sink-bytes", "0"), {"PINEFORGE_REPORT_MAX_BYTES": str(allowance)}, {}),
+                    ((), {}, {"report_bytes": allowance})):
+                with self.subTest(options=options, environment=environment, grants=grants):
+                    capture = launch(
+                        request, sink=True, observer=observer, options=options, grants=grants,
+                        environment={"PINEFORGE_RUN_JSON_PROFILE": "jailed", **environment},
+                        audit_stdout=True, receipt_hold="after")
+                    record = self.assert_jailed_sink_delivery(
+                        capture, request, expected, allowance, "after")
+                    self.assertEqual(record["limits"]["report_bytes"]["effective"], allowance,
+                                     msg=capture.failure_context())
+
+    def test_jailed_planned_sink_cli_and_environment_supply_the_bound(self):
+        request = {"closes": [11, 16, 12], "inherited_sink": True}
+        expected, _ = reference(request)
+        bound = len(sink_wire(request["closes"]))
+        with validator_observer() as observer:
+            for options, environment in (
+                    (("--planned-sink-bytes", str(bound)), {}),
+                    ((), {"PINEFORGE_REPORT_PLANNED_SINK_BYTES": str(bound)}),
+                    (("--planned-sink-bytes", str(bound)),
+                     {"PINEFORGE_REPORT_PLANNED_SINK_BYTES": "invalid"})):
+                with self.subTest(options=options, environment=environment):
+                    capture = launch(
+                        request, sink=True, observer=observer, options=options,
+                        environment={"PINEFORGE_RUN_JSON_PROFILE": "jailed", **environment},
+                        audit_stdout=True, receipt_hold="before")
+                    record = self.assert_jailed_sink_delivery(
+                        capture, request, expected, bound, "before")
+                    self.assertIsNone(record["limits"]["report_bytes"]["effective"],
+                                      msg=capture.failure_context())
+
+    def test_jailed_overflow_receipt_discards_provisional_stdout(self):
+        request = {"closes": [19, 22, 20], "inherited_sink": True}
+        native = sink_wire(request["closes"])
+        bound = len(native) - 1
+        with tempfile.TemporaryDirectory(prefix="pf-jailed-overflow-") as directory, \
+                validator_observer() as observer:
+            main_supervisor = supervisor_fixture(directory, main_finalizer=True)
+            for script in (None, main_supervisor):
+                with self.subTest(script=script):
+                    capture = launch(
+                        request, sink=True, planned_sink_bytes=bound, observer=observer,
+                        audit_stdout=True, supervisor_path=script,
+                        environment={"PINEFORGE_RUN_JSON_PROFILE": "jailed"})
+                    msg = capture.failure_context()
+                    record = self.refusal(capture, "report_sink_failed", {
+                        "reason": "sink_exhausted", "sink_bytes": bound + 1, "cap_bytes": bound},
+                        exit_class="transport_failure", status=1, msg=msg)
+                    self.assertEqual(record["sink_verification"]["exit_status"], 8, msg=msg)
+                    self.assertFalse(record["sink_verification"]["complete"], msg=msg)
+                    self.assertEqual(capture.finalizer_receipt(), sink_receipt(
+                        native, complete=False, cap=bound, equity_count=len(request["closes"])),
+                        msg=msg)
+                    self.assertTrue(capture.finalizer_stdout(), msg=msg)
+                    self.assertTrue(native.startswith(capture.finalizer_stdout()), msg=msg)
+                    self.assertLessEqual(len(capture.finalizer_stdout()), bound, msg=msg)
+                    self.assertEqual(capture.sink, b"", msg=msg)
+                    self.assertEqual(record["channels"]["sink"]["written_bytes"], 0, msg=msg)
+                    self.assertEqual(record["channels"]["sink"]["accepted_bytes"], bound, msg=msg)
+                    self.assertEqual(record["channels"]["sink"]["observed_bytes"], bound + 1, msg=msg)
+                    self.assertEqual(record["channels"]["sink"]["accepted_sha256"],
+                                     hashlib.sha256(native[:bound]).hexdigest(), msg=msg)
+                    self.assertEqual([event for event in capture.validator_events
+                                      if event[:1] == b"F"], [], msg=msg)
+
+    def test_jailed_complete_receipt_followed_by_nonzero_exit_discards_stdout(self):
+        request = {"closes": [8, 15, 10], "inherited_sink": True}
+        native = sink_wire(request["closes"])
+        capture = launch(
+            request, sink=True, planned_sink_bytes=len(native), audit_stdout=True,
+            environment={"PINEFORGE_RUN_JSON_PROFILE": "jailed",
+                         "PF_REPORT_TEST_FAIL_AFTER_RECEIPT": "1"})
+        msg = capture.failure_context()
+        record = self.refusal(capture, "report_channel_failed", {
+            "channel": "sink", "reason": "protocol"}, exit_class="transport_failure", status=1, msg=msg)
+        self.assertEqual(capture.finalizer_stdout(), native, msg=msg)
+        self.assertTrue(json.loads(capture.finalizer_receipt())["complete"], msg=msg)
+        self.assertEqual(record["sink_verification"]["exit_status"], 5, msg=msg)
+        self.assertFalse(record["sink_verification"]["complete"], msg=msg)
+        self.assertEqual(capture.sink, b"", msg=msg)
+
+    def test_jailed_buffer_hash_is_cross_checked_against_independent_native_bytes(self):
+        request = {"closes": [4, 9, 6], "inherited_sink": True}
+        native = sink_wire(request["closes"])
+        capture = launch(
+            request, sink=True, planned_sink_bytes=len(native), audit_stdout=True,
+            environment={"PINEFORGE_RUN_JSON_PROFILE": "jailed",
+                         "PF_REPORT_TEST_CORRUPT_STDOUT": "1"})
+        msg = capture.failure_context()
+        record = self.refusal(capture, "report_channel_failed", {
+            "channel": "sink", "reason": "protocol"}, exit_class="transport_failure", status=1, msg=msg)
+        self.assertEqual(record["sink_verification"]["exit_status"], 0, msg=msg)
+        self.assertEqual(capture.finalizer_receipt(),
+                         sink_receipt(native, complete=True, equity_count=3), msg=msg)
+        self.assertEqual(len(capture.finalizer_stdout()), len(native), msg=msg)
+        self.assertNotEqual(capture.finalizer_stdout(), native, msg=msg)
+        self.assertEqual(record["channels"]["sink"]["accepted_sha256"],
+                         hashlib.sha256(native).hexdigest(), msg=msg)
+        self.assertEqual(capture.sink, b"", msg=msg)
+        self.assertFalse(record["sink_verification"]["complete"], msg=msg)
+
+    def test_jailed_validator_stdout_cannot_extend_the_buffer_beyond_bound(self):
+        request = {"closes": [3, 8, 7], "inherited_sink": True}
+        native = sink_wire(request["closes"])
+        capture = launch(
+            request, sink=True, planned_sink_bytes=len(native), audit_stdout=True,
+            environment={"PINEFORGE_RUN_JSON_PROFILE": "jailed",
+                         "PF_REPORT_TEST_EXCESS_STDOUT": "1"})
+        msg = capture.failure_context()
+        record = self.refusal(capture, "report_channel_failed", {
+            "channel": "sink", "reason": "protocol"}, exit_class="transport_failure", status=1, msg=msg)
+        self.assertEqual(capture.finalizer_stdout(), native + b"x", msg=msg)
+        self.assertEqual(capture.sink, b"", msg=msg)
+        self.assertEqual(record["channels"]["sink"]["accepted_bytes"], len(native), msg=msg)
+        self.assertEqual(record["channels"]["sink"]["written_bytes"], 0, msg=msg)
+
+    def test_validator_environment_is_explicit_and_excludes_supervisor_variable(self):
+        request = {"closes": [6, 12, 8], "inherited_sink": True}
+        expected, _ = reference(request)
+        native = sink_wire(request["closes"])
+        capture = launch(
+            request, sink=True, planned_sink_bytes=len(native), audit_stdout=True,
+            receipt_hold="after", environment={
+                "PINEFORGE_RUN_JSON_PROFILE": "jailed",
+                "PF_REPORT_UNLISTED_MARKER": "present in S only",
+                "PYTHONPATH": "/a-test-path-that-must-not-reach-the-validator"})
+        self.assert_jailed_sink_delivery(capture, request, expected, len(native), "after")
+        msg = capture.failure_context()
+        allowed = {"PINEFORGE_RUN_JSON_PROFILE", "LD_PRELOAD", "PF_REPORT_TEST_TRACE",
+                   "PF_REPORT_TEST_STDOUT_AUDIT", "PF_REPORT_TEST_HOLD_RECEIPT", "LC_CTYPE"}
+        names = capture.finalizer_environment_names()
+        self.assertTrue(names <= allowed, msg=msg)
+        self.assertIn("PINEFORGE_RUN_JSON_PROFILE", names, msg=msg)
+        gate = capture.control["receipt_hold"]
+        self.assertIn("PF_REPORT_UNLISTED_MARKER", gate["supervisor_environment_names"], msg=msg)
+        self.assertIn("PYTHONPATH", gate["supervisor_environment_names"], msg=msg)
+        self.assertNotIn("PF_REPORT_UNLISTED_MARKER", names, msg=msg)
+        self.assertNotIn("PYTHONPATH", names, msg=msg)
+        self.assertTrue(set(gate["environment_names"]) <= allowed, msg=msg)
+
+    def test_effective_profile_cli_overrides_environment_for_unjailed_file_route(self):
+        request = {"closes": [9, 14, 10], "inherited_sink": True}
+        expected, _ = reference(request)
+        native = sink_wire(request["closes"])
+        with validator_observer() as observer:
+            for environment, arguments in (
+                    ({"PINEFORGE_RUN_JSON_PROFILE": "jailed"}, ("--profile", "unjailed")),
+                    ({"PINEFORGE_RUN_JSON_PROFILE": "invalid"}, ("--profile=unjailed",))):
+                with self.subTest(environment=environment, arguments=arguments):
+                    capture = launch(
+                        request, sink=True, observer=observer, environment=environment,
+                        producer_arguments=arguments)
+                    msg = capture.failure_context()
+                    self.assertEqual([event[1:] for event in capture.validator_events
+                                      if event[:1] == b"Q"], [b"unjailed"], msg=msg)
+                    self.assert_fixture_delivery(capture, msg=msg)
+                    self.assertEqual(capture.report, expected.stdout, msg=msg)
+                    self.assertEqual(capture.sink, native, msg=msg)
+                    argv = capture.finalizer_arguments()
+                    self.assertNotIn(b"--max-bytes", argv, msg=msg)
+                    self.assertNotEqual(argv[argv.index(b"--out") + 1], b"-", msg=msg)
+                    self.assertTrue(any(event[:1] == b"F" for event in capture.validator_events),
+                                    msg=msg)
+
+    def test_ambiguous_or_invalid_effective_profile_refuses_before_launch(self):
+        with tempfile.TemporaryDirectory(prefix="pf-profile-admission-") as directory:
+            marker = Path(directory) / "producer.json"
+            for environment, arguments, named in (
+                    ({}, ("--profile", "jailed", "--profile=unjailed"), "ambiguous"),
+                    ({}, ("--prof", "jailed"), "ambiguous"),
+                    ({}, ("--profile",), "ambiguous"),
+                    ({}, ("--profile=other",), "--profile"),
+                    ({"PINEFORGE_RUN_JSON_PROFILE": "other"}, (), "PINEFORGE_RUN_JSON_PROFILE")):
+                with self.subTest(environment=environment, arguments=arguments):
+                    capture = launch(
+                        {"producer_identity_path": str(marker)}, sink=True,
+                        environment=environment, producer_arguments=arguments)
+                    msg = capture.failure_context()
+                    self.assertFalse(marker.exists(), msg=msg)
+                    self.assertIsNone(capture.terminal()["producer"]["stage"], msg=msg)
+                    record = self.refusal(
+                        capture, "run_request_invalid", {"option": "arguments"}, msg=msg)
+                    self.assertIn(named, " ".join(record["diagnostics"]), msg=msg)
+                    self.assertFalse(marker.exists(), msg=msg)
+                    self.assertIsNone(record["producer"]["stage"], msg=msg)
+                    self.assertEqual(capture.validator_events, [], msg=msg)
+
+    def test_main_finalizer_jailed_file_refusal_before_target_creation(self):
+        with tempfile.TemporaryDirectory(prefix="pf-main-finalizer-contract-") as directory:
+            supervisor = supervisor_fixture(directory, main_finalizer=True)
+            output = Path(directory) / "output"
+            output.mkdir()
+            target = output / "verified.sink"
+            finalizer = supervisor.with_name("pineforge_sink_finalize.py")
+            result = subprocess.run(
+                [sys.executable, "-B", str(finalizer), "--in-fd", "0", "--out", str(target)],
+                input=sink_wire([5, 8, 6]), capture_output=True, check=False, timeout=10,
+                env={"PINEFORGE_RUN_JSON_PROFILE": "jailed"})
+            context = repr((result.returncode, result.stdout, result.stderr))
+            self.assertEqual(result.returncode, 3, msg=context)
+            self.assertIn(b"finalizer_file_output_no_jailed_route", result.stderr, msg=context)
+            self.assertFalse(json.loads(result.stdout)["complete"], msg=context)
+            self.assertEqual(list(output.iterdir()), [], msg=context)
+
+    def test_jailed_named_sink_route_remains_a_descriptor_refusal(self):
+        capture = launch(
+            options=("--report-sink", "full-projection.sink"),
+            environment={"PINEFORGE_RUN_JSON_PROFILE": "jailed"})
+        msg = capture.failure_context()
+        record = self.refusal(
+            capture, "run_isolation_unavailable", {"reason": "descriptor"},
+            exit_class="resource_refusal", status=1, msg=msg)
+        self.assertIsNone(record["producer"]["stage"], msg=msg)
+        self.assertEqual(capture.validator_events, [], msg=msg)
+
     def test_t12_unlimited_file_finalizer_omits_cap(self):
         request = {"closes": [8, 13, 11, 17], "inherited_sink": True}
         native = sink_wire(request["closes"])
@@ -1202,6 +1688,11 @@ class Contract(unittest.TestCase):
                     self.assertIsNone(record["limits"]["sink_bytes"], msg=msg)
                     arguments = capture.finalizer_arguments()
                     self.assertNotIn(b"--max-bytes", arguments, msg=msg)
+                    self.assertNotEqual(arguments[arguments.index(b"--out") + 1], b"-", msg=msg)
+                    self.assertEqual([event[1:] for event in capture.validator_events
+                                      if event[:1] == b"Q"], [b"unjailed"], msg=msg)
+                    self.assertTrue(any(event[:1] == b"F" for event in capture.validator_events),
+                                    msg=f"the file observer must detect the real spool; {msg}")
                     self.assertFalse(any(event[:1] == b"P" for event in capture.validator_events),
                                      msg=msg)
                     self.assertEqual(capture.finalizer_receipt(),
@@ -1281,6 +1772,104 @@ class Contract(unittest.TestCase):
                              {"channel": "candidate", "reason": "protocol"},
                              exit_class="transport_failure", status=1, msg=msg)
                 self.assertNotEqual(capture.report, candidate, msg=msg)
+
+    def test_strategy_create_series_limit_cause_is_relayed_intact_with_producer_authority(self):
+        with tempfile.TemporaryDirectory(prefix="pf-series-cause-catalog-") as directory:
+            supervisor = supervisor_fixture(directory, main_catalog=True)
+            catalog = json.loads(supervisor.with_name("run_failure_codes.json").read_bytes())
+            self.assertIn("too_many_series", catalog["codes"]["outputs_limit"]["args"]["reason"]["values"])
+            for maximum, exit_status, error in (
+                    (1, 0, "series capacity"), (37, 1, "series capacity"),
+                    (9007199254740991, 1, "large description " + "z" * 9000)):
+                with self.subTest(maximum=maximum, exit_status=exit_status):
+                    cause = {"code": "outputs_limit",
+                             "args": {"max": maximum, "reason": "too_many_series"}}
+                    candidate = json.dumps({
+                        "engine": "pineforge", "error": error, "cause": cause,
+                        "code": "strategy_create_failed", "args": {}},
+                        separators=(", ", ": "), ensure_ascii=True).encode() + b"\n"
+                    capture = launch(
+                        {"candidate": encoded(candidate), "exit_status": exit_status,
+                         "fragment_bytes": 19}, supervisor_path=supervisor)
+                    msg = capture.failure_context()
+                    # This must distinguish relay from a replacement refusal.
+                    self.assertEqual(capture.report, candidate, msg=msg)
+                    record = self.refusal(
+                        capture, "run_producer_failed", {"reason": "claim"},
+                        exit_class="producer_failure", status=1, msg=msg)
+                    self.assertEqual(record["producer"]["failure"], {
+                        "code": "strategy_create_failed", "args": {},
+                        "cause": cause, "authority": "producer"}, msg=msg)
+                    self.assertEqual(record["producer"]["exit_status"], exit_status, msg=msg)
+                    self.assertFalse(record["producer"]["failure_claim_omitted"], msg=msg)
+                    self.assertLessEqual(len(json.dumps(
+                        record["producer"]["failure"], separators=(",", ":")).encode()), 8192, msg=msg)
+                    self.assertEqual(record["channels"]["candidate"]["accepted_bytes"],
+                                     len(candidate), msg=msg)
+                    self.assertEqual(record["channels"]["candidate"]["sha256"],
+                                     hashlib.sha256(candidate).hexdigest(), msg=msg)
+
+    def test_strategy_create_cause_wrong_shapes_remain_protocol_refusals(self):
+        valid = {"code": "outputs_limit", "args": {"max": 7, "reason": "too_many_series"}}
+        variants = [
+            ("harness_internal_error", {}, valid),
+            ("strategy_create_failed", {}, {**valid, "extra": 1}),
+            ("strategy_create_failed", {}, {"code": "not_an_installed_code", "args": valid["args"]}),
+            ("strategy_create_failed", {}, {"code": "run_aborted", "args": {}}),
+            ("strategy_create_failed", {}, None),
+            ("strategy_create_failed", {}, []),
+            ("strategy_create_failed", {}, "outputs_limit"),
+            ("strategy_create_failed", {}, {"code": "outputs_limit"}),
+            ("strategy_create_failed", {}, {"args": valid["args"]}),
+            ("strategy_create_failed", {}, {"code": 1, "args": valid["args"]}),
+            ("strategy_create_failed", {}, {"code": True, "args": valid["args"]}),
+            ("strategy_create_failed", {}, {"code": "outputs_limit", "args": []}),
+            ("strategy_create_failed", {}, {"code": "outputs_limit", "args": "arguments"}),
+            ("strategy_create_failed", {}, {"code": "outputs_limit", "args": None}),
+            ("strategy_create_failed", {}, {"code": "outputs_limit", "args": {"max": 7}}),
+            ("strategy_create_failed", {}, {"code": "outputs_limit",
+                                            "args": {**valid["args"], "extra": 1}}),
+            ("strategy_create_failed", {}, {"code": "outputs_limit",
+                                            "args": {"max": 7, "reason": "too_many_events"}}),
+            ("strategy_create_failed", {}, {"code": "outputs_limit",
+                                            "args": {"max": 7, "reason": "too_many_rows"}}),
+            ("strategy_create_failed", {}, {"code": "outputs_limit",
+                                            "args": {"max": 7, "reason": 1}}),
+            ("strategy_create_failed", {"unexpected": 1}, valid),
+        ]
+        for maximum in (0, -1, True, 1.0, "1", None, [], {}, 9007199254740992):
+            variants.append(("strategy_create_failed", {}, {
+                "code": "outputs_limit", "args": {"max": maximum, "reason": "too_many_series"}}))
+        with tempfile.TemporaryDirectory(prefix="pf-series-cause-refusals-") as directory:
+            supervisor = supervisor_fixture(directory, main_catalog=True)
+            candidates = [
+                json.dumps({"engine": "pineforge", "error": "creation refused",
+                            "code": code, "args": args, "cause": cause},
+                           separators=(",", ":")).encode() + b"\n"
+                for code, args, cause in variants]
+            candidates.extend((
+                b'{"engine":"pineforge","error":"legacy","cause":'
+                b'{"code":"outputs_limit","args":{"max":1,"reason":"too_many_series"}}}\n',
+                b'{"engine":"pineforge","error":"duplicate","code":"strategy_create_failed","args":{},'
+                b'"cause":{"code":"outputs_limit","code":"outputs_limit",'
+                b'"args":{"max":1,"reason":"too_many_series"}}}\n',
+                b'{"engine":"pineforge","error":"duplicate","code":"strategy_create_failed","args":{},'
+                b'"cause":{"code":"outputs_limit","args":'
+                b'{"max":1,"max":2,"reason":"too_many_series"}}}\n',
+                b'{"engine":"pineforge","cause":'
+                b'{"code":"outputs_limit","args":{"max":1,"reason":"too_many_series"}}}\n',
+            ))
+            for candidate in candidates:
+                with self.subTest(candidate=candidate):
+                    capture = launch(
+                        {"candidate": encoded(candidate), "exit_status": 1, "fragment_bytes": 7},
+                        supervisor_path=supervisor)
+                    msg = capture.failure_context()
+                    record = self.refusal(capture, "report_channel_failed", {
+                        "channel": "candidate", "reason": "protocol"},
+                        exit_class="transport_failure", status=1, msg=msg)
+                    self.assertNotEqual(capture.report, candidate, msg=msg)
+                    self.assertIsNone(record["producer"]["failure"], msg=msg)
 
     def test_t25_legacy_failure_is_relayed_as_a_claim(self):
         candidate = b'{"engine":"pineforge","error":"legacy failure"}\n'

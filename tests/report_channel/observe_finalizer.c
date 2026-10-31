@@ -4,11 +4,13 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <sys/un.h>
@@ -25,6 +27,11 @@ static bool paused;
 static int status_fd = -1;
 static int status_gate_fd = -1;
 static bool status_waited;
+static bool finalizer_process;
+static bool stdout_audit;
+static bool stdout_corrupted;
+static bool receipt_waited;
+extern char **environ;
 
 static void event(char kind, const void *bytes, size_t length)
 {
@@ -105,10 +112,77 @@ static void observe(void)
         return;
     }
     if (finalizer) {
+        finalizer_process = true;
         pause_probe = getenv("PF_REPORT_TEST_PAUSE_PROBE") != NULL;
+        stdout_audit = getenv("PF_REPORT_TEST_STDOUT_AUDIT") != NULL;
         pid_event('S');
         event('A', command, (size_t)count);
+        char names[16384];
+        size_t used = 0;
+        for (char **entry = environ; *entry; ++entry) {
+            const char *equals = strchr(*entry, '=');
+            size_t length = equals ? (size_t)(equals - *entry) : strlen(*entry);
+            if (length + 1 > sizeof(names) - used)
+                break;
+            memcpy(names + used, *entry, length);
+            used += length;
+            names[used++] = '\0';
+        }
+        event('E', names, used);
+        const char *profile = getenv("PINEFORGE_RUN_JSON_PROFILE");
+        if (profile)
+            event('Q', profile, strlen(profile));
     }
+}
+
+static int observed_open(int directory, const char *path, int flags, mode_t mode)
+{
+    int fd = (int)syscall(SYS_openat, directory, path, flags, mode);
+    if (finalizer_process && (flags & (O_CREAT | O_TRUNC)
+            || (flags & O_TMPFILE) == O_TMPFILE))
+        event('F', path, strnlen(path, 4096));
+    return fd;
+}
+
+#define OBSERVED_OPEN(name) \
+int name(const char *path, int flags, ...) \
+{ \
+    mode_t mode = 0; \
+    if ((flags & O_CREAT) || (flags & O_TMPFILE) == O_TMPFILE) { \
+        va_list arguments; \
+        va_start(arguments, flags); \
+        mode = (mode_t)va_arg(arguments, int); \
+        va_end(arguments); \
+    } \
+    return observed_open(AT_FDCWD, path, flags, mode); \
+}
+
+#define OBSERVED_OPENAT(name) \
+int name(int directory, const char *path, int flags, ...) \
+{ \
+    mode_t mode = 0; \
+    if ((flags & O_CREAT) || (flags & O_TMPFILE) == O_TMPFILE) { \
+        va_list arguments; \
+        va_start(arguments, flags); \
+        mode = (mode_t)va_arg(arguments, int); \
+        va_end(arguments); \
+    } \
+    return observed_open(directory, path, flags, mode); \
+}
+
+OBSERVED_OPEN(open)
+OBSERVED_OPEN(open64)
+OBSERVED_OPENAT(openat)
+OBSERVED_OPENAT(openat64)
+
+int creat(const char *path, mode_t mode)
+{
+    return observed_open(AT_FDCWD, path, O_WRONLY | O_CREAT | O_TRUNC, mode);
+}
+
+int creat64(const char *path, mode_t mode)
+{
+    return observed_open(AT_FDCWD, path, O_WRONLY | O_CREAT | O_TRUNC, mode);
 }
 
 ssize_t read(int fd, void *buffer, size_t length)
@@ -128,9 +202,39 @@ ssize_t read(int fd, void *buffer, size_t length)
 
 ssize_t write(int fd, const void *buffer, size_t length)
 {
-    ssize_t count = syscall(SYS_write, fd, buffer, length);
-    if (count > 0 && fd == receipt_fd)
+    const char *hold = finalizer_process ? getenv("PF_REPORT_TEST_HOLD_RECEIPT") : NULL;
+    if (fd == receipt_fd && hold && !strcmp(hold, "before") && !receipt_waited) {
+        receipt_waited = true;
+        pid_event('G');
+        (void)syscall(SYS_kill, getpid(), SIGSTOP);
+    }
+    char changed[65536];
+    const void *output = buffer;
+    if (finalizer_process && fd == 1 && stdout_audit && length && length <= sizeof(changed)
+            && !stdout_corrupted && getenv("PF_REPORT_TEST_CORRUPT_STDOUT")) {
+        memcpy(changed, buffer, length);
+        changed[0] ^= 1;
+        output = changed;
+        stdout_corrupted = true;
+    }
+    if (finalizer_process && fd == receipt_fd && getenv("PF_REPORT_TEST_EXCESS_STDOUT")) {
+        char extra = 'x';
+        if (syscall(SYS_write, 1, &extra, 1) == 1 && stdout_audit)
+            event('O', &extra, 1);
+    }
+    ssize_t count = syscall(SYS_write, fd, output, length);
+    if (count > 0 && finalizer_process && fd == 1 && stdout_audit)
+        event('O', output, (size_t)count);
+    if (count > 0 && fd == receipt_fd) {
         event('R', buffer, (size_t)count);
+        if (hold && !strcmp(hold, "after") && !receipt_waited) {
+            receipt_waited = true;
+            pid_event('G');
+            (void)syscall(SYS_kill, getpid(), SIGSTOP);
+        }
+        if (finalizer_process && getenv("PF_REPORT_TEST_FAIL_AFTER_RECEIPT"))
+            (void)syscall(SYS_exit_group, 5);
+    }
     return count;
 }
 
