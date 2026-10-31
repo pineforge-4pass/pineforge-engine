@@ -20,6 +20,8 @@
 #include "pine_run_failure.hpp"
 #include "pine_checked_arith.hpp"
 #include "pine_command_scratch_production.hpp"
+#include "../command_scratch_cache.hpp"
+#include "pine_sequence_cache_observer.hpp"
 #include "exit_scratch_versions_production.hpp"
 #include "pine_value_admission.hpp"
 #include "pine_position_tail.hpp"
@@ -1116,12 +1118,12 @@ namespace detail {
 struct CommandScratchRun {
     // Fixed geometry, independent of bars, handles and text widths.
     static constexpr std::size_t page_size = 512;
-    std::unique_ptr<pineforge::detail::ScratchBacking> backing =
-        make_command_scratch_backing(page_size);
+    std::unique_ptr<pineforge::detail::ScratchBacking> backing;
     CommandScratchStore store;
 
-    explicit CommandScratchRun(ScratchKeyOrder order)
-        : store{{2, page_size, 1, 1, order,
+    CommandScratchRun(ScratchKeyOrder order, CacheCapacity capacity)
+        : backing(make_command_scratch_backing(page_size, capacity)),
+          store{{2, page_size, 1, 1, order,
                  pineforge::detail::ScratchOpenMode::create_empty}, backing.get()} {
         exit_scratch_check(store.status(), store);
     }
@@ -1129,19 +1131,19 @@ struct CommandScratchRun {
 
 namespace {
 struct ExitScratchRun {
-    CommandScratchRun scratch{exit_scratch_key_order()};
+    CommandScratchRun scratch;
     ExitScratchContext context;
     ExitScratchVersionsProduction versions{scratch.store};
 
-    explicit ExitScratchRun(const native_order::RunIdentity& run)
-        : context{scratch.store, run} {
+    ExitScratchRun(const native_order::RunIdentity& run, CacheCapacity capacity)
+        : scratch(exit_scratch_key_order(), capacity), context{scratch.store, run} {
         context.versions = &versions;
     }
 };
 
 std::shared_ptr<ExitScratchContext> make_exit_scratch(
-        const native_order::RunIdentity& identity) {
-    auto run = std::make_shared<ExitScratchRun>(identity);
+        const native_order::RunIdentity& identity, CacheCapacity capacity) {
+    auto run = std::make_shared<ExitScratchRun>(identity, capacity);
     return {run, &run->context};
 }
 } // namespace
@@ -3198,7 +3200,9 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     }
     // Projection owns only the standalone exit service. Trade and dependency
     // workspaces are installed once by the admitted run's consumer/host setup.
-    auto exit_scratch = detail::make_exit_scratch(spec.identity);
+    const CacheDefaults defaults;
+    const auto& cache_policy = host_ ? host_->cache_policy_for_run() : defaults;
+    auto exit_scratch = detail::make_exit_scratch(spec.identity, cache_policy.projection_exit_pages);
     exit_scratch_ = std::move(exit_scratch);
     return spec;
 }
@@ -28662,7 +28666,8 @@ void PineExecutionAdapter::preserve_position_tail_before_seal(
     }
     observe_position_tail_rows(); // never miss a row retired by the row source
     detail::PositionTailBinding::preserve(position_tail_spill_, pine->trades_, global_end,
-                                         position_open_script_bar_, scratch_directory);
+        position_open_script_bar_, scratch_directory,
+        pine->cache_policy_for_run().position_tail_pages);
 }
 
 PineExecutionAdapter::PositionTailWork
@@ -28995,6 +29000,13 @@ void PineExecutionAdapter::set_id_tables_directory(const std::string& directory)
     if (!position_tail_summary_)
         position_tail_summary_ = std::make_shared<detail::AdapterPositionTailSummary>();
     position_tail_summary_->set_directory(directory);
+}
+
+void PineExecutionAdapter::set_cache_policy_for_run(const CacheDefaults& policy) {
+    cohorts_by_id_.set_cache_capacity(policy.cohort_id_pages);
+    exit_rank_keys_.set_cache_capacity(policy.exit_rank_pages);
+    placement_.set_cache_capacity(policy.erased_minima_pages, policy.retained_sequence_pages);
+    consumed_partial_exit_cycles_.set_cache_capacity(policy.consumed_cycle_pages);
 }
 
 PineExecutionAdapter::CohortTable::iterator
@@ -29637,7 +29649,8 @@ struct PlacementTable::SequenceIndex {
         return Status::ok;
     }
 
-    static std::unique_ptr<::pineforge::detail::ScratchBacking> make_backing() {
+    static std::unique_ptr<::pineforge::detail::ScratchBacking> make_backing(
+            CacheCapacity capacity) {
         // Derived identities are not command scopes. The factory snapshots
         // the observer, so isolate their accounting without changing the
         // backing selection, shared byte budget or failure propagation.
@@ -29646,17 +29659,22 @@ struct PlacementTable::SequenceIndex {
                 detail::set_command_scratch_io_observer({});
             ~RestoreObserver() { detail::set_command_scratch_io_observer(previous); }
         } restore;
-        return detail::make_command_scratch_backing(512);
+        // One allowance sizes the shared slab in both prefix and read phases.
+        auto backing = ::pineforge::detail::make_command_scratch_backing(512, capacity);
+        const auto observer = detail::sequence_cache_observer;
+        if (observer.created) observer.created(observer.context, *backing);
+        return backing;
     }
 
     mutable std::uint64_t operations = 0;
-    std::unique_ptr<::pineforge::detail::ScratchBacking> backing = make_backing();
+    std::unique_ptr<::pineforge::detail::ScratchBacking> backing;
     ::pineforge::detail::CommandScratchStore store{
         {2, 512, 1, 1, {0x6578697473657131ULL, this, compare},
          ::pineforge::detail::ScratchOpenMode::create_empty}, backing.get()};
     bool certified = false;
 
-    SequenceIndex() { require(store.status()); }
+    explicit SequenceIndex(CacheCapacity capacity)
+        : backing(make_backing(capacity)) { require(store.status()); }
     void require(Status status) const {
         if (status == Status::ok) return;
         if (status == Status::io_error)
@@ -29820,7 +29838,7 @@ struct PlacementTable::SequenceIndex {
 
 PlacementTable::SequenceIndex& PlacementTable::sequence_index() const {
     if (!sequence_index_) {
-        auto next = std::make_shared<SequenceIndex>();
+        auto next = std::make_shared<SequenceIndex>(sequence_cache_capacity_);
         SequenceIndex::Transaction transaction(*next);
         // A deferred first insertion leaves at most one row to build.
         // Failed derived writes or a backing rebind can need a recovery walk.

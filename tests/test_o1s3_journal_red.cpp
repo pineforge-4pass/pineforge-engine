@@ -25,6 +25,7 @@
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
 
+#include <pineforge/cache_policy.hpp>
 #include <pineforge/compat/pine/market_admission.hpp>
 #include <pineforge/detail/journal_codec.hpp>
 #include <pineforge/detail/scratch_errors.hpp>
@@ -1216,10 +1217,23 @@ void s3_journal_islands_fixed_under_pins_red() {
                  + 4 * sizeof(void*))
             + 4 * (sizeof(no::CommandEvent) + sizeof(no::LiveRequest))
             + 2 * sizeof(ad::CommandCapture) + 512;
+        // prepare_codec_frames constructs the pending tails and controls
+        // before constructed(). Reads of the spilled receipt log later add
+        // one lazy slab: 64 * line_bytes(4 * sizeof(uint64_t)), since
+        // ReceiptRec stores cause, recipient, outcome and effect. This
+        // fixture creates no successor rows and only one chain segment, so
+        // neither of the other two committed-row caches allocates.
+        const auto receipt_cache_bytes = pineforge::CacheDefaults{}.receipt_tail_pages.capacity_bytes;
         const auto w = native_store.stats().resident_bytes + admission_store.stats().resident_bytes;
         heap.constructed();
         const auto census = [&] {
-            heap.flat(native_store, admission_store, w, frames);
+            const auto receipts = core.tail_read_cache_stats(no::TailWindowKind::receipts);
+            require(receipts.current_bytes == 0 || receipts.current_bytes == receipt_cache_bytes,
+                    "receipt reads own at most their one complete fixed slab");
+            require(core.tail_read_cache_stats(no::TailWindowKind::successor_roots).current_bytes == 0
+                    && core.tail_read_cache_stats(no::TailWindowKind::chain_segments).current_bytes == 0,
+                    "this journal fixture allocates no other native tail read slab");
+            heap.flat(native_store, admission_store, w, frames + receipt_cache_bytes);
         };
         const auto parent = driver.submit(parent_input);
         no::Request child_input{no::Reduce{no::OwnerOpenedUnits{}}, "child", ""};
@@ -1264,6 +1278,9 @@ void s3_journal_islands_fixed_under_pins_red() {
         require(core.history_end() - core.history_base() >= population
                 && core.group_effect_receipt_count() == population,
                 "a long pinned native suffix really exists");
+        require(core.tail_read_cache_stats(no::TailWindowKind::receipts).current_bytes
+                    == receipt_cache_bytes,
+                "the spilled receipt witness actually allocates its counted slab");
         require(held_draft.observation() && held_draft.observation()->bar == 7,
                 "a still-referenced Draft allocation remains in the heap census");
         ModelWalk captured(admission_values);

@@ -15,7 +15,26 @@ SO    = ROOT / "macd" / "strategy.so"
 OHLCV = ROOT / "data" / "btcusdt_15m_7d.csv"
 
 
-# ctypes mirror of <pineforge/pineforge.h>
+# ctypes mirrors of <pineforge/pineforge.h>
+class CachePolicyEntryC(ctypes.Structure):
+    _fields_ = [("kind", ctypes.c_uint32),
+                ("capacity_bytes", ctypes.c_uint64)]
+
+
+class CachePolicyC(ctypes.Structure):
+    _fields_ = [("struct_size", ctypes.c_uint32),
+                ("version", ctypes.c_uint32),
+                ("entry_count", ctypes.c_uint64),
+                ("entries", ctypes.POINTER(CachePolicyEntryC))]
+
+
+def bind_cache_policy(lib: ctypes.CDLL) -> None:
+    if hasattr(lib, "strategy_set_cache_policy_v1"):
+        lib.strategy_set_cache_policy_v1.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(CachePolicyC)]
+        lib.strategy_set_cache_policy_v1.restype = ctypes.c_int
+
+
 class BarC(ctypes.Structure):
     _fields_ = [("open",  ctypes.c_double), ("high",   ctypes.c_double),
                 ("low",   ctypes.c_double), ("close",  ctypes.c_double),
@@ -193,6 +212,7 @@ def main() -> int:
 
     lib = ctypes.CDLL(str(SO))
     check_abi(lib)
+    bind_cache_policy(lib)
     lib.strategy_create.argtypes  = [ctypes.c_char_p]
     lib.strategy_create.restype   = ctypes.c_void_p
     lib.run_backtest_full.argtypes = [
