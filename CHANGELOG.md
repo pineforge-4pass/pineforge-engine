@@ -7,6 +7,8 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- Recorded output series are unlimited by default; 0 or omission of `--limit-output-series` means no limit, while a positive N is the operator's cap and any refusal reports that positive N as `max`. Report-window memory follows the declared count: 6 MiB + 64 KiB × S + a 64 KiB reader with the default I/O sizes.
+
 ## 1.9.1 — 2026-10-31
 
 - A script container (string, array, map or object store) whose scratch

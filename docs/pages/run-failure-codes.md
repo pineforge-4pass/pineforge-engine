@@ -141,12 +141,15 @@ The `strategy_library_incompatible` row also includes the two released
 in addition to its six released 1.4.0 reasons.
 
 `outputs_limit` admits reasons `too_many_events`, `too_many_rows` and
-`too_many_series`. The first two carry `max` `INT_MAX`. Declaring more than
-64 recorded series slots reaches Pine's plot-count limit: it throws
-`std::runtime_error` with reason `too_many_series` and `max` 64 before any
-declaration state changes. Exactly 64 series slots are accepted. The
-declaration is C++ only: a generated strategy that declares more than 64 slots
-fails strategy creation and `run_json` reports `strategy_create_failed`.
+`too_many_series`. The first two carry `max` `INT_MAX`. Series are unlimited
+by default. `--limit-output-series N` (`N >= 0`) applies before strategy creation; 0
+or omission means unlimited. A declaration above a positive N throws
+`std::runtime_error` with `too_many_series`; its `max` is the operator's positive N
+before state changes; up to N slots are accepted, and zero imposes no limit.
+`run_json` reports the refused constructor as `strategy_create_failed`.
+Only that operator-limit refusal adds a top-level `cause` member to the failure line,
+shaped as `{"code":"outputs_limit","args":{"max":N,"reason":"too_many_series"}}`;
+other `strategy_create_failed` lines omit it.
 
 <!-- BEGIN generated from docker/run_failure_codes.json: python3 scripts/test_gen_run_failure_catalog_diff.py --write-docs-tables -->
 
