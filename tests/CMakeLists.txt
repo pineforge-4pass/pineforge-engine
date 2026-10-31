@@ -2330,6 +2330,40 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         test_entrypoint_compile_limits PROPERTIES LABELS "report-channel")
 endif()
 
+# OFF identity of the opt-in report channel: the same fixed requests through main's own
+# docker/ closure (read from git at the pinned base) and through this tree, over the
+# corpus parity subset; needs the corpus strategy modules, so it exists only in a build
+# that has them.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
+   AND PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_CORPUS_STRATEGIES)
+    file(STRINGS "${PROJECT_SOURCE_DIR}/scripts/corpus_parity_subset.txt"
+        _pf_report_off_lines)
+    set(_pf_report_off_map "")
+    foreach(_pf_report_off_line IN LISTS _pf_report_off_lines)
+        string(REGEX REPLACE "#.*$" "" _pf_report_off_probe "${_pf_report_off_line}")
+        string(STRIP "${_pf_report_off_probe}" _pf_report_off_probe)
+        if(_pf_report_off_probe STREQUAL "")
+            continue()
+        endif()
+        string(MAKE_C_IDENTIFIER "strategy_${_pf_report_off_probe}"
+            _pf_report_off_target)
+        string(APPEND _pf_report_off_map
+            "${_pf_report_off_probe}\t$<TARGET_FILE:${_pf_report_off_target}>\n")
+    endforeach()
+    file(GENERATE
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/report-off-modules-$<CONFIG>.tsv"
+        CONTENT "${_pf_report_off_map}")
+    add_test(NAME test_report_channel_off_identity
+        COMMAND ${CMAKE_COMMAND} -E env
+            "PINEFORGE_REPORT_OFF_MODULE_MAP=${CMAKE_CURRENT_BINARY_DIR}/report-off-modules-$<CONFIG>.tsv"
+            "PINEFORGE_REPORT_OFF_DEFAULT_OHLCV=${PROJECT_SOURCE_DIR}/corpus/data/derived/ohlcv_ETH-USDT-USDT_15m.csv"
+            ${Python3_EXECUTABLE} -B
+                ${PROJECT_SOURCE_DIR}/tests/report_channel/test_off_identity.py
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+    set_tests_properties(test_report_channel_off_identity PROPERTIES
+        LABELS "report-channel" RUN_SERIAL TRUE)
+endif()
+
 # The seven ABI-provider manifests and the four receipt-gated rows. The
 # private-fixture PRs take every manifest below out of the public tree, and
 # scripts/prepare_settlement_cpp_abi_base.py answers a missing one with the
