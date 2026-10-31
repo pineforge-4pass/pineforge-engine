@@ -1113,14 +1113,12 @@ class Supervisor:
                 cell = self.limits[name]
                 requested = cell["requested"]
                 cell["granted"] = grant
-                if name in GRACE_DEFAULTS:
-                    if grant and requested == 0:
-                        cell["effective"] = None
-                        above_grant.add(name)
-                    elif grant and requested is not None and requested > grant:
-                        cell["effective"] = None
-                        above_grant.add(name)
-                    elif requested is None:
+                if (grant and requested is not None
+                        and (requested > grant or (name in GRACE_DEFAULTS and requested == 0))):
+                    cell["effective"] = None
+                    above_grant.add(name)
+                elif name in GRACE_DEFAULTS:
+                    if requested is None:
                         cell["effective"] = grant or GRACE_DEFAULTS[name]
                     else:
                         cell["effective"] = requested or None

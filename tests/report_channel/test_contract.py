@@ -14,7 +14,7 @@ import time
 import unittest
 
 from host import (
-    ROOT, SUPERVISOR, HostWatchdogExpired, clean_environment, encoded,
+    ROOT, SUPERVISOR, PROCESS_EXIT_POLL_SECONDS, HostWatchdogExpired, clean_environment, encoded,
     fixture_subreaper, group_members, launch, process_info, reference,
     require_supervisor, sink_receipt, sink_wire, supervisor_fixture, validator_observer,
 )
@@ -1292,6 +1292,23 @@ class Contract(unittest.TestCase):
             msg=capture.failure_context())
         self.assertIsNone(record["producer"]["stage"], msg=capture.failure_context())
 
+    def assert_process_exit_observation(self, capture, name, identity):
+        msg = capture.failure_context()
+        observation = capture.control.get(name + "_exit")
+        self.assertIsNotNone(observation, msg=msg)
+        self.assertEqual(observation["pid"], identity["pid"], msg=msg)
+        self.assertEqual(observation["started"], identity["started"], msg=msg)
+        self.assertEqual(observation["poll_interval_seconds"], PROCESS_EXIT_POLL_SECONDS, msg=msg)
+        self.assertGreaterEqual(observation["last_alive_at_monotonic"],
+                                capture.control[name + "_term_at"], msg=msg)
+        self.assertGreaterEqual(observation["exited_at_monotonic"],
+                                observation["last_alive_at_monotonic"], msg=msg)
+        self.assertLessEqual(
+            observation["exited_at_monotonic"] - observation["last_alive_at_monotonic"],
+            PROCESS_EXIT_POLL_SECONDS + 0.1,
+            msg=f"process exit observation exceeded its polling allowance; {msg}")
+        return observation["exited_at_monotonic"]
+
     def assert_stop_grace_producer(self, *, options=(), environment=None,
                                    requested=None, granted=None, effective=1000,
                                    release_after_ms=None, output_after_term=False,
@@ -1340,14 +1357,14 @@ class Contract(unittest.TestCase):
                     waited, release_after_ms / 1000 - 0.1, msg=msg)
                 self.assertGreater(waited, 1.0, msg=msg)
             else:
-                self.assertIsNotNone(capture.control.get("exited_at_monotonic"), msg=msg)
-                elapsed = (capture.control["exited_at_monotonic"]
-                           - capture.control["producer_term_at"])
+                exited_at = self.assert_process_exit_observation(
+                    capture, "producer", capture.control["producer_term_process"])
+                elapsed = exited_at - capture.control["producer_term_at"]
                 self.assertGreaterEqual(
                     elapsed, effective / 1000 - 0.15,
                     msg=f"stop grace timing: returned too soon; {msg}")
                 self.assertLess(
-                    elapsed, effective / 1000 + 0.5,
+                    elapsed, effective / 1000 + 0.5 + PROCESS_EXIT_POLL_SECONDS,
                     msg=f"stop grace timing: returned too late; {msg}")
             record = self.refusal(capture, "diagnostic_budget_exceeded", {
                 "cap_bytes": 64, "used_bytes": 64, "requested_bytes": 1},
@@ -1395,7 +1412,7 @@ class Contract(unittest.TestCase):
             changed = supervisor_fixture(
                 directory, text=text.replace(
                     original, "DEFAULT_STOP_GRACE_MILLISECONDS = 3000"))
-            with self.assertRaisesRegex(AssertionError, "stop grace timing"):
+            with self.assertRaisesRegex(AssertionError, "stop grace timing: returned too late"):
                 self.assert_stop_grace_producer(supervisor_path=changed)
 
     def test_stop_grace_parameter_grammar_precedence_and_grants(self):
@@ -1689,6 +1706,8 @@ class Contract(unittest.TestCase):
         msg = capture.failure_context()
         hold = capture.control.get("validator_overflow_hold")
         self.assertIsNotNone(hold, msg=msg)
+        self.assertEqual(hold["process"]["pid"], hold["pid"], msg=msg)
+        self.assertNotEqual(hold["process"]["state"], "Z", msg=msg)
         if effective is None:
             self.assertIsNotNone(
                 capture.control.get("validator_alive_before_release"), msg=msg)
@@ -1705,13 +1724,16 @@ class Contract(unittest.TestCase):
             self.assertEqual(
                 len([event for event in capture.validator_events if event[:1] == b"T"]),
                 1, msg=msg)
-            elapsed = (capture.control["exited_at_monotonic"]
-                       - capture.control["validator_term_at"])
+            self.assertEqual(hold["pid"], capture.control["validator_term_pid"], msg=msg)
+            self.assertLessEqual(hold["at"], capture.control["validator_term_at"], msg=msg)
+            exited_at = self.assert_process_exit_observation(
+                capture, "validator", capture.control["validator_term_process"])
+            elapsed = exited_at - capture.control["validator_term_at"]
             self.assertGreaterEqual(
                 elapsed, effective / 1000 - 0.15,
                 msg=f"stop grace timing: validator returned too soon; {msg}")
             self.assertLess(
-                elapsed, effective / 1000 + 0.75,
+                elapsed, effective / 1000 + 0.75 + PROCESS_EXIT_POLL_SECONDS,
                 msg=f"stop grace timing: validator returned too late; {msg}")
         record = self.refusal(capture, "report_sink_failed", {
             "reason": "sink_exhausted", "sink_bytes": cap + 1, "cap_bytes": cap},
@@ -2443,26 +2465,55 @@ class Contract(unittest.TestCase):
         self.assertTrue(record["producer"]["failure_claim_omitted"], msg=msg)
 
     def test_t31_positive_host_grants_are_optional_constraints(self):
-        grants = {"report_bytes": 4096, "diagnostic_bytes": 64,
-                  "wall_ms": 10000, "stall_ms": 2000}
-        for flag, _, field, _ in KNOBS:
-            for value in (None, 0, grants[field] - 1, grants[field]):
-                with self.subTest(flag=flag, value=value):
-                    capture = launch(grants=grants, options=() if value is None else (flag, str(value)))
-                    msg = capture.failure_context()
-                    record = self.assert_fixture_delivery(capture, msg=msg)
-                    for _, _, name, _ in KNOBS:
-                        requested = value if name == field else None
-                        self.assertEqual(record["limits"][name], {
-                            "requested": requested, "granted": grants[name],
-                            "effective": requested or grants[name]}, msg=msg)
-            capture = launch(grants=grants, options=(flag, str(grants[field] + 1)))
-            msg = capture.failure_context()
-            record = self.refusal(capture, "run_request_invalid", {"option": "arguments"}, msg=msg)
-            self.assertIsNone(record["producer"]["stage"], msg=msg)
-            self.assertEqual(record["limits"][field], {
-                "requested": grants[field] + 1, "granted": grants[field], "effective": None},
-                msg=msg)
+        grace_knobs = (
+            ("--post-exit-drain-ms", "PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS",
+             "post_exit_drain_ms", 2700),
+            ("--stop-grace-ms", "PINEFORGE_CHANNEL_STOP_GRACE_MS", "stop_grace_ms", 2700),
+        )
+        knobs = (*KNOBS, *grace_knobs)
+        grace_fields = {field for _, _, field, _ in grace_knobs}
+        grants = {field: value for _, _, field, value in knobs}
+        for flag, environment, field, grant in knobs:
+            admitted = ((None, grant - 1, grant) if field in grace_fields
+                        else (None, 0, grant - 1, grant))
+            for value in admitted:
+                for route in (("absent",) if value is None else ("cli", "environment")):
+                    with self.subTest(field=field, value=value, route=route):
+                        capture = launch(
+                            grants=grants, options=(flag, str(value)) if route == "cli" else (),
+                            environment={environment: str(value)} if route == "environment" else {})
+                        msg = capture.failure_context()
+                        record = self.assert_fixture_delivery(capture, msg=msg)
+                        for _, _, name, _ in knobs:
+                            requested = value if name == field else None
+                            self.assertEqual(record["limits"][name], {
+                                "requested": requested, "granted": grants[name],
+                                "effective": requested or grants[name]}, msg=msg)
+            refused = (grant + 1, 0) if field in grace_fields else (grant + 1,)
+            for value in refused:
+                for route in ("cli", "environment"):
+                    with self.subTest(field=field, value=value, route=route), \
+                            tempfile.TemporaryDirectory(prefix="pf-grant-refusal-") as directory:
+                        marker = Path(directory) / "producer.json"
+                        self.assertFalse(marker.exists())
+                        capture = launch(
+                            {"producer_identity_path": str(marker),
+                             "stdout": encoded(b"producer marker")},
+                            grants=grants, options=(flag, str(value)) if route == "cli" else (),
+                            environment={environment: str(value)} if route == "environment" else {})
+                        msg = capture.failure_context()
+                        record = self.refusal(
+                            capture, "run_request_invalid", {"option": "arguments"}, msg=msg)
+                        self.assertIsNone(record["producer"]["stage"], msg=msg)
+                        self.assertIsNone(record["producer"]["exit_status"], msg=msg)
+                        self.assertIsNone(record["producer"]["signal"], msg=msg)
+                        self.assertFalse(marker.exists(), msg=msg)
+                        self.assertEqual(capture.diagnostic, b"", msg=msg)
+                        self.assertEqual(capture.validator_events, [], msg=msg)
+                        self.assertEqual(record["channels"]["candidate"]["observed_bytes"], 0,
+                                         msg=msg)
+                        self.assertEqual(record["limits"][field], {
+                            "requested": value, "granted": grant, "effective": None}, msg=msg)
 
     def test_t31_unlimited_grants_accept_exact_positive_requests(self):
         for grants in ({}, {field: 0 for _, _, field, _ in KNOBS},

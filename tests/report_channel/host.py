@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import termios
+import threading
 import time
 import uuid
 
@@ -31,6 +32,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 SUPERVISOR = ROOT / "docker/pineforge_report_supervise.py"
 PRODUCER = Path(__file__).with_name("producer.py")
+PROCESS_EXIT_POLL_SECONDS = 0.005
 
 
 def require_supervisor():
@@ -86,6 +88,44 @@ def process_info(pid):
         return None
     return {"pid": pid, "state": fields[0], "parent": int(fields[1]),
             "group": int(fields[2]), "started": int(fields[19])}
+
+
+class ProcessExitObservation:
+    """Sample the signalled child independently of channel EOF and S's wait."""
+    def __init__(self, identity):
+        self.identity = identity
+        self.result = None
+        self.error = None
+        self.stop = threading.Event()
+        self.last_alive_at = time.monotonic()
+        self.thread = threading.Thread(target=self.poll, daemon=True)
+        self.thread.start()
+
+    def poll(self):
+        last_alive_at = self.last_alive_at
+        try:
+            while not self.stop.is_set():
+                info = process_info(self.identity["pid"])
+                observed_at = time.monotonic()
+                # A zombie has already stopped executing; reaping may follow.
+                # The start tick distinguishes this child from a reused pid.
+                if (info is None or info["state"] in ("Z", "X")
+                        or info["started"] != self.identity["started"]):
+                    self.result = {
+                        "pid": self.identity["pid"], "started": self.identity["started"],
+                        "poll_interval_seconds": PROCESS_EXIT_POLL_SECONDS,
+                        "last_alive_at_monotonic": last_alive_at,
+                        "exited_at_monotonic": observed_at, "final_process": info,
+                    }
+                    return
+                last_alive_at = observed_at
+                self.stop.wait(PROCESS_EXIT_POLL_SECONDS)
+        except Exception as error:
+            self.error = repr(error)
+
+    def close(self):
+        self.stop.set()
+        self.thread.join(timeout=1)
 
 
 def group_members(group):
@@ -528,6 +568,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                    "status_prefill_packets": len(status_backlog), "status_prefill": status_prefill,
                    "supervisor_pid": process.pid}
         descendant_samples = []
+        exit_observers = {}
 
         def unwatch(fd):
             if fd in selector.get_map():
@@ -538,7 +579,31 @@ def launch(request=None, *, options=(), environment=None, status="valid",
             fcntl.ioctl(fd, termios.FIONREAD, pending, True)
             return pending[0]
 
+        def collect_exit_observations():
+            for name, observation in exit_observers.items():
+                if observation.result is not None:
+                    control[name + "_exit"] = observation.result
+                if observation.error is not None:
+                    control[name + "_exit_error"] = observation.error
+
+        def watch_child_exit(name, identity):
+            observation = ProcessExitObservation(identity)
+            exit_observers[name] = observation
+            fixtures.callback(observation.close)
+
+        def observe_supervisor_exit(now):
+            ended = process.poll() is not None
+            if ended:
+                if control["exited_at"] is None:
+                    control["exited_at"] = now - launched
+                    control["exited_at_monotonic"] = now
+                for name, fd in tuple(flag_probes.items()):
+                    flags_after[name] = fcntl.fcntl(fd, fcntl.F_GETFL)
+                    os.close(flag_probes.pop(name))
+            return ended
+
         def current_capture():
+            collect_exit_observations()
             return Capture(
                 bytes(output["report"]), bytes(output["diagnostic"]),
                 bytes(output["sink"]), packets, flags, process.poll(), attempt, eof,
@@ -602,12 +667,11 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                 selector.register(status_host, selectors.EVENT_READ, "status")
             if trace is not None:
                 selector.register(trace, selectors.EVENT_READ, "trace")
-            while selector.get_map() or delayed_diagnostic is not None or held_readers:
+            # Always take the final state sample, even when one wake-up
+            # consumes every EOF. Only decide to finish after observations.
+            while True:
                 now = time.monotonic()
-                ended = process.poll() is not None
-                if ended and control["exited_at"] is None:
-                    control["exited_at"] = now - launched
-                    control["exited_at_monotonic"] = now
+                ended = observe_supervisor_exit(now)
                 if ended and status_probe is not None:
                     status_probe.close()
                 for name, fd in tuple(held_readers.items()):
@@ -633,6 +697,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                             "producer was gone before its TERM observation")
                         control["producer_term_at"] = term["at"]
                         control["producer_term_process"] = identity
+                        watch_child_exit("producer", identity)
                     if (release_producer_after_ms is not None
                             and term is not None
                             and control.get("producer_released_at") is None
@@ -642,6 +707,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                         info = process_info(identity["pid"])
                         require_precondition(
                             info is not None and info["state"] != "Z"
+                            and info["started"] == control["producer_term_process"]["started"]
                             and process.poll() is None,
                             "producer was not alive before the host release")
                         control["producer_alive_before_release"] = info
@@ -714,10 +780,6 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                             descendant_samples.append(sample)
                     except (FileNotFoundError, ValueError):
                         pass
-                if process.poll() is not None and flag_probes:
-                    for name, fd in tuple(flag_probes.items()):
-                        flags_after[name] = fcntl.fcntl(fd, fcntl.F_GETFL)
-                        os.close(flag_probes.pop(name))
                 if time.monotonic() >= deadline:
                     control["watchdog_pending_bytes"] = {}
                     for name, fd in held_readers.items():
@@ -729,13 +791,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                     if identity_path is not None and Path(identity_path).is_file():
                         identity = json.loads(Path(identity_path).read_text())
                         control["watchdog_producer_group"] = group_members(identity["group"])
-                    partial = Capture(
-                        bytes(output["report"]), bytes(output["diagnostic"]),
-                        bytes(output["sink"]), packets, flags, process.poll(), attempt, eof,
-                        validator_events, stopped_validators,
-                        flags_before, flags_after, descendant_samples,
-                        time.monotonic() - launched, control)
-                    raise HostWatchdogExpired(partial)
+                    raise HostWatchdogExpired(current_capture())
                 overflow_hold = control.get("validator_overflow_hold")
                 if (release_validator_after_ms is not None
                         and overflow_hold is not None
@@ -744,6 +800,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                     info = process_info(overflow_hold["pid"])
                     require_precondition(
                         info is not None and info["state"] != "Z"
+                        and info["started"] == overflow_hold["process"]["started"]
                         and process.poll() is None,
                         "validator was not alive before the host release")
                     control["validator_alive_before_release"] = info
@@ -782,6 +839,16 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                         else:
                             eof.add(key.data)
                             unwatch(key.fd)
+                if (trace is not None and trace.fileno() in selector.get_map()
+                        and process.poll() is not None
+                        and all(key.data == "trace" for key in selector.get_map().values())):
+                    while True:
+                        try:
+                            validator_events.append(trace.recv(65537))
+                        except BlockingIOError:
+                            break
+                    unwatch(trace.fileno())
+                # Include events from the final drain in this dispatch.
                 for event in validator_events:
                     if event[:1] == b"G":
                         pid = int(event[1:])
@@ -824,6 +891,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                             control["validator_term_at"] = time.monotonic()
                             control["validator_term_pid"] = pid
                             control["validator_term_process"] = info
+                            watch_child_exit("validator", info)
                         continue
                     if event[:1] == b"S" and pause_validator_until_wall:
                         pid = int(event[1:])
@@ -835,9 +903,14 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                         continue
                     else:
                         pid = int(event[1:])
-                    if event[:1] == b"P" and release_validator_after_ms is not None:
-                        control.setdefault("validator_overflow_hold", {
-                            "pid": pid, "at": time.monotonic()})
+                    if (event[:1] == b"P" and hold_validator_overflow
+                            and "validator_overflow_hold" not in control):
+                        info = process_info(pid)
+                        require_precondition(
+                            info is not None and info["state"] != "Z",
+                            "validator was gone before its overflow hold observation")
+                        control["validator_overflow_hold"] = {
+                            "pid": pid, "at": time.monotonic(), "process": info}
                     try:
                         state = Path(f"/proc/{pid}/status").read_text()
                     except FileNotFoundError:
@@ -883,18 +956,18 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                         validator_before_release=info)
                     os.kill(hold["pid"], signal.SIGCONT)
                     hold["released_at"] = time.monotonic() - launched
-                if (trace is not None and trace.fileno() in selector.get_map()
-                        and process.poll() is not None
-                        and all(key.data == "trace" for key in selector.get_map().values())):
-                    while True:
-                        try:
-                            validator_events.append(trace.recv(65537))
-                        except BlockingIOError:
-                            break
-                    unwatch(trace.fileno())
+                collect_exit_observations()
+                if (ended and not selector.get_map()
+                        and delayed_diagnostic is None and not held_readers):
+                    break
             wait = process.wait(timeout=max(0.01, deadline - time.monotonic()))
-            if control["exited_at"] is None:
-                control["exited_at"] = time.monotonic() - launched
+            observe_supervisor_exit(time.monotonic())
+            for name, observation in exit_observers.items():
+                observation.thread.join(timeout=max(0.01, deadline - time.monotonic()))
+                collect_exit_observations()
+                require_precondition(
+                    observation.error is None and observation.result is not None,
+                    "missing independent " + name + " exit observation")
             if status_backlog:
                 raise AssertionError("TEST status backlog did not drain after S exit")
         finally:
