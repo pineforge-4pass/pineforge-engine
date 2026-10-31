@@ -224,6 +224,43 @@ void overflow_selector_interleavings() {
         assert(std::memcmp(&denormal.total, &expected_tiny, sizeof expected_tiny) == 0);
         assert(denormal.path == 3 && denormal.steps == actual.steps);
     }
+    {
+        OriginRoster origins;
+        const Units units{{7, 1e16}, {19, 1.0}, {43, 1.0}, {71, 1.0}};
+        // Only these unmapped entries occupy the prefix at positions 0 and 1.
+        push(origins, 900);
+        push(origins, 901);
+        for (std::size_t i = 0; i < mapped_positions - 1; ++i) {
+            if (i == 4) push(origins, 7);
+            push(origins, small_ids[i % small_ids.size()]);
+        }
+        for (std::size_t i = origins.size(); i < selector_charge + 1; ++i)
+            push(origins, 1000 + i);
+        origins.retire_before(2);
+        assert(origins.base() == 2); // retire_before sets the global base.
+        // C + 1 accepted entries minus the two retired entries leaves C - 1.
+        assert(origins.members().size() == selector_charge - 1);
+        // Retirement preserves size() = base() + members().size() = C + 1.
+        assert(origins.size() >= selector_charge);
+        // The removed ids have no retained positions. The sole large term
+        // stays at absolute position 2 + 4, after the same four small terms.
+        assert(origins.positions_of(900) == nullptr &&
+               origins.positions_of(901) == nullptr);
+        const auto* large_positions = origins.positions_of(7);
+        assert(large_positions && large_positions->size() == 1 &&
+               large_positions->front() == 2 + 4);
+        const auto actual = check(origins, units);
+        // M = C - 1 exceeds 4R + 16, and P exceeds the stack capacity.
+        assert(actual.path == 3);
+        // Four ones precede 1e16; its resulting even significand and ULP 2
+        // make every later one round away, despite the global position offset.
+        const double expected = 10000000000000004.0;
+        assert(std::memcmp(&actual.total, &expected, sizeof expected) == 0);
+        // Gather visits R + P, then the walk visits the retained M = C - 1.
+        // Comparing size() instead would select selector_steps: shifting all
+        // mapped positions by two preserves every selector comparison.
+        assert(actual.steps == gather_steps + origins.members().size());
+    }
 }
 
 detail::CohortExposureFold check_stack_sort(const OriginRoster& origins,
