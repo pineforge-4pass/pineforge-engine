@@ -371,7 +371,7 @@ def runtime_command(run_json, work, options, *, phase_fd=None):
 
 
 def bind_inventory_command(run_json, work, codegen):
-    # docker/entrypoint.sh:349-353. The helper beside this run_json delegates
+    # docker/entrypoint.sh:331-335. The helper beside this run_json delegates
     # all inventory validation/hashing to the explicitly selected codegen.
     helper = Path(run_json).with_name("bind_compiled_inventory.py")
     if not helper.is_file():

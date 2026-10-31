@@ -26,7 +26,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 # Pinned to main at the merge; when main moves again before this change merges, repoint all three to the new main head (and re-run the re-anchor and the OFF row).
-BASE = "aaefc903be91732fe7854fc7ffa10f5a8aeee11c"
+BASE = "78f369e0c61759f6871ff4a87b37970f828aa9cf"
 CORPUS_BASE = "8425ca820c4b7272db24d659a64d88e8e05b6407"
 SUBSET = "scripts/corpus_parity_subset.txt"
 SUBSET_SIZE = 54
