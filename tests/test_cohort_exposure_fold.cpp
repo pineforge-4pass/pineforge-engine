@@ -137,6 +137,23 @@ void boundary_values() {
     assert(shape(200, 1, k + 1).path == 3);
 }
 
+void overflow_fallback_large_window() {
+    constexpr std::size_t mapped_positions = detail::kCohortFoldStack + 1;
+    OriginRoster origins;
+    const Units units{{7, 1.0}};
+    for (std::size_t i = 0; i < mapped_positions; ++i) push(origins, 7);
+    // This tail derives M above the selector's safe
+    // (P + 1) * (R + P) charge for R = 1.
+    const auto selector_charge =
+        (mapped_positions + 1) * (1 + mapped_positions);
+    for (std::size_t i = 0; i < selector_charge; ++i)
+        push(origins, mapped_positions + i + 1);
+    assert(origins.members().size() > 4 * units.size() + 16);
+    const auto actual = check(origins, units);
+    assert(actual.path == 3);
+    assert(actual.total == static_cast<double>(mapped_positions));
+}
+
 detail::CohortExposureFold check_stack_sort(const OriginRoster& origins,
                                           const Units& units) {
     assert(origins.members().size() > 4 * units.size() + 16);
@@ -259,6 +276,7 @@ void randomized_mutations() {
 int main() {
     special_values_and_multiplicity();
     boundary_values();
+    overflow_fallback_large_window();
     stack_sort_special_values();
     stack_sort_interleavings();
     randomized_mutations();

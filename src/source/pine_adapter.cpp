@@ -30292,6 +30292,7 @@ CohortExposureFold fold_cohort_exposure(
         struct Term { std::size_t position; double units; };
         Term buf[kCohortFoldStack];
         std::size_t n = 0;
+        std::size_t mapped = 0;
         bool abandoned = false;
         for (const auto& unit : live_units_by_origin) {
             ++steps;
@@ -30299,13 +30300,13 @@ CohortExposureFold fold_cohort_exposure(
             if (!positions) continue;
             for (const auto position : *positions) {
                 ++steps;
+                ++mapped;
                 if (n == kCohortFoldStack) {
                     abandoned = true;
-                    break;
+                    continue;
                 }
                 buf[n++] = {position, unit.second};
             }
-            if (abandoned) break;
         }
         if (!abandoned) {
             std::sort(buf, buf + n, [](const Term& a, const Term& b) noexcept {
@@ -30324,8 +30325,60 @@ CohortExposureFold fold_cohort_exposure(
             }
             return {std::isfinite(total) && total > 0.0 ? total : 0.0, steps, 2};
         }
-        // Discard partial gathering and recompute through the roster.
+        // The partial stack gather is discarded. Comparing this charge with
+        // M keeps either overflow completion bounded by the frozen selector.
+        const auto mapped_count = static_cast<std::uint64_t>(mapped);
+        const auto row_count =
+            static_cast<std::uint64_t>(live_units_by_origin.size());
+        // The selector has P + 1 passes. Each pass can inspect all R rows
+        // and all P positions, including positions in exhausted rows.
+        const auto charge_max = std::numeric_limits<std::uint64_t>::max();
+        const auto charge_add = [charge_max](std::uint64_t left,
+                                             std::uint64_t right) noexcept {
+            return right > charge_max - left ? charge_max : left + right;
+        };
+        const auto charge_mul = [charge_max](std::uint64_t left,
+                                             std::uint64_t right) noexcept {
+            return left != 0 && right > charge_max / left
+                ? charge_max : left * right;
+        };
+        const auto pass_count = mapped_count == charge_max
+            ? charge_max : mapped_count + 1;
+        const auto selector_charge =
+            charge_mul(pass_count, charge_add(row_count, mapped_count));
         path = 3;
+        if (static_cast<std::uint64_t>(origins.members().size()) >= selector_charge) {
+            // Frozen selector, kept term-for-term so its acceptance-ordered
+            // floating-point additions remain the old fold's additions.
+            double total = 0.0;
+            bool have_previous = false;
+            std::size_t previous = 0;
+            for (;;) {
+                bool have_next = false;
+                std::size_t next = 0;
+                double units = 0.0;
+                for (const auto& unit : live_units_by_origin) {
+                    ++steps;
+                    const auto* positions = origins.positions_of(unit.first);
+                    if (!positions) continue;
+                    for (const auto position : *positions) {
+                        ++steps;
+                        if (have_previous && position <= previous) continue;
+                        if (!have_next || position < next) {
+                            have_next = true;
+                            next = position;
+                            units = unit.second;
+                        }
+                        break;
+                    }
+                }
+                if (!have_next) break;
+                if (std::isfinite(units) && units > 0.0) total += units;
+                have_previous = true;
+                previous = next;
+            }
+            return {std::isfinite(total) && total > 0.0 ? total : 0.0, steps, path};
+        }
     }
     double total = 0.0;
     for (const auto& origin : origins) {

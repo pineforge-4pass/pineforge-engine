@@ -14,7 +14,7 @@ constexpr std::size_t kCohortFoldStack = 128;
 struct CohortExposureFold {
     double total;
     std::uint64_t steps;
-    std::uint8_t path; // 0: empty, 1: roster walk, 2: sort, 3: sort abandoned to walk.
+    std::uint8_t path; // 0: empty, 1: roster walk, 2: sort, 3: overflow fallback.
 };
 
 // Allocation-free, acceptance-ordered fold. Diagnostic work is returned to

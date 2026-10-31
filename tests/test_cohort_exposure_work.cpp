@@ -278,6 +278,44 @@ void history_guard() {
         static_cast<unsigned long long>(small.steps),
         static_cast<unsigned long long>(large.steps),
         static_cast<unsigned>(small.path), static_cast<unsigned>(large.path));
+
+    constexpr std::size_t mapped_positions =
+        source::detail::kCohortFoldStack + 1;
+    const auto overflow_fold = [mapped_positions](std::size_t tail) {
+        source::OriginRoster origins;
+        std::unordered_map<std::uint64_t, double> units{{1, 1.0}};
+        for (std::size_t i = 0; i < mapped_positions; ++i)
+            origins.push_back({{"history-overflow", 1}, 1});
+        for (std::size_t i = 0; i < tail; ++i) {
+            const auto incarnation = mapped_positions + i + 1;
+            origins.push_back({{"history-overflow", 1}, incarnation});
+        }
+        CHECK(origins.positions_of(1)
+              && origins.positions_of(1)->size() == mapped_positions);
+        CHECK(origins.members().size() > 4 * units.size() + 16);
+        const auto result = source::detail::fold_cohort_exposure(origins, units);
+        CHECK(result.total == static_cast<double>(mapped_positions));
+        return result;
+    };
+    // This is the selector's safe derived (P + 1) * (R + P) charge
+    // at P = 129 and R = 1.
+    const auto selector_charge =
+        (mapped_positions + 1) * (1 + mapped_positions);
+    const auto narrow = overflow_fold(selector_charge);
+    const auto wide = overflow_fold(2 * selector_charge);
+    CHECK(narrow.path == 3 && wide.path == 3);
+    const auto overflow_delta = wide.steps > narrow.steps
+        ? wide.steps - narrow.steps : narrow.steps - wide.steps;
+    // Both rows have the same P and R; a bounded fallback visits no tail row.
+    // Allow the selector's derived mapped-position upper charge, independent
+    // of M. The fixed fallback has delta zero.
+    const auto derived_bound = static_cast<std::uint64_t>(
+        mapped_positions * (mapped_positions + 1));
+    CHECK(overflow_delta <= derived_bound);
+    std::printf("exposure-history-overflow %llu %llu delta=%llu\n",
+        static_cast<unsigned long long>(narrow.steps),
+        static_cast<unsigned long long>(wide.steps),
+        static_cast<unsigned long long>(overflow_delta));
 }
 
 int caller_groups() {
