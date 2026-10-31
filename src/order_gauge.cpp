@@ -9,9 +9,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
-#include <new>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 namespace pineforge::detail::gauge {
 namespace {
@@ -19,7 +19,6 @@ namespace {
 static_assert(__atomic_always_lock_free(sizeof(std::uint64_t), nullptr),
               "gauge publication requires lock-free 64-bit stores");
 
-Block* attached_block = nullptr;
 std::uint64_t sequence = 0;
 
 struct PreserveErrno {
@@ -41,6 +40,21 @@ constexpr std::uint64_t little_endian(std::uint64_t value) noexcept {
 #else
     return value;
 #endif
+}
+
+std::uint32_t read_u32(const unsigned char* bytes) noexcept {
+    std::uint32_t value = 0;
+    std::memcpy(&value, bytes, sizeof value);
+    return little_endian(value);
+}
+
+bool backing_has_valid_header(int fd) noexcept {
+    unsigned char image[sizeof(Block)]{};
+    const auto received = ::pread(fd, image, sizeof image, 0);
+    return received == static_cast<ssize_t>(sizeof image)
+        && std::memcmp(image, "PFGAUGE1", 8) == 0
+        && read_u32(image + 8) == 1
+        && read_u32(image + 12) == 128;
 }
 
 bool decimal_fd(const char* text, int& fd) noexcept {
@@ -121,6 +135,9 @@ bool attach_from_environment() noexcept {
     if (attached_block) return true;
     int fd = -1;
     if (!decimal_fd(std::getenv("PF_GAUGE_FD"), fd) || !validate_backing(fd)) return false;
+    // A valid header means another image already initialized this backing.
+    // Refuse before mmap so a second writer cannot reset or race the block.
+    if (backing_has_valid_header(fd)) return false;
     void* address = ::mmap(nullptr, 128, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (address == MAP_FAILED) return false;
 

@@ -3,8 +3,10 @@
 #include <pineforge/source/magnifier_intrabars.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/compat/pine/market_admission.hpp>
+#include <pineforge/detail/order_gauge.hpp>
 
 #include <pineforge/pending_order_mirror.hpp>
+namespace gauge = ::pineforge::detail::gauge;
 
 #include <pineforge/native_calendar.hpp>
 #include <pineforge/timeframe.hpp>
@@ -4487,6 +4489,7 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
         }
     }
     auto& probe = scratch.lot_probe;
+    const bool gauge_attached = gauge::attached();
     for (const auto& roster : core.cohorts()) {
         const auto& origins = roster.origins;
         if (origins.empty()) continue;
@@ -4496,7 +4499,15 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
         std::uint64_t kept_below = 0;
         for (const auto opening : successor_lots) {
             probe.incarnation = opening;
-            if (core.cohort_contains(roster.handle, probe)) kept_below = opening;
+            if (gauge_attached) {
+                std::uint64_t roster_probes = 0;
+                if (core.cohort_contains_with_probe_count(
+                        roster.handle, probe, &roster_probes))
+                    kept_below = opening;
+                gauge::add_roster_work(roster_probes);
+            } else if (core.cohort_contains(roster.handle, probe)) {
+                kept_below = opening;
+            }
         }
         for (const auto& origin : origins) {
             const std::uint64_t incarnation = origin.incarnation;
@@ -5358,6 +5369,8 @@ double PineExecutionAdapter::cohort_exposure_for(const SourceId& id) const noexc
 }
 
 double PineExecutionAdapter::cohort_exposure_for(const CohortFacts& facts) const noexcept {
+    if (gauge::attached())
+        gauge::add_fold_work(static_cast<std::uint64_t>(facts.live_units_by_origin.size()));
     double total = 0.0;
     // `live_units_by_origin` is a lookup table.  Quantities must follow the
     // cohort's deterministic source insertion order, never its hash buckets.

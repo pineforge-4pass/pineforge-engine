@@ -3173,6 +3173,22 @@ bool WorkingRequestCore::cohort_contains(
     return std::binary_search(origins.begin(), origins.end(), *root, handle_less);
 }
 
+bool WorkingRequestCore::cohort_contains_with_probe_count(
+        CohortHandle cohort, const RequestHandle& opening,
+        std::uint64_t* binary_search_probes) const {
+    PF_COHORT_WORK(Contains); if (!cohort_exists(cohort)) return false;
+    const auto root = canonical_cohort_origin(opening);
+    if (!root) return false;
+    const auto found = cohorts_.find(cohort.value);
+    if (found == cohorts_.end()) return false;
+    const auto& origins = found->second.origins;
+    return std::binary_search(origins.begin(), origins.end(), *root,
+        [binary_search_probes](const RequestHandle& left, const RequestHandle& right) {
+            if (binary_search_probes) ++*binary_search_probes;
+            return handle_less(left, right);
+        });
+}
+
 std::size_t WorkingRequestCore::retire_cohort_receipts(std::size_t through) noexcept {
     if (through <= cohort_receipts_base_) return 0;
     const std::size_t count = std::min(through - cohort_receipts_base_, cohort_receipts_.size());

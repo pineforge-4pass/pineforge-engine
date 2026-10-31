@@ -1949,6 +1949,9 @@ public:
     void cohort_add(CohortHandle cohort, RequestHandle origin);
     void cohort_remove(CohortHandle cohort, RequestHandle origin);
     bool cohort_contains(CohortHandle cohort, const RequestHandle& opening) const;
+    bool cohort_contains_with_probe_count(
+        CohortHandle cohort, const RequestHandle& opening,
+        std::uint64_t* binary_search_probes) const;
 
     /// R1 producer convenience: prepare then install one command. Bound opening
     /// enrollment requires CommandContext observations via prepare_submit.

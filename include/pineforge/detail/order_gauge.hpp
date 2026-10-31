@@ -49,9 +49,9 @@ static_assert(offsetof(Block, match_work_sum) == 104);
 static_assert(offsetof(Block, fold_work_sum) == 112);
 static_assert(offsetof(Block, roster_work_sum) == 120);
 
-// Process-wide advisory state, owned by one engine writer thread. Attach and
+// Per-image advisory state, owned by one engine writer thread. Attach and
 // test reset also belong to that thread, outside concurrent publication reads.
-// Readers observe the mapped Block, never this plain counter structure.
+// Consumers observe the mapped Block, never this plain counter structure.
 // Nothing here participates in broker state, continuation hashes or reports.
 struct Counters {
     std::uint64_t open_lots;
@@ -70,9 +70,16 @@ struct Counters {
 };
 
 // One copy per image: the library and each strategy module are built with
-// hidden visibility, so each holds its own counters. Attach, note_* and
-// publish must run in the same image; one attach per process.
+// hidden visibility, so each holds its own counters and mapping pointer. Attach,
+// note_* and publish must run in the same image. A same-image re-attach is
+// idempotent; a valid header already on the backing belongs to another image
+// or process and is refused.
 inline Counters counters{};
+inline Block* attached_block = nullptr;
+
+inline bool attached() noexcept {
+    return attached_block != nullptr;
+}
 
 namespace detail {
 
@@ -93,13 +100,14 @@ inline void raise_peak(std::uint64_t& peak, std::uint64_t value) noexcept {
 
 // Test teardown only: zero all counters and unmap the attachment. It does not
 // close the inherited descriptor or erase the launcher's last published image.
-// No concurrent writer/reader may use the engine's mapping during this reset.
+// No concurrent writer or consumer may use the engine's mapping during this reset.
 void reset_for_test() noexcept;
 
 } // namespace detail
 
-// Exactly once per completed bar. Exit requests count live native exit legs,
-// not source exit calls. Extra publish() calls must not charge another bar.
+// Callers must check attached() before these mutators. Exactly once per
+// completed bar, exit requests count live native exit legs, not source exit
+// calls. Extra publish() calls must not charge another bar.
 inline void note_state(std::uint64_t open_lots, std::uint64_t live_orders,
                        std::uint64_t live_exit_requests) noexcept {
     counters.open_lots = open_lots;
@@ -130,18 +138,21 @@ inline void note_bars(std::uint64_t bars_done, std::uint64_t bars_total) noexcep
 // Optional inherited PF_GAUGE_FD, excluding 0, 1, 2 and the scratch arena's 5.
 // Invalid configuration silently leaves the gauge detached. The caller owns
 // the fd and must retain the backing's size until exit (or test reset).
-// Once attached, further calls succeed without replacing the first mapping.
+// Once attached, further calls in this image succeed without replacing the
+// first mapping. A new process or image must provide a fresh zeroed backing;
+// reset_for_test unmaps but deliberately does not erase a published backing.
 bool attach_from_environment() noexcept;
 
 // Single writer, no allocation, locks or syscalls; detached is a no-op.
-// Mapped payload words use lock-free atomic stores. Readers must acquire seq,
+// Mapped payload words use lock-free atomic stores. Consumers must acquire seq,
 // copy the payload, then acquire/recheck seq, retrying odd or changed values.
-// In-process readers use atomic word loads and an acquire fence before the
+// In-process consumers use atomic word loads and an acquire fence before the
 // second seq load; retrying ordinary racing C++ loads is not sufficient.
-// A reader without atomics (pread) must read the whole 128 bytes twice and
-// accept only two byte-identical images with an even seq. After a kill, an odd
-// seq means a publish was interrupted and the payload may mix two states;
-// every counter is advisory.
+// A non-atomic file consumer (pread) must read the whole 128 bytes twice and
+// accept only two byte-identical images whose magic is "PFGAUGE1", version is
+// 1, length is 128, and seq is even. After a kill, an odd seq means a publish
+// was interrupted and the payload may mix two states; every counter is
+// advisory.
 void publish() noexcept;
 
 } // namespace pineforge::detail::gauge

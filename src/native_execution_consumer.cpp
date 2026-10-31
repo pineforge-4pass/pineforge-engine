@@ -30,9 +30,15 @@
 #include <utility>
 #include <variant>
 #include "native_cohort_target_work.hpp"
+#include <pineforge/detail/order_gauge.hpp>
+
+namespace gauge = ::pineforge::detail::gauge;
+
 namespace pineforge {
 inline namespace engine_script_run_v19 {
 namespace {
+
+bool order_gauge_enabled = false;
 
 template<class T>
 void reserve_next(std::vector<T>& values) {
@@ -3110,6 +3116,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     engine.bar_magnifier_enabled_ = !spec.intrabar.is_none();
     requests_.reset(spec.identity);
     requests_.bind_scratch_slab(engine.scratch_table_run_.slab);
+    order_gauge_enabled = gauge::attach_from_environment();
     host_cache_.reset();
     clear_cohort_target_cache();
     terminal_receipt_high_water_ = 0;
@@ -9599,6 +9606,20 @@ void NativeExecutionConsumer::seal_script(BacktestEngine& engine, NativeCompleti
     script_.sealed = true;
     script_.has_data = false;
     ++next_script_index_;
+    if (order_gauge_enabled && !failed()) {
+        std::uint64_t live_exit_requests = 0;
+        for (const auto& live : requests_.live()) {
+            if (std::holds_alternative<native_order::CohortClose>(live.authority))
+                ++live_exit_requests;
+        }
+        // Display-only telemetry. None of these values feeds a run decision.
+        gauge::note_state(static_cast<std::uint64_t>(engine.pyramid_entries_.size()),
+                          static_cast<std::uint64_t>(requests_.live_size()),
+                          live_exit_requests);
+        // The supplied input count is not a script-bar total under aggregation.
+        gauge::note_bars(static_cast<std::uint64_t>(engine.diag_script_bars_processed_), 0);
+        gauge::publish();
+    }
 }
 
 bool NativeExecutionConsumer::final_script_session_closed() const noexcept {

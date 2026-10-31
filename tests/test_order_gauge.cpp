@@ -57,6 +57,7 @@ static_assert(noexcept(gauge::add_fold_work(0)));
 static_assert(noexcept(gauge::add_roster_work(0)));
 static_assert(noexcept(gauge::note_bars(0, 0)));
 static_assert(noexcept(gauge::attach_from_environment()));
+static_assert(noexcept(gauge::attached()));
 static_assert(noexcept(gauge::publish()));
 static_assert(noexcept(gauge::detail::reset_for_test()));
 
@@ -119,6 +120,12 @@ struct Backing {
     Backing(const Backing&) = delete;
     Backing& operator=(const Backing&) = delete;
 
+    void zero_block() const {
+        std::array<unsigned char, 128> zeros{};
+        REQUIRE(::pwrite(fd, zeros.data(), zeros.size(), 0)
+                == static_cast<ssize_t>(zeros.size()));
+    }
+
     std::vector<unsigned char> image() const {
         struct stat status{};
         REQUIRE(::fstat(fd, &status) == 0);
@@ -152,8 +159,39 @@ std::uint64_t u64(const Bytes& bytes, std::size_t offset) {
     return value;
 }
 
+// The file-byte consumer's acceptance rule is independent of the writer.
+bool accepts_pread_copy(const Bytes& bytes) {
+    return std::memcmp(bytes.data(), "PFGAUGE1", 8) == 0
+        && u32(bytes, 8) == 1
+        && u32(bytes, 12) == 128
+        && (u64(bytes, 16) & 1) == 0;
+}
+
+void write_valid_header(const Backing& backing) {
+    Bytes bytes{};
+    std::memcpy(bytes.data(), "PFGAUGE1", 8);
+    bytes[8] = 1;
+    bytes[12] = 128;
+    REQUIRE(::pwrite(backing.fd, bytes.data(), bytes.size(), 0)
+            == static_cast<ssize_t>(bytes.size()));
+}
+
+bool counters_zero() {
+    const auto& c = gauge::counters;
+    return c.open_lots == 0 && c.live_orders == 0
+        && c.open_lots_peak == 0 && c.live_orders_peak == 0
+        && c.bars_done == 0 && c.bars_total == 0
+        && c.updates == 0 && c.live_exit_requests == 0
+        && c.live_exit_requests_peak == 0 && c.match_work_peak == 0
+        && c.match_work_sum == 0 && c.fold_work_sum == 0
+        && c.roster_work_sum == 0;
+}
+
 void fresh_attachment(const Backing& backing) {
     gauge::detail::reset_for_test();
+    // A reset keeps the published bytes by contract. Each test re-attach
+    // therefore starts from a separately zeroed header.
+    backing.zero_block();
     select_fd(backing.fd);
     REQUIRE(gauge::attach_from_environment());
 }
@@ -291,7 +329,22 @@ void layout_and_attach() {
     CHECK(gauge::counters.match_work_sum == 0);
 }
 
+void valid_backing_is_refused() {
+    Environment environment;
+    gauge::detail::reset_for_test();
+    Backing backing;
+    write_valid_header(backing);
+    const auto before = backing.image();
+    select_fd(backing.fd);
+    CHECK(!gauge::attached());
+    CHECK(!gauge::attach_from_environment());
+    CHECK(!gauge::attached());
+    CHECK(gauge::counters.updates == 0);
+    CHECK(backing.image() == before);
+}
+
 void feed_counters() noexcept {
+    if (!gauge::attached()) return;
     gauge::note_state(7, 9, 2);
     gauge::note_bars(3, 11);
     gauge::add_fold_work(4);
@@ -543,6 +596,7 @@ void protected_number_is_untouched(const char* name) {
     // must leave this otherwise valid gauge backing usable.
     Backing unrelated;
     select_protected_fd(name, unrelated.fd);
+    backing.zero_block();
     auto result = try_attachment(backing.fd);
     CHECK(result.attached == true);
     CHECK(u64(read_block(backing.fd), 72) == 1);
@@ -553,6 +607,7 @@ void protected_number_is_untouched(const char* name) {
     }};
     for (const auto& value : malformed) {
         REQUIRE(::setenv(name, value.c_str(), 1) == 0);
+        backing.zero_block();
         result = try_attachment(backing.fd);
         CHECK(result.attached == true);
         CHECK(u64(read_block(backing.fd), 72) == 1);
@@ -561,6 +616,7 @@ void protected_number_is_untouched(const char* name) {
     REQUIRE(closed >= 200);
     REQUIRE(::close(closed) == 0);
     select_protected_fd(name, closed);
+    backing.zero_block();
     result = try_attachment(backing.fd);
     CHECK(result.attached == true);
     CHECK(u64(read_block(backing.fd), 72) == 1);
@@ -783,20 +839,47 @@ void saturating_work_and_peaks() {
     CHECK(u64(read_block(backing.fd), 72) == 18446744073709551615ULL);
 }
 
-void report_rule(r4_test::Host& host, bool instrument) {
+void native_run_publishes_gauge() {
+    Environment environment;
+    gauge::detail::reset_for_test();
+    Bytes empty{};
+    CHECK(u64(empty, 16) == 0);
+    CHECK(!accepts_pread_copy(empty));
+    Backing backing;
+    select_fd(backing.fd);
+
+    r4_test::Host host;
+    host.calculation = [](r4_test::Host& current) {
+        if (current.calculations == 1) {
+            const auto result = current.submit(l2_fixture::market(1.0, "real-open"));
+            REQUIRE(result.status == no::SubmitStatus::Accepted);
+        }
+    };
+    const auto run_spec = r4_test::spec("order-gauge-real-run");
+    const auto bars = l2_fixture::feed(4);
+    l2_fixture::run_feed(host, run_spec, bars);
+    r4_test::completed(host);
+    CHECK(host.lots().size() > 0);
+
+    const auto bytes = read_block(backing.fd);
+    CHECK(std::memcmp(bytes.data(), "PFGAUGE1", 8) == 0);
+    CHECK(u32(bytes, 8) == 1);
+    CHECK(u32(bytes, 12) == 128);
+    CHECK((u64(bytes, 16) & 1) == 0);
+    CHECK(u64(bytes, 24) > 0);
+    CHECK(u64(bytes, 40) > 0);
+    CHECK(u64(bytes, 56) == 4);
+    CHECK(u64(bytes, 64) == 0);
+    CHECK(u64(bytes, 72) >= 4);
+}
+
+void report_rule(r4_test::Host& host) {
     switch (host.calculations - 1) {
     case 10: host.submit(l2_fixture::market(2.0, "enter-long")); break;
     case 30: host.submit(l2_fixture::market(-2.0, "exit-long")); break;
     case 40: host.submit(l2_fixture::market(-1.0, "enter-short")); break;
     case 55: host.submit(l2_fixture::market(1.0, "exit-short")); break;
     default: break;
-    }
-    if (instrument) {
-        gauge::note_state(static_cast<std::uint64_t>(host.lots().size()), 3, 2);
-        gauge::note_bars(static_cast<std::uint64_t>(host.calculations), 60);
-        gauge::add_fold_work(1);
-        gauge::add_roster_work(3);
-        gauge::publish();
     }
 }
 
@@ -816,12 +899,10 @@ struct ReportArtifact {
     }
 };
 
-std::vector<unsigned char> native_report(bool instrument) {
+std::vector<unsigned char> native_report() {
     ReportArtifact artifact; // Outlives the host and its unlinked scratch files.
     r4_test::Host host;
-    host.calculation = [instrument](r4_test::Host& current) {
-        report_rule(current, instrument);
-    };
+    host.calculation = [](r4_test::Host& current) { report_rule(current); };
     auto spec = l2_fixture::report_spec("order-gauge-neutrality");
     spec.report_policy = pineforge::NativeReportPolicy::KernelRecorded;
     spec.close_execution = pineforge::NativeCloseExecution::AfterCalculation;
@@ -861,19 +942,27 @@ void report_bytes_are_unchanged() {
     Environment environment;
     gauge::detail::reset_for_test();
     REQUIRE(::unsetenv("PF_GAUGE_FD") == 0);
-    REQUIRE(!gauge::attach_from_environment());
-    const auto detached = native_report(false);
+    const auto detached = native_report();
+    CHECK(counters_zero());
+
+    gauge::detail::reset_for_test();
+    REQUIRE(::setenv("PF_GAUGE_FD", "-1", 1) == 0);
+    const auto invalid = native_report();
+    CHECK(invalid == detached);
+    CHECK(counters_zero());
+
+    gauge::detail::reset_for_test();
     Backing backing;
-    fresh_attachment(backing);
-    const auto attached = native_report(true);
+    select_fd(backing.fd);
+    const auto attached = native_report();
     CHECK(attached == detached);
     const auto bytes = read_block(backing.fd);
     CHECK(u64(bytes, 16) == 120);
     CHECK(u64(bytes, 56) == 60);
-    CHECK(u64(bytes, 64) == 60);
+    CHECK(u64(bytes, 64) == 0);
     CHECK(u64(bytes, 72) == 60);
-    CHECK(u64(bytes, 112) == 120);
-    CHECK(u64(bytes, 120) == 180);
+    CHECK(u64(bytes, 112) == 0);
+    CHECK(u64(bytes, 120) == 0);
 }
 
 void allocation_free_updates() {
@@ -901,21 +990,23 @@ void allocation_free_updates() {
         const auto allocations = global_allocation::allocations;
         const auto refusals = global_allocation::refused;
         global_allocation::refusing = true;
-        for (std::uint64_t k = 1; k <= 1000000; ++k) {
-            gauge::note_state(k, k, k);
-            gauge::note_bars(k, 1000000);
-            gauge::add_fold_work(1);
-            gauge::add_roster_work(3);
-            gauge::publish();
+        if (attached) {
+            for (std::uint64_t k = 1; k <= 1000000; ++k) {
+                gauge::note_state(k, k, k);
+                gauge::note_bars(k, 1000000);
+                gauge::add_fold_work(1);
+                gauge::add_roster_work(3);
+                gauge::publish();
+            }
         }
         global_allocation::refusing = false;
         CHECK(global_allocation::allocations == allocations);
         CHECK(global_allocation::refused == refusals);
-        CHECK(gauge::counters.open_lots == 1000000);
-        CHECK(gauge::counters.match_work_sum == 333333833333500000ULL);
-        CHECK(gauge::counters.fold_work_sum == 2000000);
-        CHECK(gauge::counters.roster_work_sum == 3000000);
         if (attached) {
+            CHECK(gauge::counters.open_lots == 1000000);
+            CHECK(gauge::counters.match_work_sum == 333333833333500000ULL);
+            CHECK(gauge::counters.fold_work_sum == 2000000);
+            CHECK(gauge::counters.roster_work_sum == 3000000);
             const auto bytes = read_block(backing.fd);
             CHECK(u64(bytes, 16) == 2000000);
             CHECK(u64(bytes, 24) == 1000000);
@@ -925,7 +1016,7 @@ void allocation_free_updates() {
             CHECK(u64(bytes, 112) == 2000000);
             CHECK(u64(bytes, 120) == 3000000);
         } else {
-            CHECK(gauge::counters.updates == 0);
+            CHECK(counters_zero());
             CHECK(backing.image() == before);
         }
     }
@@ -935,6 +1026,7 @@ void allocation_free_updates() {
 
 int main() {
     test("order_gauge_layout_and_attach", layout_and_attach);
+    test("order_gauge_valid_backing_is_refused", valid_backing_is_refused);
     test("order_gauge_disabled_and_invalid_backings", disabled_and_invalid_backings);
     test("order_gauge_linked_file_is_untouched", linked_file_is_untouched);
     test("order_gauge_native_quota_number_is_untouched", [] {
@@ -951,6 +1043,7 @@ int main() {
          standard_stream_aliases_are_untouched);
     test("order_gauge_concurrent_publication", concurrent_publication);
     test("order_gauge_saturating_work_and_peaks", saturating_work_and_peaks);
+    test("order_gauge_native_run_publishes_gauge", native_run_publishes_gauge);
     test("order_gauge_report_bytes_are_unchanged", report_bytes_are_unchanged);
     test("order_gauge_allocation_free_updates", allocation_free_updates);
     std::printf("test_order_gauge: %d checks, %d failures\n", checks, failures);
