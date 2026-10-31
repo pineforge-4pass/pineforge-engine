@@ -2291,6 +2291,11 @@ public:
                                 bool existing_matching_bit) const noexcept;
     bool working_is_buy(const LiveRequest& live,
                         std::optional<Side> cohort_side = std::nullopt) const noexcept;
+    /// Borrow the rosters holding origins, in ascending cohort-handle order.
+    /// No copies or allocation; use only until the next cohort mutation.
+    const std::map<std::uint64_t, CohortRoster>& nonempty_cohorts() const noexcept {
+        return cohorts_;
+    }
 
 private:
     enum class TargetKind { Live, NotWorking, InvalidHandle };
