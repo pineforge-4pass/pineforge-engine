@@ -143,7 +143,7 @@ COMMIT, using the configured budget without an input reservation. They are
 optional on refusal and publish the same diagnostic. This is intended for both
 startup and post-replay checkpoints (`Ledger::checkpoint_recovered_report`,
 `runner/store.cpp:1225`; the post-replay call is `checkpoint_recovered_report`,
-`runner/main.cpp:1108`): with a large budget, either can spend most of the
+`runner/main.cpp:1116`): with a large budget, either can spend most of the
 remaining headroom on an O(report) payload before the first live input. The run
 can stop sooner, never over budget. Opening files already
 over a newly supplied finite budget refuses with `LedgerBudgetExceeded` before
