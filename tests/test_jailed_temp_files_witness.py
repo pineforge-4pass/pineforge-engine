@@ -469,7 +469,7 @@ def _assert_driver_refusal(result):
 
 
 def test_final_json_spool_stays_resident(tmp_path):
-    """B: docker/run_json.py:7231 TemporaryFile is bypassed by :7461.
+    """B: docker/run_json.py:7215 TemporaryFile is bypassed by :7461.
 
     Ordinary arrays, recorded arrays, benchmark and selected-window reports
     reach the real resident serializer; a native error reaches write_failure.
@@ -533,7 +533,7 @@ def test_final_json_spool_stays_resident(tmp_path):
 
 
 def test_output_columns_use_fd_metadata_without_implicit_recording(tmp_path):
-    """B: docker/run_json.py:7203/7856-7857 call _json_temporary(:7215).
+    """B: docker/run_json.py:7187/7856-7857 call _json_temporary(:7215).
 
     The fd metadata return at :7830-7832 precedes all columns; the jailed
     path-sink refusal closes the other route. Plain fd runs must not enable
