@@ -55,7 +55,7 @@ def main_blob(path):
     """Read the finalizer/catalog contract from main's committed text."""
     # Pinned to main at the merge; when main moves again before this change merges, repoint all three to the new main head (and re-run the re-anchor and the OFF row).
     return subprocess.run(
-        ["git", "show", f"a86dbdc0949c5e9b49f62ff2aeac83641a22b72f:{path}"], cwd=ROOT,
+        ["git", "show", f"1a7593b2f2f8a0b17a90c3cb9503ce4a7c508683:{path}"], cwd=ROOT,
         capture_output=True, check=True, timeout=30).stdout
 
 
