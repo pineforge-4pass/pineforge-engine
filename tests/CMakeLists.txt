@@ -7440,6 +7440,14 @@ endif()
 
 add_test(NAME test_run_json_sink_fd_skip_accounting COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_fd_skip_accounting.py --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_run_json_sink_fd_skip_accounting)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME test_jailed_temp_files_witness
+        COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/run_pytest_no_skips.py
+            --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_jailed_temp_files_witness
+            -- -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_jailed_temp_files_witness.py)
+endif()
+
 # Property reads and the diagnostic belong before the lane loop;
 # the fence grammar permits target definitions, not get_target_property/message.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
@@ -8049,6 +8057,14 @@ foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
             message(FATAL_ERROR "PR fast row must execute without skips: ${_pf_fast_test}")
         endif()
         set_property(TEST ${_pf_fast_test} APPEND PROPERTY LABELS fast)
+    endif()
+endforeach()
+get_directory_property(_pf_registered_tests TESTS)
+foreach(_pf_registered_test IN LISTS _pf_registered_tests)
+    get_test_property(${_pf_registered_test} LABELS _pf_registered_test_labels)
+    if("fast" IN_LIST _pf_registered_test_labels AND NOT _pf_registered_test IN_LIST PINEFORGE_PR_FAST_TESTS)
+        message(FATAL_ERROR
+            "test labeled fast is not in PINEFORGE_PR_FAST_TESTS, so pineforge_pr_smoke never builds it: ${_pf_registered_test}")
     endif()
 endforeach()
 if(PINEFORGE_BUILD_SOURCE_LAYER)
