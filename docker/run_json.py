@@ -2974,6 +2974,7 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
         lib.strategy_set_report_replay_v1.restype = ctypes.c_int
 
     _bind_scratch_tables(lib)  # optional unless the host selects the jailed profile
+    _bind_cache_policy(lib)
 
     if hasattr(lib, "strategy_get_last_error"):
         lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
@@ -3063,6 +3064,27 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     lib.strategy_free.argtypes = [ctypes.c_void_p]
     lib.report_free.argtypes   = [ctypes.POINTER(ReportC)]
     return lib
+
+
+class CachePolicyEntryC(ctypes.Structure):
+    """Native C alignment; mirrors pf_cache_policy_entry_v1."""
+    _fields_ = [("kind", ctypes.c_uint32),
+                ("capacity_bytes", ctypes.c_uint64)]
+
+
+class CachePolicyC(ctypes.Structure):
+    """Caller-owned descriptor; the runtime copies entries during the setter."""
+    _fields_ = [("struct_size", ctypes.c_uint32),
+                ("version", ctypes.c_uint32),
+                ("entry_count", ctypes.c_uint64),
+                ("entries", ctypes.POINTER(CachePolicyEntryC))]
+
+
+def _bind_cache_policy(lib) -> None:
+    if hasattr(lib, "strategy_set_cache_policy_v1"):
+        lib.strategy_set_cache_policy_v1.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(CachePolicyC)]
+        lib.strategy_set_cache_policy_v1.restype = ctypes.c_int
 
 
 class ScratchTablesC(ctypes.Structure):
@@ -3222,7 +3244,7 @@ def uses_checked_settings(lib) -> bool:
     return True
 
 
-def create_strategy(lib, checked: bool):
+def _create_strategy(lib, checked: bool):
     """A new strategy handle, through strategy_create_checked when checked. A
     creation that fails (a NULL handle, or a checked status other than OK) is
     strategy_create_failed, whatever the cause: run_json reads no code from the
@@ -3432,7 +3454,6 @@ _SYMBOL_FEED_HASH_PREFIX = b"pineforge:symbol-feed:barc-close-le:v1\0"
 _SYMBOL_FEED_RECORD = struct.Struct("<5dqq")
 # The requests manifest's timeframe spelling and caps (scripts/run_strategy.py).
 _SYMBOL_TF_RE = re.compile(r"(?:[1-9][0-9]{0,4}|[1-9][0-9]{0,3}[DWMS])")
-_SYMBOL_FEEDS_MAX = 256
 _SYMBOL_KEY_MAX = 256
 _SYMBOL_STAMP_MAX = 2**53 - 1  # unix ms; the record is fingerprinted as a JSON number
 # Catalog syminfo key -> the strategy_set_symbol_facts field it sets.
@@ -3686,7 +3707,7 @@ def _resolve_chart_source(args):
         args.ohlcv = binary  # the effective input path used by the report
 
 
-def load_symbol_feeds(index_path: Path, *, verify_bin="full") -> list:
+def load_symbol_feeds(index_path: Path, *, verify_bin="full", max_symbol_feeds=None) -> list:
     """Read all CSV/binary feeds before state construction, relative to the index.
 
     Each exact symbol key holds facts and feeds as before. Binary feed records
@@ -3696,14 +3717,15 @@ def load_symbol_feeds(index_path: Path, *, verify_bin="full") -> list:
     doc = _read_symbol_index(index_path)
     _index_chart_path(doc, index_path)
     with ExitStack() as pending:
-        result = _load_index_feeds(index_path, doc["symbols"], verify_bin, pending)
+        result = _load_index_feeds(index_path, doc["symbols"], verify_bin, pending,
+                                   max_symbol_feeds)
         pending.pop_all()  # success transfers ownership to the returned records
         return result
 
 
-def _load_index_feeds(index_path, symbols, verify_bin, pending):
-    if len(symbols) > _SYMBOL_FEEDS_MAX:
-        raise SymbolFeedsError(f"--symbol-feeds: more than {_SYMBOL_FEEDS_MAX} symbols",
+def _load_index_feeds(index_path, symbols, verify_bin, pending, max_symbol_feeds):
+    if max_symbol_feeds and len(symbols) > max_symbol_feeds:
+        raise SymbolFeedsError(f"--symbol-feeds: more than {max_symbol_feeds} symbols",
                                "too_many_symbols")
     out, total = [], 0
     for symbol, entry in symbols.items():
@@ -3717,8 +3739,8 @@ def _load_index_feeds(index_path, symbols, verify_bin, pending):
             raise SymbolFeedsError(f"--symbol-feeds: {symbol}: feeds must be an object",
                                    "feeds_not_object")
         total += len(feeds)
-        if total > _SYMBOL_FEEDS_MAX:
-            raise SymbolFeedsError(f"--symbol-feeds: more than {_SYMBOL_FEEDS_MAX} feeds",
+        if max_symbol_feeds and total > max_symbol_feeds:
+            raise SymbolFeedsError(f"--symbol-feeds: more than {max_symbol_feeds} feeds",
                                    "too_many_feeds")
         named = {}
         for tf, file in feeds.items():
@@ -3757,8 +3779,12 @@ def _run_symbol_feeds(args, binary_inputs):
     if not args.symbol_feeds:
         return None
     # Keep the legacy call shape on the default path, including host test seams.
-    symbols = (load_symbol_feeds(args.symbol_feeds) if args.verify_bin == "full"
-               else load_symbol_feeds(args.symbol_feeds, verify_bin=args.verify_bin))
+    options = {}
+    if args.verify_bin != "full":
+        options["verify_bin"] = args.verify_bin
+    if getattr(args, "max_symbol_feeds", None):
+        options["max_symbol_feeds"] = args.max_symbol_feeds
+    symbols = load_symbol_feeds(args.symbol_feeds, **options)
     binary_inputs.callback(close_symbol_feeds, symbols)
     return symbols
 
@@ -4905,10 +4931,12 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
     #    artifact's request-feed inventory (this --so, hashed and never loaded; the inventory
     #    beside it). Raises InventoryAdmissionError (window_mode_unsupported) before any feed,
     #    ctypes library, strategy or phase record. The refusal keeps its code and detail.
+    inventory_limits = ({"max_inventory_bytes": args.max_inventory_bytes}
+                        if args.max_inventory_bytes else {})
     try:
         request_feed_inventory.admit_selected_request(
             request.script_tf, args.request_feed_inventory, args.so, inputs,
-            swr.support_policy())
+            swr.support_policy(), **inventory_limits)
     except request_feed_inventory.InventoryAdmissionError as error:
         raise RunFailure(error.message, error.code, error.detail) from None
 
@@ -4981,7 +5009,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         """A fresh, fully configured strategy state (the ordinary run's setup without the
         legacy trade-start gate, which selected mode refuses); freed again if it fails."""
         nonlocal syminfo_applied
-        st = create_strategy(lib, checked)
+        st = create_strategy(lib, checked, getattr(args, "max_output_series", None))
         sink = None
         try:
             apply_settings(lib, st, inputs, overrides, checked)
@@ -5119,6 +5147,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
+        _add_cache_diagnostics(lib, state, out["diagnostics"])
         out["report_window"] = window
         out["report_shape"] = swr.report_shape_full(
             equity_points, sink.counts["T"] if sink is not None else len(out["trades"]))
@@ -5265,7 +5294,7 @@ def main(argv=None) -> int:
         except RunFailure as failure:
             if not abort.started and abort.requested():
                 failure = abort.failure()
-            write_failure(str(failure), failure.code, failure.code_args)
+            _write_run_failure(failure)
             return failure.exit_status
         except Exception as error:
             if not abort.started and abort.requested():
@@ -5311,6 +5340,21 @@ def _legacy_abbreviations(argv, legacy_long, all_long):
                     token = matches[0] + equals + value
         out.append(token)
     return out
+
+
+# Opt-in compatibility defaults; explicit values, including zero, always win.
+# The binder imports this table so both inventory readers use the same set.
+TV_COMPAT_LIMITS = {"max_symbol_feeds": 256, "max_inventory_bytes": 8 * 1024 * 1024}
+
+
+def nonnegative_limit(value):
+    try:
+        limit = int(value)
+        if limit >= 0:
+            return limit
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError("must be a nonnegative integer (0 means unlimited)")
 
 
 def _main(argv, binary_inputs) -> int:
@@ -5377,6 +5421,12 @@ def _main(argv, binary_inputs) -> int:
     # The long options of the command line BEFORE the selected-window flags below; see
     # _legacy_abbreviations (the option strings of the parser, captured here and not typed out).
     legacy_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
+    ap.add_argument("--max-symbol-feeds", type=nonnegative_limit, default=None, metavar="N",
+                    help="Maximum symbols and total extra feeds; unset or 0 = unlimited.")
+    ap.add_argument("--max-inventory-bytes", type=nonnegative_limit, default=None, metavar="N",
+                    help="Maximum request-feed inventory bytes; unset or 0 = unlimited.")
+    ap.add_argument("--tv-compat", action="store_true",
+                    help="Use TradingView compatibility limits as defaults; explicit limits win.")
     ap.add_argument("--ohlcv-bin", type=Path, default=None,
                     help="pf_bar_t/v1 binary chart (or the symbol index chart); alternative to --ohlcv.")
     ap.add_argument("--verify-bin", choices=("full", "sidecar"), default="full",
@@ -5450,7 +5500,11 @@ def _main(argv, binary_inputs) -> int:
     argv = _legacy_abbreviations(argv, pre_metrics_long, all_long)
     if not argv:
         ap.error("the following arguments are required: --so, --ohlcv")
-    args = ap.parse_args(argv)
+    args = _parse_output_series_limit(ap, argv)
+    if args.tv_compat:
+        for name, limit in TV_COMPAT_LIMITS.items():
+            if getattr(args, name) is None:
+                setattr(args, name, limit)
     if args.profile not in ("unjailed", "jailed"):
         raise _request_invalid("PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed", "arguments")
     missing = []
@@ -5559,7 +5613,7 @@ def _main(argv, binary_inputs) -> int:
         Match the validation harness's setup and free a state whose
         configuration fails before propagating its failure."""
         nonlocal syminfo_applied
-        st = create_strategy(lib, checked)
+        st = create_strategy(lib, checked, getattr(args, "max_output_series", None))
         sink = None
         try:
             apply_settings(lib, st, inputs, overrides, checked)
@@ -5729,6 +5783,7 @@ def _main(argv, binary_inputs) -> int:
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
+        _add_cache_diagnostics(lib, state, out["diagnostics"])
         if timing is not None:
             out["diagnostics"]["timing"] = timing
             out["diagnostics"]["throughput"] = _throughput_block(
@@ -5852,6 +5907,9 @@ def _bind_report_sink(lib) -> None:
         "pf_report_sink_version": (ctypes.c_uint32, []),
         "pf_report_scratch_arena_stats": (ctypes.c_int, [
             ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64)]),
+        "pf_report_cache_stats": (ctypes.c_int, [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint64),
+            ctypes.POINTER(ctypes.c_uint64)]),
         "strategy_require_report_scratch_arena_v1": (ctypes.c_int, [ctypes.c_void_p]),
         "strategy_set_report_sink_v1": (ctypes.c_int, [
             ctypes.c_void_p, ctypes.POINTER(ReportSinkC)]),
@@ -5889,6 +5947,21 @@ def _add_scratch_arena_counters(lib, diagnostics):
         raise _engine_invariant("the engine's scratch arena statistics could not be read")
     diagnostics["scratch_arena_high_water_bytes"] = high_water.value
     diagnostics["scratch_arena_bytes"] = arena_bytes.value
+
+
+def _add_cache_diagnostics(lib, state, diagnostics):
+    # Per-run counters: report assembly can read the ledger and fill its cache.
+    # Query afterwards, while its strategy and allocation owners are still live.
+    getter = getattr(lib, "pf_report_cache_stats", None)
+    if getter is None:
+        return  # older modules have no such diagnostics
+    resident_bytes, bypasses = ctypes.c_uint64(), ctypes.c_uint64()
+    if getter(state, ctypes.byref(resident_bytes), ctypes.byref(bypasses)) != 0:
+        raise _engine_invariant("the engine's cache statistics could not be read")
+    if bypasses.value > 0:
+        diagnostics["cache_resident_bytes"] = resident_bytes.value
+        diagnostics["cache_bypass_reason"] = "alloc_failed"
+        diagnostics["allocation_bypass_count"] = bypasses.value
 
 
 def _refuse_jailed_path_sink(args):
@@ -6525,7 +6598,7 @@ class _FusedOutputState:
                 for entry in _manifest_entries(
                     self.manifest, "constants", ("index",))
             }
-            resources = sink._spool_resources
+            resources = _output_series_resources(sink, self.slots)
             directory = sink.directory
             self.opens = _JSONColumn(resources, directory)
             self.closes = _JSONColumn(resources, directory)
@@ -7434,9 +7507,9 @@ def _open_uncached_sink(path, *, raw=False):
 # Six large windows for fixed files with outputs: report, equity/trade, open/close/event.
 _ARTIFACT_WINDOW_BUDGET_BYTES = 6 * 1024 * 1024
 _ARTIFACT_LARGE_WINDOW = 1024 * 1024
-# TradingView Pine Script, Writing scripts > Limitations > Chart visuals > Plot limits:
-# "A maximum of 64 plot counts are allowed per script." The engine refuses more series.
-_OUTPUT_SERIES_LIMIT = 64
+# These are default I/O sizes, not admission limits. After the fixed files,
+# each declared output series adds one small window; the sink reader adds one.
+# The per-run accountant receives the actual declaration, with no built-in cap.
 # Indexed decoding bounds copied slices; sequential reads use the full file window.
 _JSON_COLUMN_LOOKUP_READ_SIZE = 64 * 1024
 
@@ -7450,6 +7523,7 @@ class _ArtifactWindowBudget:
 
     def __init__(self):
         self.remaining = _ARTIFACT_WINDOW_BUDGET_BYTES
+        self.declared_series = 0
         self.report_window = self.take()
 
     def take(self):
@@ -7457,6 +7531,16 @@ class _ArtifactWindowBudget:
             self.remaining -= _ARTIFACT_LARGE_WINDOW
             return _ARTIFACT_LARGE_WINDOW
         return _BoundedJSONFile.window
+
+    def declare_series(self, count):
+        self.declared_series = max(self.declared_series, count)
+
+    @property
+    def worst_case_bytes(self):
+        """Default artifact windows plus the independently bounded sink reader."""
+        return (_ARTIFACT_WINDOW_BUDGET_BYTES
+                + _BoundedJSONFile.window * self.declared_series
+                + _UncachedSinkFile.window)
 
 
 def _artifact_windows(owner):
@@ -7869,8 +7953,8 @@ def _prepare_report_json(document, resources, args, sink):
             raise sink._spool_failure
         # Keep the final artifact provisional until auxiliary files have closed.
         with ExitStack() as prepared_files:
-            prepared_files._window_budget = _artifact_windows(
-                sink if sink is not None else resources)
+            prepared_files._window_budget = _declared_artifact_windows(
+                sink if sink is not None else resources, _report_series_count(document))
             prepared = _prepare_stream_report(
                 document, prepared_files,
                 sink.directory if sink is not None else args.spill_dir,
@@ -8256,7 +8340,7 @@ def _sink_outputs_block(lib, state, sink, resources, *, summary_only=False):
                _manifest_entries(block["manifest"], "outputs", ("index", "id"))}
     # After the report reservation: equity/trade spools, then open/close/event
     # columns in creation order, then recorded series in slot order.
-    resources._window_budget = _artifact_windows(sink)
+    resources._window_budget = _declared_artifact_windows(sink, slots)
     opens, closes, events = (_JSONColumn(resources, sink.directory) for _ in range(3))
     columns = [_JSONColumn(resources, sink.directory) for _ in entries]
     expected_row = 0
@@ -9244,6 +9328,96 @@ class _MetricsOnlyRun:
             if self.failure is None and recovered is not None and recovered.route == 3:
                 raise _engine_invariant("the legacy metrics recovery requested another run")
         return self.result(recovered_settings)
+
+
+def _output_series_count(text):
+    if not re.fullmatch(r"[0-9]+", text) or int(text) > (1 << 63) - 1:
+        raise argparse.ArgumentTypeError("expected a nonnegative int64 series count")
+    return int(text)
+
+
+def _parse_output_series_limit(parser, argv):
+    parser.add_argument(
+        "--limit-output-series", dest="max_output_series", type=_output_series_count,
+        default=None, metavar="N",
+        help="Maximum declared output series (N >= 0); 0 or omitted means no limit.")
+    return parser.parse_args(argv)
+
+
+def _output_series_limit_functions(lib, maximum):
+    names = ("pf_output_series_limit_set_checked", "pf_output_series_limit_failure")
+    present = [hasattr(lib, name) for name in names]
+    if not any(present) and maximum is None:
+        return None
+    for name, found in zip(names, present):
+        if not found:
+            raise StrategyLibraryError(
+                f"the library lacks {name}; rebuild to configure output series",
+                {"reason": "symbol_missing", "missing": name})
+    setter, failure = (getattr(lib, name) for name in names)
+    setter.argtypes = [ctypes.POINTER(ctypes.c_int64), ctypes.c_char_p, ctypes.c_size_t]
+    setter.restype = ctypes.c_int
+    failure.argtypes = [ctypes.POINTER(ctypes.c_int64)]
+    failure.restype = ctypes.c_int
+    return setter, failure
+
+
+def create_strategy(lib, checked: bool, max_output_series=None):
+    """Apply the checked option before the generated constructor declares."""
+    if max_output_series == 0:
+        max_output_series = None
+    functions = _output_series_limit_functions(lib, max_output_series)
+    if functions is None:
+        return _create_strategy(lib, checked)
+    setter, read_failure = functions
+    maximum = None if max_output_series is None else ctypes.c_int64(max_output_series)
+    error = ctypes.create_string_buffer(_SETTINGS_ERROR_CAPACITY)
+    if setter(None if maximum is None else ctypes.byref(maximum),
+              error, len(error)) != PF_SETTINGS_OK:
+        raise _request_invalid(
+            "error: --limit-output-series: " + _c_text(error.value), "arguments")
+    try:
+        return _create_strategy(lib, checked)
+    except RunFailure as failure:
+        refused_max = ctypes.c_int64()
+        if (failure.code == "strategy_create_failed"
+                and read_failure(ctypes.byref(refused_max)) == 1):
+            failure.cause = {
+                "code": "outputs_limit",
+                "args": {"max": refused_max.value, "reason": "too_many_series"}}
+        raise
+    finally:
+        # Each handle has already snapshotted the option. Keep later creations
+        # in this interpreter unlimited unless their caller supplies a limit.
+        setter(None, error, len(error))
+
+
+def _write_run_failure(failure):
+    cause = getattr(failure, "cause", None)
+    if cause is None:
+        write_failure(str(failure), failure.code, failure.code_args)
+        return
+    # This path has the fixed empty strategy_create_failed args and the
+    # runtime's scalar series-limit cause; no engine message is parsed.
+    document = json.loads(failure_line(str(failure), failure.code, failure.code_args))
+    document["cause"] = cause
+    _publish_failure(_dump_line(document) + "\n")
+
+
+def _declared_artifact_windows(owner, series):
+    budget = _artifact_windows(owner)
+    budget.declare_series(series)
+    return budget
+
+
+def _output_series_resources(sink, series):
+    resources = sink._spool_resources
+    resources._window_budget = _declared_artifact_windows(sink, series)
+    return resources
+
+
+def _report_series_count(document):
+    return len((document.get("outputs") or {}).get("series", ()))
 
 
 if __name__ == "__main__":

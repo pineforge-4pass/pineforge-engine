@@ -1,4 +1,5 @@
 #include "report_scratch.hpp"
+#include "read_through_window.hpp"
 
 #include <pineforge/run_failure.hpp>
 
@@ -59,17 +60,20 @@ void check_buffer(const void* bytes, std::size_t length) {
     }
 }
 
-void read_exact(int descriptor, std::int64_t offset, void* bytes, std::size_t length) {
+void read_exact(int descriptor, std::int64_t offset, void* bytes, std::size_t length,
+                ScratchReadStats* inner_reads) {
     check_span(offset, length);
     check_buffer(bytes, length);
     auto* destination = static_cast<unsigned char*>(bytes);
     std::size_t received = 0;
     while (received < length) {
         const std::size_t chunk = std::min(length - received, kScratchWindowBytes);
+        if (inner_reads) ++inner_reads->calls;
         const ssize_t count = ::pread(descriptor, destination + received, chunk,
             static_cast<off_t>(offset + static_cast<std::int64_t>(received)));
         if (count < 0 && errno == EINTR) continue;
         if (count <= 0) fail_io(count < 0 ? errno : EIO, "report scratch read");
+        if (inner_reads) inner_reads->bytes += static_cast<std::size_t>(count);
         received += static_cast<std::size_t>(count);
     }
 }
@@ -122,7 +126,9 @@ void ScratchFile::read(std::int64_t byte_offset, void* bytes, std::size_t length
     check_span(byte_offset, length);
     check_buffer(bytes, length);
     if (length == 0) return;
+    ++read_count_;
     file_.read(static_cast<std::uint64_t>(byte_offset), bytes, length);
+    read_bytes_ += length;
 }
 
 void ScratchFile::truncate(std::int64_t byte_count) {
@@ -246,7 +252,7 @@ metrics::ScratchCurveRegion ScratchCurveWriter::region() const {
 
 void read_scratch_points(const metrics::ScratchCurveRegion& region,
                          std::int64_t first, pf_equity_point_t* points,
-                         std::int64_t count) {
+                         std::int64_t count, ScratchReadStats* inner_reads) {
     check_region(region);
     if (first < 0 || count < 0 || first > region.point_count
         || count > region.point_count - first
@@ -261,30 +267,95 @@ void read_scratch_points(const metrics::ScratchCurveRegion& region,
     check_buffer(points, length);
     if (length == 0) return;
     if (region.scratch) {
+        if (inner_reads) ++inner_reads->calls;
         region.scratch->read(static_cast<std::uint64_t>(offset), points, length);
+        if (inner_reads) inner_reads->bytes += length;
     } else {
-        read_exact(region.descriptor, offset, points, length);
+        read_exact(region.descriptor, offset, points, length, inner_reads);
     }
 }
 
 struct ScratchCurveWindow::State {
     metrics::ScratchCurveRegion region;
+    ScratchReadStats* inner_reads;
+    detail::ReadThroughWindow cache;
     std::array<pf_equity_point_t, kScratchWindowPoints> window{};
     std::int64_t first = 0;
     std::int64_t count = 0;
+    std::int64_t previous_index = -1;
 
-    explicit State(const metrics::ScratchCurveRegion& value) : region(value) {
+    State(const metrics::ScratchCurveRegion& value, std::size_t cache_bytes,
+          ScratchReadStats* reads)
+        : State(value, CacheCapacity::from_payload(sizeof(pf_equity_point_t), cache_bytes),
+                reads) {}
+    State(const metrics::ScratchCurveRegion& value, CacheCapacity capacity,
+          ScratchReadStats* reads)
+        : region(value), inner_reads(reads),
+          cache(sizeof(pf_equity_point_t), capacity, this, read_backing) {
         check_region(region);
+    }
+    static void read_backing(void* context, std::uint64_t offset,
+                             void* destination, std::size_t bytes) {
+        auto& self = *static_cast<State*>(context);
+        const auto index = static_cast<std::int64_t>(offset / sizeof(pf_equity_point_t));
+        // The shared cache has already attempted allocation. Its bypass
+        // must read directly without consulting the fixed block workspace.
+        if (self.cache.payload_bytes() != 0) {
+            if ((index < self.first || index - self.first >= self.count)
+                && self.previous_index >= 0
+                && (index == self.previous_index + 1 || index + 1 == self.previous_index)) {
+                constexpr auto capacity = static_cast<std::int64_t>(kScratchWindowPoints);
+                const auto first = index / capacity * capacity;
+                const auto count = std::min(self.region.point_count - first, capacity);
+                // A short read can overwrite the old block. Publish its
+                // replacement only after all requested bytes are available.
+                self.count = 0;
+                read_scratch_points(self.region, first, self.window.data(), count, self.inner_reads);
+                self.first = first;
+                self.count = count;
+            }
+            if (index >= self.first && index - self.first < self.count) {
+                std::memcpy(destination, &self.window[static_cast<std::size_t>(index - self.first)],
+                            bytes);
+                return;
+            }
+        }
+        read_scratch_points(self.region, index,
+            static_cast<pf_equity_point_t*>(destination),
+            static_cast<std::int64_t>(bytes / sizeof(pf_equity_point_t)), self.inner_reads);
+        // Retain a lone point until a sequential block replaces it, even
+        // if a distant probe collides with its shared-cache line.
+        if (self.cache.payload_bytes() != 0 && self.count == 0) {
+            std::memcpy(self.window.data(), destination, bytes);
+            self.first = index;
+            self.count = 1;
+        }
     }
 };
 
-ScratchCurveWindow::ScratchCurveWindow(const metrics::ScratchCurveRegion& region)
-    : state_(std::make_unique<State>(region)) {}
+ScratchCurveWindow::ScratchCurveWindow(const metrics::ScratchCurveRegion& region,
+                                     std::size_t cache_bytes, ScratchReadStats* inner_reads)
+    : state_(std::make_unique<State>(region, cache_bytes, inner_reads)) {}
+
+ScratchCurveWindow::ScratchCurveWindow(const metrics::ScratchCurveRegion& region,
+                                     CacheCapacity capacity, ScratchReadStats* inner_reads)
+    : state_(std::make_unique<State>(region, capacity, inner_reads)) {}
 
 ScratchCurveWindow::~ScratchCurveWindow() = default;
 
 std::int64_t ScratchCurveWindow::size() const noexcept {
     return state_->region.point_count;
+}
+
+std::size_t ScratchCurveWindow::cache_capacity_bytes() const noexcept {
+    return state_->cache.payload_bytes();
+}
+
+detail::ReadThroughCacheStats ScratchCurveWindow::cache_stats() const noexcept {
+    return state_->cache.stats();
+}
+std::size_t ScratchCurveWindow::cache_control_bytes() const noexcept {
+    return sizeof(ScratchCurveWindow) + sizeof(State);
 }
 
 pf_equity_point_t ScratchCurveWindow::operator[](std::int64_t index) const {
@@ -293,20 +364,9 @@ pf_equity_point_t ScratchCurveWindow::operator[](std::int64_t index) const {
         throw coded<std::out_of_range>(RunFailureCode::engine_invariant, {},
                                         "report scratch point index is invalid");
     }
-    if (index < state.first || index - state.first >= state.count) {
-        constexpr auto capacity = static_cast<std::int64_t>(kScratchWindowPoints);
-        const std::int64_t first = index / capacity * capacity;
-        const std::int64_t count = std::min(size() - first, capacity);
-        // A failed refill may have overwritten part of the old window.
-        // Invalidate its range before I/O, and publish only a complete read.
-        state.count = 0;
-        read_scratch_points(state.region, first, state.window.data(), count);
-        state.first = first;
-        state.count = count;
-    }
     pf_equity_point_t point;
-    std::memcpy(&point, &state.window[static_cast<std::size_t>(index - state.first)],
-                sizeof(point));
+    state.cache.get(static_cast<std::uint64_t>(index), &point, sizeof(point));
+    state.previous_index = index;
     return point;
 }
 

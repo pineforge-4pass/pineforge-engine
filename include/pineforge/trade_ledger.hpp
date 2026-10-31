@@ -9,6 +9,7 @@
 #include <string_view>
 
 namespace pineforge {
+struct CacheCapacity;
 
 struct Trade;
 namespace detail { struct TradeLedgerStorageProbe; }
@@ -40,16 +41,24 @@ public:
     static constexpr size_type kRecordBytes = 168;
     static constexpr size_type kResidentRows = 64;
     // One knob for this cache kind: ledger_rows. Each entry contains a
-    // 168-byte numeric/extent record, a global key and validity generation,
+    // 168-byte numeric/extent record, a global key and generation/flags,
     // and exactly 128 inline string bytes (all four strings combined).
-    // The string-validity flag shares the generation word. On 64-bit targets:
+    // The string-validity flag uses the generation word. On 64-bit targets:
     // 168 + 16 + 128 = 312 bytes, with no additional alignment padding.
+    // Byte allowances include both entries and the private page directory.
     // No per-entry heap allocation or growing offset/string directory.
     static constexpr size_type kCacheStringBytes = 128;
     static constexpr size_type kLedgerEntryBytes =
         kRecordBytes + 2 * sizeof(size_type) + kCacheStringBytes;
+    static constexpr size_type kCachePageSlots = 256;
     static constexpr size_type kDefaultCacheRows = 65536;
     static constexpr size_type kMaxCacheRows = 1048576;
+    static constexpr size_type cache_capacity_bytes(size_type rows) noexcept {
+        return rows * kLedgerEntryBytes
+            + (rows / kCachePageSlots + (rows % kCachePageSlots != 0)) * sizeof(void*);
+    }
+    // Sole byte-to-row conversion, shared by the host and standalone setters.
+    static size_type cache_rows_for_capacity(CacheCapacity capacity) noexcept;
     // A report-sink run has the same declared constant cap as the default:
     // 20,447,232 entry bytes + 2,048 table bytes + sizeof(TradeLedger)+sizeof(State).
     // Pages allocate lazily up to this cap, clipping the final page to fit.
@@ -81,6 +90,8 @@ public:
     using iterator = const_iterator;
 
     TradeLedger();
+    explicit TradeLedger(size_type cache_rows);
+    explicit TradeLedger(CacheCapacity capacity);
     ~TradeLedger();
     TradeLedger(const TradeLedger&);
     TradeLedger& operator=(const TradeLedger&);
@@ -91,11 +102,21 @@ public:
     void set_scratch_directory(const std::string&);
     const std::string& scratch_directory() const;
     // Configure before the first append/spill; clear() preserves the budget.
-    // Valid rows: [1,1048576]; invalid/late settings throw a coded
-    // std::invalid_argument (setting_rejected, reason value_below_minimum,
-    // value_above_maximum or frozen). Default: 65,536 rows, 20,447,232 entry
-    // bytes on 64-bit targets; maximum: 1,048,576 rows, 327,155,712 entry bytes.
+    // The constructor accepts the same optional row budget. Zero bypasses
+    // the decoded cache. Optional table/page allocation failure selects
+    // backing reads for this ledger without retrying the failed allocation.
+    // Valid rows: [0,1048576]; invalid/late settings throw a coded
+    // std::invalid_argument (setting_rejected, reason value_above_maximum
+    // or frozen). Default: 65,536 rows; maximum: 1,048,576 rows.
+    // On 64-bit targets, entries plus the page directory cost 20,449,280 B
+    // at default and 327,188,480 B at maximum, plus the fixed base.
     void set_cache_rows(size_type rows);
+    // Standalone inclusive byte allowance for entries plus owning pointers.
+    // Selects the largest row cap that fits, without the legacy row ceiling;
+    // allowances below one entry plus one pointer bypass. The host policy
+    // uses this same conversion, with the existing row-setting ceiling.
+    // Frozen after the first append/spill.
+    void set_cache_capacity(CacheCapacity capacity);
     size_type cache_rows() const;
     // Accounted storage: sizeof(TradeLedger)+sizeof(State)+rows*kLedgerEntryBytes
     // + ceil(rows/256)*sizeof(void*). Excludes allocator overhead, scratch/OS pages,
@@ -106,7 +127,18 @@ public:
     // after first read + min(256,cache_rows()-256*p)*kLedgerEntryBytes per page p.
     // Slot mapping stays fixed; page growth preserves entries. Writes only
     // fill an existing cache; retirement frees pages outside retained rows.
+    // The fixed base includes the zero-row read workspace. The directory
+    // and allocated entry pages each enter the common cache accounting once.
     size_type cache_resident_bytes() const;
+    enum class CacheBypassReason : std::uint32_t { none, allocation_failed };
+    struct CacheStats {
+        std::uint64_t allocation_bypass_count = 0;
+        CacheBypassReason bypass_reason = CacheBypassReason::none;
+    };
+    // One allocation failure is reported once and remains sticky through
+    // reads, appends, replacements and policy changes. clear() starts afresh.
+    bool cache_allocation_failed() const noexcept;
+    CacheStats read_cache_stats() const noexcept;
     // Occupied decoded entries only; separate from resident_size()'s legacy
     // descriptor/materialization accounting.
     size_type cache_size() const;
@@ -137,8 +169,9 @@ public:
     Trade numeric_at(size_type global) const;
     std::string entry_id_at(size_type global) const;
     // Pine field reads use the same check(global) as at(). A numeric
-    // hit loads just its Record member, without constructing/copying a Trade
-    // or any string. A string hit copies only the requested packed bytes.
+    // hit reads the Record from its private cache entry without
+    // constructing a Trade or owning string. A string hit constructs only
+    // the requested string from its packed bytes.
     // Misses retain the numeric record and all strings fitting the allowance.
     double pnl_at(size_type global) const;
     double pnl_pct_at(size_type global) const;

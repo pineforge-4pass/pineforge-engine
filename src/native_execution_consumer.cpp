@@ -1267,7 +1267,8 @@ std::shared_ptr<const native_order::LiveRequest> unowned_live(
     return std::shared_ptr<const native_order::LiveRequest>(
             std::shared_ptr<const native_order::LiveRequest>(), &row);
 }
-std::unique_ptr<detail::ScratchBacking> make_book_scratch_backing(std::size_t page_size);
+std::unique_ptr<detail::ScratchBacking> make_book_scratch_backing(
+    std::size_t page_size, CacheCapacity capacity);
 }  // namespace
 
 struct NativeExecutionConsumer::RunCommandScratch {
@@ -1279,9 +1280,9 @@ struct NativeExecutionConsumer::RunCommandScratch {
     std::array<std::byte, page_size> digest_page{};
     CommandScratchSnapshot snapshot;
 
-    explicit RunCommandScratch(detail::ScratchKeyOrder order, bool book)
-        : backing(book ? make_book_scratch_backing(page_size)
-                       : detail::make_command_scratch_backing(page_size)),
+    RunCommandScratch(detail::ScratchKeyOrder order, bool book, CacheCapacity capacity)
+        : backing(book ? make_book_scratch_backing(page_size, capacity)
+                       : detail::make_command_scratch_backing(page_size, capacity)),
           store(std::make_unique<detail::CommandScratchStore>(
               detail::ScratchStoreConfig{2, page_size, 1, 1, order,
                                         detail::ScratchOpenMode::create_empty},
@@ -1322,7 +1323,11 @@ void NativeExecutionConsumer::provision_run_command_scratch(
     if (borrower && borrower->transaction_active())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "run command scratch borrower has an active transaction");
-    auto run = std::make_shared<RunCommandScratch>(order, binding == CommandScratchBinding::Book);
+    const auto& policy = cache_policy_for_run();
+    const CacheCapacity capacities[] = {
+        policy.trade_pages, policy.dependency_pages, policy.book_pages, policy.exit_pages};
+    auto run = std::make_shared<RunCommandScratch>(
+        order, binding == CommandScratchBinding::Book, capacities[index]);
     run->borrower = &borrower;
     borrower = run->store.get();
     run_command_scratch_[index] = std::move(run);
@@ -1841,6 +1846,13 @@ bool NativeExecutionConsumer::prepare_public_begin(
         render(engine, text);
         return false;
     }
+    cache_policy_attempt_ = cache_policy_config_;
+    struct RestorePolicyPreparation {
+        bool& flag;
+        bool previous;
+        ~RestorePolicyPreparation() { flag = previous; }
+    } restore_policy{cache_policy_preparing_, cache_policy_preparing_};
+    cache_policy_preparing_ = true;
     try {
         auto config = engine.scratch_table_config_;
         const auto& m = config.manifest;
@@ -3059,9 +3071,11 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         render(engine, "native run generation counter exhausted");
         return false;
     }
+    cache_policy_run_ = cache_policy_attempt_;
     release_run_command_scratch();
     for (auto& run : run_command_scratch_) run.reset();
     dependency_scratch_stats_ = {};
+    run_cache_diagnostics_.begin_run();
     engine.reset_run_state();
     engine.reset_trade_percent_prefix();
     closed_trade_prefix_ = {};
@@ -3114,7 +3128,10 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // Report-only: did this spec declare an intrabar path? The consumer walks
     // that path (driver_statistics_.intrabar_path_enabled below) for any host.
     engine.bar_magnifier_enabled_ = !spec.intrabar.is_none();
-    requests_.reset(spec.identity);
+    requests_ = native_order::WorkingRequestCore(spec.identity,
+        cache_policy_run_.successor_root_pages,
+        cache_policy_run_.receipt_tail_pages,
+        cache_policy_run_.chain_segment_pages);
     requests_.bind_scratch_slab(engine.scratch_table_run_.slab);
     order_gauge_enabled = gauge::attach_from_environment();
     if (order_gauge_enabled) gauge::reset_counters();
@@ -3194,11 +3211,10 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         closed_row_prefix_.clear();
     }
     engine.trades_.set_scratch_directory(engine.report_sink_state_.scratch_dir);
-    // A sink run declares the same 65,536-row read-cache cap as the default:
-    // 20,447,232 entry bytes plus the fixed ledger/State base, independent of
-    // trade count. Allocation grows lazily up to that cap (the sink heap witness).
-    engine.trades_.set_cache_rows(engine.report_sink_state_.enabled
-        ? TradeLedger::kSinkCacheRows : TradeLedger::kDefaultCacheRows);
+    // Reset above closed the previous generation before its new allowance is
+    // applied. Sink and array runs share the same internal default.
+    engine.trades_.set_cache_rows(
+        CacheDefaults::ledger_cache_rows(cache_policy_run_.ledger_rows));
     precommit_digest_.reset();
     margin_liquidation_.reset();
     has_margin_path_ = false;
@@ -12922,6 +12938,27 @@ NativeExecutionConsumer::~NativeExecutionConsumer() {
     drop_presentation();
 }
 
+int NativeExecutionConsumer::report_cache_stats(
+        const BacktestEngine& engine, std::uint64_t* resident_bytes,
+        std::uint64_t* allocation_bypass_count) noexcept {
+    if (!resident_bytes || !allocation_bypass_count || resident_bytes == allocation_bypass_count)
+        return -1;
+    const auto* consumer = static_cast<const NativeExecutionConsumer*>(
+        engine.execution_consumer_slot_.ptr.get());
+    const auto bytes = consumer ? consumer->run_cache_diagnostics_.resident_bytes() : 0;
+    const auto bypasses = consumer
+        ? consumer->run_cache_diagnostics_.allocation_bypass_count() : 0;
+    *resident_bytes = bytes;
+    *allocation_bypass_count = bypasses;
+    return 0;
+}
+
+int BacktestEngine::report_cache_stats(
+        std::uint64_t* resident_bytes, std::uint64_t* allocation_bypass_count) const noexcept {
+    return NativeExecutionConsumer::report_cache_stats(
+        *this, resident_bytes, allocation_bypass_count);
+}
+
 void NativeExecutionConsumer::retain_command_scratch_owner(
         CommandScratchBinding binding, std::shared_ptr<void> owner) noexcept {
     command_scratch_owners_[static_cast<std::size_t>(binding)] = std::move(owner);
@@ -13223,7 +13260,8 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
                     local.equity_curve, metric_equity_len, &local.metrics.equity);
             }
         } else if (engine.report_sink_state_.equity_scratch) {
-            engine.compute_report_sink_metrics(&local, metric_equity_len);
+            engine.compute_report_sink_metrics(&local, metric_equity_len,
+                engine.cache_policy_for_run().equity_curve_pages);
         } else {
             internal::compute_report_metrics(
                 local.metrics, local.trades, local.trades_len,
@@ -14637,10 +14675,16 @@ void NativeExecutionConsumer::provision_run_command_scratch_for_run() {
 // but open the production backing/cache only when a dormant row will use it.
 // All subsequent page traffic goes to the same production implementation.
 DormantBookScratchBacking::DormantBookScratchBacking(std::size_t page_size) noexcept
-    : ScratchBacking(detail::ScratchBackingKind::disk, page_size) {}
+    : DormantBookScratchBacking(page_size,
+        CacheDefaults::lines(page_size, page_size == 0 ? 0 : 64 * 1024 / page_size)) {}
+
+DormantBookScratchBacking::DormantBookScratchBacking(
+        std::size_t page_size, CacheCapacity capacity) noexcept
+    : ScratchBacking(detail::ScratchBackingKind::disk, page_size),
+      cache_capacity_(capacity) {}
 
 void DormantBookScratchBacking::prepare() {
-    if (!inner_) inner_ = detail::make_command_scratch_backing(page_size());
+    if (!inner_) inner_ = detail::make_command_scratch_backing(page_size(), cache_capacity_);
 }
 
 std::uint64_t DormantBookScratchBacking::page_count() const noexcept {
@@ -14676,8 +14720,9 @@ detail::ScratchStatus DormantBookScratchBacking::do_sync(
 
 namespace {
 
-std::unique_ptr<detail::ScratchBacking> make_book_scratch_backing(std::size_t page_size) {
-    return std::make_unique<DormantBookScratchBacking>(page_size);
+std::unique_ptr<detail::ScratchBacking> make_book_scratch_backing(
+        std::size_t page_size, CacheCapacity capacity) {
+    return std::make_unique<DormantBookScratchBacking>(page_size, capacity);
 }
 
 } // namespace

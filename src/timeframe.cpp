@@ -803,7 +803,17 @@ bool build_native_day_partition(NativeDayPartition& out,
                                 const std::string& tz,
                                 const std::string& session,
                                 const std::vector<int64_t>& stamps,
-                                const Bar* input_bars, int n_input) {
+                                const Bar* input_bars, int n_input, const std::string& scratch_directory) {
+    return build_native_day_partition(out, tz, session, stamps, input_bars,
+                                      n_input, detail::kFeedProjectionCacheBytes, scratch_directory);
+}
+
+bool build_native_day_partition(NativeDayPartition& out,
+                                const std::string& tz,
+                                const std::string& session,
+                                const std::vector<int64_t>& stamps,
+                                const Bar* input_bars, int n_input,
+                                std::size_t projection_cache_bytes, const std::string& scratch_directory) {
     out = NativeDayPartition{};
     if (stamps.empty()) return false;
     for (std::size_t k = 1; k < stamps.size(); ++k) {
@@ -820,14 +830,13 @@ bool build_native_day_partition(NativeDayPartition& out,
     p.last_bound = session_day_close_real_ms(
         session_day_index_nominal(stamps.back(), tz, session), tz, session);
     const std::size_t n = stamps.size();
-    p.trade_day.reserve(n);
-    p.week_open.reserve(n);
-    p.month_open.reserve(n);
+    detail::FeedProjectionBuilder<int64_t> trade_days(scratch_directory, true), week_opens(scratch_directory, true), month_opens(scratch_directory, true);
     // Trade instants in one merge pass: the last input bar before the next
     // stamp (before the last bound for the last stamp), the stamp itself
     // when no input bar lies in the period.
     int j = 0;
     int64_t prev_week = 0, prev_month = 0;
+    int64_t week_open = 0, month_open = 0;
     for (std::size_t k = 0; k < n; ++k) {
         const int64_t stamp = stamps[k];
         const int64_t next = (k + 1 < n) ? stamps[k + 1] : p.last_bound;
@@ -839,7 +848,7 @@ bool build_native_day_partition(NativeDayPartition& out,
             ++j;
         }
         const int64_t td = session_day_index_nominal(last_in_period, tz, session);
-        p.trade_day.push_back(td);
+        trade_days.append(td);
         // A native bar's W / M group is the nominal period of its trade day;
         // consecutive stamps of one group share the group's first stamp. The
         // FIRST stamp cannot prove it opens its group (the feed may start
@@ -850,17 +859,20 @@ bool build_native_day_partition(NativeDayPartition& out,
         const int64_t week = session_period_first_day(td, session, CalendarPeriod::WEEK);
         const int64_t month = session_period_first_day(td, session, CalendarPeriod::MONTH);
         if (k == 0) {
-            p.week_open.push_back(std::min(
-                stamp, session_day_stamp_real_ms(week, tz, session)));
-            p.month_open.push_back(std::min(
-                stamp, session_day_stamp_real_ms(month, tz, session)));
+            week_open = std::min(stamp, session_day_stamp_real_ms(week, tz, session));
+            month_open = std::min(stamp, session_day_stamp_real_ms(month, tz, session));
         } else {
-            p.week_open.push_back(week == prev_week ? p.week_open.back() : stamp);
-            p.month_open.push_back(month == prev_month ? p.month_open.back() : stamp);
+            if (week != prev_week) week_open = stamp;
+            if (month != prev_month) month_open = stamp;
         }
+        week_opens.append(week_open);
+        month_opens.append(month_open);
         prev_week = week;
         prev_month = month;
     }
+    p.trade_day = trade_days.finish(projection_cache_bytes);
+    p.week_open = week_opens.finish(projection_cache_bytes);
+    p.month_open = month_opens.finish(projection_cache_bytes);
     p.late_opens = native_late_day_opens(tz, session, p.stamps, input_bars, n_input);
     out = std::move(p);
     return true;
@@ -893,7 +905,7 @@ int64_t session_period_close_ms(int64_t ms, const std::string& tz,
     if (const NativeDayPartition* p = matching_day_partition(tz, session)) {
         const int k = native_day_partition_index(*p, ms);
         if (k >= 0 && period != CalendarPeriod::DAY) {
-            const std::vector<int64_t>& group =
+            const auto& group =
                 period == CalendarPeriod::WEEK ? p->week_open : p->month_open;
             const std::size_t n = p->stamps.size();
             for (std::size_t j = static_cast<std::size_t>(k) + 1; j < n; ++j) {
@@ -936,7 +948,7 @@ int64_t session_period_last_traded_close_ms(int64_t ms, const std::string& tz,
     if (const NativeDayPartition* p = matching_day_partition(tz, session)) {
         const int k = native_day_partition_index(*p, ms);
         if (k >= 0 && period != CalendarPeriod::DAY) {
-            const std::vector<int64_t>& group =
+            const auto& group =
                 period == CalendarPeriod::WEEK ? p->week_open : p->month_open;
             const std::size_t n = p->stamps.size();
             std::size_t last = static_cast<std::size_t>(k);

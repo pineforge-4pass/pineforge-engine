@@ -3803,7 +3803,6 @@ list(APPEND TEST_SOURCES test_native_unreachable_book)
 list(APPEND TEST_SOURCES test_native_dormant_book_cost)
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     list(APPEND TEST_SOURCES test_standing_orders_wall test_projected_pending_scaling)
-    list(APPEND TEST_SOURCES test_adapter_cohort_origin_release)
     list(APPEND TEST_SOURCES test_abi_layout_probe)
 endif()
 list(APPEND TEST_SOURCES test_native_dormant_book_resident)
@@ -7493,6 +7492,37 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
     endforeach()
 endif()
 
+option(PINEFORGE_COHORT_EXPOSURE_FIXTURES
+    "Compare every cohort exposure call with the frozen selector" OFF)
+if(PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    target_compile_definitions(pineforge PRIVATE PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    if(TARGET pineforge_source_quiet_ungated)
+        target_compile_definitions(pineforge_source_quiet_ungated PRIVATE
+            PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    endif()
+    if(TARGET pineforge_source_quiet_probe)
+        target_compile_definitions(pineforge_source_quiet_probe PRIVATE
+            PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    endif()
+    # These TUs compile the adapter directly, including two through the
+    # position-tail retirement fixture header. Source properties also cover
+    # any additional target built from the same TU in this directory.
+    foreach(_pf_cohort_adapter_tu IN ITEMS
+            test_adapter_growth_storage.cpp
+            test_adapter_reversal_storage.cpp
+            test_adapter_tree_ram.cpp
+            test_cohort_exposure_work.cpp
+            test_live_source_key_alias_adapter.cpp
+            test_live_source_key_spellings_strict_adapter.cpp
+            test_position_tail_retirement.cpp
+            test_position_tail_retirement_work.cpp
+            test_position_tail_summary_scale.cpp
+            test_reversal_exit_owner_gate.cpp)
+        set_property(SOURCE ${_pf_cohort_adapter_tu} APPEND PROPERTY
+            COMPILE_DEFINITIONS PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    endforeach()
+endif()
+
 # CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
 file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
 list(SORT CR150_LANE_CMAKE)
@@ -7960,6 +7990,25 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
         "-Wl,--wrap=_ZnamRKSt9nothrow_t")
 endif()
 # --- CR-150 resident-command-scratch end ---
+# --- CR-150 cache-policy-v1 begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    add_library(cache_policy_module MODULE cache_policy_module.cpp)
+    target_link_libraries(cache_policy_module PRIVATE pineforge)
+    target_compile_options(cache_policy_module PRIVATE -ffp-contract=off -fvisibility=hidden)
+    target_link_libraries(test_cache_policy_v1 PRIVATE ${CMAKE_DL_LIBS})
+    target_compile_definitions(test_cache_policy_v1 PRIVATE
+        PF_CACHE_POLICY_MODULE_PATH="$<TARGET_FILE:cache_policy_module>")
+    add_dependencies(test_cache_policy_v1 cache_policy_module)
+endif()
+# --- CR-150 cache-policy-v1 end ---
+# --- CR-150 ta-history-cache begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    target_link_options(test_ta_history_cache_faults PRIVATE
+        "-Wl,--wrap=pread" "-Wl,--wrap=pwrite"
+        "-Wl,--wrap=_ZnwmRKSt9nothrow_t")
+endif()
+# --- CR-150 ta-history-cache end ---
+
 # --- CR-150 core-cr150-replay begin ---
 # Test-only strategy orders for the real-library JSON replay test. The module
 # links the actual runtime; it supplies no replay accessor or replay option.
@@ -8033,6 +8082,41 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8
     target_link_options(test_ledger_block_zeroing PRIVATE "-Wl,--wrap=pwrite")
 endif()
 # --- CR-150 ledger-block-zeroing end ---
+
+# --- CR-150 outputs-series-limit begin ---
+target_link_libraries(test_outputs_series_limit PRIVATE ${CMAKE_DL_LIBS})
+if(APPLE)
+    target_link_options(test_outputs_series_limit PRIVATE "-Wl,-export_dynamic")
+elseif(UNIX)
+    target_link_options(test_outputs_series_limit PRIVATE "-Wl,--export-dynamic")
+endif()
+if(UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(outputs_series_fixture_strategy MODULE outputs_series_fixture_strategy.cpp)
+    target_link_libraries(outputs_series_fixture_strategy PRIVATE pineforge)
+    target_compile_options(outputs_series_fixture_strategy PRIVATE -ffp-contract=off -UNDEBUG)
+    if(APPLE)
+        target_link_options(outputs_series_fixture_strategy PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(outputs_series_fixture_strategy PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    add_test(NAME test_run_json_output_series_parameter
+        COMMAND ${CMAKE_COMMAND} -E env
+            "PINEFORGE_OUTPUT_SERIES_SO=$<TARGET_FILE:outputs_series_fixture_strategy>"
+            ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/docker/run_json_window_budget_test.py
+            -k "declared_series_determine_real_run_window_bound or operator_limit_fails_typed_through_real_cli or cli_option_accepts_the_edge_and_default_remains_unlimited")
+endif()
+# --- CR-150 outputs-series-limit end ---
+# --- CR-150 roster-pass-work begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    # The fixture includes the real adapter translation unit before linking
+    # the archive, so only this test target needs the counting overlay.
+    target_compile_definitions(test_adapter_cohort_origin_release PRIVATE
+        PINEFORGE_ROSTER_PASS_OBSERVER=1)
+endif()
+# --- CR-150 roster-pass-work end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))

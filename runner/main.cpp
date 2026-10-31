@@ -29,6 +29,7 @@
 #include <iostream>
 #include <iterator>
 #include <locale>
+#include <optional>
 #include <poll.h>
 #include <set>
 #include <sstream>
@@ -65,6 +66,7 @@ struct Config {
     long poll_ms = 1000;
     bool check = false, allow_http = false, ledger_unbounded = false;
     ReportJsonlMode report_jsonl = ReportJsonlMode::Off;
+    std::optional<std::int64_t> max_output_series;
 };
 
 void help() {
@@ -76,6 +78,7 @@ void help() {
                  "Options: --input-tf SCRIPT_TF (default) --name NAME --session 24x7 --timezone UTC\n"
                  "         --input TITLE=VALUE --override KEY=VALUE (repeatable)\n"
                  "         --syminfo KEY=VALUE --chart-timezone UTC\n"
+                 "         --limit-output-series N (N >= 0; 0 or absent = unlimited)\n"
                  "         --subscribe subscription.json (WebSocket only)\n"
                  "         --webhook-secret-env NAME --allow-insecure-http\n"
                  "         --webhook-routes FILE (strict per-action routing; optional webhooks)\n"
@@ -216,6 +219,11 @@ Config args(int argc, char **argv) {
             c.from_input = unsigned_arg(v);
         else if (a == "--max-events")
             c.max_events = unsigned_arg(v);
+        else if (a == "--limit-output-series") {
+            c.max_output_series = Json::number(v).integer<std::int64_t>();
+            if (*c.max_output_series < 0)
+                throw std::runtime_error("max-output-series must not be negative");
+        }
         else if (a == "--ratio-interval") {
             c.ratio_interval = unsigned_arg(v);
             if (!c.ratio_interval) throw std::runtime_error("ratio-interval must be positive");
@@ -341,6 +349,35 @@ bool line(std::istream &in, std::string &out) {
 }
 bool blank(const std::string &s) { return s.find_first_not_of(" \t\r\n") == std::string::npos; }
 
+class OutputSeriesLimitScope {
+    decltype(&pf_output_series_limit_set_checked) setter_ = nullptr;
+    decltype(&pf_output_series_limit_failure) failure_ = nullptr;
+public:
+    OutputSeriesLimitScope(void* library, const std::optional<std::int64_t>& maximum) {
+        const std::int64_t* requested = maximum && *maximum != 0 ? &*maximum : nullptr;
+        setter_ = reinterpret_cast<decltype(setter_)>(
+            dlsym(library, "pf_output_series_limit_set_checked"));
+        failure_ = reinterpret_cast<decltype(failure_)>(
+            dlsym(library, "pf_output_series_limit_failure"));
+        if (!setter_ && !failure_ && !requested) return;
+        if (!setter_ || !failure_)
+            throw std::runtime_error("strategy lacks the output series limit API; rebuild");
+        char error[512]{};
+        if (setter_(requested, error, sizeof(error)) != PF_SETTINGS_OK)
+            throw std::runtime_error(std::string("output series limit refused: ") + error);
+    }
+    ~OutputSeriesLimitScope() {
+        if (setter_) setter_(nullptr, nullptr, 0);
+    }
+    std::string creation_failure(std::string text) const {
+        std::int64_t maximum = 0;
+        if (failure_ && failure_(&maximum) == 1)
+            text += "; outputs_limit {\"max\":" + std::to_string(maximum)
+                + ",\"reason\":\"too_many_series\"}";
+        return text;
+    }
+};
+
 class Strategy {
     void *library_ = nullptr;
     decltype(&strategy_stream_begin) begin_ = nullptr;
@@ -396,7 +433,7 @@ class Strategy {
                                      (e ? e : "unknown error"));
         }
     }
-    void load(const std::string &path) {
+    void load(const std::string &path, const std::optional<std::int64_t>& maximum) {
         library_ = dlopen(fs::absolute(path).c_str(), RTLD_NOW | RTLD_LOCAL);
         if (!library_)
             throw std::runtime_error("cannot load compiled strategy library");
@@ -445,6 +482,7 @@ class Strategy {
                 std::cerr << "pineforge-live: warning: compiled strategy lacks execution capabilities; "
                              "close-only eligibility cannot be proved (legacy behavior retained)\n";
             }
+            OutputSeriesLimitScope series_limit(library_, maximum);
             auto settings_version = optional_symbol<decltype(&strategy_settings_api_version)>(
                 "strategy_settings_api_version");
             if (settings_version) {
@@ -456,14 +494,14 @@ class Strategy {
                 char message[512]{};
                 auto create = symbol<decltype(&strategy_create_checked)>("strategy_create_checked");
                 if (create(nullptr, &state, message, sizeof(message)) != PF_SETTINGS_OK)
-                    throw std::runtime_error(std::string("strategy creation failed: ") + message);
+                    throw std::runtime_error(series_limit.creation_failure(std::string("strategy creation failed: ") + message));
             } else {
                 std::cerr << "pineforge-live: warning: compiled strategy lacks checked settings; "
                              "legacy settings may be ignored or defaulted\n";
                 state = symbol<decltype(&strategy_create)>("strategy_create")(nullptr);
             }
             if (!state)
-                throw std::runtime_error("strategy creation failed");
+                throw std::runtime_error(series_limit.creation_failure("strategy creation failed"));
             auto contract_fn = optional_symbol<decltype(&strategy_execution_contract)>(
                 "strategy_execution_contract");
             contract = 1;
@@ -903,7 +941,7 @@ int run(Config c) {
     auto original = read_file(c.warmup, 512ULL * 1024 * 1024);
     auto library = read_file(c.strategy, 512ULL * 1024 * 1024);
     Strategy strategy;
-    strategy.load(c.strategy);
+    strategy.load(c.strategy, c.max_output_series);
     if (sha256_hex(read_file(c.strategy, 512ULL * 1024 * 1024)) != sha256_hex(library))
         throw std::runtime_error("strategy library changed during initialization");
     strategy.require_contract(c);

@@ -2746,13 +2746,17 @@ class CAbiRuntimeInventory(unittest.TestCase):
         header = [name for relative in RUNTIME_HEADERS
                   for name in _pf_api_names(ROOT / 'include/pineforge' / relative)]
         runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
-        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 118)
-        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 98)
+        # Source rows: pineforge.h 111 + observer 3 + window 3 + sink 5;
+        # 102 c_abi.cpp definitions and twenty generated declarations.
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 122)
+        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 102)
         self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
         self.assertEqual(len(header), len(set(header)))
         self.assertEqual(len(runtime), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(set(runtime), EXPECTED_RUNTIME)
+        self.assertIn('pf_report_cache_stats', header)
+        self.assertIn('pf_report_cache_stats', runtime)
         self.assertIn('strategy_configure_native_fx_curve_v1', header)
         self.assertIn('strategy_configure_native_fx_curve_v1', runtime)
         self.assertIn('strategy_configure_native_fx_curve_ext_v1', header)
@@ -2762,6 +2766,10 @@ class CAbiRuntimeInventory(unittest.TestCase):
                      'strategy_report_sink_diagnostics_v1',
                      'strategy_require_report_scratch_arena_v1',
                      'strategy_set_scratch_tables_v1',
+                     'strategy_set_cache_policy_v1',
+                     'strategy_stream_engine_layout_version',
+                     'pf_output_series_limit_set_checked',
+                     'pf_output_series_limit_failure',
                      'pf_run_abort_install_sigterm_v1',
                      'pf_run_abort_requested_v1',
                      'pf_run_abort_restore_sigterm_v1',
@@ -4476,7 +4484,7 @@ class PrivateFixtureFloors(unittest.TestCase):
             {name for name in ci_verify.PINNED_SLOW_TEST_ROWS
              if name.startswith('test_native_command_after')},
             {f'test_native_command_after_slice_{index}' for index in range(1, 9)})
-        self.assertEqual(len(ci_verify.PINNED_SLOW_TEST_ROWS), 79)
+        self.assertEqual(len(ci_verify.PINNED_SLOW_TEST_ROWS), 86)
         self.assertEqual(LIVE_SANITIZERS_MIN_TESTS, 21)
         for name, (full, pinned) in ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS.items():
             with self.subTest(profile=name):

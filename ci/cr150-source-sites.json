@@ -1298,6 +1298,77 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/detail/feed_projection.hpp",
+   "symbol": "cache_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Row > class FeedProjection final : public FeedReader < Row > #1",
+    "void initialize_cache ( ) noexcept #1"
+   ],
+   "cls": "grow",
+   "spelling": "cache_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/feed_projection.hpp",
+   "symbol": "reader_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Row > class FeedProjectionBuilder #1",
+    ", bool resident_if_single_page = false ) : directory_ ( directory ) , resident_if_single_page_ ( resident_if_single_page ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/feed_projection.hpp",
+   "symbol": "reader_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Row > class FeedProjectionBuilder #1",
+    "private : void spill_to_scratch ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/feed_projection.hpp",
+   "symbol": "provider",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Row > class FeedProjectionBuilder #1",
+    "FeedProjection < Row > finish ( std :: size_t capacity_bytes = kFeedProjectionCacheBytes ) #1",
+    "else #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/feed_projection.hpp",
+   "symbol": "directory_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Row > class FeedProjectionBuilder #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/feed_projection.hpp",
+   "symbol": "builder",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Row > FeedProjection < Row > :: FeedProjection ( std :: initializer_list < Row > rows ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "builder . append ( . . . )",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/detail/id_pair_slab_fold.hpp",
    "symbol": "reader",
    "scope": [
@@ -1646,11 +1717,35 @@
    "scope": [
     "namespace pineforge :: detail #1",
     "class IdTableReadCache #1",
-    "template < class File > void read ( const File & source , bool plain_disk , std :: uint64_t logical_end , unsigned file , std :: uint64_t offset , void * destination , std :: size_t length ) const #1",
-    "if ( ! bytes_ ) #1"
+    "bool prepare ( ) const noexcept #1",
+    "if ( line_bytes_ > kPageBytes ) #1"
    ],
    "cls": "alloc",
    "spelling": "new",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/id_table_read_cache.hpp",
+   "symbol": "operator new",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class IdTableReadCache #1",
+    "bool prepare ( ) const noexcept #1"
+   ],
+   "cls": "alloc",
+   "spelling": "operator new",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/id_table_read_cache.hpp",
+   "symbol": "cache_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class IdTableReadCache #1",
+    "bool prepare ( ) const noexcept #1"
+   ],
+   "cls": "grow",
+   "spelling": "cache_ . emplace ( . . . )",
    "ordinal": 1
   },
   {
@@ -1663,6 +1758,30 @@
    ],
    "cls": "grow",
    "spelling": "out . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/read_through_cache.hpp",
+   "symbol": "operator new",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ReadThroughCache #1",
+    "void allocate_slots ( ) noexcept #1"
+   ],
+   "cls": "alloc",
+   "spelling": "operator new",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/read_through_cache.hpp",
+   "symbol": "new:?",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class ReadThroughCache #1",
+    "void allocate_slots ( ) noexcept #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new",
    "ordinal": 1
   },
   {
@@ -2576,19 +2695,6 @@
   },
   {
    "file": "include/pineforge/drawing.hpp",
-   "symbol": "tail_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace detail #1",
-    "template < class Rec > class DrawingRecordStore #1",
-    "[ [ gnu :: noinline , gnu :: cold ] ] void push_block ( Rec && rec ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "tail_ = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/drawing.hpp",
    "symbol": "root",
    "scope": [
     "namespace pineforge #1",
@@ -2641,19 +2747,6 @@
   },
   {
    "file": "include/pineforge/drawing.hpp",
-   "symbol": "tail_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace detail #1",
-    "template < class Rec > class DrawingRecordStore #1",
-    "DrawingRecordStore ( const DrawingRecordStore & other ) : blocks_ ( true ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "tail_ = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/drawing.hpp",
    "symbol": "<temp:DrawingRecordStore>",
    "scope": [
     "namespace pineforge #1",
@@ -2689,20 +2782,6 @@
    ],
    "cls": "assign",
    "spelling": "flat_ = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/drawing.hpp",
-   "symbol": "tail_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace detail #1",
-    "template < class Rec > class DrawingRecordStore #1",
-    "DrawingRecordStore & operator = ( DrawingRecordStore && other ) noexcept #1",
-    "if ( this ! = & other ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "tail_ = . . .",
    "ordinal": 1
   },
   {
@@ -8108,6 +8187,112 @@
   },
   {
    "file": "include/pineforge/series.hpp",
+   "symbol": "pages_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "template < class T > class WindowValues #1",
+    "WindowValues & operator = ( WindowValues && other ) noexcept ( std :: is_nothrow_move_assignable_v < T > ) #1",
+    "if ( this ! = & other ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "pages_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/series.hpp",
+   "symbol": "pages_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "template < class T > class WindowValues #1",
+    "void reset ( std :: size_t size , T initial ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "pages_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/series.hpp",
+   "symbol": "stored",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "template < class T > class WindowValues #1",
+    "void write ( std :: size_t index , T value ) #1",
+    "if ( ! spilled_ ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/series.hpp",
+   "symbol": "stored",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "template < class T > class WindowValues #1",
+    "void write ( std :: size_t index , T value ) #1",
+    "if ( ! spilled_ ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/series.hpp",
+   "symbol": "values",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "template < class T > class WindowValues #1",
+    "private : struct Page #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < T >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/series.hpp",
+   "symbol": "cache_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "template < class T > class WindowValues #1",
+    "void ensure_cache ( ) const #1"
+   ],
+   "cls": "grow",
+   "spelling": "cache_ . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/series.hpp",
+   "symbol": "replacement",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "template < class T > class WindowValues #1",
+    "void make_writable_backing ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/series.hpp",
+   "symbol": "pages_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "template < class T > class WindowValues #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < std :: shared_ptr < Page > >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/series.hpp",
    "symbol": "<temp:DynamicRingBuffer>",
    "scope": [
     "namespace pineforge #1"
@@ -8118,17 +8303,6 @@
   },
   {
    "file": "include/pineforge/series.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename T > class DynamicRingBuffer #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < T >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/series.hpp",
    "symbol": "<temp:DynamicRingBuffer>",
    "scope": [
     "namespace pineforge #1",
@@ -8136,30 +8310,6 @@
    ],
    "cls": "temp",
    "spelling": "DynamicRingBuffer",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/series.hpp",
-   "symbol": "buffer_",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename T > class DynamicRingBuffer #1",
-    "void push_front ( T val ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "buffer_ . resize ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/series.hpp",
-   "symbol": "new_buffer",
-   "scope": [
-    "namespace pineforge #1",
-    "template < typename T > class DynamicRingBuffer #1",
-    "void resize ( std :: size_t new_capacity ) #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < T >",
    "ordinal": 1
   },
   {
@@ -8274,7 +8424,7 @@
    "scope": [
     "namespace pineforge :: source #1",
     "namespace detail #1",
-    "template < class T > class ExitScratchRows #1"
+    "template < class T , ExitScratchRowMode Mode = ExitScratchRowMode :: per_row > class ExitScratchRows #1"
    ],
    "cls": "temp",
    "spelling": "const_iterator",
@@ -8286,7 +8436,7 @@
    "scope": [
     "namespace pineforge :: source #1",
     "namespace detail #1",
-    "template < class T > class ExitScratchRows #1"
+    "template < class T , ExitScratchRowMode Mode = ExitScratchRowMode :: per_row > class ExitScratchRows #1"
    ],
    "cls": "decl",
    "spelling": "const_iterator",
@@ -8298,7 +8448,7 @@
    "scope": [
     "namespace pineforge :: source #1",
     "namespace detail #1",
-    "template < class T > class ExitScratchRows #1"
+    "template < class T , ExitScratchRowMode Mode = ExitScratchRowMode :: per_row > class ExitScratchRows #1"
    ],
    "cls": "decl",
    "spelling": "const_iterator",
@@ -11090,28 +11240,6 @@
   },
   {
    "file": "include/pineforge/source/pine_strategy_host.hpp",
-   "symbol": "open_ms",
-   "scope": [
-    "namespace pineforge :: source #1",
-    "struct RecordedSeries #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < std :: int64_t >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/source/pine_strategy_host.hpp",
-   "symbol": "values",
-   "scope": [
-    "namespace pineforge :: source #1",
-    "struct RecordedSeries #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/source/pine_strategy_host.hpp",
    "symbol": "historical_projections",
    "scope": [
     "namespace pineforge :: source #1",
@@ -11513,30 +11641,6 @@
    "ordinal": 1
   },
   {
-   "file": "include/pineforge/source/pine_ta_length.hpp",
-   "symbol": "frozen_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "class HeldHistory #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < std :: shared_ptr < const std :: vector < double > > >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/source/pine_ta_length.hpp",
-   "symbol": "tail_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "class HeldHistory #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
    "file": "include/pineforge/str_utils.hpp",
    "symbol": "text",
    "scope": [
@@ -11655,30 +11759,6 @@
    ],
    "cls": "decl",
    "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "values_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class ExtremeRing #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/ta.hpp",
-   "symbol": "written_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace ta #1",
-    "class ExtremeRing #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < unsigned char >",
    "ordinal": 1
   },
   {
@@ -12242,39 +12322,6 @@
   {
    "file": "include/pineforge/timeframe.hpp",
    "symbol": "stamps",
-   "scope": [
-    "namespace pineforge #1",
-    "struct NativeDayPartition #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < int64_t >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/timeframe.hpp",
-   "symbol": "trade_day",
-   "scope": [
-    "namespace pineforge #1",
-    "struct NativeDayPartition #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < int64_t >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/timeframe.hpp",
-   "symbol": "week_open",
-   "scope": [
-    "namespace pineforge #1",
-    "struct NativeDayPartition #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: vector < int64_t >",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/timeframe.hpp",
-   "symbol": "month_open",
    "scope": [
     "namespace pineforge #1",
     "struct NativeDayPartition #1"
@@ -13243,8 +13290,8 @@
    "symbol": "reset",
    "scope": [
     "namespace pineforge :: detail #1",
-    "CachedScratchBacking :: CachedScratchBacking ( std :: unique_ptr < ScratchBacking > inner , ScratchIoObserver observer , std :: size_t resident_bytes , std :: shared_ptr < CommandScratchByteBudget > budget ) : ScratchBacking ( inner ? inner -> kind ( ) : ScratchBackingKind :: disk , inner ? inner -> page_size ( ) : 0 , observer ) , inner_ ( std :: move ( inner ) ) , slot_count_ ( page_size ( ) > = kMinPageBytes && page_size ( ) < = kCacheBytes ? kCacheBytes / page_size ( ) : 0 ) , resident_pages_ ( slot_count_ ! = 0 ? std :: min ( resident_bytes , kCacheBytes ) / page_size ( ) : 0 ) , resident_ ( resident_pages_ ! = 0 && inner_ -> page_count ( ) = = 0 ) , budget_ ( std :: move ( budget ) ) #1",
-    "if ( slot_count_ ! = 0 ) #1"
+    ") #1",
+    "if ( storage_bytes_ ! = 0 ) #1"
    ],
    "cls": "alloc",
    "spelling": "new",
@@ -13252,15 +13299,14 @@
   },
   {
    "file": "src/command_scratch_cache.cpp",
-   "symbol": "reset",
+   "symbol": "resident_",
    "scope": [
     "namespace pineforge :: detail #1",
-    "CachedScratchBacking :: CachedScratchBacking ( std :: unique_ptr < ScratchBacking > inner , ScratchIoObserver observer , std :: size_t resident_bytes , std :: shared_ptr < CommandScratchByteBudget > budget ) : ScratchBacking ( inner ? inner -> kind ( ) : ScratchBackingKind :: disk , inner ? inner -> page_size ( ) : 0 , observer ) , inner_ ( std :: move ( inner ) ) , slot_count_ ( page_size ( ) > = kMinPageBytes && page_size ( ) < = kCacheBytes ? kCacheBytes / page_size ( ) : 0 ) , resident_pages_ ( slot_count_ ! = 0 ? std :: min ( resident_bytes , kCacheBytes ) / page_size ( ) : 0 ) , resident_ ( resident_pages_ ! = 0 && inner_ -> page_count ( ) = = 0 ) , budget_ ( std :: move ( budget ) ) #1",
-    "if ( slot_count_ ! = 0 ) #1"
+    ") #1"
    ],
-   "cls": "alloc",
-   "spelling": "new",
-   "ordinal": 2
+   "cls": "assign",
+   "spelling": "resident_ = . . .",
+   "ordinal": 1
   },
   {
    "file": "src/command_scratch_cache.cpp",
@@ -13380,7 +13426,7 @@
    "symbol": "budget",
    "scope": [
     "namespace pineforge :: detail #1",
-    "std :: unique_ptr < pineforge :: detail :: ScratchBacking > make_command_scratch_backing ( std :: size_t page_size , std :: size_t resident_bytes ) #1",
+    "std :: unique_ptr < ScratchBacking > make_command_scratch_backing ( std :: size_t page_size , std :: size_t resident_bytes , std :: size_t cache_bytes ) #1",
     "if ( ! budget && default_cap ! = 0 ) #1",
     "if ( ! budget || budget -> limit ! = default_cap ) #1"
    ],
@@ -13393,7 +13439,7 @@
    "symbol": "make_unique",
    "scope": [
     "namespace pineforge :: detail #1",
-    "std :: unique_ptr < pineforge :: detail :: ScratchBacking > make_command_scratch_backing ( std :: size_t page_size , std :: size_t resident_bytes ) #1"
+    "std :: unique_ptr < ScratchBacking > make_command_scratch_backing ( std :: size_t page_size , std :: size_t resident_bytes , std :: size_t cache_bytes ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_unique",
@@ -13404,7 +13450,7 @@
    "symbol": "make_unique",
    "scope": [
     "namespace pineforge :: detail #1",
-    "std :: unique_ptr < pineforge :: detail :: ScratchBacking > make_command_scratch_backing ( std :: size_t page_size , std :: size_t resident_bytes ) #1"
+    "std :: unique_ptr < ScratchBacking > make_command_scratch_backing ( std :: size_t page_size , std :: size_t resident_bytes , std :: size_t cache_bytes ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_unique",
@@ -13415,7 +13461,7 @@
    "symbol": "make_unique",
    "scope": [
     "namespace pineforge :: detail #1",
-    "std :: unique_ptr < pineforge :: detail :: ScratchBacking > make_command_scratch_backing ( std :: size_t page_size , std :: size_t resident_bytes ) #1"
+    "std :: unique_ptr < ScratchBacking > make_command_scratch_backing ( std :: size_t page_size , std :: size_t resident_bytes , std :: size_t cache_bytes ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_unique",
@@ -13426,7 +13472,7 @@
    "symbol": "make_unique",
    "scope": [
     "namespace pineforge :: detail #1",
-    "std :: unique_ptr < pineforge :: detail :: ScratchBacking > make_command_scratch_backing ( std :: size_t page_size , std :: size_t resident_bytes ) #1"
+    "std :: unique_ptr < ScratchBacking > make_command_scratch_backing ( std :: size_t page_size , std :: size_t resident_bytes , std :: size_t cache_bytes ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_unique",
@@ -14566,29 +14612,30 @@
   },
   {
    "file": "src/engine_orders.cpp",
-   "symbol": "cache",
+   "symbol": "reset",
    "scope": [
     "namespace pineforge #1",
     "inline namespace engine_script_run_v19 #1",
     "struct TradeLedger :: State #1",
-    "void ensure_cache ( ) const #1"
+    "bool ensure_cache ( ) const noexcept #1",
+    "if ( ! cache ) #1"
    ],
    "cls": "alloc",
-   "spelling": "make_unique",
+   "spelling": "new",
    "ordinal": 1
   },
   {
    "file": "src/engine_orders.cpp",
-   "symbol": "page",
+   "symbol": "reset",
    "scope": [
     "namespace pineforge #1",
     "inline namespace engine_script_run_v19 #1",
     "struct TradeLedger :: State #1",
-    "CacheEntry & ensure_cache_entry ( size_type global ) const #1",
+    "CacheEntry * ensure_cache_entry ( size_type global ) const noexcept #1",
     "if ( ! page ) #1"
    ],
    "cls": "alloc",
-   "spelling": "make_unique",
+   "spelling": "new",
    "ordinal": 1
   },
   {
@@ -20343,7 +20390,7 @@
    "scope": [
     "namespace pineforge :: engine_script_run_v19 #1",
     "namespace #1",
-    "std :: unique_ptr < detail :: ScratchBacking > make_book_scratch_backing ( std :: size_t page_size ) #1"
+    "std :: unique_ptr < detail :: ScratchBacking > make_book_scratch_backing ( std :: size_t page_size , CacheCapacity capacity ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_unique",
@@ -21163,43 +21210,15 @@
   },
   {
    "file": "src/native_order.cpp",
-   "symbol": "tail_",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "namespace #3",
-    "template < class Record , std :: size_t kTail > class TailLog #1",
-    "public : TailLog ( ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "tail_ . reserve ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "tail_",
-   "scope": [
-    "namespace pineforge :: native_order #1",
-    "inline namespace native_order_v8 #1",
-    "namespace #3",
-    "template < class Record , std :: size_t kTail > class TailLog #1",
-    "void push ( const Record & record ) noexcept #1"
-   ],
-   "cls": "grow",
-   "spelling": "tail_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/native_order.cpp",
-   "symbol": "tail_",
+   "symbol": "rows",
    "scope": [
     "namespace pineforge :: native_order #1",
     "inline namespace native_order_v8 #1",
     "namespace #3",
     "template < class Record , std :: size_t kTail > class TailLog #1"
    ],
-   "cls": "decl",
-   "spelling": "std :: vector < Record >",
+   "cls": "assign",
+   "spelling": "rows = . . .",
    "ordinal": 1
   },
   {
@@ -22183,7 +22202,7 @@
    "scope": [
     "namespace pineforge :: native_order #1",
     "inline namespace native_order_v8 #1",
-    "WorkingRequestCore :: WorkingRequestCore ( RunIdentity identity ) #1"
+    "WorkingRequestCore :: WorkingRequestCore ( RunIdentity identity , TailWindowConfig windows ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
@@ -22195,11 +22214,62 @@
    "scope": [
     "namespace pineforge :: native_order #1",
     "inline namespace native_order_v8 #1",
-    "WorkingRequestCore :: WorkingRequestCore ( RunIdentity identity ) #1"
+    "WorkingRequestCore :: WorkingRequestCore ( RunIdentity identity , TailWindowConfig windows ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
    "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "CacheCapacity WorkingRequestCore :: tail_cache_capacity ( TailWindowKind kind ) const noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "rows = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "CacheCapacity WorkingRequestCore :: tail_cache_capacity ( TailWindowKind kind ) const noexcept #1",
+    "switch ( kind ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "rows = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "CacheCapacity WorkingRequestCore :: tail_cache_capacity ( TailWindowKind kind ) const noexcept #1",
+    "switch ( kind ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "rows = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "rows",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "CacheCapacity WorkingRequestCore :: tail_cache_capacity ( TailWindowKind kind ) const noexcept #1",
+    "switch ( kind ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "rows = . . .",
+   "ordinal": 3
   },
   {
    "file": "src/native_order.cpp",
@@ -24500,6 +24570,17 @@
    "cls": "alloc",
    "spelling": "make_unique",
    "ordinal": 2
+  },
+  {
+   "file": "src/report_scratch.cpp",
+   "symbol": "state_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report_sink #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 3
   },
   {
    "file": "src/report_sink_writer.cpp",
@@ -29233,7 +29314,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "namespace detail #5",
     "namespace #1",
-    "std :: shared_ptr < ExitScratchContext > make_exit_scratch ( const native_order :: RunIdentity & identity ) #1"
+    "std :: shared_ptr < ExitScratchContext > make_exit_scratch ( const native_order :: RunIdentity & identity , CacheCapacity capacity ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
@@ -30211,7 +30292,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & roster : core . cohorts ( ) ) #1"
+    "for ( const auto & [ key , roster ] : core . nonempty_cohorts ( ) ) #2"
    ],
    "cls": "grow",
    "spelling": "roster_roots . push_back ( . . . )",
@@ -30236,7 +30317,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & roster : core . cohorts ( ) ) #2"
+    "for ( const auto & [ key , roster ] : core . nonempty_cohorts ( ) ) #3"
    ],
    "cls": "assign",
    "spelling": "origins = . . .",
@@ -30248,7 +30329,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: release_closed_cohort_origins ( ) #1",
-    "for ( const auto & roster : core . cohorts ( ) ) #2",
+    "for ( const auto & [ key , roster ] : core . nonempty_cohorts ( ) ) #3",
     "for ( const auto & origin : origins ) #1"
    ],
    "cls": "grow",
@@ -30445,10 +30526,38 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "positions",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "for ( const auto & unit : live_units_by_origin ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "positions = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "remaining",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "if ( ! abandoned ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "remaining = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "next",
    "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "double PineExecutionAdapter :: cohort_exposure_for ( const CohortFacts & facts ) const noexcept #1",
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
     ") #1"
    ],
    "cls": "assign",
@@ -30459,10 +30568,12 @@
    "file": "src/source/pine_adapter.cpp",
    "symbol": "positions",
    "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "double PineExecutionAdapter :: cohort_exposure_for ( const CohortFacts & facts ) const noexcept #1",
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
     ") #1",
-    "for ( const auto & unit : facts . live_units_by_origin ) #1"
+    "for ( const auto & unit : live_units_by_origin ) #1"
    ],
    "cls": "assign",
    "spelling": "positions = . . .",
@@ -30472,10 +30583,52 @@
    "file": "src/source/pine_adapter.cpp",
    "symbol": "next",
    "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "double PineExecutionAdapter :: cohort_exposure_for ( const CohortFacts & facts ) const noexcept #1",
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
     ") #1",
-    "for ( const auto & unit : facts . live_units_by_origin ) #1",
+    "for ( const auto & unit : live_units_by_origin ) #1",
+    "for ( const auto position : * positions ) #1",
+    "if ( ! have_next || position < next ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
+    ") #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "positions",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
+    ") #1",
+    "for ( const auto & unit : live_units_by_origin ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "positions = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
+    ") #1",
+    "for ( const auto & unit : live_units_by_origin ) #1",
     "for ( const auto position : * positions ) #1",
     "if ( ! have_next || position < next ) #1"
    ],
@@ -39946,12 +40099,22 @@
    "ordinal": 1
   },
   {
+   "file": "src/source/pine_position_tail.cpp",
+   "symbol": "state_",
+   "scope": [
+    "namespace pineforge :: source :: detail #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 2
+  },
+  {
    "file": "src/source/pine_position_tail_binding.hpp",
    "symbol": "spill",
    "scope": [
     "namespace pineforge :: source :: detail #1",
     "struct PositionTailBinding #1",
-    "static void preserve ( std :: shared_ptr < PositionTailSpill > & spill , const TradeLedger & trades , std :: size_t end , std :: int64_t position_open , const std :: string & directory ) #1",
+    "private : template < class Capacity > static void preserve_with_capacity ( std :: shared_ptr < PositionTailSpill > & spill , const TradeLedger & trades , std :: size_t end , std :: int64_t position_open , const std :: string & directory , Capacity cache_bytes ) #1",
     "+ + i ) #1",
     "else #1"
    ],
@@ -39965,7 +40128,7 @@
    "scope": [
     "namespace pineforge :: source :: detail #1",
     "struct PositionTailBinding #1",
-    "static void preserve ( std :: shared_ptr < PositionTailSpill > & spill , const TradeLedger & trades , std :: size_t end , std :: int64_t position_open , const std :: string & directory ) #1",
+    "private : template < class Capacity > static void preserve_with_capacity ( std :: shared_ptr < PositionTailSpill > & spill , const TradeLedger & trades , std :: size_t end , std :: int64_t position_open , const std :: string & directory , Capacity cache_bytes ) #1",
     "+ + i ) #1",
     "else #1"
    ],
@@ -41114,7 +41277,7 @@
    "symbol": "std::to_string",
    "scope": [
     "namespace pineforge #1",
-    "bool source :: PineStrategyHost :: set_recorded_series ( const std :: string & key , const int64_t * chart_open_ms , const double * values , int n ) #1",
+    "bool source :: PineStrategyHost :: set_recorded_series_impl ( const std :: string & key , const int64_t * chart_open_ms , const double * values , int n , std :: optional < std :: size_t > cache_capacity_bytes ) #1",
     "+ + i ) #1"
    ],
    "cls": "temp",
@@ -41123,26 +41286,13 @@
   },
   {
    "file": "src/source/pine_security_eval.cpp",
-   "symbol": "open_ms",
+   "symbol": "builder",
    "scope": [
     "namespace pineforge #1",
-    "bool source :: PineStrategyHost :: set_recorded_series ( const std :: string & key , const int64_t * chart_open_ms , const double * values , int n ) #1",
-    "if ( n > 0 ) #1"
+    "bool source :: PineStrategyHost :: set_recorded_series_impl ( const std :: string & key , const int64_t * chart_open_ms , const double * values , int n , std :: optional < std :: size_t > cache_capacity_bytes ) #1"
    ],
    "cls": "grow",
-   "spelling": "open_ms . assign ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_security_eval.cpp",
-   "symbol": "values",
-   "scope": [
-    "namespace pineforge #1",
-    "bool source :: PineStrategyHost :: set_recorded_series ( const std :: string & key , const int64_t * chart_open_ms , const double * values , int n ) #1",
-    "if ( n > 0 ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "values . assign ( . . . )",
+   "spelling": "builder . append ( . . . )",
    "ordinal": 1
   },
   {
@@ -41150,7 +41300,7 @@
    "symbol": "why",
    "scope": [
     "namespace pineforge #1",
-    "bool source :: PineStrategyHost :: set_recorded_series ( const std :: string & key , const int64_t * chart_open_ms , const double * values , int n ) #1"
+    "bool source :: PineStrategyHost :: set_recorded_series_impl ( const std :: string & key , const int64_t * chart_open_ms , const double * values , int n , std :: optional < std :: size_t > cache_capacity_bytes ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -41161,7 +41311,41 @@
    "symbol": "recorded_series_",
    "scope": [
     "namespace pineforge #1",
-    "bool source :: PineStrategyHost :: set_recorded_series ( const std :: string & key , const int64_t * chart_open_ms , const double * values , int n ) #1"
+    "bool source :: PineStrategyHost :: set_recorded_series_impl ( const std :: string & key , const int64_t * chart_open_ms , const double * values , int n , std :: optional < std :: size_t > cache_capacity_bytes ) #1"
+   ],
+   "cls": "subscript",
+   "spelling": "recorded_series_ [ . . . ]",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_security_eval.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "bool source :: PineStrategyHost :: set_recorded_series_reader_impl ( const std :: string & key , std :: shared_ptr < const FeedReader < RecordedSeriesRow > > reader , std :: optional < std :: size_t > cache_capacity_bytes ) #1",
+    "+ + i ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_security_eval.cpp",
+   "symbol": "why",
+   "scope": [
+    "namespace pineforge #1",
+    "bool source :: PineStrategyHost :: set_recorded_series_reader_impl ( const std :: string & key , std :: shared_ptr < const FeedReader < RecordedSeriesRow > > reader , std :: optional < std :: size_t > cache_capacity_bytes ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_security_eval.cpp",
+   "symbol": "recorded_series_",
+   "scope": [
+    "namespace pineforge #1",
+    "bool source :: PineStrategyHost :: set_recorded_series_reader_impl ( const std :: string & key , std :: shared_ptr < const FeedReader < RecordedSeriesRow > > reader , std :: optional < std :: size_t > cache_capacity_bytes ) #1"
    ],
    "cls": "subscript",
    "spelling": "recorded_series_ [ . . . ]",
@@ -42388,104 +42572,14 @@
   },
   {
    "file": "src/source/pine_ta_length.cpp",
-   "symbol": "frozen_",
+   "symbol": "values_",
    "scope": [
     "namespace pineforge #1",
     "namespace source #1",
-    "void HeldHistory :: push ( double value ) #1",
-    "if ( tail_ . size ( ) = = kChunk ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "frozen_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "push_back",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "void HeldHistory :: push ( double value ) #1",
-    "if ( tail_ . size ( ) = = kChunk ) #1"
-   ],
-   "cls": "alloc",
-   "spelling": "make_shared",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "tail_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "void HeldHistory :: push ( double value ) #1",
-    "if ( tail_ . size ( ) = = kChunk ) #1"
+    "void HeldHistory :: ensure_slots ( std :: size_t keep ) #1"
    ],
    "cls": "assign",
-   "spelling": "tail_ = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "<temp:vector>",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "void HeldHistory :: push ( double value ) #1",
-    "if ( tail_ . size ( ) = = kChunk ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "std :: vector < double >",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "tail_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "void HeldHistory :: push ( double value ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "tail_ . reserve ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "tail_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "void HeldHistory :: push ( double value ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "tail_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "tail_",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "void HeldHistory :: write ( long long bar , double value , std :: size_t keep ) #1",
-    "if ( gap > = static_cast < long long > ( keep ) ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "tail_ = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "<temp:vector>",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "void HeldHistory :: write ( long long bar , double value , std :: size_t keep ) #1",
-    "if ( gap > = static_cast < long long > ( keep ) ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "std :: vector < double >",
+   "spelling": "values_ = . . .",
    "ordinal": 1
   },
   {
@@ -44447,7 +44541,7 @@
    "symbol": "tz",
    "scope": [
     "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input ) #1"
+    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes , const std :: string & scratch_directory ) #1"
    ],
    "cls": "assign",
    "spelling": "tz = . . .",
@@ -44458,7 +44552,7 @@
    "symbol": "stamps",
    "scope": [
     "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input ) #1"
+    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes , const std :: string & scratch_directory ) #1"
    ],
    "cls": "assign",
    "spelling": "stamps = . . .",
@@ -44466,99 +44560,38 @@
   },
   {
    "file": "src/timeframe.cpp",
-   "symbol": "trade_day",
+   "symbol": "trade_days",
    "scope": [
     "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "trade_day . reserve ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/timeframe.cpp",
-   "symbol": "week_open",
-   "scope": [
-    "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "week_open . reserve ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/timeframe.cpp",
-   "symbol": "month_open",
-   "scope": [
-    "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "month_open . reserve ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/timeframe.cpp",
-   "symbol": "trade_day",
-   "scope": [
-    "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input ) #1",
+    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes , const std :: string & scratch_directory ) #1",
     "+ + k ) #2"
    ],
    "cls": "grow",
-   "spelling": "trade_day . push_back ( . . . )",
+   "spelling": "trade_days . append ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/timeframe.cpp",
-   "symbol": "week_open",
+   "symbol": "week_opens",
    "scope": [
     "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input ) #1",
-    "+ + k ) #2",
-    "if ( k = = 0 ) #1"
+    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes , const std :: string & scratch_directory ) #1",
+    "+ + k ) #2"
    ],
    "cls": "grow",
-   "spelling": "week_open . push_back ( . . . )",
+   "spelling": "week_opens . append ( . . . )",
    "ordinal": 1
   },
   {
    "file": "src/timeframe.cpp",
-   "symbol": "month_open",
+   "symbol": "month_opens",
    "scope": [
     "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input ) #1",
-    "+ + k ) #2",
-    "if ( k = = 0 ) #1"
+    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes , const std :: string & scratch_directory ) #1",
+    "+ + k ) #2"
    ],
    "cls": "grow",
-   "spelling": "month_open . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/timeframe.cpp",
-   "symbol": "week_open",
-   "scope": [
-    "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input ) #1",
-    "+ + k ) #2",
-    "else #1"
-   ],
-   "cls": "grow",
-   "spelling": "week_open . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/timeframe.cpp",
-   "symbol": "month_open",
-   "scope": [
-    "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input ) #1",
-    "+ + k ) #2",
-    "else #1"
-   ],
-   "cls": "grow",
-   "spelling": "month_open . push_back ( . . . )",
+   "spelling": "month_opens . append ( . . . )",
    "ordinal": 1
   },
   {
@@ -44566,7 +44599,7 @@
    "symbol": "late_opens",
    "scope": [
     "namespace pineforge #1",
-    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input ) #1"
+    "bool build_native_day_partition ( NativeDayPartition & out , const std :: string & tz , const std :: string & session , const std :: vector < int64_t > & stamps , const Bar * input_bars , int n_input , std :: size_t projection_cache_bytes , const std :: string & scratch_directory ) #1"
    ],
    "cls": "assign",
    "spelling": "late_opens = . . .",

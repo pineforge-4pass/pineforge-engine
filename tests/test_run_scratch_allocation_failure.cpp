@@ -4,6 +4,7 @@
 #include "../src/command_scratch_cache.hpp"
 #include "../src/native_execution_consumer.hpp"
 
+#include <pineforge/cache_policy.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/source/exit_scratch.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -18,7 +19,6 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-
 #include <unistd.h>
 
 namespace {
@@ -29,21 +29,6 @@ using pineforge::RunFailureCode;
 constexpr auto kDisabled = std::numeric_limits<std::size_t>::max();
 
 enum class EntryKind { run, exit };
-
-// The cache decorator allocates its slot table with the slot count of the page
-// size of the store it wraps: kCacheBytes / page_size entries. The run entry
-// opens its command store with 512-byte pages (the minimum cached page), the
-// exit entry with the platform page size (the same sysconf call the production
-// exit run makes). The expectation is derived from that page size.
-std::size_t cache_page_size(EntryKind kind) {
-    return kind == EntryKind::run
-        ? CachedScratchBacking::kMinPageBytes
-        : static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
-}
-
-std::size_t expected_slot_table_bytes(EntryKind kind) {
-    return CachedScratchBacking::kCacheBytes / cache_page_size(kind) * sizeof(ScratchPageId);
-}
 
 struct AllocationFault {
     const std::size_t before = global_allocation::refused;
@@ -88,15 +73,29 @@ struct Environment {
 // Observe successful setup allocations with the existing allocator callback.
 // No ordinal countdown is armed across owner, file or cache construction.
 struct WorkspaceBoundary {
-    enum class Next { cache, slot_table, store_object, workspace, done };
+    enum class Next { cache, store_object, workspace, done };
     EntryKind kind;
     AllocationFault* fault = nullptr;
-    bool fail_slot_table = false;
     Next next = Next::cache;
     unsigned boundaries = 0;
-    bool slot_table_matches = true;
     bool store_object_matches = true;
     std::size_t workspace_bytes = 0;
+    const std::size_t page_bytes = setup_page_bytes(kind);
+    const std::size_t cache_bytes = setup_cache_bytes(kind, page_bytes);
+
+    static std::size_t setup_page_bytes(EntryKind entry) {
+        if (entry == EntryKind::run) return 512;
+        const long page = ::sysconf(_SC_PAGESIZE);
+        require(page > 0, "read the source exit service's platform page geometry");
+        return static_cast<std::size_t>(page);
+    }
+    static std::size_t setup_cache_bytes(EntryKind entry, std::size_t page) {
+        const pineforge::CacheDefaults defaults;
+        const auto capacity = entry == EntryKind::run
+            ? defaults.trade_pages : defaults.exit_pages;
+        return CachedScratchBacking::cache_allocation_bytes(
+            page, capacity.payload_bytes(page));
+    }
 
     void before_workspace() noexcept {
         ++boundaries;
@@ -112,20 +111,13 @@ struct WorkspaceBoundary {
     void allocated(std::size_t bytes) noexcept {
         switch (next) {
         case Next::cache:
-            if (bytes == CachedScratchBacking::kCacheBytes) {
-                if (fault && fail_slot_table) {
-                    // The page buffer succeeded; the next new is the slot table.
-                    ++boundaries;
-                    fault->arm();
-                    next = Next::done;
-                } else next = Next::slot_table;
+            // Trade uses 512-byte pages; the source host first constructs
+            // its platform-page exit service. Observe each owner's payload
+            // AND metadata, before the later temporary projection store.
+            if (bytes == cache_bytes) {
+                if (kind == EntryKind::run) next = Next::store_object;
+                else before_workspace();
             }
-            break;
-        case Next::slot_table:
-            slot_table_matches = bytes == expected_slot_table_bytes(kind);
-            if (!slot_table_matches) next = Next::done;
-            else if (kind == EntryKind::run) next = Next::store_object;
-            else before_workspace();
             break;
         case Next::store_object:
             store_object_matches = bytes == sizeof(CommandScratchStore);
@@ -141,7 +133,7 @@ struct WorkspaceBoundary {
         }
     }
     void check() const {
-        require(boundaries == 1 && slot_table_matches && store_object_matches && next == Next::done,
+        require(boundaries == 1 && store_object_matches && next == Next::done,
                 "observe the final setup allocation immediately before the workspace");
     }
 };
@@ -243,6 +235,8 @@ void workspace_allocation_failure(EntryKind kind) {
         if (const auto error = enter(control, boundary)) std::rethrow_exception(error);
         boundary.check();
         auto& store = control.store();
+        require(store.page_size() == boundary.page_bytes,
+                "the observed workspace belongs to the retained production store");
         require(store.status() == ScratchStatus::ok && !store.carried_failure()
                     && store.record_count() == 0 && !store.transaction_active(),
                 "the same unarmed production entry opens a healthy empty store");
@@ -253,16 +247,13 @@ void workspace_allocation_failure(EntryKind kind) {
                 "the unarmed production entry refuses no allocation");
     }
 
-    const bool slot_table_faults[] = {true, false};
-    for (const bool fail_slot_table : slot_table_faults) {
-        Entry failed;
-        AllocationFault fault;
-        WorkspaceBoundary boundary{kind, &fault, fail_slot_table};
-        const auto error = enter(failed, boundary);
-        fault.finish();
-        boundary.check();
-        require_memory(error);
-    }
+    Entry failed;
+    AllocationFault fault;
+    WorkspaceBoundary boundary{kind, &fault};
+    const auto error = enter(failed, boundary);
+    fault.finish();
+    boundary.check();
+    require_memory(error);
 }
 
 void run_scratch_workspace_allocation_failure() {

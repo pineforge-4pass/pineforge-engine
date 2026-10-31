@@ -2,7 +2,9 @@
 from contextlib import ExitStack
 import inspect
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import textwrap
 
@@ -28,11 +30,6 @@ def test_artifact_window_budget_literal_contract():
     assert getattr(run_json, "_JSON_COLUMN_LOOKUP_READ_SIZE", None) == 64 * 1024
     assert run_json._ARTIFACT_LARGE_WINDOW % 4096 == 0
     assert run_json._ARTIFACT_WINDOW_BUDGET_BYTES % run_json._ARTIFACT_LARGE_WINDOW == 0
-
-
-def test_output_series_ceiling_literal_contract():
-    assert getattr(run_json, "_OUTPUT_SERIES_LIMIT", None) == 64, (
-        "OUTPUT_SERIES_LIMIT: the production ceiling matches TradingView's plot-count limit")
 
 
 def _production_sizes():
@@ -149,22 +146,138 @@ def test_without_outputs_only_three_large_files_use_the_budget(tmp_path, monkeyp
     assert budget - sum(captured["windows"]) == 3 * large, "ARTIFACT_WINDOW_UNUSED_CREDIT"
 
 
-def test_many_series_cross_the_production_budget(tmp_path, monkeypatch):
-    budget, large, small = _production_sizes()
-    captured = _capture_report(tmp_path, monkeypatch, run_json._OUTPUT_SERIES_LIMIT)
-    assert len(captured["windows"]) == 70
-    _assert_allocations(captured["windows"], budget, large, small)
-    assert captured["windows"][-1] == large, "ARTIFACT_WINDOW_FINAL_RESERVATION"
+@pytest.fixture(scope="module")
+def series_library(tmp_path_factory):
+    """Build a real kernel module on the verification host, without private data."""
+    root = Path(__file__).resolve().parents[1]
+    project = tmp_path_factory.mktemp("series-module")
+    supplied = os.environ.get("PINEFORGE_OUTPUT_SERIES_SO")
+    if supplied:
+        module = Path(supplied).resolve()
+        assert module.is_file(), module
+        return module
+    options = "\n".join(
+        f"set(PINEFORGE_BUILD_{name} OFF CACHE BOOL \"\" FORCE)"
+        for name in ("TESTS", "SOURCE_LAYER", "CORPUS_STRATEGIES", "EXAMPLES",
+                     "TUTORIAL", "LIVE_RUNNER", "BENCH_STRATEGIES", "SPEED_BENCH"))
+    (project / "CMakeLists.txt").write_text(f"""
+cmake_minimum_required(VERSION 3.16)
+project(series_window_fixture LANGUAGES C CXX)
+{options}
+add_subdirectory("{root.as_posix()}" runtime)
+add_library(series_fixture MODULE "{root.as_posix()}/tests/outputs_series_fixture_strategy.cpp")
+target_link_libraries(series_fixture PRIVATE pineforge)
+target_compile_features(series_fixture PRIVATE cxx_std_17)
+target_compile_options(series_fixture PRIVATE -ffp-contract=off -UNDEBUG)
+if(APPLE)
+  target_link_options(series_fixture PRIVATE "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+else()
+  target_link_options(series_fixture PRIVATE
+    "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+endif()
+set_target_properties(series_fixture PROPERTIES PREFIX "" SUFFIX ".so")
+""", encoding="utf-8")
+    build = project / "build"
+    for command in (
+            ["cmake", "-S", str(project), "-B", str(build), "-DCMAKE_BUILD_TYPE=Release"],
+            ["cmake", "--build", str(build), "--target", "series_fixture", "--parallel", "4"]):
+        done = subprocess.run(command, capture_output=True, text=True)
+        assert done.returncode == 0, (command, done.stdout, done.stderr)
+    return build / "series_fixture.so"
 
 
-def test_series_ceiling_has_ten_mib_of_mapped_artifact_windows(tmp_path, monkeypatch):
-    budget, large, small = _production_sizes()
-    captured = _capture_report(tmp_path, monkeypatch, run_json._OUTPUT_SERIES_LIMIT)
-    assert len(captured["windows"]) == 6 + run_json._OUTPUT_SERIES_LIMIT
-    _assert_allocations(captured["windows"], budget, large, small)
-    assert sum(captured["windows"]) == (
-        6 * 1024 * 1024 + 64 * 1024 * run_json._OUTPUT_SERIES_LIMIT
-    ) == 10_485_760, "ARTIFACT_WINDOW_CEILING_CAPACITY"
+def _series_cli(tmp_path, series_library, series, *options):
+    tape = tmp_path / "series.csv"
+    tape.write_text(
+        "timestamp,open,high,low,close,volume\n"
+        "1704067200000,100,102,99,101,10\n"
+        "1704067500000,101,103,100,102,11\n", encoding="ascii")
+    environment = dict(os.environ, PINEFORGE_TEST_DECLARED_SERIES=str(series),
+                       PYTHONDONTWRITEBYTECODE="1")
+    environment.pop("PINEFORGE_RUN_JSON_PROFILE", None)
+    command = [sys.executable, "-B", str(Path(run_json.__file__).resolve()),
+               "--so", str(series_library), "--ohlcv", str(tape), "--input-tf", "5",
+               "--outputs", *options]
+    done = subprocess.run(command, capture_output=True, text=True, env=environment)
+    assert len(done.stdout.splitlines()) == 1, (command, done.stdout, done.stderr)
+    return done.returncode, json.loads(done.stdout)
+
+
+@pytest.mark.parametrize("series", (0, 1, 64, 65, 1000))
+def test_declared_series_determine_real_run_window_bound(
+        tmp_path, monkeypatch, series_library, series):
+    # Every row first crosses the former cap through the actual CLI. Smaller
+    # shapes alone already fit the old engine and cannot be a regression proof.
+    status, document = _series_cli(tmp_path, series_library, 65)
+    assert status == 0, document
+    windows, accountants = [], []
+    constructor = run_json._BoundedJSONFile.__init__
+    prepare = run_json._prepare_report_json
+
+    def observed(self, file, window=None):
+        constructor(self, file, window)
+        if type(self) is run_json._BoundedJSONFile:
+            windows.append(self.window)
+
+    def prepared(document, resources, args, sink):
+        result = prepare(document, resources, args, sink)
+        accountants.append(sink._window_budget)
+        return result
+
+    # Real CDLL, host declaration, native run, sink and report assembly;
+    # observers delegate unchanged and only measure the resulting objects.
+    monkeypatch.setenv("PINEFORGE_TEST_DECLARED_SERIES", str(series))
+    monkeypatch.delenv("PINEFORGE_RUN_JSON_PROFILE", raising=False)
+    monkeypatch.setattr(run_json._BoundedJSONFile, "__init__", observed)
+    monkeypatch.setattr(run_json, "_prepare_report_json", prepared)
+    tape = tmp_path / "series.csv"
+    monkeypatch.setattr(sys, "argv", [
+        "run_json", "--so", str(series_library), "--ohlcv", str(tape),
+        "--input-tf", "5", "--outputs"])
+    assert run_json._host_main() == 0
+    assert len(windows) == 6 + series
+    # Expectations come from the declared shape and literal default sizes.
+    expected = 6 * 1024 * 1024 + 64 * 1024 * series
+    assert windows == [1024 * 1024] * 5 + [64 * 1024] * series + [1024 * 1024]
+    assert sum(windows) <= expected
+    assert len(accountants) == 1
+    assert accountants[0].declared_series == series
+    assert accountants[0].worst_case_bytes == expected + 64 * 1024
+
+
+@pytest.mark.parametrize("limit,declared", ((64, 65), (10, 11), (1, 2)))
+def test_operator_limit_fails_typed_through_real_cli(
+        tmp_path, series_library, limit, declared):
+    status, document = _series_cli(tmp_path, series_library, 65)
+    assert status == 0, document
+    status, document = _series_cli(
+        tmp_path, series_library, declared, "--limit-output-series", str(limit))
+    assert status == 1, document
+    assert document["code"] == "strategy_create_failed"
+    assert document["args"] == {}
+    assert document["cause"] == {
+        "code": "outputs_limit", "args": {"max": limit, "reason": "too_many_series"}}
+
+
+def test_cli_option_accepts_the_edge_and_default_remains_unlimited(tmp_path, series_library):
+    status, document = _series_cli(tmp_path, series_library, 65)
+    assert status == 0, document
+    assert len(document["outputs"]["series"]) == 65
+    status, document = _series_cli(
+        tmp_path, series_library, 65, "--limit-output-series", "0")
+    assert status == 0, document
+    assert len(document["outputs"]["series"]) == 65
+    status, document = _series_cli(tmp_path, series_library, 64, "--limit-output-series", "64")
+    assert status == 0, document
+    assert len(document["outputs"]["series"]) == 64
+    status, document = _series_cli(
+        tmp_path, series_library, 65, "--limit-output-series", str((1 << 63) - 1))
+    assert status == 0, document
+    assert len(document["outputs"]["series"]) == 65
+    status, document = _series_cli(tmp_path, series_library, 65, "--limit-output-series", "-1")
+    assert status == 2, document
+    assert document["code"] == "run_request_invalid"
+    assert document["args"] == {"option": "arguments"}
 
 
 @pytest.mark.parametrize("legacy", (False, True), ids=("fused", "legacy"))
