@@ -7,6 +7,15 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- Reading a map is cheaper: each map now keeps a fixed read cache of 8 slots
+  for the keys and values it has just read, so a repeated `get` or `contains`
+  of the same key no longer reads the Store again. The cache adds a fixed 528
+  bytes per map identity for a `map<string, float>` whatever the number of
+  pairs, is cleared by every mutation of the map and invalidated when the
+  Store rolls back an outer transaction, and is never filled from an absent
+  key. Results are unchanged. The internal `detail::o1::Store` interface gains
+  a pure virtual `rollback_epoch()` for that invalidation; a Store
+  implementation outside the engine tree must provide it.
 - Reading a script container (string, array, map or object store) is cheaper:
   each Store now keeps two fixed tables of 8 slots, one for decoded object
   headers and one for chunk lookup handles, so a repeated read of the same
