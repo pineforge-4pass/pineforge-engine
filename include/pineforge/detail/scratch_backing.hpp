@@ -69,6 +69,8 @@ struct ScratchIoCharge {
     ScratchStatus status;
 };
 
+// A passive accounting sink. Its callback must not call back into the engine,
+// a store or a consumer.
 struct ScratchIoObserver {
     void* context = nullptr;
     void (*charge)(void*, const ScratchIoCharge&) noexcept = nullptr;
@@ -95,6 +97,8 @@ public:
 
     ScratchBackingKind kind() const noexcept { return kind_; }
     std::size_t page_size() const noexcept { return page_size_; }
+    // True when this backing carries a registered passive accounting sink.
+    bool has_io_observer() const noexcept { return observer_.charge != nullptr; }
     virtual std::uint64_t page_count() const noexcept = 0;
     // Construction-time arena region bound, including a zero-byte share.
     // No value for disk/test backings; this policy is not logical store state.

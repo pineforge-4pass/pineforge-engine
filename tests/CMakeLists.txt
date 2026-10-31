@@ -7503,6 +7503,37 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
     endforeach()
 endif()
 
+option(PINEFORGE_COHORT_EXPOSURE_FIXTURES
+    "Compare every cohort exposure call with the frozen selector" OFF)
+if(PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    target_compile_definitions(pineforge PRIVATE PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    if(TARGET pineforge_source_quiet_ungated)
+        target_compile_definitions(pineforge_source_quiet_ungated PRIVATE
+            PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    endif()
+    if(TARGET pineforge_source_quiet_probe)
+        target_compile_definitions(pineforge_source_quiet_probe PRIVATE
+            PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    endif()
+    # These TUs compile the adapter directly, including two through the
+    # position-tail retirement fixture header. Source properties also cover
+    # any additional target built from the same TU in this directory.
+    foreach(_pf_cohort_adapter_tu IN ITEMS
+            test_adapter_growth_storage.cpp
+            test_adapter_reversal_storage.cpp
+            test_adapter_tree_ram.cpp
+            test_cohort_exposure_work.cpp
+            test_live_source_key_alias_adapter.cpp
+            test_live_source_key_spellings_strict_adapter.cpp
+            test_position_tail_retirement.cpp
+            test_position_tail_retirement_work.cpp
+            test_position_tail_summary_scale.cpp
+            test_reversal_exit_owner_gate.cpp)
+        set_property(SOURCE ${_pf_cohort_adapter_tu} APPEND PROPERTY
+            COMPILE_DEFINITIONS PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    endforeach()
+endif()
+
 # CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
 file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
 list(SORT CR150_LANE_CMAKE)
@@ -7970,6 +8001,25 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
         "-Wl,--wrap=_ZnamRKSt9nothrow_t")
 endif()
 # --- CR-150 resident-command-scratch end ---
+# --- CR-150 cache-policy-v1 begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    add_library(cache_policy_module MODULE cache_policy_module.cpp)
+    target_link_libraries(cache_policy_module PRIVATE pineforge)
+    target_compile_options(cache_policy_module PRIVATE -ffp-contract=off -fvisibility=hidden)
+    target_link_libraries(test_cache_policy_v1 PRIVATE ${CMAKE_DL_LIBS})
+    target_compile_definitions(test_cache_policy_v1 PRIVATE
+        PF_CACHE_POLICY_MODULE_PATH="$<TARGET_FILE:cache_policy_module>")
+    add_dependencies(test_cache_policy_v1 cache_policy_module)
+endif()
+# --- CR-150 cache-policy-v1 end ---
+# --- CR-150 ta-history-cache begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    target_link_options(test_ta_history_cache_faults PRIVATE
+        "-Wl,--wrap=pread" "-Wl,--wrap=pwrite"
+        "-Wl,--wrap=_ZnwmRKSt9nothrow_t")
+endif()
+# --- CR-150 ta-history-cache end ---
+
 # --- CR-150 core-cr150-replay begin ---
 # Test-only strategy orders for the real-library JSON replay test. The module
 # links the actual runtime; it supplies no replay accessor or replay option.

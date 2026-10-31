@@ -334,17 +334,27 @@ void script_allocation_failure() {
 
 void cache_allocation_failure() {
     ArenaAttachment attachment(kSmallArenaBytes);
-    // Construct the owned backing first. The stack decorator's first new is
-    // its nothrow page buffer, with no make_unique allocation in front of it.
-    auto inner = make_script_scratch_backing();
+    // Prepare the optional cache unarmed. The script backing's first write
+    // must allocate its arena chunk directory; it has no direct-I/O fallback.
+    CachedScratchBacking cached(make_script_scratch_backing());
+    std::array<std::byte, 4096> page{}, read{};
+    page.fill(std::byte{0x5a});
+    const auto claimed = ScratchArena::attached()->stats().bytes_used;
     AllocationFault fault;
     fault.arm();
     const auto result = observe([&] {
-        CachedScratchBacking cached(std::move(inner));
-        return ScratchStatus::ok;
+        return cached.write_page(0, {page.data(), page.size()});
     });
     fault.finish();
-    require_memory(result);
+    require_memory(result, cached.carried_failure());
+    require(result.status == ScratchStatus::io_error && cached.page_count() == 0
+                && ScratchArena::attached()->stats().bytes_used == claimed
+                && cached.read_cache_stats().allocation_bypass_count == 0,
+            "required script directory failure publishes no page or arena claim");
+    require(cached.write_page(0, {page.data(), page.size()}) == ScratchStatus::ok
+                && cached.read_page(0, {read.data(), read.size()}) == ScratchStatus::ok
+                && read == page && !cached.carried_failure(),
+            "an unarmed retry completes the required script allocation and page I/O");
 }
 
 void chunk_directory_allocation_failure() {

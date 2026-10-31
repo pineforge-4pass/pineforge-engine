@@ -268,6 +268,32 @@ def report_of(text):
     return rep
 
 
+@pytest.mark.parametrize("count", [0, 3])
+def test_success_report_reads_cache_diagnostics_before_strategy_release(harness, count):
+    def cache_stats(state, resident, bypasses):
+        assert state == ST
+        assert "run_backtest_full" in lib.names()
+        assert "strategy_free" not in lib.names()
+        ctypes.cast(resident, ctypes.POINTER(ctypes.c_uint64))[0] = 160_704
+        ctypes.cast(bypasses, ctypes.POINTER(ctypes.c_uint64))[0] = count
+        return 0
+
+    lib = fake_lib(impl={"pf_report_cache_stats": cache_stats})
+    status, text = harness(lib)
+    assert status == 0, text
+    diagnostics = json.loads(text)["diagnostics"]
+    if count:
+        assert diagnostics["cache_resident_bytes"] == 160_704
+        assert diagnostics["cache_bypass_reason"] == "alloc_failed"
+        assert diagnostics["allocation_bypass_count"] == count
+    else:
+        assert "cache_resident_bytes" not in diagnostics
+        assert "cache_bypass_reason" not in diagnostics
+        assert "allocation_bypass_count" not in diagnostics
+    assert lib.names().count("pf_report_cache_stats") == 1
+    assert lib.names().index("pf_report_cache_stats") < lib.names().index("strategy_free")
+
+
 # --- the line ----------------------------------------------------------------
 
 def test_line_shape_and_key_order():
@@ -1146,10 +1172,163 @@ def test_every_symbol_feeds_refusal_has_its_reason(tmp_path, symbols, files, rea
     if symbols is not None:
         index.write_text(symbols if isinstance(symbols, str) else json.dumps({"symbols": symbols}))
     with pytest.raises(run_json.SymbolFeedsError) as e:
-        run_json.load_symbol_feeds(index)
+        run_json.load_symbol_feeds(index, max_symbol_feeds=256)
     assert (e.value.code, e.value.code_args) == ("symbol_feeds_refused", {"reason": reason})
     assert catalogued(e.value.code, e.value.code_args)
     assert str(e.value).startswith("--symbol-feeds: ")
+
+
+def counted_feeds_index(tmp_path, symbol_count, feeds_per_symbol):
+    (tmp_path / "f.csv").write_text(GOOD)
+    index = tmp_path / "symbols.json"
+    index.write_text(json.dumps({"symbols": {
+        f"S{i}": {"feeds": {str(tf): "f.csv" for tf in range(1, feeds_per_symbol + 1)}}
+        for i in range(symbol_count)}}))
+    return index
+
+
+@pytest.mark.parametrize("symbol_count,feeds_per_symbol,extra,expected_symbols,expected_feeds", [
+    (257, 1, [], 257, 257),
+    (3, 100, [], 3, 300),
+    (256, 1, ["--max-symbol-feeds", "256"], 256, 256),
+    (1, 256, ["--max-symbol-feeds", "256"], 1, 256),
+    (3, 100, ["--max-symbol-feeds", "0"], 3, 300),
+    (3, 100, ["--tv-compat", "--max-symbol-feeds", "0"], 3, 300),
+    (3, 100, ["--max-symbol-feeds", "0", "--tv-compat"], 3, 300),
+    (3, 100, ["--tv-compat", "--max-symbol-feeds", "300"], 3, 300),
+])
+def test_symbol_feed_limits_accept_and_report_every_feed(
+        harness, tmp_path, symbol_count, feeds_per_symbol, extra,
+        expected_symbols, expected_feeds):
+    index = counted_feeds_index(tmp_path, symbol_count, feeds_per_symbol)
+    lib = fake_lib("strategy_set_symbol_facts", "strategy_set_symbol_feed",
+                   returns={"strategy_set_symbol_feed": 0})
+    status, out = harness(lib, "--symbol-feeds", str(index), *extra)
+    assert status == 0, out
+    symbols = json.loads(out)["applied_runtime"]["symbol_feeds"]["symbols"]
+    assert len(symbols) == expected_symbols
+    assert sum(len(sym["feeds"]) for sym in symbols.values()) == expected_feeds
+    assert set(symbols) == {f"S{i}" for i in range(expected_symbols)}
+    for sym in symbols.values():
+        assert set(sym["feeds"]) == {str(tf) for tf in range(1, feeds_per_symbol + 1)}
+        assert all(feed["bars"] == 1 for feed in sym["feeds"].values())
+    assert lib.names().count("strategy_set_symbol_feed") == expected_feeds
+    assert lib.names().count("run_backtest_full") == 1
+    assert harness.stderr == ""
+
+
+@pytest.mark.parametrize("symbol_count,feeds_per_symbol,extra,reason,message", [
+    (257, 1, ["--max-symbol-feeds", "256"],
+     "too_many_symbols", "--symbol-feeds: more than 256 symbols"),
+    (3, 100, ["--max-symbol-feeds", "256"],
+     "too_many_feeds", "--symbol-feeds: more than 256 feeds"),
+    (257, 1, ["--tv-compat"],
+     "too_many_symbols", "--symbol-feeds: more than 256 symbols"),
+    (3, 100, ["--tv-compat"],
+     "too_many_feeds", "--symbol-feeds: more than 256 feeds"),
+    (3, 1, ["--max-symbol-feeds", "2"],
+     "too_many_symbols", "--symbol-feeds: more than 2 symbols"),
+    (1, 3, ["--max-symbol-feeds", "2"],
+     "too_many_feeds", "--symbol-feeds: more than 2 feeds"),
+])
+def test_symbol_feed_limits_keep_typed_refusals(
+        harness, tmp_path, symbol_count, feeds_per_symbol, extra, reason, message):
+    index = counted_feeds_index(tmp_path, symbol_count, feeds_per_symbol)
+    lib = fake_lib("strategy_set_symbol_facts", "strategy_set_symbol_feed")
+    status, out = harness(lib, "--symbol-feeds", str(index), *extra)
+    assert status == 1
+    assert line_of(out) == {"engine": "pineforge", "error": message,
+                            "code": "symbol_feeds_refused", "args": {"reason": reason}}
+    assert "run_backtest_full" not in lib.names()
+
+
+@pytest.mark.parametrize("flag", ["--max-symbol-feeds", "--max-inventory-bytes"])
+@pytest.mark.parametrize("value", ["-1", "abc", "", "1.5"])
+def test_limit_usage_errors_use_the_existing_failure_path(monkeypatch, flag, value):
+    monkeypatch.setattr(sys, "argv", ["run_json.py", "--so", "fake.so",
+                                     "--ohlcv", "unused.csv", flag, value])
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+            pytest.raises(SystemExit) as stop:
+        run_json.main()
+    assert stop.value.code == 2
+    doc = line_of(out.getvalue())
+    assert (doc["code"], doc["args"]) == ("run_request_invalid", {"option": "arguments"})
+    assert doc["error"] == (
+        f"run_json.py: error: argument {flag}: must be a nonnegative integer (0 means unlimited)")
+    assert err.getvalue().startswith("usage: run_json.py")
+    assert err.getvalue().endswith(doc["error"] + "\n")
+
+
+def test_three_symbol_feed_records_are_byte_identical_with_and_without_a_limit(
+        harness, tmp_path, monkeypatch):
+    index = counted_feeds_index(tmp_path, 3, 1)
+    plain = run_json.symbol_feeds_record(run_json.load_symbol_feeds(index))
+    limited = run_json.symbol_feeds_record(
+        run_json.load_symbol_feeds(index, max_symbol_feeds=256))
+    assert len(plain["symbols"]) == 3
+    assert json.dumps(plain, separators=(",", ":")).encode() == \
+        json.dumps(limited, separators=(",", ":")).encode()
+    # Supply identical elapsed intervals; feed loading, installation and report
+    # serialization all remain real.
+    ticks = iter([10.0, 10.25, 20.0, 20.25])
+    monkeypatch.setattr(run_json.time, "time", ticks.__next__)
+    def library():
+        return fake_lib("strategy_set_symbol_facts", "strategy_set_symbol_feed",
+                        returns={"strategy_set_symbol_feed": 0})
+    plain_status, plain_out = harness(library(), "--symbol-feeds", str(index))
+    limited_status, limited_out = harness(library(), "--symbol-feeds", str(index), "--tv-compat")
+    assert plain_status == limited_status == 0
+    assert plain_out.encode() == limited_out.encode()
+    assert len(json.loads(plain_out)["applied_runtime"]["symbol_feeds"]["symbols"]) == 3
+
+
+@pytest.mark.parametrize("extra,expected_status", [
+    ([], 0),
+    (["--max-inventory-bytes", "0"], 0),
+    (["--max-inventory-bytes", "8388608"], 1),
+    (["--tv-compat"], 1),
+    (["--tv-compat", "--max-inventory-bytes", "0"], 0),
+    (["--max-inventory-bytes", "0", "--tv-compat"], 0),
+])
+def test_runner_passes_inventory_limit_to_admission(tmp_path, monkeypatch, extra, expected_status):
+    import selected_window_report
+    artifact = tmp_path / "strategy.so"
+    artifact.write_bytes(b"inventory binding fixture\n")
+    document = json.dumps({
+        "schema": "pineforge-request-feed-inventory/v1", "source_sha256": "0" * 64,
+        "artifact_sha256": run_json.hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        "primary_chart_timeframe": None, "entries": [{"kind": "token", "timeframe": "D"}],
+    }).encode()
+    inventory_path = tmp_path / "inventory.json"
+    inventory_path.write_bytes(b" " * (8388609 - len(document)) + document)
+    monkeypatch.setattr(selected_window_report, "support_policy", lambda: {
+        "primary_chart_timeframes": ["1"], "preroll": "supported",
+        "request_feed_timeframes": ["D"]})
+    # Stop immediately after real admission, before a planner or library is needed.
+    class AdmissionReached(Exception):
+        pass
+    def after_admission(args):
+        assert args.request_feed_inventory == inventory_path
+        assert args.so == artifact
+        raise AdmissionReached()
+    monkeypatch.setattr(run_json, "_resolve_chart_source", after_admission)
+    args = ["--so", str(artifact), "--ohlcv", "unused.csv",
+            "--request-feed-inventory", str(inventory_path),
+            "--report-policy", "selected-window/v1", "--input-tf", "1", "--script-tf", "1",
+            "--window-start-ms", "60000", "--window-end-ms", "120000",
+            "--preroll-bars", "0", "--fed-start-ms", "0", "--validate-window-only", *extra]
+    with contextlib.ExitStack() as resources:
+        if expected_status == 0:
+            with pytest.raises(AdmissionReached):
+                run_json._main(args, resources)
+        else:
+            with pytest.raises(run_json.RunFailure) as caught:
+                run_json._main(args, resources)
+            assert (caught.value.code, caught.value.code_args) == (
+                "window_mode_unsupported", {"capability": "selected_window_request_feed_inventory"})
+            assert str(caught.value) == (
+                "the request-feed inventory is incomplete: the inventory is over 8388608 bytes")
 
 
 def feeds_index(tmp_path):

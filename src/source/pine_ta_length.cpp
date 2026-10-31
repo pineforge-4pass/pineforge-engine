@@ -13,6 +13,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -98,29 +99,45 @@ int simple_ta_length(std::int64_t value, const char* function, const char* argum
 
 // --- HeldHistory ---
 
+void HeldHistory::ensure_slots(std::size_t keep) {
+    // The existing whole-chunk retirement can retain keep + kChunk - 1
+    // members. Leave room for the next write before that retirement.
+    const std::size_t chunks = keep / kChunk + (keep % kChunk != 0) + 1;
+    if (chunks > std::numeric_limits<std::size_t>::max() / kChunk)
+        throw coded<std::length_error>(RunFailureCode::scratch_capacity_exceeded,
+            {{"resource", "layout"}}, "history byte extent is not representable");
+    const std::size_t slots = chunks * kChunk;
+    if (slots <= values_.size()) return;
+    ::pineforge::detail::WindowValues<double> next(slots, na<double>(), values_.cache_capacity());
+    for (long long i = 0; i < count_; ++i)
+        next.write(static_cast<std::size_t>(i), at(first_bar_ + i));
+    values_ = std::move(next);
+    head_ = 0;
+}
+
+std::size_t HeldHistory::slot(std::size_t offset) const {
+    const auto remaining = values_.size() - head_;
+    return offset >= remaining ? offset - remaining : head_ + offset;
+}
+
 void HeldHistory::push(double value) {
-    if (tail_.size() == kChunk) {
-        frozen_.push_back(std::make_shared<const std::vector<double>>(std::move(tail_)));
-        tail_ = std::vector<double>();
-    }
-    if (tail_.capacity() == 0) tail_.reserve(kChunk);
-    tail_.push_back(value);
+    values_.write(slot(static_cast<std::size_t>(count_)), value);
     ++count_;
 }
 
 void HeldHistory::drop_front_chunks(std::size_t keep) {
-    std::size_t drop = 0;
-    while (drop < frozen_.size() &&
+    while (count_ > static_cast<long long>(kChunk) &&
            count_ - static_cast<long long>(kChunk) >= static_cast<long long>(keep)) {
+        values_.retire_page(head_ / kChunk);
+        head_ = slot(kChunk);
         count_ -= static_cast<long long>(kChunk);
         first_bar_ += static_cast<long long>(kChunk);
-        ++drop;
     }
-    if (drop) frozen_.erase(frozen_.begin(), frozen_.begin() + static_cast<long>(drop));
 }
 
 void HeldHistory::write(long long bar, double value, std::size_t keep) {
     if (count_ == 0) {
+        ensure_slots(keep);
         first_bar_ = bar;
         push(value);
         return;
@@ -128,31 +145,33 @@ void HeldHistory::write(long long bar, double value, std::size_t keep) {
     const long long last = last_bar();
     if (bar < last) return;           // an earlier bar is never rewritten
     if (bar == last) {
-        tail_.back() = value;
+        values_.write(slot(static_cast<std::size_t>(count_ - 1)), value);
         return;
     }
+    ensure_slots(keep);
     // Skipped bars hold the last value. Only the `keep` newest bars can ever
     // be read, so a longer gap restarts the history at its readable part.
-    const double held = tail_.back();
+    const double held = at(last);
     long long gap = bar - last - 1;
     if (gap >= static_cast<long long>(keep)) {
-        frozen_.clear();
-        tail_ = std::vector<double>();
+        values_.reset(values_.size(), na<double>());
+        head_ = 0;
         count_ = 0;
         first_bar_ = bar - static_cast<long long>(keep);
         gap = static_cast<long long>(keep);
     }
-    for (long long i = 0; i < gap; ++i) push(held);
+    for (long long i = 0; i < gap; ++i) {
+        push(held);
+        // Retiring complete chunks during the gap yields the same final base
+        // as retiring after it, and keeps the physical ring bounded.
+        drop_front_chunks(keep);
+    }
     push(value);
     drop_front_chunks(keep);
 }
 
 double HeldHistory::at(long long bar) const {
-    const long long i = bar - first_bar_;
-    const std::size_t chunk = static_cast<std::size_t>(i) / kChunk;
-    const std::size_t offset = static_cast<std::size_t>(i) % kChunk;
-    if (chunk < frozen_.size()) return (*frozen_[chunk])[offset];
-    return tail_[offset];
+    return values_.read(slot(static_cast<std::size_t>(bar - first_bar_)));
 }
 
 // --- SeriesWindowExtreme ---
