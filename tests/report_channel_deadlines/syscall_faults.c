@@ -175,7 +175,14 @@ ssize_t read(int fd, void *buffer, size_t length)
     return result;
 }
 
-int poll(struct pollfd *fds, nfds_t count, int timeout)
+/* The C library declares poll() with a write-only access attribute on its first
+ * argument, which makes the compiler treat this wrapper's reads of the descriptor
+ * array as reads of uninitialised memory. Defining the wrapper under a private C
+ * name bound to the exported symbol "poll" keeps that declaration out of its way
+ * without silencing any diagnostic. */
+int pf_interposed_poll(struct pollfd *fds, nfds_t count, int timeout) __asm__("poll");
+
+int pf_interposed_poll(struct pollfd *fds, nfds_t count, int timeout)
 {
     int watched = watched_fd(fds, count);
     if (watched < 0)
