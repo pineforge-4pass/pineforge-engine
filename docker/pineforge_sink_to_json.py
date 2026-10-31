@@ -11,18 +11,30 @@ file, NOT the finalizer's live pipe. The wrapper must keep that retained
 inode immutable for the entire conversion. M likewise names a read-only
 regular stdout.json capture. Paths are opened read-only; inherited fds are
 duplicated, never closed or repositioned in the caller. There is no implicit
-stdin, scratch-arena access, spool, temporary, second sink copy or network.
-Only fd 1 (JSON) and fd 2 (structured diagnostics) are written.
+stdin or scratch-arena access. Unmanaged conversion writes only fd 1 (JSON)
+and fd 2 (structured diagnostics), with no spool or temporary.
 
 Pass 1 exhausts the SAME strict SinkReader as the finalizer, including its
 EOF probe, counts, SHA and additional E/T/O/K ordering checks. It folds only
 fixed-size scalars and one header-bounded K row. No stdout byte precedes this
 verification. Replays use pread on the pinned inode and SinkReader again;
 interleaving is legal. Trades and equity stream in report order. Each output
-time/series column gets its own replay: no column transpose is stored.
+time/series column gets its own replay in unmanaged mode.
 An emission preflight walks every lazy array into a discard writer before
 the actual emission. Sink defects and deterministic conversion failures
 therefore precede stdout. Every replay must verify the original receipt.
+Managed conversion instead transposes every array in ONE additional verified
+sink traversal into quota_columns' two unlinked backings and fixed window
+pool. Assembly splices those original encoded bytes, without sink rescans.
+The same quota client admits scratch, files, descriptors and intermediate output,
+then reserves the exact preflight stdout count INCLUDING its final LF, before
+emission. Output is cumulative on the shared ledger; it includes earlier
+stages and the column representation as well as stdout. A quota refusal is
+exit 3 with event=quota_refused and typed quota code/args on stderr, with no stdout
+when admission fails. No marker means no ledger traffic or new refusal.
+The managed host must independently confirm scratch inodes before COMMIT,
+via its creation helper or main(confirm_backing=...). This is cooperative
+accounting, not host containment.
 An E-row null equity/open_profit is refused with event=sink_refused,
 exit_code=3, code=report_result_invalid and
 args={field: equity_curve.<field>, reason: nonfinite}.
@@ -45,7 +57,7 @@ Manifest/slot/constant metadata is bounded by the input/header caps.
 Exit codes (compatible with the finalizer's categories):
   0  verified report delivered; metadata drops still mean normal charging
   2  usage / retained-file descriptor contract
-  3  malformed sink or a report row/order the verified v1 cannot supply
+  3  malformed sink, unsupported report row/order, or typed quota refusal
   4  receipt failure, changed retained input, or replay receipt disagreement
   5  input/output I/O failure, including stdout EPIPE
   6  incomplete sink / missing or truncated trailer
@@ -67,6 +79,7 @@ import sys
 sys.dont_write_bytecode = True
 
 import argparse
+from contextlib import ExitStack
 import fcntl
 import io
 import json
@@ -85,6 +98,13 @@ from pineforge_sink_finalize import (
     CHUNK_BYTES, _Failure, _FinalizerReader, _check_equity, _descriptor, _line_bound, _reader_code,
     _write_all,
 )
+
+if __package__:
+    from . import run_quota as quota
+    from .quota_columns import ColumnStore, ColumnStoreCorruptError
+else:
+    import run_quota as quota
+    from quota_columns import ColumnStore, ColumnStoreCorruptError
 
 
 STDOUT_JSON_MAX_BYTES = 2 * 1024 * 1024
@@ -183,6 +203,8 @@ class _Sink:
         if self.stamp[2] > max_bytes:
             raise _Failure(8, "retained sink exceeds --max-bytes")
         self.header = self.counts = None
+        self.columns = self.output_metadata = None
+        self.traversals = 0
         self.sha256 = ""
         self.verified = False
         self.constants = ()
@@ -195,6 +217,7 @@ class _Sink:
 
     def records(self, tag=None):
         self._unchanged()
+        self.traversals += 1
         try:
             stream = io.BufferedReader(_PreadInput(self.fd), buffer_size=CHUNK_BYTES)
             with _FinalizerReader(stream=stream) as reader:
@@ -272,6 +295,11 @@ class _Sink:
     def slots(self):
         return next((len(entry["fields"]) - 3 for entry in self.header["records"]
                      if entry["type"] == "O"), 0)
+
+    def rows(self, tag, project, stream):
+        if self.columns is not None:
+            return _ColumnRows(self.columns, stream)
+        return _Rows(lambda: (project(row) for row in self.records(tag)))
 
 
 # Presentation schema. Object keys are closed at EVERY level. Maps below
@@ -560,14 +588,55 @@ class _Rows:
         self.factory = factory
 
 
+class _ColumnRows(_Rows):
+    """Splice original encoded bytes; decode one item only for metadata checks."""
+    def __init__(self, store, stream):
+        self.store, self.stream = store, stream
+        super().__init__(self._items)
+
+    def _items(self):
+        chunks = iter(self.store.iter_bytes(self.stream))
+        decoder = json.JSONDecoder()
+        pending, eof, after_comma = "", False, False
+        while True:
+            if pending:
+                try:
+                    item, end = decoder.raw_decode(pending)
+                except ValueError:
+                    if eof:
+                        raise ColumnStoreCorruptError("invalid encoded column item") from None
+                else:
+                    if end < len(pending) and pending[end] == ",":
+                        yield item
+                        pending, after_comma = pending[end + 1:], True
+                        continue
+                    if eof:
+                        if end != len(pending):
+                            raise ColumnStoreCorruptError("invalid encoded column separator")
+                        yield item
+                        return
+                    # A number may end at a window boundary, or raw_decode
+                    # may have seen only its prefix (e.g. "1e"). Get a delimiter.
+            elif eof:
+                if after_comma:
+                    raise ColumnStoreCorruptError("trailing encoded column separator")
+                return
+            try:
+                pending += next(chunks).decode("ascii")
+            except StopIteration:
+                eof = True
+
+
 class _Writer:
     def __init__(self, fd=None):
         self.fd = fd
         self.buffer = bytearray()
+        self.count = 0
 
     def write(self, data):
+        self.count += len(data)
         if self.fd is None:
-            return  # preflight still serializes every value, retaining none
+            return len(data)  # preflight serializes and counts, retaining none
         if len(data) >= CHUNK_BYTES:
             self.flush()
             _write_all(self.fd, data)
@@ -575,6 +644,7 @@ class _Writer:
             self.buffer.extend(data)
             if len(self.buffer) >= CHUNK_BYTES:
                 self.flush()
+        return len(data)
 
     def flush(self):
         if self.buffer:
@@ -583,7 +653,9 @@ class _Writer:
 
 
 def _emit(value, writer):
-    if isinstance(value, _Rows):
+    if isinstance(value, _ColumnRows):
+        value.store.copy_to(value.stream, writer)
+    elif isinstance(value, _Rows):
         writer.write(b"[")
         first = True
         for row in value.factory():
@@ -609,6 +681,12 @@ def _emit(value, writer):
         writer.write(b"]")
     else:
         writer.write(_encoded(value))
+
+
+def _emit_report(document, writer):
+    _emit(document, writer)
+    writer.write(b"\n")
+    writer.flush()
 
 
 def _same(left, right):
@@ -664,7 +742,7 @@ def _value(value, encoding):
     return int(value) if value is not None and encoding == "rgba-u32" else value
 
 
-def _outputs(source, sink, diagnostics):
+def _output_metadata(source, sink, diagnostics):
     manifest = source.get("manifest", {})
     # These are presentation identities/mappings, NEVER a source of row count.
     outputs = {}
@@ -701,6 +779,51 @@ def _outputs(source, sink, diagnostics):
     if "constants" in manifest:
         manifest["constants"] = valid_constants
     constants = [_value(value, encodings.get(index)) for index, value in enumerate(sink.constants)]
+    return manifest, outputs, entries, constants
+
+
+def _trade(row):
+    return dict(zip(row.fields[:16], row.values[:16]))
+
+
+def _event(record, outputs):
+    row = record.as_dict()
+    output = outputs.get(row["output_index"], {})
+    event = {
+        "sequence": row["sequence"], "output": output.get("id"),
+        "bar_index": row["bar_index"], "bar_open_ms": row["bar_open_ms"],
+        "bar_close_ms": row["bar_close_ms"], "ordinal_in_bar": row["ordinal_in_bar"],
+        "phase": {0: "batch", 1: "warmup", 2: "realtime"}.get(row["phase"], str(row["phase"])),
+        "value": row["value"], "message": row["message"],
+    }
+    if output.get("kind") == "alert":
+        event["freq"] = output.get("freq")
+    return event
+
+
+def _fill_columns(sink, store):
+    """One receipt-checked replay supplies every logical stream."""
+    outputs, entries = ({}, {}) if sink.output_metadata is None else sink.output_metadata[1:3]
+    for row in sink.records():
+        if row.tag == "T":
+            store.append_encoded(store.TRADES, _encoded(_trade(row)))
+        elif row.tag == "E":
+            store.append_encoded(store.EQUITY, _encoded(row.as_dict()))
+        elif row.tag == "O":
+            store.append_encoded(store.OPENS, _encoded(row.values[1]))
+            store.append_encoded(store.CLOSES, _encoded(row.values[2]))
+            for slot in range(sink.slots()):
+                value = _value(row.values[3 + slot], entries.get(slot, {}).get("encoding"))
+                store.append_encoded(store.numeric_stream(slot), _encoded(value))
+        elif row.tag == "V":
+            store.append_encoded(store.EVENTS, _encoded(_event(row, outputs)))
+    sink.columns = store
+
+
+def _outputs(source, sink, diagnostics):
+    manifest, outputs, entries, constants = (
+        sink.output_metadata if sink.output_metadata is not None else
+        _output_metadata(source, sink, diagnostics))
     series = []
     # Slot count is from the strict header. Absent/invalid metadata cannot
     # remove a numeric column or supply a substitute value.
@@ -708,9 +831,9 @@ def _outputs(source, sink, diagnostics):
         entry = entries.get(slot, {})
         if not entry:
             diagnostics.drop(f"$.outputs.series[{slot}].output", "presentation_unavailable")
-        series.append({"slot": slot, "output": entry.get("output"), "values": _Rows(
-            lambda slot=slot, encoding=entry.get("encoding"): (
-                _value(row.values[3 + slot], encoding) for row in sink.records("O")))})
+        series.append({"slot": slot, "output": entry.get("output"), "values": sink.rows(
+            "O", lambda row, slot=slot, encoding=entry.get("encoding"): (
+                _value(row.values[3 + slot], encoding)), ColumnStore.NUMERIC_BASE + slot)})
     hlines = []
     for entry in outputs.values():
         if entry.get("kind") == "hline":
@@ -718,31 +841,17 @@ def _outputs(source, sink, diagnostics):
             hlines.append({"output": entry["id"], "price": (
                 constants[index] if index is not None and index < len(constants) else None)})
 
-    def events():
-        for record in sink.records("V"):
-            row = record.as_dict()
-            output = outputs.get(row["output_index"], {})
-            event = {
-                "sequence": row["sequence"], "output": output.get("id"),
-                "bar_index": row["bar_index"], "bar_open_ms": row["bar_open_ms"],
-                "bar_close_ms": row["bar_close_ms"], "ordinal_in_bar": row["ordinal_in_bar"],
-                "phase": {0: "batch", 1: "warmup", 2: "realtime"}.get(row["phase"], str(row["phase"])),
-                "value": row["value"], "message": row["message"],
-            }
-            if output.get("kind") == "alert":
-                event["freq"] = output.get("freq")
-            yield event
-
     block = {"schema_version": "pineforge-outputs/v1",
              "message_format": manifest.get("message_format", "pineforge/v1")}
     if "manifest_sha256" in source:
         block["manifest_sha256"] = source["manifest_sha256"]
     if "manifest" in source:
         block["manifest"] = manifest
-    block.update(bars={key: _Rows(lambda index=index: (
-        row.values[index] for row in sink.records("O")))
-        for key, index in (("open_ms", 1), ("close_ms", 2))},
-        series=series, constants=constants, hlines=hlines, events=_Rows(events))
+    block.update(bars={key: sink.rows("O", lambda row, index=index: row.values[index], stream)
+        for key, index, stream in (("open_ms", 1, ColumnStore.OPENS),
+                                   ("close_ms", 2, ColumnStore.CLOSES))},
+        series=series, constants=constants, hlines=hlines,
+        events=sink.rows("V", lambda row: _event(row, outputs), ColumnStore.EVENTS))
     for key, value in block.items():
         if key not in ("manifest", "manifest_sha256"):
             _authoritative(source, key, value, "$.outputs", diagnostics)
@@ -773,8 +882,8 @@ def _document(source, sink, diagnostics):
         result["summary"]["bars_processed"] = small_summary["bars_processed"]
     if "diagnostics" in source:
         result["diagnostics"] = source["diagnostics"]
-    result["trades"] = _authoritative(source, "trades", _Rows(lambda: (
-        dict(zip(row.fields[:16], row.values[:16])) for row in sink.records("T"))), "$", diagnostics)
+    result["trades"] = _authoritative(source, "trades", sink.rows(
+        "T", _trade, ColumnStore.TRADES), "$", diagnostics)
     metrics = source.get("metrics", {})
     result["metrics"] = {}
     for name, group in sink.groups.items():
@@ -785,8 +894,8 @@ def _document(source, sink, diagnostics):
             if key in counts or key in presented}
     if "equity" in metrics:
         result["metrics"]["equity"] = metrics["equity"]
-    result["equity_curve"] = _authoritative(source, "equity_curve", _Rows(lambda: (
-        row.as_dict() for row in sink.records("E"))), "$", diagnostics)
+    result["equity_curve"] = _authoritative(source, "equity_curve", sink.rows(
+        "E", lambda row: row.as_dict(), ColumnStore.EQUITY), "$", diagnostics)
     if "report_window" in source:
         _reconcile_window(source["report_window"], sink, "$.report_window", diagnostics)
         result["report_window"] = source["report_window"]
@@ -864,7 +973,49 @@ def _parser():
     return parser
 
 
-def main(argv=None):
+def _convert(source, sink, diagnostics, client, *, confirm_backing=None, observe=None):
+    with ExitStack() as resources:
+        columns = None
+        if client is not None:
+            if "O" in sink.counts:
+                sink.output_metadata = _output_metadata(
+                    source.get("outputs", {}), sink, diagnostics)
+            columns = resources.enter_context(ColumnStore(
+                sink.slots(), quota_client=client, stage=quota.Stage.CONVERTER,
+                confirm_backing=confirm_backing))
+            _fill_columns(sink, columns)
+        document = _document(source, sink, diagnostics)
+        if observe is not None:
+            observe("prepared", sink, columns)
+        sink._unchanged()
+        preflight = _Writer()
+        _emit_report(document, preflight)
+        sink._unchanged()
+        ticket = None
+        if client is not None:
+            ticket = client.reserve(quota.Amounts(output_bytes=preflight.count),
+                                    stage=quota.Stage.CONVERTER, artifact=quota.Artifact.STDOUT)
+        if observe is not None:
+            observe("admitted", sink, columns)
+        sink._unchanged()
+        # A late write failure leaves the whole ticket pending for host
+        # reconciliation: an unknown accepted prefix must never be refunded.
+        _emit_report(document, _Writer(1))
+        if ticket is not None:
+            ticket.commit(quota.Amounts(output_bytes=preflight.count), 0)
+            ticket.cancel()
+        if observe is not None:
+            observe("emitted", sink, columns)
+
+
+def main(argv=None, *, confirm_backing=None, observe=None):
+    """Convert; trusted hosts may confirm backings and observe phase boundaries.
+
+    confirm_backing(object_id, generation, fd) is quota_columns' host-only
+    confirmation hook. observe(phase, sink, columns) receives borrowed,
+    read-only state at prepared/admitted/emitted boundaries; columns is None
+    for unmanaged conversion. Neither hook is selected by CLI or metadata.
+    """
     parser = _parser()
     args = parser.parse_args(argv)
     if args.in_fd is not None and args.in_fd == args.stdout_json_fd:
@@ -872,20 +1023,21 @@ def main(argv=None):
     if args.in_fd in (1, 2) or args.stdout_json_fd in (1, 2):
         parser.error("input descriptors must differ from stdout and stderr")
     diagnostics = _Diagnostics()
-    fd, sink = None, None
+    fd, sink, client = None, None, None
     code, event, message = 0, "converter_complete", ""
     failure_fields = {}
     try:
         fd = _open_input(args.input_path, args.in_fd)
         sink = _Sink(fd, args.max_bytes, args.run_id)
         sink.verify()  # FIRST: metadata is not even read before sink acceptance.
+        if quota.mode() == "managed":
+            client = quota.QuotaClient.from_environment(role=quota.Role.CONVERTER)
         source = _load_stdout(args.stdout_json, args.stdout_json_fd, diagnostics)
-        document = _document(source, sink, diagnostics)
-        _emit(document, _Writer())  # deterministic conversion failures before stdout
-        writer = _Writer(1)
-        _emit(document, writer)
-        writer.write(b"\n")
-        writer.flush()  # direct write(2): no Python stdout buffer or exit-time EPIPE
+        _convert(source, sink, diagnostics, client,
+                 confirm_backing=confirm_backing, observe=observe)
+    except quota.QuotaError as error:
+        code, event, message = 3, "quota_refused", str(error)
+        failure_fields = {"code": error.code, "args": error.code_args}
     except _Failure as error:
         code, event, message = error.code, "sink_refused", str(error)
         failure_fields = error.diagnostic_fields()
@@ -895,6 +1047,19 @@ def main(argv=None):
         code, message = 7, type(error).__name__ + ": " + str(error)
         event = "engine_fault" if sink is not None and sink.verified else "converter_fault"
     finally:
+        if client is not None:
+            try:
+                try:
+                    client.finish()
+                finally:
+                    client.close()
+            except quota.QuotaError as error:
+                if code == 0:
+                    code, event, message = 3, "quota_refused", str(error)
+                    failure_fields = {"code": error.code, "args": error.code_args}
+            except OSError as error:
+                code, event, message = 5, "converter_io", str(error)
+                failure_fields = {}
         if fd is not None:
             try:
                 os.close(fd)

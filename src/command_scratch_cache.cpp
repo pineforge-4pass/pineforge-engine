@@ -94,6 +94,9 @@ ScratchStatus CachedScratchBacking::do_write_page(
     const auto before = page_count();
     const auto growth = id >= before ? (id + 1 - before) * size : 0;
     if (budget_ && growth != 0 && !budget_->reserve(growth)) return ScratchStatus::io_error;
+    // Keep this local predicate before write()'s resident/spill choice. Only
+    // the inner disk backing reserves shared scratch bytes; charging here
+    // would count resident pages as disk and charge a spilled prefix twice.
     const auto status = write(id, source);
     // A failed spill keeps the resident prefix authoritative. After spill,
     // ftruncate may have extended the file before a failed/short pwrite;

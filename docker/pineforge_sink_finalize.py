@@ -101,10 +101,21 @@ line "pineforge-sink-finalize: <text>" on stderr when M is not 2.
 With M=2 no separate diagnostic is written. A receipt write failure also
 removes PATH and returns 5; the receiver must require exit 0.
 
+With a host run-quota marker, the finalizer attaches as a finalizer actor.
+It admits one spool file before creation, and storage/output growth before
+each write. Stdout admits output bytes only. The local --max-bytes check
+still precedes each chunk's quota admission. Renaming the spool adds no
+storage or output charge. The host must independently confirm its backing
+inode before accepting file commits, as required by the quota protocol.
+Aggregate refusals exit 3 and append the typed diagnostic fields to the
+receipt on every receipt descriptor; they never use reason=sink_exhausted.
+Receipt/diagnostic bytes use the host's separate control allowance.
+Without a marker no quota module is imported or channel contacted.
+
 Exit codes:
   0  complete and verified; sink delivered/published and receipt written
   2  usage error
-  3  malformed stream (JSON/schema/line rule, run-id mismatch, or E/T/O/K order) or a host-profile refusal (text diagnostic naming the reason on stderr only when --receipt-fd is not 2; with --receipt-fd 2, the ordinary failure receipt only, indistinguishable from a malformed stream)
+  3  malformed stream (JSON/schema/line rule, run-id mismatch, or E/T/O/K order), a typed run-quota refusal, or a host-profile refusal (text diagnostic naming the reason on stderr only when --receipt-fd is not 2; with --receipt-fd 2, the ordinary failure receipt only, indistinguishable from a malformed stream)
   4  verification failure: trailer grammar, counts, SHA-256, or extra bytes
   5  input/output I/O failure (including receipt/rename)
   6  EOF without a trailer, including empty input/final fragments
@@ -162,6 +173,139 @@ class _Failure(Exception):
         if self.failure_code is None:
             return {}
         return {"code": self.failure_code, "args": self.failure_args}
+
+
+class _QuotaFailure(_Failure):
+    def __init__(self, error):
+        super().__init__(3, str(error), failure_code=error.code,
+                         failure_args=error.code_args)
+
+
+class _Quota:
+    """Managed-only admission; the host, never this client, confirms inodes."""
+
+    def __init__(self):
+        self.api = None
+        self.client = None
+        self.finished = False
+        self.object_id = 0
+        self.extent = 0
+        self.identity = (0, 0)
+        self.registered = False
+        self.uncertain = False
+
+    def _call(self, function, *args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except self.api.QuotaError as error:
+            raise _QuotaFailure(error) from error
+
+    def attach(self):
+        import secrets
+        import run_quota
+
+        self.api = run_quota
+        self.object_id = secrets.randbits(64) or 1
+        self.client = self._call(
+            run_quota.QuotaClient.from_environment, role=run_quota.Role.FINALIZER)
+
+    def _fields(self, new_extent):
+        return dict(object_id=self.object_id, generation=1,
+                    old_extent=self.extent, new_extent=new_extent,
+                    stage=self.api.Stage.FINALIZER, artifact=self.api.Artifact.SPOOL,
+                    device=self.identity[0], inode=self.identity[1])
+
+    def reserve_spool(self):
+        return self._call(self.client.reserve, self.api.Amounts(scratch_files=1),
+                          **self._fields(0))
+
+    def cancel(self, ticket):
+        self._call(ticket.cancel)
+
+    def spool_created(self, ticket, fd):
+        self.uncertain = True
+        metadata = os.fstat(fd)
+        self._call(ticket.commit, self.api.Amounts(scratch_files=1), 0,
+                   device=metadata.st_dev, inode=metadata.st_ino)
+        self.identity = (metadata.st_dev, metadata.st_ino)
+        self.registered = True
+        self.cancel(ticket)
+        self.uncertain = False
+
+    def _settle_write(self, ticket, fd, old_extent, produced, spool):
+        if spool:
+            metadata = os.fstat(fd)
+            if (metadata.st_dev, metadata.st_ino) != self.identity or (
+                    metadata.st_size != old_extent + produced):
+                raise OSError(errno.EIO, "spool extent changed unexpectedly")
+            actual = metadata.st_size
+            amounts = self.api.Amounts(scratch_bytes=produced, output_bytes=produced)
+            self._call(ticket.commit, amounts, actual,
+                       device=metadata.st_dev, inode=metadata.st_ino)
+            self.extent = actual
+        else:
+            self._call(ticket.commit, self.api.Amounts(output_bytes=produced), 0)
+        self.cancel(ticket)
+        if spool:
+            self.uncertain = False
+
+    def write(self, fd, data, *, spool=False):
+        remaining = memoryview(data)
+        while remaining:
+            # Admit a fitting prefix, then probe one byte at a full resource.
+            # Snapshot is only a sizing hint; RESERVE remains authoritative
+            # when another actor changes the shared ledger in between.
+            size = len(remaining)
+            resources = ((self.api.Resource.SCRATCH_BYTES, self.api.Resource.OUTPUT_BYTES)
+                         if spool else (self.api.Resource.OUTPUT_BYTES,))
+            for resource in resources:
+                usage = self._call(self.client.snapshot, resource)
+                size = min(size, max(1, usage.limit - usage.used))
+            old_extent = self.extent if spool else 0
+            amounts = self.api.Amounts(
+                scratch_bytes=size if spool else 0, output_bytes=size)
+            fields = (self._fields(old_extent + size) if spool else
+                      dict(stage=self.api.Stage.FINALIZER, artifact=self.api.Artifact.SINK))
+            ticket = self._call(self.client.reserve, amounts, **fields)
+            if spool:
+                self.uncertain = True
+            produced = 0
+            try:
+                while produced < size:
+                    written = os.write(fd, remaining[produced:size])
+                    if written <= 0:
+                        raise OSError(errno.EIO, "write made no progress")
+                    produced += written
+            except BaseException:
+                try:
+                    self._settle_write(ticket, fd, old_extent, produced, spool)
+                except BaseException:
+                    # Unknown realization remains reserved for the host.
+                    # Preserve the original I/O failure or interruption.
+                    pass
+                raise
+            else:
+                self._settle_write(ticket, fd, old_extent, produced, spool)
+            remaining = remaining[produced:]
+
+    def removed_spool(self):
+        # Called only after removal and the finalizer's last spool close.
+        # An uncertain commit must remain charged for host reconciliation.
+        if self.registered and not self.uncertain:
+            self._call(self.client.release,
+                       self.api.Amounts(scratch_bytes=self.extent, scratch_files=1),
+                       **self._fields(0))
+            self.registered = False
+            self.extent = 0
+
+    def finish(self):
+        if self.client is not None and not self.finished:
+            self.finished = True
+            self._call(self.client.finish, self.api.Resource.SCRATCH_BYTES)
+
+    def close(self):
+        if self.client is not None:
+            self.client.close()
 
 
 def _check_equity(record) -> None:
@@ -280,7 +424,8 @@ class _StreamInput(io.RawIOBase):
         return len(chunk)
 
 
-def _receive(in_fd: int, spool_fd: int, receipt: _Receipt, max_bytes: int | None) -> None:
+def _receive(in_fd: int, spool_fd: int, receipt: _Receipt, max_bytes: int | None, *,
+             quota: _Quota | None = None) -> None:
     line_bytes = 0
     while True:
         # Read only one byte beyond a cap, enough to distinguish exact fit
@@ -294,7 +439,10 @@ def _receive(in_fd: int, spool_fd: int, receipt: _Receipt, max_bytes: int | None
         if max_bytes is not None and receipt.sink_bytes > max_bytes:
             raise _Failure(8, "stream exceeds --max-bytes")
         line_bytes = _line_bound(chunk, line_bytes)
-        _write_all(spool_fd, chunk)
+        if quota is None:
+            _write_all(spool_fd, chunk)
+        else:
+            quota.write(spool_fd, chunk, spool=True)
 
 
 def _reader_code(error: SinkFormatError) -> int:
@@ -310,13 +458,14 @@ def _reader_code(error: SinkFormatError) -> int:
 
 
 def _verify(path: str | None, run_id: str | None, receipt: _Receipt, *,
-            stream=None, out_fd: int | None = None) -> None:
+            stream=None, out_fd: int | None = None, quota: _Quota | None = None) -> None:
+    write = _write_all if quota is None else quota.write
     try:
         with _FinalizerReader(path, stream=stream) as reader:
             if run_id is not None and reader.header["run_id"] != run_id:
                 raise _Failure(3, "header run_id differs from --run-id")
             if out_fd is not None:
-                _write_all(out_fd, reader.line)
+                write(out_fd, reader.line)
             reader.line = b""
             last_equity_time = None
             next_trade, next_output, constants = 1, 0, 0
@@ -343,7 +492,7 @@ def _verify(path: str | None, run_id: str | None, receipt: _Receipt, *,
                         if constants > 1:
                             raise _Failure(3, "constants record is repeated")
                     if out_fd is not None:
-                        _write_all(out_fd, reader.line)
+                        write(out_fd, reader.line)
                     reader.line = b""
                     del record
             finally:
@@ -351,7 +500,7 @@ def _verify(path: str | None, run_id: str | None, receipt: _Receipt, *,
             if not reader.complete:
                 raise _Failure(4, "strict reader did not verify completion")
             if out_fd is not None:
-                _write_all(out_fd, reader.line)
+                write(out_fd, reader.line)
             receipt.sha256 = reader.sha256
     except SinkFormatError as error:
         raise _Failure(_reader_code(error), str(error)) from error
@@ -425,19 +574,34 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--out - requires --receipt-fd different from stdout (fd 1)")
     if args.max_bytes is not None and args.max_bytes < 0:
         parser.error("--max-bytes must be a nonnegative integer")
+    # Limit variables alone do not select management. A partial/invalid
+    # marker is still passed to the client for its typed configuration refusal.
+    quota = (_Quota() if any(name in os.environ for name in (
+        "PF_RUN_QUOTA_MODE", "PF_RUN_QUOTA_NATIVE_FD", "PF_RUN_QUOTA_PYTHON_FD")) else None)
+    try:
+        return _finalize(args, stdout_mode, quota, profile)
+    finally:
+        if quota is not None:
+            quota.close()
+
+
+def _finalize(args, stdout_mode: bool, quota: _Quota | None, profile: str) -> int:
     out = None if stdout_mode else os.path.abspath(args.out)
     receipt = _Receipt()
     spool = None
     owns_output = False
     status = 0
     failure_diagnostic = {}
+    quota_refusal = False
     try:
         if profile not in ("unjailed", "jailed"):
             raise _Failure(3, "PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed")
+        if quota is not None:
+            quota.attach()
         if stdout_mode:
             with io.BufferedReader(_StreamInput(args.in_fd, receipt, args.max_bytes),
                                    buffer_size=CHUNK_BYTES) as stream:
-                _verify(None, args.run_id, receipt, stream=stream, out_fd=1)
+                _verify(None, args.run_id, receipt, stream=stream, out_fd=1, quota=quota)
         else:
             if profile == "jailed":
                 raise _Failure(
@@ -447,19 +611,31 @@ def main(argv: list[str] | None = None) -> int:
                          else os.path.dirname(out))
             _unlink(out)
             owns_output = True
-            spool_fd, spool = tempfile.mkstemp(prefix=".pineforge-sink-", suffix=".spool", dir=directory)
+            ticket = quota.reserve_spool() if quota is not None else None
             try:
+                spool_fd, spool = tempfile.mkstemp(
+                    prefix=".pineforge-sink-", suffix=".spool", dir=directory)
+            except BaseException:
+                if ticket is not None:
+                    quota.cancel(ticket)
+                raise
+            try:
+                if ticket is not None:
+                    quota.spool_created(ticket, spool_fd)
                 # mkstemp is 0600 or stricter under umask; keep the promised mode.
                 os.fchmod(spool_fd, 0o600)
-                _receive(args.in_fd, spool_fd, receipt, args.max_bytes)
+                _receive(args.in_fd, spool_fd, receipt, args.max_bytes, quota=quota)
                 os.fsync(spool_fd)
             finally:
                 os.close(spool_fd)
             _verify(spool, args.run_id, receipt)
             os.replace(spool, out)
             spool = None
+        if quota is not None:
+            quota.finish()
     except _Failure as error:
         status = error.code
+        quota_refusal = isinstance(error, _QuotaFailure)
         fields = error.diagnostic_fields()
         if fields:
             failure_diagnostic = {
@@ -477,15 +653,31 @@ def main(argv: list[str] | None = None) -> int:
         if spool is not None:
             try:
                 _unlink(spool)
+                if quota is not None:
+                    quota.removed_spool()
             except OSError as error:
                 status = 5
                 _diagnostic(f"spool cleanup failed: {error}", args.receipt_fd)
+            except _QuotaFailure:
+                # Keep the primary refusal (including local exit 8).
+                pass
         if status and owns_output:
             try:
                 _unlink(out)
+                if quota is not None:
+                    quota.removed_spool()
             except OSError as error:
                 status = 5
                 _diagnostic(f"output cleanup failed: {error}", args.receipt_fd)
+            except _QuotaFailure:
+                pass
+        if quota is not None:
+            try:
+                quota.finish()
+            except _QuotaFailure:
+                # FINISH echoes an already latched refusal; do not replace
+                # the failure that stopped receiving or forwarding.
+                pass
     if stdout_mode:
         # Sink writes use write(2). Flush after output stops, on failure too,
         # and require flush success before constructing any receipt.
@@ -502,7 +694,8 @@ def main(argv: list[str] | None = None) -> int:
         # final exit-8 outcome gets the exhaustion-specific receipt keys.
         receipt.cap_bytes = args.max_bytes if status == 8 else None
         document = receipt.document(status == 0)
-        if args.receipt_fd == 2 and status == failure_diagnostic.get("exit_code"):
+        if ((args.receipt_fd == 2 or quota_refusal)
+                and status == failure_diagnostic.get("exit_code")):
             document.update(failure_diagnostic)
         line = json.dumps(document, separators=(",", ":"), allow_nan=False)
         _write_all(args.receipt_fd, line.encode("ascii") + b"\n")
@@ -517,9 +710,13 @@ def main(argv: list[str] | None = None) -> int:
     if owns_output:
         try:
             _unlink(out)
+            if quota is not None:
+                quota.removed_spool()
         except OSError as error:
             status = 5
             _diagnostic(f"output cleanup failed: {error}", args.receipt_fd)
+        except _QuotaFailure:
+            pass
     return status
 
 
