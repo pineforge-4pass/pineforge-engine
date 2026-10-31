@@ -2326,8 +2326,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
             ${PROJECT_SOURCE_DIR}/tests/entrypoint_limits/test_compile_limits.py
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-    set_tests_properties(test_report_channel_contract test_report_channel_deadlines
-        test_entrypoint_compile_limits PROPERTIES LABELS "report-channel")
+    set_tests_properties(test_report_channel_contract test_entrypoint_compile_limits PROPERTIES LABELS "report-channel")
+    set_tests_properties(test_report_channel_deadlines PROPERTIES LABELS "report-channel" RUN_SERIAL TRUE)
 endif()
 
 # OFF identity of the opt-in report channel: the same fixed requests through main's own

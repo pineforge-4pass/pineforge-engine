@@ -33,6 +33,11 @@ PROBE_FAILURE = b"fixture compiler: requested probe failure\n"
 BINDER_FAILURE = b"fixture binder: requested inventory failure\n"
 STOP_GRACE_SECONDS = 1.0
 STARTUP_ALLOWANCE_SECONDS = 0.75
+# Outside hang guard for a run that really compiles the fixture strategy with the host g++
+# and expects it to finish: it only ends a stuck run, no assertion measures against it.
+# A Debug or sanitizer ctest leg runs this row beside hundreds of heavy rows, and a real
+# compile then took longer than the former 20 s.
+HANG_GUARD_SECONDS = 180
 
 
 class Invocation:
@@ -110,7 +115,7 @@ class Box:
             "PF_ENTRYPOINT_FIXTURE_RUN_STARTED": str(root / "run-started"),
         })
 
-    def run(self, extra=None, *, entrypoint=ENTRYPOINT, timeout=20, trace_reads=False,
+    def run(self, extra=None, *, entrypoint=ENTRYPOINT, timeout=HANG_GUARD_SECONDS, trace_reads=False,
             trace_processes=False, inherited_as=None, stderr_sink=None):
         env = dict(self.env)
         env.update(extra or {})
@@ -463,7 +468,7 @@ def test_guard_restores_the_callers_stderr_flags(box, nonblocking, outcome):
         if nonblocking:
             flags |= os.O_NONBLOCK
         fcntl.fcntl(sink, fcntl.F_SETFL, flags)
-        result = box.run(extra, stderr_sink=sink, timeout=4 if outcome == "deadline" else 20)
+        result = box.run(extra, stderr_sink=sink, timeout=4 if outcome == "deadline" else HANG_GUARD_SECONDS)
         assert fcntl.fcntl(sink, fcntl.F_GETFL) == flags
     if outcome == "success":
         assert result.returncode == 0, (result.stdout, result.stderr)
