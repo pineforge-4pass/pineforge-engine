@@ -7,6 +7,12 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- **Validation grading ([#664]).** Strategies whose `strategy.exit` uses a
+  `trail_points`, `trail_offset` or `trail_price` parameter now use the
+  production profile with the existing count and entry limits, a 0.02% exit
+  limit and a 1% P&L limit. The exit and P&L gates remain per-strategy
+  90th-percentile measurements.
+
 ## 1.9.1 — 2026-10-31
 
 - A script container (string, array, map or object store) whose scratch

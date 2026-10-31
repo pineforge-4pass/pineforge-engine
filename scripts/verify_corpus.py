@@ -44,9 +44,10 @@ from pathlib import Path
 # Two profiles available:
 #  - STRICT: tight on all four dims (indicator-style strategies whose exits
 #    land on deterministic OHLC levels).
-#  - PRODUCTION: relaxes exit (5x) and per-trade pnl (~100x) to absorb TV's
-#    broker-emulator sub-bar fill drift. Auto-applied when strategy.pine uses
-#    any trail_* parameter on strategy.exit.
+#  - PRODUCTION: keeps count and entry at the strict limits, relaxes exit to
+#    0.02% and keeps per-strategy P&L at 1.0% to absorb trail fill drift.
+#    Auto-applied when strategy.pine uses any trail_* parameter on
+#    strategy.exit.
 STRICT_COUNT_DELTA = 0.01      # 1.0%
 STRICT_ENTRY_DELTA = 0.0001    # 0.01%
 STRICT_EXIT_DELTA  = 0.0001    # 0.01%
@@ -54,8 +55,8 @@ STRICT_PNL_DELTA   = 0.01      # 1.0%
 
 PRODUCTION_COUNT_DELTA = 0.01    # 1.0%   — same as strict
 PRODUCTION_ENTRY_DELTA = 0.0001  # 0.01%  — entries must stay tight
-PRODUCTION_EXIT_DELTA  = 0.0005  # 0.05%  — exits absorb sub-bar broker drift
-PRODUCTION_PNL_DELTA   = 1.0     # 100%   — gate only catastrophic divergence
+PRODUCTION_EXIT_DELTA  = 0.0002  # 0.02%  — exits absorb trail fill drift
+PRODUCTION_PNL_DELTA   = 0.01    # 1.0%   — same P&L limit as strict
 
 STRONG_COUNT_DELTA = 0.06
 STRONG_ENTRY_DELTA = 0.001
