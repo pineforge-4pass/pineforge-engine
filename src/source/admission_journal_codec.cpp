@@ -514,11 +514,12 @@ detail::ScratchStatus fold_validated_journal_record(const detail::ScratchByteSou
     JournalRecordSummary candidate;
     const detail::ReportScratchIoError* unused = nullptr;
     const auto status = decode<false,true>(input,page,scratch,candidate,unused,&fold);
-    if (input.failure != Status::ok && fold.validation_skipped) {
+    if (status != Status::ok && fold.validation_skipped) {
         // A skipped text region changes the old scan's refill boundaries.
-        // On a read failure only, replay that scan to retain its validation
-        // priority (including its tag-read error handling). Never retry the
-        // hash or turn the original read failure into a successful query.
+        // On any fused failure, replay that scan to retain its validation
+        // priority: its next page can fail before the fused schema error.
+        // Keep its tag-read error handling too. Never retry the hash or turn
+        // the original failure into a successful query.
         JournalRecordSummary checked;
         const auto validation = scan_journal_record(source,page,checked);
         if (validation != Status::ok) {
@@ -527,7 +528,7 @@ detail::ScratchStatus fold_validated_journal_record(const detail::ScratchByteSou
             return validation;
         }
         if (failure) *failure = input.carried;
-        return input.failure;
+        return input.failure != Status::ok ? input.failure : status;
     }
     if (failure && status == Status::io_error) *failure = input.carried;
     if (status == Status::ok) {

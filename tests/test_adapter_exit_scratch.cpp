@@ -22,10 +22,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
+#include <typeinfo>
 #include <vector>
 
 namespace {
@@ -572,6 +576,299 @@ void batch_visibility_boundaries() {
     CHECK(!store.transaction_active());
     CHECK(store.record_count() == 0);
 }
+
+namespace pd = pineforge::detail;
+namespace sd = source::detail;
+
+struct RowFailureObservation {
+    const std::type_info* type = nullptr;
+    std::string message;
+    RunFailureValue failure;
+    std::optional<pd::ScratchStatus> status;
+    std::optional<std::error_code> error_code;
+};
+
+template<class Operation>
+RowFailureObservation observe_row_failure(Operation operation) {
+    RowFailureObservation result;
+    try {
+        operation();
+    } catch (const std::exception& error) {
+        result.type = &typeid(error);
+        result.message = error.what();
+        result.failure = classify_run_failure(error);
+        if (const auto* scratch = dynamic_cast<const sd::ExitScratchError*>(&error))
+            result.status = scratch->status();
+        if (const auto* io = dynamic_cast<const std::system_error*>(&error))
+            result.error_code = io->code();
+    }
+    return result;
+}
+
+void compare_row_failures(const RowFailureObservation& actual,
+                          const RowFailureObservation& expected) {
+    CHECK(expected.type != nullptr);
+    CHECK(actual.type != nullptr);
+    if (actual.type && expected.type) CHECK(*actual.type == *expected.type);
+    CHECK(actual.message == expected.message);
+    CHECK(actual.status == expected.status);
+    CHECK(actual.error_code == expected.error_code);
+    CHECK(actual.failure.code == expected.failure.code);
+    CHECK(bool(actual.failure.args) == bool(expected.failure.args));
+    if (actual.failure.args && expected.failure.args)
+        CHECK(*actual.failure.args == *expected.failure.args);
+}
+
+class RowFaultBacking final : public pd::ScratchBacking {
+public:
+    explicit RowFaultBacking(pd::FixedMemoryScratchBacking& inner)
+        : ScratchBacking(inner.kind(), inner.page_size()), inner_(inner) {}
+    std::uint64_t page_count() const noexcept override { return inner_.page_count(); }
+    const pd::ReportScratchIoError* carried_failure() const noexcept override {
+        return last_failed_ && typed_ ? &failure_ : nullptr;
+    }
+    void arm(bool typed) noexcept {
+        fail_publication_ = true;
+        typed_ = typed;
+    }
+    std::size_t faults = 0;
+    pd::ScratchPageId failed_page = pd::scratch_no_page;
+
+protected:
+    pd::ScratchStatus do_read_page(pd::ScratchPageId page,
+                                   pd::ScratchBuffer destination) const noexcept override {
+        last_failed_ = false;
+        return inner_.read_page(page, destination);
+    }
+    pd::ScratchStatus do_write_page(pd::ScratchPageId page,
+                                    pd::ScratchBytes bytes) noexcept override {
+        last_failed_ = false;
+        // commit_impl publishes to next.seq & 1, so only pages 0 and 1
+        // identify publication writes. Other writes still exercise the real
+        // backing, including dirty evictions while comparing keys.
+        if (fail_publication_ && page < 2) {
+            fail_publication_ = false; // One refused write; rollback is serviceable.
+            ++faults;
+            failed_page = page;
+            last_failed_ = true;
+            return pd::ScratchStatus::io_error;
+        }
+        return inner_.write_page(page, bytes);
+    }
+    pd::ScratchStatus do_sync(pd::ScratchDurability durability) noexcept override {
+        last_failed_ = false;
+        return inner_.sync(durability);
+    }
+
+private:
+    pd::FixedMemoryScratchBacking& inner_;
+    pd::ReportScratchIoError failure_{ENOSPC, "exit scratch backing write"};
+    bool fail_publication_ = false;
+    bool typed_ = false;
+    mutable bool last_failed_ = false;
+};
+
+struct PartialBatchFixture {
+    // Same backing geometry as the construction fixtures; no observers, so
+    // the bounded-batch path is exercised rather than its per-row fallback.
+    static constexpr std::size_t page_size = pd::scratch_min_page_size;
+    std::array<std::byte, 1024 * page_size> bytes{};
+    pd::FixedMemoryScratchBacking memory{{bytes.data(), bytes.size()}, page_size};
+    RowFaultBacking backing{memory};
+    pd::CommandScratchStore store{
+        {2, page_size, 1, 1, sd::exit_scratch_key_order(),
+         pd::ScratchOpenMode::create_empty}, &backing};
+    sd::ExitScratchContext context{store, handle(1).run};
+
+    PartialBatchFixture() {
+        CHECK(store.status() == pd::ScratchStatus::ok);
+        CHECK(!store.has_io_observer());
+        CHECK(!context.observe_rows && !context.observe_lookup);
+    }
+    void check_clean() const {
+        CHECK(!store.transaction_active());
+        CHECK(!context.teardown_failure.pending());
+        CHECK(store.record_count() == 0);
+    }
+};
+
+enum class PartialBatchFailure { identity, commit, teardown };
+
+template<sd::ExitScratchRowMode Mode>
+RowFailureObservation partial_batch_failure(PartialBatchFailure fault,
+        std::size_t committed, std::size_t pending, bool typed = false) {
+    PartialBatchFixture fixture;
+    RowFailureObservation result;
+    const auto cleanup = observe_row_failure([&] {
+        sd::ExitScratchRows<Handle, Mode> rows(fixture.context);
+        for (std::size_t i = 0; i < committed; ++i) rows.push_back(handle(i + 1));
+        rows.finish();
+        // Both modes attempt the same input rows. For a commit fault the
+        // per-row reference fails while appending its last row; the batch
+        // fails when finish publishes those already staged rows.
+        const auto prepared = fault == PartialBatchFailure::commit
+                && Mode == sd::ExitScratchRowMode::per_row ? pending - 1 : pending;
+        for (std::size_t i = 0; i < prepared; ++i)
+            rows.push_back(handle(committed + i + 1));
+        CHECK(rows.size() == committed + prepared);
+        CHECK(fixture.store.transaction_active()
+            == (Mode == sd::ExitScratchRowMode::bounded_batch));
+        if (fault == PartialBatchFailure::teardown)
+            fixture.context.teardown_failure.remember(pd::ScratchStatus::corrupt, fixture.store);
+        result = observe_row_failure([&] {
+            switch (fault) {
+            case PartialBatchFailure::identity: {
+                auto foreign = handle(committed + prepared + 1);
+                ++foreign.run.run_number;
+                rows.push_back(foreign);
+                break;
+            }
+            case PartialBatchFailure::commit:
+                fixture.backing.arm(typed);
+                if constexpr (Mode == sd::ExitScratchRowMode::per_row)
+                    rows.push_back(handle(committed + pending));
+                else rows.finish();
+                break;
+            case PartialBatchFailure::teardown:
+                if constexpr (Mode == sd::ExitScratchRowMode::per_row)
+                    rows.push_back(handle(committed + prepared + 1));
+                else rows.finish();
+                break;
+            }
+        });
+        CHECK(result.type != nullptr);
+        // Check before destruction too: a destructor-only fix cannot hide
+        // an active transaction from the caller that catches this failure.
+        CHECK(!fixture.store.transaction_active());
+        CHECK(rows.size() == committed + prepared);
+        // Rollback restores the last batch boundary. In the per-row reference
+        // all preceding successful appends are already committed.
+        const auto survivors = Mode == sd::ExitScratchRowMode::bounded_batch
+            ? committed : committed + prepared;
+        CHECK(fixture.store.record_count() == survivors);
+        if (!fixture.store.transaction_active()) {
+            // Inspect the store directly: the failed builder is abandoned,
+            // and the teardown test deliberately still has a pending failure.
+            pd::ScratchHandle current = 0;
+            auto status = fixture.store.first(current);
+            std::size_t visited = 0;
+            for (; visited < survivors && status == pd::ScratchStatus::ok; ++visited) {
+                sd::ExitScratchKeyWords key{};
+                std::uint64_t incarnation = 0;
+                CHECK(fixture.store.read(current, pd::ScratchField::key, 0,
+                    {reinterpret_cast<std::byte*>(key.data()), sizeof(key)})
+                    == pd::ScratchStatus::ok);
+                CHECK((key == sd::ExitScratchKeyWords{rows.scope(), 0, 0, visited}));
+                CHECK(fixture.store.read(current, pd::ScratchField::value, 0,
+                    {reinterpret_cast<std::byte*>(&incarnation), sizeof(incarnation)})
+                    == pd::ScratchStatus::ok);
+                CHECK(incarnation == handle(visited + 1).incarnation);
+                status = fixture.store.next(current, current);
+            }
+            CHECK(visited == survivors);
+            CHECK(status == pd::ScratchStatus::end);
+        }
+        if (fault == PartialBatchFailure::commit) {
+            CHECK(fixture.backing.faults == 1); // The armed failure is one shot.
+            CHECK(fixture.backing.failed_page != pd::scratch_no_page);
+            CHECK(fixture.backing.failed_page < 2);
+        }
+        if (fault == PartialBatchFailure::teardown) {
+            CHECK(fixture.context.teardown_failure.pending());
+            // Clear only this deliberately injected prior failure, after
+            // observing rollback, so the ordinary scope erase can run.
+            fixture.context.teardown_failure = sd::ExitScratchTeardownFailure{};
+        } else CHECK(!fixture.context.teardown_failure.pending());
+    });
+    CHECK(cleanup.type == nullptr);
+    // The relation differs just after rollback, but scope destruction erases
+    // every surviving row in either mode. It must leave the context reusable.
+    fixture.check_clean();
+    return result;
+}
+
+void partial_batch_errors() {
+    constexpr auto per_row = sd::ExitScratchRowMode::per_row;
+    constexpr auto batched = sd::ExitScratchRowMode::bounded_batch;
+    constexpr auto batch = sd::kExitScopeEraseBatch;
+    for (const std::size_t committed : {std::size_t{0}, batch}) {
+        for (const std::size_t pending : {std::size_t{17}, batch - 1}) {
+            for (const auto fault : {PartialBatchFailure::identity, PartialBatchFailure::teardown}) {
+                scenario = fault == PartialBatchFailure::identity
+                    ? "partial batch foreign-run rollback" : "partial batch teardown rollback";
+                // Derive exception type, status, code, arguments and message
+                // from the unchanged per-row path with the same failed input.
+                const auto expected = partial_batch_failure<per_row>(fault, committed, pending);
+                const auto actual = partial_batch_failure<batched>(fault, committed, pending);
+                compare_row_failures(actual, expected);
+            }
+            scenario = "partial batch backing commit failure";
+            for (bool typed : {false, true}) {
+                const auto expected = partial_batch_failure<per_row>(
+                    PartialBatchFailure::commit, committed, pending, typed);
+                const auto actual = partial_batch_failure<batched>(
+                    PartialBatchFailure::commit, committed, pending, typed);
+                compare_row_failures(actual, expected);
+            }
+        }
+    }
+}
+
+void unfinished_batch_cleanup() {
+    scenario = "unfinished batch scope cleanup";
+    const std::runtime_error caller_failure("snapshot caller failure");
+    const auto expected = observe_row_failure([&] { throw caller_failure; });
+    for (bool unwinding : {false, true}) {
+        PartialBatchFixture fixture;
+        const auto actual = observe_row_failure([&] {
+            sd::ExitScratchBatchRows<Handle> rows(fixture.context);
+            for (std::size_t i = 0; i < sd::kExitScopeEraseBatch - 1; ++i)
+                rows.push_back(handle(i + 1));
+            CHECK(fixture.store.transaction_active());
+            if (unwinding) throw caller_failure;
+        });
+        if (unwinding) compare_row_failures(actual, expected);
+        else CHECK(actual.type == nullptr);
+        fixture.check_clean();
+    }
+}
+
+void partial_batch_boundary() {
+    scenario = "partial batch final publication and move";
+    PartialBatchFixture fixture;
+    auto* state = fixture.store.*access(ScratchState{});
+    CHECK(state != nullptr);
+    if (!state) return;
+    const auto sequence_before = state->cur_.seq;
+    constexpr auto population = sd::kExitScopeEraseBatch - 1;
+    const auto cleanup = observe_row_failure([&] {
+        std::optional<sd::ExitScratchBatchRows<Handle>> moved;
+        {
+            sd::ExitScratchBatchRows<Handle> rows(fixture.context);
+            for (std::size_t i = 0; i < population; ++i)
+                rows.push_back(handle(population - i));
+            CHECK(rows.size() == population);
+            CHECK(state->cur_.seq == sequence_before);
+            CHECK(fixture.store.transaction_active());
+            moved.emplace(std::move(rows));
+        } // The moved-from builder must not roll back the transferred batch.
+        CHECK(fixture.store.transaction_active());
+        CHECK(moved->size() == population);
+        for (std::size_t i = 0; i < population; ++i)
+            CHECK((*moved)[i] == handle(population - i));
+        moved->finish();
+        CHECK(!fixture.store.transaction_active());
+        const auto publications = population / sd::kExitScopeEraseBatch
+            + (population % sd::kExitScopeEraseBatch != 0);
+        CHECK(state->cur_.seq == sequence_before + publications);
+        moved->finish();
+        CHECK(state->cur_.seq == sequence_before + publications);
+        for (std::size_t i = 0; i < population; ++i)
+            CHECK((*moved)[i] == handle(population - i));
+    });
+    CHECK(cleanup.type == nullptr);
+    fixture.check_clean();
+}
 #endif
 
 void child_rows(std::size_t population) {
@@ -1090,6 +1387,9 @@ int main(int argc, char** argv) {
         construction_publications();
         batch_visibility_boundaries();
         observed_construction_publications();
+        partial_batch_errors();
+        unfinished_batch_cleanup();
+        partial_batch_boundary();
     }
 #endif
     for (const auto population : {17U, 129U, 513U}) {

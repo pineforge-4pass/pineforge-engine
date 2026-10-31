@@ -69,6 +69,22 @@ struct Model {
             digest = (digest ^ std::to_integer<unsigned>(byte)) * 1099511628211ULL;
         return digest;
     }
+    std::uint64_t value_offset(const char* path) const {
+        // Storage starts with the row count. Each field has a length-prefixed
+        // path, a tag word, then a scalar word or length-prefixed text.
+        constexpr std::uint64_t word_bytes = sizeof(std::uint64_t);
+        std::uint64_t offset = word_bytes;
+        for (const auto& field : fields) {
+            offset += word_bytes + field.path.size() + word_bytes;
+            if (field.path == path) return offset;
+            offset += std::visit([](const auto& value) -> std::uint64_t {
+                if constexpr (std::is_same_v<std::decay_t<decltype(value)>, std::string>)
+                    return sizeof(std::uint64_t) + value.size();
+                else return sizeof(std::uint64_t);
+            }, field.value);
+        }
+        throw std::runtime_error("wire offset names a real field");
+    }
 };
 class Source final : public pd::ScratchByteSource {
     const pd::ScratchByteSource& source_;
@@ -191,21 +207,77 @@ void valid_rows() {
 }
 
 void compare_failure(const Bytes& wire, std::uint64_t fault,
-                     std::uint64_t after_sequence = 0) {
+                     std::uint64_t after_sequence = 0,
+                     const pd::ReportScratchIoError* typed_error = nullptr) {
     const pd::ScratchSpanSource span({wire.data(), wire.size()});
     Source old_source(span), source(span);
     old_source.fault = source.fault = fault;
+    old_source.typed_error = source.typed_error = typed_error;
     std::array<std::byte, 512> page{};
     const pd::ScratchBuffer buffer{page.data(), page.size()};
     const ad::JournalRecordSummary sentinel{991, -31, true};
     auto old_summary = sentinel, summary = sentinel;
     auto old_digest = seed, digest = seed;
+    // Expected status and diagnostic come from the retained old two-pass
+    // implementation, never from the fused loader under comparison.
     const auto old_status = legacy_fold(old_source, buffer, old_summary, old_digest, after_sequence);
-    const auto status = ad::fold_validated_journal_record(source, buffer, summary, digest, after_sequence);
+    const auto* expected_failure = old_status == Status::io_error
+        ? old_source.carried_failure() : nullptr;
+    std::optional<pd::ReportScratchIoError> failure;
+    const auto status = ad::fold_validated_journal_record(source, buffer, summary, digest,
+                                                          after_sequence, &failure);
     require(status == old_status && same(summary, old_summary) && digest == old_digest,
             "failure status and publication equal validation followed by folding");
+    require(bool(failure) == (expected_failure != nullptr),
+            "failure diagnostic presence equals validation followed by folding");
+    if (expected_failure) {
+        require(failure->code() == expected_failure->code()
+                && std::strcmp(failure->what(), expected_failure->what()) == 0
+                && failure->run_failure_code() == expected_failure->run_failure_code()
+                && bool(failure->run_failure().args) == bool(expected_failure->run_failure().args),
+                "failure error code, English and typed code equal the old composite");
+        if (expected_failure->run_failure().args)
+            require(*failure->run_failure().args == *expected_failure->run_failure().args,
+                    "failure arguments equal the old composite");
+    }
     require(status != Status::ok, "the mutation or fault must actually reject");
     require(same(summary, sentinel) && digest == seed, "failure publishes neither output");
+}
+void skipped_text_schema_faults() {
+    constexpr std::uint64_t page_size = 512;
+    const auto event = command(8193);
+    Model changed(event);
+    const auto id_end = changed.value_offset("event.observation.id") + sizeof(std::uint64_t)
+        + std::get<ad::CommandEvent>(event).observation->id.size();
+    const auto quantity_end = changed.value_offset("event.observation.quantity_type")
+        + sizeof(std::uint64_t);
+    bool mutated = false;
+    for (auto& field : changed.fields) {
+        if (field.path != "event.observation.quantity_type") continue;
+        if (field.value.index() == 0) field.value = std::uint64_t{99};
+        else field.value = std::int64_t{std::numeric_limits<std::int64_t>::max()};
+        mutated = true;
+    }
+    require(mutated, "schema fault changes the quantity-type field");
+    const auto wire = changed.bytes(true);
+    // Reader::text(..., false) skips to id_end; the old scan refills there.
+    // The fused reader consumes text and refills on consecutive page edges.
+    // Thus the old scan reads the tail beyond the fused quantity-type page
+    // before checking that scalar. Derive both edges from the wire widths.
+    const auto fused_end = (quantity_end + page_size - 1) / page_size * page_size;
+    const auto scan_end = std::min<std::uint64_t>(id_end + page_size, wire.size());
+    require(id_end < quantity_end && quantity_end <= fused_end && fused_end < scan_end,
+            "the skipped-text scan page extends beyond the malformed scalar's fused page");
+    const pd::ReportScratchIoError original(EIO, "admission schema-page read");
+    for (bool typed : {false, true}) {
+        const auto* error = typed ? &original : nullptr;
+        for (auto fault = fused_end; fault != scan_end; ++fault)
+            compare_failure(wire, fault, 0, error);
+        for (const auto fault : {std::uint64_t{0}, id_end, fused_end - 1,
+                                 scan_end, std::uint64_t(wire.size() - 1),
+                                 std::numeric_limits<std::uint64_t>::max()})
+            compare_failure(wire, fault, 0, error);
+    }
 }
 void invalid_rows() {
     const Model model(command(8193));
@@ -293,7 +365,7 @@ void carried_failures() {
 } // namespace
 
 int main() {
-    try { valid_rows(); invalid_rows(); carried_failures(); }
+    try { valid_rows(); invalid_rows(); carried_failures(); skipped_text_schema_faults(); }
     catch (const std::exception& error) {
         std::fprintf(stderr, "admission streaming fold: %s\n", error.what());
         return 1;
