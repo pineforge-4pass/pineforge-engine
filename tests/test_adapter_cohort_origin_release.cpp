@@ -4,6 +4,7 @@
 #include "../src/native_execution_consumer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -205,14 +206,14 @@ public:
                 "counter working population differs from its construction");
         const bool due = path_ != CounterPath::NotDue;
         expected.due_passes = due ? 1 : 0;
-        // Derive counts from every constructed row, rather than constants
-        // equal to the expected result. The sole member is in the LAST row:
-        // a failed direct scan also visits all C rows, so its total is 4C.
+        // Derive N from the constructed rosters, independently of the pass.
+        // Empty handles cost no visits: general=3N, direct=2N,
+        // failed-direct=4N (the sole member is last), all-empty=0.
         for (const auto& roster : core().cohorts()) {
             ++cohort_rows;
             nonempty_rows += !roster.origins.empty();
             memberships += roster.origins.size();
-            if (!due) continue;
+            if (!due || roster.origins.empty()) continue;
             ++expected.roster_cohort_visits; // Member-count walk.
             if (path_ == CounterPath::Direct || path_ == CounterPath::FailedDirect)
                 ++expected.roster_cohort_visits; // Direct walk.
@@ -258,13 +259,15 @@ private:
     CounterPath path_;
 };
 
-RosterWork counter_case(const char* name, std::size_t handles, CounterPath path) {
+RosterWork counter_case(const char* name, std::size_t handles, CounterPath path,
+                        RosterWork* expected_out = nullptr) {
     CounterHost host(handles, path);
     const auto bars = tape(1);
     host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
     require(host.last_error().empty(), host.last_error().c_str());
     require(host.measured, "counter row did not reach the adapter");
     expect_work(name, host.work, host.expected);
+    if (expected_out) *expected_out = host.expected;
     std::printf("%s: C=%zu R=%zu M=%zu L=0 Q=%zu visits=%llu expected=%llu\n",
                 name, host.cohort_rows, host.nonempty_rows, host.memberships, host.live_requests,
                 static_cast<unsigned long long>(host.work.roster_cohort_visits),
@@ -274,21 +277,22 @@ RosterWork counter_case(const char* name, std::size_t handles, CounterPath path)
 
 void empty_heavy_work() {
     // Increase only historical handles. R=M=1, L=0 and Q=64+1 stay fixed.
-    // Each added handle costs one count, one union and one release visit.
+    // With N unchanged, delta(3N)=0 despite the added historical handles.
     constexpr std::size_t first_handles = 8;
     constexpr std::size_t added_empty_handles = first_handles * first_handles;
-    const auto first = counter_case("roster empty heavy first", first_handles, CounterPath::General);
+    RosterWork first_expected, second_expected;
+    const auto first = counter_case("roster empty heavy first", first_handles,
+                                    CounterPath::General, &first_expected);
     const auto second = counter_case("roster empty heavy second",
-                                    first_handles + added_empty_handles, CounterPath::General);
+                                    first_handles + added_empty_handles,
+                                    CounterPath::General, &second_expected);
     RosterWork delta, expected_delta;
     require(second.roster_cohort_visits >= first.roster_cohort_visits,
-            "adding empty handles reduced full-walk work");
+            "adding empty handles reduced filtered work");
     delta.roster_cohort_visits = second.roster_cohort_visits - first.roster_cohort_visits;
-    for (std::size_t i = 0; i < added_empty_handles; ++i) {
-        ++expected_delta.roster_cohort_visits; // Count.
-        ++expected_delta.roster_cohort_visits; // Union.
-        ++expected_delta.roster_cohort_visits; // Release.
-    }
+    // Accumulated from the two constructed populations: 3*(N_second-N_first).
+    expected_delta.roster_cohort_visits =
+        second_expected.roster_cohort_visits - first_expected.roster_cohort_visits;
     expect_work("roster empty heavy slope", delta, expected_delta);
 }
 
@@ -427,6 +431,93 @@ ReleasePlan original_release(const no::WorkingRequestCore& core,
     return out;
 }
 
+struct DensePlan {
+    ReleasePlan decisions;
+    RosterWork dense, filtered;
+    std::size_t nonempty = 0;
+    bool general = false;
+};
+
+// Independent reference for the complete dense pass, including its direct
+// shortcut. It never calls the adapter pass or its nonempty enumeration.
+// Charge dense work before looking at origins; charge expected filtered work
+// only for populated rows of this independently traversed logical sequence.
+DensePlan dense_release(const no::WorkingRequestCore& core,
+                        const std::vector<PyramidEntry>& entries) {
+    DensePlan out;
+    out.dense.due_passes = out.filtered.due_passes = 1;
+    const auto visit = [&](const no::CohortRoster& row) {
+        ++out.dense.roster_cohort_visits;
+        if (!row.origins.empty()) ++out.filtered.roster_cohort_visits;
+    };
+    std::size_t members = 0;
+    for (const auto& row : core.cohorts()) {
+        visit(row);
+        members += row.origins.size();
+        out.nonempty += !row.origins.empty();
+    }
+    if (members == 0) return out;
+    const auto root = [](const no::LiveRequest& row) {
+        return row.definition->root ? row.definition->root->incarnation
+                                    : row.handle().incarnation;
+    };
+    constexpr std::size_t direct_limit = 64;
+    if (members * (entries.size() + core.live().size()) <= direct_limit) {
+        bool bound = true;
+        for (const auto& row : core.cohorts()) {
+            visit(row);
+            for (const auto& origin : row.origins) {
+                if (std::any_of(entries.begin(), entries.end(), [&](const PyramidEntry& lot) {
+                        return lot.entry_incarnation == origin.incarnation;
+                    }) || std::any_of(core.live().begin(), core.live().end(),
+                        [&](const no::LiveRequest& live) {
+                            return root(live) == origin.incarnation;
+                        })) continue;
+                bound = false;
+                break;
+            }
+            if (!bound) break;
+        }
+        if (bound) return out;
+    }
+    out.general = true;
+    std::vector<std::uint64_t> working, lots, roster_roots;
+    for (const auto& live : core.live()) working.push_back(root(live));
+    std::sort(working.begin(), working.end());
+    for (const auto& lot : entries) lots.push_back(lot.entry_incarnation);
+    std::sort(lots.begin(), lots.end());
+    lots.erase(std::unique(lots.begin(), lots.end()), lots.end());
+    for (const auto& row : core.cohorts()) {
+        visit(row);
+        for (const auto& origin : row.origins) roster_roots.push_back(origin.incarnation);
+    }
+    std::sort(roster_roots.begin(), roster_roots.end());
+    roster_roots.erase(std::unique(roster_roots.begin(), roster_roots.end()),
+                       roster_roots.end());
+    auto& plan = out.decisions;
+    for (const auto opening : lots)
+        if (opening != 0 && !std::binary_search(roster_roots.begin(), roster_roots.end(), opening))
+            plan.successor_lots.push_back(opening);
+    for (const auto& row : core.cohorts()) {
+        visit(row);
+        if (row.origins.empty()) continue;
+        plan.probe.run = row.origins.front().run;
+        std::uint64_t kept_below = 0;
+        for (const auto opening : plan.successor_lots) {
+            visit(row); // The dense algorithm also probes only nonempty rows.
+            plan.probe.incarnation = opening;
+            if (core.cohort_contains(row.handle, plan.probe)) kept_below = opening;
+        }
+        for (const auto& origin : row.origins) {
+            if (origin.incarnation < kept_below
+                || std::binary_search(working.begin(), working.end(), origin.incarnation)
+                || std::binary_search(lots.begin(), lots.end(), origin.incarnation)) continue;
+            plan.released.emplace_back(row.handle, origin.incarnation);
+        }
+    }
+    return out;
+}
+
 struct Stage {
     std::vector<no::CohortReceipt> receipts;
     std::vector<Removal> removals;
@@ -440,7 +531,7 @@ struct Stage {
 struct SourceCohort { friend auto access(SourceCohort); };
 template struct Access<SourceCohort, &Adapter::cohort_for>;
 
-class IdentityHost final : public Host {
+class IdentityHost : public Host {
 public:
     explicit IdentityHost(bool original) : Host(1), original_(original) {}
     std::vector<Stage> stages;
@@ -517,7 +608,7 @@ public:
         CHECK(!core().cohort_contains(a, root));
     }
 
-private:
+protected:
     no::RequestHandle put_order(const char* label, double units,
                                double limit = std::numeric_limits<double>::quiet_NaN()) {
         strategy_order(label, true, units, limit);
@@ -580,8 +671,8 @@ private:
         stage.expected_work.due_passes = 1;
         // This population starts with an unbound canceled origin in the
         // first roster, so the optional direct scan stops after ONE row.
-        // Count, union and release each walk C rows; every nonempty roster
-        // also probes each successor lot: 3C + 1 + R*S.
+        // Count, union and release each walk N nonempty rows; each also
+        // probes every successor lot: 3N + 1 + N*S.
         const auto first = core().cohorts().begin();
         require(first != core().cohorts().end() && !first->origins.empty(),
                 "successor counter lacks its first unbound member");
@@ -595,14 +686,14 @@ private:
                     }), "successor counter direct scan will not stop at its first row");
         ++stage.expected_work.roster_cohort_visits; // Failed direct prefix.
         for (const auto& roster : core().cohorts()) {
+            if (roster.origins.empty()) continue;
             ++stage.expected_work.roster_cohort_visits; // Count.
             ++stage.expected_work.roster_cohort_visits; // Union.
             ++stage.expected_work.roster_cohort_visits; // Release.
-            if (!roster.origins.empty())
-                for (const auto opening : reference.successor_lots) {
-                    (void)opening;
-                    ++stage.expected_work.roster_cohort_visits; // Successor probe.
-                }
+            for (const auto opening : reference.successor_lots) {
+                (void)opening;
+                ++stage.expected_work.roster_cohort_visits; // Successor probe.
+            }
         }
         stage.before_digest = NativeExecutionConsumerProbe::cohort_digest(consumer());
         stage.before_epoch = consumer().dormant_core_epoch();
@@ -648,6 +739,7 @@ private:
         stage.after_continuation = native_continuation_hash();
         return stage;
     }
+private:
     bool original_;
 };
 
@@ -715,6 +807,247 @@ void successor_work() {
         expect_work("roster successor probes", stage.roster_work, stage.expected_work);
 }
 
+struct DifferentialStage {
+    Stage state;
+    std::vector<std::pair<no::CohortHandle, no::RequestHandle>> remaining;
+    std::uint64_t before_broker = 0, after_broker = 0;
+    std::size_t handles = 0, nonempty = 0;
+};
+
+class RandomHost final : public IdentityHost {
+public:
+    RandomHost(bool original, std::uint64_t seed, std::size_t rounds,
+               std::size_t empty_handles)
+        : IdentityHost(original), reference_(original), random_(seed),
+          rounds_(rounds), empty_handles_(empty_handles) {}
+    std::vector<DifferentialStage> samples;
+    std::size_t successor_fills = 0, direct_fills = 0, closed_lots = 0;
+    std::size_t empty_passes = 0, ordered_pairs = 0;
+
+    void on_source_bar(const Bar&) override {
+        require(samples.empty(), "random population constructed twice");
+        // Four reusable named rosters bound N independently of historical C.
+        // Empty handles are never stored in an auxiliary C-sized container.
+        for (std::size_t i = 0; i < empty_handles_; ++i) cohort_open();
+        for (std::size_t i = 0; i < rosters_.size(); ++i) {
+            const auto gap = next() % rosters_.size();
+            for (std::size_t j = 0; j < gap; ++j) cohort_open();
+            rosters_[i] = (adapter_.*access(SourceCohort{}))(labels_[i]);
+        }
+        sample(); // All-empty due pass, before the first origin exists.
+        for (std::size_t round = 0; round < rounds_; ++round) {
+            const auto gap = next() % rosters_.size();
+            for (std::size_t j = 0; j < gap; ++j) cohort_open();
+            const auto slot = next() % rosters_.size();
+            close(slot);
+            // Cover direct and successor openings once each, then draw the
+            // kind as well as the cohort and close choices from the seed.
+            constexpr std::size_t opening_kinds = 2;
+            const auto kind = round < opening_kinds ? round : next() % opening_kinds;
+            const bool successor = kind != 0;
+            auto opening = successor ? put_order(labels_[slot], 1.0, 50.0)
+                                     : put_order(labels_[slot], 1.0);
+            const auto shared = (slot + 1 + next() % (rosters_.size() - 1)) % rosters_.size();
+            cohort_add(rosters_[shared], opening);
+            if (successor) {
+                const auto root = opening;
+                opening = put_order(labels_[slot], 1.0);
+                require(opening != root, "random replacement kept its handle");
+                const auto* live = core().find_live(opening);
+                require(live && live->definition->root && *live->definition->root == root,
+                        "random replacement lost its root");
+                ++successor_fills;
+            } else {
+                ++direct_fills;
+            }
+            fill(opening, 1.0, 0.0);
+            held_[slot] = opening;
+            // These origins are newer than every lot, so cancellation must
+            // release both memberships in ascending cohort order.
+            const auto canceled = put_resting("canceled-origin");
+            const auto first = next() % rosters_.size();
+            const auto second = (first + 1 + next() % (rosters_.size() - 1)) % rosters_.size();
+            cohort_add(rosters_[first], canceled);
+            cohort_add(rosters_[second], canceled);
+            withdraw(canceled);
+            const auto pending = put_resting("pending-origin");
+            const auto pending_slot = next() % rosters_.size();
+            cohort_add(rosters_[pending_slot], pending);
+            sample();
+            CHECK(core().cohort_contains(rosters_[pending_slot], pending));
+            CHECK(!core().cohort_contains(rosters_[first], canceled));
+            CHECK(!core().cohort_contains(rosters_[second], canceled));
+            withdraw(pending);
+            if (next() & 1) close(next() % rosters_.size());
+            sample();
+        }
+        for (std::size_t i = 0; i < held_.size(); ++i) close(i);
+        sample(); // Release the last filled roots.
+        sample(); // Roster nodes erased by real closes; N=0, C unchanged.
+        CHECK(lots().empty());
+        CHECK(core().live().empty());
+        for (const auto& row : core().cohorts()) CHECK(row.origins.empty());
+    }
+
+private:
+    std::uint64_t next() {
+        // A specified unsigned generator keeps sequences portable.
+        random_ ^= random_ << 13;
+        random_ ^= random_ >> 7;
+        random_ ^= random_ << 17;
+        return random_;
+    }
+    void close(std::size_t slot) {
+        if (held_[slot].incarnation == 0) return;
+        no::Request request{no::Reduce{no::ExplicitUnits{1.0}}, "selected-close", ""};
+        request.owner = no::BindOpening{held_[slot], position_cycle_seq_};
+        fill(put(request), 0.0, 1.0);
+        held_[slot] = {};
+        ++closed_lots;
+    }
+    void sample() {
+        const auto reference = dense_release(core(), lots());
+        // A second, pre-union reference also checks the decision algorithm,
+        // independently of the complete dense reference's union construction.
+        const auto searched = original_release(core(), lots());
+        CHECK(reference.decisions.released == searched.released);
+        DifferentialStage sample;
+        sample.handles = core().cohorts().size();
+        sample.nonempty = reference.nonempty;
+        CHECK(sample.nonempty <= rosters_.size());
+        if (sample.nonempty == 0) ++empty_passes;
+        if (reference.decisions.released.size() >= 2) ++ordered_pairs;
+        auto& state = sample.state;
+        state.expected_work = reference.filtered;
+        state.before_digest = NativeExecutionConsumerProbe::cohort_digest(consumer());
+        state.before_epoch = consumer().dormant_core_epoch();
+        state.before_continuation = native_continuation_hash();
+        sample.before_broker = broker_state_hash();
+        const auto receipt_begin = core().cohort_receipts().size();
+        if (reference_) {
+            for (const auto& [cohort, incarnation] : reference.decisions.released) {
+                auto origin = reference.decisions.probe;
+                origin.incarnation = incarnation;
+                cohort_remove(cohort, origin);
+            }
+            scratch().roster_pass_due = false;
+        } else {
+            RosterScope scope(state.roster_work);
+            release();
+            expect_work("roster randomized filtered work", state.roster_work, reference.filtered);
+            // Four outer walks at most, plus one membership probe per
+            // nonempty row per successor: visits <= (4+S)*N, no C term.
+            const std::size_t outer_walks = 4;
+            const auto bound = (outer_walks + reference.decisions.successor_lots.size())
+                * sample.nonempty;
+            CHECK(state.roster_work.roster_cohort_visits <= bound);
+            CHECK(reference.dense.roster_cohort_visits > reference.filtered.roster_cohort_visits);
+            if (reference.general) {
+                CHECK(scratch().released_origins == reference.decisions.released);
+                CHECK(scratch().successor_lots == reference.decisions.successor_lots);
+            }
+        }
+        const auto& receipts = core().cohort_receipts();
+        state.receipts.assign(receipts.begin() + static_cast<std::ptrdiff_t>(receipt_begin),
+                              receipts.end());
+        CHECK(state.receipts.size() == reference.decisions.released.size());
+        for (std::size_t i = 0; i < state.receipts.size(); ++i) {
+            const auto& receipt = state.receipts[i];
+            CHECK(receipt.operation == no::CohortReceiptOperation::Remove);
+            CHECK(receipt.status == no::CohortReceiptStatus::Applied);
+            if (i < reference.decisions.released.size()) {
+                auto origin = reference.decisions.probe;
+                origin.incarnation = reference.decisions.released[i].second;
+                CHECK(receipt.cohort == reference.decisions.released[i].first);
+                CHECK(receipt.origin == origin);
+            }
+            state.removals.emplace_back(receipt.cohort.value, receipt.origin.incarnation);
+        }
+        state.successors = reference.decisions.successor_lots;
+        state.after_digest = NativeExecutionConsumerProbe::cohort_digest(consumer());
+        state.after_epoch = consumer().dormant_core_epoch();
+        state.after_continuation = native_continuation_hash();
+        sample.after_broker = broker_state_hash();
+        CHECK(state.after_epoch - state.before_epoch == state.receipts.size());
+        CHECK(state.after_digest.first - state.before_digest.first == state.receipts.size());
+        // Store memberships only, never the C synthesized empty rows.
+        for (const auto& row : core().cohorts())
+            for (const auto& origin : row.origins)
+                sample.remaining.emplace_back(row.handle, origin);
+        samples.push_back(std::move(sample));
+    }
+    const std::array<const char*, 4> labels_{{"alpha", "beta", "gamma", "delta"}};
+    std::array<no::CohortHandle, 4> rosters_{};
+    std::array<no::RequestHandle, 4> held_{};
+    bool reference_;
+    std::uint64_t random_;
+    std::size_t rounds_, empty_handles_;
+};
+
+void randomized_case(std::uint64_t seed, std::size_t rounds, std::size_t empty_handles) {
+    const int failures_before = failures;
+    RandomHost reference(true, seed, rounds, empty_handles);
+    RandomHost actual(false, seed, rounds, empty_handles);
+    const auto bars = tape(1);
+    reference.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    actual.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    require(reference.last_error().empty(),
+            ("random reference: " + reference.last_error()).c_str());
+    require(actual.last_error().empty(), ("random actual: " + actual.last_error()).c_str());
+    // Two passes per round, an initial empty pass, final release and empty pass.
+    const auto expected_samples = rounds * 2 + 3;
+    CHECK(reference.samples.size() == expected_samples);
+    CHECK(actual.samples.size() == expected_samples);
+    CHECK(actual.empty_passes >= 2); // The initial and final empty populations.
+    CHECK(actual.ordered_pairs >= rounds); // Two canceled memberships each round.
+    CHECK(actual.closed_lots == rounds); // Every round opens exactly one lot.
+    CHECK(actual.successor_fills + actual.direct_fills == rounds);
+    CHECK(actual.successor_fills != 0 && actual.direct_fills != 0);
+    for (std::size_t i = 0; i < std::min(actual.samples.size(), reference.samples.size()); ++i) {
+        const auto& a = actual.samples[i];
+        const auto& r = reference.samples[i];
+        CHECK(a.handles == r.handles && a.nonempty == r.nonempty);
+        CHECK(a.handles >= empty_handles);
+        CHECK(a.remaining == r.remaining);
+        CHECK(a.before_broker == r.before_broker && a.after_broker == r.after_broker);
+        CHECK(a.state.removals == r.state.removals);
+        CHECK(a.state.successors == r.state.successors);
+        CHECK(a.state.before_digest == r.state.before_digest);
+        CHECK(a.state.after_digest == r.state.after_digest);
+        CHECK(a.state.before_epoch == r.state.before_epoch);
+        CHECK(a.state.after_epoch == r.state.after_epoch);
+        CHECK(a.state.before_continuation == r.state.before_continuation);
+        CHECK(a.state.after_continuation == r.state.after_continuation);
+        CHECK(a.state.receipts.size() == r.state.receipts.size());
+        for (std::size_t j = 0; j < std::min(a.state.receipts.size(), r.state.receipts.size()); ++j)
+            CHECK(same_receipt(a.state.receipts[j], r.state.receipts[j]));
+    }
+    CHECK(actual.native_continuation_hash() == reference.native_continuation_hash());
+    CHECK(actual.broker_state_hash() == reference.broker_state_hash());
+    CHECK(actual.trade_count() == reference.trade_count());
+    if (failures != failures_before)
+        std::fprintf(stderr, "random population seed=%llu rounds=%zu initial_empty=%zu\n",
+                     static_cast<unsigned long long>(seed), rounds, empty_handles);
+}
+
+void randomized_release() {
+    constexpr std::size_t sequences = 64;
+    for (std::size_t i = 0; i < sequences; ++i) {
+        // Odd, distinct seeds; vary rounds and historical gaps independently.
+        const std::uint64_t seed = (static_cast<std::uint64_t>(i) + 1) * 2 + 1;
+        randomized_case(seed, 12 + i % 13, 8 + i * 3);
+    }
+}
+
+void sparse_long_release() {
+    constexpr std::size_t slots = 4;
+    // N <= slots, C starts at slots^6, and 2*slots^4+3 due passes exercise
+    // repeated opens, closes and replacement chains without a C-sized index.
+    constexpr std::size_t empty_handles = slots * slots * slots * slots * slots * slots;
+    constexpr std::size_t rounds = slots * slots * slots * slots;
+    randomized_case(empty_handles + rounds + 1, rounds, empty_handles);
+}
+
 template<class Function> void row(const char* name, Function function) {
     if (selected_row && std::strcmp(selected_row, name) != 0) return;
     ++rows_run;
@@ -756,6 +1089,8 @@ int main(int argc, char** argv) {
     });
     row("roster empty heavy", [] { empty_heavy_work(); });
     row("roster successor probes", [] { successor_work(); });
+    row("roster randomized release", [] { randomized_release(); });
+    row("roster sparse long release", [] { sparse_long_release(); });
     if (rows_run == 0) {
         ++failures;
         std::fprintf(stderr, "FAIL row selection: no matching row\n");
