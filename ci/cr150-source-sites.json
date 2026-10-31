@@ -30485,6 +30485,52 @@
    "symbol": "next",
    "scope": [
     "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
+    ") #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "positions",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
+    ") #1",
+    "for ( const auto & unit : live_units_by_origin ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "positions = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
+    ") #1",
+    "for ( const auto & unit : live_units_by_origin ) #1",
+    "for ( const auto position : * positions ) #1",
+    "if ( ! have_next || position < next ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
     "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
     ") #1"
    ],

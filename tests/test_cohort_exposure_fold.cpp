@@ -154,6 +154,78 @@ void overflow_fallback_large_window() {
     assert(actual.total == static_cast<double>(mapped_positions));
 }
 
+void overflow_selector_interleavings() {
+    constexpr std::array<std::uint64_t, 3> small_ids{{19, 43, 71}};
+    constexpr std::size_t live_rows = small_ids.size() + 1;
+    constexpr std::size_t mapped_positions = detail::kCohortFoldStack + 2;
+    constexpr auto selector_charge =
+        (mapped_positions + 1) * (live_rows + mapped_positions);
+    constexpr auto gather_steps = live_rows + mapped_positions;
+    // In pass t = 0..P, each row is visited and t accepted positions are
+    // skipped. Each unexhausted row adds one position visit. Those visits
+    // total last_position + 1 per row: 5 + (P - 2) + (P - 1) + P = 3P + 2.
+    constexpr auto selector_steps = gather_steps
+        + live_rows * (mapped_positions + 1)
+        + mapped_positions * (mapped_positions + 1) / 2
+        + 3 * mapped_positions + 2;
+    const std::array<std::size_t, 3> windows{{
+        mapped_positions + selector_charge, selector_charge - 1, selector_charge
+    }};
+    const double tiny = std::numeric_limits<double>::denorm_min();
+    const std::array<double, 7> values{{
+        std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity(),
+        -0.0, tiny, std::numeric_limits<double>::max(), -1.0
+    }};
+    for (const auto window : windows) {
+        OriginRoster origins;
+        Units units{{7, 1e16}, {19, 1.0}, {43, 1.0}, {71, 1.0}};
+        for (std::size_t i = 0; i < mapped_positions - 1; ++i) {
+            if (i == 4) push(origins, 7);
+            push(origins, small_ids[i % small_ids.size()]);
+        }
+        assert(origins.members().size() == mapped_positions);
+        assert(units.size() == live_rows);
+        for (std::size_t i = origins.size(); i < window; ++i)
+            push(origins, 1000 + i);
+        assert(origins.members().size() == window);
+        assert(window > 4 * live_rows + 16);
+        const auto actual = check(origins, units);
+        assert(actual.path == 3); // P exceeds the stack's capacity.
+        // Four ones precede 1e16, giving the exactly representable sum below.
+        // Its ULP is 2 and its significand is even, so later ones round away.
+        // Moving 1e16 first loses every one; even three ones added before
+        // 1e16 round to 1e16 + 4, unlike three added after it.
+        const double expected = 10000000000000004.0;
+        assert(std::memcmp(&actual.total, &expected, sizeof expected) == 0);
+        if (window < selector_charge) {
+            // The gather visits R + P; the roster completion visits all M.
+            assert(actual.steps == gather_steps + window);
+            assert(actual.steps >= origins.members().size());
+        } else {
+            assert(actual.steps == selector_steps);
+            assert(actual.steps < origins.members().size());
+        }
+        for (const auto id : small_ids) {
+            for (const auto value : values) {
+                units[id] = value;
+                const auto special = check(origins, units);
+                assert(special.path == 3 && special.steps == actual.steps);
+            }
+            units[id] = 1.0;
+        }
+        units[7] = 0.0;
+        for (const auto id : small_ids) units[id] = tiny;
+        const auto denormal = check(origins, units);
+        // The large row is zero; all P - 1 small positions contribute tiny.
+        // This integer multiple is exact and makes rejecting denormals visible.
+        const double expected_tiny = static_cast<double>(mapped_positions - 1) * tiny;
+        assert(std::memcmp(&denormal.total, &expected_tiny, sizeof expected_tiny) == 0);
+        assert(denormal.path == 3 && denormal.steps == actual.steps);
+    }
+}
+
 detail::CohortExposureFold check_stack_sort(const OriginRoster& origins,
                                           const Units& units) {
     assert(origins.members().size() > 4 * units.size() + 16);
@@ -277,6 +349,7 @@ int main() {
     special_values_and_multiplicity();
     boundary_values();
     overflow_fallback_large_window();
+    overflow_selector_interleavings();
     stack_sort_special_values();
     stack_sort_interleavings();
     randomized_mutations();

@@ -279,9 +279,10 @@ void history_guard() {
         static_cast<unsigned long long>(large.steps),
         static_cast<unsigned>(small.path), static_cast<unsigned>(large.path));
 
+    constexpr std::size_t live_rows = 1;
     constexpr std::size_t mapped_positions =
         source::detail::kCohortFoldStack + 1;
-    const auto overflow_fold = [mapped_positions](std::size_t tail) {
+    const auto overflow_fold = [](std::size_t tail) {
         source::OriginRoster origins;
         std::unordered_map<std::uint64_t, double> units{{1, 1.0}};
         for (std::size_t i = 0; i < mapped_positions; ++i)
@@ -312,6 +313,13 @@ void history_guard() {
     const auto derived_bound = static_cast<std::uint64_t>(
         mapped_positions * (mapped_positions + 1));
     CHECK(overflow_delta <= derived_bound);
+    // Both M exceed selector_charge: the gather takes R + P steps, and
+    // the selector's mapped lists and row scans are identical in both calls.
+    // No tail member is visited, so changing only M adds exactly zero steps.
+    CHECK(overflow_delta == 0);
+    // The gather plus P + 1 selector passes cost at most
+    // (R + P) + (P + 1) * (R + P) = (R + P) * (P + 2).
+    CHECK(wide.steps <= (live_rows + mapped_positions) * (mapped_positions + 2));
     std::printf("exposure-history-overflow %llu %llu delta=%llu\n",
         static_cast<unsigned long long>(narrow.steps),
         static_cast<unsigned long long>(wide.steps),
