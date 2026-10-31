@@ -270,7 +270,14 @@ docker run --rm \
   requested bar whose close is at or before the chart bar's close; with it on,
   the latest that opened at or before the chart bar's open. A missing requested
   bar carries the last value forward (`gaps` off) or reads na (`gaps` on).
-- Limits: at most 256 symbols and 256 feeds in one index. The chart must be its
+- Symbol and total feed counts default to no limit. `--max-symbol-feeds N`
+  (`PINEFORGE_MAX_SYMBOL_FEEDS`) applies N to both counts; unset or `0` means
+  unlimited. `--max-inventory-bytes N` (`PINEFORGE_MAX_INVENTORY_BYTES`) applies
+  the same rule to inventory bytes in both the binder and runner. Empty,
+  negative and non-integer values are usage errors. `--tv-compat`
+  (`PINEFORGE_TV_COMPAT=1`) opts into defaults of 256 symbols/feeds and 8 MiB
+  inventory from the runner's one compatibility set; explicit limits,
+  including `0`, win. The chart must be its
   own input (`PINEFORGE_SCRIPT_TF` unset or equal to the input timeframe), else
   the run fails with `request.security of another symbol needs the chart's own
   bars as input; input '<i>' aggregated to chart '<s>' is not supported`. The run
@@ -284,7 +291,8 @@ docker run --rm \
 - An index or feed the harness cannot install (for example: not JSON, a bad
   timeframe spelling, two feeds at one timeframe, a CSV without `close`,
   timestamps that do not strictly increase, a close after the next bar's open,
-  a non-positive `mintick`, more than 256 feeds, a library without the setters,
+  a non-positive `mintick`, exceeding an explicit or compatibility feed limit,
+  a library without the setters,
   a feed the engine refuses)
   fails the run before it starts: one line
   `{"engine":"pineforge","error":"--symbol-feeds: ...","code":"symbol_feeds_refused",...}`
