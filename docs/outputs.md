@@ -67,7 +67,7 @@ off, so a module can call them unconditionally; generated code tests
 
 | Member | Call it | Fails when |
 |---|---|---|
-| `declare_outputs(slots, outputs, run_constants = 0)` | once, before the first run (a generated constructor) | a count is negative; the host is running; a second call names other counts |
+| `declare_outputs(slots, outputs, run_constants = 0)` | once, before the first run (a generated constructor) | a count is negative; the host is running; `slots` exceeds 64; a second call names other counts |
 | `output_run_begin()` | at the start of every run, before any bar; a C++ host calls it in `on_native_run_begin` | never; calling it twice is calling it once |
 | `output_bar(open_ms, close_ms)` | first, in every calculation the host publishes | `output_run_begin()` was never called; `open_ms` is below the last row's; the row count reaches `INT_MAX` |
 | `output_value(slot, value)` | after `output_bar` | no row is open; `slot` is out of range |
@@ -79,11 +79,19 @@ until the next `output_bar`, so a calculation that skips it and still writes
 lands in the previous bar's row.
 
 Each failure carries a run-failure code (`docs/pages/run-failure-codes.md`)
-beside its text. A broken precondition of the table above is a host or
-generated-code defect, thrown as `std::logic_error` and coded
-`engine_invariant`. An event queue or a row count that reaches `INT_MAX`
-throws `std::runtime_error` coded `outputs_limit` (reason `too_many_events`
-or `too_many_rows`). A recalculation of a bar after a caller cleared that
+beside its text. A broken recorder precondition, other than a capacity limit,
+is a host or generated-code defect, thrown as `std::logic_error` and coded
+`engine_invariant`. Declaring more than 64 series slots (Pine's plot-count
+limit) throws `std::runtime_error` coded `outputs_limit` with reason
+`too_many_series` and `max` 64, before the declaration changes any state,
+even with recording off. Exactly 64 series slots are accepted. `declare_outputs`
+is C++ only: the typed failure reaches the C++ caller. A generated strategy
+whose constructor declares more than 64 slots fails strategy creation, and
+`run_json` reports `strategy_create_failed` (it reads no code from the
+creation message). An event queue
+or a row count that reaches `INT_MAX` throws `std::runtime_error` coded
+`outputs_limit` (reason `too_many_events` or `too_many_rows`, `max` `INT_MAX`).
+A recalculation of a bar after a caller cleared that
 bar's events throws `std::runtime_error` coded `outputs_rejected` (reason
 `recalculated_after_clear`), the code of the switch's refusals below.
 Thrown inside a callback, the exception fails the run with its text in
@@ -246,6 +254,10 @@ and `scripts/test_run_json_outputs.py` runs the harness end to end.
 
 ## Costs and limits
 
+- A host can declare at most 64 series slots, matching
+  [Pine's plot-count limit](https://www.tradingview.com/pine-script-docs/writing/limitations/#plot-limits):
+  "A maximum of 64 plot counts are allowed per script". Exactly 64 is accepted;
+  65 or more is refused as `outputs_limit`, reason `too_many_series`, `max` 64.
 - A row costs 8 bytes per slot and is kept for the whole run or stream.
 - The event queue holds at most `INT_MAX` events between clears, and a run
   at most `INT_MAX` rows; one more fails the run as `outputs_limit`.

@@ -3,6 +3,7 @@
 The copied bodies are verbatim from these git blobs:
 docker/run_json.py: b5081ee6dea5e3355f5d65c1c044b30eef25009a
 docker/pf_sink.py: f40cd8c7c58264da7679ce456442d1a5d09e1760
+`_File.__init__` also takes the product's instance window (signature and validation as in the current wrapper).
 Only unchanged dependencies are shared with the wrapper. This support module
 does not match the test collection glob.
 """
