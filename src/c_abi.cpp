@@ -29,7 +29,7 @@
  *     strategy_position_size, strategy_current_equity,
  *     strategy_initial_capital, strategy_net_profit_sum,
  *     strategy_report_pointvalue, strategy_set_report_replay_v1,
- *     strategy_script_bars_processed),
+ *     strategy_script_bars_processed), pf_output_series_limit_set_checked/pf_output_series_limit_failure,
  *     pf_version_get/pf_version_string,
  *     pf_abi_version, strategy_execution_contract,
  *     strategy_configure_native_v1, strategy_configure_native_fx_curve_v1,
@@ -1549,4 +1549,16 @@ PF_API uint32_t strategy_stream_engine_layout_version(void) {
     return PF_STREAM_ENGINE_LAYOUT_VERSION;
 }
 
+} // extern "C"
+
+extern "C" {
+PF_API int pf_output_series_limit_set_checked(
+        const int64_t* maximum, char* error, size_t error_capacity) {
+    return pineforge::BacktestEngine::set_output_series_limit_checked(
+        maximum, error, error_capacity);
+}
+
+PF_API int pf_output_series_limit_failure(int64_t* maximum) {
+    return pineforge::BacktestEngine::output_series_limit_failure(maximum);
+}
 } // extern "C"

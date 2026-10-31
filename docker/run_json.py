@@ -3222,7 +3222,7 @@ def uses_checked_settings(lib) -> bool:
     return True
 
 
-def create_strategy(lib, checked: bool):
+def _create_strategy(lib, checked: bool):
     """A new strategy handle, through strategy_create_checked when checked. A
     creation that fails (a NULL handle, or a checked status other than OK) is
     strategy_create_failed, whatever the cause: run_json reads no code from the
@@ -4985,7 +4985,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         """A fresh, fully configured strategy state (the ordinary run's setup without the
         legacy trade-start gate, which selected mode refuses); freed again if it fails."""
         nonlocal syminfo_applied
-        st = create_strategy(lib, checked)
+        st = create_strategy(lib, checked, getattr(args, "max_output_series", None))
         sink = None
         try:
             apply_settings(lib, st, inputs, overrides, checked)
@@ -5269,7 +5269,7 @@ def main(argv=None) -> int:
         except RunFailure as failure:
             if not abort.started and abort.requested():
                 failure = abort.failure()
-            write_failure(str(failure), failure.code, failure.code_args)
+            _write_run_failure(failure)
             return failure.exit_status
         except Exception as error:
             if not abort.started and abort.requested():
@@ -5454,7 +5454,7 @@ def _main(argv, binary_inputs) -> int:
     argv = _legacy_abbreviations(argv, pre_metrics_long, all_long)
     if not argv:
         ap.error("the following arguments are required: --so, --ohlcv")
-    args = ap.parse_args(argv)
+    args = _parse_output_series_limit(ap, argv)
     if args.profile not in ("unjailed", "jailed"):
         raise _request_invalid("PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed", "arguments")
     missing = []
@@ -5563,7 +5563,7 @@ def _main(argv, binary_inputs) -> int:
         Match the validation harness's setup and free a state whose
         configuration fails before propagating its failure."""
         nonlocal syminfo_applied
-        st = create_strategy(lib, checked)
+        st = create_strategy(lib, checked, getattr(args, "max_output_series", None))
         sink = None
         try:
             apply_settings(lib, st, inputs, overrides, checked)
@@ -6541,7 +6541,7 @@ class _FusedOutputState:
                 for entry in _manifest_entries(
                     self.manifest, "constants", ("index",))
             }
-            resources = sink._spool_resources
+            resources = _output_series_resources(sink, self.slots)
             directory = sink.directory
             self.opens = _JSONColumn(resources, directory)
             self.closes = _JSONColumn(resources, directory)
@@ -7450,9 +7450,9 @@ def _open_uncached_sink(path, *, raw=False):
 # Six large windows for fixed files with outputs: report, equity/trade, open/close/event.
 _ARTIFACT_WINDOW_BUDGET_BYTES = 6 * 1024 * 1024
 _ARTIFACT_LARGE_WINDOW = 1024 * 1024
-# TradingView Pine Script, Writing scripts > Limitations > Chart visuals > Plot limits:
-# "A maximum of 64 plot counts are allowed per script." The engine refuses more series.
-_OUTPUT_SERIES_LIMIT = 64
+# These are default I/O sizes, not admission limits. After the fixed files,
+# each declared output series adds one small window; the sink reader adds one.
+# The per-run accountant receives the actual declaration, with no built-in cap.
 # Indexed decoding bounds copied slices; sequential reads use the full file window.
 _JSON_COLUMN_LOOKUP_READ_SIZE = 64 * 1024
 
@@ -7466,6 +7466,7 @@ class _ArtifactWindowBudget:
 
     def __init__(self):
         self.remaining = _ARTIFACT_WINDOW_BUDGET_BYTES
+        self.declared_series = 0
         self.report_window = self.take()
 
     def take(self):
@@ -7473,6 +7474,16 @@ class _ArtifactWindowBudget:
             self.remaining -= _ARTIFACT_LARGE_WINDOW
             return _ARTIFACT_LARGE_WINDOW
         return _BoundedJSONFile.window
+
+    def declare_series(self, count):
+        self.declared_series = max(self.declared_series, count)
+
+    @property
+    def worst_case_bytes(self):
+        """Default artifact windows plus the independently bounded sink reader."""
+        return (_ARTIFACT_WINDOW_BUDGET_BYTES
+                + _BoundedJSONFile.window * self.declared_series
+                + _UncachedSinkFile.window)
 
 
 def _artifact_windows(owner):
@@ -7885,8 +7896,8 @@ def _prepare_report_json(document, resources, args, sink):
             raise sink._spool_failure
         # Keep the final artifact provisional until auxiliary files have closed.
         with ExitStack() as prepared_files:
-            prepared_files._window_budget = _artifact_windows(
-                sink if sink is not None else resources)
+            prepared_files._window_budget = _declared_artifact_windows(
+                sink if sink is not None else resources, _report_series_count(document))
             prepared = _prepare_stream_report(
                 document, prepared_files,
                 sink.directory if sink is not None else args.spill_dir,
@@ -8272,7 +8283,7 @@ def _sink_outputs_block(lib, state, sink, resources, *, summary_only=False):
                _manifest_entries(block["manifest"], "outputs", ("index", "id"))}
     # After the report reservation: equity/trade spools, then open/close/event
     # columns in creation order, then recorded series in slot order.
-    resources._window_budget = _artifact_windows(sink)
+    resources._window_budget = _declared_artifact_windows(sink, slots)
     opens, closes, events = (_JSONColumn(resources, sink.directory) for _ in range(3))
     columns = [_JSONColumn(resources, sink.directory) for _ in entries]
     expected_row = 0
@@ -9367,6 +9378,96 @@ class _MetricsOnlyRun:
             if self.failure is None and recovered is not None and recovered.route == 3:
                 raise _engine_invariant("the legacy metrics recovery requested another run")
         return self.result(recovered_settings)
+
+
+def _output_series_count(text):
+    if not re.fullmatch(r"[0-9]+", text) or int(text) > (1 << 63) - 1:
+        raise argparse.ArgumentTypeError("expected a nonnegative int64 series count")
+    return int(text)
+
+
+def _parse_output_series_limit(parser, argv):
+    parser.add_argument(
+        "--limit-output-series", dest="max_output_series", type=_output_series_count,
+        default=None, metavar="N",
+        help="Maximum declared output series (N >= 0); 0 or omitted means no limit.")
+    return parser.parse_args(argv)
+
+
+def _output_series_limit_functions(lib, maximum):
+    names = ("pf_output_series_limit_set_checked", "pf_output_series_limit_failure")
+    present = [hasattr(lib, name) for name in names]
+    if not any(present) and maximum is None:
+        return None
+    for name, found in zip(names, present):
+        if not found:
+            raise StrategyLibraryError(
+                f"the library lacks {name}; rebuild to configure output series",
+                {"reason": "symbol_missing", "missing": name})
+    setter, failure = (getattr(lib, name) for name in names)
+    setter.argtypes = [ctypes.POINTER(ctypes.c_int64), ctypes.c_char_p, ctypes.c_size_t]
+    setter.restype = ctypes.c_int
+    failure.argtypes = [ctypes.POINTER(ctypes.c_int64)]
+    failure.restype = ctypes.c_int
+    return setter, failure
+
+
+def create_strategy(lib, checked: bool, max_output_series=None):
+    """Apply the checked option before the generated constructor declares."""
+    if max_output_series == 0:
+        max_output_series = None
+    functions = _output_series_limit_functions(lib, max_output_series)
+    if functions is None:
+        return _create_strategy(lib, checked)
+    setter, read_failure = functions
+    maximum = None if max_output_series is None else ctypes.c_int64(max_output_series)
+    error = ctypes.create_string_buffer(_SETTINGS_ERROR_CAPACITY)
+    if setter(None if maximum is None else ctypes.byref(maximum),
+              error, len(error)) != PF_SETTINGS_OK:
+        raise _request_invalid(
+            "error: --limit-output-series: " + _c_text(error.value), "arguments")
+    try:
+        return _create_strategy(lib, checked)
+    except RunFailure as failure:
+        refused_max = ctypes.c_int64()
+        if (failure.code == "strategy_create_failed"
+                and read_failure(ctypes.byref(refused_max)) == 1):
+            failure.cause = {
+                "code": "outputs_limit",
+                "args": {"max": refused_max.value, "reason": "too_many_series"}}
+        raise
+    finally:
+        # Each handle has already snapshotted the option. Keep later creations
+        # in this interpreter unlimited unless their caller supplies a limit.
+        setter(None, error, len(error))
+
+
+def _write_run_failure(failure):
+    cause = getattr(failure, "cause", None)
+    if cause is None:
+        write_failure(str(failure), failure.code, failure.code_args)
+        return
+    # This path has the fixed empty strategy_create_failed args and the
+    # runtime's scalar series-limit cause; no engine message is parsed.
+    document = json.loads(failure_line(str(failure), failure.code, failure.code_args))
+    document["cause"] = cause
+    _publish_failure(_dump_line(document) + "\n")
+
+
+def _declared_artifact_windows(owner, series):
+    budget = _artifact_windows(owner)
+    budget.declare_series(series)
+    return budget
+
+
+def _output_series_resources(sink, series):
+    resources = sink._spool_resources
+    resources._window_budget = _declared_artifact_windows(sink, series)
+    return resources
+
+
+def _report_series_count(document):
+    return len((document.get("outputs") or {}).get("series", ()))
 
 
 if __name__ == "__main__":
