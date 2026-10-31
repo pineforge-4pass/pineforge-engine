@@ -97,23 +97,25 @@ Mount points (provide exactly one of `strategy.pine` / `strategy.cpp`):
 
 ### Opt-in compile guards
 
-The entrypoint can apply cooperative limits to compilation on Linux. Each
-setting below is **off when unset**. With all three unset, the entrypoint
-uses its original compiler and inventory-binding commands, environment,
-output and exit statuses.
+The entrypoint can apply cooperative limits to compilation on Linux. The
+feature is off when all three settings are unset. Once any setting opts it in,
+an unset dimension and a dimension set to `0` are both unlimited. With no
+positive setting, the entrypoint keeps its original compiler and
+inventory-binding commands, environment, output and exit statuses after
+validating the supplied values.
 
-| Environment setting | Unit and scope | Finite policy selected by `0` |
+| Environment setting | Unit and scope | Value resolution |
 | --- | --- | --- |
-| `PINEFORGE_COMPILE_WALL_MS` | Milliseconds from before compiler launch through all helpers and selected inventory binding | 120,000 ms |
-| `PINEFORGE_COMPILE_AS_BYTES` | Per-process address space, installed as inherited `RLIMIT_AS` with equal soft and hard limits before compiler or binder execution | 4,294,967,296 bytes (4 GiB), or a lower inherited positive hard limit |
-| `PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES` | Combined raw stdout and stderr bytes from the compiler, its helpers and the binder | 1,048,576 bytes (1 MiB) |
+| `PINEFORGE_COMPILE_WALL_MS` | Milliseconds from before compiler launch through all helpers and selected inventory binding | Unset or `0`: unlimited; positive: exact |
+| `PINEFORGE_COMPILE_AS_BYTES` | Per-process address space, installed as inherited `RLIMIT_AS` with equal soft and hard limits before compiler or binder execution | Unset or `0`: unlimited; positive: exact |
+| `PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES` | Combined raw stdout and stderr bytes from the compiler, its helpers and the binder | Unset or `0`: unlimited; positive: exact |
 
 A set value must contain decimal digits only and fit `0..9007199254740990`.
-Zero selects the finite policy above; it never requests unlimited execution.
-An omitted setting leaves that dimension unchanged. A positive value is used
-exactly. A positive address-space request above the inherited hard limit is refused
-before launch. Empty strings, signs, whitespace, fractions and values outside
-the range are usage errors: one `run_request_invalid` failure line with
+An omitted setting is unlimited once the feature is opted in, and `0` is also
+unlimited. A positive value is used exactly. A positive address-space request
+above the inherited hard limit is refused before launch. Empty strings, signs,
+whitespace, fractions and values outside the range are usage errors: one
+`run_request_invalid` failure line with
 `args: {"option":"arguments"}` on stdout and exit 4.
 
 For example, these settings allow 30 seconds, 2 GiB of address space per

@@ -391,38 +391,59 @@ def test_address_request_above_an_inherited_hard_limit_is_refused_without_clampi
 
 
 @pytest.mark.parametrize("inherited", [None, 2 << 30])
-def test_zero_address_ceiling_resolves_to_the_finite_compile_policy(box, inherited):
+def test_zero_address_ceiling_is_unlimited_and_preserves_inherited_limit(box, inherited):
     result = box.run({ADDRESS: "0", "PF_ENTRYPOINT_FIXTURE_MODE": "limits"},
                      inherited_as=inherited)
-    hard = resource.getrlimit(resource.RLIMIT_AS)[1] if inherited is None else inherited
-    expected = 4 << 30 if hard == resource.RLIM_INFINITY else min(4 << 30, hard)
+    expected = (list(resource.getrlimit(resource.RLIMIT_AS))
+                if inherited is None else [inherited, inherited])
+    if inherited is None:
+        assert expected == [resource.RLIM_INFINITY, resource.RLIM_INFINITY]
     assert result.returncode == 0, result.stderr
-    assert result.records["driver"]["as"] == [expected, expected]
-    assert result.records["limits_helper"]["as"] == [expected, expected]
+    assert result.records["driver"]["as"] == expected
+    assert result.records["limits_helper"]["as"] == expected
     assert result.stdout == b'{"signals":[2.0,-3.0]}\n'
     assert result.stderr == COMPILE_LOG + b"[pineforge] running backtest ...\n"
 
 
-def test_zero_diagnostic_ceiling_still_stops_at_the_finite_compile_policy(box):
-    cap = 1 << 20
-    payload = bytes(range(256)) * ((cap + 256) // 256)
-    result = box.run({DIAGNOSTIC: "0", "PF_ENTRYPOINT_FIXTURE_MODE": "flood",
+def test_zero_diagnostic_ceiling_streams_a_payload_larger_than_one_mib(box):
+    minimum = 1 << 20
+    payload = bytes(range(256)) * (minimum // 256 + 1)
+    result = box.run({WALL: "10000", DIAGNOSTIC: "0",
+                      "PF_ENTRYPOINT_FIXTURE_MODE": "flood",
                       "PF_ENTRYPOINT_FIXTURE_DIAGNOSTIC": box.payload(payload)},
                      trace_reads=True)
-    assert_failure(result, "diagnostic_budget_exceeded",
-                   {"cap_bytes": cap, "used_bytes": cap, "requested_bytes": 1})
-    assert result.stderr == COMPILE_LOG + payload[:cap]
-    assert pipe_read_bytes(result) == cap + 1
+    assert result.returncode == 3, (result.stdout, result.stderr)
+    assert result.stdout == b""
+    assert result.stderr == COMPILE_LOG + payload + COMPILE_FAILURE
+    assert len(payload) > minimum
+    assert pipe_read_bytes(result) == len(payload)
 
 
-def test_zero_wall_ceiling_still_expires_at_the_finite_compile_policy(box):
-    wall_seconds = 120
-    result = box.run({WALL: "0", "PF_ENTRYPOINT_FIXTURE_MODE": "orphan"},
-                     timeout=wall_seconds + 4)
-    assert_failure(result, "run_deadline_exceeded", {"stage": "compile"})
-    assert wall_seconds <= result.elapsed <= (
-        wall_seconds + STOP_GRACE_SECONDS + STARTUP_ALLOWANCE_SECONDS)
-    assert_tree_gone(result)
+def test_zero_wall_ceiling_keeps_the_frozen_direct_process_table(box):
+    before = box.run(entrypoint=box.reference, trace_processes=True)
+    after = box.run({WALL: "0"}, trace_processes=True)
+    assert before.returncode == after.returncode == 0, (before.stderr, after.stderr)
+    assert before.stdout == after.stdout == b'{"signals":[2.0,-3.0]}\n'
+    assert before.stderr == after.stderr
+    assert before.argv == after.argv
+    before_environment = set(before.environment.rstrip(b"\0").split(b"\0"))
+    after_environment = set(after.environment.rstrip(b"\0").split(b"\0"))
+    assert after_environment - before_environment == {b"PINEFORGE_COMPILE_WALL_MS=0"}
+    assert before_environment <= after_environment
+    assert before.records["driver"]["parent_exe"] == after.records["driver"]["parent_exe"]
+    assert before.records["driver"]["descriptors"] == after.records["driver"]["descriptors"]
+    assert before.records["driver"]["stdout"] == before.records["driver"]["stderr"]
+    assert after.records["driver"]["stdout"] == after.records["driver"]["stderr"]
+
+
+def test_zero_guard_path_validates_a_malformed_sibling_before_compiler(box):
+    result = box.run({WALL: "0", ADDRESS: "not-a-number",
+                      "PF_ENTRYPOINT_FIXTURE_MODE": "reject_probe"})
+    assert_failure(result, "run_request_invalid", {"option": "arguments"})
+    assert "driver" not in result.records
+    assert result.stderr == (
+        COMPILE_LOG + b"entrypoint.sh: error: " + os.fsencode(ADDRESS)
+        + b" must be an unsigned decimal integer in 0..9007199254740990\n")
 
 
 @pytest.mark.parametrize("nonblocking", [False, True])

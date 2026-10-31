@@ -26,18 +26,16 @@
 #   PINEFORGE_OVERRIDES  JSON object of strategy() header field -> value
 #                        e.g. '{"default_qty_value": "5", "commission_value": "0.04"}'
 #
-# Optional compile guards (Linux; each is OFF when unset):
+# Optional compile guards (Linux; the feature is OFF when all three are unset):
 #   PINEFORGE_COMPILE_WALL_MS       Absolute compiler/helper/binder lifetime in ms.
 #   PINEFORGE_COMPILE_AS_BYTES      Inherited per-process RLIMIT_AS, soft=hard, in bytes.
 #   PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES
 #                                  Combined compiler/binder stdout+stderr byte cap.
-# Set values are unsigned decimal integers in 0..9007199254740990. Zero selects
-# a finite local policy: 120000 ms, 4294967296 AS bytes, or 1048576 diagnostic
-# bytes, respectively (AS respects a lower inherited hard cap); it never disables
-# a guard. Other unset dimensions stay
-# unset. Positive values are exact; an AS cap above the inherited hard limit is
-# refused. Empty, signed, whitespace, nondecimal and out-of-range values are
-# usage errors (run_request_invalid, exit 4), before compiler launch.
+# Once opted in, an unset dimension and an explicit zero are unlimited. Set
+# values are unsigned decimal integers in 0..9007199254740990. Positive values
+# are exact; an AS cap above the inherited hard limit is refused. Empty, signed,
+# whitespace, nondecimal and out-of-range values are usage errors
+# (run_request_invalid, exit 4), before compiler launch.
 # Deadline: run_deadline_exceeded{stage:compile}; diagnostic overflow:
 # diagnostic_budget_exceeded{cap_bytes,used_bytes,requested_bytes:1}; exit 4.
 # Stops kill/reap compiler descendants, including adopted orphans, with at most
@@ -45,7 +43,8 @@
 # as raw bytes on stderr. The fixed shell progress/failure messages are separate.
 # These are cooperative engine guards, not a host isolation or memory quota.
 # AS failures alone retain ordinary compile exit 3, without inferred cause.
-# No compile guard set: the original g++/binder path, arguments and environment.
+# No positive compile guard: the original g++/binder path, arguments and
+# environment is used after any supplied zero-only settings are validated.
 # Details: docker/README.md, "Opt-in compile guards".
 #
 # Optional env vars (runtime args — applied to run_backtest_full):
@@ -270,9 +269,65 @@ echo "[pineforge] compiling strategy.cpp ..." >&2
 # -ffp-contract=off is parity-critical: the static lib is built with it
 # (CMakeLists.txt) so FMA contraction can't reassociate float ops. The strategy
 # TU must match or any inlined TA/sizing math drifts at the last ULP.
-if [[ -z "${PINEFORGE_COMPILE_WALL_MS+x}" &&
+COMPILE_GUARD_ORIGINAL=false
+if [[ -n "${PINEFORGE_COMPILE_WALL_MS+x}" ||
+      -n "${PINEFORGE_COMPILE_AS_BYTES+x}" ||
+      -n "${PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES+x}" ]]; then
+    if python3 - <<'PY'
+import json
+import os
+import re
+import sys
+
+names = (
+    "PINEFORGE_COMPILE_WALL_MS",
+    "PINEFORGE_COMPILE_AS_BYTES",
+    "PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES",
+)
+maximum = 9007199254740990
+values = []
+
+
+def reject(message):
+    text = "entrypoint.sh: error: " + message
+    sys.stderr.write(text + "\n")
+    sys.stdout.write(json.dumps({
+        "engine": "pineforge",
+        "error": text,
+        "code": "run_request_invalid",
+        "args": {"option": "arguments"},
+    }, separators=(",", ":")) + "\n")
+    raise SystemExit(4)
+
+
+for name in names:
+    if name not in os.environ:
+        continue
+    raw = os.environ[name]
+    if not re.fullmatch(r"[0-9]+", raw):
+        reject(name + " must be an unsigned decimal integer in 0..9007199254740990")
+    digits = raw.lstrip("0") or "0"
+    value = int(digits)
+    if len(digits) > 16 or value > maximum:
+        reject(name + " is outside 0..9007199254740990")
+    values.append(value)
+
+raise SystemExit(0 if all(value == 0 for value in values) else 1)
+PY
+    then
+        COMPILE_GUARD_ORIGINAL=true
+    else
+        validation_status=$?
+        if [[ "${validation_status}" -ne 1 ]]; then
+            exit "${validation_status}"
+        fi
+    fi
+fi
+
+if [[ "${COMPILE_GUARD_ORIGINAL}" == "true" ||
+      ( -z "${PINEFORGE_COMPILE_WALL_MS+x}" &&
       -z "${PINEFORGE_COMPILE_AS_BYTES+x}" &&
-      -z "${PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES+x}" ]]; then
+      -z "${PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES+x}" ) ]]; then
 g++ -std=c++17 -O2 -ffp-contract=off -fPIC -shared \
     -I"${PREFIX}/include" \
     -I/usr/include/eigen3 \
@@ -333,7 +388,7 @@ def usage(text):
                        "entrypoint.sh: error: " + text)
 
 
-def ceiling(name, policy):
+def ceiling(name):
     if name not in os.environ:
         return None
     raw = os.environ[name]
@@ -343,7 +398,7 @@ def ceiling(name, policy):
     if len(digits) > 16 or int(digits) > 9007199254740990:
         usage(name + " is outside 0..9007199254740990")
     value = int(digits)
-    return policy if value == 0 else value
+    return None if value == 0 else value
 
 
 def now_ns():
@@ -368,9 +423,9 @@ def diagnostic_failure(error):
 
 class CompileGuard:
     def __init__(self):
-        self.wall = ceiling("PINEFORGE_COMPILE_WALL_MS", 120000)
-        self.address = ceiling("PINEFORGE_COMPILE_AS_BYTES", 4294967296)
-        self.cap = ceiling("PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES", 1048576)
+        self.wall = ceiling("PINEFORGE_COMPILE_WALL_MS")
+        self.address = ceiling("PINEFORGE_COMPILE_AS_BYTES")
+        self.cap = ceiling("PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES")
         if sys.platform != "linux" or not hasattr(time, "CLOCK_BOOTTIME"):
             usage("compile guards require Linux with CLOCK_BOOTTIME and procfs")
         self.children_file = Path(f"/proc/self/task/{os.getpid()}/children")
@@ -385,10 +440,7 @@ class CompileGuard:
         if self.address is not None:
             hard = resource.getrlimit(resource.RLIMIT_AS)[1]
             if hard != resource.RLIM_INFINITY and self.address > hard:
-                if os.environ["PINEFORGE_COMPILE_AS_BYTES"].strip("0") == "" and hard > 0:
-                    self.address = hard
-                else:
-                    usage("PINEFORGE_COMPILE_AS_BYTES exceeds the inherited hard limit")
+                usage("PINEFORGE_COMPILE_AS_BYTES exceeds the inherited hard limit")
         self.accepted = 0
         self.deadline = None if self.wall is None else now_ns() + self.wall * 1000000
         self.original_stderr_flags = fcntl.fcntl(2, fcntl.F_GETFL)

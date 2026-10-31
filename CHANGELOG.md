@@ -7,7 +7,10 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
-- Container compile limits are opt-in and off by default; compilation is unchanged without them.
+- Container compile guards are opt-in and off when all three settings are
+  unset. Once opted in, an unset or zero value is unlimited and a positive
+  value is exact; when no dimension is limited, the original compile and
+  binding behavior is retained.
 
 ## 1.9.1 — 2026-10-31
 
