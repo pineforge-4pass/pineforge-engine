@@ -77,11 +77,11 @@ Binary curve scratch on **disk** still costs **24 B per script bar**
 **6 MiB at 262,144 bars** and **48 MiB at 2,097,152 bars**, calculated payload
 sizes excluding other scratch and output.
 The sink's `E` output and the default route's JSON artifact also grow with
-the bar count: `_build_sink_report` docker/run_json.py:7972-8069 supplies lazy
-record arrays, and `_prepare_stream_report` docker/run_json.py:7829-7851
+the bar count: `_build_sink_report` docker/run_json.py:7983-8080 supplies lazy
+record arrays, and `_prepare_stream_report` docker/run_json.py:7840-7862
 serializes them to a temporary artifact.
 Lazy serialization bounds buffers, not output bytes.
-Python artifact windows share the per-run constant
+Python artifact windows share the per-run default budget
 `_ARTIFACT_WINDOW_BUDGET_BYTES = 6 * 1024 * 1024` (**6 MiB**).
 The final report's **1 MiB** window is reserved first, even though that file
 is created last. The equity spool and trade spool receive large windows next,
@@ -89,12 +89,13 @@ then the open-time, close-time and event columns in creation order, then one
 column per recorded output series in slot order. Each file receives **1 MiB**
 while the remaining budget covers it; the crossing file and every later file
 use the **64 KiB** class window. The sink reader keeps its own **64 KiB** page.
-Peak artifact window memory is at most **6 MiB + 64 KiB x (recorded series,
-at most 64) + the 64 KiB reader page**, independent of report size and the
-number of trades. Its worst case is **10,551,296 bytes (10.06 MiB)**. The ceiling
-of 64 is TradingView's plot-count limit; the engine refuses a larger declaration,
-so the bound holds for a library built from this version or later (`run_json`
-does not itself refuse an older library that declares more).
+Peak artifact window memory is at most **6 MiB + 64 KiB × S + the 64 KiB
+reader page**, where S is the run's actual declared series count, independent
+of report size and trade count. Series are unlimited by default; 0 or omission
+means unlimited. A positive N is an operator cap; if a declaration is refused,
+its `max` is that operator-supplied positive N, and S cannot then exceed N.
+Without a positive limit the allowance follows the strategy's declaration.
+The 6 MiB budget and 1 MiB large window are default sizes, not refusals.
 Window selection changes no output bytes.
 The opt-in corpus RSS comparison (each producer's own peak) allows the sink
 route to exceed the full route by **2.5 MiB + 2 × 1 MiB + 64 KiB = 4,784,128
@@ -111,7 +112,7 @@ always, and any other run that inherits one), curve scratch instead consumes
 the **RAM-backed arena**, so those same **24 B per script bar are memory**.
 The fd setter attaches the arena (`attach_from_environment`
 src/engine_report.cpp:1410), and `ScratchFile::open`
-include/pineforge/detail/scratch_file.hpp:168-175 selects it.
+include/pineforge/detail/scratch_file.hpp:308-316 selects it.
 Linux jailed admission requires sealed memfd backing
 (`strategy_require_report_scratch_arena_v1` src/c_abi.cpp:1481-1498).
 The hosting wrapper supplies `PF_SCRATCH_ARENA_BYTES`
@@ -126,7 +127,7 @@ Exhaustion fails closed with typed `report_sink_failed`
 (`ReportScratchIoError` include/pineforge/detail/scratch_arena.hpp:16-21),
 reason `arena_exhausted` src/scratch_arena.cpp:249-253.
 There is no RAM fallback (the comment on `ScratchFile`
-include/pineforge/detail/scratch_file.hpp:31-37).
+include/pineforge/detail/scratch_file.hpp:157-163).
 
 A **jailed run without `--report-sink-fd` has no sink at all**:
 `_new_report_sink` docker/run_json.py:5967-5985 returns `None`, so it retains
@@ -182,7 +183,7 @@ bytes.
 
 The sink-off jailed route buffers the whole report text before writing to
 stdout, so a serialization error publishes no partial report
-(`_prepare_report_json`, `docker/run_json.py:7854`; publication in
+(`_prepare_report_json`, `docker/run_json.py:7865`; publication in
 `_write_report`, `docker/run_json.py:4797`). Its UTF-8 byte buffer uses about
 one byte of resident text per output byte, plus bounded encoding and
 read-back buffers, on top of the input mapping and the engine's storage:
@@ -257,8 +258,8 @@ measured jailed descriptor run carried no sha256 of the stream, so a caller has 
 the trailer against.
 
 The process entry reserves the caller's original stdout as a private report descriptor before argument parsing or
-strategy loading (`_ReportOutput` at `docker/run_json.py:8317`; `_host_main` at
-`docker/run_json.py:8477`). It redirects native fd 1 to fd 2, and writes the summary and every typed
+strategy loading (`_ReportOutput` at `docker/run_json.py:8328`; `_host_main` at
+`docker/run_json.py:8488`). It redirects native fd 1 to fd 2, and writes the summary and every typed
 failure through the saved descriptor. The native stream N stays on the descriptor supplied by the caller.
 Isolation holds only when the harness keeps stdout and stderr separate. If they name the same file
 (for example, with `2>&1`), the host writes one stderr line,
@@ -266,15 +267,15 @@ Isolation holds only when the harness keeps stdout and stderr separate. If they 
 publication through the saved descriptor.
 The host refuses a report descriptor that shares a number or open file with N, the phase descriptor, or
 arena fd 5, using `run_request_invalid` (`_validate_report_fd_separation` at
-`docker/run_json.py:8439`). The library can write the saved descriptor because it runs in this process.
+`docker/run_json.py:8450`). The library can write the saved descriptor because it runs in this process.
 The descriptor is non-inheritable, so exec'd children do not get it. Code that deliberately writes
 through that file description can still affect the report. This transport arrangement isolates
 ordinary native fd 1 output when the streams stay separate; it is not a security boundary.
 
 Imported library calls write reports and failures to the current Python stdout without reserving or
-redirecting descriptors (`_report_output` at `docker/run_json.py:8400`). Each call to the library entry
+redirecting descriptors (`_report_output` at `docker/run_json.py:8411`). Each call to the library entry
 gets its own publication guard, so repeated runs remain independent (`_LibraryReportRun` at
-`docker/run_json.py:8296`).
+`docker/run_json.py:8307`).
 
 **When the report is complete.** The verified trailer is the completion marker, and EOF alone is not.
 Read every record as provisional until the trailer's counts and sha256 equal what the reader counted and
@@ -289,7 +290,7 @@ and exit status 1
 `docker/pineforge_sink_finalize.py`, has its own exit statuses: 0 complete and verified, 2 usage error,
 3 malformed stream or host-profile refusal, 4 verification failure, 5 input or output failure, 6 end of input without a
 trailer, 7 internal error, 8 `sink_exhausted` (the stream exceeds `--max-bytes`;
-`sink_exhausted` at `docker/pineforge_sink_finalize.py:104-113`). Its output is provisional until
+`sink_exhausted` at `docker/pineforge_sink_finalize.py:115-123`). Its output is provisional until
 exit 0, and a consumer must discard everything it received on exit 3 to 8 (`PROVISIONAL` at
 `docker/pineforge_sink_finalize.py:24-26`). The failure catalog maps exit 8 to `report_sink_failed`
 with `reason` `sink_exhausted` (`sink_exhausted` at `docker/run_failure_codes.json:1105`). A sink failure carries code `report_sink_failed` and a `reason`
@@ -299,7 +300,7 @@ from the closed list of the catalog (`report_sink_failed` at `docker/run_failure
 `arena_bytes`, `claimed_bytes`, `store` and `needed_bytes_lower_bound`, `sink_exhausted` carries
 `sink_bytes` and `cap_bytes`, and every other reason carries `reason` alone, a closed reader included.
 A write error while `run_json.py` prepares the report in scratch is raised as `RunFailure` with
-`scratch_io` (`docker/run_json.py:7845-7846`); it is not a write to the descriptor. `sink_peer_closed` is also raised when the descriptor setup itself
+`scratch_io` (`docker/run_json.py:7856-7857`); it is not a write to the descriptor. `sink_peer_closed` is also raised when the descriptor setup itself
 finds a closed peer (`EPIPE`, `ECONNRESET` or `ENOTCONN`, with the message "report sink fd setup
 failed"; `RunFailure` at `docker/run_json.py:2196-2203`). The descriptor then holds records without a
 verified trailer, and a caller treats it as absent. The engine writer loops a short write to completion,
@@ -344,13 +345,13 @@ store; the part that spills grows in the scratch backing.
 | Order book | 4,096 rows | See the drain plateau below | Older rows |
 | Command-store resident prefix / read cache | Fixed K = `3 * (kCacheBytes + kMaxSlots * sizeof(ScratchPageId) + kFixedObjectBytes)` = 202,752 B (198 KiB) per run at the default: three 64 KiB page buffers, a table allocated with the slot count for the wrapped backing's page size (K is charged at the worst case of 512-byte pages: 128 eight-byte slot keys, 1 KiB), and a 1 KiB fixed object (`CachedScratchBacking::kCommandScratchMemoryBytes`, `src/command_scratch_cache.hpp:28`; `static_assert(sizeof(CachedScratchBacking)` at `src/command_scratch_cache.hpp:76`); pages larger than `kCacheBytes` (64 KiB at default) or smaller than 512 B bypass the buffer; the constant has no upper cap in the class (at 4 GiB the table is 8 Mi entries of 8 B, 64 MiB per store) | Counted in bytes; independent of extent and bars; replaces the previous read-cache allowance | Each disk store holds its prefix in the same buffer until its extent exceeds `kCacheBytes` (64 KiB at default), then spills the prefix once and reuses the buffer as a read cache. Attached arenas retain direct mapped admission |
 | Id-table read caches | A separate fixed 192 KiB of page bytes **per adapter, not per engine** (`IdTableReadCache::kAdapterCacheBytes`, `include/pineforge/detail/id_table_read_cache.hpp`): only the adapter opts in its cohort AVL and exit-rank AVL at 64 KiB each, and erased minima and consumed cycles at 32 KiB each (data/index sharing one allocation per pair store). Other table instances default to zero capacity and allocate nothing. Lines are 4 KiB; allocation is lazy, falls back to direct reads on allocation failure, and never grows. All slab and arena paths bypass allocation and cache lookup, including unjailed regular-file arenas and inherited sealed memfds | Plus a fixed cache control object per table instance, each with sixteen page/file tags, one owning pointer and a slot count (`sizeof(IdTableReadCache)`); no per-id metadata. One adapter owns each enabled cache; no sharing across threads. Every write still reaches the file immediately; overlapping writes invalidate before I/O, appends invalidate from the old tail page onward, and index growth, clear, moves and backend changes invalidate all lines. Bound from constants, not a measurement | Not applicable (copy-in/copy-out reads over private disk files; formats and logical folds unchanged) |
-| Scratch files read through a bounded window | one 64 KiB window per file that enables it (`ScratchFile::kCacheBytes`, `include/pineforge/detail/scratch_file.hpp:40`) | Counted in bytes. It bounds the operating-system page cache the file pins (the kernel is asked to drop clean pages); it is not an engine heap cache | Not applicable |
+| Scratch files read through a bounded window | one 64 KiB window per file that enables it (`ScratchFile::kCacheBytes`, `include/pineforge/detail/scratch_file.hpp:166`) | Counted in bytes. It bounds the operating-system page cache the file pins (the kernel is asked to drop clean pages); it is not an engine heap cache | Not applicable |
 | Report sink writer | a fixed 64 KiB buffer; a record line may not exceed 1 MiB | Counted in bytes | The sink file or stream |
 | Position-tail read window | one fixed 64 KiB window | Counted in bytes | The position tail: a 30-byte footer plus the entry id per trade |
 | Cohort id table | Rows kept in memory: at most twice the rows left by the last spill pass, plus 64, plus the rows pinned by live exposure or an outstanding reference (the comment above `kMaxResidentCohorts` at `include/pineforge/detail/scratch_defaults.hpp:16`; the threshold is set in `DiskResidentIdTable::spill`, with the floor `kSpillFloor` of 64). That is not a bound in terms of live rows. In the bounded scratch (jailed) profile, admission also refuses a run that would hold more than 4,096 live (non-spillable) cohorts (`kMaxResidentCohorts`, `include/pineforge/detail/scratch_defaults.hpp:16`) with `scratch_capacity_exceeded`. The rows that hold an opening or live units are also tracked in an ordered set, one map node each. `DiskResidentIdTable::find` walks the disk AVL on every lookup, even for resident rows; those disk reads use the id-table page cache above. `exit_rank_keys_` is a separate plain `DiskIdTable`. The id-pair store's index file starts at 64 slots and doubles when it grows (`kInitialSlots` and `grow_index`, `include/pineforge/detail/id_pair_store.hpp`) | Not measured | The on-disk ordered tree |
 | Cohort roster (native working-request core, `cohorts_`) | One in-memory map node per cohort that holds a live origin: `WorkingRequestCore::cohort_add` inserts it and `cohort_remove` erases it with its last origin (`src/native_order.cpp`), and nothing checks the map's size. It is bounded by the strategy's open lots, like the open-trade list, not by bars or closed trades. No engine constant caps open lots in the default profile: `pyramiding` is the script's own input, it limits same-side entries only when above 0 and does not cap `strategy.order`, and the native `max_open_lots` is optional and left unset by the Pine projection (`src/source/pine_adapter.cpp`). Only the bounded scratch (jailed) profile caps the number of cohort rows, because it refuses a run that would hold more than 4,096 live cohorts (`kMaxResidentCohorts`, above) with `scratch_capacity_exceeded`; it does not cap the origins inside one cohort, so the roster still follows the strategy's open lots | 96 B per open lot with one origin (estimate: the map node plus one `RequestHandle`, allocator headers not counted), which is 393,216 B (384 KiB) for 4,096 cohorts of one origin each; every further origin of a cohort adds one `RequestHandle` and vector growth. Measured on one run, trades equal to a build without the counter: 268 open lots at 10,000 bars and 269 at 100,000 bars (25,824 B; that plateau is most likely that script's own sizing, not a cap), and at most 2 on a script that adds and closes one lot per bar (10,000 and 35,000 adds), so it does not follow the bar count or the closed-trade count; the row is freed on close | Does not spill |
 | Cohort-target index (native consumer) | Up to 4,096 rows: `kCohortOpeningIndexBytes` (64 KiB, a constant with no setter; production code uses the constant) divided by the row size, applied in `read_indexed_cohort_target` (`src/native_execution_consumer.cpp`). Reserved once, on the first indexed cohort read, even for a few lots; kept across commands and run begin; held until the native consumer is destroyed, so a reused engine run object keeps it. | 16 B per row, so 65,536 B (64 KiB) per native consumer (one per engine run object), independent of bars, trades and lots | Does not spill: above 4,096 open lots, and in the other fallback cases, the original reader answers instead |
-| Report artifact I/O windows (`run_json`, unjailed route) | The final report artifact has a 1 MiB aligned I/O window (the only call that passes a window, in the preparation of the final report); every column and spool file and the sink reader page keep the 64 KiB class window. Fixed: the window is a positive multiple of 4096 chosen by the code, not set by a host. Up to eight files are alive in the output-series route (the final artifact plus seven columns and spools) and one reader page. | 1 MiB for the final artifact and 64 KiB for each other file or page, so about 1.5 MiB (1 MiB + 8 x 64 KiB) at most, independent of bars, trades, report size and the number of recorded output series | Disk-backed temporary files; the windows are the resident part |
+| Report artifact I/O windows (`run_json`, unjailed route) | The per-run 6 MiB default budget reserves the final report's 1 MiB window first, then equity/trade spools and open/close/event columns. Each declared series adds a 64 KiB window after those six fixed files; the sink reader has a separate 64 KiB page. Sizes are defaults, not refusals. | At most 6 MiB + 64 KiB × S + 64 KiB for S declared series, independent of bars, trades and report size. Series are unlimited by default; `--limit-output-series N` applies before creation and bounds S by N | Disk-backed temporary files; the windows are the resident part |
 | Placement table (retained placement rows) | not a constant. It holds the live rows plus the rows the retirement rules pin, one heap node each; retirement erases the rest every bar, so it grows only for the patterns in the dormant-leg and settled-family rows below | Not measured (`sizeof` of a placement snapshot plus its node was not compiled) | Not applicable |
 
 For the short waiting-child parent-terminal fixture (short ids), the book and

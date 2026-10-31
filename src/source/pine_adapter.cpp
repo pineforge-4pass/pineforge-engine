@@ -3,7 +3,6 @@
 #include <pineforge/source/magnifier_intrabars.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/compat/pine/market_admission.hpp>
-
 #include <pineforge/pending_order_mirror.hpp>
 
 #include <pineforge/native_calendar.hpp>
@@ -27,6 +26,7 @@
 #include "pine_position_tail_binding.hpp"
 #include "pine_position_tail_summary.hpp"
 #include "pine_source_key_test.hpp"
+#include "roster_pass_work.hpp"
 // Only an adapter TU using the existing observation seam selects the
 // counting instantiations. Normal builds select the empty diagnostic tag.
 #ifndef PINEFORGE_POSITION_TAIL_DIAGNOSTICS
@@ -4413,14 +4413,14 @@ void PineExecutionAdapter::clear_bracket_families() noexcept {
 void PineExecutionAdapter::release_closed_cohort_origins() {
     auto& scratch = retired_row_scratch_;
     if (!scratch.roster_pass_due) return;
-    scratch.roster_pass_due = false;
+    scratch.roster_pass_due = false; PF_ROSTER_PASS_WORK(due_passes);
     IExecutionConsumer* consumer = bound_consumer();
     if (!consumer) return;
     auto* pine = pine_view_of(host_);
     if (!pine) return;
     const auto& core = as_native_consumer(*consumer).request_core();
     std::size_t members = 0;
-    for (const auto& roster : core.cohorts()) members += roster.origins.size();
+    for (const auto& [key, roster] : core.nonempty_cohorts()) { PF_ROSTER_PASS_WORK(roster_cohort_visits); members += roster.origins.size(); }
     if (members == 0) return;
     // The common case, in a direct scan with nothing allocated or sorted:
     // every member still opened a lot that is open, or roots a working
@@ -4432,7 +4432,7 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     constexpr std::size_t kDirectScan = 64;
     if (members * (pine->pyramid_entries_.size() + core.live().size()) <= kDirectScan) {
         bool every_member_bound = true;
-        for (const auto& roster : core.cohorts()) {
+        for (const auto& [key, roster] : core.nonempty_cohorts()) { PF_ROSTER_PASS_WORK(roster_cohort_visits);
             for (const auto& origin : roster.origins) {
                 const std::uint64_t incarnation = origin.incarnation;
                 const bool bound = std::any_of(pine->pyramid_entries_.begin(),
@@ -4470,7 +4470,7 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     for (const auto& lot : pine->pyramid_entries_) lots.push_back(lot.entry_incarnation);
     std::sort(lots.begin(), lots.end());
     lots.erase(std::unique(lots.begin(), lots.end()), lots.end());
-    for (const auto& roster : core.cohorts()) {
+    for (const auto& [key, roster] : core.nonempty_cohorts()) { PF_ROSTER_PASS_WORK(roster_cohort_visits);
         PINEFORGE_LOOKUP_INDEX_WORK("cohort_origin_roster", this, run_counter_, 1);
         for (const auto& origin : roster.origins)
             roster_roots.push_back(origin.incarnation);
@@ -4487,14 +4487,14 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
         }
     }
     auto& probe = scratch.lot_probe;
-    for (const auto& roster : core.cohorts()) {
+    for (const auto& [key, roster] : core.nonempty_cohorts()) { PF_ROSTER_PASS_WORK(roster_cohort_visits);
         const auto& origins = roster.origins;
         if (origins.empty()) continue;
         if (probe.run != origins.front().run) probe.run = origins.front().run;
         // The newest open successor lot this roster binds: every member older
         // than it may be its root.
         std::uint64_t kept_below = 0;
-        for (const auto opening : successor_lots) {
+        for (const auto opening : successor_lots) { PF_ROSTER_PASS_WORK(roster_cohort_visits);
             probe.incarnation = opening;
             if (core.cohort_contains(roster.handle, probe)) kept_below = opening;
         }
