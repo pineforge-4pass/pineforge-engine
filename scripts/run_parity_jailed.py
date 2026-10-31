@@ -21,6 +21,7 @@ neither explicit configuration nor the environment variable is refused.
 """
 from __future__ import annotations
 
+import ctypes
 import errno
 import fcntl
 import hashlib
@@ -28,6 +29,7 @@ import io
 import json
 import os
 from pathlib import Path
+import platform
 import shutil
 import subprocess
 import sys
@@ -49,6 +51,9 @@ _RUN_JSON = (None if _INITIAL_HARNESS_DIR is None
              else _INITIAL_HARNESS_DIR / "run_json.py")
 _FINALIZER = (None if _INITIAL_HARNESS_DIR is None
               else _INITIAL_HARNESS_DIR / "pineforge_sink_finalize.py")
+# Linux ABI values are usable even when Python's build libc lacks the names.
+MFD_CLOEXEC = 0x1
+MFD_ALLOW_SEALING = 0x2
 _ARENA_SEALS = 0x0004 | 0x0002 | 0x0001  # GROW | SHRINK | SEAL, still writable
 _STAGED_DERIVED_FILES = (
     "ohlcv_ETH-USDT-USDT_15m.csv",
@@ -482,12 +487,36 @@ def _prepare(case, directory, harness_paths, corpus_commit=None):
         signal_start=signal_start, inputs=inputs, overrides=overrides)
 
 
+def _memfd_create(name, flags):
+    create = getattr(os, "memfd_create", None)
+    if create is not None:
+        return create(name, flags)
+    number = {
+        "x86_64": 319,
+        "aarch64": 279,
+        "riscv64": 279,
+        "i686": 356,
+        "armv7l": 385,
+        "ppc64le": 360,
+        "s390x": 350,
+    }.get(platform.machine())
+    if number is None:
+        raise _Refusal("memfd_create is unavailable on this host")
+    syscall = ctypes.CDLL(None, use_errno=True).syscall
+    syscall.restype = ctypes.c_long
+    fd = syscall(number, os.fsencode(name), flags)
+    if fd < 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), "memfd_create")
+    return fd
+
+
 def _arena_fd(size):
-    fd = os.memfd_create("pineforge-parity-arena",
-                         os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+    fd = _memfd_create("pineforge-parity-arena",
+                       MFD_CLOEXEC | MFD_ALLOW_SEALING)
     try:
         os.ftruncate(fd, size)
-        fcntl.fcntl(fd, fcntl.F_ADD_SEALS, _ARENA_SEALS)
+        fcntl.fcntl(fd, getattr(fcntl, "F_ADD_SEALS", 1033), _ARENA_SEALS)
         # A source descriptor is not the child's fd-5 destination.
         return fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 64)
     finally:

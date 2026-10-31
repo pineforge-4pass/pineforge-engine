@@ -2518,12 +2518,6 @@ add_test(
 )
 
 add_test(
-    NAME test_parity_packaged_paths
-    COMMAND ${Python3_EXECUTABLE}
-            ${PROJECT_SOURCE_DIR}/scripts/test_parity_packaged_paths.py
-)
-
-add_test(
     NAME test_fingerprint
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/fingerprint_self_test.py
@@ -8107,3 +8101,9 @@ endforeach()
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
 endif()
+
+add_test(
+    NAME test_parity_packaged_paths
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_parity_packaged_paths.py
+)

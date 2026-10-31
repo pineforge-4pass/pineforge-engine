@@ -18,6 +18,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import resource
 import shutil
@@ -2141,6 +2142,83 @@ def test_staged_derived_requires_corpus_root(tmp_path, monkeypatch):
     _assert_refused(result, output, before)
     assert result.failure_text == "unsupported case parameter: corpus_root"
     assert launcher.last is None
+
+
+def test_memfd_without_os_wrapper_runs_full_jailed_case(tmp_path, monkeypatch):
+    for name in ("memfd_create", "MFD_CLOEXEC", "MFD_ALLOW_SEALING"):
+        monkeypatch.delattr(os, name, raising=False)
+
+    case, _output, launcher, result = _assert_positive(tmp_path)
+
+    assert len(launcher.requests) == 1
+    assert result.csv_paths[case.case_id].read_bytes()
+    assert result.trades[case.case_id] == _reference_trades(case)
+
+
+def test_memfd_without_os_wrapper_refuses_unknown_machine(tmp_path, monkeypatch):
+    case = _case_fixture(tmp_path)
+    output = _output_fixture(tmp_path, case.case_id, stale=False)
+    before = _csv_snapshot(output)
+    launcher = _StandInLauncher(tmp_path, case.case_id)
+    machine = mock.Mock(return_value="pineforge-unsupported-memfd-machine")
+    monkeypatch.setattr(platform, "machine", machine)
+    for name in ("memfd_create", "MFD_CLOEXEC", "MFD_ALLOW_SEALING"):
+        monkeypatch.delattr(os, name, raising=False)
+
+    result = _invoke([case], output, launcher)
+
+    _assert_refused(result, output, before)
+    assert result.failure_text == "memfd_create is unavailable on this host"
+    assert result.failure_document is None
+    assert result.failure_code is None
+    machine.assert_called_once_with()
+    assert set(result.preparations) == {case.case_id}
+    assert launcher.requests == []
+    assert launcher.last is None
+    assert result.trades == {}
+    assert result.reports == {}
+    assert result.receipts == {}
+    assert result.diagnostics == {}
+    assert result.finalizer_outputs == {}
+    assert list(output.iterdir()) == []
+
+
+def test_memfd_fallback_uses_real_syscall_and_seals_arena(monkeypatch):
+    _require_entry()
+    number = {
+        "x86_64": 319,
+        "aarch64": 279,
+        "riscv64": 279,
+        "i686": 356,
+        "armv7l": 385,
+        "ppc64le": 360,
+        "s390x": 350,
+    }[platform.machine()]
+    real_syscall = ctypes.CDLL(None, use_errno=True).syscall
+    real_syscall.restype = ctypes.c_long
+    calls = []
+
+    def record_syscall(number, name, flags):
+        calls.append((number, name, flags))
+        return real_syscall(number, name, flags)
+
+    for name in ("memfd_create", "MFD_CLOEXEC", "MFD_ALLOW_SEALING"):
+        monkeypatch.delattr(os, name, raising=False)
+    monkeypatch.delattr(fcntl, "F_ADD_SEALS", raising=False)
+    libc = types.SimpleNamespace(syscall=record_syscall)
+    with mock.patch.object(ctypes, "CDLL", return_value=libc) as load_libc:
+        fd = _adapter._arena_fd(witness.ARENA_BYTES)
+    try:
+        load_libc.assert_called_once_with(None, use_errno=True)
+        assert calls == [(number, b"pineforge-parity-arena", 0x3)]
+        info = os.fstat(fd)
+        assert stat.S_ISREG(info.st_mode)
+        assert info.st_size == witness.ARENA_BYTES
+        assert os.readlink(f"/proc/self/fd/{fd}").startswith(
+            "/memfd:pineforge-parity-arena")
+        assert fcntl.fcntl(fd, 1034) & ARENA_SEALS == ARENA_SEALS  # F_GET_SEALS
+    finally:
+        os.close(fd)
 
 
 if __name__ == "__main__":
