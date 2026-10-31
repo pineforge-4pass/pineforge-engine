@@ -556,6 +556,36 @@ message(FATAL_ERROR "e2e-two-world: the tampered tree reached a fatal error")
                       result.stdout + result.stderr)
         self.assertIn(TREES_DIR, result.stdout + result.stderr)
 
+    # control 12b: get_directory_property(TESTS) reads the rows registered so
+    # far; a row registered after the read is not in the list
+    def test_get_directory_property_tests_lists_the_registered_rows(self):
+        baseline = self.row_count(TREES_DIR)
+        self.tree.append(TREES_DIR, '''
+add_test(NAME e2e_two_world_dirprop_probe COMMAND ${CMAKE_COMMAND} -E echo ok)
+set(_e2e_two_world_probe e2e_two_world_dirprop_probe)
+get_directory_property(_e2e_two_world_all TESTS)
+if(${_e2e_two_world_probe} IN_LIST _e2e_two_world_all)
+    add_test(NAME e2e_two_world_dirprop_seen COMMAND ${CMAKE_COMMAND} -E echo ok)
+endif()
+add_test(NAME e2e_two_world_dirprop_late COMMAND ${CMAKE_COMMAND} -E echo ok)
+set(_e2e_two_world_late e2e_two_world_dirprop_late)
+if(${_e2e_two_world_late} IN_LIST _e2e_two_world_all)
+    add_test(NAME e2e_two_world_dirprop_late_seen COMMAND ${CMAKE_COMMAND} -E echo ok)
+endif()
+''')
+        # probe, seen and late register; late_seen must not
+        self.assertEqual(baseline + 3, self.row_count(TREES_DIR))
+
+    # control 12c: any other directory property is not modelled (exit 2)
+    def test_an_unmodelled_directory_property_exits_2(self):
+        self.tree.append(TREES_DIR, '''
+get_directory_property(_e2e_two_world_dirs INCLUDE_DIRECTORIES)
+''')
+        result = self.run_check('--cmakelists', TREES_DIR, '--profile', 'release')
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('unmodelled get_directory_property INCLUDE_DIRECTORIES',
+                      result.stdout + result.stderr)
+
     # control 13: a two-pattern glob; the registered row appears only when
     # BOTH patterns are matched (one file each, in two directories)
     def test_a_two_pattern_glob_matches_both_patterns(self):
