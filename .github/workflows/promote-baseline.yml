@@ -13,9 +13,14 @@
 #            lab promote adopts the pair the merge gate's parity verdict
 #            measured — the merged engine with the codegen the sweep measured
 #            (ruling R2, 2026-09-26), PASS or neutral alike
-#   codegen  no failing check-run on the PR head; lab promote needs a pr-gate
-#            PASS binding (baseline engine, merged codegen), exact head
+#   codegen  the required `gate` context green (the trusted reporter's commit
+#            status, else the check-run) and no check-run on the PR head
+#            whose newest run (per app and name) failed; lab promote needs a pr-gate PASS binding (baseline
+#            engine, the PR head) and re-reads both trees from GitHub (the
+#            verdict records commits, not trees; GH_TOKEN below)
 # Otherwise it exits green without promoting.
+# A docs-only codegen receipt names no measured snapshot. lab promote refuses
+# it explicitly: the baseline stands, even when the required gate is green.
 #
 # It runs on a push to main, using MAIN's own copy at refs/heads/main. The
 # pf-gcp-main class admits this allowlisted workflow at that ref. The
@@ -23,9 +28,10 @@
 # `<repo>/.github/workflows/promote-baseline.yml@refs/heads/main` and the run
 # ref to refs/heads/main, with no event restriction
 # (terraform/gcp/github-wif.tf:133-134), so a push to main satisfies both gates.
-# The pushed SHA must resolve to exactly one merged PR with that merge commit
-# and base main; no match or ambiguity skips promotion. It checks out and runs
-# no PR code: it fetches the PR head's objects only to compare trees.
+# The pushed SHA must
+# resolve to exactly one merged PR with that merge commit and base main; no
+# match or ambiguity skips promotion. It checks out and runs no PR code:
+# it fetches the PR head's objects only to compare trees.
 #
 # The plane is GCP: the
 # promotion reads the active baseline and the gate ledger from the Postgres
@@ -379,8 +385,23 @@ jobs:
               echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
             fi
           else
-            bad=$(gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs" \
-              --jq '[.check_runs[] | select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out" or .conclusion=="action_required")] | length')
+            # Codegen's required context is `gate`, from the trusted reporter
+            # or the legacy check-run (ruleset "PineForge strict CI base"), and no
+            # other check-run may have failed: only the newest run of each (app,
+            # name) counts, since a run on the same head (an edit, a fork's PR,
+            # a re-run) supersedes an older red one. Every page is
+            # {total_count, check_runs}; slurp them into one list.
+            runs=$(gh api --paginate \
+              "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100")
+            gate=$(jq -s '[.[].check_runs[] | select(.name == "gate" and .conclusion == "success")] | length' <<< "$runs")
+            statuses=$(gh api --paginate \
+              "repos/${{ github.repository }}/commits/$HEAD_SHA/statuses?per_page=100")
+            gate_status=$(jq -sr '[.[][] | select(.context == "gate")][0].state // "absent"' <<< "$statuses")
+            if { [ "$gate_status" = absent ] && [ "$gate" = "0" ]; } || { [ "$gate_status" != absent ] && [ "$gate_status" != success ]; }; then
+              echo "::notice::the required gate context has not succeeded on $HEAD_SHA — not green; skipping"
+              echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            bad=$(jq -s '[[.[].check_runs[]] | group_by([.app.id, .name])[] | max_by(.id) | select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out" or .conclusion=="action_required")] | length' <<< "$runs")
             if [ "$bad" != "0" ]; then
               echo "::notice::$bad failing check-run(s) on $HEAD_SHA — not green; skipping"
               echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
@@ -413,6 +434,7 @@ jobs:
           ref: ${{ vars.WORKFLOW_REF || 'main' }}
           token: ${{ steps.app.outputs.token }}
           path: .workflow
+          persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: steps.ci.outputs.green == 'true'
@@ -442,12 +464,15 @@ jobs:
           chmod +x /tmp/cloud-sql-proxy
           /tmp/cloud-sql-proxy --port 5433 \
             gen-lang-client-0864094636:asia-east1:pineforge-workflow-pg &
-          for _ in $(seq 1 30); do
+          proxy_pid=$!
+          while true; do
             if (exec 3<>/dev/tcp/127.0.0.1/5433) 2>/dev/null; then exit 0; fi
+            if ! kill -0 "$proxy_pid" 2>/dev/null; then
+              echo "cloud-sql-proxy exited before it became ready" >&2
+              exit 1
+            fi
             sleep 1
           done
-          echo "cloud-sql-proxy did not become ready" >&2
-          exit 1
 
       - name: Install campaign dependencies
         if: steps.ci.outputs.green == 'true'
@@ -462,6 +487,10 @@ jobs:
           # No metadata server on a GitHub runner; mint GCS tokens from the
           # federated gcloud credential explicitly.
           PINEFORGE_GCP_TOKEN_CMD: gcloud auth print-access-token
+          # A codegen squash merge: lab promote reads the gated head's and the
+          # merge commit's trees from GitHub itself (gh api …/git/commits/<sha>)
+          # with the job's own read-only token.
+          GH_TOKEN: ${{ github.token }}
           MERGE_SHA: ${{ needs.promote-guard.outputs.merge_sha }}
           HEAD_SHA: ${{ needs.promote-guard.outputs.head_sha }}
           MERGE_TREE: ${{ steps.exacttree.outputs.merge_tree }}
@@ -481,9 +510,10 @@ jobs:
           set -e
           # Exit 2 is `refuse`: no verdict binds this merge as a single-axis
           # advance -- a cross-cutting engine+codegen change (gated as a composite
-          # the single axis cannot complete), an ungated merge, a squash-merged
-          # codegen PR (exact head only there), or an engine merge the diff rule
-          # cleared (nothing measured). Defer green, do not fail CI; a cross-cutting pair is promoted by
+          # the single axis cannot complete), an ungated merge, a codegen merge
+          # gated only neutral (lab promote takes a pr-gate PASS), a merge tree
+          # GitHub does not show as the gated head's, or an engine merge the
+          # diff rule cleared (nothing measured). Defer green, do not fail CI; a cross-cutting pair is promoted by
           # hand with `lab promote --composite` once both repos merge (see the
           # baseline-promote skill). Any other non-zero is a real error.
           if [ "$code" = "2" ]; then

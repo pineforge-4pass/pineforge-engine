@@ -1332,6 +1332,16 @@ tree, and the tool promotes the pair the merge gate's parity verdict measured
 for the tree; after the guard succeeds, ineligible baseline cases exit green
 without promoting.
 
+**2026-10-31 promotion template alignment:** the shared workflow's codegen
+axis requires the `gate` context to succeed. The newest `gate` commit status
+takes precedence; only when that status is absent may a successful `gate`
+check-run satisfy the context. Both API reads paginate, and only the newest
+check-run by ID for each (App ID, check name) can veto promotion for `failure`,
+`cancelled`, `timed_out` or `action_required`. The campaign tool independently
+requires a codegen `pr-gate` PASS receipt and re-reads the gated head's and
+squash merge's trees from GitHub. A docs-only codegen receipt has no measured
+snapshot, so it defers promotion even with a green gate.
+
 `promote-guard` resolves the pushed SHA and must pass before the credential job runs.
 It reads the selected PR's full API response to obtain the merger, checking
 that its merge commit, base, head and merge time match the selected result.
@@ -1673,6 +1683,15 @@ tree equality and head-status checks admit promotion. A shared
 promotions one at a time. GitHub keeps one pending run per group, so a further
 merge while one promotion runs and another waits cancels the waiting run,
 which is then re-fired by manual dispatch.
+
+**2026-10-31 credential and proxy alignment:** after tree and head-gate
+checks succeed, the workflow mints a read-only App token scoped to the private
+campaign repository. `Checkout campaign tooling (pineforge-workflow)` sets
+`persist-credentials: false`. The `Promote baseline` step supplies its own
+read-only `${{ github.token }}` as `GH_TOKEN` for the campaign tool's GitHub
+tree reads. The Cloud SQL proxy readiness loop captures the background PID,
+probes port 5433 and fails if that process dies before readiness; it has no
+fixed retry count.
 
 The named promotion exception requires exactly `push` and
 `workflow_dispatch`, pins the push filter to `branches: [main]`, and requires
