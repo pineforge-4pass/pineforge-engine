@@ -754,10 +754,12 @@ void identity() {
     IdentityHost actual(false);
     reference.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
     actual.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
-    require(reference.last_error().empty(),
-            ("identity reference run: " + reference.last_error()).c_str());
-    require(actual.last_error().empty(),
-            ("identity current run: " + actual.last_error()).c_str());
+    const std::string identity_reference_error = reference.last_error();
+    const std::string identity_actual_error = actual.last_error();
+    require(identity_reference_error.empty(),
+            ("identity reference run: " + identity_reference_error).c_str());
+    require(identity_actual_error.empty(),
+            ("identity current run: " + identity_actual_error).c_str());
     // One cancellation-only pass and one pass after each of two closes.
     CHECK(actual.stages.size() == 3 && reference.stages.size() == 3);
     // Before any close, successor 3 keeps roots below 3 in both rosters;
@@ -793,8 +795,12 @@ void identity() {
     // Two selected closes book one trade each; opening 5 remains live.
     CHECK(actual.trade_count() == 2 && reference.trade_count() == 2);
     CHECK(actual.lots().size() == 1 && reference.lots().size() == 1);
-    CHECK(actual.native_continuation_hash() == reference.native_continuation_hash());
-    CHECK(actual.broker_state_hash() == reference.broker_state_hash());
+    const auto identity_actual_continuation = actual.native_continuation_hash();
+    const auto identity_reference_continuation = reference.native_continuation_hash();
+    CHECK(identity_actual_continuation == identity_reference_continuation);
+    const auto identity_actual_broker = actual.broker_state_hash();
+    const auto identity_reference_broker = reference.broker_state_hash();
+    CHECK(identity_actual_broker == identity_reference_broker);
 }
 
 void successor_work() {
@@ -991,9 +997,11 @@ void randomized_case(std::uint64_t seed, std::size_t rounds, std::size_t empty_h
     const auto bars = tape(1);
     reference.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
     actual.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
-    require(reference.last_error().empty(),
-            ("random reference: " + reference.last_error()).c_str());
-    require(actual.last_error().empty(), ("random actual: " + actual.last_error()).c_str());
+    const std::string random_reference_error = reference.last_error();
+    const std::string random_actual_error = actual.last_error();
+    require(random_reference_error.empty(),
+            ("random reference: " + random_reference_error).c_str());
+    require(random_actual_error.empty(), ("random actual: " + random_actual_error).c_str());
     // Two passes per round, an initial empty pass, final release and empty pass.
     const auto expected_samples = rounds * 2 + 3;
     CHECK(reference.samples.size() == expected_samples);
@@ -1022,9 +1030,15 @@ void randomized_case(std::uint64_t seed, std::size_t rounds, std::size_t empty_h
         for (std::size_t j = 0; j < std::min(a.state.receipts.size(), r.state.receipts.size()); ++j)
             CHECK(same_receipt(a.state.receipts[j], r.state.receipts[j]));
     }
-    CHECK(actual.native_continuation_hash() == reference.native_continuation_hash());
-    CHECK(actual.broker_state_hash() == reference.broker_state_hash());
-    CHECK(actual.trade_count() == reference.trade_count());
+    const auto random_actual_continuation = actual.native_continuation_hash();
+    const auto random_reference_continuation = reference.native_continuation_hash();
+    CHECK(random_actual_continuation == random_reference_continuation);
+    const auto random_actual_broker = actual.broker_state_hash();
+    const auto random_reference_broker = reference.broker_state_hash();
+    CHECK(random_actual_broker == random_reference_broker);
+    const auto random_actual_trades = actual.trade_count();
+    const auto random_reference_trades = reference.trade_count();
+    CHECK(random_actual_trades == random_reference_trades);
     if (failures != failures_before)
         std::fprintf(stderr, "random population seed=%llu rounds=%zu initial_empty=%zu\n",
                      static_cast<unsigned long long>(seed), rounds, empty_handles);
