@@ -18,7 +18,15 @@ version number follows semantic versioning over the surfaces the
   zero waits without a drain deadline. This guards against a leaked descendant
   that outlives its parent and keeps an output pipe open. Progress does not
   renew the grace; expiry names the parameter in terminal diagnostics.
-  TERM-to-KILL cleanup retains its separate fixed 1000 ms grace.
+  `--stop-grace-ms` (`PINEFORGE_CHANNEL_STOP_GRACE_MS`) controls the separate
+  TERM-to-KILL cleanup grace, with the same 1000 ms default and zero meaning
+  unlimited. For both grace parameters, operator 0 means unlimited; an absent
+  operator value takes the 1000 ms default; an absent or zero host grant means
+  no host limit, so that default still applies when the operator gave no value;
+  a positive host grant makes an absent operator value take the grant, refuses
+  a positive operator value above it, and refuses operator 0 as exceeding it.
+  Terminal records carry a `diagnostics` list of text strings, each cut at
+  1,024 bytes; a jailed refusal names its parameter there.
 - Sink validation preserves the effective producer profile in an explicit
   environment. Under the jailed profile it uses provisional binary stdout,
   with no sink spool or file, and buffers at most the planned sink bound in

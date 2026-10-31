@@ -36,13 +36,22 @@ unlimited, not a policy refusal. limits.*.effective is null for an unlimited
 dimension. Accounting continues and all polls use at most 50 ms slices.
 --post-exit-drain-ms (PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS) bounds the diagnostic
 and receipt drains after their owners exit. Its default is 1000 ms; zero means
-unlimited, subject to a positive host grant. Like the other ceilings it accepts
-only unsigned decimal integers in 0..9007199254740990. A leaked descendant can
-outlive its parent and keep an output pipe open. Expiry refuses that drain with
-report_channel_failed and names --post-exit-drain-ms in terminal diagnostics.
-Output progress never renews this interval. limits.post_exit_drain_ms reports
-requested/granted/effective, with effective=null for unlimited. The separate
-fixed stop_grace_ms still controls TERM-to-KILL cleanup.
+unlimited. --stop-grace-ms (PINEFORGE_CHANNEL_STOP_GRACE_MS) bounds the
+TERM-to-KILL cleanup after a stop request. Its default is also 1000 ms; zero
+means unlimited, so S waits for the owned group to exit and sends no KILL after
+TERM. Both grace parameters accept only unsigned decimal integers in
+0..9007199254740990 and report requested/granted/effective, with effective=null
+for unlimited. Their one grant rule is: operator 0 means unlimited; an absent
+operator value takes the 1000 ms default; an absent or zero host grant imposes
+no host limit, so that default still applies when the operator gave no value; a
+positive host grant makes an absent operator value take the grant, refuses a
+positive operator value above it, and refuses operator 0 as exceeding it.
+A leaked descendant can outlive its parent and keep an output pipe open. Drain
+expiry refuses that drain with report_channel_failed and names
+--post-exit-drain-ms in terminal diagnostics. Stop-grace expiry names
+--stop-grace-ms in diagnostics. Output progress never renews either interval.
+The terminal record carries diagnostics as text strings cut to at most 1,024
+UTF-8 bytes.
 
 S counts/hashes K and relays through one 64 KiB queue to the real finalizer V.
 V receives an explicit environment containing PINEFORGE_RUN_JSON_PROFILE.
@@ -68,8 +77,9 @@ an external sink fd; its full projection is unavailable without one.
 A failure line may additionally carry cause only on strategy_create_failed:
 exactly {"code":"outputs_limit","args":{"max":N,"reason":"too_many_series"}},
 where N is an integer >= 1 and both code and args pass the installed catalog.
-It remains a producer claim, relayed without re-encoding; a claim exceeding
-8 KiB is omitted from the terminal record under the existing omission rule.
+It remains a producer claim; the parsed claim is re-serialised in the terminal
+record, while the report bytes stay relayed intact. A claim exceeding 8 KiB is
+omitted from the terminal record under the existing omission rule.
 The deadline module has no cancellation callback. S uses its own nonblocking
 I/O loops around the same absolute Deadline, checking host cancellation between
 poll slices of at most 50 ms. Cancellation stops data publication; M gets one
@@ -113,16 +123,21 @@ INT_MAX = (1 << 31) - 1
 TERMINAL_BYTES = 65536
 QUEUE_BYTES = 65536
 CLAIM_BYTES = 8192
-STOP_GRACE_MS = 1000
 DEFAULT_POST_EXIT_DRAIN_MS = 1000
+DEFAULT_STOP_GRACE_MILLISECONDS = 1000
 DIMENSIONS = ("report_bytes", "diagnostic_bytes", "wall_ms", "stall_ms",
-              "post_exit_drain_ms")
+              "post_exit_drain_ms", "stop_grace_ms")
 CEILINGS = {
     "--report-max-bytes": ("PINEFORGE_REPORT_MAX_BYTES", "report_bytes"),
     "--diagnostic-max-bytes": ("PINEFORGE_DIAGNOSTIC_MAX_BYTES", "diagnostic_bytes"),
     "--channel-wall-ms": ("PINEFORGE_CHANNEL_WALL_MS", "wall_ms"),
     "--channel-stall-ms": ("PINEFORGE_CHANNEL_STALL_MS", "stall_ms"),
     "--post-exit-drain-ms": ("PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS", "post_exit_drain_ms"),
+    "--stop-grace-ms": ("PINEFORGE_CHANNEL_STOP_GRACE_MS", "stop_grace_ms"),
+}
+GRACE_DEFAULTS = {
+    "post_exit_drain_ms": DEFAULT_POST_EXIT_DRAIN_MS,
+    "stop_grace_ms": DEFAULT_STOP_GRACE_MILLISECONDS,
 }
 CONTROLS = {
     "--report-channel": "PINEFORGE_REPORT_CHANNEL",
@@ -139,6 +154,11 @@ CATALOG = Path(__file__).with_name("run_failure_codes.json")
 def wire(value):
     return json.dumps(value, separators=(",", ":"), ensure_ascii=True,
                       allow_nan=False).encode("utf-8") + b"\n"
+
+
+def diagnostic_text(value):
+    raw = str(value).encode("utf-8")[:1024]
+    return raw.decode("utf-8", "ignore")
 
 
 class UsageError(Exception):
@@ -575,7 +595,7 @@ def validate_candidate(stream, catalog, operation):
                             **({"cause": cause} if cause is not None else {}),
                             "authority": "producer"}
                 if not omitted:
-                    omitted = len(wire(proposed if cause is not None else values)) - 1 > CLAIM_BYTES
+                    omitted = len(wire(proposed)) - 1 > CLAIM_BYTES
                 if not omitted:
                     claim = proposed
             return True, False, True, claim, omitted
@@ -745,13 +765,16 @@ def read_size(allowance, room=QUEUE_BYTES):
 
 class GroupStop:
     """Stop owned sessions even after their leaders have been reaped."""
-    def __init__(self):
+    def __init__(self, grace_ms, on_expire=None):
+        self.grace_ms = grace_ms
+        self.on_expire = on_expire
         self.ends = {}
 
     def request(self, process, now):
         if process is None or process in self.ends:
             return
-        self.ends[process] = now + STOP_GRACE_MS / 1000
+        self.ends[process] = (
+            None if self.grace_ms is None else now + self.grace_ms / 1000)
         try:
             os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
@@ -760,6 +783,8 @@ class GroupStop:
     def advance(self, now):
         for process, end in self.ends.items():
             if end is not None and now >= end:
+                if self.on_expire is not None:
+                    self.on_expire()
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
@@ -833,6 +858,7 @@ class Supervisor:
         self.deadline = Deadline(None, None)
         self.borrowed_flags = {}
         self.diagnostic_by_stage = {stage: 0 for stage in ("run", "finalize")}
+        self.stop_grace_diagnostic_emitted = False
         # A single raw syscall returns EINTR to S's deadline loop. Python's
         # convenience writes can retry it below that loop.
         self.raw_io = ctypes.CDLL(None, use_errno=True)
@@ -898,6 +924,28 @@ class Supervisor:
                 "reason": "sink_peer_closed" if error.reason == "peer_closed" else "sink_io"})
         else:
             self.latch("report_channel_failed", {"channel": error.channel, "reason": error.reason})
+
+    def stop_grace_expired(self, context="TERM-to-KILL cleanup"):
+        if not self.stop_grace_diagnostic_emitted:
+            self.diagnostics.append(diagnostic_text(
+                "--stop-grace-ms (PINEFORGE_CHANNEL_STOP_GRACE_MS) expired during "
+                + context + "."))
+            self.stop_grace_diagnostic_emitted = True
+
+    def wait_after_stop(self, process, name):
+        if process is None:
+            return
+        grace_ms = self.limits["stop_grace_ms"]["effective"]
+        try:
+            if grace_ms is None:
+                process.wait()
+            else:
+                process.wait(timeout=grace_ms / 1000)
+        except subprocess.TimeoutExpired:
+            self.stop_grace_expired("the " + name + " wait")
+            self.diagnostics.append(diagnostic_text(
+                "the " + name + " survived SIGKILL and the stop grace"))
+            self.latch("harness_internal_error", {})
 
     def check_cancelled(self):
         if self.cancelled:
@@ -1010,8 +1058,8 @@ class Supervisor:
                 text = getattr(options, flag[2:].replace("-", "_"))
                 self.limits[name]["requested"] = None if text is None else decimal(text)
                 self.limits[name]["effective"] = (
-                    DEFAULT_POST_EXIT_DRAIN_MS
-                    if name == "post_exit_drain_ms" and text is None
+                    GRACE_DEFAULTS[name]
+                    if name in GRACE_DEFAULTS and text is None
                     else self.limits[name]["requested"] or None)
             if options.planned_sink_bytes is not None:
                 self.planned_sink_request = decimal(options.planned_sink_bytes)
@@ -1051,12 +1099,19 @@ class Supervisor:
                 cell = self.limits[name]
                 requested = cell["requested"]
                 cell["granted"] = grant
-                cell["effective"] = requested or grant or None
-                if name == "post_exit_drain_ms" and requested is None and grant is None:
-                    cell["effective"] = DEFAULT_POST_EXIT_DRAIN_MS
-                if grant and requested and requested > grant:
-                    cell["effective"] = None
-                    above_grant.add(name)
+                if name in GRACE_DEFAULTS:
+                    if grant and requested == 0:
+                        cell["effective"] = None
+                        above_grant.add(name)
+                    elif grant and requested is not None and requested > grant:
+                        cell["effective"] = None
+                        above_grant.add(name)
+                    elif requested is None:
+                        cell["effective"] = grant or GRACE_DEFAULTS[name]
+                    else:
+                        cell["effective"] = requested or None
+                else:
+                    cell["effective"] = requested or grant or None
             # A rejected request is not silently recorded as an accepted clamp.
             # Its failure publication must nevertheless obey the host grant.
             report_limit = self.limits["report_bytes"][
@@ -1105,7 +1160,7 @@ class Supervisor:
                     "sha256": None, "finalizer_version": None}
         except (OSError, UsageError, ValueError) as error:
             if isinstance(error, UsageError):
-                self.diagnostics.append(str(error)[:1024])
+                self.diagnostics.append(diagnostic_text(error))
             self.latch("run_request_invalid", {"option": "arguments"}, usage=True)
 
     def validator_environment(self):
@@ -1116,16 +1171,17 @@ class Supervisor:
             for name in ("LD_PRELOAD", "PF_REPORT_TEST_TRACE", "PF_REPORT_TEST_PAUSE_PROBE",
                          "PF_REPORT_TEST_STDOUT_AUDIT", "PF_REPORT_TEST_HOLD_RECEIPT",
                          "PF_REPORT_TEST_FAIL_AFTER_RECEIPT", "PF_REPORT_TEST_CORRUPT_STDOUT",
-                         "PF_REPORT_TEST_EXCESS_STDOUT"):
+                         "PF_REPORT_TEST_EXCESS_STDOUT", "PF_REPORT_TEST_IGNORE_TERM",
+                         "PF_REPORT_TEST_HOLD_OVERFLOW", "PF_REPORT_TEST_OUTPUT_AFTER_TERM"):
                 if name in os.environ:
                     environment[name] = os.environ[name]
         return environment
 
     def drain_expired(self, channel):
-        self.diagnostics.append(
+        self.diagnostics.append(diagnostic_text(
             "--post-exit-drain-ms (PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS) ended the "
             + ("diagnostic" if channel == "diagnostic" else "validator output/receipt")
-            + " drain: a descendant can outlive its parent and keep an output pipe open.")
+            + " drain: a descendant can outlive its parent and keep an output pipe open."))
         self.latch("report_channel_failed", {
             "channel": channel, "reason": "io" if channel == "diagnostic" else "protocol"})
 
@@ -1353,7 +1409,8 @@ class Supervisor:
         diagnostic_since = None
         candidate_waiting = False
         receipt_eof = validator_done = False
-        stopping = GroupStop()
+        stop_grace_ms = self.limits["stop_grace_ms"]["effective"]
+        stopping = GroupStop(stop_grace_ms, self.stop_grace_expired)
         diagnostic_drain_end = receipt_drain_end = overflow_finish_end = None
         diagnostic_tail_remaining = None
         drain_ms = self.limits["post_exit_drain_ms"]["effective"]
@@ -1538,7 +1595,9 @@ class Supervisor:
                             relay_pending.extend(data)
                             if allowance is not None and len(data) > allowance:
                                 sink.truncated = self.sink_overflow = True
-                                overflow_finish_end = time.monotonic() + STOP_GRACE_MS / 1000
+                                overflow_finish_end = (
+                                    None if stop_grace_ms is None
+                                    else time.monotonic() + stop_grace_ms / 1000)
                                 self.latch("report_sink_failed", {
                                     "reason": "sink_exhausted", "sink_bytes": sink.observed,
                                     "cap_bytes": sink.limit})
@@ -1666,7 +1725,9 @@ class Supervisor:
                                 unwatch(relay_fd)
                                 release(relay_fd)
                             stopping.request(self.validator, now)
-                        elif self.deadline.expired() or now >= overflow_finish_end:
+                        elif self.deadline.expired() or (
+                                overflow_finish_end is not None
+                                and now >= overflow_finish_end):
                             # Let V emit its existing overflow receipt first,
                             # then stop its whole session under the same grace.
                             relay_pending.clear()
@@ -1714,10 +1775,10 @@ class Supervisor:
                                 diagnostic.truncated = True
                                 diagnostic_pending.clear()
                     stopping.advance(now)
-                self.process.wait(timeout=STOP_GRACE_MS / 1000)
+                self.wait_after_stop(self.process, "producer")
                 if self.validator is not None:
-                    self.validator.wait(timeout=STOP_GRACE_MS / 1000)
-                    if not validator_done:
+                    self.wait_after_stop(self.validator, "validator")
+                    if self.validator.returncode is not None and not validator_done:
                         self.finish_sink(bytes(receipt), receipt_eof)
         finally:
             if self.failure is not None:
@@ -1726,8 +1787,7 @@ class Supervisor:
                 stopping.request(process, time.monotonic())
             stopping.finish()
             for process in (self.process, self.validator):
-                if process is not None:
-                    process.wait(timeout=STOP_GRACE_MS / 1000)
+                self.wait_after_stop(process, "cleanup")
             for fd in tuple(owned):
                 release(fd)
         diagnostic = self.channels["diagnostic"]
@@ -1825,14 +1885,14 @@ class Supervisor:
                         if worker.poll() is None:
                             worker.kill()
                         break
-                worker.wait(timeout=STOP_GRACE_MS / 1000)
+                self.wait_after_stop(worker, "trusted parser")
             self.finalize_finished = time.monotonic()
         finally:
             for fd in readers:
                 os.close(fd)
             if worker.poll() is None:
                 worker.kill()
-                worker.wait(timeout=STOP_GRACE_MS / 1000)
+                self.wait_after_stop(worker, "trusted parser cleanup")
             if not diagnostic_eof:
                 self.channels["diagnostic"].known = self.channels["diagnostic"].complete = False
         if self.failure is not None:
@@ -2095,8 +2155,7 @@ class Supervisor:
                 "failure": self.producer_claim, "failure_claim_omitted": self.claim_omitted,
             },
             "limits": {**self.limits, "sink_bytes": self.sink_bound, "terminal_bytes": TERMINAL_BYTES,
-                       "stop_grace_ms": STOP_GRACE_MS, "relay_queue_bytes": QUEUE_BYTES,
-                       "producer_claim_bytes": CLAIM_BYTES},
+                       "relay_queue_bytes": QUEUE_BYTES, "producer_claim_bytes": CLAIM_BYTES},
             "report_charged_bytes": self.charged,
             "channels": {name: channel.record(name) for name, channel in self.channels.items()},
             "sink_verification": self.sink_verification, "usage": self.usage(),
@@ -2209,17 +2268,18 @@ class Supervisor:
             pass
         except Exception:
             self.latch("harness_internal_error", {})
-            stopping = GroupStop()
+            stopping = GroupStop(
+                self.limits["stop_grace_ms"]["effective"], self.stop_grace_expired)
             for process in (self.process, self.validator):
                 stopping.request(process, time.monotonic())
             stopping.finish()
             for process in (self.process, self.validator):
-                if process is not None:
-                    process.wait(timeout=STOP_GRACE_MS / 1000)
+                self.wait_after_stop(process, "exception cleanup")
             if self.validator is not None:
                 status = self.validator.returncode
-                self.sink_verification["exit_status"] = status if status >= 0 else None
-                self.sink_verification["signal"] = -status if status < 0 else None
+                if status is not None:
+                    self.sink_verification["exit_status"] = status if status >= 0 else None
+                    self.sink_verification["signal"] = -status if status < 0 else None
         try:
             self.publish(selected)
         except Cancelled:

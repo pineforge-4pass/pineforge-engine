@@ -53,6 +53,7 @@ def clean_environment():
 
 def main_blob(path):
     """Read the finalizer/catalog contract from main's committed text."""
+    # Pinned to main at the merge; when main moves again before this change merges, repoint all three to the new main head (and re-run the re-anchor and the OFF row).
     return subprocess.run(
         ["git", "show", f"a86dbdc0949c5e9b49f62ff2aeac83641a22b72f:{path}"], cwd=ROOT,
         capture_output=True, check=True, timeout=30).stdout
@@ -277,7 +278,10 @@ def launch(request=None, *, options=(), environment=None, status="valid",
            endpoint_nonblocking=None, diagnostic_delay_ms=0, stalled_channels=(),
            cancel_channel=None, cancel_signal=signal.SIGTERM, cancel_delay_ms=150,
            saturate_status=False, gate_status=False, watchdog_seconds=20,
-           supervisor_path=None, producer_arguments=(), audit_stdout=False, receipt_hold=None):
+           supervisor_path=None, producer_arguments=(), audit_stdout=False, receipt_hold=None,
+           ignore_validator_term=False, hold_validator_overflow=False,
+           output_after_validator_term=False, release_validator_after_ms=None,
+           release_producer_after_ms=None):
     """Create R/D/M, launch S, and read every endpoint concurrently to EOF.
 
     ``status`` tests absent, pipe, stream, reserved, closed and wrong-direction
@@ -465,6 +469,12 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                 env["PF_REPORT_TEST_STDOUT_AUDIT"] = "1"
             if receipt_hold is not None:
                 env["PF_REPORT_TEST_HOLD_RECEIPT"] = receipt_hold
+            if ignore_validator_term:
+                env["PF_REPORT_TEST_IGNORE_TERM"] = "1"
+            if hold_validator_overflow:
+                env["PF_REPORT_TEST_HOLD_OVERFLOW"] = "1"
+            if output_after_validator_term:
+                env["PF_REPORT_TEST_OUTPUT_AFTER_TERM"] = "1"
         flag_probes, flags_before, flags_after = {}, {}, {}
 
         def close_flag_probes():
@@ -511,6 +521,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
         validator_events, stopped_validators = [], set()
         host_paused_validators = set()
         control = {"stalled_at": {}, "cancelled_at": None, "exited_at": None,
+                   "exited_at_monotonic": None,
                    "host_paused_validators": [], "held_until_exit": [],
                    "status_prefill_packets": len(status_backlog), "status_prefill": status_prefill,
                    "supervisor_pid": process.pid}
@@ -594,6 +605,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                 ended = process.poll() is not None
                 if ended and control["exited_at"] is None:
                     control["exited_at"] = now - launched
+                    control["exited_at_monotonic"] = now
                 if ended and status_probe is not None:
                     status_probe.close()
                 for name, fd in tuple(held_readers.items()):
@@ -605,6 +617,34 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                     elif name != "status" and name not in control["stalled_at"]:
                         if pending_bytes(fd) == 4096:
                             control["stalled_at"][name] = now - launched
+                identity_path = (request or {}).get("producer_identity_path")
+                term_path = (request or {}).get("producer_term_path")
+                if term_path is not None and Path(term_path).is_file():
+                    try:
+                        term = json.loads(Path(term_path).read_text())
+                    except (OSError, ValueError):
+                        term = None
+                    if term is not None and control.get("producer_term_at") is None:
+                        identity = process_info(term["pid"])
+                        require_precondition(
+                            identity is not None and identity["state"] != "Z",
+                            "producer was gone before its TERM observation")
+                        control["producer_term_at"] = term["at"]
+                        control["producer_term_process"] = identity
+                    if (release_producer_after_ms is not None
+                            and term is not None
+                            and control.get("producer_released_at") is None
+                            and identity_path is not None
+                            and (now - term["at"]) >= release_producer_after_ms / 1000):
+                        identity = json.loads(Path(identity_path).read_text())
+                        info = process_info(identity["pid"])
+                        require_precondition(
+                            info is not None and info["state"] != "Z"
+                            and process.poll() is None,
+                            "producer was not alive before the host release")
+                        control["producer_alive_before_release"] = info
+                        Path((request or {})["producer_release_path"]).touch()
+                        control["producer_released_at"] = now
                 status_phase = "status_ready" if gate_status else "status"
                 if (status_stall and not ended and {"report", "diagnostic"} <= eof
                         and status_phase not in control["stalled_at"]):
@@ -694,6 +734,19 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                         flags_before, flags_after, descendant_samples,
                         time.monotonic() - launched, control)
                     raise HostWatchdogExpired(partial)
+                overflow_hold = control.get("validator_overflow_hold")
+                if (release_validator_after_ms is not None
+                        and overflow_hold is not None
+                        and control.get("validator_released_at") is None
+                        and now >= overflow_hold["at"] + release_validator_after_ms / 1000):
+                    info = process_info(overflow_hold["pid"])
+                    require_precondition(
+                        info is not None and info["state"] != "Z"
+                        and process.poll() is None,
+                        "validator was not alive before the host release")
+                    control["validator_alive_before_release"] = info
+                    os.kill(overflow_hold["pid"], signal.SIGCONT)
+                    control["validator_released_at"] = now
                 for key, _ in selector.select(0.05):
                     if key.data == "trace":
                         while True:
@@ -759,6 +812,17 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                             observation == control.setdefault("status_pending_send", observation),
                             "more than one terminal send entered the TEST gate")
                         continue
+                    if event[:1] == b"T":
+                        pid = int(event[1:])
+                        if control.get("validator_term_at") is None:
+                            info = process_info(pid)
+                            require_precondition(
+                                info is not None and info["state"] != "Z",
+                                "validator was gone before its TERM observation")
+                            control["validator_term_at"] = time.monotonic()
+                            control["validator_term_pid"] = pid
+                            control["validator_term_process"] = info
+                        continue
                     if event[:1] == b"S" and pause_validator_until_wall:
                         pid = int(event[1:])
                         if pid not in host_paused_validators:
@@ -769,6 +833,9 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                         continue
                     else:
                         pid = int(event[1:])
+                    if event[:1] == b"P" and release_validator_after_ms is not None:
+                        control.setdefault("validator_overflow_hold", {
+                            "pid": pid, "at": time.monotonic()})
                     try:
                         state = Path(f"/proc/{pid}/status").read_text()
                     except FileNotFoundError:

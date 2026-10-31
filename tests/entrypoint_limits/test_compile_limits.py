@@ -18,6 +18,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+# Pinned to main at the merge; when main moves again before this change merges, repoint all three to the new main head (and re-run the re-anchor and the OFF row).
 BASE = "a86dbdc0949c5e9b49f62ff2aeac83641a22b72f"
 ENTRYPOINT = Path(os.environ.get("PINEFORGE_ENTRYPOINT_UNDER_TEST",
                                 str(ROOT / "docker/entrypoint.sh"))).resolve()

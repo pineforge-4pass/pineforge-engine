@@ -25,6 +25,18 @@ def main():
     request = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     reference = "--reference" in sys.argv[2:]
     fragment = request.get("fragment_bytes", 65536)
+    term_seen = False
+
+    def ignored_term(signum, frame):
+        nonlocal term_seen
+        term_seen = True
+        path = request.get("producer_term_path")
+        if path is not None and not Path(path).exists():
+            Path(path).write_text(json.dumps({
+                "pid": os.getpid(), "at": time.monotonic()}))
+
+    if request.get("ignore_sigterm"):
+        signal.signal(signal.SIGTERM, ignored_term)
     if "producer_identity_path" in request:
         Path(request["producer_identity_path"]).write_text(
             json.dumps({"pid": os.getpid(), "group": os.getpgrp()}))
@@ -79,6 +91,17 @@ def main():
     for name, fd in (("stdout", 1), ("stderr", 2)):
         if name in request:
             write_all(fd, base64.b64decode(request[name]), fragment)
+    hold_path = request.get("hold_after_output_path")
+    if hold_path is not None:
+        while not Path(hold_path).exists():
+            if term_seen and request.get("output_after_term"):
+                try:
+                    os.write(2, b"producer output after TERM\n")
+                except OSError:
+                    pass
+            time.sleep(0.01)
+        if request.get("exit_after_hold"):
+            return 0
     if "candidate" in request:
         candidate = base64.b64decode(request["candidate"])
     else:

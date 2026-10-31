@@ -26,17 +26,20 @@ KNOBS = (
     ("--channel-wall-ms", "PINEFORGE_CHANNEL_WALL_MS", "wall_ms", 10000),
     ("--channel-stall-ms", "PINEFORGE_CHANNEL_STALL_MS", "stall_ms", 2000),
 )
+CLAIM_BYTES = 8192
 INACTIVE_CONTROLS = (
     *((flag, "0") for flag, _, _, _ in KNOBS),
     ("--terminal-status-fd", "9"), ("--attempt-id", "0"),
     ("--host-attestation-fd", "9"), ("--test-only-host-attestation-fd", "9"),
-    ("--post-exit-drain-ms", "0"), ("--planned-sink-bytes", "0"),
+    ("--post-exit-drain-ms", "0"), ("--stop-grace-ms", "0"),
+    ("--planned-sink-bytes", "0"),
 )
 INACTIVE_ENVIRONMENT = (
     *(environment for _, environment, _, _ in KNOBS),
     "PINEFORGE_TERMINAL_STATUS_FD", "PINEFORGE_REPORT_ATTEMPT_ID",
     "PINEFORGE_REPORT_HOST_ATTESTATION_FD",
-    "PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS", "PINEFORGE_REPORT_PLANNED_SINK_BYTES",
+    "PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS", "PINEFORGE_CHANNEL_STOP_GRACE_MS",
+    "PINEFORGE_REPORT_PLANNED_SINK_BYTES",
 )
 
 
@@ -537,7 +540,8 @@ class Contract(unittest.TestCase):
         for name in ("report", "candidate", "diagnostic"):
             self.assertIsNone(record["channels"][name]["limit_bytes"], msg=msg)
         self.assertEqual(limits["terminal_bytes"], 65536, msg=msg)
-        self.assertEqual(limits["stop_grace_ms"], 1000, msg=msg)
+        self.assertEqual(limits["stop_grace_ms"], {
+            "requested": None, "granted": None, "effective": 1000}, msg=msg)
         self.assertEqual(limits["post_exit_drain_ms"], {
             "requested": None, "granted": None, "effective": 1000}, msg=msg)
         self.assertEqual(limits["relay_queue_bytes"], 65536, msg=msg)
@@ -983,7 +987,8 @@ class Contract(unittest.TestCase):
                 self.assertEqual(record["limits"]["post_exit_drain_ms"], {
                     "requested": requested, "granted": (grants or {}).get("post_exit_drain_ms"),
                     "effective": effective}, msg=msg)
-                self.assertEqual(record["limits"]["stop_grace_ms"], 1000, msg=msg)
+                self.assertEqual(record["limits"]["stop_grace_ms"], {
+                    "requested": None, "granted": None, "effective": 1000}, msg=msg)
                 self.assertTrue(capture.diagnostic, msg=msg)
                 line = b"diagnostic child continues\n"
                 self.assertEqual(
@@ -1032,8 +1037,7 @@ class Contract(unittest.TestCase):
              {"PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS": "invalid"}, {}, 2300, None, 2300),
             (("--post-exit-drain-ms", str(maximum)), {}, {}, maximum, None, maximum),
             ((), {}, {"post_exit_drain_ms": 2700}, None, 2700, 2700),
-            ((), {}, {"post_exit_drain_ms": 0}, None, 0, None),
-            (("--post-exit-drain-ms", "0"), {}, {"post_exit_drain_ms": 2700}, 0, 2700, 2700),
+            ((), {}, {"post_exit_drain_ms": 0}, None, 0, 1000),
             (("--post-exit-drain-ms", "1800"), {}, {"post_exit_drain_ms": 2700}, 1800, 2700, 1800),
         )
         for options, environment, grants, requested, granted, effective in cases:
@@ -1043,7 +1047,8 @@ class Contract(unittest.TestCase):
                 self.assertEqual(record["limits"]["post_exit_drain_ms"], {
                     "requested": requested, "granted": granted, "effective": effective},
                     msg=capture.failure_context())
-                self.assertEqual(record["limits"]["stop_grace_ms"], 1000,
+                self.assertEqual(record["limits"]["stop_grace_ms"], {
+                    "requested": None, "granted": None, "effective": 1000},
                                  msg=capture.failure_context())
         for value in ("", "-1", "+1", " 1", "1 ", "1.0", "1e3", "0x10", "١", str(maximum + 1)):
             for environment_only in (False, True):
@@ -1065,6 +1070,167 @@ class Contract(unittest.TestCase):
         self.assertEqual(record["limits"]["post_exit_drain_ms"], {
             "requested": 2701, "granted": 2700, "effective": None}, msg=capture.failure_context())
         self.assertIsNone(record["producer"]["stage"], msg=capture.failure_context())
+        capture = launch(
+            {"stdout": encoded(b"producer marker")},
+            options=("--post-exit-drain-ms", "0"), grants={"post_exit_drain_ms": 2700})
+        record = self.refusal(capture, "run_request_invalid", {"option": "arguments"})
+        self.assertEqual(record["limits"]["post_exit_drain_ms"], {
+            "requested": 0, "granted": 2700, "effective": None},
+            msg=capture.failure_context())
+        self.assertIsNone(record["producer"]["stage"], msg=capture.failure_context())
+
+    def assert_stop_grace_producer(self, *, options=(), environment=None,
+                                   requested=None, granted=None, effective=1000,
+                                   release_after_ms=None, output_after_term=False,
+                                   supervisor_path=None):
+        with tempfile.TemporaryDirectory(prefix="pf-stop-grace-producer-") as directory:
+            directory = Path(directory)
+            identity = directory / "producer.json"
+            term = directory / "term.json"
+            hold = directory / "release"
+            request = {
+                "stdout": encoded(b"diagnostic output " * 512),
+                "producer_identity_path": str(identity),
+                "producer_term_path": str(term),
+                "producer_release_path": str(hold),
+                "hold_after_output_path": str(hold),
+                "ignore_sigterm": True,
+                "exit_after_hold": True,
+                "output_after_term": output_after_term,
+            }
+            base_options = (
+                "--diagnostic-max-bytes", "64",
+                "--channel-wall-ms", "60000",
+                "--channel-stall-ms", "1000",
+            )
+            capture = launch(
+                request,
+                options=(*base_options, *options),
+                environment=environment,
+                release_producer_after_ms=release_after_ms,
+                supervisor_path=supervisor_path,
+                watchdog_seconds=8,
+            )
+            msg = capture.failure_context()
+            self.assertIsNotNone(capture.control.get("producer_term_at"), msg=msg)
+            self.assertIsNotNone(capture.control.get("producer_term_process"), msg=msg)
+            identities = json.loads(identity.read_text())
+            self.assertEqual(capture.control["producer_term_process"]["pid"],
+                             identities["pid"], msg=msg)
+            if effective is None:
+                self.assertIsNotNone(
+                    capture.control.get("producer_alive_before_release"), msg=msg)
+                self.assertIsNotNone(capture.control.get("producer_released_at"), msg=msg)
+                waited = (capture.control["producer_released_at"]
+                          - capture.control["producer_term_at"])
+                self.assertGreaterEqual(
+                    waited, release_after_ms / 1000 - 0.1, msg=msg)
+                self.assertGreater(waited, 1.0, msg=msg)
+            else:
+                self.assertIsNotNone(capture.control.get("exited_at_monotonic"), msg=msg)
+                elapsed = (capture.control["exited_at_monotonic"]
+                           - capture.control["producer_term_at"])
+                self.assertGreaterEqual(
+                    elapsed, effective / 1000 - 0.15,
+                    msg=f"stop grace timing: returned too soon; {msg}")
+                self.assertLess(
+                    elapsed, effective / 1000 + 0.5,
+                    msg=f"stop grace timing: returned too late; {msg}")
+            record = self.refusal(capture, "diagnostic_budget_exceeded", {
+                "cap_bytes": 64, "used_bytes": 64, "requested_bytes": 1},
+                exit_class="resource_refusal", status=1, msg=msg)
+            self.assertEqual(record["limits"]["stop_grace_ms"], {
+                "requested": requested, "granted": granted, "effective": effective}, msg=msg)
+            if effective is None:
+                self.assertEqual(record["producer"]["exit_status"], 0, msg=msg)
+                self.assertIsNone(record["producer"]["signal"], msg=msg)
+            else:
+                self.assertIsNone(record["producer"]["exit_status"], msg=msg)
+                self.assertEqual(record["producer"]["signal"], signal.SIGKILL, msg=msg)
+                diagnostics = " ".join(record["diagnostics"])
+                self.assertIn("--stop-grace-ms", diagnostics, msg=msg)
+                self.assertIn("PINEFORGE_CHANNEL_STOP_GRACE_MS", diagnostics, msg=msg)
+            self.assertIsNone(process_info(identities["pid"]), msg=msg)
+            self.assertEqual(group_members(identities["group"]), [], msg=msg)
+            return capture
+
+    def test_stop_grace_default_kills_term_ignoring_producer_after_one_second(self):
+        self.assert_stop_grace_producer()
+
+    def test_stop_grace_larger_cli_and_environment_values_are_not_renewed_by_output(self):
+        self.assert_stop_grace_producer(
+            options=("--stop-grace-ms", "2200"), requested=2200, effective=2200,
+            output_after_term=True)
+        self.assert_stop_grace_producer(
+            environment={"PINEFORGE_CHANNEL_STOP_GRACE_MS": "2200"},
+            requested=2200, effective=2200, output_after_term=True)
+
+    def test_stop_grace_zero_waits_for_host_release_without_killing_producer(self):
+        self.assert_stop_grace_producer(
+            options=("--stop-grace-ms", "0"), requested=0, effective=None,
+            release_after_ms=1300)
+        self.assert_stop_grace_producer(
+            environment={"PINEFORGE_CHANNEL_STOP_GRACE_MS": "0"},
+            requested=0, effective=None, release_after_ms=1300)
+
+    def test_stop_grace_default_assertions_reject_a_doctored_grace(self):
+        self.assert_stop_grace_producer()
+        text = SUPERVISOR.read_text(encoding="utf-8")
+        original = "DEFAULT_STOP_GRACE_MILLISECONDS = 1000"
+        self.assertEqual(text.count(original), 1)
+        with tempfile.TemporaryDirectory(prefix="pf-stop-grace-mutation-") as directory:
+            changed = supervisor_fixture(
+                directory, text=text.replace(
+                    original, "DEFAULT_STOP_GRACE_MILLISECONDS = 3000"))
+            with self.assertRaisesRegex(AssertionError, "stop grace timing"):
+                self.assert_stop_grace_producer(supervisor_path=changed)
+
+    def test_stop_grace_parameter_grammar_precedence_and_grants(self):
+        maximum = 9007199254740990
+        cases = (
+            ((), {}, {}, None, None, 1000),
+            (("--stop-grace-ms", "0"), {}, {}, 0, None, None),
+            ((), {"PINEFORGE_CHANNEL_STOP_GRACE_MS": "0"}, {}, 0, None, None),
+            (("--stop-grace-ms", "0002300"),
+             {"PINEFORGE_CHANNEL_STOP_GRACE_MS": "invalid"}, {}, 2300, None, 2300),
+            (("--stop-grace-ms", str(maximum)), {}, {}, maximum, None, maximum),
+            ((), {}, {"stop_grace_ms": 2700}, None, 2700, 2700),
+            ((), {}, {"stop_grace_ms": 0}, None, 0, 1000),
+            (("--stop-grace-ms", "1800"), {}, {"stop_grace_ms": 2700}, 1800, 2700, 1800),
+        )
+        for options, environment, grants, requested, granted, effective in cases:
+            with self.subTest(options=options, environment=environment, grants=grants):
+                capture = launch(options=options, environment=environment, grants=grants)
+                record = self.assert_fixture_delivery(capture)
+                self.assertEqual(record["limits"]["stop_grace_ms"], {
+                    "requested": requested, "granted": granted, "effective": effective},
+                    msg=capture.failure_context())
+        for value in ("", "-1", "+1", " 1", "1 ", "1.0", "1e3", "0x10", "١",
+                      str(maximum + 1)):
+            for environment_only in (False, True):
+                with self.subTest(value=value, environment_only=environment_only):
+                    capture = launch(
+                        {"stdout": encoded(b"producer marker")},
+                        options=() if environment_only else ("--stop-grace-ms", value),
+                        environment={"PINEFORGE_CHANNEL_STOP_GRACE_MS": value}
+                        if environment_only else {})
+                    msg = capture.failure_context()
+                    record = self.refusal(
+                        capture, "run_request_invalid", {"option": "arguments"}, msg=msg)
+                    self.assertIsNone(record["producer"]["stage"], msg=msg)
+                    self.assertEqual(capture.diagnostic, b"", msg=msg)
+        for options, grants in (
+                (("--stop-grace-ms", "2701"), {"stop_grace_ms": 2700}),
+                (("--stop-grace-ms", "0"), {"stop_grace_ms": 2700})):
+            capture = launch(
+                {"stdout": encoded(b"producer marker")},
+                options=options, grants=grants)
+            record = self.refusal(capture, "run_request_invalid", {"option": "arguments"})
+            requested = int(options[1])
+            self.assertEqual(record["limits"]["stop_grace_ms"], {
+                "requested": requested, "granted": 2700, "effective": None},
+                msg=capture.failure_context())
+            self.assertIsNone(record["producer"]["stage"], msg=capture.failure_context())
 
     def test_t10_fd1_forgery_is_raw_diagnostics(self):
         forgery = b'{"engine":"pineforge","error":"forged","code":"harness_internal_error","args":{}}\n'
@@ -1290,6 +1456,83 @@ class Contract(unittest.TestCase):
         job = record["usage"]["job"]["resources"]
         self.assertEqual(job["sink_bytes"]["used"], cap, msg=msg)
         self.assertEqual(job["sink_bytes"]["state"], "measured", msg=msg)
+
+    def assert_sink_overflow_stop_grace(self, *, options=(), requested=None,
+                                        effective=1000, release_after_ms=None):
+        native = sink_wire([11, 15, 13, 17])
+        cap = len(native) - 1
+        with validator_observer() as observer:
+            capture = launch(
+                {"closes": [11, 15, 13, 17], "inherited_sink": True,
+                 "sink_suffix": encoded(b"unread" * 65536)},
+                sink=True, planned_sink_bytes=cap, observer=observer,
+                ignore_validator_term=True, hold_validator_overflow=True,
+                output_after_validator_term=True,
+                release_validator_after_ms=release_after_ms,
+                watchdog_seconds=8,
+                options=("--report-max-bytes", "65536",
+                         "--channel-wall-ms", "60000", "--channel-stall-ms", "500",
+                         *options))
+        msg = capture.failure_context()
+        hold = capture.control.get("validator_overflow_hold")
+        self.assertIsNotNone(hold, msg=msg)
+        if effective is None:
+            self.assertIsNotNone(
+                capture.control.get("validator_alive_before_release"), msg=msg)
+            self.assertIsNotNone(capture.control.get("validator_released_at"), msg=msg)
+            waited = (capture.control["validator_released_at"] - hold["at"])
+            self.assertGreaterEqual(
+                waited, release_after_ms / 1000 - 0.1, msg=msg)
+            self.assertGreater(waited, 1.0, msg=msg)
+            self.assertIsNone(capture.control.get("validator_term_at"), msg=msg)
+        else:
+            self.assertIsNotNone(capture.control.get("validator_term_at"), msg=msg)
+            self.assertIsNotNone(
+                capture.control.get("validator_term_process"), msg=msg)
+            self.assertEqual(
+                len([event for event in capture.validator_events if event[:1] == b"T"]),
+                1, msg=msg)
+            elapsed = (capture.control["exited_at_monotonic"]
+                       - capture.control["validator_term_at"])
+            self.assertGreaterEqual(
+                elapsed, effective / 1000 - 0.15,
+                msg=f"stop grace timing: validator returned too soon; {msg}")
+            self.assertLess(
+                elapsed, effective / 1000 + 0.75,
+                msg=f"stop grace timing: validator returned too late; {msg}")
+        record = self.refusal(capture, "report_sink_failed", {
+            "reason": "sink_exhausted", "sink_bytes": cap + 1, "cap_bytes": cap},
+            exit_class="transport_failure", status=1, msg=msg)
+        self.assertEqual(record["limits"]["stop_grace_ms"], {
+            "requested": requested, "granted": None, "effective": effective}, msg=msg)
+        self.assertEqual(capture.sink, b"", msg=msg)
+        if effective is None:
+            self.assertEqual(record["sink_verification"], {
+                "exit_status": 8, "signal": None, "complete": False,
+                "counts": {tag: 0 for tag in "ETOVKXH"},
+                "sha256": None, "finalizer_version": "1.1.0"}, msg=msg)
+            self.assertEqual(
+                capture.finalizer_receipt(),
+                sink_receipt(native, complete=False, cap=cap), msg=msg)
+        else:
+            pid = capture.control["validator_term_pid"]
+            self.assertEqual(record["sink_verification"], {
+                "exit_status": None, "signal": signal.SIGKILL, "complete": False,
+                "counts": dict.fromkeys("ETOVKXH"), "sha256": None,
+                "finalizer_version": None}, msg=msg)
+            diagnostics = " ".join(record["diagnostics"])
+            self.assertIn("--stop-grace-ms", diagnostics, msg=msg)
+            self.assertIn("PINEFORGE_CHANNEL_STOP_GRACE_MS", diagnostics, msg=msg)
+            self.assertIsNone(process_info(pid), msg=msg)
+            self.assertEqual(group_members(pid), [], msg=msg)
+
+    def test_sink_overflow_stop_grace_covers_ignored_term_validator(self):
+        self.assert_sink_overflow_stop_grace()
+        self.assert_sink_overflow_stop_grace(
+            options=("--stop-grace-ms", "2200"), requested=2200, effective=2200)
+        self.assert_sink_overflow_stop_grace(
+            options=("--stop-grace-ms", "0"), requested=0, effective=None,
+            release_after_ms=1300)
 
     def test_t13_exported_sink_and_candidate_share_one_allowance(self):
         for closes, label in (([6, 10, 8], "café🙂.csv"), ([20, 25, 21, 27], "longer.csv")):
@@ -1920,6 +2163,49 @@ class Contract(unittest.TestCase):
                     self.assertNotEqual(capture.report, candidate, msg=msg)
                     self.assertIsNone(record["producer"]["failure"], msg=msg)
 
+    def test_failure_claim_size_boundary_is_same_with_and_without_cause(self):
+        def wire_size(value):
+            return len(json.dumps(
+                value, separators=(",", ":"), ensure_ascii=True).encode()) + 1
+
+        with tempfile.TemporaryDirectory(prefix="pf-claim-size-boundary-") as directory:
+            supervisor = supervisor_fixture(directory, main_catalog=True)
+            catalog_path = supervisor.with_name("run_failure_codes.json")
+            catalog = json.loads(catalog_path.read_bytes())
+            catalog["codes"]["strategy_create_failed"]["args"] = {
+                "message": {"kind": "string"}}
+            catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+            args = None
+            for length in range(1, CLAIM_BYTES + 1):
+                candidate_args = {"message": "x" * length}
+                values_size = wire_size(candidate_args)
+                proposed_size = wire_size({
+                    "code": "strategy_create_failed", "args": candidate_args,
+                    "authority": "producer"})
+                if values_size - 1 <= 8192 and proposed_size - 1 > 8192:
+                    args = candidate_args
+                    break
+            self.assertIsNotNone(args)
+            cause = {"code": "outputs_limit",
+                     "args": {"max": 1, "reason": "too_many_series"}}
+            for extra in ({}, {"cause": cause}):
+                with self.subTest(with_cause=bool(extra)):
+                    value = {
+                        "engine": "pineforge", "error": "creation refused",
+                        "code": "strategy_create_failed", "args": args, **extra}
+                    candidate = json.dumps(
+                        value, separators=(",", ":"), ensure_ascii=True).encode() + b"\n"
+                    capture = launch(
+                        {"candidate": encoded(candidate), "exit_status": 1},
+                        supervisor_path=supervisor)
+                    msg = capture.failure_context()
+                    record = self.refusal(
+                        capture, "run_producer_failed", {"reason": "claim"},
+                        exit_class="producer_failure", status=1, msg=msg)
+                    self.assertEqual(capture.report, candidate, msg=msg)
+                    self.assertTrue(record["producer"]["failure_claim_omitted"], msg=msg)
+                    self.assertIsNone(record["producer"]["failure"], msg=msg)
+
     def test_t25_legacy_failure_is_relayed_as_a_claim(self):
         candidate = b'{"engine":"pineforge","error":"legacy failure"}\n'
         capture = launch({"candidate": encoded(candidate)})
@@ -2034,7 +2320,7 @@ class Contract(unittest.TestCase):
 
     def test_t31_strict_decimal_parser(self):
         for flag in ("--report-max-bytes", "--diagnostic-max-bytes",
-                     "--channel-wall-ms", "--channel-stall-ms"):
+                     "--channel-wall-ms", "--channel-stall-ms", "--stop-grace-ms"):
             for value in ("", "-1", "+1", " 1", "1 ", "1.0", "1e3", "0x10", "١",
                           "9007199254740991"):
                 with self.subTest(flag=flag, value=value):

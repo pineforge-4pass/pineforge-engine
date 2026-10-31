@@ -8567,14 +8567,15 @@ def _host_main(argv=None) -> int:
         channel_flags = {
             "--report-channel", "--terminal-status-fd", "--report-max-bytes",
             "--diagnostic-max-bytes", "--channel-wall-ms", "--channel-stall-ms",
-            "--post-exit-drain-ms", "--planned-sink-bytes",
+            "--post-exit-drain-ms", "--stop-grace-ms", "--planned-sink-bytes",
             "--attempt-id", "--host-attestation-fd", "--test-only-host-attestation-fd",
         }
         channel_environment = {
             "PINEFORGE_REPORT_CHANNEL", "PINEFORGE_TERMINAL_STATUS_FD",
             "PINEFORGE_REPORT_MAX_BYTES", "PINEFORGE_DIAGNOSTIC_MAX_BYTES",
             "PINEFORGE_CHANNEL_WALL_MS", "PINEFORGE_CHANNEL_STALL_MS",
-            "PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS", "PINEFORGE_REPORT_PLANNED_SINK_BYTES",
+            "PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS", "PINEFORGE_CHANNEL_STOP_GRACE_MS",
+            "PINEFORGE_REPORT_PLANNED_SINK_BYTES",
             "PINEFORGE_REPORT_ATTEMPT_ID", "PINEFORGE_REPORT_HOST_ATTESTATION_FD",
         }
         channel_tokens = tokens[:tokens.index("--")] if "--" in tokens else tokens

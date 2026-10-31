@@ -33,6 +33,8 @@ static bool finalizer_process;
 static bool stdout_audit;
 static bool stdout_corrupted;
 static bool receipt_waited;
+static bool hold_overflow;
+static volatile sig_atomic_t overflow_released;
 extern char **environ;
 
 static void event(char kind, const void *bytes, size_t length)
@@ -54,6 +56,23 @@ static void pid_event(char kind)
     int length = snprintf(text, sizeof(text), "%ld", (long)getpid());
     if (length > 0 && (size_t)length < sizeof(text))
         event(kind, text, (size_t)length);
+}
+
+static void ignored_term(int signum)
+{
+    (void)signum;
+    pid_event('T');
+    if (finalizer_process && getenv("PF_REPORT_TEST_OUTPUT_AFTER_TERM")) {
+        char byte = 'x';
+        for (int index = 0; index < 128; ++index)
+            (void)syscall(SYS_write, 1, &byte, 1);
+    }
+}
+
+static void release_overflow(int signum)
+{
+    (void)signum;
+    overflow_released = 1;
 }
 
 __attribute__((constructor))
@@ -119,7 +138,12 @@ static void observe(void)
     if (finalizer) {
         finalizer_process = true;
         pause_probe = getenv("PF_REPORT_TEST_PAUSE_PROBE") != NULL;
+        hold_overflow = getenv("PF_REPORT_TEST_HOLD_OVERFLOW") != NULL;
         stdout_audit = getenv("PF_REPORT_TEST_STDOUT_AUDIT") != NULL;
+        if (getenv("PF_REPORT_TEST_IGNORE_TERM")) {
+            signal(SIGTERM, ignored_term);
+            signal(SIGCONT, release_overflow);
+        }
         pid_event('S');
         event('A', command, (size_t)count);
         char names[16384];
@@ -198,8 +222,12 @@ ssize_t read(int fd, void *buffer, size_t length)
         if (has_cap && input_bytes > cap_bytes && !paused) {
             paused = true;
             pid_event('P');
-            if (pause_probe)
+            if (hold_overflow) {
+                while (!overflow_released)
+                    (void)syscall(SYS_pause);
+            } else if (pause_probe) {
                 (void)syscall(SYS_kill, getpid(), SIGSTOP);
+            }
         }
     }
     return count;
