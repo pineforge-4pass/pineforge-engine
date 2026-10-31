@@ -358,6 +358,14 @@ def cancel(_signum, _frame):
     cancelled = True
 
 
+def diagnostic_failure(error):
+    reason = "peer_closed" if error.errno in (
+        errno.EPIPE, errno.ECONNRESET, errno.ENOTCONN) else "io"
+    return GuardFailure("report_channel_failed",
+                        {"channel": "diagnostic", "reason": reason},
+                        "A report transport could not complete.")
+
+
 class CompileGuard:
     def __init__(self):
         self.wall = ceiling("PINEFORGE_COMPILE_WALL_MS", 120000)
@@ -384,12 +392,41 @@ class CompileGuard:
         self.accepted = 0
         self.deadline = None if self.wall is None else now_ns() + self.wall * 1000000
         self.original_stderr_flags = fcntl.fcntl(2, fcntl.F_GETFL)
-        fcntl.fcntl(2, fcntl.F_SETFL, self.original_stderr_flags | os.O_NONBLOCK)
         signal.signal(signal.SIGTERM, cancel)
         signal.signal(signal.SIGINT, cancel)
 
+    def capture(self):
+        fcntl.fcntl(2, fcntl.F_SETFL, self.original_stderr_flags | os.O_NONBLOCK)
+
     def restore(self):
         fcntl.fcntl(2, fcntl.F_SETFL, self.original_stderr_flags)
+
+    def check_stop(self):
+        if cancelled:
+            raise GuardFailure("run_aborted", {}, "native run aborted")
+        if self.deadline is not None and now_ns() >= self.deadline:
+            raise GuardFailure("run_deadline_exceeded", {"stage": "compile"},
+                               "The admitted channel lifetime expired.")
+
+    def message(self, text):
+        pending = memoryview(text.encode("utf-8"))
+        while pending:
+            self.check_stop()
+            try:
+                written = os.write(2, pending)
+                if written == 0:
+                    raise OSError(errno.EIO, "zero diagnostic write")
+                pending = pending[written:]
+            except BlockingIOError:
+                poller = select.poll()
+                poller.register(2, select.POLLOUT | select.POLLHUP | select.POLLERR)
+                wait_ms = 10
+                if self.deadline is not None:
+                    wait_ms = min(wait_ms, max(
+                        0, (self.deadline - now_ns() + 999999) // 1000000))
+                poller.poll(wait_ms)
+            except OSError as error:
+                raise diagnostic_failure(error)
 
     def install_child_limits(self):
         if self.address is not None:
@@ -417,23 +454,18 @@ class CompileGuard:
                 driver.returncode = os.waitstatus_to_exitcode(status)
 
     def run(self, command, failure_message):
-        if cancelled:
-            raise GuardFailure("run_aborted", {}, "native run aborted")
-        if self.deadline is not None and now_ns() >= self.deadline:
-            raise GuardFailure("run_deadline_exceeded", {"stage": "compile"},
-                               "The admitted channel lifetime expired.")
+        self.check_stop()
         try:
             driver = subprocess.Popen(command, stdout=subprocess.PIPE,
                                       stderr=subprocess.STDOUT, start_new_session=True,
                                       preexec_fn=self.install_child_limits)
         except OSError:
             # A failed compiler exec is not proof of a particular resource denial.
-            sys.stderr.write(failure_message)
+            self.message(failure_message)
             return 3
         except subprocess.SubprocessError:
             usage("could not install PINEFORGE_COMPILE_AS_BYTES before compiler launch")
         reader = driver.stdout
-        os.set_blocking(reader.fileno(), False)
         pending = bytearray()
         primary = None
         cleanup_deadline = None
@@ -448,6 +480,7 @@ class CompileGuard:
                 reader = None
 
         try:
+            os.set_blocking(reader.fileno(), False)
             while True:
                 if primary is not None:
                     self.kill_children()
@@ -509,32 +542,32 @@ class CompileGuard:
                     except BlockingIOError:
                         pass
                     except OSError as error:
-                        reason = "peer_closed" if error.errno in (
-                            errno.EPIPE, errno.ECONNRESET, errno.ENOTCONN) else "io"
-                        latch(GuardFailure("report_channel_failed",
-                                           {"channel": "diagnostic", "reason": reason},
-                                           "A report transport could not complete."))
+                        latch(diagnostic_failure(error))
                         pending.clear()
             if primary is not None:
                 raise primary
             if driver.returncode != 0:
-                sys.stderr.write(failure_message)
+                self.message(failure_message)
                 return 3
             return 0
         finally:
-            if reader is not None:
-                reader.close()
-            # Also stop descendants on an unexpected controller exception.
-            until = cleanup_deadline if cleanup_deadline is not None else now_ns() + 1000000000
-            while self.reap(driver) and now_ns() < until:
-                self.kill_children()
-                select.poll().poll(1)
+            try:
+                if reader is not None:
+                    reader.close()
+            finally:
+                until = cleanup_deadline if cleanup_deadline is not None else now_ns() + 1000000000
+                while True:
+                    self.kill_children()
+                    if not self.reap(driver) or now_ns() >= until:
+                        break
+                    select.poll().poll(1)
 
 
 def main():
     prefix, source, shared_object, bound_inventory, inventory = sys.argv[1:]
     guard = CompileGuard()
     try:
+        guard.capture()
         command = [
             "g++", "-std=c++17", "-O2", "-ffp-contract=off", "-fPIC", "-shared",
             "-I" + prefix + "/include", "-I/usr/include/eigen3", source,
@@ -545,11 +578,14 @@ def main():
         if status:
             return status
         if bound_inventory:
+            guard.message("[pineforge] binding request-feed inventory ...\n")
             return guard.run(
                 ["python3", prefix + "/bin/bind_compiled_inventory.py",
                  "--inventory", inventory, "--cpp", source, "--so", shared_object,
                  "--out", bound_inventory],
                 "[pineforge] request-feed inventory binding failed\n")
+        if os.environ.get("PINEFORGE_REPORT_POLICY") == "selected-window/v1":
+            guard.message("[pineforge] no request-feed inventory for this strategy.cpp; none is passed on\n")
         return 0
     finally:
         guard.restore()

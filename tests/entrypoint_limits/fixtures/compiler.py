@@ -63,7 +63,7 @@ def emit(payload):
             offset += os.write(fd, part[offset:offset + 8192])
 
 
-def hanging_tree(orphan):
+def detached_helper():
     ready_read, ready_write = os.pipe()
     child = os.fork()
     if child == 0:
@@ -75,11 +75,12 @@ def hanging_tree(orphan):
             os._exit(0)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         record("helper")
-        os.write(ready_write, b"r")
-        os.close(ready_write)
         os.close(1)
         os.close(2)
         with (TRACE / "heartbeat").open("ab", buffering=0) as heartbeat:
+            heartbeat.write(time.monotonic_ns().to_bytes(8, "little"))
+            os.write(ready_write, b"r")
+            os.close(ready_write)
             while True:
                 heartbeat.write(time.monotonic_ns().to_bytes(8, "little"))
                 time.sleep(0.02)
@@ -87,6 +88,10 @@ def hanging_tree(orphan):
     if os.read(ready_read, 1) != b"r":
         raise RuntimeError("helper failed to start")
     os.close(ready_read)
+
+
+def hanging_tree(orphan):
+    detached_helper()
     if orphan:
         os._exit(0)
     while True:
@@ -128,8 +133,16 @@ if __name__ == "__main__":
             result = subprocess.run([sys.executable, __file__, "--allocate"], check=False)
             sys.exit(result.returncode)
         elif mode == "reject_probe":
+            emit(b"fixture compiler: requested probe failure\n")
+            sys.exit(17)
+        elif mode == "gated_failure":
+            (TRACE / "failure-ready").write_bytes(b"ready")
+            while not (TRACE / "release-failure").is_file():
+                time.sleep(0.005)
             sys.exit(17)
         else:
+            if mode == "flood_tree":
+                detached_helper()
             delay_ms = os.environ.get("PF_ENTRYPOINT_FIXTURE_DELAY_MS")
             if delay_ms is not None:
                 time.sleep(int(delay_ms) / 1000)
@@ -138,7 +151,7 @@ if __name__ == "__main__":
             diagnostic = os.environ.get("PF_ENTRYPOINT_FIXTURE_DIAGNOSTIC")
             if diagnostic:
                 emit(Path(diagnostic).read_bytes())
-            if mode == "flood":
+            if mode in ("flood", "flood_tree"):
                 sys.exit(23)
             if mode == "artifact":
                 output = Path(sys.argv[sys.argv.index("-o") + 1])

@@ -17,11 +17,17 @@ trace = Path(os.environ["PF_ENTRYPOINT_FIXTURE_TRACE"])
 mode = os.environ["PF_ENTRYPOINT_FIXTURE_BINDER"]
 if mode == "hang":
     signal.pause()
-elif mode == "flood":
+elif mode in ("flood", "success"):
     payload = Path(os.environ["PF_ENTRYPOINT_FIXTURE_BINDER_DIAGNOSTIC"]).read_bytes()
     offset = 0
     while offset < len(payload):
         offset += os.write(2, payload[offset:offset + 8192])
-    sys.exit(23)
-else:
+    if mode == "flood":
+        sys.exit(23)
+    Path(sys.argv[sys.argv.index("--out") + 1]).write_text(
+        '{"fixture":"bound inventory"}\n', encoding="utf-8")
+elif mode == "fail":
+    os.write(2, b"fixture binder: requested inventory failure\n")
     sys.exit(19)
+else:
+    raise ValueError(f"unknown fixture binder mode: {mode}")

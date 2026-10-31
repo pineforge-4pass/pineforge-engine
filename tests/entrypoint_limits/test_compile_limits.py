@@ -1,6 +1,7 @@
 """Outside-in compile-stage tests; run only on the Linux proof host."""
 
 import errno
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -25,6 +26,10 @@ ADDRESS = "PINEFORGE_COMPILE_AS_BYTES"
 DIAGNOSTIC = "PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES"
 MAXIMUM = (1 << 53) - 2
 COMPILE_LOG = b"[pineforge] compiling strategy.cpp ...\n"
+BIND_LOG = b"[pineforge] binding request-feed inventory ...\n"
+COMPILE_FAILURE = b"[pineforge] compile failed\n"
+PROBE_FAILURE = b"fixture compiler: requested probe failure\n"
+BINDER_FAILURE = b"fixture binder: requested inventory failure\n"
 STOP_GRACE_SECONDS = 1.0
 STARTUP_ALLOWANCE_SECONDS = 0.75
 
@@ -63,7 +68,19 @@ class Box:
                                       str(ROOT / "build/lib/libpineforge.a"))).resolve()
         assert archive.is_file(), f"build the complete Release profile first: {archive}"
         (self.prefix / "lib/libpineforge.a").symlink_to(archive)
-        (self.prefix / "include").symlink_to(ROOT / "include", target_is_directory=True)
+        generated_version = archive.parent.parent / "include/pineforge/version.h"
+        assert generated_version.is_file(), (
+            f"the archive's generated version header is required: {generated_version}")
+        source_include = ROOT / "include"
+        include = self.prefix / "include"
+        include.mkdir()
+        for source in sorted(source_include.rglob("*")):
+            destination = include / source.relative_to(source_include)
+            if source.is_dir():
+                destination.mkdir()
+            else:
+                destination.symlink_to(source)
+        (include / "pineforge/version.h").symlink_to(generated_version)
         for destination, source in (
                 (self.tools / "g++", "compiler.py"),
                 (self.tools / "mktemp", "mktemp.py"),
@@ -93,7 +110,7 @@ class Box:
         })
 
     def run(self, extra=None, *, entrypoint=ENTRYPOINT, timeout=20, trace_reads=False,
-            trace_processes=False, inherited_as=None):
+            trace_processes=False, inherited_as=None, stderr_sink=None):
         env = dict(self.env)
         env.update(extra or {})
         command = ["bash", str(entrypoint)]
@@ -110,7 +127,8 @@ class Box:
 
         started = time.monotonic()
         process = subprocess.Popen(command, env=env, cwd=self.root, stdin=subprocess.PIPE,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE if stderr_sink is None else stderr_sink,
                                    start_new_session=True,
                                    preexec_fn=inherit_limits if inherited_as is not None else None)
         self.processes.append(process)
@@ -119,8 +137,12 @@ class Box:
         except subprocess.TimeoutExpired:
             self.stop_fixture_processes(process)
             stdout, stderr = process.communicate(timeout=5)
+            if stderr_sink is not None:
+                stderr = Path(stderr_sink.name).read_bytes()
             pytest.fail(f"outside watchdog expired after {timeout}s; "
                         f"stdout={stdout!r}, stderr prefix={stderr[:1024]!r}")
+        if stderr_sink is not None:
+            stderr = Path(stderr_sink.name).read_bytes()
         result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
         return Invocation(result, time.monotonic() - started, self.trace)
 
@@ -261,7 +283,9 @@ def test_real_syntax_failure_keeps_exit_three_and_the_original_bytes(box, limits
     assert before.returncode == after.returncode == 3, (before.stderr, after.stderr)
     assert before.stdout == after.stdout == b""
     assert before.stderr == after.stderr
-    assert b"[pineforge] compile failed\n" in after.stderr
+    assert b"this is deliberately invalid C++;" in after.stderr, after.stderr
+    assert b"fatal error:" not in after.stderr, after.stderr
+    assert after.stderr.endswith(COMPILE_FAILURE)
     assert not (box.root / "run-started").exists()
 
 
@@ -291,6 +315,7 @@ def test_actual_mapping_denial_keeps_compiler_failure_without_an_invented_cause(
                       "PF_ENTRYPOINT_FIXTURE_ALLOCATION": str(requested)})
     assert result.returncode == 3, (result.stdout, result.stderr)
     assert result.stdout == b""
+    assert result.stderr == COMPILE_LOG + COMPILE_FAILURE
     assert result.records["driver"]["as"] == [cap, cap]
     assert result.records["memory"]["as"] == [cap, cap]
     allocation = result.records["allocation"]
@@ -302,9 +327,10 @@ def test_actual_mapping_denial_keeps_compiler_failure_without_an_invented_cause(
 
 @pytest.mark.parametrize("cap", [17, 4096])
 @pytest.mark.parametrize("stream", ["stdout", "stderr", "mixed"])
-def test_diagnostic_overflow_reads_one_probe_and_retains_only_the_cap(box, cap, stream):
+@pytest.mark.parametrize("mode", ["flood", "flood_tree"])
+def test_diagnostic_overflow_reads_one_probe_and_retains_only_the_cap(box, cap, stream, mode):
     payload = bytes(range(256)) * ((cap * 4 + 256) // 256)
-    result = box.run({DIAGNOSTIC: str(cap), "PF_ENTRYPOINT_FIXTURE_MODE": "flood",
+    result = box.run({DIAGNOSTIC: str(cap), "PF_ENTRYPOINT_FIXTURE_MODE": mode,
                       "PF_ENTRYPOINT_FIXTURE_STREAM": stream,
                       "PF_ENTRYPOINT_FIXTURE_SPLIT_AT": str(cap // 2),
                       "PF_ENTRYPOINT_FIXTURE_DIAGNOSTIC": box.payload(payload)},
@@ -313,11 +339,14 @@ def test_diagnostic_overflow_reads_one_probe_and_retains_only_the_cap(box, cap, 
                    {"cap_bytes": cap, "used_bytes": cap, "requested_bytes": 1})
     assert result.stderr == COMPILE_LOG + payload[:cap]
     assert pipe_read_bytes(result) == cap + 1
+    if mode == "flood_tree":
+        assert_tree_gone(result)
 
 
 @pytest.mark.parametrize("stream", ["stdout", "stderr", "mixed"])
-def test_exact_diagnostic_fit_is_success_and_keeps_raw_binary_bytes(box, stream):
-    payload = bytes(range(256)) * 3
+@pytest.mark.parametrize("cap", [17, 768, 65536, 65537])
+def test_exact_diagnostic_fit_is_success_and_keeps_raw_binary_bytes(box, stream, cap):
+    payload = (bytes(range(256)) * ((cap + 255) // 256))[:cap]
     result = box.run({DIAGNOSTIC: str(len(payload)),
                       "PF_ENTRYPOINT_FIXTURE_STREAM": stream,
                       "PF_ENTRYPOINT_FIXTURE_DIAGNOSTIC": box.payload(payload)},
@@ -335,7 +364,10 @@ def test_malformed_knobs_are_usage_errors_before_any_compiler_starts(box, knob, 
     result = box.run({knob: value, "PF_ENTRYPOINT_FIXTURE_MODE": "reject_probe"})
     assert_failure(result, "run_request_invalid", {"option": "arguments"})
     assert "driver" not in result.records
-    assert os.fsencode(knob) in result.stderr
+    reason = (b"is outside 0..9007199254740990" if value in (str(MAXIMUM + 1), "9" * 80)
+              else b"must be an unsigned decimal integer in 0..9007199254740990")
+    assert result.stderr == (COMPILE_LOG + b"entrypoint.sh: error: "
+                             + os.fsencode(knob) + b" " + reason + b"\n")
 
 
 @pytest.mark.parametrize("knob", [WALL, DIAGNOSTIC])
@@ -344,6 +376,8 @@ def test_largest_representable_positive_ceiling_does_not_create_a_new_refusal(bo
     assert result.returncode == 3, (result.stdout, result.stderr)
     assert result.stdout == b""
     assert "driver" in result.records
+    assert result.stderr == COMPILE_LOG + PROBE_FAILURE + COMPILE_FAILURE
+    assert not (box.root / "run-started").exists()
 
 
 def test_address_request_above_an_inherited_hard_limit_is_refused_without_clamping(box):
@@ -353,6 +387,7 @@ def test_address_request_above_an_inherited_hard_limit_is_refused_without_clampi
     assert_failure(result, "run_request_invalid", {"option": "arguments"})
     assert "driver" not in result.records
     assert os.fsencode(ADDRESS) in result.stderr
+    assert b"exceeds the inherited hard limit" in result.stderr
 
 
 @pytest.mark.parametrize("inherited", [None, 2 << 30])
@@ -364,6 +399,8 @@ def test_zero_address_ceiling_resolves_to_the_finite_compile_policy(box, inherit
     assert result.returncode == 0, result.stderr
     assert result.records["driver"]["as"] == [expected, expected]
     assert result.records["limits_helper"]["as"] == [expected, expected]
+    assert result.stdout == b'{"signals":[2.0,-3.0]}\n'
+    assert result.stderr == COMPILE_LOG + b"[pineforge] running backtest ...\n"
 
 
 def test_zero_diagnostic_ceiling_still_stops_at_the_finite_compile_policy(box):
@@ -386,6 +423,102 @@ def test_zero_wall_ceiling_still_expires_at_the_finite_compile_policy(box):
     assert wall_seconds <= result.elapsed <= (
         wall_seconds + STOP_GRACE_SECONDS + STARTUP_ALLOWANCE_SECONDS)
     assert_tree_gone(result)
+
+
+@pytest.mark.parametrize("nonblocking", [False, True])
+@pytest.mark.parametrize("outcome", ["success", "compiler_failure", "overflow", "deadline"])
+def test_guard_restores_the_callers_stderr_flags(box, nonblocking, outcome):
+    extra = {DIAGNOSTIC: "4096"}
+    if outcome == "compiler_failure":
+        extra["PF_ENTRYPOINT_FIXTURE_MODE"] = "reject_probe"
+    elif outcome == "overflow":
+        extra.update({DIAGNOSTIC: "17", "PF_ENTRYPOINT_FIXTURE_MODE": "flood",
+                      "PF_ENTRYPOINT_FIXTURE_DIAGNOSTIC": box.payload(b"x" * 18)})
+    elif outcome == "deadline":
+        extra.update({WALL: "800", "PF_ENTRYPOINT_FIXTURE_MODE": "orphan"})
+    with (box.root / "stderr-output").open("wb", buffering=0) as sink:
+        flags = fcntl.fcntl(sink, fcntl.F_GETFL)
+        if nonblocking:
+            flags |= os.O_NONBLOCK
+        fcntl.fcntl(sink, fcntl.F_SETFL, flags)
+        result = box.run(extra, stderr_sink=sink, timeout=4 if outcome == "deadline" else 20)
+        assert fcntl.fcntl(sink, fcntl.F_GETFL) == flags
+    if outcome == "success":
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert result.stdout == b'{"signals":[2.0,-3.0]}\n'
+    elif outcome == "compiler_failure":
+        assert result.returncode == 3, (result.stdout, result.stderr)
+        assert result.stdout == b""
+        assert result.stderr == COMPILE_LOG + PROBE_FAILURE + COMPILE_FAILURE
+        assert not (box.root / "run-started").exists()
+    elif outcome == "overflow":
+        assert_failure(result, "diagnostic_budget_exceeded",
+                       {"cap_bytes": 17, "used_bytes": 17, "requested_bytes": 1})
+        assert result.stderr == COMPILE_LOG + b"x" * 17
+    else:
+        assert_failure(result, "run_deadline_exceeded", {"stage": "compile"})
+        assert 0.8 <= result.elapsed <= 0.8 + STOP_GRACE_SECONDS + STARTUP_ALLOWANCE_SECONDS
+        assert_tree_gone(result)
+
+
+def test_blocked_compile_failure_message_still_honors_the_wall_deadline(box):
+    wall_ms = 1500
+    strace = shutil.which("strace")
+    assert strace, "strace is required to observe the compiler's actual exit"
+    command = [strace, "-f", "-qq", "-e", "trace=process",
+               "-o", str(box.trace / "syscalls.log"), "bash", str(ENTRYPOINT)]
+    env = {**box.env, WALL: str(wall_ms), "PF_ENTRYPOINT_FIXTURE_MODE": "gated_failure"}
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "rb", buffering=0) as reader, \
+            os.fdopen(write_fd, "wb", buffering=0) as writer:
+        flags = fcntl.fcntl(writer, fcntl.F_GETFL) | os.O_NONBLOCK
+        fcntl.fcntl(writer, fcntl.F_SETFL, flags)
+        started = time.monotonic()
+        process = subprocess.Popen(command, env=env, cwd=box.root, stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=writer, start_new_session=True)
+        box.processes.append(process)
+        ready_until = started + wall_ms / 1000
+        while not (box.trace / "failure-ready").is_file() and time.monotonic() < ready_until:
+            assert process.poll() is None, "entrypoint exited before the compiler was ready"
+            time.sleep(0.005)
+        assert (box.trace / "failure-ready").is_file(), "compiler never reached the release gate"
+        assert fcntl.fcntl(writer, fcntl.F_GETFL) & os.O_NONBLOCK
+        pressure_bytes = 0
+        while True:
+            try:
+                pressure_bytes += os.write(writer.fileno(), b"x" * 4096)
+            except BlockingIOError:
+                break
+        assert pressure_bytes > 0
+        (box.trace / "release-failure").write_bytes(b"exit")
+        try:
+            stdout, _ = process.communicate(input=b"", timeout=4)
+        except subprocess.TimeoutExpired:
+            box.stop_fixture_processes(process)
+            stdout, _ = process.communicate(timeout=5)
+            pytest.fail(f"outside watchdog expired with stderr blocked; stdout={stdout!r}")
+        elapsed = time.monotonic() - started
+        assert fcntl.fcntl(writer, fcntl.F_GETFL) == flags
+        os.set_blocking(reader.fileno(), False)
+        stderr = bytearray()
+        while True:
+            try:
+                block = os.read(reader.fileno(), 65536)
+            except BlockingIOError:
+                break
+            if not block:
+                break
+            stderr.extend(block)
+    result = Invocation(subprocess.CompletedProcess(
+        command, process.returncode, stdout, bytes(stderr)), elapsed, box.trace)
+    assert_failure(result, "run_deadline_exceeded", {"stage": "compile"})
+    assert wall_ms / 1000 <= result.elapsed <= (
+        wall_ms / 1000 + STOP_GRACE_SECONDS + STARTUP_ALLOWANCE_SECONDS)
+    assert result.stderr == COMPILE_LOG + b"x" * pressure_bytes
+    driver = result.records["driver"]
+    assert re.search(rf"(?m)^{driver['pid']}\s+exit_group\(17(?:\)|\s)",
+                     result.syscalls), result.syscalls
+    assert not original_process_present(driver)
 
 
 @pytest.fixture
@@ -428,7 +561,7 @@ def test_binder_shares_the_compiler_diagnostic_allowance(selected_box):
     assert "binder" in result.records, result.stderr
     assert_failure(result, "diagnostic_budget_exceeded",
                    {"cap_bytes": cap, "used_bytes": cap, "requested_bytes": 1})
-    assert result.stderr == COMPILE_LOG + (prefix + suffix)[:cap]
+    assert result.stderr == COMPILE_LOG + prefix + BIND_LOG + suffix[:cap - len(prefix)]
     assert pipe_read_bytes(result) + pipe_read_bytes(result, "binder") == cap + 1
 
 
@@ -438,5 +571,24 @@ def test_genuine_binder_failure_keeps_exit_three(selected_box, limits):
     assert result.returncode == 3, (result.stdout, result.stderr)
     assert result.stdout == b""
     assert "binder" in result.records
-    assert b"[pineforge] request-feed inventory binding failed\n" in result.stderr
+    assert result.stderr == (COMPILE_LOG + BIND_LOG + BINDER_FAILURE
+                             + b"[pineforge] request-feed inventory binding failed\n")
     assert not (selected_box.root / "run-started").exists()
+
+
+@pytest.mark.parametrize("binder_payload", [b"", bytes(range(256))])
+def test_binder_exact_fit_shares_the_compiler_allowance_and_succeeds(selected_box,
+                                                                  binder_payload):
+    prefix = b"compiler diagnostic\n"
+    cap = len(prefix) + len(binder_payload)
+    result = selected_box.run({
+        DIAGNOSTIC: str(cap), "PF_ENTRYPOINT_FIXTURE_BINDER": "success",
+        "PF_ENTRYPOINT_FIXTURE_DIAGNOSTIC": selected_box.payload(prefix, "compiler-output"),
+        "PF_ENTRYPOINT_FIXTURE_BINDER_DIAGNOSTIC":
+            selected_box.payload(binder_payload, "binder-output"),
+    }, trace_reads=True)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.stdout == b'{"signals":[2.0,-3.0]}\n'
+    assert result.stderr == (COMPILE_LOG + prefix + BIND_LOG + binder_payload
+                             + b"[pineforge] running backtest ...\n")
+    assert pipe_read_bytes(result) + pipe_read_bytes(result, "binder") == cap
