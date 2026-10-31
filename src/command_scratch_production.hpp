@@ -95,6 +95,11 @@ ScratchStatus command_scratch_io_status(int error) noexcept;
 // invalid values throw std::invalid_argument. Unset means no default cap.
 // Extents consume the run budget until destruction; over-cap extensions return
 // ScratchStatus::io_error before extending the backing in either mode.
+// In managed mode the physical disk backing additionally reserves from
+// RunQuota before creation/growth. The local byte predicate runs first.
+// Resident pages consume only the local budget; each spilled disk extent is
+// charged once, including a successful truncate followed by a failed write.
+// Shared quota refusals retain their typed value on the active quota endpoint.
 // Zero page size and sizes beyond off_t throw std::invalid_argument.
 // OS setup failures throw std::system_error.
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
