@@ -95,6 +95,71 @@ Mount points (provide exactly one of `strategy.pine` / `strategy.cpp`):
 | `strategy.cpp`   | `/in/strategy.cpp`    | back-compat | Pre-transpiled PineForge translation unit (used only if no `.pine`). Refused unless `PINEFORGE_STRATEGY_CPP_SHA256` holds the sha256 of exactly these bytes, or `PINEFORGE_ALLOW_UNATTESTED_CPP=1` (local trust only; a hosted caller must never set it) |
 | `ohlcv.csv`      | `/in/ohlcv.csv`       | yes      | `timestamp,open,high,low,close,volume` |
 
+### Opt-in compile guards
+
+The entrypoint can apply cooperative limits to compilation on Linux. Each
+setting below is **off when unset**. With all three unset, the entrypoint
+uses its original compiler and inventory-binding commands, environment,
+output and exit statuses.
+
+| Environment setting | Unit and scope | Finite policy selected by `0` |
+| --- | --- | --- |
+| `PINEFORGE_COMPILE_WALL_MS` | Milliseconds from before compiler launch through all helpers and selected inventory binding | 120,000 ms |
+| `PINEFORGE_COMPILE_AS_BYTES` | Per-process address space, installed as inherited `RLIMIT_AS` with equal soft and hard limits before compiler or binder execution | 4,294,967,296 bytes (4 GiB), or a lower inherited positive hard limit |
+| `PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES` | Combined raw stdout and stderr bytes from the compiler, its helpers and the binder | 1,048,576 bytes (1 MiB) |
+
+A set value must contain decimal digits only and fit `0..9007199254740990`.
+Zero selects the finite policy above; it never requests unlimited execution.
+An omitted setting leaves that dimension unchanged. A positive value is used
+exactly. A positive address-space request above the inherited hard limit is refused
+before launch. Empty strings, signs, whitespace, fractions and values outside
+the range are usage errors: one `run_request_invalid` failure line with
+`args: {"option":"arguments"}` on stdout and exit 4.
+
+For example, these settings allow 30 seconds, 2 GiB of address space per
+compiler process, and 64 KiB of compiler/binder diagnostics:
+
+```bash
+docker run --rm \
+  -e PINEFORGE_COMPILE_WALL_MS=30000 \
+  -e PINEFORGE_COMPILE_AS_BYTES=2147483648 \
+  -e PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES=65536 \
+  -v "$(pwd)/strategy.pine:/in/strategy.pine:ro" \
+  -v "$(pwd)/ohlcv.csv:/in/ohlcv.csv:ro" \
+  pineforge > report.json
+```
+
+The wall deadline is absolute and includes waiting for descendants after
+the driver exits. Progress and binder launch do not renew it. On expiry,
+the guard stops and reaps descendants, including detached orphans adopted
+through Linux child-subreaper support, and returns exit 4 with
+`run_deadline_exceeded` and `args: {"stage":"compile"}`. Cleanup has a
+1,000 ms grace; the hosting layer must retain ownership if a task cannot
+be reaped within it.
+
+The diagnostic collector reads at most the byte cap plus one probe byte.
+It forwards at most the cap to stderr, without decoding bytes or adding a
+truncation marker. Observing the probe stops compilation and returns exit 4
+with `diagnostic_budget_exceeded` and
+`args: {"cap_bytes":B,"used_bytes":B,"requested_bytes":1}`. Exact fit followed
+by EOF is allowed. Both compiler streams share one allowance, which is also
+shared with the binder. Fixed entrypoint progress and failure messages are
+separate from this compiler-output cap.
+
+An ordinary compiler or binding failure still exits 3. Address-space
+allocation failures also retain that status: the guard does not infer a
+memory-limit cause from diagnostics, allocation errors or child signals.
+The compiler flags, including `-ffp-contract=off` and whole-archive linking,
+are unchanged.
+
+These controls are engine guards. They do not establish namespaces, cgroups,
+RSS or aggregate memory quotas, cumulative tree CPU limits, temporary-storage
+quotas, task quotas, or signed installation evidence. The host supplies those
+controls and owns the outer process lifetime and report channels. These
+settings apply to compilation and binding; transpilation and backtesting
+have their own controls. A requested guard requires Linux procfs and
+child-subreaper support; an unavailable mechanism is a usage refusal.
+
 ### Transpile only (Pine → C++, no backtest)
 
 Set `PINEFORGE_TRANSPILE_ONLY=1` to emit the generated C++ on stdout and exit
@@ -769,8 +834,8 @@ directly (for example `base64 -d | shasum -a 256`).
 | ---: | ------- |
 |  `0` | Success — JSON report (or C++ in transpile-only mode) on stdout |
 |  `2` | Missing input mount (`/in/strategy.pine` or `/in/strategy.cpp`, and `/in/ohlcv.csv`), or a mounted `strategy.cpp` the host did not vouch for (one typed `run_request_invalid` line on stdout) |
-|  `3` | `g++` compile of the strategy translation unit failed |
-|  `4` | Backtest aborted at runtime |
+|  `3` | `g++` compile or selected inventory binding failed |
+|  `4` | Backtest aborted at runtime, or an explicitly requested compile guard refused its settings or stopped compilation |
 |  `5` | Transpile failed (unsupported Pine construct or syntax error) |
 
 ## Smoke test

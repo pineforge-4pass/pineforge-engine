@@ -7,6 +7,8 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- Container compile limits are opt-in and off by default; compilation is unchanged without them.
+
 ## 1.9.1 — 2026-10-31
 
 - A script container (string, array, map or object store) whose scratch

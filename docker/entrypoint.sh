@@ -26,6 +26,28 @@
 #   PINEFORGE_OVERRIDES  JSON object of strategy() header field -> value
 #                        e.g. '{"default_qty_value": "5", "commission_value": "0.04"}'
 #
+# Optional compile guards (Linux; each is OFF when unset):
+#   PINEFORGE_COMPILE_WALL_MS       Absolute compiler/helper/binder lifetime in ms.
+#   PINEFORGE_COMPILE_AS_BYTES      Inherited per-process RLIMIT_AS, soft=hard, in bytes.
+#   PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES
+#                                  Combined compiler/binder stdout+stderr byte cap.
+# Set values are unsigned decimal integers in 0..9007199254740990. Zero selects
+# a finite local policy: 120000 ms, 4294967296 AS bytes, or 1048576 diagnostic
+# bytes, respectively (AS respects a lower inherited hard cap); it never disables
+# a guard. Other unset dimensions stay
+# unset. Positive values are exact; an AS cap above the inherited hard limit is
+# refused. Empty, signed, whitespace, nondecimal and out-of-range values are
+# usage errors (run_request_invalid, exit 4), before compiler launch.
+# Deadline: run_deadline_exceeded{stage:compile}; diagnostic overflow:
+# diagnostic_budget_exceeded{cap_bytes,used_bytes,requested_bytes:1}; exit 4.
+# Stops kill/reap compiler descendants, including adopted orphans, with at most
+# 1000 ms cleanup grace. Capture reads at most cap+1 and forwards at most cap,
+# as raw bytes on stderr. The fixed shell progress/failure messages are separate.
+# These are cooperative engine guards, not a host isolation or memory quota.
+# AS failures alone retain ordinary compile exit 3, without inferred cause.
+# No compile guard set: the original g++/binder path, arguments and environment.
+# Details: docker/README.md, "Opt-in compile guards".
+#
 # Optional env vars (runtime args — applied to run_backtest_full):
 #   PINEFORGE_INPUT_TF           Chart bar timeframe ('1','5','15','60','D',...).
 #                                Empty / unset = auto-detect from bar timestamps.
@@ -85,7 +107,7 @@
 #   2  missing input mount
 #   3  compile failure (g++; on the selected path also copying a pre-transpiled strategy.cpp
 #      into the work dir, or binding the request-feed inventory)
-#   4  backtest failure
+#   4  backtest failure, or an opt-in compile guard's usage/limit/channel failure
 #   5  transpile failure (unsupported Pine construct or syntax error)
 #
 # Memory and scratch controls (environment): PINEFORGE_COMMAND_SCRATCH_MAX_BYTES
@@ -248,6 +270,9 @@ echo "[pineforge] compiling strategy.cpp ..." >&2
 # -ffp-contract=off is parity-critical: the static lib is built with it
 # (CMakeLists.txt) so FMA contraction can't reassociate float ops. The strategy
 # TU must match or any inlined TA/sizing math drifts at the last ULP.
+if [[ -z "${PINEFORGE_COMPILE_WALL_MS+x}" &&
+      -z "${PINEFORGE_COMPILE_AS_BYTES+x}" &&
+      -z "${PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES+x}" ]]; then
 g++ -std=c++17 -O2 -ffp-contract=off -fPIC -shared \
     -I"${PREFIX}/include" \
     -I/usr/include/eigen3 \
@@ -275,6 +300,284 @@ if [[ "${SELECTED}" == "true" ]]; then
     else
         echo "[pineforge] no request-feed inventory for this strategy.cpp; none is passed on" >&2
     fi
+fi
+else
+    BOUND_INVENTORY=""
+    if [[ "${SELECTED}" == "true" && -n "${INVENTORY_IN}" ]]; then
+        BOUND_INVENTORY="${WORK}/request_feed_inventory.json"
+    fi
+    python3 - "${PREFIX}" "${SRC}" "${SO}" "${BOUND_INVENTORY}" "${INVENTORY_IN}" <<'PY' || exit "$?"
+import ctypes
+import errno
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import resource
+import select
+import signal
+import subprocess
+import sys
+import time
+
+
+class GuardFailure(Exception):
+    def __init__(self, code, args, text):
+        super().__init__(text)
+        self.code, self.args_json, self.text = code, args, text
+
+
+def usage(text):
+    raise GuardFailure("run_request_invalid", {"option": "arguments"},
+                       "entrypoint.sh: error: " + text)
+
+
+def ceiling(name, policy):
+    if name not in os.environ:
+        return None
+    raw = os.environ[name]
+    if not re.fullmatch(r"[0-9]+", raw):
+        usage(name + " must be an unsigned decimal integer in 0..9007199254740990")
+    digits = raw.lstrip("0") or "0"
+    if len(digits) > 16 or int(digits) > 9007199254740990:
+        usage(name + " is outside 0..9007199254740990")
+    value = int(digits)
+    return policy if value == 0 else value
+
+
+def now_ns():
+    return time.clock_gettime_ns(time.CLOCK_BOOTTIME)
+
+
+cancelled = False
+
+
+def cancel(_signum, _frame):
+    global cancelled
+    cancelled = True
+
+
+class CompileGuard:
+    def __init__(self):
+        self.wall = ceiling("PINEFORGE_COMPILE_WALL_MS", 120000)
+        self.address = ceiling("PINEFORGE_COMPILE_AS_BYTES", 4294967296)
+        self.cap = ceiling("PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES", 1048576)
+        if sys.platform != "linux" or not hasattr(time, "CLOCK_BOOTTIME"):
+            usage("compile guards require Linux with CLOCK_BOOTTIME and procfs")
+        self.children_file = Path(f"/proc/self/task/{os.getpid()}/children")
+        try:
+            self.children_file.read_text()
+            libc = ctypes.CDLL(None, use_errno=True)
+            # Linux PR_SET_CHILD_SUBREAPER: detached orphans become our children.
+            if libc.prctl(36, 1, 0, 0, 0) != 0:
+                raise OSError(ctypes.get_errno(), "cannot become a child subreaper")
+        except (OSError, AttributeError):
+            usage("compile guards require procfs and child-subreaper support")
+        if self.address is not None:
+            hard = resource.getrlimit(resource.RLIMIT_AS)[1]
+            if hard != resource.RLIM_INFINITY and self.address > hard:
+                if os.environ["PINEFORGE_COMPILE_AS_BYTES"].strip("0") == "" and hard > 0:
+                    self.address = hard
+                else:
+                    usage("PINEFORGE_COMPILE_AS_BYTES exceeds the inherited hard limit")
+        self.accepted = 0
+        self.deadline = None if self.wall is None else now_ns() + self.wall * 1000000
+        self.original_stderr_flags = fcntl.fcntl(2, fcntl.F_GETFL)
+        fcntl.fcntl(2, fcntl.F_SETFL, self.original_stderr_flags | os.O_NONBLOCK)
+        signal.signal(signal.SIGTERM, cancel)
+        signal.signal(signal.SIGINT, cancel)
+
+    def restore(self):
+        fcntl.fcntl(2, fcntl.F_SETFL, self.original_stderr_flags)
+
+    def install_child_limits(self):
+        if self.address is not None:
+            resource.setrlimit(resource.RLIMIT_AS, (self.address, self.address))
+
+    def kill_children(self):
+        # Direct children cannot have their PIDs recycled before we reap them.
+        # Killing parents adopts further descendants; repeat until none remain.
+        for spelling in self.children_file.read_text().split():
+            try:
+                os.kill(int(spelling), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    @staticmethod
+    def reap(driver):
+        while True:
+            try:
+                pid, status = os.waitpid(-1, os.WNOHANG)
+            except ChildProcessError:
+                return False
+            if pid == 0:
+                return True
+            if pid == driver.pid:
+                driver.returncode = os.waitstatus_to_exitcode(status)
+
+    def run(self, command, failure_message):
+        if cancelled:
+            raise GuardFailure("run_aborted", {}, "native run aborted")
+        if self.deadline is not None and now_ns() >= self.deadline:
+            raise GuardFailure("run_deadline_exceeded", {"stage": "compile"},
+                               "The admitted channel lifetime expired.")
+        try:
+            driver = subprocess.Popen(command, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT, start_new_session=True,
+                                      preexec_fn=self.install_child_limits)
+        except OSError:
+            # A failed compiler exec is not proof of a particular resource denial.
+            sys.stderr.write(failure_message)
+            return 3
+        except subprocess.SubprocessError:
+            usage("could not install PINEFORGE_COMPILE_AS_BYTES before compiler launch")
+        reader = driver.stdout
+        os.set_blocking(reader.fileno(), False)
+        pending = bytearray()
+        primary = None
+        cleanup_deadline = None
+
+        def latch(failure):
+            nonlocal primary, cleanup_deadline, reader
+            if primary is None:
+                primary = failure
+                cleanup_deadline = now_ns() + 1000000000
+            if reader is not None:
+                reader.close()
+                reader = None
+
+        try:
+            while True:
+                if primary is not None:
+                    self.kill_children()
+                children_alive = self.reap(driver)
+                current = now_ns()
+                if cancelled:
+                    latch(GuardFailure("run_aborted", {}, "native run aborted"))
+                if primary is None and self.deadline is not None and current >= self.deadline:
+                    latch(GuardFailure("run_deadline_exceeded", {"stage": "compile"},
+                                       "The admitted channel lifetime expired."))
+                if not children_alive and reader is None and not pending:
+                    break
+                if cleanup_deadline is not None and current >= cleanup_deadline:
+                    self.kill_children()
+                    self.reap(driver)
+                    break
+
+                poller = select.poll()
+                read_fd = None
+                if reader is not None and len(pending) < 65536:
+                    read_fd = reader.fileno()
+                    poller.register(read_fd, select.POLLIN | select.POLLHUP | select.POLLERR)
+                if pending:
+                    poller.register(2, select.POLLOUT | select.POLLHUP | select.POLLERR)
+                expiry = cleanup_deadline if primary is not None else self.deadline
+                wait_ms = 10
+                if expiry is not None:
+                    wait_ms = min(wait_ms, max(0, (expiry - now_ns() + 999999) // 1000000))
+                events = dict(poller.poll(wait_ms))
+                if read_fd is not None and read_fd in events:
+                    amount = 65536 - len(pending)
+                    if self.cap is not None:
+                        amount = min(amount, self.cap - self.accepted + 1)
+                    try:
+                        block = os.read(read_fd, amount)
+                    except BlockingIOError:
+                        block = None
+                    if block == b"":
+                        reader.close()
+                        reader = None
+                    elif block:
+                        take = len(block)
+                        if self.cap is not None:
+                            take = min(take, self.cap - self.accepted)
+                        pending.extend(block[:take])
+                        self.accepted += take
+                        if take < len(block):
+                            latch(GuardFailure(
+                                "diagnostic_budget_exceeded",
+                                {"cap_bytes": self.cap, "used_bytes": self.accepted,
+                                 "requested_bytes": 1},
+                                "The diagnostics exceed their admitted byte budget."))
+                if pending and 2 in events:
+                    try:
+                        written = os.write(2, pending)
+                        if written == 0:
+                            raise OSError(errno.EIO, "zero diagnostic write")
+                        del pending[:written]
+                    except BlockingIOError:
+                        pass
+                    except OSError as error:
+                        reason = "peer_closed" if error.errno in (
+                            errno.EPIPE, errno.ECONNRESET, errno.ENOTCONN) else "io"
+                        latch(GuardFailure("report_channel_failed",
+                                           {"channel": "diagnostic", "reason": reason},
+                                           "A report transport could not complete."))
+                        pending.clear()
+            if primary is not None:
+                raise primary
+            if driver.returncode != 0:
+                sys.stderr.write(failure_message)
+                return 3
+            return 0
+        finally:
+            if reader is not None:
+                reader.close()
+            # Also stop descendants on an unexpected controller exception.
+            until = cleanup_deadline if cleanup_deadline is not None else now_ns() + 1000000000
+            while self.reap(driver) and now_ns() < until:
+                self.kill_children()
+                select.poll().poll(1)
+
+
+def main():
+    prefix, source, shared_object, bound_inventory, inventory = sys.argv[1:]
+    guard = CompileGuard()
+    try:
+        command = [
+            "g++", "-std=c++17", "-O2", "-ffp-contract=off", "-fPIC", "-shared",
+            "-I" + prefix + "/include", "-I/usr/include/eigen3", source,
+            "-Wl,--whole-archive", prefix + "/lib/libpineforge.a", "-Wl,--no-whole-archive",
+            "-o", shared_object,
+        ]
+        status = guard.run(command, "[pineforge] compile failed\n")
+        if status:
+            return status
+        if bound_inventory:
+            return guard.run(
+                ["python3", prefix + "/bin/bind_compiled_inventory.py",
+                 "--inventory", inventory, "--cpp", source, "--so", shared_object,
+                 "--out", bound_inventory],
+                "[pineforge] request-feed inventory binding failed\n")
+        return 0
+    finally:
+        guard.restore()
+
+
+try:
+    status = main()
+except GuardFailure as failure:
+    if failure.code == "run_request_invalid":
+        sys.stderr.write(failure.text + "\n")
+    try:
+        sys.stdout.write(json.dumps({"engine": "pineforge", "error": failure.text,
+                                    "code": failure.code, "args": failure.args_json},
+                                   separators=(",", ":")) + "\n")
+        sys.stdout.flush()
+    except OSError:
+        os._exit(4)
+    status = 4
+except Exception:
+    try:
+        sys.stdout.write('{"engine":"pineforge","error":"The compile guard could not complete.",'
+                         '"code":"harness_internal_error","args":{}}\n')
+        sys.stdout.flush()
+    except OSError:
+        os._exit(4)
+    status = 4
+sys.exit(status)
+PY
 fi
 
 echo "[pineforge] running backtest ..." >&2
