@@ -1,9 +1,0 @@
-{
-  "schema": "pf-report-off-identity-golden/v1",
-  "engine_revision": "fc0a2df5d",
-  "corpus_revision": "8425ca820c4b7272db24d659a64d88e8e05b6407",
-  "scenario_list": "scripts/corpus_parity_subset.txt",
-  "scenario_list_sha256": "",
-  "requests_sha256": "",
-  "reports_sha256": ""
-}
