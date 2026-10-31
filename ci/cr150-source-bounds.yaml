@@ -79,7 +79,8 @@ ceilings:
   # The ledger's private directory/pages share one lexical allocation key.
   # These entries remain OPEN.
   # The literal-vector proof form cannot express a caller's fixed byte policy.
-  unreviewed: 1340
+  # Two feed-projection builder entries: the resident one-page provider and the directory string.
+  unreviewed: 1341
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
