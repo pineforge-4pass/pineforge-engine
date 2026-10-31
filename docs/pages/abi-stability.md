@@ -96,12 +96,24 @@ namespace or separate `pf-report-replay/v1` companion. The C++ implementation
 adds no virtual method. Its private report sidecar follows the existing
 report-sink output hash waiver; trading state and broker hashes are unchanged.
 
+`pf_report_cache_stats(s, &resident_bytes, &allocation_bypass_count)` adds one
+runtime symbol for the admitted run's command-cache and ledger diagnostics.
+Residency sums each live allocation owner once, including the ledger's fixed
+workspace, private directory and entry pages. The bypass count includes released
+command owners and each sticky ledger allocation failure. Admission resets the
+run's accounting. Query after report finalization and before strategy release;
+NULL handles/outputs or aliased outputs return -1 with both outputs unchanged.
+This query leaves ABI 5 and every existing C struct, including the 72-byte
+`pf_report_sink_diagnostics_v1`, unchanged. Older modules can lack the symbol;
+`run_json` skips it and otherwise emits the bypass reason/count only when
+the count is positive.
+
 ## Symbol inventory
 
 The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
 
-The stable inventory contains 118 compiled-strategy `PF_API` declarations
-(98 implementations in `src/c_abi.cpp` plus twenty generated declarations)
+The stable inventory contains 122 compiled-strategy `PF_API` declarations
+(102 implementations in `src/c_abi.cpp` plus twenty generated declarations)
 and 43 native-host declarations. A module supplies the generated symbols it
 supports; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
@@ -142,6 +154,7 @@ not the complete inventory:
 | `strategy_get_last_error` | Diagnostics |
 | `strategy_get_last_error_code` | Diagnostics (@ref run_failure_codes) |
 | `strategy_get_last_error_args` | Diagnostics (@ref run_failure_codes) |
+| `pf_report_cache_stats` | Per-run command-cache and ledger resident bytes and allocation bypasses |
 | `pf_version_get` | @ref pf_version |
 | `pf_abi_version` | @ref pf_version |
 | `pf_version_string` | @ref pf_version |
@@ -214,7 +227,7 @@ are unchanged. Uncertified hosts and Off requests do not call admission or
 preparation.
 
 Sixteen per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 100 runtime implementations, including the
+functions. The remaining 102 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.

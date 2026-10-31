@@ -116,10 +116,9 @@ std::size_t mode_table_capacity(int length) {
 
 }  // namespace
 
-ExtremeRing::ExtremeRing(int length)
+ExtremeRing::ExtremeRing(int length, WindowCacheCapacity cache)
     : length_(length),
-      values_(length > 0 ? static_cast<std::size_t>(length) + 1 : 0, na<double>()),
-      written_(length > 0 ? static_cast<std::size_t>(length) + 1 : 0, 0) {}
+      values_(length > 0 ? static_cast<std::size_t>(length) + 1 : 0, 0.0, cache) {}
 
 ExtremeRing::Result ExtremeRing::update(double src, bool advance, bool want_max) {
     Result out{na<double>(), 0};
@@ -142,8 +141,7 @@ ExtremeRing::Result ExtremeRing::update(double src, bool advance, bool want_max)
 
     const long long K = static_cast<long long>(length_) + 1;
     const std::size_t cur = ring_slot(bar, K);
-    values_[cur] = src;
-    written_[cur] = 1;
+    values_.write(cur, src);
     has_written_ = true;
 
     // The cached extremum {cval_, cbar_} is maintained on every call, warmup
@@ -181,7 +179,7 @@ ExtremeRing::Result ExtremeRing::update(double src, bool advance, bool want_max)
             // grades against (the round-5 "skip" reading was wrong:
             // shiroi-qqe's stops on five 1D lanes are TV's SL = 0 from
             // exactly these reads).
-            const double v = written_[i] ? values_[i] : 0.0;
+            const double v = values_.read(i);
             if (is_na(v)) {
                 // A slot WRITTEN with na poisons the running extremum; the
                 // next (newer) slot restarts it -- so the answer is the

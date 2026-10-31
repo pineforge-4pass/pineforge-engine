@@ -93,12 +93,16 @@ public:
 // evaluation context, from the call site's first execution on. A bar the site
 // executes holds its source; a bar it skips holds the value of the last
 // execution before it. The last kMaxBarsBack + 1 bars are kept. Full chunks
-// are immutable and shared between copies, so copying the object (the
-// script-state checkpoint does it every bar) costs one chunk at most.
+// are shared between copies until written, so an in-memory checkpoint copies
+// at most the current chunk. Numeric scratch backing is also copy-on-write;
+// its resident cache size is independent of the retained lookback.
 class HeldHistory {
 public:
     static constexpr std::size_t kChunk = 1024;
 
+    HeldHistory() : HeldHistory(window_cache_capacity()) {}
+    explicit HeldHistory(WindowCacheCapacity cache)
+        : values_(cache) {}
     bool empty() const { return count_ == 0; }
     long long first_bar() const { return first_bar_; }
     long long last_bar() const { return first_bar_ + count_ - 1; }
@@ -108,14 +112,18 @@ public:
     // The value held for `bar`; the caller keeps `bar` in
     // [first_bar(), last_bar()].
     double at(long long bar) const;
+    WindowCacheCapacity cache_capacity() const { return values_.cache_capacity(); }
+    WindowCacheStats cache_stats() const { return values_.cache_stats(); }
 
 private:
+    void ensure_slots(std::size_t keep);
+    std::size_t slot(std::size_t offset) const;
     void push(double value);
     void drop_front_chunks(std::size_t keep);
 
-    std::vector<std::shared_ptr<const std::vector<double>>> frozen_;
-    std::vector<double> tail_;
-    long long first_bar_ = 0;   // the bar of frozen_[0][0] (or tail_[0])
+    ::pineforge::detail::WindowValues<double> values_;
+    std::size_t head_ = 0;
+    long long first_bar_ = 0;   // the bar at head_
     long long count_ = 0;       // bars held
 };
 
@@ -152,6 +160,9 @@ class SeriesWindowExtreme {
 public:
     static constexpr long long kMaxBarsBack = 15000;
 
+    SeriesWindowExtreme() : SeriesWindowExtreme(window_cache_capacity()) {}
+    explicit SeriesWindowExtreme(WindowCacheCapacity cache)
+        : history_(cache) {}
     struct Result {
         double value;     // na: warm-up, or no member
         double offset;    // -bars back of the extremum; na during warm-up
@@ -185,6 +196,8 @@ class SeriesHighest {
     SeriesWindowExtreme core_;
 
 public:
+    SeriesHighest() = default;
+    explicit SeriesHighest(WindowCacheCapacity cache) : core_(cache) {}
     double compute(double src, double length);
     double recompute(double src, double length);
 };
@@ -193,6 +206,8 @@ class SeriesLowest {
     SeriesWindowExtreme core_;
 
 public:
+    SeriesLowest() = default;
+    explicit SeriesLowest(WindowCacheCapacity cache) : core_(cache) {}
     double compute(double src, double length);
     double recompute(double src, double length);
 };
@@ -201,6 +216,8 @@ class SeriesHighestBars {
     SeriesWindowExtreme core_;
 
 public:
+    SeriesHighestBars() = default;
+    explicit SeriesHighestBars(WindowCacheCapacity cache) : core_(cache) {}
     double compute(double src, double length);
     double recompute(double src, double length);
 };
@@ -209,6 +226,8 @@ class SeriesLowestBars {
     SeriesWindowExtreme core_;
 
 public:
+    SeriesLowestBars() = default;
+    explicit SeriesLowestBars(WindowCacheCapacity cache) : core_(cache) {}
     double compute(double src, double length);
     double recompute(double src, double length);
 };
