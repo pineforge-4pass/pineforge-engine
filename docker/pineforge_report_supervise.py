@@ -34,6 +34,7 @@ optional constraint: omitted/zero requests resolve to it, positive requests
 above it are refused without clamping. An absent or zero host grant means
 unlimited, not a policy refusal. limits.*.effective is null for an unlimited
 dimension. Accounting continues and all polls use at most 50 ms slices.
+post-exit drain grace: fixed cleanup bound, see the release notes.
 
 S counts/hashes K, relays through one 64 KiB queue to the real file finalizer,
 and publishes its private verified inode to N before R. N stays solely in S.
@@ -42,9 +43,11 @@ Until that handoff exists, supervised execution of a sink-capable module needs
 an external sink fd; its full projection is unavailable without one.
 With unlimited R, the FILE finalizer has no --max-bytes or overflow probes,
 including when a sink size was planned. A finite R retains the planned B.
-The synchronous deadline helpers handle attestation reads and stream publication.
-Metered ready reads, pipes, packet delivery and concurrent relay steps use
-nonblocking adapters with the same absolute Deadline and preserve every chunk.
+The deadline module has no cancellation callback. S uses its own nonblocking
+I/O loops around the same absolute Deadline, checking host cancellation between
+poll slices of at most 50 ms. Cancellation stops data publication; M gets one
+immediate nonblocking attempt with the latched outcome, without waiting for a
+stalled status reader. Metered reads preserve every observed chunk.
 """
 from __future__ import annotations
 
@@ -71,8 +74,7 @@ import tempfile
 import time
 
 from pineforge_report_deadlines import (
-    Deadline, DeadlineError, PeerClosed, TransportError,
-    bounded_read, bounded_write, close_once,
+    Deadline, DeadlineError, close_once,
 )
 
 
@@ -115,6 +117,10 @@ class ProtocolError(Exception):
 
 
 class IncompleteJSON(ProtocolError):
+    pass
+
+
+class Cancelled(Exception):
     pass
 
 
@@ -735,6 +741,7 @@ class Supervisor:
         self.domain_empty = None
         self.operation = "report"
         self.stall_seconds = math.inf
+        self.stall_ms = None
         self.deadline = Deadline(None, None)
         self.borrowed_flags = {}
         self.diagnostic_by_stage = {stage: 0 for stage in ("run", "finalize")}
@@ -768,6 +775,7 @@ class Supervisor:
             self.latch("run_deadline_exceeded", {"stage": "prepare"})
             return False
         self.stall_seconds = stall_ms / 1000 if stall_ms else math.inf
+        self.stall_ms = stall_ms
         self.deadline = Deadline(remaining, stall_ms)
         return True
 
@@ -803,15 +811,33 @@ class Supervisor:
         else:
             self.latch("report_channel_failed", {"channel": error.channel, "reason": error.reason})
 
+    def check_cancelled(self):
+        if self.cancelled:
+            self.latch("run_aborted", {})
+            raise Cancelled()
+
     def stage(self):
         return "finalize" if (self.native_eof or (
             self.sink_fd is None and self.process is not None
             and self.process.poll() is not None)) else "run"
 
-    def transfer_error(self, error, channel):
-        if isinstance(error, DeadlineError):
-            return TransferError(channel, "deadline", wall=error.kind == "wall")
-        return TransferError(channel, "peer_closed" if isinstance(error, PeerClosed) else "io")
+    def attestation_read(self, fd, size):
+        # bounded_read has no cancel callback and can keep polling internally
+        # forever with unlimited W/P. Keep that pending interval in S instead.
+        pending_read = Deadline(None, self.stall_ms)
+        with selectors.DefaultSelector() as selector:
+            selector.register(fd, selectors.EVENT_READ)
+            while True:
+                self.check_cancelled()
+                if self.deadline.expired():
+                    raise DeadlineError("wall", "prepare", 0)
+                if pending_read.stall_remaining_ms() <= 0:
+                    raise DeadlineError("stall", "prepare", 0)
+                try:
+                    return self.read_ready(fd, size, "prepare")
+                except (BlockingIOError, InterruptedError):
+                    selector.select(min(0.05, self.deadline.remaining_wall_ms() / 1000,
+                                        pending_read.stall_remaining_ms() / 1000))
 
     def _attestation(self, text):
         if text is None:
@@ -829,10 +855,9 @@ class Supervisor:
             os.set_blocking(fd, False)
             data = bytearray()
             while True:
-                chunk, eof = bounded_read(
-                    fd, min(QUEUE_BYTES, TERMINAL_BYTES + 1 - len(data)),
-                    self.deadline, "prepare")
-                if eof:
+                chunk = self.attestation_read(
+                    fd, min(QUEUE_BYTES, TERMINAL_BYTES + 1 - len(data)))
+                if not chunk:
                     break
                 data.extend(chunk)
                 if len(data) > TERMINAL_BYTES:
@@ -1014,44 +1039,39 @@ class Supervisor:
             fd, data, socket_endpoint=stat.S_ISSOCK(os.fstat(fd).st_mode))
 
     def bounded_write(self, fd, data, channel, *, stage="publish"):
-        if stat.S_ISSOCK(os.fstat(fd).st_mode):
-            try:
-                count = bounded_write(fd, data, self.deadline, stage)
-            except (DeadlineError, PeerClosed, TransportError) as error:
-                self.channels[channel].write(memoryview(data)[:error.bytes_moved])
-                self.publication_started |= channel in ("report", "sink") and error.bytes_moved > 0
-                raise self.transfer_error(error, channel) from error
-            self.channels[channel].write(memoryview(data)[:count])
-            self.publication_started |= channel in ("report", "sink") and count > 0
-            return
-        # Pipe adapter: the descriptor is nonblocking, W never changes, and
+        # The helper's synchronous socket loop has no cancel callback. Use
+        # the same raw step for pipes and streams, with cancellation in S.
+        # The descriptor is nonblocking, W never changes, and
         # only a positive syscall return renews this pending operation's P.
-        end = time.monotonic() + self.stall_seconds
+        pending = Deadline(None, self.stall_ms)
         remaining = memoryview(data)
         with selectors.DefaultSelector() as selector:
             selector.register(fd, selectors.EVENT_WRITE)
             while remaining:
-                now = time.monotonic()
+                self.check_cancelled()
                 if self.deadline.expired():
                     raise TransferError(channel, "deadline", wall=True)
-                if now >= end:
+                if pending.stall_remaining_ms() <= 0:
                     raise TransferError(channel, "deadline")
                 try:
                     count = self.write_ready(fd, remaining[:QUEUE_BYTES])
                 except (BlockingIOError, InterruptedError):
                     selector.select(min(0.05, self.deadline.remaining_wall_ms() / 1000,
-                                        max(0, end - now)))
+                                        pending.stall_remaining_ms() / 1000))
                     continue
                 except OSError as error:
+                    self.check_cancelled()
                     reason = "peer_closed" if error.errno in (
                         errno.EPIPE, errno.ECONNRESET, errno.ENOTCONN) else "io"
                     raise TransferError(channel, reason) from error
                 if count <= 0:
+                    self.check_cancelled()
                     raise TransferError(channel, "io")
                 self.channels[channel].write(remaining[:count])
                 self.publication_started |= channel in ("report", "sink") and count > 0
                 remaining = remaining[count:]
-                end = time.monotonic() + self.stall_seconds
+                pending.note_progress(count)
+        self.check_cancelled()
         if self.deadline.expired():
             raise TransferError(channel, "deadline", wall=True)
 
@@ -1653,6 +1673,7 @@ class Supervisor:
         return data
 
     def publish(self, selected):
+        self.check_cancelled()
         if selected is None:
             selected = self.failure_document()
         if selected is None:
@@ -1670,6 +1691,10 @@ class Supervisor:
                     and sink.written == sink.accepted and not sink.truncated)
                 if not sink.complete:
                     raise TransferError("sink", "io")
+            except Cancelled:
+                sink.truncated = sink.written < sink.accepted
+                self.publish_finished = time.monotonic()
+                raise
             except TransferError as error:
                 sink.truncated = sink.written < sink.accepted
                 self.io_failure(error)
@@ -1691,13 +1716,17 @@ class Supervisor:
                 while data := selected.read(QUEUE_BYTES):
                     self.bounded_write(1, data, "report")
             report.complete = True
+        except Cancelled:
+            report.truncated = report.written < report.accepted
+            raise
         except TransferError as error:
             report.truncated = True
             self.io_failure(error)
         except Exception:
             report.truncated = report.written < report.accepted
             self.latch("harness_internal_error", {})
-        self.publish_finished = time.monotonic()
+        finally:
+            self.publish_finished = time.monotonic()
 
     def close_data(self):
         endpoints = [(1, "report"), (2, "diagnostic")]
@@ -1836,9 +1865,7 @@ class Supervisor:
             },
         }
 
-    def send_terminal(self):
-        if self.status_socket is None:
-            return
+    def terminal_packet(self):
         record = self.record()
         status = record["channels"]["status"]
         status.update(complete=True, source_total_known=True, truncated=False)
@@ -1851,6 +1878,15 @@ class Supervisor:
             previous = size
             for key in ("observed_bytes", "accepted_bytes", "written_bytes"):
                 status[key] = size
+        return packet, size
+
+    def send_terminal(self):
+        if self.status_socket is None:
+            return
+        cancelled_record = self.cancelled
+        if cancelled_record:
+            self.latch("run_aborted", {})
+        packet, size = self.terminal_packet()
         if size > TERMINAL_BYTES:
             # Required fields never become an unbounded "emergency" packet.
             self.facade = 4 if self.invocation == "entrypoint" else 1
@@ -1862,12 +1898,26 @@ class Supervisor:
         with selectors.DefaultSelector() as selector:
             selector.register(self.status_socket, selectors.EVENT_WRITE)
             while True:
-                if grace.expired():
+                if self.cancelled and not cancelled_record:
+                    self.latch("run_aborted", {})
+                    # No packet has been sent. Rebuild its length fixed point
+                    # so an available M names cancellation, never stale success.
+                    packet, size = self.terminal_packet()
+                    cancelled_record = True
+                    if size > TERMINAL_BYTES:
+                        self.facade = 4 if self.invocation == "entrypoint" else 1
+                        return
+                if not self.cancelled and grace.expired():
                     self.facade = 4 if self.invocation == "entrypoint" else 1
                     return
                 try:
                     count = self.send_ready(self.status_socket.fileno(), packet, socket_endpoint=True)
                 except (BlockingIOError, InterruptedError):
+                    if self.cancelled:
+                        if not cancelled_record:
+                            continue
+                        self.facade = 4 if self.invocation == "entrypoint" else 1
+                        return
                     selector.select(min(0.05, grace.remaining_wall_ms() / 1000))
                     continue
                 except OSError:
@@ -1906,10 +1956,15 @@ class Supervisor:
     def run_channels(self):
         selected = None
         try:
+            self.check_cancelled()
             self.admit()
+            self.check_cancelled()
             if self.failure is None:
                 self.capture()
+                self.check_cancelled()
                 selected = self.choose_report()
+        except Cancelled:
+            pass
         except Exception:
             self.latch("harness_internal_error", {})
             stopping = GroupStop()
@@ -1925,6 +1980,8 @@ class Supervisor:
                 self.sink_verification["signal"] = -status if status < 0 else None
         try:
             self.publish(selected)
+        except Cancelled:
+            pass
         except Exception:
             self.latch("harness_internal_error", {})
         self.close_data()

@@ -22,6 +22,9 @@ static bool has_cap;
 static uint64_t input_bytes;
 static bool pause_probe;
 static bool paused;
+static int status_fd = -1;
+static int status_gate_fd = -1;
+static bool status_waited;
 
 static void event(char kind, const void *bytes, size_t length)
 {
@@ -60,16 +63,21 @@ static void observe(void)
         return;
     command[count] = '\0';
     bool finalizer = false;
+    bool supervisor = false;
     const char *previous = "";
     for (size_t offset = 0; offset < (size_t)count;) {
         const char *arg = command + offset;
         size_t length = strnlen(arg, (size_t)count - offset);
         if (strstr(arg, "/pineforge_sink_finalize.py"))
             finalizer = true;
+        if (strstr(arg, "/pineforge_report_supervise.py"))
+            supervisor = true;
         if (!strcmp(previous, "--in-fd"))
             input_fd = atoi(arg);
         if (!strcmp(previous, "--receipt-fd"))
             receipt_fd = atoi(arg);
+        if (!strcmp(previous, "--terminal-status-fd"))
+            status_fd = atoi(arg);
         if (!strcmp(previous, "--max-bytes")) {
             cap_bytes = strtoull(arg, NULL, 10);
             has_cap = true;
@@ -77,9 +85,13 @@ static void observe(void)
         previous = arg;
         offset += length + 1;
     }
+    const char *gate = getenv("PF_REPORT_TEST_STATUS_GATE_FD");
+    if (supervisor && gate && status_fd >= 0)
+        status_gate_fd = atoi(gate);
     if (!finalizer || input_fd < 0 || receipt_fd < 0) {
         input_fd = receipt_fd = -1;
-        return;
+        if (status_gate_fd < 0)
+            return;
     }
     struct sockaddr_un address = {.sun_family = AF_UNIX};
     if (strlen(path) >= sizeof(address.sun_path))
@@ -92,9 +104,11 @@ static void observe(void)
         trace_fd = -1;
         return;
     }
-    pause_probe = getenv("PF_REPORT_TEST_PAUSE_PROBE") != NULL;
-    pid_event('S');
-    event('A', command, (size_t)count);
+    if (finalizer) {
+        pause_probe = getenv("PF_REPORT_TEST_PAUSE_PROBE") != NULL;
+        pid_event('S');
+        event('A', command, (size_t)count);
+    }
 }
 
 ssize_t read(int fd, void *buffer, size_t length)
@@ -118,4 +132,21 @@ ssize_t write(int fd, const void *buffer, size_t length)
     if (count > 0 && fd == receipt_fd)
         event('R', buffer, (size_t)count);
     return count;
+}
+
+ssize_t send(int fd, const void *buffer, size_t length, int flags)
+{
+    if (fd == status_fd && status_gate_fd >= 0 && !status_waited) {
+        status_waited = true;
+        pid_event('M');
+        /* A real host signal interrupts this one pending test syscall.
+           M itself remains writable for the product's next packet attempt. */
+        char byte;
+        ssize_t count = syscall(SYS_read, status_gate_fd, &byte, 1);
+        if (count < 0)
+            return -1;
+        errno = EAGAIN;
+        return -1;
+    }
+    return syscall(SYS_sendto, fd, buffer, length, flags, NULL, 0);
 }

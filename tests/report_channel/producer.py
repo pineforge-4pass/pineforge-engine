@@ -25,6 +25,11 @@ def main():
     request = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     reference = "--reference" in sys.argv[2:]
     fragment = request.get("fragment_bytes", 65536)
+    if "producer_identity_path" in request:
+        Path(request["producer_identity_path"]).write_text(
+            json.dumps({"pid": os.getpid(), "group": os.getpgrp()}))
+    if request.get("stall_before_candidate"):
+        signal.pause()
     if "diagnostic_child_state" in request:
         leader = os.getpid()
         ready_read, ready_write = os.pipe()
@@ -87,6 +92,12 @@ def main():
                                ensure_ascii=False).encode() + b"\n"
     sink_fd = None
     if request.get("inherited_sink"):
+        if "native_release_path" in request:
+            end = time.monotonic() + 15
+            while not Path(request["native_release_path"]).exists():
+                if time.monotonic() >= end:
+                    raise AssertionError("TEST host never observed a stopped V")
+                time.sleep(0.01)
         name = ("PINEFORGE_REPORT_REFERENCE_SINK_FD" if reference
                 else "PINEFORGE_REPORT_NATIVE_SINK_FD")
         sink_fd = int(os.environ[name])

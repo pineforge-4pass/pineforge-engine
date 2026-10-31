@@ -13,8 +13,9 @@ import time
 import unittest
 
 from host import (
-    ROOT, clean_environment, encoded, fixture_subreaper, launch, process_info,
-    reference, require_supervisor, sink_receipt, sink_wire, validator_observer,
+    ROOT, SUPERVISOR, HostWatchdogExpired, clean_environment, encoded,
+    fixture_subreaper, group_members, launch, process_info, reference,
+    require_supervisor, sink_receipt, sink_wire, validator_observer,
 )
 
 
@@ -40,7 +41,8 @@ class Contract(unittest.TestCase):
     def setUp(self):
         require_supervisor()
 
-    def assert_record(self, capture, *, complete, exit_class, exit_status, msg=None):
+    def assert_record(self, capture, *, complete, exit_class, exit_status,
+                      invocation="run_json", msg=None):
         if msg is None:
             msg = capture.failure_context()
         record = capture.terminal()
@@ -53,7 +55,7 @@ class Contract(unittest.TestCase):
         self.assertEqual(record["version"], 1, msg=msg)
         self.assertEqual(record["contract"], "supervised/v1", msg=msg)
         self.assertEqual(record["attempt_id"], capture.attempt_id, msg=msg)
-        self.assertEqual(record["invocation"], "run_json", msg=msg)
+        self.assertEqual(record["invocation"], invocation, msg=msg)
         self.assertIs(record["complete"], complete, msg=msg)
         self.assertEqual(record["exit_class"], exit_class, msg=msg)
         self.assertEqual(record["exit_status"], exit_status, msg=msg)
@@ -118,14 +120,292 @@ class Contract(unittest.TestCase):
             self.assertTrue(record["channels"][name]["complete"], msg=f"{name}; {msg}")
         return record
 
-    def refusal(self, capture, code, args, *, exit_class="input_refusal", status=2, msg=None):
+    def refusal(self, capture, code, args, *, exit_class="input_refusal", status=2,
+                invocation="run_json", msg=None):
         if msg is None:
             msg = capture.failure_context()
         record = self.assert_record(
-            capture, complete=False, exit_class=exit_class, exit_status=status, msg=msg)
+            capture, complete=False, exit_class=exit_class, exit_status=status,
+            invocation=invocation, msg=msg)
         self.assertEqual(record["failure"], {
             "code": code, "args": args, "authority": "supervisor"}, msg=msg)
         return record
+
+    def assert_producer_group_gone(self, capture, identity_path):
+        msg = capture.failure_context()
+        identity = json.loads(identity_path.read_text())
+        self.assertEqual(identity["group"], identity["pid"], msg=msg)
+        self.assertIsNone(process_info(identity["pid"]), msg=msg)
+        self.assertEqual(group_members(identity["group"]), [], msg=msg)
+
+    def assert_cancel_bound(self, capture, phase):
+        msg = capture.failure_context()
+        control = capture.control
+        self.assertIn(phase, control["stalled_at"], msg=msg)
+        self.assertIsNotNone(control["cancelled_at"], msg=msg)
+        self.assertIsNotNone(control["exited_at"], msg=msg)
+        self.assertGreaterEqual(
+            control["cancelled_at"] - control["stalled_at"][phase], 0.15, msg=msg)
+        self.assertLess(control["exited_at"] - control["cancelled_at"], 0.75, msg=msg)
+
+    def assert_cancel_record(self, capture, invocation):
+        record = self.refusal(
+            capture, "run_aborted", {}, exit_class="aborted",
+            status=4 if invocation == "entrypoint" else 1, invocation=invocation)
+        msg = capture.failure_context()
+        for name in ("wall_ms", "stall_ms"):
+            self.assertEqual(record["limits"][name], {
+                "requested": None, "granted": None, "effective": None}, msg=msg)
+        self.assertEqual(record["cleanup"]["producer_reaped"], {
+            "value": True, "measurement_state": "measured"}, msg=msg)
+        return record
+
+    def test_cancel_stalled_report_publication_with_unlimited_times(self):
+        expected = reference({"label": "stalled-report-" + "x" * 16384}).stdout
+        self.assertGreater(len(expected), 4096)
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            for invocation in ("run_json", "entrypoint"):
+                with self.subTest(signum=signum, invocation=invocation), tempfile.TemporaryDirectory(
+                        prefix="pf-cancel-report-") as directory:
+                    identity = Path(directory) / "producer.json"
+                    capture = launch(
+                        {"candidate": encoded(expected), "producer_identity_path": str(identity)},
+                        options=("--invocation", invocation), stalled_channels=("report",),
+                        cancel_channel="report", cancel_signal=signum, watchdog_seconds=5)
+                    msg = capture.failure_context()
+                    self.assert_cancel_bound(capture, "report")
+                    record = self.assert_cancel_record(capture, invocation)
+                    self.assert_producer_group_gone(capture, identity)
+                    self.assertEqual(capture.control["held_until_exit"], ["report"], msg=msg)
+                    self.assertEqual(capture.report, expected[:4096], msg=msg)
+                    self.assertTrue(record["channels"]["candidate"]["complete"], msg=msg)
+                    cell = record["channels"]["report"]
+                    self.assertEqual(cell["accepted_bytes"], len(expected), msg=msg)
+                    self.assertEqual(cell["written_bytes"], 4096, msg=msg)
+                    self.assertTrue(cell["truncated"], msg=msg)
+                    self.assertFalse(cell["complete"], msg=msg)
+
+    def test_cancel_stalled_external_sink_publication_with_unlimited_times(self):
+        closes = list(range(600))
+        native = sink_wire(closes)
+        self.assertGreater(len(native), 4096)
+        with validator_observer() as observer:
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                for invocation in ("run_json", "entrypoint"):
+                    with self.subTest(signum=signum, invocation=invocation), tempfile.TemporaryDirectory(
+                            prefix="pf-cancel-sink-") as directory:
+                        identity = Path(directory) / "producer.json"
+                        capture = launch(
+                            {"closes": closes, "inherited_sink": True,
+                             "producer_identity_path": str(identity)},
+                            sink=True, observer=observer, options=("--invocation", invocation),
+                            stalled_channels=("sink",), cancel_channel="sink",
+                            cancel_signal=signum, watchdog_seconds=5)
+                        msg = capture.failure_context()
+                        self.assert_cancel_bound(capture, "sink")
+                        record = self.assert_cancel_record(capture, invocation)
+                        self.assert_producer_group_gone(capture, identity)
+                        self.assertEqual(capture.control["held_until_exit"], ["sink"], msg=msg)
+                        self.assertEqual(capture.sink, native[:4096], msg=msg)
+                        self.assertEqual(capture.report, b"", msg=msg)
+                        self.assertTrue(record["sink_verification"]["complete"], msg=msg)
+                        self.assertEqual(record["sink_verification"]["exit_status"], 0, msg=msg)
+                        self.assertTrue(record["channels"]["candidate"]["complete"], msg=msg)
+                        self.assertEqual(record["channels"]["sink"]["accepted_bytes"],
+                                         len(native), msg=msg)
+                        self.assertEqual(record["channels"]["sink"]["written_bytes"], 4096, msg=msg)
+                        self.assertTrue(record["channels"]["sink"]["truncated"], msg=msg)
+                        self.assertFalse(record["channels"]["sink"]["complete"], msg=msg)
+
+    def test_cancel_terminal_delivery_to_unread_full_status_socket(self):
+        expected = reference({}).stdout
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            for invocation in ("run_json", "entrypoint"):
+                with self.subTest(signum=signum, invocation=invocation), tempfile.TemporaryDirectory(
+                        prefix="pf-cancel-full-status-") as directory:
+                    identity = Path(directory) / "producer.json"
+                    capture = launch(
+                        {"producer_identity_path": str(identity)},
+                        options=("--invocation", invocation), saturate_status=True,
+                        cancel_channel="status", cancel_signal=signum, watchdog_seconds=5)
+                    msg = capture.failure_context()
+                    self.assert_cancel_bound(capture, "status")
+                    self.assert_producer_group_gone(capture, identity)
+                    self.assertEqual(capture.returncode, 4 if invocation == "entrypoint" else 1,
+                                     msg=msg)
+                    self.assertGreater(capture.control["status_prefill_packets"], 0, msg=msg)
+                    self.assertEqual(capture.control["held_until_exit"], ["status"], msg=msg)
+                    self.assertEqual(capture.packets, [], msg=msg)
+                    self.assertEqual(capture.packet_flags, [], msg=msg)
+                    self.assertEqual(capture.report, expected, msg=msg)
+                    self.assertEqual(capture.diagnostic, b"", msg=msg)
+                    self.assertTrue({"report", "diagnostic", "status"} <= capture.eof, msg=msg)
+
+    def test_cancel_pending_terminal_send_rebuilds_available_packet(self):
+        expected = reference({}).stdout
+        with validator_observer() as observer:
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                for invocation in ("run_json", "entrypoint"):
+                    with self.subTest(signum=signum, invocation=invocation), tempfile.TemporaryDirectory(
+                            prefix="pf-cancel-ready-status-") as directory:
+                        identity = Path(directory) / "producer.json"
+                        capture = launch(
+                            {"producer_identity_path": str(identity)},
+                            options=("--invocation", invocation), observer=observer,
+                            gate_status=True, cancel_channel="status_ready",
+                            cancel_signal=signum, watchdog_seconds=5)
+                        msg = capture.failure_context()
+                        self.assert_cancel_bound(capture, "status_ready")
+                        record = self.assert_cancel_record(capture, invocation)
+                        self.assert_producer_group_gone(capture, identity)
+                        self.assertEqual(capture.control["status_gate_pid"],
+                                         capture.control["supervisor_pid"], msg=msg)
+                        self.assertEqual(len([event for event in capture.validator_events
+                                              if event[:1] == b"M"]), 1, msg=msg)
+                        self.assertEqual(capture.report, expected, msg=msg)
+                        self.assertTrue(record["channels"]["report"]["complete"], msg=msg)
+
+    def assert_finite_report_stall(self, *, supervisor_path=None):
+        expected = reference({"label": "finite-report-" + "x" * 16384}).stdout
+        with tempfile.TemporaryDirectory(prefix="pf-finite-report-") as directory:
+            identity = Path(directory) / "producer.json"
+            capture = launch(
+                {"candidate": encoded(expected), "producer_identity_path": str(identity)},
+                options=("--channel-stall-ms", "600", "--channel-wall-ms", "60000"),
+                stalled_channels=("report",), supervisor_path=supervisor_path, watchdog_seconds=4)
+            msg = capture.failure_context()
+            record = self.refusal(
+                capture, "report_channel_failed", {"channel": "report", "reason": "deadline"},
+                exit_class="transport_failure", status=1, msg=msg)
+            self.assert_producer_group_gone(capture, identity)
+            self.assertIn("report", capture.control["stalled_at"], msg=msg)
+            duration = capture.control["exited_at"] - capture.control["stalled_at"]["report"]
+            self.assertGreaterEqual(duration, 0.5, msg=msg)
+            self.assertLess(duration, 0.8, msg=msg)
+            self.assertEqual(capture.control["held_until_exit"], ["report"], msg=msg)
+            self.assertEqual(record["limits"]["stall_ms"]["effective"], 600, msg=msg)
+            self.assertEqual(record["limits"]["wall_ms"]["effective"], 60000, msg=msg)
+            self.assertIsNone(capture.control["cancelled_at"], msg=msg)
+            self.assertEqual(capture.report, expected[:4096], msg=msg)
+            self.assertEqual(record["channels"]["report"]["accepted_bytes"], len(expected), msg=msg)
+            self.assertTrue(record["channels"]["report"]["truncated"], msg=msg)
+            self.assertFalse(record["channels"]["report"]["complete"], msg=msg)
+
+    def test_finite_stall_expires_through_supervisor_report_pipe(self):
+        self.assert_finite_report_stall()
+
+    def test_finite_report_stall_assertions_reject_removed_pipe_deadline(self):
+        self.assert_finite_report_stall()
+        original = SUPERVISOR.read_text(encoding="utf-8")
+        line = '                if pending.stall_remaining_ms() <= 0:\n'
+        self.assertEqual(original.count(line), 1, "expected one publication stall check")
+        with tempfile.TemporaryDirectory(prefix="pf-report-deadline-mutant-") as directory:
+            altered = Path(directory) / SUPERVISOR.name
+            for sibling in SUPERVISOR.parent.iterdir():
+                if sibling != SUPERVISOR and sibling.suffix in (".py", ".json", ".def"):
+                    (altered.parent / sibling.name).symlink_to(sibling)
+            altered.write_text(
+                original.replace(line, '                if False:\n', 1), encoding="utf-8")
+            with self.assertRaises(HostWatchdogExpired) as rejected:
+                self.assert_finite_report_stall(supervisor_path=altered)
+            partial = rejected.exception.capture
+            msg = partial.failure_context()
+            self.assertEqual(partial.control["watchdog_pending_bytes"], {"report": 4096}, msg=msg)
+            self.assertEqual(partial.control["watchdog_producer_group"], [], msg=msg)
+            self.assertIn("report", partial.control["stalled_at"], msg=msg)
+            self.assertGreater(
+                partial.elapsed_seconds - partial.control["stalled_at"]["report"], 2, msg=msg)
+            self.assertIsNone(partial.control["cancelled_at"], msg=msg)
+            self.assertIsNone(partial.returncode, msg=msg)
+            self.assertEqual(partial.packets, [], msg=msg)
+            self.assertEqual(partial.diagnostic, b"", msg=msg)
+
+    def test_finite_wall_expires_through_supervisor_producer_wait(self):
+        with tempfile.TemporaryDirectory(prefix="pf-finite-producer-wall-") as directory:
+            identity = Path(directory) / "producer.json"
+            capture = launch(
+                {"producer_identity_path": str(identity), "stall_before_candidate": True},
+                options=("--channel-wall-ms", "1800"), watchdog_seconds=5)
+            msg = capture.failure_context()
+            record = self.refusal(
+                capture, "run_deadline_exceeded", {"stage": "run"},
+                exit_class="resource_refusal", status=1, msg=msg)
+            self.assert_producer_group_gone(capture, identity)
+            self.assertGreaterEqual(capture.control["exited_at"], 1.7, msg=msg)
+            self.assertLess(capture.control["exited_at"], 3.15, msg=msg)
+            self.assertEqual(record["limits"]["wall_ms"]["effective"], 1800, msg=msg)
+            self.assertIsNone(record["limits"]["stall_ms"]["effective"], msg=msg)
+            self.assertIsNone(capture.control["cancelled_at"], msg=msg)
+            self.assertEqual(record["producer"]["signal"], signal.SIGTERM, msg=msg)
+            self.assertEqual(record["channels"]["candidate"]["observed_bytes"], 0, msg=msg)
+            self.assertEqual(record["cleanup"]["producer_reaped"], {
+                "value": True, "measurement_state": "measured"}, msg=msg)
+
+    def test_finite_stall_expires_through_supervisor_diagnostic_pipe(self):
+        diagnostic = b"finite diagnostic stall\n" * 8192
+        with tempfile.TemporaryDirectory(prefix="pf-finite-diagnostic-") as directory:
+            identity = Path(directory) / "producer.json"
+            capture = launch(
+                {"stdout": encoded(diagnostic), "producer_identity_path": str(identity)},
+                options=("--channel-stall-ms", "600", "--channel-wall-ms", "60000"),
+                stalled_channels=("diagnostic",), watchdog_seconds=5)
+            msg = capture.failure_context()
+            record = self.refusal(
+                capture, "report_channel_failed", {"channel": "diagnostic", "reason": "deadline"},
+                exit_class="transport_failure", status=1, msg=msg)
+            self.assert_producer_group_gone(capture, identity)
+            self.assertIn("diagnostic", capture.control["stalled_at"], msg=msg)
+            duration = capture.control["exited_at"] - capture.control["stalled_at"]["diagnostic"]
+            self.assertGreaterEqual(duration, 0.5, msg=msg)
+            self.assertLess(duration, 1.8, msg=msg)
+            self.assertEqual(capture.control["held_until_exit"], ["diagnostic"], msg=msg)
+            self.assertIsNone(capture.control["cancelled_at"], msg=msg)
+            self.assertEqual(record["limits"]["stall_ms"]["effective"], 600, msg=msg)
+            self.assertEqual(capture.diagnostic, diagnostic[:4096], msg=msg)
+            self.assertFalse(record["channels"]["diagnostic"]["complete"], msg=msg)
+            self.assertTrue(record["channels"]["diagnostic"]["truncated"], msg=msg)
+            self.assertEqual(record["producer"]["signal"], signal.SIGTERM, msg=msg)
+
+    def test_paused_validator_is_ended_by_supervisor_wall(self):
+        closes = [11, 15, 13, 17]
+        native = sink_wire(closes)
+        with tempfile.TemporaryDirectory(prefix="pf-paused-validator-wall-") as directory:
+            identity = Path(directory) / "producer.json"
+            release = Path(directory) / "native-ready"
+            capture = launch(
+                {"closes": closes, "inherited_sink": True,
+                 "producer_identity_path": str(identity), "native_release_path": str(release)},
+                sink=True, pause_validator_until_wall=True,
+                options=("--channel-wall-ms", "1800"), watchdog_seconds=5)
+            msg = capture.failure_context()
+            record = self.refusal(
+                capture, "run_deadline_exceeded", {"stage": "finalize"},
+                exit_class="resource_refusal", status=1, msg=msg)
+            self.assert_producer_group_gone(capture, identity)
+            validators = {int(event[1:]) for event in capture.validator_events if event[:1] == b"S"}
+            self.assertEqual(len(validators), 1, msg=msg)
+            self.assertEqual(capture.stopped_validators, validators, msg=msg)
+            self.assertEqual(set(capture.control["host_paused_validators"]), validators, msg=msg)
+            self.assertTrue(release.is_file(), msg=msg)
+            self.assertEqual(record["limits"]["wall_ms"]["effective"], 1800, msg=msg)
+            self.assertIsNone(record["limits"]["stall_ms"]["effective"], msg=msg)
+            self.assertIsNone(capture.control["cancelled_at"], msg=msg)
+            self.assertGreaterEqual(capture.control["exited_at"], 1.7, msg=msg)
+            self.assertLess(capture.control["exited_at"], 3.15, msg=msg)
+            self.assertEqual(record["sink_verification"], {
+                "exit_status": None, "signal": signal.SIGKILL, "complete": False,
+                "counts": dict.fromkeys("ETOVKXH"), "sha256": None, "finalizer_version": None},
+                msg=msg)
+            for pid in validators:
+                self.assertIsNone(process_info(pid), msg=msg)
+                self.assertEqual(group_members(pid), [], msg=msg)
+            self.assertEqual(capture.finalizer_receipt(), b"", msg=msg)
+            self.assertEqual(record["channels"]["sink"]["accepted_bytes"], len(native), msg=msg)
+            self.assertEqual(record["channels"]["sink"]["accepted_sha256"],
+                             hashlib.sha256(native).hexdigest(), msg=msg)
+            self.assertTrue(record["channels"]["sink"]["source_total_known"], msg=msg)
+            self.assertEqual(capture.sink, b"", msg=msg)
+            self.assertEqual(capture.report, b"", msg=msg)
 
     def test_t1_sinkless_success_preserves_reference_bytes(self):
         for closes in ([10, 12, 11], [21, 19, 23, 20]):
@@ -772,7 +1052,6 @@ class Contract(unittest.TestCase):
                 {"closes": [11, 15, 13, 17], "inherited_sink": True,
                  "sink_suffix": encoded(b"unread" * 65536)},
                 sink=True, planned_sink_bytes=cap, observer=observer, pause_probe=True,
-                kill_stopped_probe=True,
                 options=("--report-max-bytes", "65536", "--channel-wall-ms", "2000",
                          "--channel-stall-ms", "500"))
         msg = capture.failure_context()
@@ -783,8 +1062,11 @@ class Contract(unittest.TestCase):
         self.assertEqual(len(probes), 1, msg=f"real V never read the overflow probe; {msg}")
         self.assertEqual(capture.stopped_validators, probes,
                          msg=f"real V was not observed stopped; {msg}")
-        self.assertEqual(capture.killed_validators, probes,
-                         msg=f"host never issued the actual signal; {msg}")
+        self.assertEqual(capture.control["host_paused_validators"], [], msg=msg)
+        self.assertLess(capture.elapsed_seconds, 3.5, msg=msg)
+        for pid in probes:
+            self.assertIsNone(process_info(pid), msg=msg)
+            self.assertEqual(group_members(pid), [], msg=msg)
         self.assertEqual(capture.finalizer_receipt(), b"", msg=msg)
         self.assertEqual(record["sink_verification"], {
             "exit_status": None, "signal": signal.SIGKILL, "complete": False,

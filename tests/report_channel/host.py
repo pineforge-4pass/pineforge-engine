@@ -6,6 +6,7 @@ certifies an image/launcher pairing. No product module is imported here.
 """
 from __future__ import annotations
 
+import array
 import base64
 from contextlib import ExitStack, contextmanager
 import ctypes
@@ -20,6 +21,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import termios
 import time
 import uuid
 
@@ -54,6 +56,16 @@ def process_info(pid):
         return None
     return {"pid": pid, "state": fields[0], "parent": int(fields[1]),
             "group": int(fields[2]), "started": int(fields[19])}
+
+
+def group_members(group):
+    members = []
+    for path in Path("/proc").iterdir():
+        if path.name.isdecimal():
+            info = process_info(int(path.name))
+            if info is not None and info["group"] == group:
+                members.append(info)
+    return members
 
 
 @contextmanager
@@ -150,11 +162,11 @@ class Capture:
     eof: set
     validator_events: list = field(default_factory=list)
     stopped_validators: set = field(default_factory=set)
-    killed_validators: set = field(default_factory=set)
     flags_before: dict = field(default_factory=dict)
     flags_after: dict = field(default_factory=dict)
     descendant_samples: list = field(default_factory=list)
     elapsed_seconds: float | None = None
+    control: dict = field(default_factory=dict)
 
     def finalizer_receipt(self):
         return b"".join(event[1:] for event in self.validator_events if event[:1] == b"R")
@@ -187,6 +199,7 @@ class Capture:
             "flags_before": self.flags_before, "flags_after": self.flags_after,
             "descendant_samples": self.descendant_samples,
             "elapsed_seconds": self.elapsed_seconds,
+            "control": self.control,
             "diagnostic": {
                 "length_bytes": len(self.diagnostic),
                 "prefix": self.diagnostic[:4096].decode("utf-8", "replace"),
@@ -214,11 +227,20 @@ class Capture:
                 f"invalid terminal JSON; {self.failure_context()}") from error
 
 
+class HostWatchdogExpired(AssertionError):
+    def __init__(self, capture):
+        self.capture = capture
+        super().__init__(f"TEST host watchdog expired; {capture.failure_context()}")
+
+
 def launch(request=None, *, options=(), environment=None, status="valid",
            alias=None, sink=False, attested=True, grants=None, command=None,
            direct=False, activate=True, wrong_direction=None, planned_sink_bytes=None,
-           observer=None, pause_probe=False, kill_stopped_probe=False,
-           endpoint_nonblocking=None, diagnostic_delay_ms=0):
+           observer=None, pause_probe=False, pause_validator_until_wall=False,
+           endpoint_nonblocking=None, diagnostic_delay_ms=0, stalled_channels=(),
+           cancel_channel=None, cancel_signal=signal.SIGTERM, cancel_delay_ms=150,
+           saturate_status=False, gate_status=False, watchdog_seconds=20,
+           supervisor_path=None):
     """Create R/D/M, launch S, and read every endpoint concurrently to EOF.
 
     ``status`` tests absent, pipe, stream, reserved, closed and wrong-direction
@@ -232,7 +254,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
         # Every sink row needs actual receipt bytes in a failure message,
         # including rows that do not otherwise inspect observer events.
         if observer is None and (
-                sink or alias in ("report_sink", "diagnostic_sink", "status_sink")):
+                sink or gate_status or alias in ("report_sink", "diagnostic_sink", "status_sink")):
             observer = fixtures.enter_context(validator_observer())
         request_path = Path(directory) / "request.json"
         request_path.write_text(json.dumps(request or {}), encoding="utf-8")
@@ -247,6 +269,10 @@ def launch(request=None, *, options=(), environment=None, status="valid",
 
         report_read, report_write = pipe()
         diagnostic_read, diagnostic_write = pipe()
+        for name, writer in (("report", report_write), ("diagnostic", diagnostic_write)):
+            if name in stalled_channels:
+                if fcntl.fcntl(writer, fcntl.F_SETPIPE_SZ, 4096) != 4096:
+                    raise AssertionError(f"stalled {name} reader needs a 4096-byte pipe")
         if diagnostic_delay_ms:
             if fcntl.fcntl(diagnostic_write, fcntl.F_SETPIPE_SZ, 4096) != 4096:
                 raise AssertionError("delayed diagnostic reader needs a 4096-byte pipe")
@@ -258,7 +284,29 @@ def launch(request=None, *, options=(), environment=None, status="valid",
             socket.AF_UNIX, socket.SOCK_SEQPACKET)
         stack.callback(status_host.close)
         stack.callback(status_child.close)
+        status_backlog = []
+        if saturate_status:
+            status_child.setblocking(False)
+            for size in (65536, 1):
+                filler = b"q" * size
+                while True:
+                    try:
+                        count = status_child.send(filler)
+                    except BlockingIOError:
+                        break
+                    if count != size:
+                        raise AssertionError("short TEST status prefill")
+                    status_backlog.append(filler)
+            if not status_backlog:
+                raise AssertionError("TEST status queue was not saturated")
         inherited = [status_child.fileno()]
+        gate_read = gate_write = None
+        if gate_status:
+            gate_read, gate_write = os.pipe()
+            all_fds.update((gate_read, gate_write))
+            stack.callback(os.close, gate_read)
+            inherited.append(gate_read)
+            fixtures.callback(os.close, gate_write)
         terminal_fd = status_child.fileno()
         extra_readers = {}
         if status in ("pipe", "read_end"):
@@ -288,6 +336,9 @@ def launch(request=None, *, options=(), environment=None, status="valid",
         sink_read = sink_write = None
         if sink or alias in ("report_sink", "diagnostic_sink", "status_sink"):
             sink_read, sink_write = pipe()
+            if "sink" in stalled_channels:
+                if fcntl.fcntl(sink_write, fcntl.F_SETPIPE_SZ, 4096) != 4096:
+                    raise AssertionError("stalled sink reader needs a 4096-byte pipe")
             if wrong_direction == "sink":
                 sink_write = sink_read
             if alias is not None and alias.endswith("_sink"):
@@ -316,7 +367,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                 raise AssertionError("short TEST attestation write")
             inherited.append(policy_read)
 
-        argv = [sys.executable, "-B", str(SUPERVISOR)]
+        argv = [sys.executable, "-B", str(supervisor_path or SUPERVISOR)]
         if direct:
             argv = [sys.executable, "-B", str(ROOT / "docker/run_json.py")]
         if status != "absent":
@@ -347,6 +398,8 @@ def launch(request=None, *, options=(), environment=None, status="valid",
             env.update(LD_PRELOAD=str(observer), PF_REPORT_TEST_TRACE=str(Path(directory) / "trace"))
             if pause_probe:
                 env["PF_REPORT_TEST_PAUSE_PROBE"] = "1"
+            if gate_status:
+                env["PF_REPORT_TEST_STATUS_GATE_FD"] = str(gate_read)
         flag_probes, flags_before, flags_after = {}, {}, {}
         if endpoint_nonblocking is not None:
             for fd, nonblocking in zip((report_write, diagnostic_write), endpoint_nonblocking):
@@ -366,10 +419,10 @@ def launch(request=None, *, options=(), environment=None, status="valid",
         if sink_read is not None:
             owned_readers.add(sink_read)
         owned_readers.update(extra_readers.values())
-        keep_sockets = {status_host.fileno()}
+        keep_host_fds = {status_host.fileno(), gate_write}
         stack.pop_all()
         for fd in all_fds | set(inherited):
-            if fd not in owned_readers and fd not in keep_sockets:
+            if fd not in owned_readers and fd not in keep_host_fds:
                 os.close(fd)
         # Socket objects no longer own their closed child descriptors.
         status_child.detach()
@@ -382,21 +435,57 @@ def launch(request=None, *, options=(), environment=None, status="valid",
         selector = selectors.DefaultSelector()
         delayed_diagnostic = diagnostic_read if diagnostic_delay_ms else None
         diagnostic_read_at = launched + diagnostic_delay_ms / 1000
+        held_readers = {}
         for name, fd in (("report", report_read), ("diagnostic", diagnostic_read),
                          ("sink", sink_read), *extra_readers.items()):
             if fd is not None:
                 os.set_blocking(fd, False)
-                if fd != delayed_diagnostic:
+                if name in stalled_channels:
+                    held_readers[name] = fd
+                elif fd != delayed_diagnostic:
                     selector.register(fd, selectors.EVENT_READ, name)
         status_host.setblocking(False)
-        selector.register(status_host, selectors.EVENT_READ, "status")
-        validator_events, stopped_validators, killed_validators = [], set(), set()
+        if saturate_status:
+            held_readers["status"] = status_host.fileno()
+        else:
+            selector.register(status_host, selectors.EVENT_READ, "status")
+        validator_events, stopped_validators = [], set()
+        host_paused_validators = set()
+        control = {"stalled_at": {}, "cancelled_at": None, "exited_at": None,
+                   "host_paused_validators": [], "held_until_exit": [],
+                   "status_prefill_packets": len(status_backlog), "supervisor_pid": process.pid}
         descendant_samples = []
         if trace is not None:
             selector.register(trace, selectors.EVENT_READ, "trace")
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + watchdog_seconds
         try:
-            while selector.get_map() or delayed_diagnostic is not None:
+            while selector.get_map() or delayed_diagnostic is not None or held_readers:
+                now = time.monotonic()
+                ended = process.poll() is not None
+                if ended and control["exited_at"] is None:
+                    control["exited_at"] = now - launched
+                for name, fd in tuple(held_readers.items()):
+                    if ended:
+                        selector.register(
+                            status_host if name == "status" else fd, selectors.EVENT_READ, name)
+                        control["held_until_exit"].append(name)
+                        del held_readers[name]
+                    elif name != "status" and name not in control["stalled_at"]:
+                        pending = array.array("i", [0])
+                        fcntl.ioctl(fd, termios.FIONREAD, pending, True)
+                        if pending[0] == 4096:
+                            control["stalled_at"][name] = now - launched
+                if (saturate_status and not ended and {"report", "diagnostic"} <= eof
+                        and "status" not in control["stalled_at"]):
+                    # Both data fds are closed by S before terminal delivery.
+                    # The inherited M send queue is still full and unread.
+                    control["stalled_at"]["status"] = now - launched
+                stalled_at = control["stalled_at"].get(cancel_channel)
+                if (cancel_channel is not None and not ended
+                        and control["cancelled_at"] is None and stalled_at is not None
+                        and now - launched >= stalled_at + cancel_delay_ms / 1000):
+                    os.kill(process.pid, cancel_signal)
+                    control["cancelled_at"] = time.monotonic() - launched
                 if delayed_diagnostic is not None and time.monotonic() >= diagnostic_read_at:
                     selector.register(delayed_diagnostic, selectors.EVENT_READ, "diagnostic")
                     delayed_diagnostic = None
@@ -418,14 +507,23 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                         os.close(fd)
                     flag_probes.clear()
                 if time.monotonic() >= deadline:
+                    control["watchdog_pending_bytes"] = {}
+                    for name, fd in held_readers.items():
+                        if name != "status":
+                            pending = array.array("i", [0])
+                            fcntl.ioctl(fd, termios.FIONREAD, pending, True)
+                            control["watchdog_pending_bytes"][name] = pending[0]
+                    identity_path = (request or {}).get("producer_identity_path")
+                    if identity_path is not None and Path(identity_path).is_file():
+                        identity = json.loads(Path(identity_path).read_text())
+                        control["watchdog_producer_group"] = group_members(identity["group"])
                     partial = Capture(
                         bytes(output["report"]), bytes(output["diagnostic"]),
                         bytes(output["sink"]), packets, flags, process.poll(), attempt, eof,
-                        validator_events, stopped_validators, killed_validators,
+                        validator_events, stopped_validators,
                         flags_before, flags_after, descendant_samples,
-                        time.monotonic() - launched)
-                    raise AssertionError(
-                        f"TEST host watchdog expired; {partial.failure_context()}")
+                        time.monotonic() - launched, control)
+                    raise HostWatchdogExpired(partial)
                 for key, _ in selector.select(0.05):
                     if key.data == "trace":
                         while True:
@@ -436,7 +534,11 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                             validator_events.append(data)
                     elif key.data == "status":
                         data, ancillary, packet_flags, _ = status_host.recvmsg(65537)
-                        if data:
+                        if data and status_backlog:
+                            expected = status_backlog.pop(0)
+                            if data != expected or ancillary or packet_flags:
+                                raise AssertionError("TEST status backlog changed")
+                        elif data:
                             packets.append(data)
                             flags.append(packet_flags | (socket.MSG_CTRUNC if ancillary else 0))
                         else:
@@ -450,18 +552,31 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                             eof.add(key.data)
                             selector.unregister(key.fileobj)
                 for event in validator_events:
-                    if event[:1] != b"P":
+                    if event[:1] == b"M":
+                        control.setdefault("status_gate_pid", int(event[1:]))
+                        control["stalled_at"].setdefault(
+                            "status_ready", time.monotonic() - launched)
                         continue
-                    pid = int(event[1:])
+                    if event[:1] == b"S" and pause_validator_until_wall:
+                        pid = int(event[1:])
+                        if pid not in host_paused_validators:
+                            os.kill(pid, signal.SIGSTOP)
+                            host_paused_validators.add(pid)
+                            control["host_paused_validators"].append(pid)
+                    elif event[:1] != b"P":
+                        continue
+                    else:
+                        pid = int(event[1:])
                     try:
                         state = Path(f"/proc/{pid}/status").read_text()
                     except FileNotFoundError:
                         continue
                     if any(line.startswith("State:\tT") for line in state.splitlines()):
                         stopped_validators.add(pid)
-                        if kill_stopped_probe and pid not in killed_validators:
-                            os.kill(pid, signal.SIGKILL)
-                            killed_validators.add(pid)
+                        if (pause_validator_until_wall
+                                and not control.get("native_released_at")):
+                            Path(request["native_release_path"]).touch()
+                            control["native_released_at"] = time.monotonic() - launched
                 if (trace is not None and process.poll() is not None
                         and all(key.data == "trace" for key in selector.get_map().values())):
                     while True:
@@ -471,6 +586,10 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                             break
                     selector.unregister(trace)
             wait = process.wait(timeout=max(0.01, deadline - time.monotonic()))
+            if control["exited_at"] is None:
+                control["exited_at"] = time.monotonic() - launched
+            if status_backlog:
+                raise AssertionError("TEST status backlog did not drain after S exit")
         finally:
             if process.poll() is None:
                 process.kill()
@@ -485,9 +604,9 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                 os.close(fd)
         return Capture(bytes(output["report"]), bytes(output["diagnostic"]),
                        bytes(output["sink"]), packets, flags, wait, attempt, eof,
-                       validator_events, stopped_validators, killed_validators,
+                       validator_events, stopped_validators,
                        flags_before, flags_after, descendant_samples,
-                       time.monotonic() - launched)
+                       time.monotonic() - launched, control)
 
 
 def reference(request):
