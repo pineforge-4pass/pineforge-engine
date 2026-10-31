@@ -4,7 +4,7 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/compat/pine/market_admission.hpp>
 #include <pineforge/pending_order_mirror.hpp>
-
+#include "pine_cohort_exposure.hpp"
 #include <pineforge/native_calendar.hpp>
 #include <pineforge/timeframe.hpp>
 
@@ -5362,37 +5362,37 @@ double PineExecutionAdapter::cohort_exposure_for(const SourceId& id) const noexc
 }
 
 double PineExecutionAdapter::cohort_exposure_for(const CohortFacts& facts) const noexcept {
-    double total = 0.0;
-    // `live_units_by_origin` is a lookup table.  Quantities must follow the
-    // cohort's deterministic source insertion order, never its hash buckets.
-    // Only roster positions whose incarnation has a unit row can contribute:
-    // step through just those, ascending, rather than the id's whole entry
-    // history. Allocation-free (the pending-order readback calls this).
-    bool have_previous = false;
-    std::size_t previous = 0;
-    for (;;) {
-        bool have_next = false;
-        std::size_t next = 0;
-        double units = 0.0;
-        for (const auto& unit : facts.live_units_by_origin) {
-            const auto* positions = facts.origins.positions_of(unit.first);
-            if (!positions) continue;
-            for (const auto position : *positions) {
-                if (have_previous && position <= previous) continue;
-                if (!have_next || position < next) {
-                    have_next = true;
-                    next = position;
-                    units = unit.second;
-                }
-                break;
-            }
-        }
-        if (!have_next) break;
-        if (std::isfinite(units) && units > 0.0) total += units;
-        have_previous = true;
-        previous = next;
-    }
-    return std::isfinite(total) && total > 0.0 ? total : 0.0;
+    PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_call", this, run_counter_, 1);
+    // Quantities follow source insertion order, never the lookup table's
+    // hash buckets. Each retained position contributes separately.
+    // Repeated incarnations contribute once per occurrence, in that order.
+    // Allocation-free: pending-order readback calls this const noexcept member.
+    // Finite/positive filtering and the final clamp preserve overflow to zero.
+    // Reordering, regrouping or multiplying repeated units changes bits.
+    // Diagnostic work belongs to the returned value, never adapter state.
+    // The seam receives the original roster and map by const reference.
+    // Global positions keep their order after prefix retirement.
+    // A unit row without a retained position contributes no term.
+    const auto folded = detail::fold_cohort_exposure(facts.origins,
+                                                    facts.live_units_by_origin);
+    PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_step", this, run_counter_, folded.steps);
+    PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_window", this, run_counter_,
+                               facts.origins.members().size());
+    PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_rows", this, run_counter_,
+                               facts.live_units_by_origin.size());
+    if (folded.path == 2)
+        PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_path_b", this, run_counter_, 1);
+    if (folded.path == 3)
+        PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_b_abandoned", this, run_counter_, 1);
+#ifdef PINEFORGE_COHORT_EXPOSURE_FIXTURES
+    detail::verify_cohort_exposure(facts.origins, facts.live_units_by_origin,
+                                  folded.total);
+#endif
+    // The fixture oracle is independent of the selected production path.
+    // It checks every call, including both empty-state early returns.
+    // No aggregate or reservation state is updated by this read.
+    // Callers receive only the clamped exposure value.
+    return folded.total;
 }
 
 // The units of the position an exit's entry (from_entry) holds; none for an
@@ -30295,3 +30295,159 @@ std::array<std::uint64_t, 3> PineExecutionAdapter::retirement_validation_state()
 }
 #endif
 } // namespace pineforge::source
+
+namespace pineforge::source::detail {
+
+CohortExposureFold fold_cohort_exposure(
+        const OriginRoster& origins,
+        const std::unordered_map<std::uint64_t, double>& live_units_by_origin) noexcept {
+    if (live_units_by_origin.empty() || origins.members().empty()) return {0.0, 0, 0};
+    std::uint64_t steps = 0;
+    std::uint8_t path = 1;
+    if (origins.members().size() > 4 * live_units_by_origin.size() + 16) {
+        // Positions are disjoint across incarnations and ascending within
+        // each row. Sorting all occurrences restores the roster's order.
+        struct Term { std::size_t position; double units; };
+        Term buf[kCohortFoldStack];
+        std::size_t n = 0;
+        std::size_t mapped = 0;
+        bool abandoned = false;
+        for (const auto& unit : live_units_by_origin) {
+            ++steps;
+            const auto* positions = origins.positions_of(unit.first);
+            if (!positions) continue;
+            for (const auto position : *positions) {
+                ++steps;
+                ++mapped;
+                if (n == kCohortFoldStack) {
+                    abandoned = true;
+                    continue;
+                }
+                buf[n++] = {position, unit.second};
+            }
+        }
+        if (!abandoned) {
+            std::sort(buf, buf + n, [](const Term& a, const Term& b) noexcept {
+                return a.position < b.position;
+            });
+            // Deterministic sort charge: P * ceil(log2 P), zero for P <= 1.
+            std::uint64_t levels = 0;
+            for (auto remaining = n > 0 ? n - 1 : 0; remaining; remaining >>= 1)
+                ++levels;
+            steps += static_cast<std::uint64_t>(n) * levels;
+            double total = 0.0;
+            for (std::size_t i = 0; i < n; ++i) {
+                ++steps;
+                const double units = buf[i].units;
+                if (std::isfinite(units) && units > 0.0) total += units;
+            }
+            return {std::isfinite(total) && total > 0.0 ? total : 0.0, steps, 2};
+        }
+        // The partial stack gather is discarded. Comparing this charge with
+        // M keeps either overflow completion bounded by the frozen selector.
+        const auto mapped_count = static_cast<std::uint64_t>(mapped);
+        const auto row_count =
+            static_cast<std::uint64_t>(live_units_by_origin.size());
+        // The selector has P + 1 passes. Each pass can inspect all R rows
+        // and all P positions, including positions in exhausted rows.
+        const auto charge_max = std::numeric_limits<std::uint64_t>::max();
+        const auto charge_add = [charge_max](std::uint64_t left,
+                                             std::uint64_t right) noexcept {
+            return right > charge_max - left ? charge_max : left + right;
+        };
+        const auto charge_mul = [charge_max](std::uint64_t left,
+                                             std::uint64_t right) noexcept {
+            return left != 0 && right > charge_max / left
+                ? charge_max : left * right;
+        };
+        const auto pass_count = mapped_count == charge_max
+            ? charge_max : mapped_count + 1;
+        const auto selector_charge =
+            charge_mul(pass_count, charge_add(row_count, mapped_count));
+        path = 3;
+        if (static_cast<std::uint64_t>(origins.members().size()) >= selector_charge) {
+            // Frozen selector, kept term-for-term so its acceptance-ordered
+            // floating-point additions remain the old fold's additions.
+            double total = 0.0;
+            bool have_previous = false;
+            std::size_t previous = 0;
+            for (;;) {
+                bool have_next = false;
+                std::size_t next = 0;
+                double units = 0.0;
+                for (const auto& unit : live_units_by_origin) {
+                    ++steps;
+                    const auto* positions = origins.positions_of(unit.first);
+                    if (!positions) continue;
+                    for (const auto position : *positions) {
+                        ++steps;
+                        if (have_previous && position <= previous) continue;
+                        if (!have_next || position < next) {
+                            have_next = true;
+                            next = position;
+                            units = unit.second;
+                        }
+                        break;
+                    }
+                }
+                if (!have_next) break;
+                if (std::isfinite(units) && units > 0.0) total += units;
+                have_previous = true;
+                previous = next;
+            }
+            return {std::isfinite(total) && total > 0.0 ? total : 0.0, steps, path};
+        }
+    }
+    double total = 0.0;
+    for (const auto& origin : origins) {
+        ++steps;
+        const auto unit = live_units_by_origin.find(origin.incarnation);
+        if (unit == live_units_by_origin.end()) continue;
+        const double units = unit->second;
+        if (std::isfinite(units) && units > 0.0) total += units;
+    }
+    return {std::isfinite(total) && total > 0.0 ? total : 0.0, steps, path};
+}
+
+#ifdef PINEFORGE_COHORT_EXPOSURE_FIXTURES
+void verify_cohort_exposure(
+        const OriginRoster& origins,
+        const std::unordered_map<std::uint64_t, double>& live_units_by_origin,
+        double actual) noexcept {
+    // Frozen selector: deliberately independent of the production fold.
+    double total = 0.0;
+    // `live_units_by_origin` is a lookup table.  Quantities must follow the
+    // cohort's deterministic source insertion order, never its hash buckets.
+    // Only roster positions whose incarnation has a unit row can contribute:
+    // step through just those, ascending, rather than the id's whole entry
+    // history. Allocation-free (the pending-order readback calls this).
+    bool have_previous = false;
+    std::size_t previous = 0;
+    for (;;) {
+        bool have_next = false;
+        std::size_t next = 0;
+        double units = 0.0;
+        for (const auto& unit : live_units_by_origin) {
+            const auto* positions = origins.positions_of(unit.first);
+            if (!positions) continue;
+            for (const auto position : *positions) {
+                if (have_previous && position <= previous) continue;
+                if (!have_next || position < next) {
+                    have_next = true;
+                    next = position;
+                    units = unit.second;
+                }
+                break;
+            }
+        }
+        if (!have_next) break;
+        if (std::isfinite(units) && units > 0.0) total += units;
+        have_previous = true;
+        previous = next;
+    }
+    const double expected = std::isfinite(total) && total > 0.0 ? total : 0.0;
+    if (std::memcmp(&actual, &expected, sizeof expected) != 0) std::abort();
+}
+#endif
+
+} // namespace pineforge::source::detail

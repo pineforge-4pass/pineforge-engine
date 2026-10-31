@@ -7492,6 +7492,37 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
     endforeach()
 endif()
 
+option(PINEFORGE_COHORT_EXPOSURE_FIXTURES
+    "Compare every cohort exposure call with the frozen selector" OFF)
+if(PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    target_compile_definitions(pineforge PRIVATE PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    if(TARGET pineforge_source_quiet_ungated)
+        target_compile_definitions(pineforge_source_quiet_ungated PRIVATE
+            PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    endif()
+    if(TARGET pineforge_source_quiet_probe)
+        target_compile_definitions(pineforge_source_quiet_probe PRIVATE
+            PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    endif()
+    # These TUs compile the adapter directly, including two through the
+    # position-tail retirement fixture header. Source properties also cover
+    # any additional target built from the same TU in this directory.
+    foreach(_pf_cohort_adapter_tu IN ITEMS
+            test_adapter_growth_storage.cpp
+            test_adapter_reversal_storage.cpp
+            test_adapter_tree_ram.cpp
+            test_cohort_exposure_work.cpp
+            test_live_source_key_alias_adapter.cpp
+            test_live_source_key_spellings_strict_adapter.cpp
+            test_position_tail_retirement.cpp
+            test_position_tail_retirement_work.cpp
+            test_position_tail_summary_scale.cpp
+            test_reversal_exit_owner_gate.cpp)
+        set_property(SOURCE ${_pf_cohort_adapter_tu} APPEND PROPERTY
+            COMPILE_DEFINITIONS PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    endforeach()
+endif()
+
 # CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
 file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
 list(SORT CR150_LANE_CMAKE)
