@@ -7,6 +7,8 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+## 1.9.1 — 2026-10-31
+
 - A script container (string, array, map or object store) whose scratch
   growth or commit fails now reports the typed scratch failure instead of
   `engine_unclassified_error` with the text `o1 store: put/commit: io_error`.
@@ -24,6 +26,15 @@ version number follows semantic versioning over the surfaces the
   `engine_invariant` or an unclassified error. A real operating-system
   `ENOMEM` from a mapping or a disk operation, an extent limit and arena
   exhaustion keep their existing codes. Runs that did not fail are unchanged.
+  The two owning journal-decode helpers declared in `native_order.hpp` and
+  `source/market_admission.hpp` are no longer `noexcept`: an allocation failure
+  in them throws the typed `out_of_memory` failure instead of returning an I/O
+  status. A caller that binds one of these functions to a `noexcept` function
+  pointer must update it (since C++17, `noexcept` is part of the function
+  type); the same goes for code that asserts they are `noexcept`, and a caller
+  inside a `noexcept` function now terminates if an allocation fails.
+  Otherwise the change is source-compatible, and every C++ object must be
+  rebuilt against the new headers as for any release.
 - The container entrypoint no longer compiles a mounted `/in/strategy.cpp` on
   trust. With no `/in/strategy.pine`, it compiles the file only when the
   environment holds `PINEFORGE_STRATEGY_CPP_SHA256` equal to the sha256 of
@@ -32,6 +43,143 @@ version number follows semantic versioning over the surfaces the
   any compile. `PINEFORGE_ALLOW_UNATTESTED_CPP=1` keeps the old behaviour for
   local use; a hosted caller must not set it. Mounting `strategy.pine` is
   unchanged.
+- The container's report wrapper (`docker/run_json.py`, `docker/pf_sink.py`)
+  does less work per row. It validates sink trade lines with one plan per
+  verified header instead of a generic per-field function, with the same
+  accepted set, the same left-to-right refusal order and the same error text;
+  it encodes bulk equity rows without a per-row template, with the same write
+  boundaries and bytes; and bar tapes whose volume column holds integers, or
+  whose prices are written with fixed decimals such as `100.00`, now take the
+  packed loader instead of being declined, with the same bars, count and feed
+  hash as the slower reader. Trade rows are encoded once and queued before
+  they are written (the queue of each column file keeps the existing bounds of
+  512 records and 256 KiB, so nothing grows with the number of trades or bars),
+  and the equity proof derives the repeat allowed by the run pattern once
+  instead of once per batch. A write can therefore be attempted later than the
+  row that queued it; a write failure is still published as the same typed
+  `report_sink_failed` refusal with reason `scratch_io`, at the same point
+  relative to the other refusals. The final report artifact, which the wrapper
+  writes once and reads back into stdout, now has a 1 MiB aligned I/O window
+  instead of 64 KiB; the columns, the spools and the sink reader keep 64 KiB,
+  and the bytes written are unchanged. That is one fixed 1 MiB window buffer
+  per report prepared, independent of the report size, the number of recorded
+  output series and the number of trades. Reports are byte-identical. The
+  change is in the container's Python files only; no C++ object and no C ABI
+  header is affected.
+- A cohort's target is read from an index built once per generation. A strategy
+  that keeps many lots open and has live exits used to canonicalize every
+  physical opening again for each cohort target it read, several times per
+  ordinary OHLC point. The engine now canonicalizes each physical opening once
+  per populated generation, indexes the openings by root in a private
+  fixed-size array (at most 4,096 rows of 16 bytes, 64 KiB, kept across
+  invalidations), and answers a cohort's target read from the range of its own
+  root. The original reader stays as the complete fallback: above 4,096 open
+  lots, on an allocation failure, for intrabar and tick input, inside the
+  source host's applied callback, and when the index cannot be built for the
+  current state. The array is reserved on the first indexed cohort read, even
+  for a few lots, and its size does not depend on bars, trades or lots.
+  Reports, fills, ids and hashes are unchanged. This entry makes no speed
+  claim.
+- The closed-cohort origin release searches the roster union once per pass.
+  After a close, the adapter's origin-release pass decides which request
+  origins can be released. For each open lot it asked, roster by roster,
+  whether the lot's opening was a member of that roster, so a pass could touch
+  every roster once for each lot. It now collects the origins of all rosters
+  once into one vector, sorts it, removes duplicates and answers each lot with
+  a binary search; the ordered commands the pass produces are unchanged. The
+  vector is private to the adapter, holds at most 8 bytes per stored roster
+  origin (up to about 16 bytes per origin while it grows), is cleared at the
+  start of every pass and keeps its capacity between passes; it has no fixed
+  cap, because its size follows the number of roster origins the engine
+  already stores, and it is at most about twice that count (the capacity
+  high-water mark), so it adds no growth with bars or trades beyond what the
+  rosters already hold. No public header changes and no installed class
+  changes layout. This entry makes no speed claim.
+- `is_na()` and `na()` accept strings, containers and nullable handles. In
+  `include/pineforge/na.hpp`, only arithmetic types had an `is_na` overload, so
+  generated code that called `is_na` on a `std::vector`, a `std::string` or a
+  `std::map` did not compile. `is_na(const std::string&)` now returns whether
+  the string is empty (an empty string is the string `na`, as generated code
+  already read it). Only `std::string` itself is read as a string: a type that
+  merely converts to a string, or another engine string handle, is present like
+  any other type without a missingness protocol. A `ScriptArray` is `na` when
+  it is not backed by a store. A plain container such as a `std::vector` or a
+  `std::map` is never `na`, so even an empty one is present. A type with an
+  `is_na()` member, or with a free `is_na` found by argument-dependent lookup,
+  answers through it. `na<T>()` returns `T::na()` for a type that supplies both
+  an `is_na()` member and a static `na()`, and `T{}` otherwise, as before.
+  Every existing scalar and handle overload keeps its answer. The change is
+  header-only templates in a public C++ header: no class gains a member, base
+  or virtual, and no C header changes, so `PF_ABI_VERSION` stays 5.
+- The command-store cache can be built larger than 64 KiB. The size of the
+  command scratch cache is a build-time constant (64 KiB by default). Raising
+  it above the default did not compile, because the slot table was an array
+  inside the cache object. The slot table is now one allocation made at
+  construction, beside the page buffer, with one entry per slot of the store's
+  own page size; a failed allocation reports the same typed `out_of_memory`
+  failure as the page buffer. The class sets no upper cap on the constant (on
+  64-bit targets the sizes are `std::size_t` and the page ids are 64-bit); the
+  only limit is memory. At the default size nothing changes: the slot
+  function, the admission rule, the resident prefix, hits and misses and the
+  bytes are the same, and the documented fixed bound still charges the worst
+  case, 198 KiB (202,752 bytes). With the constant raised to 1 GiB and to
+  4 GiB the library and every test target build. Seven tests were run once at
+  each of those sizes: five pass, and the two that do not are limits of the
+  tests (one assumes the cache buffer is smaller than the report curve, one
+  needs real file media that the scratch filesystem of those runs, an
+  overlay, could not provide), not of the cache. Nothing broader is claimed. The class is in a source-only header: no
+  public header or ABI declaration changes.
+
+### Closed-trade reads
+
+- `TradeLedger` gains `entry_id_matches`, `exit_id_matches`,
+  `entry_comment_matches` and `exit_comment_matches`: one call checks the index
+  and compares the text (an index outside [0,size()) compares as empty). The
+  `*_equals` members stay, and the four `BacktestEngine::closed_trade_*_equals`
+  wrappers now call the new members, so a script that compares
+  `closedtrades.entry_id(i)` with a literal over every closed trade on every bar
+  does less work per visit.
+- The closed-trade read cache is paged. It no longer doubles with the number of
+  trades and discards its entries at each doubling; slots keep a fixed mapping
+  and the storage comes in 256-slot pages, so a whole-history scan no longer
+  re-reads every row from disk after each cache growth. A non-retiring run of 64
+  rows or fewer holds about 62 KB more (one 256-slot page of 312-byte entries
+  plus the 2,048-byte page table, against 64 entries before), and a retiring
+  run holds at most (retained rows / 256, rounded up, plus 2) pages: three pages
+  (about 240 KB, plus the table) for the default 64-row window; both amounts
+  depend on the retained window, not on the number of trades.
+  `cache_resident_bytes()` and `resident_cache_bytes(rows)` both count the page
+  table (2,048 bytes at the default cap of 65,536 rows).
+  `docs/pages/memory-management.md` describes the paged cache and its charge.
+- Fewer scratch writes per closed trade: a row is written back only when its
+  close cause changes (or the row is below the sealed base), an identical
+  stored descriptor is not stored again, and the texts of one appended row go
+  out as one contiguous write; retirement no longer zeroes on disk what the same
+  operation's head release zeroes or truncates again. Reports are unchanged.
+- The closed-trade ledger writes about half as often to its scratch files in
+  the measured case. In the measured case each closed trade cost four writes
+  on the disk scratch route, two to the index file and two to the payload
+  file, because the retired head of each file was zeroed after every
+  publication. The retired head is now zeroed in whole 4,096-byte blocks
+  behind a per-file watermark. Counted on the closed-trade stream test fixture
+  (a strategy that closes one trade on every bar: 6,400 closed trades, both
+  ids 4 bytes, a report sink writing to a disk file; not a general rate)
+  against the engine just before this change, which already includes the
+  fewer-writes change above (1.9.0 was not measured), the write system calls
+  to the ledger's two scratch files, index and payload together, fell from
+  4.004 to 2.048 per closed trade (from about 2 to about 1 on each file). Up
+  to 4,095 bytes of the newest retired index bytes (about 24 index records)
+  and up to 4,095 bytes of the newest retired payload bytes per file stay
+  un-zeroed until the next block completes or a complete chunk is returned;
+  the scratch files are anonymous, unlinked and never reopened, and a hosted
+  arena keeps those bytes in the run's own chunk (until it is returned or the
+  run ends). Reports are byte-identical (pinned on the stream test fixture;
+  the 312-probe parity sweep did not move). No public header, class layout,
+  `PF_ABI_VERSION` or stream layout changes. The arena routes make no
+  `pwrite`; the same block rule applies to their memory writes, where the
+  saving is a memory copy of 4 KiB of zeros, not a syscall.
+- Class layouts are unchanged and `PF_ABI_VERSION` stays 5; the C ABI
+  (`pineforge.h`) is unchanged by 1.9.1.
 
 ## 1.9.0 — 2026-10-30
 
