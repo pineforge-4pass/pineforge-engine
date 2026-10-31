@@ -99,6 +99,21 @@ def _validate_corpus_parameters(corpus_root, corpus_commit, staged_derived,
     root = None if corpus_root is None else _corpus_root(corpus_root)
     if corpus_commit is not None and not _lower_hex(corpus_commit, 40):
         _unsupported("corpus_commit")
+    if root is not None:
+        if type(require_read_only_corpus) is not bool:
+            _unsupported("require_read_only_corpus")
+        expected_root = _INITIAL_PARITY_PATHS.corpus_root
+        expected_derived = _INITIAL_PARITY_PATHS.derived_workspace
+        if (root != expected_root.resolve()
+                or (root / "data" / "derived").resolve() != expected_derived.resolve()):
+            raise _Refusal("corpus_root differs from the resolved parity paths")
+        if require_read_only_corpus:
+            try:
+                read_only = bool(os.statvfs(root).f_flag & os.ST_RDONLY)
+            except OSError:
+                read_only = False
+            if not read_only:
+                raise _Refusal(f"corpus is not mounted read-only: {root}")
     if staged_derived is None:
         return root, None
     if root is None:
@@ -116,20 +131,6 @@ def _validate_corpus_parameters(corpus_root, corpus_commit, staged_derived,
         if not _lower_hex(digest, 64):
             _unsupported("staged_derived")
         hashes[name] = digest
-    if type(require_read_only_corpus) is not bool:
-        _unsupported("require_read_only_corpus")
-    expected_root = _INITIAL_PARITY_PATHS.corpus_root.resolve()
-    expected_derived = _INITIAL_PARITY_PATHS.derived_workspace.resolve()
-    if (root != expected_root
-            or (root / "data" / "derived").resolve() != expected_derived):
-        raise _Refusal("corpus_root differs from the resolved parity paths")
-    if require_read_only_corpus:
-        try:
-            read_only = bool(os.statvfs(root).f_flag & os.ST_RDONLY)
-        except OSError:
-            read_only = False
-        if not read_only:
-            raise _Refusal(f"corpus is not mounted read-only: {root}")
     derived = root / "data" / "derived"
     for name in _STAGED_DERIVED_FILES:
         path = derived / name
@@ -615,6 +616,21 @@ def _report_pipe():
     return high_reader, high_writer
 
 
+def _launcher_environment(prepared, arena_bytes, window_bytes):
+    environment = {
+        "PINEFORGE_RUN_JSON_PROFILE": "jailed",
+        "PF_SCRATCH_ARENA_FD": "5",
+        "PF_SCRATCH_ARENA_BYTES": str(arena_bytes),
+        "PF_SCRATCH_WINDOW_BYTES": str(window_bytes),
+        "PF_SCRATCH_ARENA_JAILED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TMPDIR": str(prepared.temporary),
+        "TMP": str(prepared.temporary),
+        "TEMP": str(prepared.temporary),
+    }
+    return environment
+
+
 def _launch(prepared, launcher, arena_bytes, result, harness_paths,
             report_cap):
     cap = report_cap
@@ -627,13 +643,7 @@ def _launch(prepared, launcher, arena_bytes, result, harness_paths,
         reader, report_fd = _report_pipe()
         capture = _PipeCapture(reader, None if cap in (None, 0) else cap)
         capture.thread.start()
-        environment = dict(os.environ)
-        environment.update(
-            PINEFORGE_RUN_JSON_PROFILE="jailed", PF_SCRATCH_ARENA_FD="5",
-            PF_SCRATCH_ARENA_BYTES=str(arena_bytes),
-            PF_SCRATCH_WINDOW_BYTES=str(window_bytes), PF_SCRATCH_ARENA_JAILED="1",
-            PYTHONDONTWRITEBYTECODE="1", TMPDIR=str(prepared.temporary),
-            TMP=str(prepared.temporary), TEMP=str(prepared.temporary))
+        environment = _launcher_environment(prepared, arena_bytes, window_bytes)
         _recheck(prepared.hashes)
         launched = launcher(
             argv=[*prepared.argv, "--report-sink-fd", str(report_fd)],
@@ -676,8 +686,10 @@ def _finalize(launched, prepared, launcher, result, harness_paths,
         [sys.executable, "-B", str(harness_paths.finalizer), "--in-fd", "0", "--out", "-",
          "--max-bytes", str(cap), "--run-id", prepared.case_id, "--receipt-fd", "2"],
         input=raw, capture_output=True, check=False,
-        env=dict(os.environ, PINEFORGE_RUN_JSON_PROFILE="jailed",
-                 PYTHONDONTWRITEBYTECODE="1"))
+        env={
+            "PINEFORGE_RUN_JSON_PROFILE": "jailed",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        })
     result.finalizer_outputs[prepared.case_id] = finalized
     try:
         receipt = _document(finalized.stderr)

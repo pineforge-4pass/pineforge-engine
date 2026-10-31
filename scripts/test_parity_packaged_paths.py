@@ -20,7 +20,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parent.parent
-FIXTURE = ROOT / "scripts" / "fixtures" / "parity-bundle.json"
+BUNDLE = ROOT / "scripts" / "parity-bundle.json"
 ENV_NAMES = {
     "corpus_root": "PINEFORGE_PARITY_CORPUS_ROOT",
     "derived_workspace": "PINEFORGE_PARITY_DERIVED_WORKSPACE",
@@ -89,6 +89,17 @@ try:
             name: str(getattr(paths, name))
             for name in ("corpus_root", "derived_workspace", "harness_dir")
         }
+    elif probe == "adapter":
+        adapter = importlib.import_module("run_parity_jailed")
+        result = adapter.run_cases(
+            [],
+            script.parent / "unpublished",
+            launcher=None,
+            arena_bytes=1,
+        )
+        observed["failure"] = result.failure_text
+        observed["csv_paths"] = result.csv_paths
+        observed["output_exists"] = (script.parent / "unpublished").exists()
     else:
         runpy.run_path(str(script), run_name="__main__")
 finally:
@@ -105,11 +116,24 @@ finally:
 
 class BundleDeclarationTests(unittest.TestCase):
     def test_source_declaration_matches_fixture_and_repository(self) -> None:
-        expected = FIXTURE.read_bytes()
         actual = (ROOT / "scripts" / "parity-bundle.json").read_bytes()
-        self.assertEqual(hashlib.sha256(actual).digest(),
-                         hashlib.sha256(expected).digest())
+        self.assertEqual(
+            hashlib.sha256(actual).hexdigest(),
+            "7b5d35dd87a45dfa46cb66abb536efd905e18e755f7cc76c2618c20668703566",
+        )
         declaration = json.loads(actual)
+        expected_files = [
+            ("scripts/derive_corpus_feeds.py", "derive_corpus_feeds.py"),
+            ("scripts/parity_paths.py", "parity_paths.py"),
+            ("scripts/pf_release_run.py", "pf_release_run.py"),
+            ("scripts/run_parity_jailed.py", "run_parity_jailed.py"),
+            ("scripts/run_strategy.py", "run_strategy.py"),
+            ("scripts/verify_corpus.py", "verify_corpus.py"),
+        ]
+        self.assertEqual(
+            [(row["source"], row["destination"]) for row in declaration["files"]],
+            expected_files,
+        )
         self.assertEqual(
             actual,
             (json.dumps(declaration, sort_keys=True, ensure_ascii=False,
@@ -126,7 +150,7 @@ class BundleDeclarationTests(unittest.TestCase):
                 self.assertEqual(Path(row["destination"]).name, row["destination"])
                 destinations.append(row["destination"])
         self.assertEqual(len(destinations), len(set(destinations)))
-        self.assertEqual(len(destinations), len(json.loads(expected)["files"]))
+        self.assertEqual(len(destinations), len(expected_files))
 
 
 class PackagedPathsTests(unittest.TestCase):
@@ -143,22 +167,16 @@ class PackagedPathsTests(unittest.TestCase):
         for directory in (cls.installed, cls.harness, cls.cwd, cls.observations):
             directory.mkdir(parents=True)
         cls.observations.chmod(0o777)
-        # W7 owns the adapter. Its existence is checked by the declaration
-        # test, but it is not needed to execute these three W1 CLIs.
-        for row in json.loads(FIXTURE.read_bytes())["files"]:
-            if row["destination"] == "run_parity_jailed.py":
-                continue
+        for row in json.loads(BUNDLE.read_bytes())["files"]:
             source = ROOT / row["source"]
-            if not source.is_file() and row["destination"] == "parity_paths.py":
-                # Leave the new module absent for the supervisor's RED run.
-                # No substitute is installed; imports/CLI behavior must fail.
-                continue
             if not source.is_file():
                 raise AssertionError(f"packaged source is missing: {row['source']}")
             shutil.copyfile(source, cls.installed / row["destination"])
+        (cls.installed / "PARITY-MANIFEST.json").write_text(
+            "{}\n", encoding="ascii")
         for name in HARNESS_FILES:
             shutil.copyfile(ROOT / "docker" / name, cls.harness / name)
-        shutil.copyfile(FIXTURE, cls.installed / "parity-bundle.json")
+        shutil.copyfile(BUNDLE, cls.installed / "parity-bundle.json")
         cls.corpus = cls.base / "mounted-corpus"
         cls.case = cls.corpus / "basic" / "one-trade"
         cls.case.mkdir(parents=True)

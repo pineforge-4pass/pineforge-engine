@@ -18,6 +18,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import resource
 import shutil
 import signal
@@ -93,10 +94,11 @@ def _write_memfd(size: int, *, seal: bool) -> int:
 class _MetadataJailedLibrary(witness._JailedLibrary):
     """The witness's native boundary with the L9 trade metadata fixture."""
 
-    def __init__(self, event_fd, *, fail=False):
+    def __init__(self, event_fd, *, fail=False, accept_bad_arena=False):
         super().__init__(event_fd, fail=fail)
         self.pnls = tuple(
             trade["pnl"] for trade in strategy_fixture.trade_fixture())
+        self._accept_bad_arena = accept_bad_arena
         self._arena_invalid = False
         self.strategy_get_last_error_args = self.export(
             "arena_args",
@@ -104,6 +106,11 @@ class _MetadataJailedLibrary(witness._JailedLibrary):
                            if self._arena_invalid else b"{}"))
 
     def admit(self, state):
+        if self._accept_bad_arena:
+            # Gate rows deliberately leave arena admission to the adapter.
+            # The real child must finish successfully so a child error cannot
+            # satisfy the adapter's refusal assertion.
+            return 0
         try:
             info = os.fstat(5)
             target = os.readlink("/proc/self/fd/5")
@@ -190,7 +197,7 @@ def _arena_observation():
     return result
 
 
-def _report_observation(fd):
+def _report_observation(fd, *, force_not_writable=False):
     result = {
         "fd": fd,
         "open": False,
@@ -210,6 +217,10 @@ def _report_observation(fd):
         )
     except OSError:
         pass
+    if force_not_writable:
+        # The child still writes to the real pipe; only the launcher receipt
+        # carries the deliberately bad observation for the adapter gate.
+        result["writable"] = False
     return result
 
 
@@ -221,9 +232,14 @@ def _launcher_child(argv):
     parser.add_argument("--report-source-fd", type=int)
     parser.add_argument("--report-fd", type=int)
     parser.add_argument("--mode", choices=("normal", "typed"), default="normal")
+    parser.add_argument("--accept-bad-arena", action="store_true")
+    parser.add_argument("--allow-report-fd-five", action="store_true")
+    parser.add_argument("--report-not-writable-stream", action="store_true")
+    parser.add_argument("--ordinary-file-arena", action="store_true")
     own = parser.parse_args(argv[:separator])
     harness = argv[separator + 1:]
 
+    arena_observation = None
     if own.arena_source_fd is None:
         try:
             os.close(5)
@@ -231,6 +247,21 @@ def _launcher_child(argv):
             pass
     else:
         os.dup2(own.arena_source_fd, 5)
+        # A report-fd-five child replaces slot 5 with its sink below. Keep
+        # the actual arena observation from before that deliberate collision
+        # so the adapter reaches its report-fd gate.
+        arena_observation = _arena_observation()
+        if own.ordinary_file_arena:
+            # Keep the ordinary-file row's other arena facts valid so its
+            # mutation isolates the memfd identity check.
+            arena_observation.update(
+                fd_open=True,
+                is_regular=True,
+                target=os.readlink("/proc/self/fd/5"),
+                bytes=os.fstat(5).st_size,
+                seals=ARENA_SEALS,
+                is_memfd=False,
+            )
     if own.report_source_fd is not None and own.report_fd is not None:
         os.dup2(own.report_source_fd, own.report_fd)
 
@@ -251,15 +282,32 @@ def _launcher_child(argv):
         spec.loader.exec_module(child_run_json)
     _bind_fake_library_harness(child_run_json)
     arguments = harness[2:] if len(harness) > 1 else []
+    if own.allow_report_fd_five:
+        validate_sink_options = child_run_json._validate_sink_options
+
+        def allow_reserved_report_fd(args):
+            if args.report_sink_fd != 5:
+                return validate_sink_options(args)
+            args.report_sink_fd = 7
+            try:
+                return validate_sink_options(args)
+            finally:
+                args.report_sink_fd = 5
+
+        # run_json's normal CLI gate is intentionally bypassed in this
+        # stand-in; the adapter is the component under test for fd 5.
+        child_run_json._validate_sink_options = allow_reserved_report_fd
     sink_fd = None
     if "--report-sink-fd" in arguments:
         sink_fd = int(arguments[arguments.index("--report-sink-fd") + 1])
     _emit(own.events_fd, {
         "kind": "jail",
+        "environment_keys": sorted(os.environ),
         "profile": os.environ.get("PINEFORGE_RUN_JSON_PROFILE"),
         "fsize": list(resource.getrlimit(resource.RLIMIT_FSIZE)),
         "sigxfsz_ignored": signal.getsignal(signal.SIGXFSZ) == signal.SIG_IGN,
-        "arena": _arena_observation(),
+        "arena": (arena_observation
+                  if arena_observation is not None else _arena_observation()),
         "arena_env_bytes": int(os.environ.get("PF_SCRATCH_ARENA_BYTES", "0")),
         "work_read_only": not bool(os.stat(".").st_mode & 0o222),
         "tmp_read_only": not bool(os.stat(os.environ["TMPDIR"]).st_mode & 0o222),
@@ -276,7 +324,8 @@ def _launcher_child(argv):
             for index, value in enumerate(arguments[:-1])
             if value == "--profile"
         ), None),
-        "report": _report_observation(sink_fd),
+        "report": _report_observation(
+            sink_fd, force_not_writable=own.report_not_writable_stream),
     })
     witness._install_observers(own.events_fd)
 
@@ -287,7 +336,10 @@ def _launcher_child(argv):
                 types.SimpleNamespace(events_fd=own.events_fd), arguments)
         else:
             library = _MetadataJailedLibrary(
-                own.events_fd, fail=own.mode == "typed")
+                own.events_fd,
+                fail=own.mode == "typed",
+                accept_bad_arena=own.accept_bad_arena,
+            )
             with mock.patch.object(child_run_json, "load_strategy",
                                    lambda path: library):
                 status = child_run_json.main(arguments)
@@ -367,14 +419,6 @@ class _StandInLauncher:
             os.close(report.writer)
             report.writer = report_source_fd
 
-            if self.fault == "report_fd_not_writable_stream":
-                bad_path = launch_dir / "read-only-report"
-                bad_path.write_bytes(b"")
-                os.close(report_source_fd)
-                report.writer_closed = True
-                report_source_fd = os.open(bad_path, os.O_RDONLY)
-                custom_fds.append(report_source_fd)
-
             actual_arena_fd = arena_fd
             if self.fault == "missing_arena":
                 actual_arena_fd = None
@@ -414,6 +458,16 @@ class _StandInLauncher:
                 "--report-fd", str(effective_report_fd),
                 "--mode", "typed" if self.fault == "typed" else "normal",
             ]
+            if self.fault in {
+                    "ordinary_file_arena", "unsealed_memfd",
+                    "small_arena", "report_fd_five"}:
+                child_command.append("--accept-bad-arena")
+            if self.fault == "ordinary_file_arena":
+                child_command.append("--ordinary-file-arena")
+            if self.fault == "report_fd_five":
+                child_command.append("--allow-report-fd-five")
+            if self.fault == "report_fd_not_writable_stream":
+                child_command.append("--report-not-writable-stream")
             if actual_arena_fd is not None:
                 child_command += ["--arena-source-fd", str(actual_arena_fd)]
             if report_source_fd is not None:
@@ -631,6 +685,32 @@ def _assert_child_document(result, launcher):
     assert result.failure_code == document.get("code")
 
 
+def _assert_adapter_gate(result, output, before, launcher, expected):
+    _assert_refused(result, output, before)
+    assert len(launcher.requests) == 1
+    assert launcher.last is not None
+    assert launcher.last.status == 0, launcher.last.stderr.decode(
+        "utf-8", errors="replace")
+    child_document = json.loads(launcher.last.stdout)
+    assert "error" not in child_document
+    assert result.failure_text == expected
+    assert result.failure_document is None
+    assert result.failure_code is None
+    assert result.failure_document != child_document
+
+
+def _assert_prelaunch_refusal(result, output, before, launcher, expected):
+    _assert_refused(result, output, before)
+    assert result.failure_text == expected
+    assert launcher.requests == []
+    assert launcher.last is None
+    assert result.preparations == {}
+    assert result.trades == {}
+    assert result.reports == {}
+    assert result.receipts == {}
+    assert result.finalizer_outputs == {}
+
+
 def _finalizer_receipt(report_bytes, case_id):
     environment = dict(os.environ, PINEFORGE_RUN_JSON_PROFILE="jailed")
     result = subprocess.run(
@@ -671,8 +751,107 @@ def _clean_environment(monkeypatch):
         "PINEFORGE_PARITY_HARNESS_DIR",
         "PINEFORGE_PARITY_CORPUS_ROOT",
         "PINEFORGE_PARITY_DERIVED_WORKSPACE",
+        "STRAY_CREDENTIAL_CANARY",
+        "PF_STRAY_AMBIENT_CANARY",
+        "PF_SEC_TRACE",
     ):
         monkeypatch.delenv(name, raising=False)
+
+
+def test_launcher_request_environment_is_closed(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRAY_CREDENTIAL_CANARY", "credential-canary-present")
+    monkeypatch.setenv("PF_STRAY_AMBIENT_CANARY", "engine-canary-present")
+    monkeypatch.setenv("PF_SEC_TRACE", "trace-canary-present")
+    case = _case_fixture(tmp_path)
+    output = _output_fixture(tmp_path, case.case_id, stale=False)
+    launcher = _StandInLauncher(tmp_path, case.case_id)
+
+    result = _invoke([case], output, launcher)
+
+    _assert_success(result)
+    environment = launcher.requests[0]["env"]
+    assert set(environment) == set([
+        "PINEFORGE_RUN_JSON_PROFILE",
+        "PF_SCRATCH_ARENA_FD",
+        "PF_SCRATCH_ARENA_BYTES",
+        "PF_SCRATCH_WINDOW_BYTES",
+        "PF_SCRATCH_ARENA_JAILED",
+        "PYTHONDONTWRITEBYTECODE",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+    ])
+    assert "STRAY_CREDENTIAL_CANARY" not in environment
+    assert "PF_STRAY_AMBIENT_CANARY" not in environment
+    assert "PF_SEC_TRACE" not in environment
+
+
+def test_child_environment_is_closed(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRAY_CREDENTIAL_CANARY", "credential-canary-present")
+    monkeypatch.setenv("PF_STRAY_AMBIENT_CANARY", "engine-canary-present")
+    monkeypatch.setenv("PF_SEC_TRACE", "trace-canary-present")
+    case = _case_fixture(tmp_path)
+    output = _output_fixture(tmp_path, case.case_id, stale=False)
+    launcher = _StandInLauncher(tmp_path, case.case_id)
+
+    result = _invoke([case], output, launcher)
+
+    _assert_success(result)
+    jail = next(event for event in launcher.last.events
+                if event["kind"] == "jail")
+    allowed_child_names = [
+        "PINEFORGE_RUN_JSON_PROFILE",
+        "PF_SCRATCH_ARENA_FD",
+        "PF_SCRATCH_ARENA_BYTES",
+        "PF_SCRATCH_WINDOW_BYTES",
+        "PF_SCRATCH_ARENA_JAILED",
+        "PYTHONDONTWRITEBYTECODE",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+    ]
+    allowed_python_extra_names = [
+        # PEP 538: CPython exports LC_CTYPE while coercing a C/POSIX locale.
+        "LC_CTYPE",
+    ]
+    # This subset assertion still rejects every other ambient name; the three
+    # canary assertions below prove the adapter did not pass canaries through.
+    assert set(jail["environment_keys"]) <= set(
+        allowed_child_names + allowed_python_extra_names)
+    assert "STRAY_CREDENTIAL_CANARY" not in jail["environment_keys"]
+    assert "PF_STRAY_AMBIENT_CANARY" not in jail["environment_keys"]
+    assert "PF_SEC_TRACE" not in jail["environment_keys"]
+
+
+def test_finalizer_environment_is_closed(tmp_path, monkeypatch):
+    _require_entry()
+    monkeypatch.setenv("STRAY_CREDENTIAL_CANARY", "credential-canary-present")
+    monkeypatch.setenv("PF_STRAY_AMBIENT_CANARY", "engine-canary-present")
+    monkeypatch.setenv("PF_SEC_TRACE", "trace-canary-present")
+    case = _case_fixture(tmp_path)
+    output = _output_fixture(tmp_path, case.case_id, stale=False)
+    launcher = _StandInLauncher(tmp_path, case.case_id)
+    recorded_environments = []
+    real_run = _adapter.subprocess.run
+
+    def record_run(*args, **kwargs):
+        recorded_environments.append(dict(kwargs["env"]))
+        return real_run(*args, **kwargs)
+
+    with mock.patch.object(
+            _adapter.subprocess, "run", side_effect=record_run):
+        result = _invoke([case], output, launcher)
+
+    _assert_success(result)
+    assert len(recorded_environments) == 1
+    environment = recorded_environments[0]
+    assert set(environment) == set([
+        "PINEFORGE_RUN_JSON_PROFILE",
+        "PYTHONDONTWRITEBYTECODE",
+    ])
+    assert "STRAY_CREDENTIAL_CANARY" not in environment
+    assert "PF_STRAY_AMBIENT_CANARY" not in environment
+    assert "PF_SEC_TRACE" not in environment
 
 
 def test_clean_case_matches_unjailed_route_and_writer(tmp_path):
@@ -813,15 +992,17 @@ def test_positive_control_for_ordinary_file_arena(tmp_path):
     _assert_positive(tmp_path)
 
 
-def test_ordinary_file_arena_is_refused(tmp_path):
+def test_ordinary_file_arena_adapter_gate(tmp_path):
     case = _case_fixture(tmp_path)
-    output = _output_fixture(tmp_path, case.case_id, stale=True)
+    output = _output_fixture(tmp_path, case.case_id, stale=False)
     before = _csv_snapshot(output)
     launcher = _StandInLauncher(tmp_path, case.case_id,
                                 fault="ordinary_file_arena")
     result = _invoke([case], output, launcher)
-    _assert_refused(result, output, before)
-    _assert_child_document(result, launcher)
+    _assert_adapter_gate(
+        result, output, before, launcher,
+        "the jailed profile requires an attached scratch arena",
+    )
     assert next(event for event in launcher.last.events
                 if event["kind"] == "jail")["arena"]["is_memfd"] is False
 
@@ -830,14 +1011,16 @@ def test_positive_control_for_unsealed_memfd(tmp_path):
     _assert_positive(tmp_path)
 
 
-def test_unsealed_memfd_is_refused(tmp_path):
+def test_unsealed_memfd_adapter_gate(tmp_path):
     case = _case_fixture(tmp_path)
-    output = _output_fixture(tmp_path, case.case_id, stale=True)
+    output = _output_fixture(tmp_path, case.case_id, stale=False)
     before = _csv_snapshot(output)
     launcher = _StandInLauncher(tmp_path, case.case_id, fault="unsealed_memfd")
     result = _invoke([case], output, launcher)
-    _assert_refused(result, output, before)
-    _assert_child_document(result, launcher)
+    _assert_adapter_gate(
+        result, output, before, launcher,
+        "the jailed profile requires an attached scratch arena",
+    )
     assert next(event for event in launcher.last.events
                 if event["kind"] == "jail")["arena"]["seals"] & ARENA_SEALS != ARENA_SEALS
 
@@ -846,14 +1029,16 @@ def test_positive_control_for_small_arena(tmp_path):
     _assert_positive(tmp_path)
 
 
-def test_small_arena_is_refused(tmp_path):
+def test_small_arena_adapter_gate(tmp_path):
     case = _case_fixture(tmp_path)
-    output = _output_fixture(tmp_path, case.case_id, stale=True)
+    output = _output_fixture(tmp_path, case.case_id, stale=False)
     before = _csv_snapshot(output)
     launcher = _StandInLauncher(tmp_path, case.case_id, fault="small_arena")
     result = _invoke([case], output, launcher)
-    _assert_refused(result, output, before)
-    _assert_child_document(result, launcher)
+    _assert_adapter_gate(
+        result, output, before, launcher,
+        "the jailed profile requires an attached scratch arena",
+    )
     jail = next(event for event in launcher.last.events if event["kind"] == "jail")
     assert 0 < jail["arena"]["bytes"] < jail["arena_env_bytes"]
 
@@ -923,15 +1108,17 @@ def test_positive_control_for_report_fd_five(tmp_path):
     _assert_positive(tmp_path)
 
 
-def test_report_fd_five_is_refused(tmp_path):
+def test_report_fd_five_adapter_gate(tmp_path):
     case = _case_fixture(tmp_path)
-    output = _output_fixture(tmp_path, case.case_id, stale=True)
+    output = _output_fixture(tmp_path, case.case_id, stale=False)
     before = _csv_snapshot(output)
     launcher = _StandInLauncher(tmp_path, case.case_id,
                                 fault="report_fd_five")
     result = _invoke([case], output, launcher)
-    _assert_refused(result, output, before)
-    _assert_child_document(result, launcher)
+    _assert_adapter_gate(
+        result, output, before, launcher,
+        "error: --report-sink-fd 5 collides with PF_SCRATCH_ARENA_FD",
+    )
     command = next(event for event in launcher.last.events
                    if event["kind"] == "command")
     assert command["report"]["fd"] == 5
@@ -959,15 +1146,17 @@ def test_positive_control_for_report_fd_not_writable_stream(tmp_path):
     _assert_positive(tmp_path)
 
 
-def test_report_fd_not_writable_stream_is_refused(tmp_path):
+def test_report_fd_not_writable_stream_adapter_gate(tmp_path):
     case = _case_fixture(tmp_path)
-    output = _output_fixture(tmp_path, case.case_id, stale=True)
+    output = _output_fixture(tmp_path, case.case_id, stale=False)
     before = _csv_snapshot(output)
     launcher = _StandInLauncher(tmp_path, case.case_id,
                                 fault="report_fd_not_writable_stream")
     result = _invoke([case], output, launcher)
-    _assert_refused(result, output, before)
-    _assert_child_document(result, launcher)
+    _assert_adapter_gate(
+        result, output, before, launcher,
+        "report fd is not a writable stream",
+    )
     report = next(event for event in launcher.last.events
                   if event["kind"] == "command")["report"]
     assert report["open"] is True
@@ -1007,32 +1196,180 @@ def test_finalizer_rejection_is_refused(tmp_path):
         launcher.last.report_bytes, case.case_id)
 
 
-def _load_arena_disabled_copy():
+_ADAPTER_GATE_MUTANTS = (
+    pytest.param(
+        "unsealed_memfd",
+        '        and arena["seals"] & _ARENA_SEALS == _ARENA_SEALS',
+        "        and True",
+        "the jailed profile requires an attached scratch arena",
+        id="ignore-seals",
+    ),
+    pytest.param(
+        "ordinary_file_arena",
+        (
+            '        and arena.get("is_memfd") is True\n'
+            '        and isinstance(arena.get("target"), str)\n'
+            '        and arena["target"].startswith("/memfd:")'
+        ),
+        "        and True",
+        "the jailed profile requires an attached scratch arena",
+        id="ignore-is-memfd",
+    ),
+    pytest.param(
+        "small_arena",
+        '        and arena["bytes"] == expected_bytes > 0',
+        '        and arena["bytes"] > 0',
+        "the jailed profile requires an attached scratch arena",
+        id="ignore-arena-bytes-equality",
+    ),
+    pytest.param(
+        "report_fd_five",
+        (
+            '    if fd == 5:\n'
+            '        message = "error: --report-sink-fd 5 collides with PF_SCRATCH_ARENA_FD"\n'
+            '    elif fd == 1:\n'
+            '        message = "report fd must differ from stdout (fd 1)"\n'
+            '    elif type(fd) is not int or fd < 7:\n'
+            '        message = "report fd must be >= 7"'
+        ),
+        (
+            '    if fd == 1:\n'
+            '        message = "report fd must differ from stdout (fd 1)"\n'
+            '    elif type(fd) is not int or (fd < 7 and fd != 5):\n'
+            '        message = "report fd must be >= 7"'
+        ),
+        "error: --report-sink-fd 5 collides with PF_SCRATCH_ARENA_FD",
+        id="drop-fd-five-branch",
+    ),
+    pytest.param(
+        "report_fd_not_writable_stream",
+        (
+            '    elif not (report.get("open") is True and report.get("writable") is True\n'
+            '              and report.get("fifo_or_socket") is True):\n'
+            '        message = "report fd is not a writable stream"'
+        ),
+        (
+            '    elif False:\n'
+            '        message = "report fd is not a writable stream"'
+        ),
+        "report fd is not a writable stream",
+        id="drop-writable-fifo-check",
+    ),
+)
+
+
+def _load_mutated_adapter(tmp_path, old, new):
     _require_entry()
     source_path = ROOT / "scripts" / "run_parity_jailed.py"
     source = source_path.read_text(encoding="utf-8")
-    needle = "if not _validate_arena("
-    assert source.count(needle) == 1, (
-        "Phase B must keep one mutation target for the arena admission branch")
-    mutated_source = source.replace(
-        needle,
-        "if False and _validate_arena(",
-        1,
-    )
+    assert source.count(old) == 1, (
+        f"mutation target must occur exactly once: {old!r}")
+    mutated_path = Path(tmp_path) / "run_parity_jailed_mutated.py"
+    mutated_source = source.replace(old, new, 1)
+    mutated_path.write_text(mutated_source, encoding="utf-8")
     spec = importlib.util.spec_from_file_location(
-        "run_parity_jailed_mutated", source_path)
+        f"run_parity_jailed_mutated_{id(mutated_path)}", mutated_path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    exec(compile(mutated_source, str(source_path), "exec"), module.__dict__)
+    exec(compile(mutated_source, str(mutated_path), "exec"), module.__dict__)
     return module
 
 
-def test_mutation_disabling_arena_check_makes_missing_arena_row_fail(tmp_path):
-    mutated = _load_arena_disabled_copy()
-    # The real child still refuses its missing arena. The missing-arena row
-    # additionally requires the adapter to inspect that observation, so a
-    # disabled adapter branch must fail that same row without publishing CSV.
-    with pytest.raises(AssertionError, match="arena admission branch did not inspect"):
-        _assert_missing_arena_case(mutated, tmp_path)
+_CLOSED_LAUNCHER_ENVIRONMENT = re.compile(
+    r"(?ms)^(?P<prefix>[ \t]*environment[ \t]*=[ \t]*)"
+    r"(?P<value>\{"
+    r"(?=[^{}]*PINEFORGE_RUN_JSON_PROFILE)"
+    r"(?=[^{}]*PF_SCRATCH_ARENA_FD)"
+    r"(?=[^{}]*PF_SCRATCH_ARENA_BYTES)"
+    r"(?=[^{}]*PF_SCRATCH_WINDOW_BYTES)"
+    r"(?=[^{}]*PF_SCRATCH_ARENA_JAILED)"
+    r"(?=[^{}]*PYTHONDONTWRITEBYTECODE)"
+    r"(?=[^{}]*TMPDIR)"
+    r"(?=[^{}]*TMP)"
+    r"(?=[^{}]*TEMP)"
+    r"[^{}]*\})"
+)
+
+
+def _load_closed_environment_mutation(tmp_path):
+    _require_entry()
+    source_path = ROOT / "scripts" / "run_parity_jailed.py"
+    source = source_path.read_text(encoding="utf-8")
+    matches = list(_CLOSED_LAUNCHER_ENVIRONMENT.finditer(source))
+    assert matches, "closed launcher environment literal is missing"
+    assert len(matches) == 1, (
+        "closed launcher environment mutation target must occur exactly once")
+    mutated_source = _CLOSED_LAUNCHER_ENVIRONMENT.sub(
+        lambda match: (
+            match.group("prefix")
+            + "dict(os.environ, **"
+            + match.group("value")
+            + ")"
+        ),
+        source,
+        count=1,
+    )
+    mutated_path = Path(tmp_path) / "run_parity_jailed_env_mutated.py"
+    mutated_path.write_text(mutated_source, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(
+        f"run_parity_jailed_env_mutated_{id(mutated_path)}", mutated_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    exec(compile(mutated_source, str(mutated_path), "exec"), module.__dict__)
+    return module
+
+
+def test_closed_launcher_environment_mutation_is_killed(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRAY_CREDENTIAL_CANARY", "credential-canary-present")
+    monkeypatch.setenv("PF_STRAY_AMBIENT_CANARY", "engine-canary-present")
+    monkeypatch.setenv("PF_SEC_TRACE", "trace-canary-present")
+    mutated = _load_closed_environment_mutation(tmp_path)
+    case = _case_fixture(tmp_path)
+    output = _output_fixture(tmp_path, case.case_id, stale=False)
+    launcher = _StandInLauncher(tmp_path, case.case_id)
+
+    result = mutated.run_cases(
+        [case.case_dir],
+        output,
+        launcher=launcher,
+        arena_bytes=witness.ARENA_BYTES,
+    )
+
+    _assert_success(result)
+    environment = launcher.requests[0]["env"]
+    assert environment["STRAY_CREDENTIAL_CANARY"] == (
+        "credential-canary-present")
+    assert environment["PF_STRAY_AMBIENT_CANARY"] == "engine-canary-present"
+    assert environment["PF_SEC_TRACE"] == "trace-canary-present"
+
+
+def _run_adapter_gate(module, tmp_path, fault):
+    case = _case_fixture(tmp_path)
+    output = _output_fixture(tmp_path, case.case_id, stale=False)
+    before = _csv_snapshot(output)
+    launcher = _StandInLauncher(tmp_path, case.case_id, fault=fault)
+    result = module.run_cases(
+        [case.case_dir],
+        output,
+        launcher=launcher,
+        arena_bytes=witness.ARENA_BYTES,
+    )
+    return result, output, before, launcher
+
+
+@pytest.mark.parametrize(
+    ("fault", "old", "new", "expected"),
+    _ADAPTER_GATE_MUTANTS,
+)
+def test_adapter_gate_mutations_are_killed(
+        tmp_path, fault, old, new, expected):
+    mutated = _load_mutated_adapter(tmp_path, old, new)
+    result, output, before, launcher = _run_adapter_gate(
+        mutated, tmp_path, fault)
+    assert result.ok is True, (
+        f"mutant did not accept {fault}: {result.failure_text!r}")
+    with pytest.raises(AssertionError):
+        _assert_adapter_gate(result, output, before, launcher, expected)
 
 
 def _finalizer_cap(result, case_id):
@@ -1388,6 +1725,172 @@ def _load_staged_adapter(parity, corpus, monkeypatch):
         str(Path(corpus) / "data" / "derived"),
     )
     return _load_installed_adapter(parity)
+
+
+def _unstaged_case_fixture(tmp_path, ensure_derived):
+    case = _case_fixture(tmp_path)
+    corpus = Path(tmp_path) / "corpus"
+    data = corpus / "data"
+    derived = data / "derived"
+    data.mkdir(parents=True)
+    source = strategy_fixture.bars.csv_file(
+        data,
+        name="ohlcv_ETH-USDT-USDT_1m.csv",
+        count=256,
+    )
+    # Keep the fixture's generated values and timestamps, while making the
+    # real derivation input large enough to pass its LFS-pointer guard.
+    rows = source.read_text(encoding="ascii").splitlines()
+    padded = [rows[0]]
+    for row in rows[1:]:
+        fields = row.split(",")
+        fields[-1] = "0" * 4096 + fields[-1]
+        padded.append(",".join(fields))
+    source.write_text("\n".join(padded) + "\n", encoding="ascii")
+    ensure_derived(corpus_root=corpus, derived_workspace=derived)
+    chart = derived / _STAGED_FILES[0]
+    (case.case_dir / "inputs.json").write_text(
+        json.dumps({"ohlcv_csv": str(chart)}), encoding="ascii")
+    case.chart = chart
+    return case, corpus, derived
+
+
+def test_unstaged_writable_corpus_default_read_only_gate(tmp_path, monkeypatch):
+    parity, harness, _ = _installed_layout(tmp_path)
+    corpus = Path(tmp_path) / "corpus"
+    installed, restore = _load_staged_adapter(parity, corpus, monkeypatch)
+    try:
+        case, corpus, _derived = _unstaged_case_fixture(
+            tmp_path, installed._strategy.ensure_derived)
+        assert not (os.statvfs(corpus).f_flag & os.ST_RDONLY)
+        output = _output_fixture(tmp_path, case.case_id, stale=True)
+        before = _csv_snapshot(output)
+        launcher = _StandInLauncher(tmp_path, case.case_id)
+        # Omit require_read_only_corpus to pin its default of True and omit
+        # staged_derived to exercise the unstaged path.
+        result = installed.run_cases(
+            [case.case_dir],
+            output,
+            launcher=launcher,
+            arena_bytes=witness.ARENA_BYTES,
+            harness_dir=harness,
+            corpus_root=corpus,
+        )
+    finally:
+        restore()
+    _assert_prelaunch_refusal(
+        result,
+        output,
+        before,
+        launcher,
+        f"corpus is not mounted read-only: {corpus.resolve()}",
+    )
+
+
+def test_unstaged_corpus_root_mismatch_gate(tmp_path, monkeypatch):
+    parity, harness, _ = _installed_layout(tmp_path)
+    corpus = Path(tmp_path) / "corpus"
+    installed, restore = _load_staged_adapter(parity, corpus, monkeypatch)
+    try:
+        case, corpus, _derived = _unstaged_case_fixture(
+            tmp_path, installed._strategy.ensure_derived)
+        wrong_root = Path(tmp_path) / "different-corpus"
+        assert wrong_root.resolve() != corpus.resolve()
+        output = _output_fixture(tmp_path, case.case_id, stale=True)
+        before = _csv_snapshot(output)
+        launcher = _StandInLauncher(tmp_path, case.case_id)
+        result = installed.run_cases(
+            [case.case_dir],
+            output,
+            launcher=launcher,
+            arena_bytes=witness.ARENA_BYTES,
+            harness_dir=harness,
+            corpus_root=wrong_root,
+        )
+    finally:
+        restore()
+    _assert_prelaunch_refusal(
+        result,
+        output,
+        before,
+        launcher,
+        "corpus_root differs from the resolved parity paths",
+    )
+
+
+def test_unstaged_writable_corpus_opt_out_runs(tmp_path, monkeypatch):
+    parity, harness, _ = _installed_layout(tmp_path)
+    corpus = Path(tmp_path) / "corpus"
+    installed, restore = _load_staged_adapter(parity, corpus, monkeypatch)
+    try:
+        case, corpus, _derived = _unstaged_case_fixture(
+            tmp_path, installed._strategy.ensure_derived)
+        output = _output_fixture(tmp_path, case.case_id, stale=False)
+        launcher = _StandInLauncher(tmp_path, case.case_id)
+        result = installed.run_cases(
+            [case.case_dir],
+            output,
+            launcher=launcher,
+            arena_bytes=witness.ARENA_BYTES,
+            harness_dir=harness,
+            corpus_root=corpus,
+            require_read_only_corpus=False,
+        )
+    finally:
+        restore()
+    _assert_success(result)
+    _assert_jail_observed(launcher)
+
+
+@pytest.mark.parametrize(
+    "staged",
+    (False, True),
+    ids=("unstaged-read-only-positive", "staged-read-only-positive"),
+)
+def test_corpus_read_only_positive_control(tmp_path, monkeypatch, staged):
+    parity, harness, _ = _installed_layout(tmp_path)
+    corpus = Path(tmp_path) / "corpus"
+    installed, restore = _load_staged_adapter(parity, corpus, monkeypatch)
+    try:
+        if staged:
+            case, corpus, _derived, hashes = _staged_case_fixture(tmp_path)
+        else:
+            case, corpus, _derived = _unstaged_case_fixture(
+                tmp_path, installed._strategy.ensure_derived)
+            hashes = None
+        output = _output_fixture(tmp_path, case.case_id, stale=False)
+        launcher = _StandInLauncher(tmp_path, case.case_id)
+        parameters = {
+            "corpus_root": corpus,
+            "require_read_only_corpus": True,
+        }
+        if staged:
+            parameters.update(
+                corpus_commit=_STAGED_COMMIT,
+                staged_derived=hashes,
+            )
+        real_statvfs = installed.os.statvfs
+
+        def read_only_for_corpus(path):
+            flags = real_statvfs(path)
+            if Path(path).resolve() == corpus.resolve():
+                return types.SimpleNamespace(f_flag=flags.f_flag | os.ST_RDONLY)
+            return flags
+
+        with mock.patch.object(
+                installed.os, "statvfs", side_effect=read_only_for_corpus):
+            result = installed.run_cases(
+                [case.case_dir],
+                output,
+                launcher=launcher,
+                arena_bytes=witness.ARENA_BYTES,
+                harness_dir=harness,
+                **parameters,
+            )
+    finally:
+        restore()
+    _assert_success(result)
+    _assert_jail_observed(launcher)
 
 
 def _staged_refusal(

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Resolve the filesystem roots used by the parity scripts.
 
-The installed parity bundle is flat, so its scripts cannot infer a corpus or
-the harness from a repository checkout.  For ``harness_dir`` the resolution
-order is an explicit argument, ``PINEFORGE_PARITY_HARNESS_DIR``, then the
-source-checkout ``REPO_ROOT / "docker"`` default only when no
-``PARITY-MANIFEST.json`` is beside this module.  An installed bundle with no
-configured harness returns ``None`` so its adapter can refuse the run without
-guessing a sibling directory.
+The installed parity bundle is flat, so its scripts cannot infer the harness
+from a repository checkout.  For ``harness_dir`` the resolution order is an
+explicit argument, ``PINEFORGE_PARITY_HARNESS_DIR``, then the source-checkout
+``REPO_ROOT / "docker"`` default only when no ``PARITY-MANIFEST.json`` is
+beside this module.  An installed bundle with no configured harness returns
+``None`` so its adapter can refuse the run without guessing a sibling
+directory.
 """
 from __future__ import annotations
 
@@ -55,7 +55,8 @@ def resolve_paths(*, corpus_root=None, derived_workspace=None,
                   harness_dir=None) -> ParityPaths:
     """Resolve parity roots in explicit, environment, checkout order."""
     return ParityPaths(
-        corpus_root=_resolve(corpus_root, CORPUS_ENV, REPO_ROOT / "corpus"),
+        corpus_root=_resolve(
+            corpus_root, CORPUS_ENV, REPO_ROOT / "corpus"),
         derived_workspace=_resolve(
             derived_workspace, DERIVED_ENV, REPO_ROOT / "corpus" / "data" / "derived"),
         harness_dir=_resolve_harness_dir(harness_dir),

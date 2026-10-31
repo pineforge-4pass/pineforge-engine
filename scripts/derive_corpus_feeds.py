@@ -39,7 +39,8 @@ SOURCE_1M = (_DEFAULT_PATHS.corpus_root / "data"
              / "ohlcv_ETH-USDT-USDT_1m.csv")
 DERIVED_DIR = _DEFAULT_PATHS.derived_workspace
 DERIVED_15M = DERIVED_DIR / "ohlcv_ETH-USDT-USDT_15m.csv"
-DERIVED_15M_WINDOW = DERIVED_DIR / "ohlcv_ETH-USDT-USDT_15m_window.csv"
+DERIVED_15M_WINDOW = (
+    DERIVED_DIR / "ohlcv_ETH-USDT-USDT_15m_window.csv")
 DERIVATION_STAMP = DERIVED_DIR / ".derive_corpus_feeds.version"
 
 # Bump whenever the materialization semantics change. This invalidates
