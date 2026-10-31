@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_outputs_series_limit)
+pineforge_add_unit_test(test_outputs_series_limit)
