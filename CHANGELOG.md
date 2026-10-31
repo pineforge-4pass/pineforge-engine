@@ -7,6 +7,22 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- The native runner seeks the next unsent delivery through the existing
+  partial index, excluding delivered, journal-only and completed-failure
+  history from the scheduler's cursor walk.
+- Native runner status reports database + WAL bytes, measured bytes per
+  committed input, available disk and a growth-based exhaustion projection.
+  `--ledger-warn-free-fraction F` (default 0.8) reports an advisory `WARNING`
+  without changing readiness or exit status. The default allowance stays
+  unlimited.
+- `--report-jsonl=delta-v2` adds versioned change-only report records with
+  `ratios.as_of_input` on every record, outside the cumulative document, and
+  a raw `--delta-base` bootstrap. The envelope bounds emitted bytes and rows
+  serialized per input on the 10,000/100,000-input work populations.
+  Ratio scheduling is a separate later change; whole-curve passes remain.
+  Plain/full and v1 delta bytes are preserved. Ledger tables and checkpoint
+  layout are unchanged.
+
 ## 1.9.1 — 2026-10-31
 
 - A script container (string, array, map or object store) whose scratch

@@ -220,12 +220,16 @@ void compare_delivery_recount(Ledger& ledger, const std::string& path) {
     CHECK(LedgerView(path).status_json() == Json::object({{"schema_version", count_json(1)},
         {"actions", count_json(events.size())}, {"targets", status}}).dump());
     std::uint64_t after = 0;
+    std::size_t visited = 0;
     while (const auto next = ledger.next_delivery_event(after)) {
-        CHECK(next->event.ordinal == after + 1);
-        CHECK(next->unsent == std::binary_search(unsent_ordinals.begin(), unsent_ordinals.end(), next->event.ordinal));
+        CHECK(visited < unsent_ordinals.size());
+        if (visited < unsent_ordinals.size())
+            CHECK(next->event.ordinal == unsent_ordinals[visited]);
+        CHECK(next->unsent && next->event.ordinal > after);
         after = next->event.ordinal;
+        ++visited;
     }
-    CHECK(after == events.size());
+    CHECK(visited == unsent_ordinals.size());
 }
 
 using LedgerFiles = std::vector<std::optional<std::string>>;
