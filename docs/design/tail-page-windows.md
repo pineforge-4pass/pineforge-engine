@@ -66,8 +66,8 @@ arguments still accepts payload budgets, adding the exact shared line charge onc
 The first placement defers index creation; a later mutation or reader may
 build it. Configuration does not alter rebuilding or query ordering.
 
-`ScratchCurveWindow` rounds its payload allowance down to complete points.
-Each point is a 24-byte shared-cache page. Zero, a sub-point allowance and
+`ScratchCurveWindow` rounds its payload allowance down to complete 24-byte point pages.
+Backing misses adjacent to the previous lookup fill aligned blocks of up to 2,730 points; other backing misses read one point. Zero, a sub-point allowance and
 optional-allocation failure bypass. A returned point is a copy, so callers
 can retain it across later reads. A failed read publishes no successful tag
 and can be retried after backing repair; unrelated valid lines remain valid.
@@ -86,8 +86,10 @@ allowance C, optional shared-cache storage is
 payload, keys, pins and replacement metadata. Fixed owner control and
 transfer/commit workspace are additional. The position reader defaults to
 16 lines of 4,096 bytes; the curve reader defaults to 2,730 lines of 24
-bytes. The curve therefore adds one metadata charge per point, rather than
-pretending that all 2,730 records share one tag.
+bytes, with one metadata charge per point. `cache_control_bytes()` reports
+`sizeof(ScratchCurveWindow) + sizeof(State)`, including the fixed 65,520-byte
+block workspace. Shared-cache statistics charge the optional line tags and
+payload separately from that control total. Bypass reads do not use the block.
 
 Native pending storage additionally uses `rows * record_bytes` when the
 optional batch exists, plus one inline fallback record per store. At the

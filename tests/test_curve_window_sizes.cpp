@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <random>
 #include <stdexcept>
 #include <system_error>
 #include <unistd.h>
@@ -32,6 +33,161 @@ struct Directory {
 
 bool equal(const pf_equity_point_t& a, const pf_equity_point_t& b) {
     return std::memcmp(&a, &b, sizeof(a)) == 0;
+}
+
+constexpr std::size_t kBoundaryBlockAllowance = 2;
+
+std::size_t block_count(std::size_t points) {
+    return points == 0 ? 0
+        : (points + rs::kScratchWindowPoints - 1) / rs::kScratchWindowPoints;
+}
+
+void curve_pass_read_cost(const pineforge::metrics::ScratchCurveRegion& region,
+                          const std::vector<pf_equity_point_t>& points, bool reverse) {
+    require(points.size() > rs::kScratchWindowPoints,
+            "curve read-cost row must exceed the configured point capacity");
+    rs::ScratchReadStats inner;
+    rs::ScratchCurveWindow curve(region, rs::kScratchWindowBytes, &inner);
+    require(equal(curve[0], points[0]), "first boundary probe is exact");
+    require(equal(curve[static_cast<std::int64_t>(points.size() - 1)], points.back()),
+            "last boundary probe is exact");
+    const auto probes = inner.calls;
+    // The two nonadjacent endpoints are distinct cold reads before the pass.
+    require(probes == 2, "two boundary probes reach backing before the pass");
+    if (!reverse) {
+        for (std::size_t i = 0; i != points.size(); ++i)
+            require(equal(curve[static_cast<std::int64_t>(i)], points[i]),
+                    "forward block walk is exact");
+    } else {
+        for (std::size_t i = points.size(); i-- > 0;)
+            require(equal(curve[static_cast<std::int64_t>(i)], points[i]),
+                    "reverse block walk is exact");
+    }
+    const auto blocks = block_count(points.size());
+    const auto bound = blocks + kBoundaryBlockAllowance;
+    std::printf("curve %s points=%zu blocks=%zu allowance=%zu probes=%llu "
+                "backing_reads=%llu backing_bytes=%llu bound=%zu\n",
+                reverse ? "reverse" : "forward", points.size(), blocks,
+                kBoundaryBlockAllowance, static_cast<unsigned long long>(probes),
+                static_cast<unsigned long long>(inner.calls),
+                static_cast<unsigned long long>(inner.bytes), bound);
+    require(inner.calls <= bound, "sequential curve reads stay at block cost");
+}
+
+void bypass_pass_read_cost(const pineforge::metrics::ScratchCurveRegion& region,
+                           const std::vector<pf_equity_point_t>& points) {
+    for (const auto bytes : {std::size_t{0}, sizeof(pf_equity_point_t) - 1}) {
+        rs::ScratchReadStats inner;
+        rs::ScratchCurveWindow curve(region, bytes, &inner);
+        for (std::size_t i = 0; i != points.size(); ++i)
+            require(equal(curve[static_cast<std::int64_t>(i)], points[i]),
+                    "bypass curve walk is exact");
+        std::printf("curve bypass requested=%zu points=%zu backing_reads=%llu "
+                    "backing_bytes=%llu\n",
+                    bytes, points.size(), static_cast<unsigned long long>(inner.calls),
+                    static_cast<unsigned long long>(inner.bytes));
+        require(inner.calls == points.size()
+                    && inner.bytes == points.size() * sizeof(pf_equity_point_t),
+                "zero and sub-point capacities read one point per bypass access");
+    }
+}
+
+void random_access_read_cost(const pineforge::metrics::ScratchCurveRegion& region,
+                            const std::vector<pf_equity_point_t>& points) {
+    constexpr std::size_t kRandomSamples = 257;
+    std::mt19937_64 random(UINT64_C(0x4d7a2c91b8e60315));
+    rs::ScratchReadStats inner;
+    rs::ScratchCurveWindow curve(region, rs::kScratchWindowBytes, &inner);
+    std::size_t adjacent_pairs = 0;
+    std::size_t previous_index = 0;
+    for (std::size_t sample = 0; sample != kRandomSamples; ++sample) {
+        const auto index = static_cast<std::size_t>(
+            random() % static_cast<std::uint64_t>(points.size()));
+        if (sample != 0
+            && (index == previous_index + 1 || index + 1 == previous_index))
+            ++adjacent_pairs;
+        require(equal(curve[static_cast<std::int64_t>(index)], points[index]),
+                "random curve access is exact");
+        previous_index = index;
+    }
+    // read_backing requests one point on a nonadjacent miss and can fill an
+    // aligned block only for an index +/-1 from the previous lookup. Reserve
+    // sizeof(pf_equity_point_t) per sample plus one complete block workspace
+    // per adjacent pair in the generated sequence; hits and short final
+    // blocks can only reduce the actual backing bytes.
+    const auto byte_bound = kRandomSamples * sizeof(pf_equity_point_t)
+        + adjacent_pairs * rs::kScratchWindowPoints * sizeof(pf_equity_point_t);
+    std::printf("curve random samples=%zu adjacent_pairs=%zu backing_reads=%llu backing_bytes=%llu "
+                "read_bound=%zu byte_bound=%zu\n",
+                kRandomSamples, adjacent_pairs, static_cast<unsigned long long>(inner.calls),
+                static_cast<unsigned long long>(inner.bytes), kRandomSamples, byte_bound);
+    require(inner.calls <= kRandomSamples && inner.bytes <= byte_bound,
+            "random accesses do not exceed one backing operation per lookup");
+}
+
+void extremes_read_cost(const pineforge::metrics::ScratchCurveRegion& region,
+                        const std::vector<pf_equity_point_t>& points) {
+    pf_equity_point_t held = points.back();
+    held.time_ms += 1;
+    held.equity = points.back().equity + 17.0;
+    double expected[] = {10000.0, 10000.0, 0.0, 0.0};
+    const auto fold = [&](double equity) {
+        if (equity > expected[0]) {
+            expected[0] = equity;
+            expected[1] = equity;
+        }
+        if (equity < expected[1]) expected[1] = equity;
+        const double drawdown = expected[0] - equity;
+        if (drawdown > expected[2]) expected[2] = drawdown;
+        const double runup = equity - expected[1];
+        if (runup > expected[3]) expected[3] = runup;
+    };
+    for (const auto& point : points) fold(point.equity);
+    fold(held.equity);
+    // The extremes check builds its own default-capacity window over the
+    // prefix and exposes no read counter of its own: its backing reads are the
+    // forward-pass reads bounded by curve_pass_read_cost, over the same window
+    // class. This row pins that the check still folds every point exactly (it
+    // throws on a mismatch) after the window changes.
+    rs::check_scratch_equity_extremes(region, &held, 10000.0, expected);
+    std::printf("curve extremes points=%zu exact\n", points.size());
+}
+
+std::vector<pf_equity_point_t> bit_pattern_points(std::size_t count) {
+    std::mt19937_64 random(UINT64_C(0x9a31f0c44b7e2086));
+    std::vector<pf_equity_point_t> points(count);
+    for (std::size_t i = 0; i != points.size(); ++i) {
+        points[i].time_ms = static_cast<std::int64_t>(random());
+        const auto equity = random();
+        const auto open_profit = random();
+        std::memcpy(&points[i].equity, &equity, sizeof(equity));
+        std::memcpy(&points[i].open_profit, &open_profit, sizeof(open_profit));
+    }
+    return points;
+}
+
+void bit_exact_block_fill(const char* directory_path) {
+    const auto points = bit_pattern_points(2 * rs::kScratchWindowPoints + 17);
+    rs::ScratchCurveWriter writer(directory_path);
+    for (const auto& point : points) writer.append(point);
+    const auto region = writer.region();
+    rs::ScratchCurveWindow curve(region, rs::kScratchWindowBytes);
+    for (std::size_t i = 0; i != points.size(); ++i)
+        require(equal(curve[static_cast<std::int64_t>(i)], points[i]),
+                "forward block fill preserves every point bit");
+    for (std::size_t i = points.size(); i-- > 0;)
+        require(equal(curve[static_cast<std::int64_t>(i)], points[i]),
+                "reverse block fill preserves every point bit");
+    std::puts("curve bit-exact block fill passed");
+}
+
+void curve_read_cost_rows(const pineforge::metrics::ScratchCurveRegion& region,
+                          const std::vector<pf_equity_point_t>& points) {
+    curve_pass_read_cost(region, points, false);
+    curve_pass_read_cost(region, points, true);
+    bypass_pass_read_cost(region, points);
+    random_access_read_cost(region, points);
+    extremes_read_cost(region, points);
 }
 
 void sweep(const pineforge::metrics::ScratchCurveRegion& region,
@@ -163,6 +319,16 @@ int main() {
             writer.append(points.back());
         }
         const auto region = writer.region();
+        curve_read_cost_rows(region, points);
+        // Endpoint probes collide in the default point cache at these sizes.
+        for (const auto count : {rs::kScratchWindowPoints + 1, 2 * rs::kScratchWindowPoints + 1}) {
+            auto prefix = region;
+            prefix.point_count = static_cast<std::int64_t>(count);
+            const std::vector<pf_equity_point_t> prefix_points(points.begin(), points.begin() + count);
+            curve_pass_read_cost(prefix, prefix_points, false);
+            curve_pass_read_cost(prefix, prefix_points, true);
+        }
+        bit_exact_block_fill(directory.path);
         for (const auto bytes : {std::size_t{0}, sizeof(pf_equity_point_t) - 1,
                                  sizeof(pf_equity_point_t), 2 * sizeof(pf_equity_point_t),
                                  rs::kScratchWindowBytes})

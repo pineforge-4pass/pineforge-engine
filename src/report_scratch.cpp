@@ -279,6 +279,10 @@ struct ScratchCurveWindow::State {
     metrics::ScratchCurveRegion region;
     ScratchReadStats* inner_reads;
     detail::ReadThroughWindow cache;
+    std::array<pf_equity_point_t, kScratchWindowPoints> window{};
+    std::int64_t first = 0;
+    std::int64_t count = 0;
+    std::int64_t previous_index = -1;
 
     State(const metrics::ScratchCurveRegion& value, std::size_t cache_bytes,
           ScratchReadStats* reads)
@@ -293,10 +297,39 @@ struct ScratchCurveWindow::State {
     static void read_backing(void* context, std::uint64_t offset,
                              void* destination, std::size_t bytes) {
         auto& self = *static_cast<State*>(context);
-        read_scratch_points(self.region,
-            static_cast<std::int64_t>(offset / sizeof(pf_equity_point_t)),
+        const auto index = static_cast<std::int64_t>(offset / sizeof(pf_equity_point_t));
+        // The shared cache has already attempted allocation. Its bypass
+        // must read directly without consulting the fixed block workspace.
+        if (self.cache.payload_bytes() != 0) {
+            if ((index < self.first || index - self.first >= self.count)
+                && self.previous_index >= 0
+                && (index == self.previous_index + 1 || index + 1 == self.previous_index)) {
+                constexpr auto capacity = static_cast<std::int64_t>(kScratchWindowPoints);
+                const auto first = index / capacity * capacity;
+                const auto count = std::min(self.region.point_count - first, capacity);
+                // A short read can overwrite the old block. Publish its
+                // replacement only after all requested bytes are available.
+                self.count = 0;
+                read_scratch_points(self.region, first, self.window.data(), count, self.inner_reads);
+                self.first = first;
+                self.count = count;
+            }
+            if (index >= self.first && index - self.first < self.count) {
+                std::memcpy(destination, &self.window[static_cast<std::size_t>(index - self.first)],
+                            bytes);
+                return;
+            }
+        }
+        read_scratch_points(self.region, index,
             static_cast<pf_equity_point_t*>(destination),
             static_cast<std::int64_t>(bytes / sizeof(pf_equity_point_t)), self.inner_reads);
+        // Retain a lone point until a sequential block replaces it, even
+        // if a distant probe collides with its shared-cache line.
+        if (self.cache.payload_bytes() != 0 && self.count == 0) {
+            std::memcpy(self.window.data(), destination, bytes);
+            self.first = index;
+            self.count = 1;
+        }
     }
 };
 
@@ -333,6 +366,7 @@ pf_equity_point_t ScratchCurveWindow::operator[](std::int64_t index) const {
     }
     pf_equity_point_t point;
     state.cache.get(static_cast<std::uint64_t>(index), &point, sizeof(point));
+    state.previous_index = index;
     return point;
 }
 
