@@ -1,3 +1,4 @@
+#include <pineforge/detail/disk_id_table.hpp>
 #include <pineforge/detail/run_quota.hpp>
 #include <pineforge/detail/scratch_file.hpp>
 #include "../src/command_scratch_production.hpp"
@@ -284,6 +285,56 @@ void moved_lifetime(const char* directory, std::uint64_t limit, std::uint64_t fi
     }
     usage(quota, QuotaResource::scratch_bytes, 0, peak, limit);
     usage(quota, QuotaResource::scratch_files, 0, 2, file_limit);
+}
+
+void id_table_refund(const char* directory) {
+    assert(mode() == QuotaMode::managed && ScratchArena::attached() == nullptr);
+    auto quota = RunQuota::from_environment();
+    usage(quota, QuotaResource::scratch_files, 0, 0, 1);
+    const auto before = quota.snapshot(QuotaResource::scratch_bytes);
+    assert(before.failure.code == RunFailureCode::none);
+    assert(before.message[QuotaSlot::committed] == 0);
+    assert(before.message[QuotaSlot::reserved] == 0);
+    assert(before.message[QuotaSlot::used] == 0);
+
+    DiskIdTable<std::uint64_t> table(4096);
+    table.set_directory(directory);
+    const auto inserted = table.insert("row", 37);
+    assert(inserted.first == 1 && inserted.second);
+    assert(!table.arena_backed() && table.size() == 1 && table.file_bytes() == 68);
+    const auto found = table.find("row");
+    assert(found && *found == 1);
+    assert(table.get(1) == 37);
+    table.set(1, 91);
+    assert(table.get(1) == 91);
+    usage(quota, QuotaResource::scratch_files, 1, 1, 1);
+
+    table.clear();
+    usage(quota, QuotaResource::scratch_files, 0, 1, 1);
+    const auto after = quota.snapshot(QuotaResource::scratch_bytes);
+    assert(after.failure.code == RunFailureCode::none);
+    assert(after.message[QuotaSlot::committed] == 0);
+    assert(after.message[QuotaSlot::reserved] == 0);
+    assert(after.message[QuotaSlot::used] == 0);
+}
+
+void borrowed_file_lifetime(const char* directory) {
+    assert(mode() == QuotaMode::managed && ScratchArena::attached() == nullptr);
+    auto quota = RunQuota::from_environment();
+    usage(quota, QuotaResource::scratch_files, 0, 0, 1);
+    ScratchFile file;
+    file.set_directory(directory);
+    file.open("quota-borrowed");
+    const int alias = ::dup(file.descriptor());
+    assert(alias >= 0 && file_stat(alias).st_nlink == 0);
+    usage(quota, QuotaResource::scratch_files, 1, 1, 1);
+    file.clear();
+    assert(file_stat(alias).st_size == 0);
+    usage(quota, QuotaResource::scratch_files, 1, 1, 1);
+    usage(quota, QuotaResource::scratch_bytes, 0, 0, 0);
+    assert(::close(alias) == 0);
+    // Last-alias proof still belongs to the host after a real descriptor loan.
+    usage(quota, QuotaResource::scratch_files, 1, 1, 1);
 }
 
 class FileSizeLimit {
@@ -587,6 +638,7 @@ with tempfile.TemporaryDirectory(prefix="quota-native-", dir=disk) as directory:
     cases += [("create", 0, 1), ("command-create", 0, 1),
               ("sparse", rounded(9 * block + 1), 1),
               ("move", rounded(block + 1) + rounded(1), 2),
+              ("id-table-refund", rounded(68), 1), ("borrowed-file", 0, 1),
               ("partial", rounded(2 * block + 1), 2),
               ("partial-some", rounded(2 * block + 1), 2),
               ("command", rounded((spill_page + 1) * page), 1),
@@ -693,6 +745,8 @@ int main(int argc, char** argv) {
                 create_refusal(directory, files, which == "command-create");
             else if (which == "sparse") sparse_and_lifetime(directory, limit);
             else if (which == "move") moved_lifetime(directory, limit, files);
+            else if (which == "id-table-refund") id_table_refund(directory);
+            else if (which == "borrowed-file") borrowed_file_lifetime(directory);
             else if (which == "partial" || which == "partial-some")
                 partial_write(directory, which == "partial-some", limit);
             else if (which == "truncate-error") truncate_then_write_error(directory, limit);

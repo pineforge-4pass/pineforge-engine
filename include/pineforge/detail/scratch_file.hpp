@@ -241,8 +241,8 @@ public:
     }
     bool opened() const noexcept { return fd_ >= 0 || arena_ != nullptr; }
     bool arena_backed() const noexcept { return arena_ != nullptr; }
-    // The report facade retains its file-mode descriptor/truncate API.
-    // Arena readers continue to borrow the store rather than the shared fd.
+    // Non-borrowing disk-backed file test; descriptor() borrows for real fd use.
+    bool disk_backed() const noexcept { return fd_ >= 0; }
     int descriptor() const noexcept {
         if (quota_) quota_->borrow_descriptor();
         return fd_;

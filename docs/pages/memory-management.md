@@ -126,7 +126,7 @@ Exhaustion fails closed with typed `report_sink_failed`
 (`ReportScratchIoError` include/pineforge/detail/scratch_arena.hpp:16-21),
 reason `arena_exhausted` src/scratch_arena.cpp:249-253.
 There is no RAM fallback (the comment on `ScratchFile`
-include/pineforge/detail/scratch_file.hpp:31-37).
+include/pineforge/detail/scratch_file.hpp:157-162).
 
 A **jailed run without `--report-sink-fd` has no sink at all**:
 `_new_report_sink` docker/run_json.py:5967-5985 returns `None`, so it retains
