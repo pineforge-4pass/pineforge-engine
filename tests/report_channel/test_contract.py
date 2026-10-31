@@ -19,6 +19,12 @@ from host import (
     require_supervisor, sink_receipt, sink_wire, supervisor_fixture, validator_observer,
 )
 
+# The test host's hang guard for the launches below: it ends a HUNG launch and nothing is
+# asserted against it, except the one mutation control that expects the guard to expire
+# (it needs only "the guard expired", then checks the elapsed time against a floor of 2 s).
+# A sanitizer ctest leg runs this file beside ~1350 other rows, where a launch can need
+# longer than the former 4-8 s to reach its stalled state. Unset = 30 s.
+HANG_GUARD_SECONDS = float(os.environ.get("PINEFORGE_REPORT_TEST_HANG_GUARD_SECONDS") or 30)
 
 KNOBS = (
     ("--report-max-bytes", "PINEFORGE_REPORT_MAX_BYTES", "report_bytes", 4096),
@@ -287,7 +293,7 @@ class Contract(unittest.TestCase):
                     capture = launch(
                         {"candidate": encoded(expected), "producer_identity_path": str(identity)},
                         options=("--invocation", invocation), stalled_channels=("report",),
-                        cancel_channel="report", cancel_signal=signum, watchdog_seconds=5)
+                        cancel_channel="report", cancel_signal=signum, watchdog_seconds=HANG_GUARD_SECONDS)
                     msg = capture.failure_context()
                     self.assert_cancel_bound(capture, "report")
                     record = self.assert_cancel_record(capture, invocation)
@@ -316,7 +322,7 @@ class Contract(unittest.TestCase):
                              "producer_identity_path": str(identity)},
                             sink=True, observer=observer, options=("--invocation", invocation),
                             stalled_channels=("sink",), cancel_channel="sink",
-                            cancel_signal=signum, watchdog_seconds=5)
+                            cancel_signal=signum, watchdog_seconds=HANG_GUARD_SECONDS)
                         msg = capture.failure_context()
                         self.assert_cancel_bound(capture, "sink")
                         record = self.assert_cancel_record(capture, invocation)
@@ -343,7 +349,7 @@ class Contract(unittest.TestCase):
                     capture = launch(
                         {"producer_identity_path": str(identity)},
                         options=("--invocation", invocation), saturate_status=True,
-                        cancel_channel="status", cancel_signal=signum, watchdog_seconds=5)
+                        cancel_channel="status", cancel_signal=signum, watchdog_seconds=HANG_GUARD_SECONDS)
                     msg = capture.failure_context()
                     self.assert_cancel_bound(capture, "status")
                     self.assert_status_stall(capture, released=False)
@@ -370,7 +376,7 @@ class Contract(unittest.TestCase):
                             {"producer_identity_path": str(identity)},
                             options=("--invocation", invocation), observer=observer,
                             gate_status=True, cancel_channel="status_ready",
-                            cancel_signal=signum, watchdog_seconds=5)
+                            cancel_signal=signum, watchdog_seconds=HANG_GUARD_SECONDS)
                         msg = capture.failure_context()
                         self.assert_cancel_bound(capture, "status_ready")
                         self.assert_status_stall(capture, released=True)
@@ -386,7 +392,7 @@ class Contract(unittest.TestCase):
             capture = launch(
                 {"candidate": encoded(expected), "producer_identity_path": str(identity)},
                 options=("--channel-stall-ms", "600", "--channel-wall-ms", "60000"),
-                stalled_channels=("report",), supervisor_path=supervisor_path, watchdog_seconds=4)
+                stalled_channels=("report",), supervisor_path=supervisor_path, watchdog_seconds=HANG_GUARD_SECONDS)
             msg = capture.failure_context()
             record = self.refusal(
                 capture, "report_channel_failed", {"channel": "report", "reason": "deadline"},
@@ -439,7 +445,7 @@ class Contract(unittest.TestCase):
             identity = Path(directory) / "producer.json"
             capture = launch(
                 {"producer_identity_path": str(identity), "stall_before_candidate": True},
-                options=("--channel-wall-ms", "1800"), watchdog_seconds=5)
+                options=("--channel-wall-ms", "1800"), watchdog_seconds=HANG_GUARD_SECONDS)
             msg = capture.failure_context()
             record = self.refusal(
                 capture, "run_deadline_exceeded", {"stage": "run"},
@@ -462,7 +468,7 @@ class Contract(unittest.TestCase):
             capture = launch(
                 {"stdout": encoded(diagnostic), "producer_identity_path": str(identity)},
                 options=("--channel-stall-ms", "600", "--channel-wall-ms", "60000"),
-                stalled_channels=("diagnostic",), watchdog_seconds=5)
+                stalled_channels=("diagnostic",), watchdog_seconds=HANG_GUARD_SECONDS)
             msg = capture.failure_context()
             record = self.refusal(
                 capture, "report_channel_failed", {"channel": "diagnostic", "reason": "deadline"},
@@ -490,7 +496,7 @@ class Contract(unittest.TestCase):
                 {"closes": closes, "inherited_sink": True,
                  "producer_identity_path": str(identity), "native_release_path": str(release)},
                 sink=True, pause_validator_until_wall=True,
-                options=("--channel-wall-ms", "1800"), watchdog_seconds=5)
+                options=("--channel-wall-ms", "1800"), watchdog_seconds=HANG_GUARD_SECONDS)
             msg = capture.failure_context()
             self.assertIn("native_release_precondition", capture.control, msg=msg)
             before = capture.control["native_release_precondition"]
@@ -1147,7 +1153,7 @@ class Contract(unittest.TestCase):
             try:
                 capture = launch(
                     request, options=options, environment=environment, grants=grants,
-                    supervisor_path=supervisor_path, watchdog_seconds=8)
+                    supervisor_path=supervisor_path, watchdog_seconds=HANG_GUARD_SECONDS)
                 msg = capture.failure_context()
                 identities = json.loads(state.read_text())
                 orphan_observations = [
@@ -1339,7 +1345,7 @@ class Contract(unittest.TestCase):
                 environment=environment,
                 release_producer_after_ms=release_after_ms,
                 supervisor_path=supervisor_path,
-                watchdog_seconds=8,
+                watchdog_seconds=HANG_GUARD_SECONDS,
             )
             msg = capture.failure_context()
             self.assertIsNotNone(capture.control.get("producer_term_at"), msg=msg)
@@ -1699,7 +1705,7 @@ class Contract(unittest.TestCase):
                 ignore_validator_term=True, hold_validator_overflow=True,
                 output_after_validator_term=True,
                 release_validator_after_ms=release_after_ms,
-                watchdog_seconds=8,
+                watchdog_seconds=HANG_GUARD_SECONDS,
                 options=("--report-max-bytes", "65536",
                          "--channel-wall-ms", "60000", "--channel-stall-ms", "500",
                          *options))
