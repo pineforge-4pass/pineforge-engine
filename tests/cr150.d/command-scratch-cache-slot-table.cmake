@@ -1,3 +1,3 @@
 list(APPEND TEST_SOURCES test_command_scratch_cache_slot_table)
 pineforge_add_unit_test(test_command_scratch_cache_slot_table)
-set_tests_properties(test_command_scratch_cache_slot_table PROPERTIES LABELS "fast;scratch")
+set_tests_properties(test_command_scratch_cache_slot_table PROPERTIES LABELS "scratch")
