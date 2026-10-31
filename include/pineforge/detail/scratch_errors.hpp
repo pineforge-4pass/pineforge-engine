@@ -20,8 +20,11 @@ enum class ScratchResource : std::uint32_t {
     consumed_index,
     cohort,
     exit_rank,
-    successor_roots, cohort_ids_total, cohort_orders_live,
+    successor_roots,
+    cohort_ids_total,
+    cohort_orders_live,
 };
+
 inline const char* scratch_resource_name(ScratchResource resource) noexcept {
     switch (resource) {
     case ScratchResource::layout: return "layout";
@@ -39,6 +42,7 @@ inline const char* scratch_resource_name(ScratchResource resource) noexcept {
     }
     return "layout";
 }
+
 // Locale-independent decimal grouping, shared by all count/byte refusals.
 inline std::string scratch_limit_number(std::uint64_t limit) {
     char digits[26]; // 20 decimal digits and six separators fit.
@@ -67,7 +71,7 @@ inline std::string scratch_limit_message(const char* prefix, std::uint64_t limit
 
 inline std::string scratch_count_limit_message(ScratchResource resource, std::uint64_t limit) {
     switch (resource) {
-    case ScratchResource::cohort: case ScratchResource::cohort_ids_total:
+    case ScratchResource::cohort:
         return scratch_limit_message("more than ", limit,
             " distinct order ids in one run; reuse ids, e.g. build the id from a modulo of bar_index");
     case ScratchResource::erased_index:
@@ -87,7 +91,7 @@ inline std::string scratch_count_limit_message(ScratchResource resource, std::ui
 
 inline std::string scratch_byte_limit_message(ScratchResource resource, std::uint64_t limit) {
     switch (resource) {
-    case ScratchResource::cohort: case ScratchResource::cohort_ids_total:
+    case ScratchResource::cohort:
         return scratch_limit_message("order ids use more than ", limit,
             " bytes in one run; use shorter ids or reuse ids");
     case ScratchResource::erased_data:

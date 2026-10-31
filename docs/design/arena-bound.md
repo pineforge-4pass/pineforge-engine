@@ -340,8 +340,8 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | --- | --- | --- |
 | Equity writer / selected hold-back / SpillCurve | 24*E | `pf_equity_point_t` size assertion `include/pineforge/metrics_stream.hpp:16`; `src/report_scratch.cpp:232` |
 | Position tail | (30+L)*T | `src/source/pine_position_tail.hpp:20`; footer packing at `src/source/pine_position_tail.cpp:94` |
-| Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `include/pineforge/detail/disk_id_table.hpp:109`; `include/pineforge/source/pine_adapter.hpp:1957` |
-| Entry-rank AVL | (60+L)*J + 1[J>0] | `src/source/pine_adapter.cpp:6377`; `include/pineforge/detail/disk_id_table.hpp:109` |
+| Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `include/pineforge/detail/disk_id_table.hpp:165-182`, `:342`; `include/pineforge/source/pine_adapter.hpp:1957` |
+| Entry-rank AVL | (60+L)*J + 1[J>0] | `src/source/pine_adapter.cpp:6377`; `include/pineforge/detail/disk_id_table.hpp:165-182`, `:342` |
 | Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:947`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:68` |
 | Erased minima index | indexPeak(D+Q) | 16-byte slot at `include/pineforge/detail/id_pair_store.hpp:68`; replacement at `:573` |
 | Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2727`; joined key at `src/source/pine_adapter.cpp:25357` |
@@ -557,7 +557,7 @@ non-command certificates exactly.
 
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
-writer (`equity_scratch` append at `src/engine_report.cpp:1556`), and capture transfers that writer as `metric_curve`
+writer (`equity_scratch` append at `src/engine_report.cpp:1562`), and capture transfers that writer as `metric_curve`
 instead of copying its prefix (`src/native_execution_consumer.cpp:13135`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
@@ -692,11 +692,11 @@ the resident-cap change changes no per-user storage term, command share, closed 
 The unbound journal's `ExtFile` uses `ScratchFile`, which can claim arena regions; earlier spill
 does not certify its lifetime extent. The bound codec's existing command share supplies no private RSS/AS certification.
 
-The command-scratch resident/cache ledger term is fixed **K = 202,752 bytes/run**:
-`3 * (65536 + 2048)`, named at `src/command_scratch_cache.hpp:28`, including three
-64-KiB buffers and their decorator/slot-key objects (`static_assert(sizeof(CachedScratchBacking)` at `src/command_scratch_cache.hpp:76`).
+The command-scratch resident/cache ledger term is fixed **K = `3 * (kCacheBytes + kMaxSlots * sizeof(ScratchPageId) + kFixedObjectBytes)`**:
+at the default this is **202,752 bytes/run**, `3 * (65536 + 1024 + 1024)`, named at
+`src/command_scratch_cache.hpp:28`, including three 64-KiB buffers, slot tables allocated with each wrapped backing's page slot count (K is charged at the worst case of 512-byte pages) and fixed objects (`static_assert(sizeof(CachedScratchBacking)` at `src/command_scratch_cache.hpp:76`).
 Each disk store reuses one buffer for its resident prefix, then its read cache;
-crossing 64 KiB spills once. Attached arenas retain direct mapped admission.
+crossing `kCacheBytes` (64 KiB at default) spills once. Attached arenas retain direct mapped admission.
 Charge K (prose ledger; scripts/arena_bound.py has no K input) alongside existing workspaces/inner backings, replacing the old read-cache allowance; K changes no arena-storage formula or certification.
 
 CORE-TOP's A5-WIDER brief reports a **44.4–46.2 MB pre-flat-port resident

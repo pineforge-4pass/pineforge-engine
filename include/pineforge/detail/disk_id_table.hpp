@@ -128,7 +128,7 @@ public:
             if (extra_rows == maximum || key.size() > maximum - extra_bytes) {
                 const auto resource = file_.scratch_resource();
                 const auto& manifest = file_.scratch_owner()->manifest();
-                throw ScratchCapacityError(resource == ScratchResource::cohort ? ScratchResource::cohort_ids_total : resource, extra_rows == maximum
+                throw ScratchCapacityError(ids_total_label(resource), extra_rows == maximum
                     ? scratch_count_limit_message(resource,
                         resource == ScratchResource::cohort ? manifest.U : manifest.V)
                     : scratch_byte_limit_message(resource,
@@ -208,13 +208,17 @@ public:
     }
 
 private:
+    static constexpr ScratchResource ids_total_label(ScratchResource resource) noexcept {
+        return resource == ScratchResource::cohort ? ScratchResource::cohort_ids_total : resource;
+    }
+
     void read(Offset offset, void* data, std::size_t length) const {
-        // descriptor() is -1 for any arena, even an unjailed file arena,
+        // disk_backed() is false for any arena, even an unjailed file arena,
         // and for a slab. Never use the attached arena's inherited fd here.
-        read_cache_.read(file_, file_.descriptor() >= 0, end_, 0, offset, data, length);
+        read_cache_.read(file_, file_.disk_backed(), end_, 0, offset, data, length);
     }
     void write(Offset offset, const void* data, std::size_t length) {
-        if (file_.descriptor() >= 0) read_cache_.before_write(0, end_, offset, length);
+        if (file_.disk_backed()) read_cache_.before_write(0, end_, offset, length);
         file_.write(offset, data, length); // Always immediate, including errors.
     }
     void require_id_size(std::size_t key_size) const {
@@ -238,15 +242,19 @@ private:
         // the null byte and fixed headers is exactly aggregate stored key bytes.
         const auto key_bytes = end_ - 1 - header * size_;
         if (size_ > rows || extra_rows > rows - size_)
-            throw ScratchCapacityError(resource == ScratchResource::cohort ? ScratchResource::cohort_ids_total : resource, scratch_count_limit_message(resource, rows));
+            throw ScratchCapacityError(ids_total_label(resource),
+                                       scratch_count_limit_message(resource, rows));
         if (key_bytes > bytes || extra_bytes > bytes - key_bytes)
-            throw ScratchCapacityError(resource == ScratchResource::cohort ? ScratchResource::cohort_ids_total : resource, scratch_byte_limit_message(resource, bytes));
+            throw ScratchCapacityError(ids_total_label(resource),
+                                       scratch_byte_limit_message(resource, bytes));
         const auto capacity = slab->region(resource).capacity;
         if (end_ > capacity || extra_rows > (capacity - end_) / header)
-            throw ScratchCapacityError(resource == ScratchResource::cohort ? ScratchResource::cohort_ids_total : resource, scratch_byte_limit_message(resource, bytes));
+            throw ScratchCapacityError(ids_total_label(resource),
+                                       scratch_byte_limit_message(resource, bytes));
         const auto fixed_bytes = header * extra_rows;
         if (extra_bytes > capacity - end_ - fixed_bytes)
-            throw ScratchCapacityError(resource == ScratchResource::cohort ? ScratchResource::cohort_ids_total : resource, scratch_byte_limit_message(resource, bytes));
+            throw ScratchCapacityError(ids_total_label(resource),
+                                       scratch_byte_limit_message(resource, bytes));
         slab->require_extend(resource, end_ + fixed_bytes + extra_bytes);
     }
     [[noreturn]] void io_error(int error, const char* operation) const {

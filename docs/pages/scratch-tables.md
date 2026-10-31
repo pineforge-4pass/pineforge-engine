@@ -270,6 +270,25 @@ APP acceptance tests remain **planned**, not established by engine host fakes.
 
 ## Jail responsibilities and exclusions
 
+`PINEFORGE_RUN_JSON_PROFILE` accepts exactly `unjailed` (default) or
+`jailed` for these tools; neither has a CLI profile override.
+
+`scripts/run_strategy.py` is excluded from jailed execution:
+trace-name dedup, Docker feed trim and reverse-CSV staging need writable storage.
+It raises the existing typed RuntimeError (exit 1), reason
+`strategy_driver_no_jailed_route`, before any native result or output staging.
+`pineforge-sink-finalize` file-output mode is excluded before output removal and spool creation: exit 3,
+with a text diagnostic naming `finalizer_file_output_no_jailed_route` on stderr only when `--receipt-fd` is not 2 (no typed code or arguments).
+With `--receipt-fd 2`, the caller sees exit 3 and the ordinary failure receipt only, indistinguishable from a malformed stream.
+The strategy driver uses `run_request_invalid` and `{"option":"arguments"}`;
+its reason is in diagnostic text, without new typed argument keys.
+Unjailed file mode needs writable output and spool directories.
+
+The finalizer's stdout mode (`--out -` with a positive `--max-bytes`) remains
+accepted and writes no file. In valid jailed `docker/run_json.py` runs, the
+final JSON spool and output-column/series temporaries are unreachable:
+reports stay resident, fd outputs stay in the stream, and path sinks are refused.
+
 **The HOST must configure SIGXFSZ.** APP's `pf-jail.c` must install
 `SIG_IGN` for SIGXFSZ **before** applying `RLIMIT_FSIZE`, including the zero
 limit, and check that setup succeeds. A successful new inherited-arena attach sets SIGXFSZ to `SIG_IGN` process-wide; detach does not restore it.

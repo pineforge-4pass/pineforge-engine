@@ -1,14 +1,14 @@
 {
   "schema": "pineforge-run-failure-catalog-diff/v1",
   "from": {
-    "version": "1.9.0",
-    "tag": "v1.9.0",
+    "version": "1.9.1",
+    "tag": "v1.9.1",
     "catalogSha256": "811f5e5bccacc6fe7d33544bcb3ff04a231fc9843b37613cdc72b180a53cd21f"
   },
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "1742b39abd8fecb650000f29b32c69442241daf76688c8cb92447818fefb2654"
+    "catalogSha256": "803c8cf11d7d058facf32e55df114bb3143bc52d8482b89376d87eee1b352c30"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -17,6 +17,47 @@
   "metadataChanges": [],
   "added": [],
   "changed": [
+    {
+      "code": "outputs_limit",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.reason.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "too_many_events",
+            "too_many_rows"
+          ],
+          "after": [
+            "too_many_events",
+            "too_many_rows",
+            "too_many_series"
+          ]
+        },
+        {
+          "path": "description",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": "A recorded-outputs capacity limit was reached during the run.",
+          "after": "A recorded-outputs capacity limit was reached at declaration or during the run."
+        },
+        {
+          "path": "english",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "outputs: the event queue is full",
+            "outputs: the row count is at its limit"
+          ],
+          "after": [
+            "outputs: the event queue is full",
+            "outputs: the row count is at its limit",
+            "outputs: the series count is at its limit"
+          ]
+        }
+      ]
+    },
     {
       "code": "scratch_capacity_exceeded",
       "collection": "codes",

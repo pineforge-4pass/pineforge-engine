@@ -195,7 +195,7 @@ import traceback
 import types
 from contextlib import ExitStack
 from datetime import datetime, timezone
-from itertools import chain
+from itertools import chain, repeat
 from pathlib import Path
 
 
@@ -694,7 +694,7 @@ def build_fingerprint(provenance: dict) -> dict:
 _BAR_HEADER = b"timestamp,open,high,low,close,volume\n"
 _BAR_FLOAT = (
     rb"[+-]?(?:(?:[0-9]+\.[0-9]*|\.[0-9]+)"
-    rb"(?:[eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)"
+    rb"(?:[eE][+-]?[0-9]+)?|[0-9]+(?:[eE][+-]?[0-9]+)?)"
 )
 _BAR_CANONICAL_LINE = re.compile(
     rb"([0-9]{13}),(" + _BAR_FLOAT + rb"),(" + _BAR_FLOAT
@@ -2654,10 +2654,12 @@ def _pack_bar_bulk_slab(matches):
     float_columns = [list(map(float, values)) for values in columns[1:]]
     for raw_values, values in zip(columns[1:], float_columns):
         for raw, value in zip(raw_values, values):
-            text = raw.decode("ascii")
-            if (not math.isfinite(value)
-                    or (value == 0.0 and text.startswith("-"))
-                    or repr(value) != text):
+            # Both paths apply float to the same ASCII text, so alternate
+            # decimal, exponent and integer spellings pack identical doubles.
+            # A finite double's repr contains at most 24 ASCII bytes.
+            # Keep that envelope so CSV's field-size refusals still fall back.
+            if (len(raw) > 24 or not math.isfinite(value)
+                    or (value == 0.0 and raw.startswith(b"-"))):
                 return None
     packed = bytearray(_SOURCE_FEED_RECORD.size * len(timestamps))
     struct.pack_into(
@@ -2671,6 +2673,10 @@ def _pack_bar_bulk_slab(matches):
 
 def _load_bars_bulk(raw: bytes):
     if not _bar_bulk_layout_matches() or not raw.startswith(_BAR_HEADER):
+        return None
+    # The line grammar requires LF. Decline a partial final line before
+    # converting any earlier slabs that DictReader would have to replay.
+    if not raw.endswith(b"\n"):
         return None
     body = raw[len(_BAR_HEADER):]
     packed = bytearray()
@@ -6153,24 +6159,112 @@ _BULK_E_LINE = re.compile(
 # The bound keeps that stack, and every list built from one batch, the same for
 # any window and any file length; a window is consumed in successive batches.
 _BULK_E_BATCH = 128
-_BULK_E_RUN = re.compile(rb"(?:" + _BULK_E_LINE.pattern + (rb"){1,%d}" % _BULK_E_BATCH))
+_BULK_E_RUN_PREFIX = rb"(?:" + _BULK_E_LINE.pattern + rb")"
+_BULK_E_RUN = re.compile(_BULK_E_RUN_PREFIX + (rb"{1,%d}" % _BULK_E_BATCH))
+# Cache only this exact pattern's interval. A replacement run still supplies
+# its own bound, independently of the window and the original batch constant.
+_BULK_E_DEFAULT_RUN = _BULK_E_RUN
+_BULK_E_DEFAULT_BOUNDS = (1, _BULK_E_BATCH)
 _BULK_E_LINE_BYTES = 80
+_BULK_E_LITERAL_BYTES = len(b'["E",,,]\n')
+# Coverage adds nine literal bytes to the three captures; the page-tail bound
+# also depends on the timestamp and float token widths. Pin that arithmetic
+# to the grammar so a later grammar edit cannot silently invalidate either.
+assert (
+    _BULK_E_FLOAT == (
+        rb"(?=[-+0-9.e]{1,24}[,\]])-?(?:0|[1-9][0-9]*)"
+        rb"(?:\.[0-9]+(?:e[+-]?[0-9]+)?|e[+-]?[0-9]+)")
+    and _BULK_E_LINE.pattern == (
+        rb'\["E",(0|-?[1-9][0-9]{0,15}),(' + _BULK_E_FLOAT
+        + rb"),(" + _BULK_E_FLOAT + rb")\]\n")
+    and _BULK_E_LINE.groups == 3
+    and _BULK_E_LITERAL_BYTES == 9
+    and _BULK_E_LITERAL_BYTES + 17 + 2 * 24 <= _BULK_E_LINE_BYTES
+), "bulk equity coverage and line bounds must follow the grammar"
 
 
 class _BulkEquity:
-    """One accepted batch of lines, with only its two decoded endpoints retained."""
-    def __init__(self, raw, count, first, last):
-        self.raw, self.count, self.first, self.last = raw, count, first, last
+    """A batch's number text and endpoints; direct construction is unbounded."""
+    def __init__(self, raw, count, first, last, columns=None):
+        self.raw, self.count = raw, count
+        self._first = tuple(first.values()) if isinstance(first, dict) else first
+        self._last = tuple(last.values()) if isinstance(last, dict) else last
+        if columns is None:
+            # Directly constructed batches need no proof or bound. Recover
+            # captures only when they tile the input; columns remain absent
+            # only on direct batches that need substitution over unmatched bytes.
+            rows = _BULK_E_LINE.findall(raw)
+            columns = tuple(zip(*rows)) if rows else ((), (), ())
+            if (sum(map(len, chain.from_iterable(columns)))
+                    + _BULK_E_LITERAL_BYTES * len(rows) != len(raw)):
+                columns = None
+        self.columns = columns
+
+    @property
+    def first(self):
+        self._first = _bulk_equity_endpoint(self._first)
+        return self._first
+
+    @first.setter
+    def first(self, point):
+        self._first = point
+
+    @property
+    def last(self):
+        self._last = _bulk_equity_endpoint(self._last)
+        return self._last
+
+    @last.setter
+    def last(self, point):
+        self._last = point
+
+
+def _bulk_equity_endpoint(point):
+    if type(point) is tuple:
+        return dict(time_ms=point[0], equity=point[1], open_profit=point[2])
+    return point
 
 
 def _bulk_equity(raw):
     """Accept a strict subset; a failed proof never supplies an error.
 
-    ``raw`` is one run of at most _BULK_E_BATCH lines; a longer one is no match.
+    Product callers supply one complete _BULK_E_RUN match or, in the pending-line
+    caller, one LF-terminated line containing at most one row. The repeat bound
+    bounds captures retained for encoding independently of window and file sizes.
+    Direct proof callers have the same bound as the run pattern's fullmatch,
+    including when its repeat is replaced. Rebind _BULK_E_LINE only together with
+    a _BULK_E_RUN built from it, which takes the fullmatch branch.
     """
-    if not raw or _BULK_E_RUN.fullmatch(raw) is None:
+    if not raw:
         return None
-    times, equities, profits = zip(*_BULK_E_LINE.findall(raw))
+    rows = _BULK_E_LINE.findall(raw)
+    if not rows:
+        return None
+    times, equities, profits = columns = tuple(zip(*rows))
+    # findall returns disjoint complete lines. Their token lengths plus
+    # the nine literal bytes per line must cover every input byte, so no
+    # prefix, gap or suffix can have been skipped. No second match is needed.
+    if (sum(map(len, times)) + sum(map(len, equities)) + sum(map(len, profits))
+            + _BULK_E_LITERAL_BYTES * len(rows) != len(raw)):
+        return None
+    # Coverage proves a concatenation of complete lines. Read its permitted
+    # count from the run pattern itself, keeping that pattern the sole batch
+    # bound even when replaced. Other pattern shapes keep their fullmatch.
+    if _BULK_E_RUN is _BULK_E_DEFAULT_RUN:
+        lower, upper = _BULK_E_DEFAULT_BOUNDS
+    else:
+        prefix, _, repeat_text = _BULK_E_RUN.pattern.rpartition(b"{")
+        bounds = repeat_text[:-1].split(b",")
+        if (prefix == _BULK_E_RUN_PREFIX and repeat_text.endswith(b"}")
+                and len(bounds) == 2 and all(map(bytes.isdigit, bounds))
+                and _BULK_E_RUN.flags == 0):
+            lower, upper = map(int, bounds)
+        else:
+            if _BULK_E_RUN.fullmatch(raw) is None:
+                return None
+            lower = upper = len(rows)
+    if not lower <= len(rows) <= upper:
+        return None
     timestamps = list(map(int, times))
     if min(timestamps) < -((1 << 53) - 1) or max(timestamps) > (1 << 53) - 1:
         return None
@@ -6179,16 +6273,37 @@ def _bulk_equity(raw):
     if not all(map(math.isfinite, numbers)) or list(map(repr, numbers)) != texts:
         return None
     count = len(timestamps)
-    first = dict(time_ms=timestamps[0], equity=numbers[0], open_profit=numbers[count])
-    last = dict(time_ms=timestamps[-1], equity=numbers[count - 1], open_profit=numbers[-1])
-    return _BulkEquity(raw, count, first, last)
+    first = (timestamps[0], numbers[0], numbers[count])
+    last = (timestamps[-1], numbers[count - 1], numbers[-1])
+    return _BulkEquity(raw, count, first, last, columns)
 
 
 def _bulk_equity_ascii(batch):
-    rows = _BULK_E_LINE.sub(
-        rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
-        batch.raw).splitlines()
-    return b"".join(rows)[:-1] if rows else b""
+    columns = getattr(batch, "columns", None)
+    if columns is None:
+        rows = _BULK_E_LINE.sub(
+            rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
+            batch.raw).splitlines()
+        return b"".join(rows)[:-1] if rows else b""
+    times, equities, profits = columns
+    # Reuse the proof's captured text. zip/chain assemble the fixed keys
+    # without another regex traversal or a replacement expansion per row.
+    return b"".join(chain.from_iterable(zip(
+        repeat(b'{"time_ms":'), times, repeat(b',"equity":'), equities,
+        repeat(b',"open_profit":'), profits, repeat(b"},"))))[:-1]
+
+
+def _bulk_equity_rows(batch):
+    """Keep individual row boundaries for the ordinary array writer."""
+    columns = getattr(batch, "columns", None)
+    if columns is None:
+        return _BULK_E_LINE.sub(
+            rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
+            batch.raw).splitlines()
+    times, equities, profits = columns
+    return list(map(b"".join, zip(
+        repeat(b'{"time_ms":'), times, repeat(b',"equity":'), equities,
+        repeat(b',"open_profit":'), profits, repeat(b"},"))))
 
 
 class _BulkEquityFile:
@@ -6332,15 +6447,18 @@ class _SinkReportDiagnostics:
         # O/V/K/X/H do not enter the trade fold. A fused sink supplies the
         # optional sink argument so those records can be dispatched to their
         # bounded artifacts while the reader hashes every record.
+        last_bulk = None
         for record in _bulk_equity_records(reader):
             if isinstance(record, _BulkEquity):
                 if not self.count_e:
                     self.first = record.first
-                self.last = record.last
+                # Only the final batch contributes the curve's last point.
+                last_bulk = record
                 self.count_e += record.count
                 if sink is not None:
                     sink._append_equity_batch(record)
             elif record.tag == "E":
+                last_bulk = None
                 point = record.as_dict()
                 if not self.count_e:
                     self.first = point
@@ -6364,6 +6482,8 @@ class _SinkReportDiagnostics:
                 yield record
             elif sink is not None:
                 sink._append_output_record(record)
+        if last_bulk is not None:
+            self.last = last_bulk.last
 
 
 class _FusedOutputState:
@@ -6409,10 +6529,10 @@ class _FusedOutputState:
             directory = sink.directory
             self.opens = _JSONColumn(resources, directory)
             self.closes = _JSONColumn(resources, directory)
+            self.events = _JSONColumn(resources, directory)
             self.columns = [
                 _JSONColumn(resources, directory) for _ in self.entries
             ]
-            self.events = _JSONColumn(resources, directory)
         except Exception as error:
             self.remember(error)
 
@@ -6565,6 +6685,7 @@ class _ReportSink:
 
     def _prepare_fused_artifacts(self, lib, state):
         if not self.named:
+            self._spool_resources._window_budget = _artifact_windows(self)
             try:
                 self._equity_spool = _JSONColumn(
                     self._spool_resources, self.directory, indexed=True)
@@ -6601,10 +6722,31 @@ class _ReportSink:
                 or self._trades_spool_failed):
             return
         try:
-            self._trades_spool.append(_sink_trade(record))
+            trade = _sink_trade(record)
+            if _json_fast_value(trade):
+                try:
+                    encoded = json.dumps(trade, separators=(",", ":"), allow_nan=False)
+                except ValueError:
+                    pass  # retain the piecewise writer's prefix and exception
+                else:
+                    self._trades_spool.append_ascii(encoded.encode("ascii"))
+                    return
+            self._trades_spool.append(trade)
         except Exception as error:
             self._trades_spool_failed = True
             self._remember_spool_failure(error)
+
+    def _finish_fused_columns(self):
+        # Pending row text has the same deferred refusal as an append failure.
+        # Drain before assembly can inspect a column or select a later error.
+        for column, failed in (
+                (self._equity_spool, self._equity_spool_failed),
+                (self._trades_spool, self._trades_spool_failed)):
+            if column is not None and not failed:
+                try:
+                    column._flush_ascii()
+                except Exception as error:
+                    self._remember_spool_failure(error)
 
     def _append_output_record(self, record):
         if self._fused_outputs is not None:
@@ -6698,6 +6840,7 @@ class _ReportSink:
                         "the report sink trailer differs from its engine receipt")
                 self._check_fused_identity(reader, self.path, self.named)
                 self._close_fused_reader(reader)
+                self._finish_fused_columns()
         except SinkFormatError as error:
             raise _engine_invariant(
                 f"the engine's report sink is invalid: {error}") from error
@@ -7009,20 +7152,27 @@ class _BoundedJSONFile:
     Disk files use Linux O_DIRECT or Darwin F_NOCACHE. Legacy libraries with
     no engine sink can also use tmpfs/ramfs for the unjailed JSON artifact.
     Engine sink and scratch directories are selected by _disk_report_directory.
-    One aligned 64 KiB anonymous window is the I/O working set. Full windows
-    are written before reuse; flush synchronizes pending writes before readback.
+    One aligned anonymous window is the I/O working set (64 KiB by default).
+    Artifact callers choose larger windows within their per-run budget.
+    Full windows are written before reuse; flush synchronizes pending writes before readback.
     Jailed and fd routes use UTF-8 memory buffers.
     """
     window = 64 * 1024
 
-    def __init__(self, file):
+    def __init__(self, file, window=None):
         import fcntl
         self.file = file
+        if window is not None:
+            if window <= 0 or window % 4096:
+                raise ValueError("report artifact window must be a positive multiple of 4096")
+            self.window = window
         self.buffer = None
         self.used = self.base = self.size = self.position = 0
         self.read_base, self.read_size = -1, 0
         self.reading = False
         self._dirty = False
+        self._pending_ascii = []
+        self._pending_rows = self._pending_bytes = 0
         self.binary = False
         self.libc = ctypes.CDLL(None, use_errno=True)
         fd = file.fileno()
@@ -7079,6 +7229,7 @@ class _BoundedJSONFile:
             self.used = 0
 
     def write(self, text):
+        self._flush_ascii()
         if self.reading:
             raise ValueError("a prepared report artifact is read-only")
         for offset in range(0, len(text), self.window):
@@ -7087,6 +7238,7 @@ class _BoundedJSONFile:
 
     def write_ascii(self, data):
         """Append already encoded ASCII through the same aligned I/O window."""
+        self._flush_ascii()
         if self.reading:
             raise ValueError("a prepared report artifact is read-only")
         position = 0
@@ -7101,7 +7253,33 @@ class _BoundedJSONFile:
                 self._sync_window()
         return len(data)
 
+    def append_ascii(self, data, row_count):
+        """Join complete column rows within the ordinary streaming bounds."""
+        if self.reading:
+            raise ValueError("a prepared report artifact is read-only")
+        size = len(data)
+        if self._pending_ascii and (
+                self._pending_rows + row_count > _STREAM_BATCH_RECORDS
+                or self._pending_bytes + size > _STREAM_BATCH_BYTES):
+            self._flush_ascii()
+        self._pending_ascii.append(data)
+        self._pending_rows += row_count
+        self._pending_bytes += size
+        # A single oversized row is written alone, as in the array writer.
+        if (self._pending_rows >= _STREAM_BATCH_RECORDS
+                or self._pending_bytes >= _STREAM_BATCH_BYTES):
+            self._flush_ascii()
+        return size
+
+    def _flush_ascii(self):
+        if self._pending_ascii:
+            data = b"".join(self._pending_ascii)
+            self._pending_ascii.clear()  # never retry a failed write
+            self._pending_rows = self._pending_bytes = 0
+            self.write_ascii(data)
+
     def flush(self):
+        self._flush_ascii()
         self.file.flush()  # retain checked flush/close failure behavior
         if not self.reading and self._dirty:
             self._sync_window()
@@ -7177,14 +7355,21 @@ class _BoundedJSONFile:
         return (b"" if self.binary else "").join(pieces)
 
     def close(self):
-        if self.buffer is not None:
-            self.buffer.close()
-            self.buffer = None
-        self.file.close()
+        try:
+            self._flush_ascii()
+        finally:
+            try:
+                if self.buffer is not None:
+                    self.buffer.close()
+                    self.buffer = None
+            finally:
+                self.file.close()
 
 
 class _UncachedSinkFile(_BoundedJSONFile):
     """Uncached binary readback with an independent bounded window."""
+    window = 64 * 1024
+
     def __init__(self, file):
         position = file.tell()
         super().__init__(file)  # path sinks are unjailed only
@@ -7246,6 +7431,42 @@ def _open_uncached_sink(path, *, raw=False):
         raise
 
 
+# Six large windows for fixed files with outputs: report, equity/trade, open/close/event.
+_ARTIFACT_WINDOW_BUDGET_BYTES = 6 * 1024 * 1024
+_ARTIFACT_LARGE_WINDOW = 1024 * 1024
+# TradingView Pine Script, Writing scripts > Limitations > Chart visuals > Plot limits:
+# "A maximum of 64 plot counts are allowed per script." The engine refuses more series.
+_OUTPUT_SERIES_LIMIT = 64
+# Indexed decoding bounds copied slices; sequential reads use the full file window.
+_JSON_COLUMN_LOOKUP_READ_SIZE = 64 * 1024
+
+
+class _ArtifactWindowBudget:
+    """Reserve the final report first, then allocate large windows in order.
+
+    Equity and trade spools precede open/close/event columns in creation
+    order, followed by recorded output series in slot order.
+    """
+
+    def __init__(self):
+        self.remaining = _ARTIFACT_WINDOW_BUDGET_BYTES
+        self.report_window = self.take()
+
+    def take(self):
+        if self.remaining >= _ARTIFACT_LARGE_WINDOW:
+            self.remaining -= _ARTIFACT_LARGE_WINDOW
+            return _ARTIFACT_LARGE_WINDOW
+        return _BoundedJSONFile.window
+
+
+def _artifact_windows(owner):
+    """Share one accountant through a sink and its report resource scopes."""
+    budget = getattr(owner, "_window_budget", None)
+    if budget is None:
+        budget = owner._window_budget = _ArtifactWindowBudget()
+    return budget
+
+
 class _JSONColumn(_JSONRecordArray):
     """A comma-separated, already encoded column in an unlinked temporary."""
     # Some serializer callers supply only .file via object.__new__.
@@ -7253,7 +7474,8 @@ class _JSONColumn(_JSONRecordArray):
 
     def __init__(self, resources, directory, *, indexed=False):
         super().__init__(lambda: iter(self), 0, self._item_at if indexed else None)
-        self.file = _json_temporary(resources, directory)
+        self.file = _json_temporary(
+            resources, directory, _artifact_windows(resources).take())
         self.empty = True
         # One cursor: the next row number and its byte offset, never a row.
         self._cursor_index = self._cursor_offset = 0
@@ -7267,9 +7489,10 @@ class _JSONColumn(_JSONRecordArray):
         The first read freezes the report spool, after which it accepts no
         more rows. Iterate before the report's resources are closed;
         afterwards iteration raises ValueError, even for an empty column.
-        A single row larger than one 64 KiB window is decoded again after
-        each further window, taking time proportional to its size times the
-        number of windows (bounded by the sink's 1 MiB record cap).
+        A single row larger than the read size is decoded again after each
+        refill, taking time proportional to its size times the number of
+        refills. Iteration reads a full file window; indexed reads use a
+        separate fixed bound.
         Indexed columns support [i], which costs O(i) from the cursor;
         callers should iterate.
         """
@@ -7283,18 +7506,21 @@ class _JSONColumn(_JSONRecordArray):
             self._cursor_index = self._cursor_offset = 0
         # The decoder lives only for this call. Retaining its generator would
         # also retain the last yielded row and a private encoded window.
-        for value, offset in self._iter_rows(self._cursor_offset):
+        for value, offset in self._iter_rows(
+                self._cursor_offset, _JSON_COLUMN_LOOKUP_READ_SIZE):
             self._cursor_index += 1
             self._cursor_offset = offset
             if self._cursor_index == index + 1:
                 return value
         raise ValueError("invalid JSON report column: row count differs")
 
-    def _iter_rows(self, offset=0):
+    def _iter_rows(self, offset=0, read_size=None):
         """Yield each decoded row and the byte offset following its separator."""
         if self.file.closed:
             raise ValueError(
                 "a report column cannot be iterated after the report resources were closed")
+        if read_size is None:
+            read_size = self.file.window
 
         def invalid_constant(token):
             raise ValueError(f"invalid JSON report column: non-JSON number {token}")
@@ -7342,7 +7568,7 @@ class _JSONColumn(_JSONRecordArray):
             # encoded value can span windows; each iterator owns its offset.
             buffer, position = buffer[position:], 0
             try:
-                chunk = self.file.read_at(offset, self.file.window)
+                chunk = self.file.read_at(offset, read_size)
             except UnicodeDecodeError as error:
                 raise ValueError("invalid JSON report column: non-ASCII data") from error
             offset += len(chunk)
@@ -7364,17 +7590,22 @@ class _JSONColumn(_JSONRecordArray):
         if not data and row_count == 0:
             return
         try:
-            if not self.empty:
-                self.file.write_ascii(b",")
-            self.file.write_ascii(data)
+            self.file.append_ascii(data if self.empty else b"," + data, row_count)
         except OSError as error:
             raise RunFailure("report sink write failed", "report_sink_failed",
                              {"reason": "scratch_io"}) from error
         self.empty = False
         self.length += row_count
 
+    def _flush_ascii(self):
+        try:
+            self.file._flush_ascii()
+        except OSError as error:
+            raise RunFailure("report sink write failed", "report_sink_failed",
+                             {"reason": "scratch_io"}) from error
 
-def _json_temporary(resources, directory):
+
+def _json_temporary(resources, directory, window=None):
     try:
         # _BoundedJSONFile owns ASCII encoding and the aligned I/O window.
         # The owner supplies only an unbuffered, automatically unlinked fd.
@@ -7383,7 +7614,7 @@ def _json_temporary(resources, directory):
         raise RunFailure("report sink open failed", "report_sink_failed",
                          {"reason": "scratch_io"}) from error
     try:
-        file = _BoundedJSONFile(file)  # unjailed report artifacts
+        file = _BoundedJSONFile(file, window)  # unjailed report artifacts
         resources.callback(_close_json_temporary, file)
     except OSError as error:
         file.close()
@@ -7472,11 +7703,9 @@ def _stream_equity_array(value, destination):
     try:
         for record in value.sink._tagged_records("E", bulk=True):
             if isinstance(record, _BulkEquity):
-                # sub and splitlines walk the entire batch in C. No Python
-                # loop, decoder or serializer visits its individual points.
-                rows = _BULK_E_LINE.sub(
-                    rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
-                    record.raw).splitlines()
+                # Reuse the proof's captures, preserving the same row list
+                # and the ordinary writer's flush and failure boundaries.
+                rows = _bulk_equity_rows(record)
             else:
                 # The existing verified decoder owns all noncanonical cases.
                 rows = [json.dumps(record.as_dict(), separators=(",", ":"),
@@ -7600,7 +7829,9 @@ def _stream_json_value(value, destination):
 def _prepare_stream_report(document, resources, directory, *, sink_errors=True):
     try:
         with ExitStack() as prepared:
-            file = _json_temporary(prepared, directory)
+            # The report's window was reserved before any column allocation.
+            file = _json_temporary(
+                prepared, directory, _artifact_windows(resources).report_window)
             _stream_json(document, file)
             file.write("\n")
             file.flush()  # disk errors must precede the first report byte
@@ -7638,6 +7869,8 @@ def _prepare_report_json(document, resources, args, sink):
             raise sink._spool_failure
         # Keep the final artifact provisional until auxiliary files have closed.
         with ExitStack() as prepared_files:
+            prepared_files._window_budget = _artifact_windows(
+                sink if sink is not None else resources)
             prepared = _prepare_stream_report(
                 document, prepared_files,
                 sink.directory if sink is not None else args.spill_dir,
@@ -8021,6 +8254,9 @@ def _sink_outputs_block(lib, state, sink, resources, *, summary_only=False):
                      key=lambda entry: entry["slot"])
     outputs = {entry["index"]: entry for entry in
                _manifest_entries(block["manifest"], "outputs", ("index", "id"))}
+    # After the report reservation: equity/trade spools, then open/close/event
+    # columns in creation order, then recorded series in slot order.
+    resources._window_budget = _artifact_windows(sink)
     opens, closes, events = (_JSONColumn(resources, sink.directory) for _ in range(3))
     columns = [_JSONColumn(resources, sink.directory) for _ in entries]
     expected_row = 0

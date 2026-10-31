@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_na_generic_containers)
+pineforge_add_unit_test(test_na_generic_containers)

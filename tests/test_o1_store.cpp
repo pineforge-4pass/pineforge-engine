@@ -14,6 +14,7 @@
 
 #include <pineforge/detail/o1_store.hpp>
 #include <pineforge/detail/scratch_backing.hpp>
+#include <pineforge/detail/scratch_store.hpp>
 
 #include <algorithm>
 #include <array>
@@ -36,17 +37,22 @@ namespace {
 
 using pineforge::detail::FixedMemoryScratchBacking;
 using pineforge::detail::ScratchBacking;
+using pineforge::detail::ScratchByteSource;
 using pineforge::detail::ScratchBuffer;
 using pineforge::detail::ScratchBytes;
 using pineforge::detail::ScratchDurability;
 using pineforge::detail::ScratchPageId;
 using pineforge::detail::ScratchStatus;
+using pineforge::detail::ScratchStoreConfig;
 using pineforge::detail::o1::CleanupSkip;
 using pineforge::detail::o1::Id;
 using pineforge::detail::o1::kMaxChunkBytes;
 using pineforge::detail::o1::kMaxLiveObjectsCap;
 using pineforge::detail::o1::kMaxResidentPages;
 using pineforge::detail::o1::kMaxTxHandles;
+using pineforge::detail::o1::kStoreReadCacheBytes;
+using pineforge::detail::o1::kStoreReadCacheSlots;
+using pineforge::detail::o1::RollbackOnly;
 using pineforge::detail::o1::Shape;
 using pineforge::detail::o1::Stats;
 using pineforge::detail::o1::Store;
@@ -98,6 +104,34 @@ class MemoryBacking {
   FixedMemoryScratchBacking memory_;
 };
 
+// Counts only real ScratchBacking reads, below the resident page cache.
+class CountingBacking final : public ScratchBacking {
+ public:
+  explicit CountingBacking(ScratchBacking& inner) noexcept
+      : ScratchBacking(inner.kind(), inner.page_size()), inner_(inner) {}
+
+  std::uint64_t page_count() const noexcept override { return inner_.page_count(); }
+  std::uint64_t reads() const noexcept { return reads_; }
+
+ protected:
+  ScratchStatus do_read_page(ScratchPageId id,
+                             ScratchBuffer destination) const noexcept override {
+    ++reads_;
+    return inner_.read_page(id, destination);
+  }
+  ScratchStatus do_write_page(ScratchPageId id,
+                              ScratchBytes source) noexcept override {
+    return inner_.write_page(id, source);
+  }
+  ScratchStatus do_sync(ScratchDurability durability) noexcept override {
+    return inner_.sync(durability);
+  }
+
+ private:
+  ScratchBacking& inner_;
+  mutable std::uint64_t reads_ = 0;
+};
+
 class FaultBacking final : public ScratchBacking {
  public:
   explicit FaultBacking(FixedMemoryScratchBacking& inner) noexcept
@@ -108,6 +142,11 @@ class FaultBacking final : public ScratchBacking {
   }
 
   void fail_next_write() noexcept { fail_next_write_ = true; }
+  void fail_next_read() noexcept {
+    fail_next_read_ = true;
+    read_failed_ = false;
+  }
+  void fail_next_commit() noexcept { fail_commit_ = true; }
   bool failed() const noexcept { return failed_; }
 
   // Borrowed patterns identify data, not page ids or an observed I/O count.
@@ -125,6 +164,11 @@ class FaultBacking final : public ScratchBacking {
  protected:
   ScratchStatus do_read_page(ScratchPageId id,
                              ScratchBuffer destination) const noexcept override {
+    if (fail_next_read_) {
+      fail_next_read_ = false;
+      read_failed_ = true;
+      return ScratchStatus::io_error;
+    }
     const ScratchStatus status = inner_.read_page(id, destination);
     if (status == ScratchStatus::ok && read_armed_ &&
         contains(ScratchBytes{destination.data, destination.size}, read_pattern_)) {
@@ -137,8 +181,10 @@ class FaultBacking final : public ScratchBacking {
 
   ScratchStatus do_write_page(ScratchPageId id,
                               ScratchBytes source) noexcept override {
-    if (fail_next_write_) {
+    // The two scratch superblocks are publication pages, never record data.
+    if (fail_next_write_ || (fail_commit_ && id < 2)) {
       fail_next_write_ = false;
+      fail_commit_ = false;
       failed_ = true;
       return ScratchStatus::io_error;
     }
@@ -163,6 +209,8 @@ class FaultBacking final : public ScratchBacking {
 
   FixedMemoryScratchBacking& inner_;
   bool fail_next_write_ = false;
+  mutable bool fail_next_read_ = false;
+  bool fail_commit_ = false;
   bool failed_ = false;
   ScratchBytes read_pattern_{};
   ScratchBytes write_pattern_{};
@@ -184,13 +232,57 @@ Shape default_shape() {
 // For the power-of-two resident page counts used here, metadata is one 24-byte
 // Slot plus two 4-byte buckets per page: 32 * resident_pages bytes. Round that
 // up to pages, then add six work pages and two pages for Core/alignment overhead.
-// The object layer also owns the 16-byte header + chunk_bytes buffer.
+// The object layer also owns the 16-byte header + chunk_bytes buffer and the
+// separately pinned 384-byte lookup cache.
 std::uint64_t ceiling_for(const Shape& shape) {
   const std::uint64_t metadata_bytes = UINT64_C(32) * shape.resident_pages;
   const std::uint64_t metadata_pages =
       (metadata_bytes + shape.page_bytes - 1) / shape.page_bytes;
   return (static_cast<std::uint64_t>(shape.resident_pages) + 6 +
-          metadata_pages + 2) * shape.page_bytes + 16 + shape.chunk_bytes;
+          metadata_pages + 2) * shape.page_bytes + 16 + shape.chunk_bytes +
+         kStoreReadCacheBytes;
+}
+
+// A valid bytewise order for sizing the substrate's actual fixed workspace.
+// required_bytes checks geometry only; it never calls this comparator.
+ScratchStatus fixture_byte_order(void*, const ScratchByteSource& left,
+                                 const ScratchByteSource& right,
+                                 int& order) noexcept {
+  const std::uint64_t common = std::min(left.size(), right.size());
+  for (std::uint64_t offset = 0; offset < common; ++offset) {
+    std::byte l{}, r{};
+    ScratchStatus status = left.read(offset, ScratchBuffer{&l, 1});
+    if (status != ScratchStatus::ok) return status;
+    status = right.read(offset, ScratchBuffer{&r, 1});
+    if (status != ScratchStatus::ok) return status;
+    if (l != r) {
+      order = l < r ? -1 : 1;
+      return ScratchStatus::ok;
+    }
+  }
+  order = left.size() < right.size() ? -1 : (left.size() > right.size() ? 1 : 0);
+  return ScratchStatus::ok;
+}
+
+std::uint64_t scratch_workspace_for(const Shape& shape, ScratchBacking& backing) {
+  ScratchStoreConfig config;
+  config.page_count = shape.resident_pages;
+  config.page_size = shape.page_bytes;
+  config.journal_slots = shape.journal_slots == 0 ? 1 : shape.journal_slots;
+  config.index_slots = shape.index_slots == 0 ? 1 : shape.index_slots;
+  config.order.id = 1;
+  config.order.compare = &fixture_byte_order;
+  return pineforge::detail::scratch_impl::Core::required_bytes(config, &backing);
+}
+
+void require_cache_bytes(const Store& store, std::uint64_t scratch_bytes) {
+  // StoreImpl asserts the layout of its actual private ReadCache, HeaderEntry
+  // and LookupEntry. stats() charges sizeof(that member), not this constant.
+  static_assert(kStoreReadCacheSlots == 8, "eight slots in each Store table");
+  static_assert(kStoreReadCacheBytes == 8 * (3 * 8 + 3 * 8),
+                "the additional Store cache is exactly 384 bytes");
+  REQUIRE(store.stats().bytes_resident >= scratch_bytes);
+  REQUIRE(store.stats().bytes_resident - scratch_bytes == 384);
 }
 
 struct XorShift {
@@ -308,6 +400,518 @@ std::uint64_t store_checksum(Store& store, const std::vector<Id>& ids) {
     hash = mix(hash, object_checksum(store, id));
   }
   return hash;
+}
+
+// ---------------------------------------------------------------- fixed Store read cache
+
+Shape read_cache_shape() {
+  Shape shape = default_shape();
+  shape.page_bytes = 512;
+  shape.resident_pages = 2;
+  shape.chunk_bytes = 512;
+  return shape;
+}
+
+void require_byte(Store& store, Id id, std::uint64_t offset,
+                   unsigned char expected) {
+  unsigned char value = 0xdd;
+  REQUIRE(store.read(id, offset, &value, 1) == 1);
+  REQUIRE(value == expected);
+}
+
+std::uint64_t counted_byte_read(Store& store, CountingBacking& backing, Id id,
+                                std::uint64_t offset, unsigned char expected) {
+  const auto before = backing.reads();
+  require_byte(store, id, offset, expected);
+  return backing.reads() - before;
+}
+
+void require_warm_byte(Store& store, CountingBacking& backing, Id id,
+                       std::uint64_t offset, unsigned char expected) {
+  REQUIRE(counted_byte_read(store, backing, id, offset, expected) == 0);
+}
+
+template <std::size_t N>
+void require_bytes(Store& store, Id id, std::uint64_t offset,
+                    const std::array<unsigned char, N>& expected) {
+  std::array<unsigned char, N> value{};
+  value.fill(0xdd);
+  REQUIRE(store.read(id, offset, value.data(), value.size()) == value.size());
+  REQUIRE(value == expected);
+}
+
+template <typename Callable>
+bool throws_rollback_only(Callable&& callable) {
+  try {
+    callable();
+  } catch (const RollbackOnly&) {
+    return true;
+  } catch (...) {
+    return false;
+  }
+  return false;
+}
+
+void check_read_cache_hits() {
+  const Shape shape = read_cache_shape();
+  MemoryBacking memory(4096, shape.page_bytes);
+  CountingBacking backing(memory.get());
+  auto store = Store::open(shape, backing);
+  const Id id = store->create(1024, 8);
+  const unsigned char marker = 0x42;
+  REQUIRE(store->write(id, 512, &marker, 1) == 1);
+
+  // Header and chunk-1 values use distinct blob pages. Together with the
+  // handle leaf they exceed the TWO resident pages. A lookup also needs the
+  // index and key pages. With both Store tables warm only handle+data remain.
+  // Disabling EITHER cache makes a repeated read issue backing reads.
+  const auto cold = counted_byte_read(*store, backing, id, 512, 0x42);
+  REQUIRE(cold > 2);
+  const auto warm = counted_byte_read(*store, backing, id, 512, 0x42);
+  REQUIRE(warm < cold);
+  REQUIRE(warm == 0);
+  require_warm_byte(*store, backing, id, 512, 0x42);
+
+  {
+    auto outer = store->begin();
+    outer->commit(); // Publication alone does not change lookup results.
+  }
+  require_warm_byte(*store, backing, id, 512, 0x42);
+  {
+    auto outer = store->begin();
+    outer->rollback(); // Even a read-only rollback invalidates both tables.
+  }
+  REQUIRE(counted_byte_read(*store, backing, id, 512, 0x42) > 2);
+  require_warm_byte(*store, backing, id, 512, 0x42);
+  require_cache_bytes(*store, scratch_workspace_for(shape, backing));
+  std::printf("O1STORE fixed read cache avoids both descents on warm reads ok\n");
+}
+
+void check_read_cache_mutations() {
+  const Shape shape = read_cache_shape();
+  MemoryBacking memory(4096, shape.page_bytes);
+  CountingBacking backing(memory.get());
+  auto store = Store::open(shape, backing);
+  const Id id = store->create(1024, 8);
+  const unsigned char first = 0x42;
+  REQUIRE(store->write(id, 512, &first, 1) == 1);
+  require_byte(*store, id, 512, 0x42);
+  require_warm_byte(*store, backing, id, 512, 0x42);
+
+  const unsigned char next = 0x63;
+  REQUIRE(store->write(id, 512, &next, 1) == 1);
+  REQUIRE(counted_byte_read(*store, backing, id, 512, 0x63) > 2);
+  require_warm_byte(*store, backing, id, 512, 0x63);
+
+  // Shrinking a blob to a cell moves its value; the decoded size must change.
+  REQUIRE(store->resize(id, 513));
+  std::array<unsigned char, 2> clipped{{0xdd, 0xdd}};
+  REQUIRE(store->read(id, 512, clipped.data(), clipped.size()) == 1);
+  REQUIRE((clipped == std::array<unsigned char, 2>{{0x63, 0xdd}}));
+  REQUIRE(store->size(id) == 513);
+  require_warm_byte(*store, backing, id, 512, 0x63);
+  REQUIRE(store->resize(id, 1024));
+  require_bytes(*store, id, 512, std::array<unsigned char, 3>{{0x63, 0, 0}});
+  require_warm_byte(*store, backing, id, 512, 0x63);
+
+  // Erase a cached chunk, then recreate it with a fresh scratch handle.
+  const unsigned char tail = 0x7a;
+  REQUIRE(store->write(id, 1023, &tail, 1) == 1);
+  require_byte(*store, id, 1023, 0x7a);
+  REQUIRE(store->resize(id, 512));
+  REQUIRE(store->size(id) == 512);
+  REQUIRE(store->read(id, 512, clipped.data(), clipped.size()) == 0);
+  REQUIRE(store->resize(id, 1024));
+  require_bytes(*store, id, 512, std::array<unsigned char, 3>{{0, 0, 0}});
+  require_byte(*store, id, 1023, 0);
+
+  // Mutating a different object must invalidate this object's entries too.
+  const Id other = store->create(8, 8);
+  REQUIRE(counted_byte_read(*store, backing, id, 512, 0) > 2);
+  require_warm_byte(*store, backing, id, 512, 0);
+  REQUIRE(store->write(other, 0, &tail, 1) == 1);
+  REQUIRE(counted_byte_read(*store, backing, id, 512, 0) > 2);
+  require_warm_byte(*store, backing, id, 512, 0);
+  store->release(other);
+  REQUIRE(counted_byte_read(*store, backing, id, 512, 0) > 2);
+  require_warm_byte(*store, backing, id, 512, 0);
+
+  store->release(id);
+  REQUIRE(throws_invalid_argument([&] { (void)store->size(id); }));
+  REQUIRE(throws_invalid_argument(
+      [&] { (void)store->read(id, 0, clipped.data(), clipped.size()); }));
+  REQUIRE(throws_invalid_argument([&] { (void)store->read(id, 0, nullptr, 0); }));
+  REQUIRE(!store->alive(id));
+  const Id after = store->create(1024, 8);
+  REQUIRE(after > other);
+  // A never-written chunk reads zero and publishes nothing; it has no handle
+  // for the fixed table to hold, so no warm claim is made for it.
+  require_byte(*store, after, 512, 0);
+  // Publish chunk 1 of the new id; the table must then serve it warm.
+  REQUIRE(store->write(after, 512, &tail, 1) == 1);
+  require_byte(*store, after, 512, 0x7a);
+  require_warm_byte(*store, backing, after, 512, 0x7a);
+  REQUIRE(!store->alive(id));
+  REQUIRE(!store->alive(0));
+  REQUIRE(throws_invalid_argument([&] { (void)store->read(0, 0, nullptr, 0); }));
+  REQUIRE(store->read(after, 0, nullptr, 0) == 0);
+  require_cache_bytes(*store, scratch_workspace_for(shape, backing));
+  std::printf("O1STORE read cache write/resize/put/erase/create/release invalidation ok\n");
+}
+
+void check_read_cache_rollbacks() {
+  // Each finish route must discard headers AND handles read from pending
+  // state. Recreating chunk 1 below gives it an aborted scratch handle.
+  for (int finish = 0; finish < 3; ++finish) {
+    const Shape shape = read_cache_shape();
+    MemoryBacking memory(4096, shape.page_bytes);
+    CountingBacking backing(memory.get());
+    auto store = Store::open(shape, backing);
+    const Id id = store->create(1024, 8);
+    const unsigned char committed = 0x42;
+    const unsigned char pending = 0x63;
+    REQUIRE(store->write(id, 512, &committed, 1) == 1);
+    Id created = 0;
+    {
+      auto outer = store->begin();
+      REQUIRE(store->resize(id, 512));
+      REQUIRE(store->resize(id, 1536));
+      REQUIRE(store->write(id, 512, &pending, 1) == 1);
+      created = store->create(8, 8);
+      REQUIRE(store->write(created, 0, &pending, 1) == 1);
+      require_byte(*store, created, 0, 0x63);
+      require_byte(*store, id, 512, 0x63);
+      require_warm_byte(*store, backing, id, 512, 0x63);
+      REQUIRE(store->size(id) == 1536);
+      if (finish == 0) {
+        outer->rollback();
+      } else if (finish == 1) {
+        auto joined = store->begin();
+        joined->rollback();
+        // Joined rollback has not restored bytes yet.
+        require_warm_byte(*store, backing, id, 512, 0x63);
+        REQUIRE(throws_rollback_only([&] { outer->commit(); }));
+      }
+      // finish == 2 abandons the unfinished outer handle.
+    }
+    REQUIRE(counted_byte_read(*store, backing, id, 512, 0x42) > 2);
+    require_warm_byte(*store, backing, id, 512, 0x42);
+    REQUIRE(store->size(id) == 1024);
+    require_bytes(*store, id, 512, std::array<unsigned char, 3>{{0x42, 0, 0}});
+    REQUIRE(store->read(id, 1024, nullptr, 0) == 0);
+    REQUIRE(!store->alive(created));
+    REQUIRE(throws_invalid_argument([&] { (void)store->size(created); }));
+    const Id after = store->create(8, 8);
+    REQUIRE(after > created); // Store ids, unlike aborted scratch handles, do not recycle.
+    require_byte(*store, after, 0, 0);
+    REQUIRE(!store->alive(created));
+    require_byte(*store, id, 512, 0x42);
+    REQUIRE(store->stats().objects_live == 2);
+    REQUIRE(store->stats().bytes_live == 1032);
+  }
+  std::printf("O1STORE read cache outer/rollback-only/abandoned rollback invalidation ok\n");
+}
+
+void check_read_cache_failures() {
+  const Shape shape = read_cache_shape();
+  MemoryBacking memory(4096, shape.page_bytes);
+  FaultBacking fault(memory.get());
+  CountingBacking backing(fault);
+  auto store = Store::open(shape, backing);
+  const Id id = store->create(1024, 8);
+  const unsigned char committed = 0x42;
+  const unsigned char pending = 0x63;
+  REQUIRE(store->write(id, 512, &committed, 1) == 1);
+  {
+    auto outer = store->begin();
+    REQUIRE(store->resize(id, 512));
+    REQUIRE(store->resize(id, 1536));
+    REQUIRE(store->write(id, 512, &pending, 1) == 1);
+    require_byte(*store, id, 512, 0x63);
+    require_warm_byte(*store, backing, id, 512, 0x63);
+    REQUIRE(store->size(id) == 1536);
+    fault.fail_next_read();
+    REQUIRE(throws_runtime_error([&] { outer->rollback(); }));
+    REQUIRE(fault.read_failed());
+    // A cached header or handle must not bypass scratch's poisoned state.
+    REQUIRE(throws_runtime_error([&] { (void)store->size(id); }));
+    REQUIRE(throws_runtime_error([&] { (void)store->alive(id); }));
+    REQUIRE(throws_runtime_error([&] { (void)store->read(id, 0, nullptr, 0); }));
+    outer->rollback(); // Resumes rollback once the backing is serviceable.
+  }
+  REQUIRE(store->size(id) == 1024);
+  require_bytes(*store, id, 512, std::array<unsigned char, 3>{{0x42, 0, 0}});
+  {
+    auto outer = store->begin();
+    REQUIRE(store->resize(id, 1536));
+    REQUIRE(store->write(id, 512, &pending, 1) == 1);
+    require_byte(*store, id, 512, 0x63);
+    require_warm_byte(*store, backing, id, 512, 0x63);
+    fault.fail_next_commit();
+    REQUIRE(throws_runtime_error([&] { outer->commit(); }));
+    REQUIRE(fault.failed());
+    REQUIRE(throws_runtime_error([&] { (void)store->size(id); }));
+    REQUIRE(throws_runtime_error([&] { (void)store->alive(id); }));
+    outer->rollback();
+  }
+  REQUIRE(store->size(id) == 1024);
+  require_byte(*store, id, 512, 0x42);
+
+  // A failed direct mutation owns an ImplicitTx, with no caller handle to
+  // perform its rollback. Fail publication after all record edits succeed.
+  fault.fail_next_commit();
+  REQUIRE(throws_runtime_error([&] { (void)store->resize(id, 1536); }));
+  REQUIRE(store->size(id) == 1024);
+  require_bytes(*store, id, 512, std::array<unsigned char, 3>{{0x42, 0, 0}});
+  fault.fail_next_commit();
+  REQUIRE(throws_runtime_error([&] { (void)store->write(id, 512, &pending, 1); }));
+  require_byte(*store, id, 512, 0x42);
+  REQUIRE(store->stats().bytes_live == 1024);
+  REQUIRE(store->stats().objects_live == 1);
+  std::printf("O1STORE read cache failed rollback/commit and implicit rollback ok\n");
+}
+
+void check_read_cache_collisions() {
+  Shape shape = read_cache_shape();
+  shape.chunk_bytes = 16;
+  MemoryBacking memory(4096, shape.page_bytes);
+  CountingBacking backing(memory.get());
+  auto store = Store::open(shape, backing);
+  const std::array<unsigned char, 9> markers{{
+      0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x79}};
+  std::array<Id, 9> ids{};
+  static_assert(9 > kStoreReadCacheSlots, "the row exceeds both fixed tables");
+  for (std::size_t index = 0; index < ids.size(); ++index) {
+    ids[index] = store->create(8 + index, 8);
+    REQUIRE(store->write(ids[index], 0, &markers[index], 1) == 1);
+  }
+  REQUIRE(ids.front() == 1);
+  REQUIRE(ids.back() == 9);
+  REQUIRE(ids.front() % kStoreReadCacheSlots == ids.back() % kStoreReadCacheSlots);
+  for (int pass = 0; pass < 3; ++pass) {
+    require_byte(*store, ids.front(), 0, 0x31);
+    require_warm_byte(*store, backing, ids.front(), 0, 0x31);
+    REQUIRE(store->size(ids.front()) == 8);
+    require_byte(*store, ids.back(), 0, 0x79);
+    require_warm_byte(*store, backing, ids.back(), 0, 0x79);
+    REQUIRE(store->size(ids.back()) == 16);
+  }
+  for (const bool reverse : {false, true}) {
+    for (std::size_t step = 0; step < ids.size(); ++step) {
+      const std::size_t index = reverse ? ids.size() - 1 - step : step;
+      require_byte(*store, ids[index], 0, markers[index]);
+      REQUIRE(store->size(ids[index]) == 8 + index);
+    }
+  }
+
+  // Seventeen different chunks, including 0 and 8 in the same lookup slot.
+  const std::array<unsigned char, 17> chunks{{
+      0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
+      0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30}};
+  const Id wide = store->create(272, 8);
+  for (std::size_t chunk = 0; chunk < chunks.size(); ++chunk)
+    REQUIRE(store->write(wide, chunk * 16, &chunks[chunk], 1) == 1);
+  require_byte(*store, wide, 0, 0x20);
+  require_byte(*store, wide, 128, 0x28);
+  require_byte(*store, wide, 0, 0x20);
+  require_byte(*store, wide, 256, 0x30);
+  for (const bool reverse : {false, true}) {
+    for (std::size_t step = 0; step < chunks.size(); ++step) {
+      const std::size_t chunk = reverse ? chunks.size() - 1 - step : step;
+      require_byte(*store, wide, chunk * 16, chunks[chunk]);
+    }
+  }
+  REQUIRE(store->size(wide) == 272);
+  std::printf("O1STORE read cache full id/chunk keys and capacity eviction ok\n");
+}
+
+void check_read_cache_page_eviction() {
+  const Shape shape = read_cache_shape();
+  MemoryBacking memory(4096, shape.page_bytes);
+  CountingBacking backing(memory.get());
+  auto store = Store::open(shape, backing);
+  const Id id = store->create(2048, 8);
+  REQUIRE(id == 1);
+  const unsigned char marker = 0x42;
+  REQUIRE(store->write(id, 512, &marker, 1) == 1);
+  require_byte(*store, id, 512, 0x42);
+  require_warm_byte(*store, backing, id, 512, 0x42);
+  // Chunks 2 and 3 use different lookup slots from chunk 1. Each full read
+  // traverses two blob pages, evicting the target data AND its handle page.
+  const std::array<unsigned char, 512> zeroes{};
+  require_bytes(*store, id, 1024, zeroes);
+  require_bytes(*store, id, 1536, zeroes);
+  const auto returning = counted_byte_read(*store, backing, id, 512, 0x42);
+  REQUIRE(returning > 0); // The target's scratch pages really were evicted.
+  REQUIRE(returning <= 2); // Its cached integer handle bypasses the index.
+  require_warm_byte(*store, backing, id, 512, 0x42);
+  std::printf("O1STORE cached handles survive scratch page eviction ok\n");
+}
+
+void check_read_cache_cold_warm_literals() {
+  const Shape shape = read_cache_shape();
+  MemoryBacking memory(4096, shape.page_bytes);
+  CountingBacking backing(memory.get());
+  auto store = Store::open(shape, backing);
+  const Id id = store->create(1024, 8);
+  const std::array<unsigned char, 8> seed{{0x11, 0x22, 0x33, 0x44,
+                                         0x55, 0x66, 0x77, 0x88}};
+  REQUIRE(store->write(id, 508, seed.data(), seed.size()) == seed.size());
+  // Each arm is checked against the literal oracle, not against the other arm.
+  require_bytes(*store, id, 508, std::array<unsigned char, 8>{{
+      0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}});
+  require_warm_byte(*store, backing, id, 512, 0x55);
+  require_bytes(*store, id, 508, std::array<unsigned char, 8>{{
+      0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}});
+  REQUIRE(store->resize(id, 514));
+  for (int pass = 0; pass < 2; ++pass) {
+    std::array<unsigned char, 8> value{};
+    value.fill(0xdd);
+    REQUIRE(store->read(id, 508, value.data(), value.size()) == 6);
+    REQUIRE((value == std::array<unsigned char, 8>{{
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0xdd, 0xdd}}));
+  }
+  REQUIRE(store->resize(id, 1024));
+  for (int pass = 0; pass < 2; ++pass)
+    require_bytes(*store, id, 508, std::array<unsigned char, 8>{{
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0, 0}});
+  std::printf("O1STORE cold/warm literal bytes, clipping and regrowth zeroes ok\n");
+}
+
+// ---------------------------------------------------------------- lazy chunk creation
+
+void check_lazy_chunk_creation() {
+  Shape shape = default_shape();
+  shape.resident_pages = 4;
+  shape.chunk_bytes = 1024;
+  MemoryBacking backing(32768, shape.page_bytes);
+  std::unique_ptr<Store> store = Store::open(shape, backing.get());
+  const Stats before = store->stats();
+  constexpr std::uint64_t declared_bytes = UINT64_C(4) * 1024 * 1024;
+  const Id id = store->create(declared_bytes, 8);
+  const Stats after_create = store->stats();
+
+  REQUIRE(after_create.bytes_live == declared_bytes);
+  REQUIRE(after_create.objects_live == 1);
+  REQUIRE(after_create.bytes_backing >= before.bytes_backing);
+  REQUIRE(after_create.bytes_backing - before.bytes_backing <= UINT64_C(256) * 1024);
+
+  std::array<unsigned char, 32> zero_probe{};
+  zero_probe.fill(0xa5);
+  REQUIRE(store->read(id, 1024 + 7, zero_probe.data(), zero_probe.size()) ==
+          zero_probe.size());
+  REQUIRE(std::all_of(zero_probe.begin(), zero_probe.end(),
+                      [](unsigned char byte) { return byte == 0; }));
+
+  const std::uint64_t marker = UINT64_C(0x1122334455667788);
+  REQUIRE(store->write(id, 3 * 1024 + 5, &marker, sizeof marker) == sizeof marker);
+  std::uint64_t echoed = 0;
+  REQUIRE(store->read(id, 3 * 1024 + 5, &echoed, sizeof echoed) == sizeof echoed);
+  REQUIRE(echoed == marker);
+
+  {
+    auto transaction = store->begin();
+    const std::uint64_t pending = UINT64_C(0xaabbccddeeff0011);
+    REQUIRE(store->write(id, 7 * 1024 + 3, &pending, sizeof pending) == sizeof pending);
+    REQUIRE(store->read(id, 7 * 1024 + 3, &echoed, sizeof echoed) == sizeof echoed);
+    REQUIRE(echoed == pending);
+    transaction->rollback();
+  }
+  echoed = marker;
+  REQUIRE(store->read(id, 7 * 1024 + 3, &echoed, sizeof echoed) == sizeof echoed);
+  REQUIRE(echoed == 0);
+  REQUIRE(store->read(id, 3 * 1024 + 5, &echoed, sizeof echoed) == sizeof echoed);
+  REQUIRE(echoed == marker);
+
+  store->release(id);
+  REQUIRE(store->stats().bytes_live == 0);
+  REQUIRE(store->stats().objects_live == 0);
+  std::printf("O1STORE lazy create, zero reads, first write and rollback ok\n");
+}
+
+void check_sparse_chunk_straddling_read() {
+  Shape shape = default_shape();
+  shape.chunk_bytes = 1024;
+  MemoryBacking backing(256, shape.page_bytes);
+  std::unique_ptr<Store> store = Store::open(shape, backing.get());
+  const Id id = store->create(4096, 8);
+
+  const std::array<unsigned char, 4> first{{0x11, 0x22, 0x33, 0x44}};
+  const std::array<unsigned char, 4> third{{0x55, 0x66, 0x77, 0x88}};
+  REQUIRE(store->write(id, 1020, first.data(), first.size()) == 4);
+  REQUIRE(store->write(id, 2055, third.data(), third.size()) == 4);
+
+  // One read crosses present chunk 0, absent chunk 1, present chunk 2,
+  // and absent chunk 3. Every byte outside the two literal markers is zero.
+  std::array<unsigned char, 4096> expected{};
+  expected[1020] = 0x11;
+  expected[1021] = 0x22;
+  expected[1022] = 0x33;
+  expected[1023] = 0x44;
+  expected[2055] = 0x55;
+  expected[2056] = 0x66;
+  expected[2057] = 0x77;
+  expected[2058] = 0x88;
+  std::array<unsigned char, 4096> actual{};
+  actual.fill(0xa5);
+  REQUIRE(store->read(id, 0, actual.data(), actual.size()) == 4096);
+  REQUIRE(actual == expected);
+
+  store->release(id);
+  REQUIRE(!store->alive(id));
+  REQUIRE(store->stats().bytes_live == 0);
+  REQUIRE(store->stats().objects_live == 0);
+  std::printf("O1STORE read straddles present and absent chunks ok\n");
+}
+
+void check_sparse_resize_and_release() {
+  Shape shape = default_shape();
+  shape.chunk_bytes = 1024;
+  MemoryBacking backing(256, shape.page_bytes);
+  std::unique_ptr<Store> store = Store::open(shape, backing.get());
+  REQUIRE(store->stats().bytes_live == 0);
+  REQUIRE(store->stats().objects_live == 0);
+  const Id id = store->create(8192, 8);
+
+  // Only chunk 5 has data; chunks 1..4 and 6..7 have no records.
+  const std::array<unsigned char, 4> marker{{0xde, 0xad, 0xbe, 0xef}};
+  REQUIRE(store->write(id, 5127, marker.data(), marker.size()) == 4);
+  std::array<unsigned char, 8> before_shrink{};
+  before_shrink.fill(0xa5);
+  const std::array<unsigned char, 8> expected_marker{{
+      0, 0, 0xde, 0xad, 0xbe, 0xef, 0, 0}};
+  REQUIRE(store->read(id, 5125, before_shrink.data(), before_shrink.size()) == 8);
+  REQUIRE(before_shrink == expected_marker);
+  REQUIRE(store->stats().bytes_live == 8192);
+  REQUIRE(store->stats().objects_live == 1);
+
+  REQUIRE(store->resize(id, 3072));
+  REQUIRE(store->size(id) == 3072);
+  REQUIRE(store->stats().bytes_live == 3072);
+  REQUIRE(store->stats().objects_live == 1);
+  std::array<unsigned char, 3072> shrunk{};
+  shrunk.fill(0xa5);
+  REQUIRE(store->read(id, 0, shrunk.data(), shrunk.size()) == 3072);
+  REQUIRE(std::all_of(shrunk.begin(), shrunk.end(),
+                      [](unsigned char byte) { return byte == 0; }));
+  REQUIRE(store->read(id, 5127, before_shrink.data(), before_shrink.size()) == 0);
+
+  REQUIRE(store->resize(id, 8192));
+  REQUIRE(store->size(id) == 8192);
+  REQUIRE(store->stats().bytes_live == 8192);
+  REQUIRE(store->stats().objects_live == 1);
+  std::array<unsigned char, 8192> regrown{};
+  regrown.fill(0xa5);
+  REQUIRE(store->read(id, 0, regrown.data(), regrown.size()) == 8192);
+  REQUIRE(std::all_of(regrown.begin(), regrown.end(),
+                      [](unsigned char byte) { return byte == 0; }));
+
+  // Chunks 1 and 2 are still absent after regrowth.
+  store->release(id);
+  REQUIRE(!store->alive(id));
+  REQUIRE(store->stats().bytes_live == 0);
+  REQUIRE(store->stats().objects_live == 0);
+  std::printf("O1STORE sparse shrink, zero regrowth and release ok\n");
 }
 
 // ---------------------------------------------------------------- lifecycle
@@ -649,14 +1253,17 @@ void check_never_refuses() {
   MemoryBacking backing(32768, shape.page_bytes);
   std::unique_ptr<Store> store = Store::open(shape, backing.get());
   const std::uint64_t ceiling = ceiling_for(shape);
+  const std::uint64_t scratch_bytes = scratch_workspace_for(shape, backing.get());
 
   const Id id = store->create(64, 8);
+  require_cache_bytes(*store, scratch_bytes);
   fill_pattern(*store, id, 31337);
   const std::vector<unsigned char> prefix = read_object(*store, id);
   const std::uint64_t huge = UINT64_C(8) * 1024 * 1024;
   REQUIRE(store->resize(id, huge));
   REQUIRE(store->size(id) == huge);
   const Stats after = store->stats();
+  require_cache_bytes(*store, scratch_bytes); // One object, now 8,192 chunks.
   REQUIRE(after.bytes_resident <= ceiling);
   REQUIRE(after.bytes_backing >= huge);
   std::vector<unsigned char> echoed(prefix.size());
@@ -758,6 +1365,10 @@ class HeapVectorStore final : public Store {
   bool join_active_tx() override { return false; }
   void abandon_joined_tx() noexcept override {}
 
+  // This deliberately nontransactional resident-memory negative control has
+  // NullTx handles: no rollback ever restores a version.
+  std::uint64_t rollback_epoch() const noexcept override { return 0; }
+
   void note_cleanup_skipped(CleanupSkip reason) noexcept override {
     if (reason == CleanupSkip::rollback_only) ++cleanup_skipped_rollback_only_;
     else ++cleanup_failed_;
@@ -854,8 +1465,10 @@ void check_growth_gate(std::uint64_t bars, std::size_t backing_pages) {
   const std::uint64_t first_mark = std::max<std::uint64_t>(1000, bars / 100);
   const std::uint64_t second_mark =
       std::max<std::uint64_t>(first_mark + 1, bars / 10);
-  const std::array<std::uint64_t, 3> marks{{first_mark, second_mark, bars}};
-  std::array<Stats, 3> checkpoints{};
+  const std::array<std::uint64_t, 4> marks{{1, first_mark, second_mark, bars}};
+  std::array<Stats, 4> checkpoints{};
+  const std::uint64_t scratch_bytes = scratch_workspace_for(shape, backing.get());
+  require_cache_bytes(*store, scratch_bytes);
   std::vector<Id> ids;
   ids.reserve(static_cast<std::size_t>(bars));
   std::size_t next_mark = 0;
@@ -864,9 +1477,8 @@ void check_growth_gate(std::uint64_t bars, std::size_t backing_pages) {
   std::unique_ptr<Tx> transaction;
   // Successful begin() and mutations allocate nothing after open.
   // ids is already reserved.
-  // bytes_resident only reports ScratchStore's constant workspace, so the old
-  // ceiling/flatness assertions cannot see an object-layer heap leak. This
-  // allocation delta catches even a growing per-object vector outside stats().
+  // bytes_resident reports the actual fixed workspace and inline read cache;
+  // allocation deltas also catch a growing per-object vector outside stats().
   constexpr std::size_t allocations_per_begin = 0;
   std::size_t begin_calls = 0;
   const std::size_t allocations_before = global_allocation::allocations;
@@ -886,6 +1498,18 @@ void check_growth_gate(std::uint64_t bars, std::size_t backing_pages) {
       REQUIRE(checkpoints[next_mark].bytes_live ==
               (index + 1) * object_bytes);
       REQUIRE(checkpoints[next_mark].bytes_resident <= ceiling);
+      // Includes the literal 1-object and 100,000-object checkpoints in the
+      // first call. The delta is the ACTUAL cache member's sizeof, checked
+      // against the real substrate workspace, never sizeof(Store) twice.
+      require_cache_bytes(*store, scratch_bytes);
+      std::uint64_t cached_value = 0;
+      REQUIRE(store->read(id, 0, &cached_value, sizeof cached_value) ==
+              sizeof cached_value);
+      REQUIRE(cached_value == (index ^ salt));
+      cached_value = 0;
+      REQUIRE(store->read(id, 0, &cached_value, sizeof cached_value) ==
+              sizeof cached_value);
+      REQUIRE(cached_value == (index ^ salt));
       REQUIRE(global_allocation::allocations - allocations_before ==
               begin_calls * allocations_per_begin);
       print_stats("growth-gate", index + 1, checkpoints[next_mark], ceiling);
@@ -908,7 +1532,8 @@ void check_growth_gate(std::uint64_t bars, std::size_t backing_pages) {
   }
   REQUIRE(checkpoints[1].bytes_backing > checkpoints[0].bytes_backing);
   REQUIRE(checkpoints[2].bytes_backing > checkpoints[1].bytes_backing);
-  REQUIRE(checkpoints[2].bytes_backing > ceiling * 100);
+  REQUIRE(checkpoints[3].bytes_backing > checkpoints[2].bytes_backing);
+  REQUIRE(checkpoints[3].bytes_backing > ceiling * 100);
 
   XorShift rng(UINT64_C(0x1234567890abcdef));
   const int probes = bars == UINT64_C(100000) ? 5000 : 20000;
@@ -919,6 +1544,8 @@ void check_growth_gate(std::uint64_t bars, std::size_t backing_pages) {
     REQUIRE(store->read(id, 0, &value, sizeof value) == sizeof value);
     REQUIRE(value == (index ^ salt));
   }
+  REQUIRE(global_allocation::allocations - allocations_before ==
+          begin_calls * allocations_per_begin);
 
   const Id last = ids.back();
   store->release(last);
@@ -1030,14 +1657,20 @@ void check_flattened_transactions() {
   const Id usable = small->create(16, 1);
   REQUIRE(small->alive(usable));
   auto failed_allocation_tx = small->begin();
-  bool allocation_failed = false;
-  try {
-    (void)small->create(UINT64_C(4) * 1024 * 1024, 1);
-  } catch (const std::runtime_error&) {
-    allocation_failed = true;
-  }
-  REQUIRE(allocation_failed);
+  constexpr std::size_t failed_allocation_bytes =
+      static_cast<std::size_t>(UINT64_C(4) * 1024 * 1024);
+  const Id failed_allocation =
+      small->create(failed_allocation_bytes, 1);
+  const std::vector<unsigned char> allocation_payload(
+      failed_allocation_bytes, 0x5a);
+  REQUIRE(throws_runtime_error([&] {
+    (void)small->write(failed_allocation, 0, allocation_payload.data(),
+                       allocation_payload.size());
+  }));
   failed_allocation_tx->rollback();
+  REQUIRE(!small->alive(failed_allocation));
+  REQUIRE(small->alive(usable));
+  REQUIRE(object_checksum(*small, victim) == victim_baseline);
   const Id after_failed_allocation = small->create(16, 1);
   REQUIRE(after_failed_allocation > usable + 1);
 
@@ -1747,6 +2380,16 @@ void check_alive_failure_is_observable() {
 
 int main() {
   try {
+    check_read_cache_hits();
+    check_read_cache_mutations();
+    check_read_cache_rollbacks();
+    check_read_cache_failures();
+    check_read_cache_collisions();
+    check_read_cache_page_eviction();
+    check_read_cache_cold_warm_literals();
+    check_lazy_chunk_creation();
+    check_sparse_chunk_straddling_read();
+    check_sparse_resize_and_release();
     check_lifecycle();
     check_shape_caps();
     check_chunk_boundaries_and_rollback();

@@ -1812,8 +1812,8 @@ list(APPEND TEST_SOURCES test_pooc_limit_close_tapes)
 list(APPEND TEST_SOURCES test_report_timeframe_ratio)
 list(APPEND TEST_SOURCES test_aggregated_admission_receipt_tapes)
 # Recorded outputs (docs/outputs.md): a bare host's record read through the
-# strategy_outputs_* C exports -- hand values, the row and run-constant rules
-# and every refusal (recorder); a stream records what a batch records; a
+# strategy_outputs_* C exports -- hand values, the row and run-constant rules,
+# the 64-slot limit (registered below), and refusals; a stream equals a batch; a
 # batch cut at bar t records bars <= t as the whole batch does; the run
 # boundary on a reused handle; and three trading hosts whose trades, equity
 # and hashes are equal with recording undeclared, off and on. All source-free,
@@ -3803,6 +3803,7 @@ list(APPEND TEST_SOURCES test_native_unreachable_book)
 list(APPEND TEST_SOURCES test_native_dormant_book_cost)
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     list(APPEND TEST_SOURCES test_standing_orders_wall test_projected_pending_scaling)
+    list(APPEND TEST_SOURCES test_abi_layout_probe)
 endif()
 list(APPEND TEST_SOURCES test_native_dormant_book_resident)
 list(APPEND TEST_SOURCES test_native_dormant_book_transcript)
@@ -7439,6 +7440,14 @@ endif()
 
 add_test(NAME test_run_json_sink_fd_skip_accounting COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_fd_skip_accounting.py --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_run_json_sink_fd_skip_accounting)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME test_jailed_temp_files_witness
+        COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/run_pytest_no_skips.py
+            --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_jailed_temp_files_witness
+            -- -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_jailed_temp_files_witness.py)
+endif()
+
 # Property reads and the diagnostic belong before the lane loop;
 # the fence grammar permits target definitions, not get_target_property/message.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
@@ -8017,6 +8026,21 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND PINEFO
         "-Wl,--wrap=preadv" "-Wl,--wrap=pwritev" "-Wl,--wrap=mmap")
 endif()
 # --- CR-150 closed-trade-text-coalesce end ---
+# --- CR-150 ledger-block-zeroing begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8
+   AND PINEFORGE_BUILD_SOURCE_LAYER)
+    target_link_options(test_ledger_block_zeroing PRIVATE "-Wl,--wrap=pwrite")
+endif()
+# --- CR-150 ledger-block-zeroing end ---
+
+# --- CR-150 roster-pass-work begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    # The fixture includes the real adapter translation unit before linking
+    # the archive, so only this test target needs the counting overlay.
+    target_compile_definitions(test_adapter_cohort_origin_release PRIVATE
+        PINEFORGE_ROSTER_PASS_OBSERVER=1)
+endif()
+# --- CR-150 roster-pass-work end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
@@ -8033,6 +8057,14 @@ foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
             message(FATAL_ERROR "PR fast row must execute without skips: ${_pf_fast_test}")
         endif()
         set_property(TEST ${_pf_fast_test} APPEND PROPERTY LABELS fast)
+    endif()
+endforeach()
+get_directory_property(_pf_registered_tests TESTS)
+foreach(_pf_registered_test IN LISTS _pf_registered_tests)
+    get_test_property(${_pf_registered_test} LABELS _pf_registered_test_labels)
+    if("fast" IN_LIST _pf_registered_test_labels AND NOT _pf_registered_test IN_LIST PINEFORGE_PR_FAST_TESTS)
+        message(FATAL_ERROR
+            "test labeled fast is not in PINEFORGE_PR_FAST_TESTS, so pineforge_pr_smoke never builds it: ${_pf_registered_test}")
     endif()
 endforeach()
 if(PINEFORGE_BUILD_SOURCE_LAYER)

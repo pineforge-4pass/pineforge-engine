@@ -149,6 +149,14 @@ The `strategy_library_incompatible` row also includes the two released
 1.5.0 outputs reasons, `outputs_api_mismatch` and `outputs_manifest_invalid`,
 in addition to its six released 1.4.0 reasons.
 
+`outputs_limit` admits reasons `too_many_events`, `too_many_rows` and
+`too_many_series`. The first two carry `max` `INT_MAX`. Declaring more than
+64 recorded series slots reaches Pine's plot-count limit: it throws
+`std::runtime_error` with reason `too_many_series` and `max` 64 before any
+declaration state changes. Exactly 64 series slots are accepted. The
+declaration is C++ only: a generated strategy that declares more than 64 slots
+fails strategy creation and `run_json` reports `strategy_create_failed`.
+
 <!-- BEGIN generated from docker/run_failure_codes.json: python3 scripts/test_gen_run_failure_catalog_diff.py --write-docs-tables -->
 
 ### Classes
@@ -181,7 +189,7 @@ in addition to its six released 1.4.0 reasons.
 | `other_symbol_feed_missing` | `no_data` | no | `timeframe` (timeframe, optional) | No feed is installed for another symbol's request at its timeframe. |
 | `other_symbol_request` | `no_data` | no | `call` (pine_source), `function` (vocab, 2 values), `line` (integer), `symbol` (symbol, optional) | The script read another symbol's request and no bars of that symbol were installed. |
 | `out_of_memory` | `resource` | yes | none | The run ran out of memory. |
-| `outputs_limit` | `strategy_limit` | no | `max` (integer), `reason` (vocab, 2 values) | A recorded-outputs capacity limit was reached during the run. |
+| `outputs_limit` | `strategy_limit` | no | `max` (integer), `reason` (vocab, 3 values) | A recorded-outputs capacity limit was reached at declaration or during the run. |
 | `outputs_rejected` | `input` | no | `reason` (vocab, 3 values) | Recorded outputs were asked of a strategy library that records none, or the recording cannot be honoured as asked. |
 | `pine_array_error` | `strategy` | no | `collection` (vocab, 2 values, optional), `method` (vocab, 12 values, optional), `reason` (vocab, 5 values) | An array call failed: an index out of bounds, an inverted slice, an empty array, an invalid size, or a modified historical collection. |
 | `pine_invalid_argument` | `strategy` | no | `argument` (identifier, optional), `function` (identifier, optional), `rule` (vocab, 6 values) | A built-in refused the value of one of its arguments. |

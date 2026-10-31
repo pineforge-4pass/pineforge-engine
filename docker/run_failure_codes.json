@@ -542,15 +542,17 @@
      "kind": "vocab",
      "values": [
       "too_many_events",
-      "too_many_rows"
+      "too_many_rows",
+      "too_many_series"
      ]
     }
    },
    "class": "strategy_limit",
-   "description": "A recorded-outputs capacity limit was reached during the run.",
+   "description": "A recorded-outputs capacity limit was reached at declaration or during the run.",
    "english": [
     "outputs: the event queue is full",
-    "outputs: the row count is at its limit"
+    "outputs: the row count is at its limit",
+    "outputs: the series count is at its limit"
    ],
    "retryable": false,
    "since": "1.5.0"
