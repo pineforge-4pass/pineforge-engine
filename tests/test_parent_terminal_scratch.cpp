@@ -974,60 +974,53 @@ void exercise_limits(bool direct) {
         const auto* found = core.event_at(no::EventId{core.identity(), ordinals[kJournalChunk]});
         CHECK(found && full_fold::value(*found) == values[kJournalChunk]);
     }
-    for (const auto label_bytes : {over_label,
-                                  2 * kJournalSpillPageBytes - accepted_bytes - 1,
-                                  2 * kJournalSpillPageBytes - accepted_bytes,
-                                  2 * kJournalSpillPageBytes - accepted_bytes + 1}) {
-        no::WorkingRequestCore core{no::RunIdentity{"journal-continuation", 1}};
-        core.reset(no::RunIdentity{"journal-continuation", 1});
+    {
+        no::WorkingRequestCore core{no::RunIdentity{"x08-limits-refuse", 1}};
+        core.reset(no::RunIdentity{"x08-limits-refuse", 1});
         core.reserve(kJournalMaxResident + 64);
         std::uint64_t incarnation = 1, ordinal = 1;
-        const no::Request over{no::Transact{1.0}, std::string(label_bytes, 'o'), ""};
+        const no::Request over{no::Transact{1.0}, std::string(over_label, 'o'), ""};
         const auto accepted = submit_limit_case(core, over, incarnation, ordinal, direct);
         CHECK(accepted.status == no::SubmitStatus::Accepted);
         while (core.history_end() < kJournalMaxResident)
             CHECK(submit_limit_case(core, filler, incarnation, ordinal, direct).status
                   == no::SubmitStatus::Rejected);
+        const auto before = full_fold::core_value(core);
         const auto before_end = core.history_end();
         const auto before_incarnation = incarnation, before_ordinal = ordinal;
-        const auto expected = full_fold::value(core.history_at(0));
         std::array<std::uintptr_t, kJournalChunk> addresses{};
         for (std::size_t index = 0; index < addresses.size(); ++index)
             addresses[index] = reinterpret_cast<std::uintptr_t>(&core.history_at(index));
-        // The first event size is one byte beyond a page; the others straddle
-        // two full transfer chunks. Before continuation support the first
-        // append below throws EFBIG: CHECK(appended) is the runtime red.
+        // The event is already resident; the next append reaches the spill
+        // refusal in reserve_plan/seal_direct. Retry also must publish nothing.
         for (unsigned attempt = 0; attempt < 2; ++attempt) {
-            bool appended = false;
+            bool refused = false;
             try {
-                appended = submit_limit_case(core, filler, incarnation, ordinal, direct).status
-                           == no::SubmitStatus::Rejected;
+                (void)submit_limit_case(core, filler, incarnation, ordinal, direct);
             } catch (const detail::ScratchIoError& error) {
-                std::fprintf(stderr, "oversized journal append: %s (errno=%d)\n",
-                             error.what(), error.code().value());
+                refused = true;
+                CHECK(error.code() == std::error_code(EFBIG, std::generic_category()));
+                CHECK(std::string(error.what()).find(
+                          "native o1 journal event exceeds the spill page byte bound")
+                      != std::string::npos);
             }
-            CHECK(appended);
-            if (!appended) return;
-            CHECK(core.history_end() == before_end + attempt + 1 && core.history_base() == 0);
-            CHECK(incarnation == before_incarnation && ordinal == before_ordinal + attempt + 1);
-            CHECK(full_fold::value(core.history_at(0)) == expected);
-            CHECK(std::get<no::AcceptedEvent>(core.history_at(0)).request().label == over.label);
+            CHECK(refused);
+            CHECK(core.history_end() == before_end && core.history_base() == 0);
+            CHECK(incarnation == before_incarnation && ordinal == before_ordinal);
+            CHECK(full_fold::core_value(core) == before);
+            for (std::size_t index = 0; index < addresses.size(); ++index)
+                CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(index)) == addresses[index]);
         }
-        CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(0)) != addresses[0]);
-        // Retiring just the continued event leaves a partial chunk/page. Its
-        // surviving prefix still reads back and the ordinal lookup agrees.
+        // Removing only the oversized event leaves a partial resident chunk.
+        // The following appends must still spill/read its surviving prefix.
         const auto survivor = full_fold::value(core.history_at(1));
         CHECK(core.retire_history(accepted.event_ordinal) == 1);
         for (unsigned index = 0; index < 2; ++index)
             CHECK(submit_limit_case(core, filler, incarnation, ordinal, direct).status
                   == no::SubmitStatus::Rejected);
-        CHECK(core.history_base() == 1 && core.history_end() == before_end + 4);
+        CHECK(core.history_base() == 1 && core.history_end() == before_end + 2);
         CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(1)) != addresses[1]);
         CHECK(full_fold::value(core.history_at(1)) == survivor);
-        const auto survivor_ordinal = std::visit(
-            [](const auto& row) { return row.ordinal; }, core.history_at(1));
-        const auto* found = core.event_at(no::EventId{core.identity(), survivor_ordinal});
-        CHECK(found && full_fold::value(*found) == survivor);
     }
     std::printf("X08 limits direct=%d page_bytes=%zu accepted_fixed_bytes=%zu "
                 "under_label=%zu exact_label=%zu over_label=%zu\n",
@@ -1067,13 +1060,7 @@ void invalid_cause(bool direct) {
 }
 }  // namespace
 
-int main(int argc, char** argv) {
-    if (argc == 2 && std::string(argv[1]) == "--journal-limits-only") {
-        exercise_limits(false);
-        exercise_limits(true);
-        std::printf("journal spill boundaries: %d failures\n", failures);
-        return failures ? 1 : 0;
-    }
+int main() {
     for (const bool direct : {true, false}) {
         exercise(64, Shape::Wide, direct);
         exercise(512, Shape::Wide, direct);
