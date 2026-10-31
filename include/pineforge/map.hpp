@@ -7,6 +7,7 @@
 #include <pineforge/script_string.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -244,6 +245,53 @@ using MapRepOf = std::conditional_t<
     std::conditional_t<MapExternalCodec<PineMapBare<T>>::enabled,
                        typename MapExternalCodec<PineMapBare<T>>::Rep,
                        std::conditional_t<is_map_inline_v<T>, PineMapBare<T>, char>>>;
+
+// A map read cache keeps only fixed-size Store representations.  Only positive
+// lookups are cached: retaining absent query strings would make the cache
+// footprint depend on key length.  The cache never owns a decoded std::string
+// or handle value, so its footprint does not follow the map population.
+inline constexpr std::size_t kMapReadCacheSlots = 8;
+
+template <typename KeyRep, typename ValueRep, std::size_t Slots = kMapReadCacheSlots>
+struct MapReadCache {
+    static_assert(Slots != 0, "a map read cache needs at least one slot");
+
+    struct Entry {
+        std::uint64_t hash = 0;
+        std::uint32_t slot = 0;
+        bool valid = false;
+        KeyRep key{};
+        ValueRep value{};
+    };
+    static_assert(std::is_trivially_copyable_v<Entry>,
+                  "map read cache entries must remain fixed-size bytes");
+
+    std::array<Entry, Slots> entries{};
+    std::size_t next = 0;
+    std::uint64_t epoch = 0;
+
+    static constexpr std::size_t capacity = Slots;
+
+    void clear() noexcept {
+        for (auto& entry : entries) entry.valid = false;
+        next = 0;
+    }
+
+    // Round-robin replacement makes the cache's memory and replacement rule
+    // independent of the map population.  The representations are borrowed
+    // from the live map slot; the map slot owns any external payload.
+    void record(std::uint64_t hash, std::uint32_t slot, const KeyRep& key,
+                const ValueRep& value) noexcept {
+        Entry& entry = entries[next];
+        next = (next + 1) % Slots;
+        entry.valid = false;
+        entry.hash = hash;
+        entry.slot = slot;
+        std::memcpy(&entry.key, &key, sizeof(KeyRep));
+        std::memcpy(&entry.value, &value, sizeof(ValueRep));
+        entry.valid = true;
+    }
+};
 
 [[nodiscard]] inline MapStringRep map_string_encode(o1::Store& store, const std::string& text) {
     MapStringRep rep{};
@@ -568,6 +616,14 @@ private:
     static_assert(std::is_trivially_copyable_v<KeyRep> &&
                       std::is_trivially_copyable_v<ValueRep>,
                   "map external representations must be copyable as Store bytes");
+    using ReadCache = detail::MapReadCache<KeyRep, ValueRep>;
+
+public:
+    static constexpr std::size_t hot_read_cache_slots =
+        detail::kMapReadCacheSlots;
+    static constexpr std::size_t hot_read_cache_bytes = sizeof(ReadCache);
+
+private:
 
     // A value that is neither a string nor trivially copyable (a handle) is
     // kept whole in a heap table indexed by slot.
@@ -614,6 +670,7 @@ private:
         std::shared_ptr<detail::MapStoreHolder> holder;
         EntryRoot entries;
         IndexRoot index;
+        ReadCache read_cache;
         std::vector<Value> heap_values;  // used only when kHeapValue
 
         Storage() = default;
@@ -716,6 +773,7 @@ public:
     Value put(Key key, Value value) {
         Storage& storage = require_storage();
         std::lock_guard<std::recursive_mutex> lock(storage.holder->mutex);
+        storage.read_cache.clear();
         auto tx = storage.store().scope();
         Value previous = [&] {
             try {
@@ -734,10 +792,21 @@ public:
     [[nodiscard]] Value get(const Key& key) const {
         Storage& storage = require_storage();
         std::lock_guard<std::recursive_mutex> lock(storage.holder->mutex);
+        const std::uint64_t hash = hash_key(key);
+        if (const auto* cached = find_cached(storage, key, hash))
+            return read_cached_value(storage, *cached);
         const detail::MapHeader header = load_header(storage);
-        const Located found = locate(storage, header, key, hash_key(key));
+        const Located found = locate(storage, header, key, hash);
         if (found.slot == 0) return pineforge::na<Value>();
-        return read_value(storage, found.slot - 1);
+        const std::uint32_t slot = found.slot - 1;
+        if constexpr (kHeapValue) {
+            record_cache(storage, hash, slot, found.key, ValueRep{});
+            return storage.heap_values[slot];
+        } else {
+            const ValueRep rep = load_value_rep(storage, slot);
+            record_cache(storage, hash, slot, found.key, rep);
+            return detail::map_decode<Value>(storage.store(), rep, storage.holder);
+        }
     }
 
     // Returns the removed value, or the value type's Pine na sentinel when no
@@ -745,6 +814,7 @@ public:
     Value remove(const Key& key) {
         Storage& storage = require_storage();
         std::lock_guard<std::recursive_mutex> lock(storage.holder->mutex);
+        storage.read_cache.clear();
         auto tx = storage.store().scope();
         detail::MapHeader header = load_header(storage);
         const Located found = locate(storage, header, key, hash_key(key));
@@ -796,8 +866,13 @@ public:
     [[nodiscard]] bool contains(const Key& key) const {
         Storage& storage = require_storage();
         std::lock_guard<std::recursive_mutex> lock(storage.holder->mutex);
+        const std::uint64_t hash = hash_key(key);
+        if (find_cached(storage, key, hash) != nullptr) return true;
         const detail::MapHeader header = load_header(storage);
-        return locate(storage, header, key, hash_key(key)).slot != 0;
+        const Located found = locate<true>(storage, header, key, hash);
+        if (found.slot == 0) return false;
+        record_cache(storage, hash, found.slot - 1, found.key, found.value);
+        return true;
     }
 
     [[nodiscard]] int size() const {
@@ -831,6 +906,7 @@ public:
     void clear() {
         Storage& storage = require_storage();
         std::lock_guard<std::recursive_mutex> lock(storage.holder->mutex);
+        storage.read_cache.clear();
         auto tx = storage.store().scope();
         // Release payload ownership before resetting the arena. Its scalar
         // geometry and hash domain remain prepared for reuse.
@@ -855,6 +931,7 @@ public:
             std::lock(target_lock, source_lock);
         }
 
+        target.read_cache.clear();
         const detail::MapHeader source_header = load_header(from);
         const detail::MapHeader target_header = load_header(target);
         std::size_t new_keys = 0;
@@ -983,6 +1060,7 @@ public:
             // and can be restored again.
             Storage& storage = *snapshot.identity_;
             std::lock_guard<std::recursive_mutex> lock(storage.holder->mutex);
+            storage.read_cache.clear();
             auto tx = storage.store().scope();
             detail::MapHeader header{};
             read_exact(storage.store(), snapshot.state_->id, 0, &header, sizeof header);
@@ -1004,6 +1082,8 @@ private:
         std::uint32_t previous = 0;
         std::uint32_t head = 0;
         std::uint32_t bucket = 0;
+        KeyRep key{};
+        ValueRep value{}; // Filled with the value by locate<true> for contains().
     };
 
     [[nodiscard]] Storage& require_storage() const {
@@ -1141,6 +1221,38 @@ private:
         }
     }
 
+    static const typename ReadCache::Entry* find_cached(Storage& storage, const Key& key,
+                                                         std::uint64_t hash) {
+        // An outer Store rollback rewrites slots without calling a map mutator.
+        // Check before touching borrowed external key/value representations.
+        if (storage.read_cache.epoch != storage.store().rollback_epoch()) {
+            storage.read_cache.clear();
+            return nullptr;
+        }
+        // A hash is only a prefilter.  The complete stored representation is
+        // compared before a cache hit is accepted, including all string bytes.
+        for (const auto& entry : storage.read_cache.entries) {
+            if (entry.valid && entry.hash == hash &&
+                key_matches(storage.store(), entry.key, key))
+                return &entry;
+        }
+        return nullptr;
+    }
+
+    static Value read_cached_value(Storage& storage, const typename ReadCache::Entry& entry) {
+        if constexpr (kHeapValue) {
+            return storage.heap_values[entry.slot];
+        } else {
+            return detail::map_decode<Value>(storage.store(), entry.value, storage.holder);
+        }
+    }
+
+    static void record_cache(Storage& storage, std::uint64_t hash, std::uint32_t slot,
+                             const KeyRep& key, const ValueRep& value) {
+        storage.read_cache.epoch = storage.store().rollback_epoch();
+        storage.read_cache.record(hash, slot, key, value);
+    }
+
     static Key read_key(Storage& storage, std::uint32_t slot) {
         return detail::map_decode<Key>(storage.store(), load_key_rep(storage, slot), storage.holder);
     }
@@ -1160,6 +1272,7 @@ private:
 
     // Walks the key's bucket.  A bucket entry counts only if it names a slot
     // below the high-water mark that is itself in that bucket.
+    template <bool WithValue = false>
     static Located locate(Storage& storage, const detail::MapHeader& header, const Key& key,
                           std::uint64_t hash) {
         Located found;
@@ -1174,11 +1287,24 @@ private:
                 found.head = at;
                 first = false;
             }
-            if (links.hash == hash &&
-                key_matches(storage.store(), load_key_rep(storage, at - 1), key)) {
-                found.slot = at;
-                found.previous = before;
-                return found;
+            if (links.hash == hash) {
+                if constexpr (WithValue && !kHeapValue) {
+                    // contains() needs the value only for cache fill. Fetch
+                    // the adjacent reps in the existing key read, adding no
+                    // Store calls to its uncached lookup.
+                    unsigned char raw[sizeof(KeyRep) + sizeof(ValueRep)];
+                    read_exact(storage.store(), storage.entries.id,
+                               slot_offset(at - 1) + kKeyOffset, raw, sizeof raw);
+                    std::memcpy(&found.key, raw, sizeof(KeyRep));
+                    std::memcpy(&found.value, raw + sizeof(KeyRep), sizeof(ValueRep));
+                } else {
+                    found.key = load_key_rep(storage, at - 1);
+                }
+                if (key_matches(storage.store(), found.key, key)) {
+                    found.slot = at;
+                    found.previous = before;
+                    return found;
+                }
             }
             before = at;
             at = links.chain;

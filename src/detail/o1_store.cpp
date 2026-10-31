@@ -147,6 +147,7 @@ class StoreImpl final : public Store {
     else ++cleanup_failed_;
   }
   Stats stats() const override;
+  std::uint64_t rollback_epoch() const noexcept override { return rollback_epoch_; }
 
  private:
   struct Header {
@@ -193,6 +194,7 @@ class StoreImpl final : public Store {
   std::uint64_t baseline_objects_live_ = 0;
   std::uint64_t cleanup_skipped_rollback_only_ = 0;
   std::uint64_t cleanup_failed_ = 0;
+  std::uint64_t rollback_epoch_ = 0;
   bool outer_active_ = false;
   mutable bool rollback_only_ = false;
   mutable std::byte key_buffer_[kKeyBytes] = {};
@@ -758,6 +760,7 @@ void StoreImpl::finish_outer(bool committed) noexcept {
   if (!committed) {
     bytes_live_ = baseline_bytes_live_;
     objects_live_ = baseline_objects_live_;
+    ++rollback_epoch_;
   }
 }
 

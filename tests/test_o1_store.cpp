@@ -758,6 +758,10 @@ class HeapVectorStore final : public Store {
   bool join_active_tx() override { return false; }
   void abandon_joined_tx() noexcept override {}
 
+  // This deliberately nontransactional resident-memory negative control has
+  // NullTx handles: no rollback ever restores a version.
+  std::uint64_t rollback_epoch() const noexcept override { return 0; }
+
   void note_cleanup_skipped(CleanupSkip reason) noexcept override {
     if (reason == CleanupSkip::rollback_only) ++cleanup_skipped_rollback_only_;
     else ++cleanup_failed_;
