@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -42,9 +43,10 @@ def hang_guard_from_environment(environment=os.environ):
 
 
 HANG_GUARD_SECONDS = hang_guard_from_environment()
-# The mutation control SETS a finite guard itself: HostWatchdogExpired firing is the feature
+# The mutation control SETS a guard itself, counted from the host's own stall timestamp (so it cannot
+# race a slow launch that has not reached its stall yet): HostWatchdogExpired firing is the feature
 # under test there, not a limit on a real run.
-MUTATION_CONTROL_GUARD_SECONDS = 4
+MUTATION_CONTROL_AFTER_STALL_SECONDS = 4
 
 KNOBS = (
     ("--report-max-bytes", "PINEFORGE_REPORT_MAX_BYTES", "report_bytes", 4096),
@@ -405,14 +407,16 @@ class Contract(unittest.TestCase):
                         self.assertEqual(capture.report, expected, msg=msg)
                         self.assertTrue(record["channels"]["report"]["complete"], msg=msg)
 
-    def assert_finite_report_stall(self, *, supervisor_path=None, guard=HANG_GUARD_SECONDS):
+    def assert_finite_report_stall(self, *, supervisor_path=None, guard=HANG_GUARD_SECONDS,
+                                   after_stall=None):
         expected = reference({"label": "finite-report-" + "x" * 16384}).stdout
         with tempfile.TemporaryDirectory(prefix="pf-finite-report-") as directory:
             identity = Path(directory) / "producer.json"
             capture = launch(
                 {"candidate": encoded(expected), "producer_identity_path": str(identity)},
                 options=("--channel-stall-ms", "600", "--channel-wall-ms", "60000"),
-                stalled_channels=("report",), supervisor_path=supervisor_path, watchdog_seconds=guard)
+                stalled_channels=("report",), supervisor_path=supervisor_path, watchdog_seconds=guard,
+                watchdog_after_stall_seconds=after_stall)
             msg = capture.failure_context()
             record = self.refusal(
                 capture, "report_channel_failed", {"channel": "report", "reason": "deadline"},
@@ -439,6 +443,14 @@ class Contract(unittest.TestCase):
         for guard in (None, 0):
             with self.subTest(guard=guard):
                 self.assert_finite_report_stall(guard=guard)
+        # The host's own default is none too, so every launch() that names no guard agrees.
+        self.assertIsNone(inspect.signature(launch).parameters["watchdog_seconds"].default)
+        self.assertIsNone(inspect.signature(launch).parameters["watchdog_after_stall_seconds"].default)
+
+    def test_host_guard_counted_from_the_stall_does_not_fire_before_it(self):
+        # A launch that ends well inside the guard (the supervisor's own 600 ms stall deadline)
+        # must not be expired by a guard counted from the stall.
+        self.assert_finite_report_stall(guard=None, after_stall=60)
 
     def test_hang_guard_environment_parse(self):
         parse = hang_guard_from_environment
@@ -464,10 +476,10 @@ class Contract(unittest.TestCase):
                     (altered.parent / sibling.name).symlink_to(sibling)
             altered.write_text(
                 original.replace(line, '                if False:\n', 1), encoding="utf-8")
-            # This control SETS the guard itself: HostWatchdogExpired firing is what it proves.
+            # This control SETS its own guard (from the stall): HostWatchdogExpired firing is what it proves.
             with self.assertRaises(HostWatchdogExpired) as rejected:
                 self.assert_finite_report_stall(
-                    supervisor_path=altered, guard=MUTATION_CONTROL_GUARD_SECONDS)
+                    supervisor_path=altered, after_stall=MUTATION_CONTROL_AFTER_STALL_SECONDS)
             partial = rejected.exception.capture
             msg = partial.failure_context()
             self.assertEqual(partial.control["watchdog_pending_bytes"], {"report": 4096}, msg=msg)
