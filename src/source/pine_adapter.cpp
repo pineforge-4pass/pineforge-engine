@@ -25855,8 +25855,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // The generic cohort is already the quantity authority.  Rebind only
         // adapter lifecycle/reservation receipts after the opening becomes a
         // live physical fact; no request is resized or resubmitted here.
-        detail::ExitScratchRows<native_order::RequestHandle> handles(*this);
+        detail::ExitScratchBatchRows<native_order::RequestHandle> handles(*this);
         for (const auto& handle : live_handles_) handles.push_back(handle);
+        handles.finish();
         for (const auto& handle : handles) {
             const auto pending = placement_.find(handle.incarnation);
             if (pending == placement_.end()) continue;
@@ -26370,8 +26371,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             ::pineforge::detail::clear_exposure_storage(cohort.second.live_units_by_origin);
             cohorts_by_id_.refresh_held(current);
         }
-        detail::ExitScratchRows<native_order::RequestHandle> handles(*this);
+        detail::ExitScratchBatchRows<native_order::RequestHandle> handles(*this);
         for (const auto& handle : live_handles_) handles.push_back(handle);
+        handles.finish();
         for (const auto& handle : handles) {
             const auto found = placement_.find(handle.incarnation);
             if (found == placement_.end()) continue;
