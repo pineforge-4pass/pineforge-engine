@@ -112,7 +112,8 @@ class _ColumnCopyWork:
         if file not in self.columns:
             self.columns[file] = dict(
                 reads=0, writes=0, read_bytes=0, write_bytes=0,
-                read_sha=hashlib.sha256(), write_sha=hashlib.sha256())
+                read_sha=hashlib.sha256(), write_sha=hashlib.sha256(),
+                read_bases=set())
         return self.columns[file]
 
     @contextmanager
@@ -120,19 +121,24 @@ class _ColumnCopyWork:
         read, write = run_json._BoundedJSONFile.read, run_json._BoundedJSONFile.write
         copy_code = run_json._stream_json_value.__code__
 
-        def observed_read(file, *args, **kwargs):
-            value = read(file, *args, **kwargs)
+        def observed_read(file, count=-1):
             caller = sys._getframe(1)
+            if caller.f_code is copy_code:
+                # The column serializer copies in 64 KiB requests.
+                assert count == 64 * 1024
+            value = read(file, count)
             if caller.f_code is copy_code:
                 assert type(value) is str, "column reads must supply text to the copy seam"
                 entry = self._entry(file)
                 if value:
                     data = value.encode("ascii")
+                    assert len(data) == min(count, file.size - entry["read_bytes"])
                     assert id(caller) not in self.pending
                     self.pending[id(caller)] = file, data
                     entry["reads"] += 1
                     entry["read_bytes"] += len(data)
                     entry["read_sha"].update(data)
+                    entry["read_bases"].add(file.read_base)
             return value
 
         def observed_write(file, text):
@@ -154,14 +160,20 @@ class _ColumnCopyWork:
             patch.setattr(run_json._BoundedJSONFile, "write", observed_write)
             yield self
 
-    def assert_one_copy(self):
+    def assert_one_copy(self, *, across_windows=False):
         assert not self.pending, "every nonempty column read must have a matching write"
         assert len(self.columns) == 2, "both E and T spools must enter real column copying"
         for file, entry in self.columns.items():
             assert entry["read_bytes"] == entry["write_bytes"] == file.size > 0
+            assert file.size < 32 * 1024 * 1024
+            # Copy requests are independent of the backing artifact window.
+            read_size = 64 * 1024
             assert entry["reads"] == entry["writes"] == (
-                file.size + file.window - 1) // file.window
+                file.size + read_size - 1) // read_size
             assert entry["read_sha"].digest() == entry["write_sha"].digest()
+            if across_windows:
+                assert file.size > file.window
+                assert len(entry["read_bases"]) > 1
 
 
 def _compact_rows(count):
@@ -228,19 +240,28 @@ def test_fused_report_has_bounded_python_lexical_work(tmp_path, monkeypatch, cou
 
 @pytest.mark.parametrize("count", (1, 257))
 def test_fused_columns_copy_each_byte_once(tmp_path, monkeypatch, count):
+    across_windows = count > 1
+    if across_windows:
+        window = support.spool_windows(tmp_path)["E"]
+        point = dict(zip(("time_ms", "equity", "open_profit"), _point(0)[1:]))
+        row_width = len(json.dumps(point, separators=(",", ":"), allow_nan=False)) + 1
+        count = max(count, window // row_width + 2)
     with _sink_case(tmp_path, _compact_rows(count)) as (sink, library, report):
+        assert Path(sink.path).stat().st_size < 32 * 1024 * 1024
         control = _ColumnCopyWork()
         with control.install(monkeypatch):
             expected, reference_sha = _assemble(
                 sink, library, report, monkeypatch, reference=True)
         assert expected.failure is None and reference_sha == library.sha
-        control.assert_one_copy()
+        assert len(expected.report) < 32 * 1024 * 1024
+        control.assert_one_copy(across_windows=across_windows)
         columns = _ColumnCopyWork()
         with columns.install(monkeypatch):
             actual, actual_sha = _assemble(sink, library, report, monkeypatch)
         assert actual.failure is None and actual_sha == library.sha
+        assert len(actual.report) < 32 * 1024 * 1024
         support.assert_same(actual, expected)
-        columns.assert_one_copy()
+        columns.assert_one_copy(across_windows=across_windows)
 
 
 def test_loop_observer_sees_reference_and_quoted_space_fallback():

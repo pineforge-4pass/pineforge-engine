@@ -960,14 +960,17 @@ namespace pineforge {
 namespace {
 
 constexpr double kUnwrittenOutput = std::numeric_limits<double>::quiet_NaN();
+// TradingView Pine Script, Writing scripts > Limitations > Chart visuals > Plot limits:
+// "A maximum of 64 plot counts are allowed per script".
+constexpr int kMaxOutputSeries = 64;
 
 [[noreturn]] void refuse_output(const std::string& text) {
     throw coded<std::logic_error>(RunFailureCode::engine_invariant, {}, "outputs: " + text);
 }
 
-[[noreturn]] void refuse_output_limit(const char* reason, const char* text) {
+[[noreturn]] void refuse_output_limit(const char* reason, const char* text, int max = INT_MAX) {
     throw coded<std::runtime_error>(RunFailureCode::outputs_limit,
-                                    {{"reason", reason}, {"max", INT_MAX}}, text);
+                                    {{"reason", reason}, {"max", max}}, text);
 }
 
 // A refused switch, recorded as the C boundary records a refused call: a
@@ -1049,6 +1052,9 @@ void BacktestEngine::declare_outputs(int series_slots, int outputs, int run_cons
     if (series_slots < 0 || outputs < 0 || run_constants < 0)
         refuse_output("declared counts must not be negative");
     if (output_host_running()) refuse_output("declare_outputs while a run is in progress");
+    if (series_slots > kMaxOutputSeries)
+        refuse_output_limit("too_many_series", "outputs: the series count is at its limit",
+                            kMaxOutputSeries);
     if (outputs_declared_) {
         if (series_slots != outputs_slots_ || outputs != outputs_count_
             || run_constants != outputs_constants_) {
