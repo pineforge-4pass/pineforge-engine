@@ -72,8 +72,9 @@ inline bool is_na(double v) { return std::isnan(v); }
 template<typename T, typename = std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>>>
 inline bool is_na(T v) { return v == std::numeric_limits<T>::min(); }
 
-// Store arrays have an explicit unbound state, unlike std::vector values.
-// Forward declaration avoids an include cycle with array.hpp.
+// Store arrays have an explicit unbound state (no store behind them: default
+// constructed or moved from), unlike std::vector values. Forward declaration
+// avoids an include cycle with array.hpp.
 template <class T> class ScriptArray;
 
 template <class T>
@@ -85,16 +86,27 @@ inline bool is_na(const ScriptArray<T>& value) {
 // generic na<T>() above), and generated code has always read "" as na (the
 // codegen warns that TradingView tells an authored "" from a missing string,
 // the engine cannot). So the one string observer is "is it empty". It is a
-// non-template overload, which wins over the generic template below.
+// non-template overload, which wins over the generic template below. A type
+// that converts implicitly to `const std::string&` is read through that
+// conversion (the generic template is constrained away from it). String views
+// and other engine string handles (std::string_view, ScriptString) are NOT
+// std::string: they are never na.
 inline bool is_na(const std::string& value) { return value.empty(); }
 
 // Preserve the existing scalar overloads, including bool/float conversions
 // and user-defined numeric conversions, rather than intercepting them here.
+// The generic template below is the answer for everything else. LIMIT, stated
+// here on the overload itself: a plain value container (std::vector<T, A>,
+// std::map, std::unordered_map) cannot hold an na reference, so is_na of one is
+// ALWAYS false, even for an empty container, and std::vector cannot tell an na
+// array from an empty one (a nullable-array representation is a separate,
+// later change).
 template <typename T, std::enable_if_t<
     !std::is_arithmetic_v<T> &&
     !std::is_convertible_v<T, double> &&
     !std::is_convertible_v<T&, double> &&
-    !std::is_convertible_v<const T&, double>, int> = 0>
+    !std::is_convertible_v<const T&, double> &&
+    !std::is_convertible_v<const T&, const std::string&>, int> = 0>
 inline bool is_na(const T& value) {
     if constexpr (na_detail::HasNaMember<T>::value) {
         return static_cast<bool>(value.is_na());

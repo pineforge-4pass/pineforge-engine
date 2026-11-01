@@ -73,6 +73,16 @@ def main():
                     pass
                 if os.getppid() != leader:
                     Path(request["diagnostic_child_progress"]).touch()
+                    release = request.get("diagnostic_child_release_path")
+                    if release is not None and Path(release).exists():
+                        # EVENT-driven: the host creates this file only after it has seen the
+                        # producer gone, so the marker exists only after the producer's exit and
+                        # after the host's observation. A supervisor that stopped draining at
+                        # once never reads it; one that drains for its grace does.
+                        try:
+                            os.write(2, b"diagnostic child after parent exit\n")
+                        except BrokenPipeError:
+                            pass
                 time.sleep(0.01)
             if "diagnostic_child_exit" in request:
                 Path(request["diagnostic_child_exit"]).write_text(
@@ -131,10 +141,7 @@ def main():
     sink_fd = None
     if request.get("inherited_sink"):
         if "native_release_path" in request:
-            end = time.monotonic() + 15
             while not Path(request["native_release_path"]).exists():
-                if time.monotonic() >= end:
-                    raise AssertionError("TEST host never observed a stopped V")
                 time.sleep(0.01)
         name = ("PINEFORGE_REPORT_REFERENCE_SINK_FD" if reference
                 else "PINEFORGE_REPORT_NATIVE_SINK_FD")

@@ -223,8 +223,15 @@ ssize_t read(int fd, void *buffer, size_t length)
             paused = true;
             pid_event('P');
             if (hold_overflow) {
-                while (!overflow_released)
+                while (!overflow_released) {
+#ifdef SYS_pause
                     (void)syscall(SYS_pause);
+#else
+                    /* aarch64 has no pause syscall: ppoll with no descriptors and no timeout blocks
+                       until a signal arrives, which is what pause does. */
+                    (void)syscall(SYS_ppoll, NULL, 0, NULL, NULL, 0);
+#endif
+                }
             } else if (pause_probe) {
                 (void)syscall(SYS_kill, getpid(), SIGSTOP);
             }
