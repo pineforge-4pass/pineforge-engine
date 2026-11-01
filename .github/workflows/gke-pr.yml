@@ -23,6 +23,7 @@ jobs:
       head_sha: ${{ steps.identity.outputs.head_sha }}
       docs_only: ${{ steps.classify.outputs.docs_only }}
       github_only: ${{ steps.classify.outputs.github_only }}
+      arm_relevant: ${{ steps.classify.outputs.arm_relevant }}
     steps:
       - name: Checkout the base checker
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -349,6 +350,38 @@ jobs:
           ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error \
             --parallel "$(getconf _NPROCESSORS_ONLN)" --output-junit build/ctest-junit.xml
 
+  build-arm:
+    needs: [admit]
+    if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' && needs.admit.outputs.arm_relevant == 'true' }}
+    runs-on: gke-16cpu-32gb-arm64
+    permissions: {contents: read}
+    steps:
+      - name: Require the arm64 machine
+        run: |
+          test "$(uname -m)" = aarch64
+      - name: Checkout the admitted head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ needs.admit.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install the CTest pytest runner
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-input \
+            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
+      - name: Install dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache strace
+      - name: Verify Debug
+        run: |
+          python3 scripts/ci_verify.py debug --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
+
   corpus-parity-subset:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' }}
@@ -392,7 +425,7 @@ jobs:
           if-no-files-found: warn
 
   legs:
-    needs: [admit, build, build-debug, corpus-parity-subset]
+    needs: [admit, build, build-debug, build-arm, corpus-parity-subset]
     if: ${{ always() && needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' }}
     runs-on: ubuntu-24.04
     permissions: {}
@@ -401,11 +434,20 @@ jobs:
         env:
           BUILD_RESULT: ${{ needs.build.result }}
           DEBUG_RESULT: ${{ needs.build-debug.result }}
+          ARM_RESULT: ${{ needs.build-arm.result }}
+          ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}
           PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
         run: |
           set -euo pipefail
+          arm_passed() {
+            case "$1:$2" in
+              true:success|false:success|false:skipped) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
           test "$BUILD_RESULT" = success
           test "$DEBUG_RESULT" = success
+          arm_passed "$ARM_RELEVANT" "$ARM_RESULT"
           test "$PARITY_RESULT" = success
 
   result:
@@ -503,8 +545,10 @@ jobs:
           LEGS_RESULT: ${{ needs.legs.result }}
           ADMIT_DOCS_ONLY: ${{ needs.admit.outputs.docs_only }}
           ADMIT_GITHUB_ONLY: ${{ needs.admit.outputs.github_only }}
+          ADMIT_ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}
           SECOND_DOCS_ONLY: ${{ steps.second-classify.outputs.docs_only }}
           SECOND_GITHUB_ONLY: ${{ steps.second-classify.outputs.github_only }}
+          SECOND_ARM_RELEVANT: ${{ steps.second-classify.outputs.arm_relevant }}
           CODE_EXTENSION: ${{ steps.veto.outputs.code_extension }}
         run: |
           set -euo pipefail
@@ -514,6 +558,11 @@ jobs:
           test "$PREFLIGHT_RESULT" = success || fail "preflight did not pass"
           test "$SECOND_DOCS_ONLY" = "$ADMIT_DOCS_ONLY" || fail "docs-only classification changed"
           test "$SECOND_GITHUB_ONLY" = "$ADMIT_GITHUB_ONLY" || fail "github-only classification changed"
+          test "$SECOND_ARM_RELEVANT" = "$ADMIT_ARM_RELEVANT" || fail "arm relevance classification changed"
+          case "$ADMIT_ARM_RELEVANT" in
+            true|false) ;;
+            *) fail "arm relevance classification is unanswered" ;;
+          esac
           test "$CODE_EXTENSION" != true || {
             test "$ADMIT_DOCS_ONLY" != true || fail "code extension vetoed docs-only classification"
             test "$ADMIT_GITHUB_ONLY" != true || fail "code extension vetoed github-only classification"

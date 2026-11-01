@@ -12,6 +12,7 @@ The current PR admission and post-merge trigger map is:
 | `ci-post.yml` proof jobs | Not triggered | Not triggered | Complete Release, Debug, native, kernel and parity profiles |
 | `corpus-parity.yml` | Not triggered | Not triggered | Full parity and its post-merge subset |
 | `docs.yml` | Documentation build except `.github/**`-only changes | Skipped by its path filter | Documentation build on its own trigger |
+| `gke-pr / build-arm` | GKE arm64 Debug build and tests when `arm_relevant=true` | Skipped | Not triggered |
 
 The admission workflow is defined on `main` and is selected by the protected
 GKE runner group. Its proof legs use the same fixed Release, Debug and parity
@@ -36,6 +37,17 @@ NUL-separated file and gives that file to the base tree's
 empty, missing, malformed, truncated or unreadable lists are neither class.
 The classifier uses exact `.github/` and `docs/` prefixes, so lookalike
 directories and the classifier itself cannot create a skip.
+
+`arm_relevant` is fail-closed: changes under `tests/`, `runner/`, `include/`,
+`src/` or `docker/`, C/C++ and CMake sources (including third-party sources),
+and `scripts/test_*` require the PR arm64 leg. Unknown paths and empty,
+unreadable or malformed change lists also require it; established docs-only
+and `.github/`-only PRs set it false and skip the leg. The base classifier
+computes it on both compare reads. When it is true, the existing `legs` and
+`result` gates require arm success and reject a skip, failure or cancellation.
+The job uses `gke-16cpu-32gb-arm64`, installs the post-arm dependencies and
+runs the complete `ci_verify.py debug` profile, building every Debug test
+target and running that profile's CTest selection before merge.
 
 `--tier github-only` runs `shellcheck-version`, `actionlint-runner-labels`,
 `runner-allowlist`, `workflow-lint`, `ci-workflow-contract`, `docs-workflow-contract` and
@@ -1478,8 +1490,8 @@ result on `main` in an excluded row or class (the Release and kernel-only
 `slow` rows, or a SLOW verifier class) BLOCKS the next release cut, and the
 author or the release owner fixes or reverts the change within the hour; the
 red is not carried into a release.
-The GKE Linux arm64 Debug leg runs after merge; a red result there blocks
-the next release cut under the same fix-or-revert rule.
+The GKE Linux arm64 Debug leg also runs before merge when `arm_relevant=true`;
+a red post-merge result blocks the next release cut under the same rule.
 
 ### Documentation-only changes
 
@@ -1639,7 +1651,7 @@ Each leg aggregate retains its old check name and requires its own matrix's succ
 Shard jobs and leg aggregates skip together only on classified docs-only changes.
 Trusted post workflows and PR proof legs build cold; no trusted job restores an Actions cache.
 `HOSTED_JOB_RUNNERS` pins hosted jobs and exact bare GKE scalars; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. PR checks are
-`build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.
+`build`, `build-debug`, `build-arm`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.
 
 Release and promotion use the isolated release fleet:
 `release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use

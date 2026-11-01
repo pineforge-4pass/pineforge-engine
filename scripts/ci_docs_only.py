@@ -44,10 +44,15 @@ it changes and never by itself; a base without the script runs everything.
 
 reads GITHUB_EVENT_NAME, and PR_HEAD_SHA (pull request) or PUSH_BEFORE and
 PUSH_FORCED (push), from the environment. It prints its reasons, appends
-``docs_only=true|false`` and ``github_only=true|false`` to FILE, and exits 0
+``docs_only=true|false``, ``github_only=true|false`` and
+``arm_relevant=true|false`` to FILE, and exits 0
 whatever it decides. ``--paths`` reads a complete NUL-separated list as data;
 an unreadable or unterminated list is neither class. The classifier is held by
 scripts/test_ci_docs_only.py (a ci_preflight stage).
+
+Arm proof is required for source/build inputs and test scripts, and for any
+path the rule cannot classify. Missing or empty change data also requires it.
+An established docs-only or GitHub-only PR never requires arm proof.
 """
 from __future__ import annotations
 
@@ -61,6 +66,8 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 # CI itself, and Markdown the proof jobs' own rows read: never documentation.
 NOT_DOCUMENTATION_DIRS = ('.github/', 'benchmarks/', 'scripts/', 'tests/')
+ARM_SOURCE_DIRS = ('tests/', 'runner/', 'include/', 'src/', 'docker/')
+ARM_SOURCE_EXTENSIONS = ('.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.cmake')
 # Documentation inputs whose checks run outside preflight, in a proof job's
 # CTest row or the docs workflow, with each input's check home. These inputs
 # remain excluded from docs-only skips.
@@ -96,18 +103,28 @@ def is_documentation(path: str) -> bool:
     return path.startswith('docs/') or name.endswith('.md')
 
 
-def classify_paths(paths: list[str], *, pull_request: bool = True) -> tuple[bool, bool]:
-    """Return ``(docs_only, github_only)`` for already collected path data.
+def is_arm_relevant(path: str) -> bool:
+    """Recognize source/test inputs; unknown paths require arm proof too."""
+    name = path.rsplit('/', 1)[-1]
+    if (path.startswith(ARM_SOURCE_DIRS) or path.startswith('scripts/test_')
+            or name == 'CMakeLists.txt' or name.endswith(ARM_SOURCE_EXTENSIONS)):
+        return True
+    return not (is_documentation(path) or path.startswith('.github/'))
+
+
+def classify_paths(paths: list[str], *, pull_request: bool = True) -> tuple[bool, bool, bool]:
+    """Return ``(docs_only, github_only, arm_relevant)`` for collected paths.
 
     The caller supplies both sides of a rename. No path is normalized: names
     containing newlines, quotes or ``..`` are still names, and only the exact
     directory prefixes below classify them.
     """
     if not paths:
-        return False, False
+        return False, False, True
     docs_only = all(is_documentation(path) for path in paths)
     github_only = pull_request and all(path.startswith('.github/') for path in paths)
-    return docs_only, github_only
+    arm_relevant = not (docs_only or github_only) and any(is_arm_relevant(path) for path in paths)
+    return docs_only, github_only, arm_relevant
 
 
 def read_paths_file(path: Path) -> tuple[list[str] | None, str]:
@@ -172,18 +189,18 @@ def changed_paths(root: Path, base: str, head: str) -> list[str]:
     return [path for path in listed.split('\0') if path]
 
 
-def classify(env: dict[str, str], root: Path = ROOT) -> tuple[bool, bool, list[str]]:
-    """(docs_only, github_only, reasons printed for them)."""
+def classify(env: dict[str, str], root: Path = ROOT) -> tuple[bool, bool, bool, list[str]]:
+    """(docs_only, github_only, arm_relevant, reasons printed for them)."""
     try:
         base, head, what = compared(env, root)
         paths = changed_paths(root, base, head)
     except Doubt as doubt:
-        return False, False, [f'not docs-only: {doubt}']
+        return False, False, True, [f'not docs-only: {doubt}']
     lines = [f'{what}: {base}..{head}, {len(paths)} changed path(s)']
-    docs_only, github_only = classify_paths(
+    docs_only, github_only, arm_relevant = classify_paths(
         paths, pull_request=env.get('GITHUB_EVENT_NAME') == 'pull_request')
     if not paths:
-        return False, False, lines + ['not docs-only: the change is empty']
+        return False, False, True, lines + ['not docs-only: the change is empty']
     other = [path for path in paths if not is_documentation(path)]
     if other:
         lines.append(f'not docs-only: {len(other)} changed path(s) are not documentation')
@@ -197,12 +214,12 @@ def classify(env: dict[str, str], root: Path = ROOT) -> tuple[bool, bool, list[s
                   if len(paths) > SHOWN else [])
     if github_only:
         lines.append('github-only: every changed path is under .github/')
-    return docs_only, github_only, lines
+    return docs_only, github_only, arm_relevant, lines
 
 
 def decide(env: dict[str, str], root: Path = ROOT) -> tuple[bool, list[str]]:
     """(docs_only, the reasons printed for it), preserving the old API."""
-    docs_only, _, lines = classify(env, root)
+    docs_only, _, _, lines = classify(env, root)
     return docs_only, lines
 
 
@@ -214,28 +231,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--paths', type=Path,
                         help='read a complete NUL-separated compare-file list')
     parser.add_argument('--github-output', type=Path,
-                        help='append docs_only=true|false and github_only=true|false to this file')
+                        help='append docs_only, github_only and arm_relevant flags to this file')
     args = parser.parse_args(argv)
     if args.paths is not None:
         paths, reason = read_paths_file(args.paths)
         if paths is None:
-            docs_only, github_only = False, False
+            docs_only, github_only, arm_relevant = False, False, True
             lines = [f'not docs-only/github-only: {reason}']
         else:
-            docs_only, github_only = classify_paths(paths)
+            docs_only, github_only, arm_relevant = classify_paths(paths)
             lines = [reason]
             lines.append('docs-only: every changed path is documentation'
                          if docs_only else 'not docs-only: a changed path is not documentation')
             lines.append('github-only: every changed path is under .github/'
                          if github_only else 'not github-only: a changed path is outside .github/')
     else:
-        docs_only, github_only, lines = classify(dict(os.environ), args.root)
+        docs_only, github_only, arm_relevant, lines = classify(dict(os.environ), args.root)
     for line in lines:
         print(line)
     if args.github_output is not None:
         with args.github_output.open('a', encoding='utf-8') as output:
             output.write(f'docs_only={"true" if docs_only else "false"}\n')
             output.write(f'github_only={"true" if github_only else "false"}\n')
+            output.write(f'arm_relevant={"true" if arm_relevant else "false"}\n')
     return 0
 
 
