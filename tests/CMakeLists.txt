@@ -3901,6 +3901,24 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_test(NAME test_adapter_bar_work_control COMMAND test_adapter_bar_work control)
 endif()
 
+# Bar-open behavior pins share the existing probed source library
+# (declared below), so every source TU uses the same quiet-gate definition.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND TARGET test_adapter_quiet_bar)
+    add_executable(test_adapter_bar_open_candidates test_adapter_bar_open_candidates.cpp)
+    target_link_libraries(test_adapter_bar_open_candidates PRIVATE pineforge_source_quiet_probe)
+    target_compile_definitions(test_adapter_bar_open_candidates PRIVATE PINEFORGE_PINE_QUIET_BAR_PROBE=1)
+    target_compile_options(test_adapter_bar_open_candidates PRIVATE -ffp-contract=off -UNDEBUG)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(test_adapter_bar_open_candidates PRIVATE ${_pf_cov_test_flags})
+    endif()
+    foreach(_pf_bar_open_case IN ITEMS
+            buy_stop marketable_stops marketable_limit dual_stop
+            trail_capture declined_reversal previous_bar_admission)
+        add_test(NAME test_adapter_bar_open_${_pf_bar_open_case}
+            COMMAND test_adapter_bar_open_candidates ${_pf_bar_open_case})
+    endforeach()
+endif()
+
 if(UNIX)
     # PASS_REGULAR_EXPRESSION makes output matching replace CTest's exit-code
     # result, while WILL_FAIL accepts every nonzero result. The driver checks
