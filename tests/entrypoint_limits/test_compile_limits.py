@@ -34,11 +34,10 @@ BINDER_FAILURE = b"fixture binder: requested inventory failure\n"
 
 
 class Invocation:
-    def __init__(self, result, elapsed, trace):
+    def __init__(self, result, trace):
         self.returncode = result.returncode
         self.stdout = result.stdout
         self.stderr = result.stderr
-        self.elapsed = elapsed
         self.trace = trace
         self.records = {path.stem: json.loads(path.read_bytes())
                         for path in trace.glob("*.json")}
@@ -124,7 +123,6 @@ class Box:
             if inherited_as is not None:
                 resource.setrlimit(resource.RLIMIT_AS, (inherited_as, inherited_as))
 
-        started = time.monotonic()
         process = subprocess.Popen(command, env=env, cwd=self.root, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE if stderr_sink is None else stderr_sink,
@@ -137,7 +135,7 @@ class Box:
         if stderr_sink is not None:
             stderr = Path(stderr_sink.name).read_bytes()
         result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
-        return Invocation(result, time.monotonic() - started, self.trace)
+        return Invocation(result, self.trace)
 
     def stop_fixture_processes(self, process):
         if process.poll() is None:
@@ -496,7 +494,6 @@ def test_blocked_compile_failure_message_still_honors_the_wall_deadline(box):
             os.fdopen(write_fd, "wb", buffering=0) as writer:
         flags = fcntl.fcntl(writer, fcntl.F_GETFL) | os.O_NONBLOCK
         fcntl.fcntl(writer, fcntl.F_SETFL, flags)
-        started = time.monotonic()
         process = subprocess.Popen(command, env=env, cwd=box.root, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=writer, start_new_session=True)
         box.processes.append(process)
@@ -513,7 +510,6 @@ def test_blocked_compile_failure_message_still_honors_the_wall_deadline(box):
         assert pressure_bytes > 0
         (box.trace / "release-failure").write_bytes(b"exit")
         stdout, _ = process.communicate(input=b"")
-        elapsed = time.monotonic() - started
         assert fcntl.fcntl(writer, fcntl.F_GETFL) == flags
         os.set_blocking(reader.fileno(), False)
         stderr = bytearray()
@@ -526,7 +522,7 @@ def test_blocked_compile_failure_message_still_honors_the_wall_deadline(box):
                 break
             stderr.extend(block)
     result = Invocation(subprocess.CompletedProcess(
-        command, process.returncode, stdout, bytes(stderr)), elapsed, box.trace)
+        command, process.returncode, stdout, bytes(stderr)), box.trace)
     assert_failure(result, "run_deadline_exceeded", {"stage": "compile"})
     assert result.stderr == COMPILE_LOG + b"x" * pressure_bytes
     driver = result.records["driver"]

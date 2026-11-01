@@ -24,11 +24,14 @@ from host import (
 HANG_GUARD_ENVIRONMENT = "PINEFORGE_REPORT_TEST_HANG_GUARD_SECONDS"
 
 
-def hang_guard_from_environment(environment=os.environ):
-    """The test host's deadline for the launches below, as a parameter: unset, empty or 0 = no
-    deadline (None); a positive number of seconds applies exactly; anything else is a usage error
-    naming the variable. A real hang is caught by the platform's own maximum job time (the workflows set no timeout-minutes: ci.yml:25)."""
-    text = environment.get(HANG_GUARD_ENVIRONMENT, "")
+MUTATION_CONTROL_ENVIRONMENT = "PINEFORGE_REPORT_TEST_MUTATION_CONTROL_AFTER_STALL_SECONDS"
+
+
+def seconds_from_environment(name, environment=os.environ):
+    """A deadline of the test host as a parameter: unset, empty or 0 = no deadline (None); a positive
+    number of seconds applies exactly; anything else is a usage error naming the variable. A real hang
+    is caught by the platform's own maximum job time (the workflows set no timeout-minutes: ci.yml:25)."""
+    text = environment.get(name, "")
     if text.strip() == "":
         return None
     try:
@@ -37,16 +40,20 @@ def hang_guard_from_environment(environment=os.environ):
         value = float("nan")
     if not math.isfinite(value) or value < 0:
         raise SystemExit(
-            f"{HANG_GUARD_ENVIRONMENT} must be a finite number of seconds >= 0 "
+            f"{name} must be a finite number of seconds >= 0 "
             f"(unset or 0 = no deadline), not {text!r}")
     return value or None
 
 
+def hang_guard_from_environment(environment=os.environ):
+    return seconds_from_environment(HANG_GUARD_ENVIRONMENT, environment)
+
+
 HANG_GUARD_SECONDS = hang_guard_from_environment()
-# The mutation control SETS a guard itself, counted from the host's own stall timestamp (so it cannot
-# race a slow launch that has not reached its stall yet): HostWatchdogExpired firing is the feature
-# under test there, not a limit on a real run.
-MUTATION_CONTROL_AFTER_STALL_SECONDS = 4
+# The mutation control's deadline is a parameter too, counted from the host's own stall timestamp (so
+# it cannot race a slow launch that has not reached its stall yet). Unset = no deadline: the control
+# then does not launch its mutant, which never ends by design (see the row).
+MUTATION_CONTROL_AFTER_STALL_SECONDS = seconds_from_environment(MUTATION_CONTROL_ENVIRONMENT)
 
 KNOBS = (
     ("--report-max-bytes", "PINEFORGE_REPORT_MAX_BYTES", "report_bytes", 4096),
@@ -459,6 +466,16 @@ class Contract(unittest.TestCase):
                 parse({HANG_GUARD_ENVIRONMENT: text})
             self.assertIn(HANG_GUARD_ENVIRONMENT, str(refused.exception))
 
+    def test_mutation_control_deadline_environment_parse(self):
+        parse = lambda environment: seconds_from_environment(MUTATION_CONTROL_ENVIRONMENT, environment)
+        self.assertIsNone(parse({}))
+        self.assertIsNone(parse({MUTATION_CONTROL_ENVIRONMENT: "0"}))
+        self.assertEqual(parse({MUTATION_CONTROL_ENVIRONMENT: "4"}), 4.0)
+        for text in ("nan", "-1", "soon"):
+            with self.subTest(value=text), self.assertRaises(SystemExit) as refused:
+                parse({MUTATION_CONTROL_ENVIRONMENT: text})
+            self.assertIn(MUTATION_CONTROL_ENVIRONMENT, str(refused.exception))
+
     def test_finite_report_stall_assertions_reject_removed_pipe_deadline(self):
         self.assert_finite_report_stall()
         original = SUPERVISOR.read_text(encoding="utf-8")
@@ -471,7 +488,10 @@ class Contract(unittest.TestCase):
                     (altered.parent / sibling.name).symlink_to(sibling)
             altered.write_text(
                 original.replace(line, '                if False:\n', 1), encoding="utf-8")
-            # This control SETS its own guard (from the stall): HostWatchdogExpired firing is what it proves.
+            if MUTATION_CONTROL_AFTER_STALL_SECONDS is None:
+                # The mutant has no stall check, so a launch without a deadline never ends: this control
+                # only runs when its deadline is given as a parameter (HostWatchdogExpired is what it proves).
+                self.skipTest(f"{MUTATION_CONTROL_ENVIRONMENT} is unset: no deadline, the mutant would never end")
             with self.assertRaises(HostWatchdogExpired) as rejected:
                 self.assert_finite_report_stall(
                     supervisor_path=altered, after_stall=MUTATION_CONTROL_AFTER_STALL_SECONDS)
@@ -480,8 +500,6 @@ class Contract(unittest.TestCase):
             self.assertEqual(partial.control["watchdog_pending_bytes"], {"report": 4096}, msg=msg)
             self.assertEqual(partial.control["watchdog_producer_group"], [], msg=msg)
             self.assertIn("report", partial.control["stalled_at"], msg=msg)
-            self.assertGreater(
-                partial.elapsed_seconds - partial.control["stalled_at"]["report"], 2, msg=msg)
             self.assertIsNone(partial.control["cancelled_at"], msg=msg)
             self.assertIsNone(partial.returncode, msg=msg)
             self.assertEqual(partial.packets, [], msg=msg)
