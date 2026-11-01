@@ -320,8 +320,8 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   not for unrelated malformed input, delivery or timeout failures.
 - Metrics are `committed_input`, `last_seq` (tick sequence, null for bars),
   `source_timestamp_ms`, `source_lag_ms` (wall-clock lag from the latest
-  committed source time), `feed_idle_ms` (milliseconds since the last byte read from the feed;
-  null before the first; the consumer owns freshness), `queue_bytes`, `ledger_bytes`, `report_cursor`,
+  committed source time), `feed_idle_ms` (milliseconds since the last byte or control frame from the feed;
+  null before the first; not data freshness, which `source_lag_ms` and `committed_input` show), `queue_bytes`, `ledger_bytes`, `report_cursor`,
   `control_errors` (ignored control entries and directory-error transitions this run) and
   per-target `pending_count` / `oldest_age_ms`. Queue bytes cover the buffered
   stdin/WebSocket fragment and bounded delivery queue; engine state and finite feed
@@ -360,7 +360,7 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   WebSocket idle resets on text or PING/PONG; assembly runs from the first text fragment through the final fragment.
   Control frames never extend assembly; zero idle/message deadlines are independent of the connection/subscription timeout.
   HTTP idle limits lack of response-body progress; its message timeout bounds the entire finite snapshot, including connection.
-  Network connection setup keeps a 5000 ms bound (shorter for a smaller finite message timeout): connecting is not a feed stall.
+  Only the TCP/TLS connect keeps a 5000 ms bound; the handshake and response wait are unbounded and end on stop or peer close.
   The engine only reports arrival age; the consumer owns freshness. Local files are finite and have no idle deadline.
   These flags do not change webhook delivery timeouts or deployment identity.
 - SIGTERM/SIGINT stop intake. An already-started atomic message finishes or

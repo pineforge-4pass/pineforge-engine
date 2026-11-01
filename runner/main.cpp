@@ -1183,7 +1183,7 @@ int run(Config c) {
                 {"last_seq", cursor.seen_tick ? num(cursor.tick_seq) : Json{}},
                 {"source_timestamp_ms", num(source_timestamp)}, {"source_lag_ms", num(now > source_timestamp ? now - source_timestamp : 0)},
                 {"feed_idle_ms", feed_last_input ? num(static_cast<std::uint64_t>(
-                    std::chrono::duration_cast<std::chrono::milliseconds>(clock - *feed_last_input).count())) : Json{}},
+                    std::max<std::chrono::milliseconds::rep>(0, std::chrono::duration_cast<std::chrono::milliseconds>(clock - *feed_last_input).count()))) : Json{}},
                 {"queue_bytes", num(intake_bytes + delivery.queue_bytes())}, {"ledger_bytes", num(c.max_ledger_bytes ? bytes : ledger_bytes(c.ledger))},
                 {"control_errors", num(delivery.control_errors())},
                 {"report_cursor", num(ledger.report_cursor())}, {"targets", std::move(pending)}})}}), force || changed);

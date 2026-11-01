@@ -13,7 +13,7 @@ version number follows semantic versioning over the surfaces the
   idle or message deadline, with 0 meaning none and positive seconds accepted
   when their milliseconds fit a `long`. A caller relying on the former
   15 second network default to end a run must set the timeout flag or close
-  the connection. Connection setup retains its 5000 ms bound.
+  the connection. Only the TCP/TLS connect keeps a 5000 ms bound.
 - **Default change, user-visible:** `pineforge-live run --feed -` (the stdin
   feed) no longer ends a run by itself after 15 seconds without data or 15
   seconds to complete a line. With neither flag given, `--feed-idle-timeout`
