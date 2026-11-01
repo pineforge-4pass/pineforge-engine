@@ -667,6 +667,9 @@ if(PINEFORGE_BUILD_TESTS)
         add_test(NAME native_live_ratio_interval_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_ratio_interval_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:native_live_example>)
+        add_test(NAME native_live_stdin_idle_e2e COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/tests/native_live_stdin_idle_e2e.py $<TARGET_FILE:pineforge-live>
+            $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:native_live_example>)
     endif()
     add_test(NAME test_live_report_accumulator_commit_retry
         COMMAND test_live_report_accumulator commit-retry)
