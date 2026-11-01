@@ -47,7 +47,11 @@ messages of every commit in ``base..head`` (``--message-from REF`` or
 ``--message-file PATH`` adds to them): that is the replay mode the audit's
 acceptance uses (597a4367's pages replayed onto db98990c must fail; e3e20cb5,
 V19-A's stated revert of PERF-P1's view, must pass with its own message). With
-``--files`` the pages judged are limited to those given.
+``--files`` the pages judged are limited to those given. ``--head REF`` without
+``--base`` takes the base the walk below takes (``PINEFORGE_DOC_REVERT_BASE``,
+else the merge base with main) and stops with exit 2 when none resolves: the
+fast preflight runs it as ``doc-reverts-net`` with ``--head HEAD``, so the net
+change of a branch, merge resolutions included, is judged beside the walk.
 
 Without ``--head`` the gate walks the non-merge commits of ``base..HEAD`` one
 by one, each against its parent and with its own message. ``base`` is
