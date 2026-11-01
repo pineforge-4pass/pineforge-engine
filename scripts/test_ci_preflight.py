@@ -9484,7 +9484,10 @@ class GkeAdmissionRuleTests(unittest.TestCase):
                 f"${{{{ inputs.runner || '{label}' }}}}",
                 f"'{label}'",
                 label.upper(),
-                label.replace('amd64', 'arm64'),
+                # The other architecture: swap amd64 and arm64 so the row is a real
+                # mutation for the arm job too (replacing amd64 alone left its label unchanged).
+                (label.replace('amd64', 'arm64') if 'amd64' in label
+                 else label.replace('arm64', 'amd64')),
                 GKE_PR_16 if label != GKE_PR_16 else GKE_PR_32,
             )
             for runner in runners:
