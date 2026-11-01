@@ -340,8 +340,8 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | --- | --- | --- |
 | Equity writer / selected hold-back / SpillCurve | 24*E | `pf_equity_point_t` size assertion `include/pineforge/metrics_stream.hpp:16`; `src/report_scratch.cpp:238` |
 | Position tail | (30+L)*T | `src/source/pine_position_tail.hpp:20`; footer packing at `src/source/pine_position_tail.cpp:94` |
-| Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `include/pineforge/detail/disk_id_table.hpp:109`; `CohortFacts::Record` at `include/pineforge/source/pine_adapter.hpp:2059-2062` |
-| Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:6773-6774`; `include/pineforge/detail/disk_id_table.hpp:109` |
+| Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `Links` at `include/pineforge/detail/disk_id_table.hpp:165-182`, `end_` at `:348`; `CohortFacts::Record` at `include/pineforge/source/pine_adapter.hpp:2059-2062` |
+| Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:6773-6774`; `Links` at `include/pineforge/detail/disk_id_table.hpp:165-182`, `end_` at `:348` |
 | Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:960`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:69` |
 | Erased minima index | indexPeak(D+Q) | 16-byte slot at `include/pineforge/detail/id_pair_store.hpp:69`; replacement at `:642` |
 | Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2834`; joined key at `src/source/pine_adapter.cpp:25477` |
