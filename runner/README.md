@@ -320,15 +320,15 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   not for unrelated malformed input, delivery or timeout failures.
 - Metrics are `committed_input`, `last_seq` (tick sequence, null for bars),
   `source_timestamp_ms`, `source_lag_ms` (wall-clock lag from the latest
-  committed source time), `queue_bytes`, `ledger_bytes`, `report_cursor`,
+  committed source time), `feed_idle_ms` (milliseconds since the last byte read from the feed;
+  null before the first; the consumer owns freshness), `queue_bytes`, `ledger_bytes`, `report_cursor`,
   `control_errors` (ignored control entries and directory-error transitions this run) and
   per-target `pending_count` / `oldest_age_ms`. Queue bytes cover the buffered
   stdin/WebSocket fragment and bounded delivery queue; engine state and finite feed
   snapshots are not queue bytes. Pending includes failed and never-completed
   routed actions, not journal-only actions; age is null for legacy rows with
   no known creation/attempt time. No secrets, URLs or receiver response text
-  are written to this status file. Storage/delivery metrics are sampled at the
-  status interval, not on every control-loop heartbeat.
+  are written to this status file. Metrics are sampled at the status interval, not on every control-loop heartbeat.
   Each ignored request is counted once per run. A directory failure is counted
   again if it recurs after a successful poll; removing an acknowledgement during
   directory enumeration can cause a transient `directory_io_failure` that heals
@@ -353,16 +353,16 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   alive control-loop heartbeat no older than S seconds (integer 1..86400).
   Add `--ready` to also require readiness. Missing, malformed, future-dated,
   stale, stopped or unready status exits 1. It opens no listener.
-- `--feed-idle-timeout S` and `--feed-message-timeout S`: integer seconds; stdin defaults to 0 (no limit).
-  Network/file defaults: 15 each (1..300); stdin has no upper cap and its idle bound excludes consume time.
-  A nonzero message timeout bounds a partial line from its first byte or the end of the preceding consume pass.
-  WebSocket idle resets on text or PING/PONG; assembly runs from the first
-  text fragment through the final fragment and control frames never extend
-  it. A feed server's unsolicited PONG every 5 seconds is compatible with
-  the default idle deadline. HTTP idle limits lack of response-body progress;
-  its message timeout bounds the entire finite snapshot request, including
-  connection. Local files are finite and have no idle deadline. These flags
-  do not change webhook delivery timeouts or deployment identity.
+- `--feed-idle-timeout S` and `--feed-message-timeout S`: integer seconds.
+  Stdin and network feeds default to 0 (no deadline); positive values have no upper cap.
+  Network seconds must fit milliseconds in a `long`; local files retain defaults of 15 and the 1..300 rule, refusing 0.
+  Stdin idle excludes consume time; a nonzero message timeout bounds a partial line from its first byte or the end of the preceding consume pass.
+  WebSocket idle resets on text or PING/PONG; assembly runs from the first text fragment through the final fragment.
+  Control frames never extend assembly; zero idle/message deadlines are independent of the connection/subscription timeout.
+  HTTP idle limits lack of response-body progress; its message timeout bounds the entire finite snapshot, including connection.
+  Network connection setup keeps a 5000 ms bound (shorter for a smaller finite message timeout): connecting is not a feed stall.
+  The engine only reports arrival age; the consumer owns freshness. Local files are finite and have no idle deadline.
+  These flags do not change webhook delivery timeouts or deployment identity.
 - SIGTERM/SIGINT stop intake. An already-started atomic message finishes or
   rolls back; incomplete transport messages are not committed. Cursor,
   actions and report remain in the same transaction. The delivery drain is

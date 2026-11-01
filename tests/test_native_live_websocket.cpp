@@ -218,6 +218,31 @@ void websocket_tests() {
     empty_final.finish();
     CHECK(received == std::vector<std::string>{large});
 
+    constexpr int silent_feed_stimulus_ms = 100;
+    WebSocketServer no_idle({frame(1, "after silence")}, false, false, silent_feed_stimulus_ms);
+    options.url = no_idle.url();
+    options.connect_timeout_ms = 20;
+    options.total_timeout_ms = 30;
+    received.clear();
+    receive_websocket(options, "", capture, running);
+    no_idle.finish();
+    CHECK(received == std::vector<std::string>{"after silence"});
+
+    WebSocketServer no_message({frame(1, "unfinished", false)}, false, false,
+                               0, silent_feed_stimulus_ms);
+    options.url = no_message.url();
+    options.idle_timeout_ms = 1000;
+    received.clear();
+    std::string closure_error;
+    try { receive_websocket(options, "", capture, running); }
+    catch (const std::exception& error) { closure_error = error.what(); }
+    CHECK(closure_error == "native WebSocket truncated text message");
+    CHECK(received.empty());
+    no_message.finish();
+    options.idle_timeout_ms = 0;
+    options.connect_timeout_ms = 500;
+    options.total_timeout_ms = 1000;
+
     for (const auto& bad : {frame(2, "binary"), frame(1, std::string("\xc0\x80", 2)),
                             frame(1, large + "x"), frame(1, "unfinished", false),
                             std::string("\x81\x0a", 2) + "abc", frame(8, "")}) {
@@ -234,6 +259,8 @@ void websocket_tests() {
     options.url = unfinished_ping.url();
     options.connect_timeout_ms = 20;
     options.total_timeout_ms = 30;
+    options.idle_timeout_ms = 30;
+    options.message_timeout_ms = 30;
     received.clear();
     bool timeout_error = false;
     try { receive_websocket(options, "", capture, running); }
@@ -247,11 +274,19 @@ void websocket_tests() {
     options.url = idle.url();
     options.connect_timeout_ms = 20;
     options.total_timeout_ms = 30;
-    CHECK(throws([&] { receive_websocket(options, "", capture, running); }));
+    options.idle_timeout_ms = 30;
+    options.message_timeout_ms = 0;
+    timeout_error = false;
+    try { receive_websocket(options, "", capture, running); }
+    catch (const std::exception& error) {
+        timeout_error = std::string(error.what()) == "native WebSocket idle or message timeout";
+    }
+    CHECK(timeout_error);
     idle.finish();
     WebSocketServer stop({}, false, false, 200);
     options.url = stop.url();
     options.total_timeout_ms = 1000;
+    options.idle_timeout_ms = 0;
     const auto start = std::chrono::steady_clock::now();
     receive_websocket(options, "", capture, [&] {
         return std::chrono::steady_clock::now() - start > std::chrono::milliseconds(50);

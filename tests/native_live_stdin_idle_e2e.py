@@ -306,6 +306,67 @@ def main():
             process.communicate()
         print("PASS stdin default-gap: no timeout flags, 17 s silence, two committed inputs", flush=True)
 
+        ledger = root / "feed-idle-field.sqlite"
+        health = root / "feed-idle-field.status.json"
+        status_interval_seconds = 1
+        status_poll_interval_seconds = 0.02
+        feed_idle_stimulus_seconds = 3 * status_interval_seconds
+        field_command = command(ledger, silent_warmup)
+        for flag in ("--feed-idle-timeout", "--feed-message-timeout"):
+            offset = field_command.index(flag)
+            field_command[offset:offset + 2] = []
+        field_command += ["--status-file", str(health),
+                          "--status-interval", str(status_interval_seconds)]
+        process = subprocess.Popen(field_command, stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            process.stdin.write(json.dumps(dict(type="bar", bar=bars[30])) + "\n")
+            process.stdin.flush()
+            readable, _, _ = select.select([process.stdout], [], [], hang_guard_seconds)
+            assert readable, (
+                f"feed-idle-field produced no committed report within {hang_guard_seconds} seconds")
+            committed = json.loads(process.stdout.readline())
+            assert committed["schema_version"] == "pineforge-native-report/v1", committed
+            assert committed["input_cursor"] == 1, committed
+            waiting_since = time.monotonic()
+            while True:
+                assert process.poll() is None, ("feed-idle-field ended intake", process.poll())
+                try:
+                    metrics = json.loads(health.read_text())["metrics"]
+                    assert "feed_idle_ms" in metrics, "feed_idle_ms key missing"
+                    first_idle = metrics["feed_idle_ms"]
+                    if first_idle is not None:
+                        assert type(first_idle) is int, metrics
+                        break
+                except (FileNotFoundError, json.JSONDecodeError):
+                    pass
+                if (hang_guard_seconds is not None and
+                        time.monotonic() - waiting_since >= hang_guard_seconds):
+                    raise AssertionError("feed-idle-field never reported the first arrival")
+                time.sleep(status_poll_interval_seconds)
+            # Named stimulus: leave stdin silent for three publication intervals.
+            time.sleep(feed_idle_stimulus_seconds)
+            second_idle = json.loads(health.read_text())["metrics"]["feed_idle_ms"]
+            assert type(second_idle) is int and second_idle > first_idle, (
+                "feed-idle-field did not grow during silence", first_idle, second_idle)
+            assert process.poll() is None, process.poll()
+            process.stdin.write(json.dumps(dict(type="bar", bar=bars[31])) + "\n")
+            process.stdin.flush()
+            process.stdin.close()
+            process.stdin = None
+            output, errors = process.communicate(timeout=hang_guard_seconds)
+            assert process.returncode == 0, (process.returncode, output, errors)
+            documents = [json.loads(line) for line in output.splitlines()]
+            assert len(documents) == 2, documents
+            assert documents[0]["input_cursor"] == 2, documents[0]
+            assert documents[1]["inputs_committed"] == 2, documents[1]
+            assert documents[1]["inputs_processed"] == 2, documents[1]
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            process.communicate(timeout=hang_guard_seconds)
+        print("PASS stdin feed-idle-field: arrival age grows through silence; EOF ends intake", flush=True)
+
 
 if __name__ == "__main__":
     main()

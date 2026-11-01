@@ -1,5 +1,6 @@
 """Exercise service lifecycle through real pipes, SQLite and bounded loopback transports."""
 import base64
+import ctypes
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -15,8 +16,12 @@ import threading
 import time
 
 from native_live_receipts import receipts_by_sequence
+from native_live_stdin_idle_e2e import hang_guard
 
 runner, library, gated_library = sys.argv[1:]
+hang_guard_seconds = hang_guard()
+status_poll_interval_seconds = 0.02
+network_silence_stimulus_seconds = 17  # Same stimulus as stdin's default-gap row.
 children = []
 receipts = []
 receiver_mode = "ok"
@@ -24,6 +29,7 @@ delivery_started = threading.Event()
 receiver_release = threading.Event()
 keepalive_started = threading.Event()
 keepalive_release = threading.Event()
+network_feeds = {}
 secret = "service-test-secret-not-public"
 
 
@@ -32,6 +38,22 @@ def frame(opcode, payload, final=True):
     if len(payload) < 126:
         return header + bytes([len(payload)]) + payload
     return header + bytes([126]) + struct.pack("!H", len(payload)) + payload
+
+
+def client_frame(stream):
+    header = stream.read(2)
+    assert len(header) == 2 and header[1] & 0x80, ("invalid masked client frame", header)
+    length = header[1] & 0x7f
+    if length in (126, 127):
+        size = 2 if length == 126 else 8
+        extended = stream.read(size)
+        assert len(extended) == size, "truncated client frame length"
+        length = int.from_bytes(extended, "big")
+    mask = stream.read(4)
+    assert len(mask) == 4, "truncated client frame mask"
+    body = stream.read(length)
+    assert len(body) == length, "truncated client frame body"
+    return header[0], bytes(byte ^ mask[index % 4] for index, byte in enumerate(body))
 
 
 class Receiver(BaseHTTPRequestHandler):
@@ -53,6 +75,24 @@ class Receiver(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        source = network_feeds.get(self.path)
+        if source is not None and source["scheme"] == "http":
+            self.close_connection = True
+            try:
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(source["body"])))
+                self.end_headers()
+                source["started"].set()
+                source["send_input"].wait()
+                self.wfile.write(source["prefix"])
+                self.wfile.flush()
+                source["prefix_sent"].set()
+                source["release"].wait()
+                self.wfile.write(source["body"][len(source["prefix"]):])
+                self.wfile.flush()
+            except OSError:
+                pass
+            return
         if self.path == "/slow-http":
             time.sleep(3)
             try:
@@ -71,7 +111,21 @@ class Receiver(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
         try:
-            if self.path == "/keepalive":
+            if source is not None:
+                if source["subscription"] is not None:
+                    source["received_subscription"] = client_frame(self.rfile)
+                source["started"].set()
+                source["send_input"].wait()
+                if source["prefix"]:
+                    self.wfile.write(frame(1, source["prefix"], False))
+                    self.wfile.flush()
+                source["prefix_sent"].set()
+                source["release"].wait()
+                self.wfile.write(frame(0 if source["prefix"] else 1,
+                    source["body"][len(source["prefix"]):]))
+                self.wfile.write(frame(8, b""))
+                self.wfile.flush()
+            elif self.path == "/keepalive":
                 keepalive_started.set()
                 while not keepalive_release.wait(0.05):
                     self.wfile.write(frame(10, b"alive"))
@@ -100,7 +154,8 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 endpoint = f"127.0.0.1:{server.server_port}"
 
 
-def wait_for(predicate):
+def wait_for(predicate, timeout=None):
+    started = time.monotonic()
     while True:
         try:
             result = predicate()
@@ -108,7 +163,9 @@ def wait_for(predicate):
                 return result
         except (FileNotFoundError, json.JSONDecodeError, sqlite3.OperationalError):
             pass
-        time.sleep(0.02)
+        if timeout is not None and time.monotonic() - started >= timeout:
+            raise AssertionError("service condition did not become ready within the hang guard")
+        time.sleep(status_poll_interval_seconds)
 
 
 def invoke(arguments, code=0, stdin=None, env=None, error=None):
@@ -137,12 +194,12 @@ def publish_request(controls, document):
     staging.replace(path)
 
 
-def finish(process, code=0, stop=True, signal_number=signal.SIGTERM):
+def finish(process, code=0, stop=True, signal_number=signal.SIGTERM, timeout=None):
     if stop:
         process.send_signal(signal_number)
     else:
-        process.wait()
-    output, errors = process.communicate()
+        process.wait(timeout=timeout)
+    output, errors = process.communicate(timeout=timeout)
     assert process.returncode == code, (process.returncode, output, errors)
     assert secret not in output + errors
     return output
@@ -160,6 +217,25 @@ try:
         batch = json.dumps({"type": "batch", "events": events}) + "\n"
         feed = root / "feed.jsonl"
         feed.write_text(batch)
+
+        def network_source(name, scheme, prefix_bytes=0):
+            body = batch.encode()
+            source = {"scheme": scheme, "body": body, "prefix": body[:prefix_bytes],
+                "subscription": None,
+                "started": threading.Event(), "send_input": threading.Event(),
+                "prefix_sent": threading.Event(), "release": threading.Event()}
+            path = f"/{name}-{scheme}"
+            network_feeds[path] = source
+            return f"{scheme}://{endpoint}{path}", source
+
+        def feed_idle_sample(health):
+            metrics = status(health)["metrics"]
+            assert "feed_idle_ms" in metrics, "feed_idle_ms key missing"
+            value = metrics["feed_idle_ms"]
+            if value is None:
+                return None
+            assert type(value) is int, metrics
+            return (value,)
 
         def base(ledger, module=library, mode="bars"):
             return ["run", "--strategy", module, "--warmup", warmup, "--mode", mode,
@@ -195,8 +271,10 @@ try:
             assert export(ledger)["input_cursor"] == 1
         for suffix, options in (("default", []), ("zero", ["--max-ledger-bytes", "0"])):
             ledger = root / ("ordinary-" + suffix + ".sqlite")
-            result = json.loads(invoke(base(ledger) + ["--feed", feed] + options))
+            health = root / ("ordinary-" + suffix + ".status.json")
+            result = json.loads(invoke(base(ledger) + ["--feed", feed, "--status-file", health] + options))
             assert result["inputs_committed"] == 1
+            assert type(status(health)["metrics"]["feed_idle_ms"]) is int
         print("PASS service and ordinary unlimited defaults and explicit unlimited opt-out", flush=True)
 
         baseline = root / "baseline.sqlite"
@@ -209,7 +287,8 @@ try:
         wait_for(lambda: status(health)["written_at_ms"] > initial)
         assert all(status(health)["readiness"].values())
         assert set(status(health)["metrics"]) - {"control_errors"} == {"committed_input", "last_seq", "source_timestamp_ms",
-            "source_lag_ms", "queue_bytes", "ledger_bytes", "report_cursor", "targets"}
+            "source_lag_ms", "feed_idle_ms", "queue_bytes", "ledger_bytes", "report_cursor", "targets"}
+        assert status(health)["metrics"]["feed_idle_ms"] is None
         duplicate = subprocess.run([runner] + list(map(str, base(ledger) + ["--feed", feed,
             "--status-file", health])), capture_output=True, text=True)
         assert duplicate.returncode == 1 and status(health)["liveness"]["alive"]
@@ -441,14 +520,26 @@ try:
                     stdin=" " * 65536 + batch))
                 assert result["inputs_committed"] == 1 and result["inputs_processed"] == 1
                 assert query(ledger, "SELECT count(*) FROM inputs") == [(1,)]
-                for scheme in ("http", "ws"):
+            long_max = (1 << (ctypes.sizeof(ctypes.c_long) * 8 - 1)) - 1
+            for scheme in ("http", "ws"):
+                for value in ("0", "301", str(long_max // 1000)):
+                    ledger = root / f"{scheme}-{option[2:]}-{value}.sqlite"
+                    url, source = network_source(f"{option[2:]}-{value}", scheme)
+                    source["send_input"].set()
+                    source["release"].set()
+                    result = json.loads(invoke(base(ledger) + [option, value, "--feed-url", url,
+                        "--allow-insecure-http", "--max-events", "1"]))
+                    assert result["inputs_committed"] == 1 and result["inputs_processed"] == 1
+                    assert query(ledger, "SELECT count(*) FROM inputs") == [(1,)]
+                for value in (str(long_max // 1000 + 1), str((1 << 64) - 1)):
                     invalid = root / f"{scheme}-{option[2:]}-{value}.sqlite"
                     invoke(base(invalid) + [option, value, "--feed-url", f"{scheme}://{endpoint}/idle-ws",
                         "--allow-insecure-http"], 1,
-                        error=f"pineforge-live: {option} must be 1..300 seconds; bound stays for network feeds")
+                        error=f"pineforge-live: {option} exceeds milliseconds range for network feeds")
                     assert not invalid.exists()
             for value in ("0", "301"):
-                invoke(base(root / "invalid.sqlite") + ["--feed", feed, option, value], 1)
+                invoke(base(root / "invalid.sqlite") + ["--feed", feed, option, value], 1,
+                    error=f"pineforge-live: {option} must be 1..300 seconds for file feeds")
         process, ledger, health = start("idle", ["--feed-idle-timeout", "1", "--feed-message-timeout", "3"])
         finish(process, 1, stop=False)
         assert status(health)["state"] == "failed"
@@ -459,8 +550,71 @@ try:
         finish(process, 1, stop=False)
         for path in ("idle-ws", "partial", "slow-http"):
             scheme = "http" if path == "slow-http" else "ws"
+            idle, message = ("3", "1") if path == "partial" else ("1", "2")
             invoke(base(root / (path + ".sqlite")) + ["--feed-url", f"{scheme}://{endpoint}/{path}",
-                "--allow-insecure-http", "--feed-idle-timeout", "1", "--feed-message-timeout", "2"], 1)
+                "--allow-insecure-http", "--feed-idle-timeout", idle, "--feed-message-timeout", message], 1,
+                error=None if scheme == "http" else
+                    "pineforge-live: native WebSocket idle or message timeout; 0 actions not sent")
+        subscription = root / "network-subscription.json"
+        subscription.write_text('{"subscribe":"TEST:MOCK"}')
+        for scheme in ("http", "ws"):
+            name = "default-silence-" + scheme
+            ledger, health = root / (name + ".sqlite"), root / (name + ".status.json")
+            url, source = network_source(name, scheme, prefix_bytes=1)
+            options = ["--check"] if scheme == "http" else ["--subscribe", subscription]
+            if scheme == "ws":
+                source["subscription"] = subscription.read_bytes()
+            process = subprocess.Popen([runner] + list(map(str, base(ledger) + [
+                "--feed-url", url, "--allow-insecure-http", "--status-file", health,
+                "--status-interval", "1"] + options)), stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True)
+            children.append(process)
+            assert source["started"].wait(hang_guard_seconds), (name, "feed never connected")
+            if scheme == "ws":
+                assert source["received_subscription"] == (0x81, source["subscription"])
+            wait_for(lambda: health.exists() and status(health)["state"] == "running",
+                timeout=hang_guard_seconds)
+            assert status(health)["metrics"]["feed_idle_ms"] is None
+            source["send_input"].set()
+            assert source["prefix_sent"].wait(hang_guard_seconds), (name, "prefix was not sent")
+            first_idle = wait_for(lambda: feed_idle_sample(health), timeout=hang_guard_seconds)[0]
+            # Named sender stimulus: silence exceeds the former 15-second default.
+            time.sleep(network_silence_stimulus_seconds)
+            assert process.poll() is None, (name, "default deadline ended intake", process.poll())
+            second_idle = status(health)["metrics"]["feed_idle_ms"]
+            assert type(second_idle) is int and second_idle > first_idle, (
+                name, "arrival age did not grow during silence", first_idle, second_idle)
+            assert query(ledger, "SELECT count(*) FROM inputs") == [(0,)]
+            source["release"].set()
+            output = finish(process, code=0 if scheme == "http" else 1, stop=False,
+                timeout=hang_guard_seconds)
+            if scheme == "http":
+                result = json.loads(output)
+                assert result["inputs_committed"] == 1 and result["inputs_processed"] == 1
+            assert query(ledger, "SELECT count(*) FROM inputs") == [(1,)]
+            assert status(health)["state"] == ("stopped" if scheme == "http" else "failed")
+            assert type(status(health)["metrics"]["feed_idle_ms"]) is int
+            print(f"PASS {name}: partial input, growing arrival age, server closure ends intake", flush=True)
+
+        url, source = network_source("zero-idle-bounded-message", "ws")
+        health = root / "zero-idle-bounded-message.status.json"
+        process = subprocess.Popen([runner] + list(map(str, base(root / "zero-idle-bounded-message.sqlite") + [
+            "--feed-url", url, "--allow-insecure-http", "--status-file", health,
+            "--feed-idle-timeout", "0", "--feed-message-timeout", "1"])),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        children.append(process)
+        assert source["started"].wait(hang_guard_seconds), "zero-idle feed never connected"
+        wait_for(lambda: health.exists() and status(health)["state"] == "running",
+            timeout=hang_guard_seconds)
+        zero_idle_stimulus_seconds = 3
+        time.sleep(zero_idle_stimulus_seconds)
+        assert process.poll() is None, ("zero idle fell back to the message deadline", process.poll())
+        assert status(health)["metrics"]["feed_idle_ms"] is None
+        finish(process, timeout=hang_guard_seconds)
+        source["send_input"].set()
+        source["release"].set()
+        print("PASS WebSocket zero idle remains unlimited with an explicit message deadline; supervisor stops intake", flush=True)
+
         keepalive_health = root / "keepalive.status.json"
         keepalive_command = base(root / "keepalive.sqlite") + ["--feed-url", f"ws://{endpoint}/keepalive",
             "--allow-insecure-http", "--feed-idle-timeout", "5", "--feed-message-timeout", "1",
@@ -502,6 +656,9 @@ try:
 finally:
     receiver_release.set()
     keepalive_release.set()
+    for source in network_feeds.values():
+        source["send_input"].set()
+        source["release"].set()
     for process in children:
         if process.poll() is None:
             process.terminate()

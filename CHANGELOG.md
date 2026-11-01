@@ -7,6 +7,13 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- `pineforge-live` status files now report `metrics.feed_idle_ms`, the
+  milliseconds since the last feed arrival, or null before the first; the
+  consumer owns freshness. HTTP and WebSocket feeds now also default to no
+  idle or message deadline, with 0 meaning none and positive seconds accepted
+  when their milliseconds fit a `long`. A caller relying on the former
+  15 second network default to end a run must set the timeout flag or close
+  the connection. Connection setup retains its 5000 ms bound.
 - **Default change, user-visible:** `pineforge-live run --feed -` (the stdin
   feed) no longer ends a run by itself after 15 seconds without data or 15
   seconds to complete a line. With neither flag given, `--feed-idle-timeout`
