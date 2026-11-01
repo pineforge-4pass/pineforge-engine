@@ -2,6 +2,7 @@
 
 #include <pineforge/detail/o1_store.hpp>
 #include <pineforge/detail/script_store.hpp>
+#include <pineforge/map_capacity.hpp>
 #include <pineforge/na.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/script_string.hpp>
@@ -17,6 +18,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -36,13 +38,6 @@ using PineMapBare = std::remove_cv_t<std::remove_reference_t<T>>;
 [[noreturn, gnu::noinline, gnu::cold]] inline void map_na_error(const char* what) {
     throw coded<std::runtime_error>(RunFailureCode::pine_na_reference,
                                     {{"object", "map"}}, what);
-}
-
-// A new key beyond the map's pair cap: pine_runtime_limit.
-[[noreturn, gnu::noinline, gnu::cold]] inline void map_capacity_error(int cap,
-                                                                     const char* what) {
-    throw coded<std::runtime_error>(RunFailureCode::pine_runtime_limit,
-                                    {{"limit", "map_pairs"}, {"max", cap}}, what);
 }
 
 // A broken key index, an unreachable size or a checkpoint never taken: an
@@ -260,7 +255,7 @@ struct MapReadCache {
 
     struct Entry {
         std::uint64_t hash = 0;
-        std::uint32_t slot = 0;
+        std::uint32_t slot = 0; // Low bits; Storage keeps the upper slot bits.
         bool valid = false;
         KeyRep key{};
         ValueRep value{};
@@ -412,16 +407,19 @@ void map_release(o1::Store& store, const MapRepOf<T>& rep) {
 // The first bytes of a map's entry object.  Slot links are slot index + 1,
 // 0 meaning none.
 struct MapHeader {
-    std::uint32_t count;
-    std::uint32_t head;
-    std::uint32_t tail;
-    std::uint32_t high_water;  // slots ever handed out
-    std::uint32_t free_head;
-    std::uint32_t reserved[3];
+    std::uint64_t count;
+    std::uint64_t head;
+    std::uint64_t tail;
+    std::uint64_t high_water;  // slots ever handed out
+    std::uint64_t free_head;
+    std::uint64_t capacity;
+    std::uint64_t max_pairs;   // zero: no admission limit
+    std::uint32_t bucket_bits;
+    std::uint32_t reserved;
 };
-static_assert(sizeof(MapHeader) == 32, "map header is 32 bytes");
+static_assert(sizeof(MapHeader) == 64, "map header is 64 bytes");
 
-inline constexpr std::uint32_t kMapNoBucket = ~std::uint32_t{0};
+inline constexpr std::uint64_t kMapNoBucket = ~std::uint64_t{0};
 
 // The first bytes of a slot.  `bucket` doubles as the live mark and as the
 // back reference the hash index is validated against: a bucket entry counts only
@@ -429,12 +427,12 @@ inline constexpr std::uint32_t kMapNoBucket = ~std::uint32_t{0};
 // so an index object needs no zero fill and a clear needs no walk.
 struct MapLinks {
     std::uint64_t hash;
-    std::uint32_t prev;
-    std::uint32_t next;
-    std::uint32_t chain;
-    std::uint32_t bucket;
+    std::uint64_t prev;
+    std::uint64_t next;
+    std::uint64_t chain;
+    std::uint64_t bucket;
 };
-static_assert(sizeof(MapLinks) == 24, "map slot links are 24 bytes");
+static_assert(sizeof(MapLinks) == 40, "map slot links are 40 bytes");
 
 // A store object that holds an enumeration or a snapshot, released with its
 // last reference.  `count` is the number of elements (an enumeration) or of
@@ -593,21 +591,22 @@ inline constexpr bool is_pine_map_snapshot_value_v =
 // store and copies the entries into it.
 //
 // The pairs live in two objects of the shared script-state store: an entry
-// arena of max_pairs slots, in which a doubly linked list holds the
+// arena grown in fixed slot steps, in which a doubly linked list holds the
 // authoritative entry sequence (so overwrites never move an existing key and
-// removals do not disturb the relative order of survivors), and a fixed table of
-// hash chains that keeps get/put/remove/contains constant-time on average.  Both
-// are sized once when the map is created, from the existing 50,000-pair limit:
-// a put never allocates a node or rehashes, and a removed slot is the next one
-// a put reuses. The Store's fixed chunk step makes backing allocation grow only
-// as slots and buckets are written, with a fixed resident page cache.
+// removals do not disturb the relative order of survivors), and a power-of-two
+// hash table sized for at most 3/4 load at the reserved capacity. Rehash changes
+// only bucket/chain links. Both roots keep stable Store ids; their extents,
+// geometry and optional pair limit roll back with the entries. No population-
+// sized heap scratch is used. A removed slot is the next one a put reuses.
 template <typename Key, typename Value>
 class PineMap {
     static_assert(detail::is_pine_map_key_v<Key>,
                   "PineMap key must be a Pine fundamental or enum type");
 
 public:
+    // Legacy spelling of the TV parity preset, NOT the default admission policy.
     static constexpr int max_pairs = 50'000;
+    static constexpr std::uint64_t growth_step_pairs = 4096;
     static constexpr bool snapshot_supported =
         detail::is_pine_map_snapshot_value_v<Value>;
 
@@ -637,17 +636,11 @@ private:
     static constexpr std::uint64_t kKeyOffset = sizeof(detail::MapLinks);
     static constexpr std::uint64_t kValueOffset = kKeyOffset + sizeof(KeyRep);
     static constexpr std::uint64_t kSlotBytes = (kValueOffset + sizeof(ValueRep) + 7) / 8 * 8;
-    static constexpr std::uint64_t kCapacity = static_cast<std::uint64_t>(max_pairs);
-    static constexpr std::uint32_t kBucketBits = 16;
-    static constexpr std::uint64_t kBucketBytes =
-        (std::uint64_t{1} << kBucketBits) * sizeof(std::uint32_t);
 
     static constexpr const char* kNaIdError =
         "map operation on na ID";
     static constexpr const char* kInvalidSnapshotError =
         "map restore from invalid snapshot";
-    static constexpr const char* kCapacityError =
-        "map cannot contain more than 50000 key-value pairs";
 
     // The roots a map's state hangs from.  Swapping them cannot fail, which is
     // what lets a replacement be built completely before it takes the place of
@@ -673,6 +666,8 @@ private:
         EntryRoot entries;
         IndexRoot index;
         ReadCache read_cache;
+        // Keep 64-bit slot addressing without growing the fixed ReadCache layout.
+        std::array<std::uint32_t, ReadCache::capacity> read_cache_slot_high{};
         std::vector<Value> heap_values;  // used only when kHeapValue
 
         Storage() = default;
@@ -759,11 +754,17 @@ public:
     }
 
     [[nodiscard]] static PineMap new_() {
+        return new_(detail::map_pair_limit());
+    }
+
+    // Explicit per-map override; zero is unlimited. The default overload takes
+    // the current run's creation policy once, never at each subsequent put.
+    [[nodiscard]] static PineMap new_(std::uint64_t maximum) {
         auto storage = std::make_shared<Storage>();
         storage->holder = detail::map_current_store();
         std::lock_guard<std::recursive_mutex> lock(storage->holder->mutex);
         auto tx = storage->store().scope();
-        create_objects(*storage);
+        create_objects(*storage, maximum);
         tx.commit();
         return PineMap(std::move(storage));
     }
@@ -800,7 +801,7 @@ public:
         const detail::MapHeader header = load_header(storage);
         const Located found = locate(storage, header, key, hash);
         if (found.slot == 0) return pineforge::na<Value>();
-        const std::uint32_t slot = found.slot - 1;
+        const std::uint64_t slot = found.slot - 1;
         if constexpr (kHeapValue) {
             record_cache(storage, hash, slot, found.key, ValueRep{});
             return storage.heap_values[slot];
@@ -822,7 +823,7 @@ public:
         const Located found = locate(storage, header, key, hash_key(key));
         if (found.slot == 0) { tx.commit(); return pineforge::na<Value>(); }
 
-        const std::uint32_t slot = found.slot - 1;
+        const std::uint64_t slot = found.slot - 1;
         const detail::MapLinks links = load_links(storage, slot);
         Value previous = read_value(storage, slot);
         detail::map_release<Key>(storage.store(), load_key_rep(storage, slot));
@@ -877,15 +878,16 @@ public:
         return true;
     }
 
-    [[nodiscard]] int size() const {
+    // The pair count as a Pine signed 64-bit integer.
+    [[nodiscard]] std::int64_t size() const {
         Storage& storage = require_storage();
         std::lock_guard<std::recursive_mutex> lock(storage.holder->mutex);
         const detail::MapHeader header = load_header(storage);
-        if (header.count > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+        if (header.count > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
             detail::map_invariant_error<std::overflow_error>(
-                "map.size: result exceeds int range");
+                "map.size: result exceeds int64 range");
         }
-        return static_cast<int>(header.count);
+        return static_cast<std::int64_t>(header.count);
     }
 
     // Generated state hashes provide their type-specific canonical scalar,
@@ -898,10 +900,16 @@ public:
         std::lock_guard<std::recursive_mutex> lock(storage.holder->mutex);
         const auto header = load_header(storage);
         sink.u(header.count);
-        for (std::uint32_t at = header.head; at != 0;) {
+        for (std::uint64_t at = header.head; at != 0;) {
             hash_key_value(sink, read_key(storage, at - 1));
             hash_value(sink, read_value(storage, at - 1));
             at = load_links(storage, at - 1).next;
+        }
+        // Keep the default map's canonical fold byte-identical. An explicit
+        // policy changes future admission and therefore participates in state.
+        if (header.max_pairs != 0) {
+            sink.u(UINT64_C(0x6d61702d6c696d31));
+            sink.u(header.max_pairs);
         }
     }
 
@@ -912,8 +920,10 @@ public:
         auto tx = storage.store().scope();
         // Release payload ownership before resetting the arena. Its scalar
         // geometry and hash domain remain prepared for reuse.
-        release_entries(storage, load_header(storage));
-        save_header(storage, detail::MapHeader{});
+        auto header = load_header(storage);
+        release_entries(storage, header);
+        header.count = header.head = header.tail = header.high_water = header.free_head = 0;
+        save_header(storage, header);
         storage.heap_values.clear();
         tx.commit();
     }
@@ -936,23 +946,24 @@ public:
         target.read_cache.clear();
         const detail::MapHeader source_header = load_header(from);
         const detail::MapHeader target_header = load_header(target);
-        std::size_t new_keys = 0;
-        for (std::uint32_t at = source_header.head; at != 0;) {
+        std::uint64_t new_keys = 0;
+        for (std::uint64_t at = source_header.head; at != 0;) {
             const Key key = read_key(from, at - 1);
-            if (locate(target, target_header, key, hash_key(key)).slot == 0) ++new_keys;
+            if (locate(target, target_header, key, hash_key(key)).slot == 0) {
+                ++new_keys;
+                if (target_header.max_pairs != 0 &&
+                    new_keys > target_header.max_pairs - target_header.count) {
+                    // Refuse at the FIRST inadmissible distinct key, before
+                    // overwrites or payload ownership have changed.
+                    detail::map_capacity_error(target_header.max_pairs,
+                                               target_header.max_pairs + 1);
+                }
+            }
             at = load_links(from, at - 1).next;
-        }
-        const auto available = static_cast<std::size_t>(max_pairs) -
-                               static_cast<std::size_t>(target_header.count);
-        if (new_keys > available) {
-            // Preflight keeps put_all transactional with respect to the
-            // capacity check: existing values are not overwritten before a
-            // later new key discovers that the map is full.
-            detail::map_capacity_error(max_pairs, kCapacityError);
         }
 
         auto tx = target.store().scope();
-        for (std::uint32_t at = source_header.head; at != 0;) {
+        for (std::uint64_t at = source_header.head; at != 0;) {
             const Key key = read_key(from, at - 1);
             (void)put_locked(target, key, read_value(from, at - 1));
             at = load_links(from, at - 1).next;
@@ -968,7 +979,7 @@ public:
         auto tx = storage.store().scope();
         const detail::MapHeader header = load_header(storage);
         auto image = make_image(storage, static_cast<std::uint64_t>(header.count) * sizeof(KeyRep));
-        fill_image<Key>(storage, header, image->id, [&storage](std::uint32_t slot) {
+        fill_image<Key>(storage, header, image->id, [&storage](std::uint64_t slot) {
             return load_key_rep(storage, slot);
         });
         image->cleanup = &release_sequence<Key>;
@@ -987,7 +998,7 @@ public:
         if constexpr (kHeapValue) {
             std::vector<Value> result;
             result.reserve(header.count);
-            for (std::uint32_t at = header.head; at != 0;) {
+            for (std::uint64_t at = header.head; at != 0;) {
                 result.push_back(storage.heap_values[at - 1]);
                 at = load_links(storage, at - 1).next;
             }
@@ -996,7 +1007,7 @@ public:
             auto tx = storage.store().scope();
             auto image = make_image(storage,
                                     static_cast<std::uint64_t>(header.count) * sizeof(ValueRep));
-            fill_image<Value>(storage, header, image->id, [&storage](std::uint32_t slot) {
+            fill_image<Value>(storage, header, image->id, [&storage](std::uint64_t slot) {
                 return load_value_rep(storage, slot);
             });
             image->cleanup = &release_sequence<Value>;
@@ -1017,8 +1028,9 @@ public:
         storage->holder = source.holder;
         std::lock_guard<std::recursive_mutex> lock(source.holder->mutex);
         auto tx = source.store().scope();
-        create_objects(*storage);
         const detail::MapHeader header = load_header(source);
+        create_objects(*storage, header.max_pairs);
+        resize_exact(*storage, storage->entries.id, arena_bytes(header.capacity));
         copy_range(source.store(), source.entries.id, storage->entries.id,
                    kHeaderBytes + static_cast<std::uint64_t>(header.high_water) * kSlotBytes);
         rebuild_index(*storage, header);
@@ -1067,6 +1079,7 @@ public:
             detail::MapHeader header{};
             read_exact(storage.store(), snapshot.state_->id, 0, &header, sizeof header);
             release_entries(storage, load_header(storage));
+            resize_exact(storage, storage.entries.id, arena_bytes(header.capacity));
             copy_range(storage.store(), snapshot.state_->id, storage.entries.id,
                        snapshot.state_->count);
             retain_entries(storage, header);
@@ -1080,10 +1093,10 @@ private:
     // Where a key sits in its hash chain: the slot (index + 1, 0 if absent), the
     // slot before it in the chain, the chain's first slot and the bucket.
     struct Located {
-        std::uint32_t slot = 0;
-        std::uint32_t previous = 0;
-        std::uint32_t head = 0;
-        std::uint32_t bucket = 0;
+        std::uint64_t slot = 0;
+        std::uint64_t previous = 0;
+        std::uint64_t head = 0;
+        std::uint64_t bucket = 0;
         KeyRep key{};
         ValueRep value{}; // Filled with the value by locate<true> for contains().
     };
@@ -1096,13 +1109,59 @@ private:
     explicit PineMap(std::shared_ptr<Storage> storage)
         : storage_(std::move(storage)) {}
 
-    static void create_objects(Storage& storage) {
+    static void create_objects(Storage& storage, std::uint64_t maximum) {
         detail::o1::Store& store = storage.store();
-        storage.entries.id = store.create(kHeaderBytes + kCapacity * kSlotBytes, 8);
-        storage.index.id = store.create(kBucketBytes, 8);
-        // A missing entry chunk reads as zero, so the all-zero MapHeader needs
-        // no data record until the first map mutation.
-        // Handle values grow their bounded table as slots are used.
+        storage.entries.id = store.create(kHeaderBytes, 8);
+        storage.index.id = store.create(sizeof(std::uint64_t), 8);
+        detail::MapHeader header{};
+        header.max_pairs = maximum;
+        if (maximum != 0) save_header(storage, header);
+        // Zero capacity and one implicit-zero bucket until the first put.
+    }
+
+    static std::uint64_t arena_bytes(std::uint64_t capacity) {
+        if (capacity > (std::numeric_limits<std::uint64_t>::max() - kHeaderBytes) / kSlotBytes)
+            throw coded<std::bad_alloc>(RunFailureCode::out_of_memory, {}, std::bad_alloc{});
+        return kHeaderBytes + capacity * kSlotBytes;
+    }
+
+    static void resize_exact(Storage& storage, StoreId id, std::uint64_t bytes) {
+        if (!storage.store().resize(id, bytes))
+            detail::map_invariant_error<std::runtime_error>(detail::kMapStoreTransferError);
+    }
+
+    static std::uint32_t bucket_bits_for(std::uint64_t capacity) {
+        std::uint32_t bits = 0;
+        std::uint64_t buckets = 1;
+        while (capacity > buckets / 2 + buckets / 4) {
+            // Check address arithmetic, not an admission policy.
+            if (buckets > std::numeric_limits<std::uint64_t>::max() /
+                              (2 * sizeof(std::uint64_t)))
+                throw coded<std::bad_alloc>(RunFailureCode::out_of_memory, {}, std::bad_alloc{});
+            buckets *= 2;
+            ++bits;
+        }
+        return bits;
+    }
+
+    static void grow(Storage& storage, detail::MapHeader& header) {
+        const auto addressable =
+            (std::numeric_limits<std::uint64_t>::max() - kHeaderBytes) / kSlotBytes;
+        if (header.capacity >= addressable)
+            throw coded<std::bad_alloc>(RunFailureCode::out_of_memory, {}, std::bad_alloc{});
+        std::uint64_t step = std::min(growth_step_pairs, addressable - header.capacity);
+        if (header.max_pairs != 0)
+            step = std::min(step, header.max_pairs - header.capacity);
+        header.capacity += step;
+        resize_exact(storage, storage.entries.id, arena_bytes(header.capacity));
+        const auto bits = bucket_bits_for(header.capacity);
+        if (bits != header.bucket_bits) {
+            header.bucket_bits = bits;
+            rebuild_index(storage, header);
+        }
+        // Payload codecs may read this map while encoding the new pair. Publish
+        // consistent geometry before entering a codec, with count unchanged.
+        save_header(storage, header);
     }
 
     static void read_exact(const detail::o1::Store& store, StoreId id, std::uint64_t offset,
@@ -1144,41 +1203,41 @@ private:
         write_exact(storage.store(), storage.entries.id, 0, &header, sizeof header);
     }
 
-    static std::uint64_t slot_offset(std::uint32_t slot) {
+    static std::uint64_t slot_offset(std::uint64_t slot) {
         return kHeaderBytes + static_cast<std::uint64_t>(slot) * kSlotBytes;
     }
 
-    static detail::MapLinks load_links(Storage& storage, std::uint32_t slot) {
+    static detail::MapLinks load_links(Storage& storage, std::uint64_t slot) {
         detail::MapLinks links{};
         read_exact(storage.store(), storage.entries.id, slot_offset(slot), &links, sizeof links);
         return links;
     }
 
-    static void save_links(Storage& storage, std::uint32_t slot, const detail::MapLinks& links) {
+    static void save_links(Storage& storage, std::uint64_t slot, const detail::MapLinks& links) {
         write_exact(storage.store(), storage.entries.id, slot_offset(slot), &links, sizeof links);
     }
 
-    static KeyRep load_key_rep(Storage& storage, std::uint32_t slot) {
+    static KeyRep load_key_rep(Storage& storage, std::uint64_t slot) {
         KeyRep rep{};
         read_exact(storage.store(), storage.entries.id, slot_offset(slot) + kKeyOffset, &rep,
                    sizeof rep);
         return rep;
     }
 
-    static ValueRep load_value_rep(Storage& storage, std::uint32_t slot) {
+    static ValueRep load_value_rep(Storage& storage, std::uint64_t slot) {
         ValueRep rep{};
         read_exact(storage.store(), storage.entries.id, slot_offset(slot) + kValueOffset, &rep,
                    sizeof rep);
         return rep;
     }
 
-    static void save_value_rep(Storage& storage, std::uint32_t slot, const ValueRep& rep) {
+    static void save_value_rep(Storage& storage, std::uint64_t slot, const ValueRep& rep) {
         write_exact(storage.store(), storage.entries.id, slot_offset(slot) + kValueOffset, &rep,
                     sizeof rep);
     }
 
     // A whole slot in one store write.
-    static void save_slot(Storage& storage, std::uint32_t slot, const detail::MapLinks& links,
+    static void save_slot(Storage& storage, std::uint64_t slot, const detail::MapLinks& links,
                           const KeyRep& key, const ValueRep& value) {
         unsigned char raw[kSlotBytes] = {};
         std::memcpy(raw, &links, sizeof links);
@@ -1187,14 +1246,14 @@ private:
         write_exact(storage.store(), storage.entries.id, slot_offset(slot), raw, sizeof raw);
     }
 
-    static std::uint32_t load_bucket(Storage& storage, std::uint32_t bucket) {
-        std::uint32_t head = 0;
+    static std::uint64_t load_bucket(Storage& storage, std::uint64_t bucket) {
+        std::uint64_t head = 0;
         read_exact(storage.store(), storage.index.id,
                    static_cast<std::uint64_t>(bucket) * sizeof head, &head, sizeof head);
         return head;
     }
 
-    static void save_bucket(Storage& storage, std::uint32_t bucket, std::uint32_t head) {
+    static void save_bucket(Storage& storage, std::uint64_t bucket, std::uint64_t head) {
         write_exact(storage.store(), storage.index.id,
                     static_cast<std::uint64_t>(bucket) * sizeof head, &head, sizeof head);
     }
@@ -1203,9 +1262,8 @@ private:
         return static_cast<std::uint64_t>(detail::PineMapKeyHash<Key>{}(key));
     }
 
-    static std::uint32_t bucket_of(std::uint64_t hash) noexcept {
-        return static_cast<std::uint32_t>((hash * UINT64_C(0x9e3779b97f4a7c15)) >>
-                                          (64 - kBucketBits));
+    static std::uint64_t bucket_of(std::uint64_t hash, std::uint32_t bits) noexcept {
+        return bits == 0 ? 0 : (hash * UINT64_C(0x9e3779b97f4a7c15)) >> (64 - bits);
     }
 
     static bool key_matches(detail::o1::Store& store, const KeyRep& rep, const Key& key) {
@@ -1239,23 +1297,28 @@ private:
 
     static Value read_cached_value(Storage& storage, const typename ReadCache::Entry& entry) {
         if constexpr (kHeapValue) {
-            return storage.heap_values[entry.slot];
+            const auto cache_index = &entry - storage.read_cache.entries.data();
+            const std::uint64_t slot =
+                (std::uint64_t{storage.read_cache_slot_high[cache_index]} << 32) | entry.slot;
+            return storage.heap_values[slot];
         } else {
             return detail::map_decode<Value>(storage.store(), entry.value, storage.holder);
         }
     }
 
-    static void record_cache(Storage& storage, std::uint64_t hash, std::uint32_t slot,
+    static void record_cache(Storage& storage, std::uint64_t hash, std::uint64_t slot,
                              const KeyRep& key, const ValueRep& value) {
         storage.read_cache.epoch = storage.store().rollback_epoch();
-        storage.read_cache.record(hash, slot, key, value);
+        storage.read_cache_slot_high[storage.read_cache.next] =
+            static_cast<std::uint32_t>(slot >> 32);
+        storage.read_cache.record(hash, static_cast<std::uint32_t>(slot), key, value);
     }
 
-    static Key read_key(Storage& storage, std::uint32_t slot) {
+    static Key read_key(Storage& storage, std::uint64_t slot) {
         return detail::map_decode<Key>(storage.store(), load_key_rep(storage, slot), storage.holder);
     }
 
-    static Value read_value(Storage& storage, std::uint32_t slot) {
+    static Value read_value(Storage& storage, std::uint64_t slot) {
         if constexpr (kHeapValue) {
             return storage.heap_values[slot];
         } else {
@@ -1263,7 +1326,7 @@ private:
         }
     }
 
-    static void set_heap_value(Storage& storage, std::uint32_t slot, Value&& value) {
+    static void set_heap_value(Storage& storage, std::uint64_t slot, Value&& value) {
         if (slot >= storage.heap_values.size()) storage.heap_values.resize(slot + 1);
         storage.heap_values[slot] = std::move(value);
     }
@@ -1274,9 +1337,9 @@ private:
     static Located locate(Storage& storage, const detail::MapHeader& header, const Key& key,
                           std::uint64_t hash) {
         Located found;
-        found.bucket = bucket_of(hash);
-        std::uint32_t at = load_bucket(storage, found.bucket);
-        std::uint32_t before = 0;
+        found.bucket = bucket_of(hash, header.bucket_bits);
+        std::uint64_t at = load_bucket(storage, found.bucket);
+        std::uint64_t before = 0;
         bool first = true;
         while (at != 0 && at <= header.high_water) {
             const detail::MapLinks links = load_links(storage, at - 1);
@@ -1311,11 +1374,11 @@ private:
     }
 
     static Value put_locked(Storage& storage, const Key& key, Value value) {
-        const detail::MapHeader before = load_header(storage);
+        detail::MapHeader before = load_header(storage);
         const std::uint64_t hash = hash_key(key);
-        const Located found = locate(storage, before, key, hash);
+        Located found = locate(storage, before, key, hash);
         if (found.slot != 0) {
-            const std::uint32_t slot = found.slot - 1;
+            const std::uint64_t slot = found.slot - 1;
             Value previous = read_value(storage, slot);
             if constexpr (kHeapValue) {
                 set_heap_value(storage, slot, std::move(value));
@@ -1328,8 +1391,12 @@ private:
             return previous;
         }
 
-        if (before.count >= static_cast<std::uint32_t>(max_pairs)) {
-            detail::map_capacity_error(max_pairs, kCapacityError);
+        if (before.max_pairs != 0 && before.count >= before.max_pairs) {
+            detail::map_capacity_error(before.max_pairs, before.count + 1);
+        }
+        if (before.free_head == 0 && before.high_water == before.capacity) {
+            grow(storage, before);
+            found = locate(storage, before, key, hash);
         }
 
         // Encode payloads inside the caller's transaction before linking the
@@ -1337,7 +1404,7 @@ private:
         const KeyRep key_rep = detail::map_encode<Key>(storage.store(), key);
         const ValueRep value_rep = detail::map_encode<Value>(storage.store(), value);
         detail::MapHeader after = before;
-        std::uint32_t slot = 0;
+        std::uint64_t slot = 0;
         if (before.free_head != 0) {
             slot = before.free_head - 1;
             after.free_head = load_links(storage, slot).next;
@@ -1368,7 +1435,7 @@ private:
     }
 
     static void release_entries(Storage& storage, const detail::MapHeader& header) {
-        for (std::uint32_t at = header.head; at != 0;) {
+        for (std::uint64_t at = header.head; at != 0;) {
             detail::map_release<Key>(storage.store(), load_key_rep(storage, at - 1));
             if constexpr (!kHeapValue)
                 detail::map_release<Value>(storage.store(), load_value_rep(storage, at - 1));
@@ -1377,7 +1444,7 @@ private:
     }
 
     static void retain_entries(Storage& storage, const detail::MapHeader& header) {
-        for (std::uint32_t at = header.head; at != 0;) {
+        for (std::uint64_t at = header.head; at != 0;) {
             detail::map_retain<Key>(storage.store(), load_key_rep(storage, at - 1));
             if constexpr (!kHeapValue)
                 detail::map_retain<Value>(storage.store(), load_value_rep(storage, at - 1));
@@ -1388,7 +1455,7 @@ private:
     static void image_entry_refs(detail::o1::Store& store, StoreId image, bool retain) {
         detail::MapHeader header{};
         read_exact(store, image, 0, &header, sizeof header);
-        for (std::uint32_t at = header.head; at != 0;) {
+        for (std::uint64_t at = header.head; at != 0;) {
             const auto offset = slot_offset(at - 1);
             detail::MapLinks links{};
             KeyRep key{};
@@ -1421,12 +1488,18 @@ private:
         }
     }
 
-    // Re-links the hash index to an entry sequence whose slots (links, hashes,
-    // chains and buckets) were just copied in: the chain head of a bucket is
-    // the last slot of the sequence that sits in it.
+    // A fresh zero table under the SAME id. Store rollback restores both its
+    // old extent and its old bytes. Walking insertion order changes only the
+    // bucket/chain fields; no key/value is decoded or retained/released.
     static void rebuild_index(Storage& storage, const detail::MapHeader& header) {
-        for (std::uint32_t at = header.head; at != 0;) {
-            const detail::MapLinks links = load_links(storage, at - 1);
+        resize_exact(storage, storage.index.id, 0);
+        resize_exact(storage, storage.index.id,
+                     (std::uint64_t{1} << header.bucket_bits) * sizeof(std::uint64_t));
+        for (std::uint64_t at = header.head; at != 0;) {
+            auto links = load_links(storage, at - 1);
+            links.bucket = bucket_of(links.hash, header.bucket_bits);
+            links.chain = load_bucket(storage, links.bucket);
+            save_links(storage, at - 1, links);
             save_bucket(storage, links.bucket, at);
             at = links.next;
         }
@@ -1446,7 +1519,7 @@ private:
         Rep chunk[kPerChunk] = {};
         std::size_t filled = 0;
         std::uint64_t written = 0;
-        for (std::uint32_t at = header.head; at != 0;) {
+        for (std::uint64_t at = header.head; at != 0;) {
             const Rep rep = fetch(at - 1);
             detail::map_retain<Elem>(storage.store(), rep);
             chunk[filled++] = rep;

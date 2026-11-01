@@ -590,7 +590,8 @@ All **❌ Unsupported** — hard-reject via `UNSUPPORTED_NAMESPACES` (`support_c
 End-to-end status is **✅ Runtime** within the transpiler's explicit supported
 boundary. Generated strategies call `PineMap<K,V>` in `map.hpp`, including null
 map IDs, alias-preserving assignment, explicit container copy, insertion
-ordering, typed missing results, `put_all`, the 50,000-pair limit, pair loops,
+ordering, typed missing results, `put_all`, a per-map pair-limit parameter
+(unlimited by default; 50,000 for TV parity), pair loops,
 and primitive-value snapshot/restore. Codegen propagates supported map types
 through variables, UDT fields, parameters, returns, wrappers, and `na`, while
 preserving once-only receiver/key/value evaluation. It fails closed for

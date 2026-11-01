@@ -44,8 +44,8 @@ public:
         auto holder = std::make_shared<detail::MapStoreHolder>(*session_->store);
         detail::MapStoreScope scope(holder);
 #endif
-        // The full scalar arena and hash domain must be prepared here,
-        // before bar zero. No payload has been admitted at this checkpoint.
+        // The Store's fixed resident workspace is prepared before bar zero;
+        // arena and bucket growth must stay inside it.
         map_ = Map::new_();
         before_ = a5_heap::live.load();
         a5_heap::reset_peak();
@@ -63,11 +63,12 @@ public:
     void verify() {
         a5_fixture::require(callbacks_ == PF_A5_BARS, "map host did not calculate every bar");
         a5_fixture::require(inserted_ == pairs && map_.size() == pairs,
-                            "map fixture did not reach the shipped 50000 pair cap");
+                            "map fixture did not reach its 50000 pair population");
         const auto retained = a5_heap::growth(a5_heap::live.load(), before_);
         const auto peak = a5_heap::growth(a5_heap::peak.load(), before_);
-        std::printf("A5MAP bars=%d entries=%d payload=%zu live=%zu peak=%zu bound=%zu\n",
-                    PF_A5_BARS, map_.size(), pairs * value_bytes, retained, peak,
+        std::printf("A5MAP bars=%d entries=%lld payload=%zu live=%zu peak=%zu bound=%zu\n",
+                    PF_A5_BARS, static_cast<long long>(map_.size()), pairs * value_bytes,
+                    retained, peak,
                     a5_fixture::operation_ceiling);
 #ifndef PF_A5_ENUMERATION_ROW
         a5_fixture::require(retained <= a5_fixture::operation_ceiling,

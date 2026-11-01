@@ -8,14 +8,42 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "803c8cf11d7d058facf32e55df114bb3143bc52d8482b89376d87eee1b352c30"
+    "catalogSha256": "4b830326de11955772718f1f9623e45348f3992ad91f6a32ba0213dd94d716f2"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
     "after": "pineforge-run-failure-catalog/v1"
   },
   "metadataChanges": [],
-  "added": [],
+  "added": [
+    {
+      "code": "pine_map_capacity_exceeded",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "bar_index": {
+            "kind": "integer"
+          },
+          "code": {
+            "kind": "identifier"
+          },
+          "currSize": {
+            "kind": "integer"
+          },
+          "maxSize": {
+            "kind": "integer"
+          }
+        },
+        "class": "strategy_limit",
+        "description": "A distinct map insertion exceeds that map's configured pair limit. Zero or omitted selects no limit. Counts and bar index are engine-owned context; code is the fixed TradingView identifier RE10070.",
+        "english": [
+          "Error on bar {bar_index}: A map cannot have more than {maxSize} key-value pairs. The current size is {currSize}."
+        ],
+        "retryable": false,
+        "since": "1.10.0"
+      }
+    }
+  ],
   "changed": [
     {
       "code": "outputs_limit",

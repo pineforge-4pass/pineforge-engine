@@ -1878,6 +1878,9 @@ bool NativeExecutionConsumer::prepare_public_begin(
     if (!host) return true;
     preparing_begin_ = true;
     try {
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        const int preparation_bar = 0;
+        detail::MapBarContextScope map_bar(&preparation_bar);
         host->prepare_native_begin(args);
     } catch (const std::exception& e) {
         pending_bar_views_ = {};
@@ -2154,6 +2157,12 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.s(kNativeConsumerSemanticVersion);
     f.s(kNativeDriverSemanticVersion);
     f.s(kNativeCalendarSemanticVersion);
+    // An explicit creation policy changes future callbacks. The unlimited
+    // default adds no bytes to the historical continuation fold.
+    if (map_pair_limit_ != 0) {
+        f.s("map-pair-limit/v1");
+        f.u(map_pair_limit_);
+    }
     f.u(static_cast<uint64_t>(state_.index()));
     if (const auto* running = std::get_if<NativeRunning>(&state_)) {
         f.u(static_cast<uint64_t>(running->phase));
@@ -3264,6 +3273,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         in_callback_ = true;
         in_run_begin_ = true;
         try {
+            detail::MapPairLimitScope map_policy(map_pair_limit_);
+            detail::MapBarContextScope map_bar(&engine.bar_index_);
             host->on_native_run_begin();
         } catch (const std::exception& e) {
             in_callback_ = false;
@@ -8224,6 +8235,8 @@ void NativeExecutionConsumer::invoke_recalculation(
     MatchBookSpillScope candidate_free(*this, true);
     try {
         const NativeDecisionContext presented = callback_context_;
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_recalculate(bar, presented, reason, cause);
     } catch (const std::bad_alloc& e) {
         in_callback_ = false;
@@ -8277,6 +8290,8 @@ void NativeExecutionConsumer::invoke_sub_bar_callback(
     const uint64_t ordinal = callback_context_.coordinate.ordinal;
     try {
         const NativeDecisionContext presented = callback_context_;
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_sub_bar(sub, presented);
     } catch (const std::bad_alloc& e) {
         in_callback_ = false;
@@ -8348,6 +8363,8 @@ void NativeExecutionConsumer::invoke_applied_callback(
         in_callback_ = true;
         callback_phase_ = CallbackPhase::Applied;
         const auto presented = callback_context_;
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_applied(applied, presented);
         // L4: the margin receipt of this same fill, after the ordinary applied
         // notification and with the same cursor.
@@ -8505,6 +8522,8 @@ void NativeExecutionConsumer::invoke_bar_open_callback(
     callback_phase_ = CallbackPhase::PreOpen;
     try {
         const NativeDecisionContext presented = callback_context_;
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_bar_open(open_view, presented);
     } catch (const std::exception& e) {
         in_callback_ = false;
@@ -8545,6 +8564,8 @@ bool NativeExecutionConsumer::invoke_input_callback(
     input_callback_bar_ = bar;
     in_callback_ = true;
     try {
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_input(bar, context);
     } catch (const std::exception& e) {
         in_callback_ = false;
@@ -8587,6 +8608,8 @@ bool NativeExecutionConsumer::invoke_tick_callback(
     in_callback_ = true;
     callback_phase_ = CallbackPhase::Tick;
     try {
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_tick(bar, presented);
     } catch (const std::bad_alloc& e) {
         in_callback_ = false;
@@ -8659,6 +8682,8 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
         const NativeDecisionContext presented = callback_context_;
         // Every calculation routes here; the default recalculation hook
         // forwards to on_native_bar for hosts using the ordinary cadence.
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_recalculate(bar, presented, NativeCalculationReason::BarClose,
                                     nullptr);
     } catch (const std::exception& e) {
@@ -10473,6 +10498,8 @@ bool NativeExecutionConsumer::invoke_timeframe_callback(
     if (host == nullptr) return true;
     in_callback_ = true;
     try {
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_timeframe_bar(bucket, context);
     } catch (const std::exception& e) {
         in_callback_ = false;

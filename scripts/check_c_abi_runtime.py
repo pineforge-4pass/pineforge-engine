@@ -139,6 +139,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_set_cache_policy_v1",
     "strategy_report_sink_summary_v1",
     "strategy_stream_engine_layout_version", "pf_output_series_limit_set_checked", "pf_output_series_limit_failure",
+    "pf_map_pairs_limit_set_checked",
 })
 
 # The headers under include/pineforge/ whose PF_API declarations are read as one
@@ -152,10 +153,10 @@ RUNTIME_HEADERS = (
     "report_sink.h",
 )
 
-# Source inventory: pineforge.h 111 + observer 3 + window 3 + sink 5.
-EXPECTED_PUBLIC_DECLARATIONS = 122
-# c_abi.cpp implements 102 of those declarations; twenty remain generated.
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 102
+# Source inventory: pineforge.h 112 + observer 3 + window 3 + sink 5.
+EXPECTED_PUBLIC_DECLARATIONS = 123
+# c_abi.cpp implements 103 of those declarations; twenty remain generated.
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 103
 
 # Per-module implementations, never static-runtime implementations. The
 # capability has its own declaration in native_module.hpp; the other eight

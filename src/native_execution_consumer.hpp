@@ -9,6 +9,7 @@
 #include <pineforge/run_failure.hpp>
 #include <pineforge/native_bar_views.hpp>
 #include <pineforge/metrics_stream.hpp>
+#include <pineforge/map_capacity.hpp>
 #include "native_calendar_memo.hpp"
 #include "native_selected_epoch.hpp"
 #include "runtime_ambient.hpp"
@@ -95,6 +96,9 @@ class NativeExecutionConsumer final : public IExecutionConsumer {
     // Declared first so embedded cache registrations detach before this sink
     // dies. Its destructor also detaches the engine's longer-lived ledger.
     detail::RunCacheDiagnostics run_cache_diagnostics_;
+    // Creation-time run policy, captured before the derived host constructs
+    // script state. A run reset never adopts another host's thread default.
+    std::uint64_t map_pair_limit_ = detail::map_pair_limit();
 public:
     static int report_cache_stats(const BacktestEngine& engine,
                                   std::uint64_t* resident_bytes,
