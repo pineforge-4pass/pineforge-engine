@@ -7,6 +7,20 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- `pineforge-live` status files now report `metrics.feed_idle_ms`, the
+  milliseconds since the last feed arrival, or null before the first; the
+  consumer owns freshness. HTTP and WebSocket feeds now also default to no
+  idle or message deadline, with 0 meaning none and positive seconds accepted
+  when their milliseconds fit a `long`. A caller relying on the former
+  15 second network default to end a run must set the timeout flag or close
+  the connection. The TCP/TLS connect no longer has a fixed 5000 ms bound:
+  the new `--feed-connect-timeout S` (integer seconds, network feeds only)
+  defaults to 0, which sets the connect option to the largest value libcurl
+  accepts, so the runner adds no connect bound: connecting ends only on a
+  system or peer failure, unless a nonzero `--feed-message-timeout` ends it
+  sooner (that total timeout covers connecting). A positive value sets the
+  connect bound in seconds. Files and stdin ignore a well-formed value;
+  malformed values are refused for every feed kind.
 - **Default change, user-visible:** `pineforge-live run --feed -` (the stdin
   feed) no longer ends a run by itself after 15 seconds without data or 15
   seconds to complete a line. With neither flag given, `--feed-idle-timeout`
