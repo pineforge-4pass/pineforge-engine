@@ -2314,7 +2314,19 @@ add_test(NAME test_compile_inventory_pipeline
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME test_report_channel_contract COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
             ${PROJECT_SOURCE_DIR}/tests/report_channel/test_contract.py
+            -k "not assertions_reject_removed_pipe_deadline"
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+    # The mutation control has its own row so that a skip shows as "Skipped" in the CTest summary.
+    # Its mutant removes the supervisor's stall check, so it never ends without a deadline: the
+    # deadline is the parameter PINEFORGE_REPORT_TEST_MUTATION_CONTROL_AFTER_STALL_SECONDS, unset
+    # = no deadline = the row skips (the regex is the skip reason pytest prints with -rs).
+    add_test(NAME test_report_channel_mutation_control COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -rs
+            -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/report_channel/test_contract.py
+            -k "assertions_reject_removed_pipe_deadline"
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+    set_tests_properties(test_report_channel_mutation_control PROPERTIES
+        LABELS "report-channel"
+        SKIP_REGULAR_EXPRESSION "MUTATION_CONTROL_AFTER_STALL_SECONDS is unset: no deadline")
     add_test(NAME test_report_channel_deadlines COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
             ${PROJECT_SOURCE_DIR}/tests/report_channel_deadlines/test_deadlines.py
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
