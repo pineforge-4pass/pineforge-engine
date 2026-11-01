@@ -326,7 +326,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
            endpoint_nonblocking=None, diagnostic_delay_ms=0, stalled_channels=(),
            cancel_channel=None, cancel_signal=signal.SIGTERM, cancel_delay_ms=150,
            saturate_status=False, gate_status=False, watchdog_seconds=None,
-           watchdog_after_stall_seconds=None,
+           watchdog_after_stall_iterations=None,
            supervisor_path=None, producer_arguments=(), audit_stdout=False, receipt_hold=None,
            ignore_validator_term=False, hold_validator_overflow=False,
            output_after_validator_term=False, release_validator_after_ms=None,
@@ -661,8 +661,13 @@ def launch(request=None, *, options=(), environment=None, status="valid",
         # (a real hang is caught by the platform's own maximum job time (the workflows set no timeout-minutes: ci.yml:25), not by a limit here).
         if watchdog_seconds is not None and watchdog_seconds < 0:
             raise ValueError("watchdog_seconds must be None, 0 or a positive number of seconds")
-        if watchdog_after_stall_seconds is not None and watchdog_after_stall_seconds < 0:
-            raise ValueError("watchdog_after_stall_seconds must be None or a number >= 0")
+        # watchdog_after_stall_iterations is a COUNT of this loop's iterations after the first stall
+        # was seen (not a duration): None = no guard.
+        if watchdog_after_stall_iterations is not None and (
+                not isinstance(watchdog_after_stall_iterations, int)
+                or watchdog_after_stall_iterations < 1):
+            raise ValueError("watchdog_after_stall_iterations must be None or an integer >= 1")
+        stall_iterations = 0
         deadline = time.monotonic() + watchdog_seconds if watchdog_seconds else None
         try:
             for name, fd in (("report", report_read), ("diagnostic", diagnostic_read),
@@ -794,12 +799,12 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                     except (FileNotFoundError, ValueError):
                         pass
                 expired = deadline is not None and time.monotonic() >= deadline
-                if (not expired and watchdog_after_stall_seconds is not None
-                        and control["stalled_at"]
-                        and time.monotonic() - launched
-                        >= min(control["stalled_at"].values()) + watchdog_after_stall_seconds):
-                    # relative guard: counted from the host's own stall timestamp, so it cannot
-                    # race a slow launch that has not reached its stall yet
+                if control["stalled_at"]:
+                    stall_iterations += 1
+                if (not expired and watchdog_after_stall_iterations is not None
+                        and stall_iterations >= watchdog_after_stall_iterations):
+                    # a COUNT of loop iterations since the host saw its own stall (not a duration):
+                    # it cannot race a slow launch that has not reached its stall yet
                     expired = True
                 if expired:
                     control["watchdog_pending_bytes"] = {}

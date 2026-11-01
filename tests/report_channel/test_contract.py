@@ -24,7 +24,22 @@ from host import (
 HANG_GUARD_ENVIRONMENT = "PINEFORGE_REPORT_TEST_HANG_GUARD_SECONDS"
 
 
-MUTATION_CONTROL_ENVIRONMENT = "PINEFORGE_REPORT_TEST_MUTATION_CONTROL_AFTER_STALL_SECONDS"
+MUTATION_CONTROL_ENVIRONMENT = "PINEFORGE_REPORT_TEST_MUTATION_CONTROL_AFTER_STALL_ITERATIONS"
+
+
+def count_from_environment(name, environment=os.environ):
+    """A COUNT (not a duration) as a parameter: unset, empty or 0 = no guard (None); a positive integer
+    applies exactly; anything else is a usage error naming the variable."""
+    text = environment.get(name, "")
+    if text.strip() == "":
+        return None
+    try:
+        value = int(text)
+    except ValueError:
+        value = -1
+    if value < 0:
+        raise SystemExit(f"{name} must be a whole number >= 0 (unset or 0 = no guard), not {text!r}")
+    return value or None
 
 
 def seconds_from_environment(name, environment=os.environ):
@@ -50,10 +65,10 @@ def hang_guard_from_environment(environment=os.environ):
 
 
 HANG_GUARD_SECONDS = hang_guard_from_environment()
-# The mutation control's deadline is a parameter too, counted from the host's own stall timestamp (so
-# it cannot race a slow launch that has not reached its stall yet). Unset = no deadline: the control
-# then does not launch its mutant, which never ends by design (see the row).
-MUTATION_CONTROL_AFTER_STALL_SECONDS = seconds_from_environment(MUTATION_CONTROL_ENVIRONMENT)
+# The mutation control's guard is a COUNT of the host's own loop iterations since it saw the stall
+# (not a duration), given as a parameter. Unset = no guard: the control then does not launch its
+# mutant, which never ends by design (see the row).
+MUTATION_CONTROL_AFTER_STALL_ITERATIONS = count_from_environment(MUTATION_CONTROL_ENVIRONMENT)
 
 KNOBS = (
     ("--report-max-bytes", "PINEFORGE_REPORT_MAX_BYTES", "report_bytes", 4096),
@@ -412,7 +427,7 @@ class Contract(unittest.TestCase):
                         self.assertTrue(record["channels"]["report"]["complete"], msg=msg)
 
     def assert_finite_report_stall(self, *, supervisor_path=None, guard=HANG_GUARD_SECONDS,
-                                   after_stall=None):
+                                   after_stall_iterations=None):
         expected = reference({"label": "finite-report-" + "x" * 16384}).stdout
         with tempfile.TemporaryDirectory(prefix="pf-finite-report-") as directory:
             identity = Path(directory) / "producer.json"
@@ -420,7 +435,7 @@ class Contract(unittest.TestCase):
                 {"candidate": encoded(expected), "producer_identity_path": str(identity)},
                 options=("--channel-stall-ms", "600", "--channel-wall-ms", "60000"),
                 stalled_channels=("report",), supervisor_path=supervisor_path, watchdog_seconds=guard,
-                watchdog_after_stall_seconds=after_stall)
+                watchdog_after_stall_iterations=after_stall_iterations)
             msg = capture.failure_context()
             record = self.refusal(
                 capture, "report_channel_failed", {"channel": "report", "reason": "deadline"},
@@ -447,12 +462,12 @@ class Contract(unittest.TestCase):
                 self.assert_finite_report_stall(guard=guard)
         # The host's own default is none too, so every launch() that names no guard agrees.
         self.assertIsNone(inspect.signature(launch).parameters["watchdog_seconds"].default)
-        self.assertIsNone(inspect.signature(launch).parameters["watchdog_after_stall_seconds"].default)
+        self.assertIsNone(inspect.signature(launch).parameters["watchdog_after_stall_iterations"].default)
 
-    def test_host_guard_counted_from_the_stall_does_not_fire_before_it(self):
-        # A launch that ends well inside the guard (the supervisor's own 600 ms stall deadline)
-        # must not be expired by a guard counted from the stall.
-        self.assert_finite_report_stall(guard=None, after_stall=60)
+    def test_host_iteration_guard_far_above_the_run_does_not_fire(self):
+        # A launch that ends by itself (the supervisor's own stall deadline) is not expired by an
+        # iteration-count guard far above the iterations it needs: a count, not a duration.
+        self.assert_finite_report_stall(guard=None, after_stall_iterations=1000000)
 
     def test_hang_guard_environment_parse(self):
         parse = hang_guard_from_environment
@@ -466,12 +481,12 @@ class Contract(unittest.TestCase):
                 parse({HANG_GUARD_ENVIRONMENT: text})
             self.assertIn(HANG_GUARD_ENVIRONMENT, str(refused.exception))
 
-    def test_mutation_control_deadline_environment_parse(self):
-        parse = lambda environment: seconds_from_environment(MUTATION_CONTROL_ENVIRONMENT, environment)
+    def test_mutation_control_iteration_environment_parse(self):
+        parse = lambda environment: count_from_environment(MUTATION_CONTROL_ENVIRONMENT, environment)
         self.assertIsNone(parse({}))
         self.assertIsNone(parse({MUTATION_CONTROL_ENVIRONMENT: "0"}))
-        self.assertEqual(parse({MUTATION_CONTROL_ENVIRONMENT: "4"}), 4.0)
-        for text in ("nan", "-1", "soon"):
+        self.assertEqual(parse({MUTATION_CONTROL_ENVIRONMENT: "80"}), 80)
+        for text in ("nan", "-1", "soon", "1.5", "4s"):
             with self.subTest(value=text), self.assertRaises(SystemExit) as refused:
                 parse({MUTATION_CONTROL_ENVIRONMENT: text})
             self.assertIn(MUTATION_CONTROL_ENVIRONMENT, str(refused.exception))
@@ -488,13 +503,15 @@ class Contract(unittest.TestCase):
                     (altered.parent / sibling.name).symlink_to(sibling)
             altered.write_text(
                 original.replace(line, '                if False:\n', 1), encoding="utf-8")
-            if MUTATION_CONTROL_AFTER_STALL_SECONDS is None:
-                # The mutant has no stall check, so a launch without a deadline never ends: this control
-                # only runs when its deadline is given as a parameter (HostWatchdogExpired is what it proves).
-                self.skipTest(f"{MUTATION_CONTROL_ENVIRONMENT} is unset: no deadline, the mutant would never end")
+            if MUTATION_CONTROL_AFTER_STALL_ITERATIONS is None:
+                # The mutant has no stall check, so a launch without a guard never ends: this control
+                # only runs when its guard, a COUNT of host loop iterations (not a duration), is given
+                # as a parameter (HostWatchdogExpired is what it proves).
+                self.skipTest(f"{MUTATION_CONTROL_ENVIRONMENT} is unset: no guard, the mutant would never end")
             with self.assertRaises(HostWatchdogExpired) as rejected:
                 self.assert_finite_report_stall(
-                    supervisor_path=altered, after_stall=MUTATION_CONTROL_AFTER_STALL_SECONDS)
+                    supervisor_path=altered,
+                    after_stall_iterations=MUTATION_CONTROL_AFTER_STALL_ITERATIONS)
             partial = rejected.exception.capture
             msg = partial.failure_context()
             self.assertEqual(partial.control["watchdog_pending_bytes"], {"report": 4096}, msg=msg)
@@ -1196,6 +1213,7 @@ class Contract(unittest.TestCase):
                 "leader_completes": True, "detached_diagnostic_child": True,
                 "double_fork_diagnostic_child": True,
                 "diagnostic_child_lifetime_ms": 2200 if effective is None else 5000,
+                "diagnostic_child_after_parent_marker": True,
             }
             try:
                 capture = launch(
@@ -1213,6 +1231,9 @@ class Contract(unittest.TestCase):
                 self.assertNotEqual(identities["group"], identities["leader"], msg=msg)
                 self.assertNotEqual(identities["child"], identities["group"], msg=msg)
                 self.assertTrue(progress.exists(), msg=msg)
+                # The drain grace is observed as an EVENT, not a duration: output the descendant
+                # wrote only after the producer had exited reached the host through the supervisor.
+                self.assertIn(b"diagnostic child after parent exit", capture.diagnostic, msg=msg)
                 if effective is None:
                     self.assertTrue(child_exit.exists(), msg=msg)
                     status = self.wait_fixture_child(identities["child"], msg)

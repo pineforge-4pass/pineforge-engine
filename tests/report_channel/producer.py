@@ -73,6 +73,13 @@ def main():
                     pass
                 if os.getppid() != leader:
                     Path(request["diagnostic_child_progress"]).touch()
+                    if request.get("diagnostic_child_after_parent_marker"):
+                        # An EVENT the host can read back: output that exists only after the
+                        # producer's exit, so a supervisor that stopped draining at once loses it.
+                        try:
+                            os.write(2, b"diagnostic child after parent exit\n")
+                        except BrokenPipeError:
+                            pass
                 time.sleep(0.01)
             if "diagnostic_child_exit" in request:
                 Path(request["diagnostic_child_exit"]).write_text(
