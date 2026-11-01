@@ -4128,6 +4128,8 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/test_check_doc_reverts.py')]),
         ('doc-reverts',
          [sys.executable, str(source / 'scripts/check_doc_reverts.py')]),
+        ('doc-reverts-net',
+         [sys.executable, str(source / 'scripts/check_doc_reverts.py'), '--head', 'HEAD']),
         # R5 lane H-DOCGATES (AUDIT4-opus X10): every kernel `source_*` seam and
         # every kernel member or row field the source layer writes is named by
         # an ADR-0001 row, which states who writes it and its ruling.
