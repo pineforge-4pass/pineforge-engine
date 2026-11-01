@@ -491,6 +491,10 @@ def _memfd_create(name, flags):
     create = getattr(os, "memfd_create", None)
     if create is not None:
         return create(name, flags)
+    if not sys.platform.startswith("linux"):
+        # The numbers below are Linux system call numbers; another kernel
+        # (Intel macOS reports machine x86_64 too) answers 319 with a different call.
+        raise _Refusal("memfd_create is unavailable on this host")
     number = {
         "x86_64": 319,
         "aarch64": 279,
@@ -504,6 +508,7 @@ def _memfd_create(name, flags):
         raise _Refusal("memfd_create is unavailable on this host")
     syscall = ctypes.CDLL(None, use_errno=True).syscall
     syscall.restype = ctypes.c_long
+    syscall.argtypes = [ctypes.c_long, ctypes.c_char_p, ctypes.c_uint]
     fd = syscall(number, os.fsencode(name), flags)
     if fd < 0:
         error = ctypes.get_errno()

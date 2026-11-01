@@ -2183,6 +2183,29 @@ def test_memfd_without_os_wrapper_refuses_unknown_machine(tmp_path, monkeypatch)
     assert list(output.iterdir()) == []
 
 
+def test_memfd_without_os_wrapper_refuses_a_non_linux_host_before_any_syscall(
+        tmp_path, monkeypatch):
+    case = _case_fixture(tmp_path)
+    output = _output_fixture(tmp_path, case.case_id, stale=False)
+    before = _csv_snapshot(output)
+    launcher = _StandInLauncher(tmp_path, case.case_id)
+    # A known machine name on a host whose system call 319 is another call: the
+    # fallback must refuse on the platform alone and never load the C library.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(platform, "machine", mock.Mock(return_value="x86_64"))
+    for name in ("memfd_create", "MFD_CLOEXEC", "MFD_ALLOW_SEALING"):
+        monkeypatch.delattr(os, name, raising=False)
+
+    with mock.patch.object(ctypes, "CDLL") as load_libc:
+        result = _invoke([case], output, launcher)
+
+    _assert_refused(result, output, before)
+    assert result.failure_text == "memfd_create is unavailable on this host"
+    load_libc.assert_not_called()
+    assert launcher.requests == []
+    assert list(output.iterdir()) == []
+
+
 def test_memfd_fallback_uses_real_syscall_and_seals_arena(monkeypatch):
     _require_entry()
     number = {
