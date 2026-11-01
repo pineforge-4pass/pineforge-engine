@@ -65,11 +65,13 @@ private:
 
 #include <algorithm>
 #include <cinttypes>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -83,6 +85,11 @@ constexpr int kWarmup = 4;
 constexpr int kFeedBars = kWarmup + 2 * kBars + 2;
 constexpr std::int64_t kStart = INT64_C(1736121600000);
 constexpr double kLimit = 50.0;
+// With mintick 1, a buy at source limit 50 reaches raw prints whose half-up
+// tick is <= 50. The inclusive native boundary is the last binary64 below
+// 50.5: 50.5 itself rounds to 51. This oracle uses only the fixture inputs,
+// never the adapter's threshold helper or a price read from the working book.
+const double kNativeLimit = std::nextafter(kLimit + 0.5, 0.0);
 constexpr double kMissing = std::numeric_limits<double>::quiet_NaN();
 // A fixed allowance of eight additional primitive observations per opening,
 // irrespective of N. It permits small fixed bookkeeping after a quiet gate.
@@ -98,6 +105,39 @@ int failures = 0;
 
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
+}
+
+void print_pending_trigger(int bar, std::size_t row, const native_order::Trigger& trigger) {
+    std::fprintf(stderr, "BARWORK_TRIGGER bar=%d row=%zu variant=%zu"
+                 " expected_price=%.17g expected_hex=%a",
+                 bar, row, trigger.index(), kNativeLimit, kNativeLimit);
+    if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) {
+        std::fprintf(stderr, " kind=Limit price=%.17g price_hex=%a fill_through=%d\n",
+                     limit->price, limit->price, static_cast<int>(limit->fill_through));
+    } else if (const auto* stop = std::get_if<native_order::Stop>(&trigger)) {
+        std::fprintf(stderr, " kind=Stop price=%.17g price_hex=%a\n",
+                     stop->price, stop->price);
+    } else if (const auto* stop_limit = std::get_if<native_order::StopLimit>(&trigger)) {
+        std::fprintf(stderr, " kind=StopLimit stop=%.17g stop_hex=%a"
+                     " limit=%.17g limit_hex=%a\n",
+                     stop_limit->stop, stop_limit->stop, stop_limit->limit, stop_limit->limit);
+    } else if (const auto* trail = std::get_if<native_order::Trail>(&trigger)) {
+        const double arm = trail->arm_price.value_or(kMissing);
+        const double ticks = trail->ticks ? trail->ticks->ticks : kMissing;
+        const double seed = trail->best_seed.value_or(kMissing);
+        std::fprintf(stderr, " kind=Trail offset=%.17g offset_hex=%a"
+                     " arm_present=%d arm_price=%.17g arm_hex=%a"
+                     " ticks_present=%d ticks=%.17g ticks_hex=%a"
+                     " seed_present=%d best_seed=%.17g seed_hex=%a\n",
+                     trail->offset, trail->offset,
+                     static_cast<int>(trail->arm_price.has_value()), arm, arm,
+                     static_cast<int>(trail->ticks.has_value()), ticks, ticks,
+                     static_cast<int>(trail->best_seed.has_value()), seed, seed);
+    } else if (std::holds_alternative<native_order::Market>(trigger)) {
+        std::fprintf(stderr, " kind=Market\n");
+    } else {
+        std::fprintf(stderr, " kind=unrecognized\n");
+    }
 }
 
 Counts difference(const Counts& after, const Counts& before) {
@@ -180,14 +220,26 @@ public:
             require(trade_count() == 0 && live_position_size() == 0.0,
                     "an unreachable limit filled");
             if (i == 1) {
-                for (const auto& row : working) handles_.push_back(row.definition->handle);
+                for (const auto& row : working) {
+                    handles_.push_back(row.definition->handle);
+                    definitions_.push_back(row.definition);
+                }
             }
             for (std::size_t row = 0; row < working.size(); ++row) {
                 const auto& definition = *working[row].definition;
+                // Always print before the trigger checks, including on bar 1.
+                // Decimal and hex preserve a half-tick boundary's exact value.
+                print_pending_trigger(i, row, definition.request.trigger);
                 require(definition.handle == handles_.at(row),
                         "a pending order was cancelled or replaced");
                 const auto* limit = std::get_if<native_order::Limit>(&definition.request.trigger);
-                require(limit && limit->price == kLimit, "pending limit was retuned");
+                require(limit != nullptr, "pending request is not a native limit");
+                require(limit->price == kNativeLimit, "pending limit threshold changed");
+                require(!limit->fill_through, "pending limit lost its bounded fill price");
+                // A keep_handle replacement can preserve both the handle and
+                // the trigger. The immutable accepted definition must stay too.
+                require(working[row].definition == definitions_.at(row),
+                        "a pending order was replaced in place");
             }
         }
         if (i >= kWarmup && i < kWarmup + 2 * kBars)
@@ -200,6 +252,7 @@ private:
     Counts& observed_;
     Counts previous_{};
     std::vector<Handle> handles_;
+    std::vector<native_order::DefinitionRef> definitions_;
 };
 
 Sample replay(int population) {
