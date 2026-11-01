@@ -9,7 +9,7 @@
 
 namespace pineforge::detail {
 
-// Closed vocabulary: layout is a refusal resource, not a tenth byte region.
+// Closed vocabulary: layout and cohort capacity labels are not byte regions.
 enum class ScratchResource : std::uint32_t {
     layout = 0,
     sequence_data,
@@ -21,6 +21,8 @@ enum class ScratchResource : std::uint32_t {
     cohort,
     exit_rank,
     successor_roots,
+    cohort_ids_total,
+    cohort_orders_live,
 };
 
 inline const char* scratch_resource_name(ScratchResource resource) noexcept {
@@ -35,6 +37,8 @@ inline const char* scratch_resource_name(ScratchResource resource) noexcept {
     case ScratchResource::cohort: return "cohort";
     case ScratchResource::exit_rank: return "exit_rank";
     case ScratchResource::successor_roots: return "successor_roots";
+    case ScratchResource::cohort_ids_total: return "cohort_ids_total";
+    case ScratchResource::cohort_orders_live: return "cohort_orders_live";
     }
     return "layout";
 }

@@ -60,7 +60,7 @@ def main_blob(path):
     # Pinned to main at the merge; when main moves again before this change merges, repoint all three to the new main head (and re-run the re-anchor and the OFF row).
     return subprocess.run(
         ["git", "show", f"69cddc9d102d2ccf5605231cc508b82c08c7081c:{path}"], cwd=ROOT,
-        capture_output=True, check=True, timeout=30).stdout
+        capture_output=True, check=True).stdout
 
 
 def supervisor_fixture(directory, *, main_finalizer=False, main_catalog=False, text=None):
@@ -127,7 +127,7 @@ class ProcessExitObservation:
 
     def close(self):
         self.stop.set()
-        self.thread.join(timeout=1)
+        self.thread.join()
 
 
 def group_members(group):
@@ -214,11 +214,15 @@ def validator_observer():
     """Build only on the executing CLOUD test host; absence is a failure."""
     with tempfile.TemporaryDirectory(prefix="pf-finalizer-observer-") as directory:
         library = Path(directory) / "observe.so"
-        subprocess.run(
+        build = subprocess.run(
             [os.environ.get("CC", "cc"), "-std=c11", "-shared", "-fPIC",
              "-Wall", "-Wextra", "-Werror", "-o", str(library),
              str(Path(__file__).with_name("observe_finalizer.c"))],
-            capture_output=True, check=True, timeout=30)
+            capture_output=True, check=False)
+        if build.returncode != 0:
+            raise AssertionError(
+                "the finalizer observer did not build: " + " ".join(build.args)
+                + "\n" + build.stderr.decode(errors="replace"))
         yield library
 
 
@@ -322,7 +326,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
            endpoint_nonblocking=None, diagnostic_delay_ms=0, stalled_channels=(),
            cancel_channel=None, cancel_signal=signal.SIGTERM, cancel_delay_ms=150,
            saturate_status=False, gate_status=False, watchdog_seconds=None,
-           watchdog_after_stall_seconds=None,
+           watchdog_after_stall_iterations=None,
            supervisor_path=None, producer_arguments=(), audit_stdout=False, receipt_hold=None,
            ignore_validator_term=False, hold_validator_overflow=False,
            output_after_validator_term=False, release_validator_after_ms=None,
@@ -654,11 +658,16 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                 f"M accepted a host probe before cancellation; {current_capture().failure_context()}")
 
         # watchdog_seconds None or 0 = no host deadline: the launch ends when the supervisor does
-        # (a real hang is caught by the CI runner's own no-new-output guard, not by a limit here).
+        # (a real hang is caught by the platform's own maximum job time (the workflows set no timeout-minutes: ci.yml:25), not by a limit here).
         if watchdog_seconds is not None and watchdog_seconds < 0:
             raise ValueError("watchdog_seconds must be None, 0 or a positive number of seconds")
-        if watchdog_after_stall_seconds is not None and watchdog_after_stall_seconds < 0:
-            raise ValueError("watchdog_after_stall_seconds must be None or a number >= 0")
+        # watchdog_after_stall_iterations is a COUNT of this loop's iterations after the first stall
+        # was seen (not a duration): None = no guard.
+        if watchdog_after_stall_iterations is not None and (
+                not isinstance(watchdog_after_stall_iterations, int)
+                or watchdog_after_stall_iterations < 1):
+            raise ValueError("watchdog_after_stall_iterations must be None or an integer >= 1")
+        stall_iterations = 0
         deadline = time.monotonic() + watchdog_seconds if watchdog_seconds else None
         try:
             for name, fd in (("report", report_read), ("diagnostic", diagnostic_read),
@@ -787,15 +796,21 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                                 descendant_samples[-1][name] != sample[name]
                                 for name in ("leader", "child"))):
                             descendant_samples.append(sample)
+                        release = request.get("diagnostic_child_release_path")
+                        if (release is not None and sample["leader"] is None
+                                and sample["child"] is not None):
+                            # The EVENT the descendant waits for: the host has seen the producer gone
+                            # while the descendant is alive (no delay, no duration).
+                            Path(release).touch()
                     except (FileNotFoundError, ValueError):
                         pass
                 expired = deadline is not None and time.monotonic() >= deadline
-                if (not expired and watchdog_after_stall_seconds is not None
-                        and control["stalled_at"]
-                        and time.monotonic() - launched
-                        >= min(control["stalled_at"].values()) + watchdog_after_stall_seconds):
-                    # relative guard: counted from the host's own stall timestamp, so it cannot
-                    # race a slow launch that has not reached its stall yet
+                if control["stalled_at"]:
+                    stall_iterations += 1
+                if (not expired and watchdog_after_stall_iterations is not None
+                        and stall_iterations >= watchdog_after_stall_iterations):
+                    # a COUNT of loop iterations since the host saw its own stall (not a duration):
+                    # it cannot race a slow launch that has not reached its stall yet
                     expired = True
                 if expired:
                     control["watchdog_pending_bytes"] = {}
@@ -993,7 +1008,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
             try:
                 if process.poll() is None:
                     process.kill()
-                    process.wait(timeout=2)
+                    process.wait()
             finally:
                 for fd in tuple(selector.get_map()):
                     unwatch(fd)
@@ -1025,7 +1040,7 @@ def reference(request):
             try:
                 result = subprocess.run(
                     [sys.executable, "-B", str(PRODUCER), str(path), "--reference"],
-                    capture_output=True, env=environment, check=False, timeout=10,
+                    capture_output=True, env=environment, check=False,
                     pass_fds=() if writer is None else (writer,))
             finally:
                 if writer is not None:

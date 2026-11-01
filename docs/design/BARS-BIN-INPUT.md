@@ -224,7 +224,7 @@ Read-only searches covered `docker/`, `scripts/`, `runner/` and repository
 filenames/release notes; `campaign/` and `cloudrun/` are absent. The local
 backtest entry is `main` docker/run_json.py:5280; the catalog itself
 identifies the optimizer-only refusal separately (`description`
-docker/run_failure_codes.json:2412). Neither establishes the production HPO
+docker/run_failure_codes.json:2414). Neither establishes the production HPO
 runner's input support.
 
 Check the separate **pineforge-hpo** repository named by this repository's
@@ -336,7 +336,7 @@ Failure JSON uses `engine`, `error`, `code`, `args` (`doc`
 docker/run_json.py:2319; `code` docker/run_json.py:2322; `args`
 docker/run_json.py:2323). The catalog entries are `chart_bars_unreadable`
 docker/run_failure_codes.json:60, `symbol_feeds_refused`
-docker/run_failure_codes.json:1997 and `run_request_invalid`
+docker/run_failure_codes.json:1999 and `run_request_invalid`
 docker/run_failure_codes.json:1509. Shared binary-reader helpers additionally
 refuse malformed file `size`, metadata/digests as `sidecar`, and a bad feed
 companion as `close_file` (`bar_count` docker/pf_bars.py:101;

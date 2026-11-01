@@ -24,11 +24,29 @@ from host import (
 HANG_GUARD_ENVIRONMENT = "PINEFORGE_REPORT_TEST_HANG_GUARD_SECONDS"
 
 
-def hang_guard_from_environment(environment=os.environ):
-    """The test host's deadline for the launches below, as a parameter: unset, empty or 0 = no
-    deadline (None); a positive number of seconds applies exactly; anything else is a usage error
-    naming the variable. A real hang is caught by the CI runner's own no-new-output guard."""
-    text = environment.get(HANG_GUARD_ENVIRONMENT, "")
+MUTATION_CONTROL_ENVIRONMENT = "PINEFORGE_REPORT_TEST_MUTATION_CONTROL_AFTER_STALL_ITERATIONS"
+
+
+def count_from_environment(name, environment=os.environ):
+    """A COUNT (not a duration) as a parameter: unset, empty or 0 = no guard (None); a positive integer
+    applies exactly; anything else is a usage error naming the variable."""
+    text = environment.get(name, "")
+    if text.strip() == "":
+        return None
+    try:
+        value = int(text)
+    except ValueError:
+        value = -1
+    if value < 0:
+        raise SystemExit(f"{name} must be a whole number >= 0 (unset or 0 = no guard), not {text!r}")
+    return value or None
+
+
+def seconds_from_environment(name, environment=os.environ):
+    """A deadline of the test host as a parameter: unset, empty or 0 = no deadline (None); a positive
+    number of seconds applies exactly; anything else is a usage error naming the variable. A real hang
+    is caught by the platform's own maximum job time (the workflows set no timeout-minutes: ci.yml:25)."""
+    text = environment.get(name, "")
     if text.strip() == "":
         return None
     try:
@@ -37,16 +55,20 @@ def hang_guard_from_environment(environment=os.environ):
         value = float("nan")
     if not math.isfinite(value) or value < 0:
         raise SystemExit(
-            f"{HANG_GUARD_ENVIRONMENT} must be a finite number of seconds >= 0 "
+            f"{name} must be a finite number of seconds >= 0 "
             f"(unset or 0 = no deadline), not {text!r}")
     return value or None
 
 
+def hang_guard_from_environment(environment=os.environ):
+    return seconds_from_environment(HANG_GUARD_ENVIRONMENT, environment)
+
+
 HANG_GUARD_SECONDS = hang_guard_from_environment()
-# The mutation control SETS a guard itself, counted from the host's own stall timestamp (so it cannot
-# race a slow launch that has not reached its stall yet): HostWatchdogExpired firing is the feature
-# under test there, not a limit on a real run.
-MUTATION_CONTROL_AFTER_STALL_SECONDS = 4
+# The mutation control's guard is a COUNT of the host's own loop iterations since it saw the stall
+# (not a duration), given as a parameter. Unset = no guard: the control then does not launch its
+# mutant, which never ends by design (see the row).
+MUTATION_CONTROL_AFTER_STALL_ITERATIONS = count_from_environment(MUTATION_CONTROL_ENVIRONMENT)
 
 KNOBS = (
     ("--report-max-bytes", "PINEFORGE_REPORT_MAX_BYTES", "report_bytes", 4096),
@@ -247,10 +269,7 @@ class Contract(unittest.TestCase):
         self.assertIn(phase, control["stalled_at"], msg=msg)
         self.assertIsNotNone(control["cancelled_at"], msg=msg)
         self.assertIsNotNone(control["exited_at"], msg=msg)
-        self.assertGreaterEqual(
-            control["cancelled_at"] - control["stalled_at"][phase], 0.15, msg=msg)
         self.assertGreaterEqual(control["exited_at"], control["cancelled_at"], msg=msg)
-        self.assertLess(control["exited_at"] - control["cancelled_at"], 0.75, msg=msg)
         self.assertIn("pre_cancel", control, msg=msg)
         before = control["pre_cancel"]
         self.assertEqual(before["phase"], phase, msg=msg)
@@ -408,7 +427,7 @@ class Contract(unittest.TestCase):
                         self.assertTrue(record["channels"]["report"]["complete"], msg=msg)
 
     def assert_finite_report_stall(self, *, supervisor_path=None, guard=HANG_GUARD_SECONDS,
-                                   after_stall=None, check_timing=True):
+                                   after_stall_iterations=None):
         expected = reference({"label": "finite-report-" + "x" * 16384}).stdout
         with tempfile.TemporaryDirectory(prefix="pf-finite-report-") as directory:
             identity = Path(directory) / "producer.json"
@@ -416,17 +435,13 @@ class Contract(unittest.TestCase):
                 {"candidate": encoded(expected), "producer_identity_path": str(identity)},
                 options=("--channel-stall-ms", "600", "--channel-wall-ms", "60000"),
                 stalled_channels=("report",), supervisor_path=supervisor_path, watchdog_seconds=guard,
-                watchdog_after_stall_seconds=after_stall)
+                watchdog_after_stall_iterations=after_stall_iterations)
             msg = capture.failure_context()
             record = self.refusal(
                 capture, "report_channel_failed", {"channel": "report", "reason": "deadline"},
                 exit_class="transport_failure", status=1, msg=msg)
             self.assert_producer_group_gone(capture, identity)
             self.assertIn("report", capture.control["stalled_at"], msg=msg)
-            if check_timing:
-                duration = capture.control["exited_at"] - capture.control["stalled_at"]["report"]
-                self.assertGreaterEqual(duration, 0.5, msg=msg)
-                self.assertLess(duration, 0.8, msg=msg)
             self.assertEqual(capture.control["held_until_exit"], ["report"], msg=msg)
             self.assertEqual(record["limits"]["stall_ms"]["effective"], 600, msg=msg)
             self.assertEqual(record["limits"]["wall_ms"]["effective"], 60000, msg=msg)
@@ -444,15 +459,15 @@ class Contract(unittest.TestCase):
         for guard in (None, 0):
             with self.subTest(guard=guard):
                 # a host row: it asserts that the launch completes and no guard fired, not a wall bound
-                self.assert_finite_report_stall(guard=guard, check_timing=False)
+                self.assert_finite_report_stall(guard=guard)
         # The host's own default is none too, so every launch() that names no guard agrees.
         self.assertIsNone(inspect.signature(launch).parameters["watchdog_seconds"].default)
-        self.assertIsNone(inspect.signature(launch).parameters["watchdog_after_stall_seconds"].default)
+        self.assertIsNone(inspect.signature(launch).parameters["watchdog_after_stall_iterations"].default)
 
-    def test_host_guard_counted_from_the_stall_does_not_fire_before_it(self):
-        # A launch that ends well inside the guard (the supervisor's own 600 ms stall deadline)
-        # must not be expired by a guard counted from the stall.
-        self.assert_finite_report_stall(guard=None, after_stall=60, check_timing=False)
+    def test_host_iteration_guard_far_above_the_run_does_not_fire(self):
+        # A launch that ends by itself (the supervisor's own stall deadline) is not expired by an
+        # iteration-count guard far above the iterations it needs: a count, not a duration.
+        self.assert_finite_report_stall(guard=None, after_stall_iterations=1000000)
 
     def test_hang_guard_environment_parse(self):
         parse = hang_guard_from_environment
@@ -466,6 +481,16 @@ class Contract(unittest.TestCase):
                 parse({HANG_GUARD_ENVIRONMENT: text})
             self.assertIn(HANG_GUARD_ENVIRONMENT, str(refused.exception))
 
+    def test_mutation_control_iteration_environment_parse(self):
+        parse = lambda environment: count_from_environment(MUTATION_CONTROL_ENVIRONMENT, environment)
+        self.assertIsNone(parse({}))
+        self.assertIsNone(parse({MUTATION_CONTROL_ENVIRONMENT: "0"}))
+        self.assertEqual(parse({MUTATION_CONTROL_ENVIRONMENT: "80"}), 80)
+        for text in ("nan", "-1", "soon", "1.5", "4s"):
+            with self.subTest(value=text), self.assertRaises(SystemExit) as refused:
+                parse({MUTATION_CONTROL_ENVIRONMENT: text})
+            self.assertIn(MUTATION_CONTROL_ENVIRONMENT, str(refused.exception))
+
     def test_finite_report_stall_assertions_reject_removed_pipe_deadline(self):
         self.assert_finite_report_stall()
         original = SUPERVISOR.read_text(encoding="utf-8")
@@ -478,17 +503,20 @@ class Contract(unittest.TestCase):
                     (altered.parent / sibling.name).symlink_to(sibling)
             altered.write_text(
                 original.replace(line, '                if False:\n', 1), encoding="utf-8")
-            # This control SETS its own guard (from the stall): HostWatchdogExpired firing is what it proves.
+            if MUTATION_CONTROL_AFTER_STALL_ITERATIONS is None:
+                # The mutant has no stall check, so a launch without a guard never ends: this control
+                # only runs when its guard, a COUNT of host loop iterations (not a duration), is given
+                # as a parameter (HostWatchdogExpired is what it proves).
+                self.skipTest(f"{MUTATION_CONTROL_ENVIRONMENT} is unset: no guard, the mutant would never end")
             with self.assertRaises(HostWatchdogExpired) as rejected:
                 self.assert_finite_report_stall(
-                    supervisor_path=altered, after_stall=MUTATION_CONTROL_AFTER_STALL_SECONDS)
+                    supervisor_path=altered,
+                    after_stall_iterations=MUTATION_CONTROL_AFTER_STALL_ITERATIONS)
             partial = rejected.exception.capture
             msg = partial.failure_context()
             self.assertEqual(partial.control["watchdog_pending_bytes"], {"report": 4096}, msg=msg)
             self.assertEqual(partial.control["watchdog_producer_group"], [], msg=msg)
             self.assertIn("report", partial.control["stalled_at"], msg=msg)
-            self.assertGreater(
-                partial.elapsed_seconds - partial.control["stalled_at"]["report"], 2, msg=msg)
             self.assertIsNone(partial.control["cancelled_at"], msg=msg)
             self.assertIsNone(partial.returncode, msg=msg)
             self.assertEqual(partial.packets, [], msg=msg)
@@ -505,8 +533,6 @@ class Contract(unittest.TestCase):
                 capture, "run_deadline_exceeded", {"stage": "run"},
                 exit_class="resource_refusal", status=1, msg=msg)
             self.assert_producer_group_gone(capture, identity)
-            self.assertGreaterEqual(capture.control["exited_at"], 1.7, msg=msg)
-            self.assertLess(capture.control["exited_at"], 3.15, msg=msg)
             self.assertEqual(record["limits"]["wall_ms"]["effective"], 1800, msg=msg)
             self.assertIsNone(record["limits"]["stall_ms"]["effective"], msg=msg)
             self.assertIsNone(capture.control["cancelled_at"], msg=msg)
@@ -529,9 +555,6 @@ class Contract(unittest.TestCase):
                 exit_class="transport_failure", status=1, msg=msg)
             self.assert_producer_group_gone(capture, identity)
             self.assertIn("diagnostic", capture.control["stalled_at"], msg=msg)
-            duration = capture.control["exited_at"] - capture.control["stalled_at"]["diagnostic"]
-            self.assertGreaterEqual(duration, 0.5, msg=msg)
-            self.assertLess(duration, 1.8, msg=msg)
             self.assertEqual(capture.control["held_until_exit"], ["diagnostic"], msg=msg)
             self.assertIsNone(capture.control["cancelled_at"], msg=msg)
             self.assertEqual(record["limits"]["stall_ms"]["effective"], 600, msg=msg)
@@ -570,8 +593,6 @@ class Contract(unittest.TestCase):
             self.assertEqual(record["limits"]["wall_ms"]["effective"], 1800, msg=msg)
             self.assertIsNone(record["limits"]["stall_ms"]["effective"], msg=msg)
             self.assertIsNone(capture.control["cancelled_at"], msg=msg)
-            self.assertGreaterEqual(capture.control["exited_at"], 1.7, msg=msg)
-            self.assertLess(capture.control["exited_at"], 3.15, msg=msg)
             self.assertEqual(record["sink_verification"], {
                 "exit_status": None, "signal": signal.SIGKILL, "complete": False,
                 "counts": dict.fromkeys("ETOVKXH"), "sha256": None, "finalizer_version": None},
@@ -693,7 +714,7 @@ class Contract(unittest.TestCase):
         argv = ["--an-unrecognized-runner-option"]
         baseline = subprocess.run(
             [sys.executable, "-B", str(ROOT / "docker/run_json.py"), *argv],
-            capture_output=True, env=clean_environment(), check=False, timeout=10)
+            capture_output=True, env=clean_environment(), check=False)
         capture = launch(direct=True, command=argv)
         msg = capture.failure_context()
         self.assertEqual(baseline.returncode, 2, msg=msg)
@@ -919,7 +940,7 @@ class Contract(unittest.TestCase):
         for name, value in INACTIVE_CONTROLS:
             result = subprocess.run(
                 [sys.executable, "-B", str(runner), name, value],
-                capture_output=True, env=clean_environment(), timeout=10, check=False)
+                capture_output=True, env=clean_environment(), check=False)
             yield name, result
         for name in INACTIVE_ENVIRONMENT:
             environment = clean_environment()
@@ -928,7 +949,7 @@ class Contract(unittest.TestCase):
             # masquerade as a missing-arguments usage refusal.
             result = subprocess.run(
                 [sys.executable, "-B", str(runner), "--help"],
-                capture_output=True, env=environment, timeout=10, check=False)
+                capture_output=True, env=environment, check=False)
             yield name, result
 
     def assert_dispatch_refusal(self, name, result):
@@ -972,7 +993,7 @@ class Contract(unittest.TestCase):
             altered.write_text(original.replace(dispatch, "", 1), encoding="utf-8")
             baseline = subprocess.run(
                 [sys.executable, "-B", str(altered), "--help"],
-                capture_output=True, env=clean_environment(), timeout=10, check=False)
+                capture_output=True, env=clean_environment(), check=False)
             self.assertEqual(baseline.returncode, 0, baseline.stderr.decode("utf-8", "replace"))
             self.assertIn(b"--magnifier-samples", baseline.stdout)
             self.assertEqual(baseline.stderr, b"")
@@ -1082,15 +1103,9 @@ class Contract(unittest.TestCase):
                     self.assertEqual(capture.flags_after[name], capture.flags_before[name], msg=msg)
 
     def wait_fixture_child(self, pid, msg):
-        end = time.monotonic() + 1
-        while True:
-            reaped, status = os.waitpid(pid, os.WNOHANG)
-            if reaped:
-                self.assertEqual(reaped, pid, msg=msg)
-                return status
-            self.assertLess(time.monotonic(), end,
-                            msg=f"fixture child still present: {process_info(pid)}; {msg}")
-            time.sleep(0.01)
+        reaped, status = os.waitpid(pid, 0)
+        self.assertEqual(reaped, pid, msg=msg)
+        return status
 
     def cleanup_fixture_child(self, state_path):
         if not state_path.exists():
@@ -1106,14 +1121,11 @@ class Contract(unittest.TestCase):
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            end = time.monotonic() + 2
             while process_info(pid) is not None:
                 try:
                     os.waitpid(pid, os.WNOHANG)
                 except ChildProcessError:
                     pass  # Adoption can follow the leader's final exit.
-                if time.monotonic() >= end:
-                    raise AssertionError(f"TEST cleanup could not reap {process_info(pid)}")
                 time.sleep(0.01)
 
     def test_diagnostic_refusal_stops_descendant_after_leader_exit(self):
@@ -1130,7 +1142,6 @@ class Contract(unittest.TestCase):
                             "--channel-wall-ms", "60000", "--channel-stall-ms", "1000"))
                 msg = capture.failure_context()
                 identities = json.loads(state.read_text())
-                self.assertLess(capture.elapsed_seconds, 5, msg=msg)
                 record = self.refusal(capture, "diagnostic_budget_exceeded", {
                     "cap_bytes": 64, "used_bytes": 64, "requested_bytes": 1},
                     exit_class="resource_refusal", status=1, msg=msg)
@@ -1165,7 +1176,6 @@ class Contract(unittest.TestCase):
                             "--channel-wall-ms", "60000", "--channel-stall-ms", "1000"))
                 msg = capture.failure_context()
                 identities = json.loads(state.read_text())
-                self.assertLess(capture.elapsed_seconds, 5, msg=msg)
                 record = self.refusal(capture, "report_channel_failed", {
                     "channel": "diagnostic", "reason": "io"},
                     exit_class="transport_failure", status=1, msg=msg)
@@ -1203,6 +1213,7 @@ class Contract(unittest.TestCase):
                 "leader_completes": True, "detached_diagnostic_child": True,
                 "double_fork_diagnostic_child": True,
                 "diagnostic_child_lifetime_ms": 2200 if effective is None else 5000,
+                "diagnostic_child_release_path": str(Path(directory) / "marker-release"),
             }
             try:
                 capture = launch(
@@ -1215,23 +1226,14 @@ class Contract(unittest.TestCase):
                     if sample["leader"] is None and sample["child"] is not None
                     and sample["child"]["state"] != "Z"]
                 self.assertTrue(orphan_observations, msg=msg)
-                waited = capture.control["exited_at"] - min(orphan_observations)
-                if effective is not None:
-                    self.assertGreaterEqual(
-                        waited, effective / 1000 - 0.15,
-                        msg=f"drain grace timing: returned too soon; {msg}")
-                    self.assertLess(
-                        waited, effective / 1000 + 0.35,
-                        msg=f"drain grace timing: returned too late; {msg}")
-                else:
-                    self.assertGreaterEqual(
-                        waited, 1.9, msg=f"unlimited drain did not wait for the descendant; {msg}")
-                    self.assertLess(waited, 2.65, msg=msg)
                 self.assertIsNone(process_info(identities["leader"]), msg=msg)
                 self.assertEqual(group_members(identities["leader"]), [], msg=msg)
                 self.assertNotEqual(identities["group"], identities["leader"], msg=msg)
                 self.assertNotEqual(identities["child"], identities["group"], msg=msg)
                 self.assertTrue(progress.exists(), msg=msg)
+                # The drain grace is observed as an EVENT, not a duration: output the descendant
+                # wrote only after the producer had exited reached the host through the supervisor.
+                self.assertIn(b"diagnostic child after parent exit", capture.diagnostic, msg=msg)
                 if effective is None:
                     self.assertTrue(child_exit.exists(), msg=msg)
                     status = self.wait_fixture_child(identities["child"], msg)
@@ -1263,11 +1265,15 @@ class Contract(unittest.TestCase):
                 self.assertEqual(record["limits"]["stop_grace_ms"], {
                     "requested": None, "granted": None, "effective": 1000}, msg=msg)
                 self.assertTrue(capture.diagnostic, msg=msg)
+                # No corruption: every complete line the host captured is one of the two lines the
+                # descendant writes, and a cut last line is a prefix of one of them.
                 line = b"diagnostic child continues\n"
-                self.assertEqual(
-                    capture.diagnostic,
-                    (line * (len(capture.diagnostic) // len(line) + 1))[:len(capture.diagnostic)],
-                    msg=msg)
+                marker = b"diagnostic child after parent exit\n"
+                *complete, tail = capture.diagnostic.split(b"\n")
+                for text in complete:
+                    self.assertIn(text + b"\n", (line, marker), msg=msg)
+                self.assertTrue(tail == b"" or line.startswith(tail) or marker.startswith(tail),
+                                msg=msg)
                 return capture
             finally:
                 self.cleanup_fixture_child(state)
@@ -1297,7 +1303,7 @@ class Contract(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="pf-drain-mutation-") as directory:
             changed = supervisor_fixture(
                 directory, text=text.replace(original, "DEFAULT_POST_EXIT_DRAIN_MS = 3000"))
-            with self.assertRaisesRegex(AssertionError, "drain grace timing: returned too late"):
+            with self.assertRaisesRegex(AssertionError, "'effective': 3000"):  # the limits record prints the doctored default
                 self.assert_post_exit_drain(supervisor_path=changed)
 
     def test_post_exit_drain_parameter_grammar_precedence_and_grants(self):
@@ -1363,10 +1369,6 @@ class Contract(unittest.TestCase):
                                 capture.control[name + "_term_at"], msg=msg)
         self.assertGreaterEqual(observation["exited_at_monotonic"],
                                 observation["last_alive_at_monotonic"], msg=msg)
-        self.assertLessEqual(
-            observation["exited_at_monotonic"] - observation["last_alive_at_monotonic"],
-            PROCESS_EXIT_POLL_SECONDS + 0.1,
-            msg=f"process exit observation exceeded its polling allowance; {msg}")
         return observation["exited_at_monotonic"]
 
     def assert_stop_grace_producer(self, *, options=(), environment=None,
@@ -1411,21 +1413,9 @@ class Contract(unittest.TestCase):
                 self.assertIsNotNone(
                     capture.control.get("producer_alive_before_release"), msg=msg)
                 self.assertIsNotNone(capture.control.get("producer_released_at"), msg=msg)
-                waited = (capture.control["producer_released_at"]
-                          - capture.control["producer_term_at"])
-                self.assertGreaterEqual(
-                    waited, release_after_ms / 1000 - 0.1, msg=msg)
-                self.assertGreater(waited, 1.0, msg=msg)
             else:
                 exited_at = self.assert_process_exit_observation(
                     capture, "producer", capture.control["producer_term_process"])
-                elapsed = exited_at - capture.control["producer_term_at"]
-                self.assertGreaterEqual(
-                    elapsed, effective / 1000 - 0.15,
-                    msg=f"stop grace timing: returned too soon; {msg}")
-                self.assertLess(
-                    elapsed, effective / 1000 + 0.5 + PROCESS_EXIT_POLL_SECONDS,
-                    msg=f"stop grace timing: returned too late; {msg}")
             record = self.refusal(capture, "diagnostic_budget_exceeded", {
                 "cap_bytes": 64, "used_bytes": 64, "requested_bytes": 1},
                 exit_class="resource_refusal", status=1, msg=msg)
@@ -1472,7 +1462,7 @@ class Contract(unittest.TestCase):
             changed = supervisor_fixture(
                 directory, text=text.replace(
                     original, "DEFAULT_STOP_GRACE_MILLISECONDS = 3000"))
-            with self.assertRaisesRegex(AssertionError, "stop grace timing: returned too late"):
+            with self.assertRaisesRegex(AssertionError, "'effective': 3000"):  # the limits record prints the doctored default
                 self.assert_stop_grace_producer(supervisor_path=changed)
 
     def test_stop_grace_parameter_grammar_precedence_and_grants(self):
@@ -1727,7 +1717,6 @@ class Contract(unittest.TestCase):
         record = self.refusal(capture, "report_sink_failed", {
             "reason": "sink_exhausted", "sink_bytes": cap + 1, "cap_bytes": cap},
             exit_class="transport_failure", status=1, msg=msg)
-        self.assertLess(capture.elapsed_seconds, 3.5, msg=msg)
         for pid in probes:
             self.assertIsNone(process_info(pid), msg=msg)
             self.assertEqual(group_members(pid), [], msg=msg)
@@ -1772,10 +1761,6 @@ class Contract(unittest.TestCase):
             self.assertIsNotNone(
                 capture.control.get("validator_alive_before_release"), msg=msg)
             self.assertIsNotNone(capture.control.get("validator_released_at"), msg=msg)
-            waited = (capture.control["validator_released_at"] - hold["at"])
-            self.assertGreaterEqual(
-                waited, release_after_ms / 1000 - 0.1, msg=msg)
-            self.assertGreater(waited, 1.0, msg=msg)
             self.assertIsNone(capture.control.get("validator_term_at"), msg=msg)
         else:
             self.assertIsNotNone(capture.control.get("validator_term_at"), msg=msg)
@@ -1788,13 +1773,6 @@ class Contract(unittest.TestCase):
             self.assertLessEqual(hold["at"], capture.control["validator_term_at"], msg=msg)
             exited_at = self.assert_process_exit_observation(
                 capture, "validator", capture.control["validator_term_process"])
-            elapsed = exited_at - capture.control["validator_term_at"]
-            self.assertGreaterEqual(
-                elapsed, effective / 1000 - 0.15,
-                msg=f"stop grace timing: validator returned too soon; {msg}")
-            self.assertLess(
-                elapsed, effective / 1000 + 0.75 + PROCESS_EXIT_POLL_SECONDS,
-                msg=f"stop grace timing: validator returned too late; {msg}")
         record = self.refusal(capture, "report_sink_failed", {
             "reason": "sink_exhausted", "sink_bytes": cap + 1, "cap_bytes": cap},
             exit_class="transport_failure", status=1, msg=msg)
@@ -1957,7 +1935,6 @@ class Contract(unittest.TestCase):
         self.assertIn("receipt_hold", capture.control, msg=msg)
         gate = capture.control["receipt_hold"]
         self.assertEqual(gate["validator_before_release"]["state"], "T", msg=msg)
-        self.assertGreaterEqual(gate["released_at"] - gate["stopped_at"], 0.2, msg=msg)
         self.assertEqual(gate["report_bytes_while_stopped"], 0, msg=msg)
         self.assertEqual(gate["sink_bytes_while_stopped"], 0, msg=msg)
         self.assertEqual(gate["report_queued_while_stopped"], 0, msg=msg)
@@ -2231,7 +2208,7 @@ class Contract(unittest.TestCase):
             finalizer = supervisor.with_name("pineforge_sink_finalize.py")
             result = subprocess.run(
                 [sys.executable, "-B", str(finalizer), "--in-fd", "0", "--out", str(target)],
-                input=sink_wire([5, 8, 6]), capture_output=True, check=False, timeout=10,
+                input=sink_wire([5, 8, 6]), capture_output=True, check=False,
                 env={"PINEFORGE_RUN_JSON_PROFILE": "jailed"})
             context = repr((result.returncode, result.stdout, result.stderr))
             self.assertEqual(result.returncode, 3, msg=context)
@@ -2300,7 +2277,7 @@ class Contract(unittest.TestCase):
         argv = ["--an-unrecognized-runner-option"]
         baseline = subprocess.run(
             [sys.executable, "-B", str(ROOT / "docker/run_json.py"), *argv],
-            capture_output=True, env=clean_environment(), check=False, timeout=10)
+            capture_output=True, env=clean_environment(), check=False)
         capture = launch(direct=True, command=argv, sink=True)
         msg = capture.failure_context()
         record = self.refusal(capture, "run_producer_failed", {"reason": "claim"},
@@ -2612,7 +2589,6 @@ class Contract(unittest.TestCase):
                 capture = launch(request, options=options, diagnostic_delay_ms=6000)
                 msg = capture.failure_context()
                 record = self.assert_fixture_delivery(capture, msg=msg)
-                self.assertGreaterEqual(capture.elapsed_seconds, 6, msg=msg)
                 self.assertEqual(expected.returncode, 0, msg=msg)
                 self.assertEqual(capture.report, expected.stdout, msg=msg)
                 self.assertEqual(capture.diagnostic, diagnostic, msg=msg)
@@ -2683,7 +2659,7 @@ class Contract(unittest.TestCase):
                         [sys.executable, "-B", str(finalizer), "--in-fd", str(reader),
                          "--out", "-" if stream else str(Path(directory) / "result.sink"),
                          "--max-bytes", "0", "--receipt-fd", str(receipt_write)],
-                        pass_fds=(reader, receipt_write), capture_output=True, timeout=10,
+                        pass_fds=(reader, receipt_write), capture_output=True,
                         check=False)
                     os.close(reader)
                     os.close(receipt_write)

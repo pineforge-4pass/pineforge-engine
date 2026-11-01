@@ -67,7 +67,6 @@ def worker(config):
     module = load_module(config.get("module_path", MODULE))
     data = payload(config.get("size", 0), config.get("seed", 0))
     start()
-    started_ns = time.monotonic_ns()
     deadline = module.Deadline(config.get("wall_ms", 1000),
                                config.get("stall_ms", 500))
     received = bytearray()
@@ -123,9 +122,7 @@ def worker(config):
             result["remaining_at_expiry"] = deadline.remaining_wall_ms()
         else:
             raise ValueError("unknown fixture operation")
-        finished_ns = time.monotonic_ns()
         emit({"ok": True, "result": result, "signals_seen": len(signals_seen),
-              "started_ns": started_ns, "finished_ns": finished_ns,
               "wall_remaining_ms": deadline.remaining_wall_ms(),
               "stall_remaining_ms": deadline.stall_remaining_ms(),
               "wall_expired": deadline.expired(),
@@ -133,10 +130,8 @@ def worker(config):
               "fd_live": descriptor_live(config.get("fd")),
               "src_live": descriptor_live(config.get("src_fd"))})
     except (module.DeadlineError, module.ChannelIOError) as exc:
-        finished_ns = time.monotonic_ns()
         result = {
             "ok": False, "exception": type(exc).__name__,
-            "started_ns": started_ns, "finished_ns": finished_ns,
             "kind": getattr(exc, "kind", None),
             "errno": getattr(exc, "errno", None),
             "stage_hint": exc.stage_hint, "bytes_moved": exc.bytes_moved,
