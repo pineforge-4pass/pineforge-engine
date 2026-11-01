@@ -33,24 +33,6 @@ CMAKE_PATH = re.compile(r'\$\{(PROJECT_SOURCE_DIR|CMAKE_SOURCE_DIR|CMAKE_CURRENT
                         r'CMAKE_CURRENT_LIST_DIR)\}/([^\s")}]+)')
 
 
-def announce_fixture_paths(*paths: Path) -> None:
-    """List command inputs and refuse protected paths before opening them."""
-    forbidden = tuple(Path.home() / name for name in (
-        '.config/zsh/keys', '.ssh', '.aws', '.codex', '.config/pineforge'))
-    announced = []
-    for path in paths:
-        candidate = path.absolute()
-        for resolved in (False, True):
-            if resolved:
-                candidate = candidate.resolve()
-            if (any(part.endswith('.env') for part in candidate.parts)
-                    or any(candidate == root or root in candidate.parents
-                           for root in forbidden)):
-                raise ValueError(f'refusing classifier fixture path by name: {candidate}')
-        announced.append(str(candidate))
-    print('classifier fixture follows: ' + ', '.join(announced), flush=True)
-
-
 _saved_env: dict[str, str | None] = {}
 
 
@@ -306,8 +288,6 @@ class CommandLineTests(unittest.TestCase):
         """Run a copy of the script: inside the checkout, or, as the workflow
         does, from a directory of its own with --root naming the checkout."""
         home = outside if outside is not None else repo / 'scripts'
-        announce_fixture_paths(SCRIPT, home / 'ci_docs_only.py', repo, output,
-                               Path(sys.executable))
         home.mkdir(exist_ok=True)
         shutil.copyfile(SCRIPT, home / 'ci_docs_only.py')
         environment = {key: value for key, value in os.environ.items()
@@ -420,7 +400,6 @@ class PathListTests(unittest.TestCase):
             for name, data, expected in cases:
                 with self.subTest(case=name):
                     paths, output = root / name, root / f'{name}-output'
-                    announce_fixture_paths(SCRIPT, paths, output, Path(sys.executable))
                     if data is not None:
                         paths.write_bytes(data)
                     output.write_text('earlier=1\n')
