@@ -1,0 +1,5 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND TEST_SOURCES test_cache_sweep_ledger_rows)
+    pineforge_add_unit_test(test_cache_sweep_ledger_rows)
+    set_tests_properties(test_cache_sweep_ledger_rows PROPERTIES LABELS "slow;mem")
+endif()

@@ -59,6 +59,8 @@
 #define PINEFORGE_HAS_NATIVE_LIVE_V1 1
 #define PINEFORGE_HAS_EQUITY_METRICS_FOLD_V1 1
 namespace pineforge {
+struct CacheCapacity;
+struct CacheDefaults;
 namespace metrics { struct ScratchCurveRegion; }
 enum class PositionSide { FLAT, LONG, SHORT };
 namespace report_sink { class ScratchCurveWriter; }
@@ -1982,9 +1984,9 @@ protected:
     // replaced by its native sibling.
     void prepare_native_security_feeds(const Bar* input_bars, int n_input);
     void prepare_chart_day_partition(const Bar* input_bars, int n_input);
+    const std::string& report_scratch_directory() const noexcept { return report_sink_state_.scratch_dir; }
     bool substitute_native_security_bar(SecurityEvalState& state, Bar& bar,
                                         bool count_miss = true);
-
 
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     virtual bool source_aux_security_feed_enabled() const;
@@ -2164,6 +2166,9 @@ public:
 
     int trade_count() const { return (int)trades_.size(); }
     Trade get_trade(int i) const { return trades_.read(static_cast<std::size_t>(i)); }
+    // Read-only run diagnostics, outside reports and broker-state hashes.
+    int report_cache_stats(std::uint64_t* resident_bytes,
+                           std::uint64_t* allocation_bypass_count) const noexcept;
     // The same closed rows under the `closed_trade_*` name a host reads them
     // by (RP6). The per-field `closed_trade_*` family below stays protected
     // Pine plumbing: one owning row value answers all of it, and a host
@@ -2785,7 +2790,8 @@ private:
     void finish_report_sink(ReportC* out) const;
     void stage_report_sink_equity_point(const pf_equity_point_t& point) const;
     void stage_report_sink_equity_tail(const ReportC* out) const;
-    void compute_report_sink_metrics(ReportC* out, std::int64_t equity_count) const;
+    void compute_report_sink_metrics(ReportC* out, std::int64_t equity_count,
+                                     CacheCapacity equity_capacity) const;
     void compute_report_sink_trade_metrics(ReportC* out,
                                            const TradeC* open_rows, int count) const;
     void write_report_sink_trades(const TradeC* open_rows, int count) const;
@@ -2833,6 +2839,13 @@ public:
     const detail::ScratchTableConfig& scratch_table_config() const noexcept {
         return scratch_table_config_;
     }
+
+    // Physical policy lives behind the opaque consumer, so these additive
+    // methods do not change the engine's layout or virtual interface.
+    int set_cache_policy_v1(const pf_cache_policy_v1* descriptor);
+    void set_cache_policy(const CacheDefaults& policy);
+    const CacheDefaults& cache_policy_config() const;
+    const CacheDefaults& cache_policy_for_run() const;
 
     // The additive C ABI delegates here; receipt queries never bind a consumer.
     int set_report_sink_v1(const pf_report_sink_v1* sink);
@@ -2968,6 +2981,21 @@ private:
     mutable bool sequence_row_folded_ = false;
     report_sequence::SequenceWitness output_row_witness_base_;
     report_sequence::SequenceWitness output_event_row_witness_;
+
+public:
+    // Configure this thread's next hosts BEFORE their constructors declare
+    // outputs. nullptr means unlimited; a negative value is a checked refusal.
+    static int set_output_series_limit_checked(const std::int64_t* maximum,
+                                               char* error, std::size_t capacity) noexcept;
+    // 1: a declaration exceeded its operator limit since the last successful
+    // setter; write that maximum. 0: none; -1: null destination. No allocation.
+    static int output_series_limit_failure(std::int64_t* maximum) noexcept;
+
+private:
+    static std::optional<std::int64_t> default_output_series_limit() noexcept;
+    // Recorder admission only, outside execution state and its hashes, like
+    // the output shape and recording switch. Existing hosts keep their setting.
+    std::optional<std::int64_t> max_output_series_ = default_output_series_limit();
 };
 
 inline constexpr std::size_t kReportSinkHeldEquityPoints = 1;

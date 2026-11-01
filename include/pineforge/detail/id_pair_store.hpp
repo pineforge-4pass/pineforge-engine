@@ -174,6 +174,12 @@ public:
 
     IdPairStore() = default;
     explicit IdPairStore(std::size_t cache_bytes) : read_cache_(cache_bytes) {}
+    explicit IdPairStore(IdTableReadCache::Policy cache) : read_cache_(cache) {}
+    explicit IdPairStore(CacheCapacity capacity)
+        : IdPairStore(IdTableReadCache::policy_for_capacity(capacity)) {}
+    void set_cache_capacity(CacheCapacity capacity) {
+        read_cache_.set_cache_capacity(capacity);
+    }
     IdPairStore(const IdPairStore&) = delete;
     IdPairStore& operator=(const IdPairStore&) = delete;
     IdPairStore(IdPairStore&& other) noexcept { swap(other); }

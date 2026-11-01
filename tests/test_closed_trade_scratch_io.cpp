@@ -578,7 +578,7 @@ void scenario(const Directory& directory, bool read_history = false) {
     const auto& payload = io.files[static_cast<std::size_t>(ledger_io::File::payload)];
     // (a) One logical descriptor store per row, plus at most floor(bytes/65536)
     // splits: ScratchFile::write limits each pwrite to the remaining 64 KiB
-    // write budget (include/pineforge/detail/scratch_file.hpp:342-351).
+    // write budget (include/pineforge/detail/scratch_file.hpp:525-536).
     // Restoring three stores per trade must exceed this observed-call bound.
     const Count descriptor_calls = trades + index.pwrite_bytes / (64 * 1024);
     bound("descriptor-write count", index.pwrite_calls, descriptor_calls, trades);

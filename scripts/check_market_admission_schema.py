@@ -31,7 +31,7 @@ def check(root: Path = ROOT) -> int:
     for token in (
         "void reflect(const Draft& value", "void reflect(const Event& value",
         "void Journal::reflect", "Journal::Prefix Journal::folded_window() const",
-        "fold_journal_record(source,page,result.digest)",
+        "fold_validated_journal_record(source,page,summary,result.digest,",
     ):
         if token not in source:
             raise ValueError("admission reflection/hash fold is missing: " + token)

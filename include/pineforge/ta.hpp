@@ -137,7 +137,7 @@ public:
         double value;   // na: window not formed yet, or no written non-na member
         int bars_back;  // k of the extremum slot (0 = the current bar)
     };
-    explicit ExtremeRing(int length);
+    explicit ExtremeRing(int length, WindowCacheCapacity cache = window_cache_capacity());
     // advance = true  -> compute():   records src for the context's current bar
     // advance = false -> recompute(): rewrites the current bar's slot
     // An na src is WRITTEN: it answers na, poisons the cache and, in every
@@ -148,11 +148,12 @@ public:
     // answers exactly what "live over the non-na members" did.
     // Ties resolve to the OLDEST member (strict comparison, oldest slot first).
     Result update(double src, bool advance, bool want_max);
+    WindowCacheStats cache_stats() const { return values_.cache_stats(); }
 
 private:
     int length_;
-    std::vector<double> values_;
-    std::vector<unsigned char> written_;
+    // Unwritten slots read zero; writing na stores that poison explicitly.
+    ::pineforge::detail::WindowValues<double> values_;
     long long own_bar_ = -1;   // cadence when no context is installed
     bool has_written_ = false;
     // TradingView's cached extremum with an implied bar (bar_context() docs):
@@ -398,9 +399,10 @@ class WMA {
     DynamicRingBuffer<double> buffer_;
 
 public:
-    explicit WMA(int length);
+    explicit WMA(int length, WindowCacheCapacity cache = window_cache_capacity());
     double compute(double src);
     double recompute(double src);
+    WindowCacheStats cache_stats() const { return buffer_.cache_stats(); }
 };
 
 // --- HMA (Hull Moving Average) ---

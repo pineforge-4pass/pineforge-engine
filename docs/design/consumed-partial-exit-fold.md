@@ -58,15 +58,15 @@ hash request would put the work on the per-bar path. The scheduler calls
 its quiet carried-callback branch
 (`src/source/pine_scheduler_native.cpp:639`,
 `src/source/pine_scheduler_native.cpp:725`). With recording enabled this
-calls `broker_state_hash` (`src/source/pine_strategy_host.cpp:3309`).
+calls `broker_state_hash` (`src/source/pine_strategy_host.cpp:3313`).
 `on_native_bar` then refreshes the recorded row after the adapter's close
-(`src/source/pine_strategy_host.cpp:935`); its `recording` guard
-(`src/source/pine_strategy_host.cpp:951`) enables
+(`src/source/pine_strategy_host.cpp:939`); its `recording` guard
+(`src/source/pine_strategy_host.cpp:955`) enables
 `capture_script_continuation_hash`
-(`src/source/pine_strategy_host.cpp:866`). Thus an ordinary recorded script
+(`src/source/pine_strategy_host.cpp:870`). Thus an ordinary recorded script
 bar folds the table twice. Recorded magnifier sub-bars can refresh it too.
 Terminal input updates also call `capture_script_continuation_hash`
-(`src/source/pine_strategy_host.cpp:891`). Without recording, that refresh
+(`src/source/pine_strategy_host.cpp:895`). Without recording, that refresh
 does not call the broker hash; explicit broker/stream hash queries still do.
 Each broker hash reaches `hash_host_extension`
 (`src/engine_state_hash.cpp:129`); the adapter's `hash_state`
@@ -95,14 +95,14 @@ old sorted live sequence. Dead rows contribute identity. The existing
 257-seed composition law therefore proves equality for every state and
 every incoming seed, including binary keys and prefixes. `fold_sorted`
 still folds the live count and applies this root in O(1)
-(`include/pineforge/detail/id_pair_store.hpp:363`).
+(`include/pineforge/detail/id_pair_store.hpp:369`).
 
 ### Fixed budget and publication
 
 The existing consumed index region is exactly 16*Q bytes, with Q a power of
 two and Q >= 2*K. Only the folded slab packs its hash slots as offsets;
 the full hash is read from the existing record header, and probing still
-compares complete keys (`include/pineforge/detail/id_pair_store.hpp:465`).
+compares complete keys (`include/pineforge/detail/id_pair_store.hpp:581`).
 There is no change to data records, admission maxima, page spans or slab
 allocation. The disk and ordinary non-folded slab slot layouts are unchanged.
 
@@ -130,7 +130,7 @@ The root and scalar layout state stay in the store; the slab update workspace
 is 4,632 bytes, below the existing disk workspace allowance. The final store
 static assertion still bounds the store plus update workspace and fixed
 buffer/frame allowance to 32 KiB
-(`include/pineforge/detail/id_pair_store.hpp:825`), excluding the separately
+(`include/pineforge/detail/id_pair_store.hpp:894`), excluding the separately
 admitted, fixed slab. All slab access copies through `read_at`/`write_at`;
 there are no retained payload pointers, allocations or file operations.
 
@@ -138,7 +138,7 @@ The existing read-only key/data admission still precedes the first write.
 After admission, the roster and map writes fit spans that were made readable
 at bind; they cannot introduce a capacity refusal. Slab publication uses the
 prospective header while folding, then copies the admitted header and slot
-(`include/pineforge/detail/id_pair_store.hpp:789`). A refused operation
+(`include/pineforge/detail/id_pair_store.hpp:861`). A refused operation
 changes no row, map, slot, count, root, byte or extent. The disk pending-write
 and undo protocol remains the one described below. Move carries the roster
 layout, bucket count and root with the slab owner. Clear zeros the same

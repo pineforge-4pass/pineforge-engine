@@ -34,6 +34,13 @@
 //                 marked, and on_recorded (when set) sees each size;
 //   live_bytes    what the marked blocks still hold; a block allocated outside
 //                 the window is never subtracted from it.
+//   peak_bytes    largest live_bytes during the window, including allocations
+//                 released before a checkpoint;
+//   live_blocks, peak_blocks, recorded_allocations, recorded_releases
+//                 the corresponding deterministic whole-heap census.
+// PINEFORGE_TEST_ALLOCATION_CENSUS also counts releases after recording
+// stops. Its clients use one window per process and never reset live
+// counters with marked blocks alive. Legacy window semantics are unchanged.
 #pragma once
 
 #include <cstddef>
@@ -41,6 +48,11 @@
 #include <cstring>
 #include <limits>
 #include <new>
+#if defined(PINEFORGE_TEST_ALLOCATION_CENSUS) && defined(__linux__)
+#include <malloc.h>
+#elif defined(PINEFORGE_TEST_ALLOCATION_CENSUS) && defined(__APPLE__)
+#include <malloc/malloc.h>
+#endif
 
 namespace global_allocation {
 
@@ -52,7 +64,19 @@ inline std::size_t fail_after = std::numeric_limits<std::size_t>::max();
 #if defined(PINEFORGE_TEST_ALLOCATION_BYTES)
 inline bool recording = false;
 inline std::size_t live_bytes = 0;
+inline std::size_t peak_bytes = 0;
+inline std::size_t live_blocks = 0;
+inline std::size_t peak_blocks = 0;
+inline std::size_t recorded_allocations = 0;
+inline std::size_t recorded_releases = 0;
+#if defined(PINEFORGE_TEST_ALLOCATION_CENSUS)
+// Supplementary allocator-usable charge, including this hook's prefix and
+// allocator rounding. Keep live_bytes (WIN's requested-byte metric) intact.
+inline std::size_t system_live_bytes = 0;
+inline std::size_t system_peak_bytes = 0;
+#endif
 inline void (*on_recorded)(std::size_t size) = nullptr;
+inline void (*on_released)(std::size_t size) = nullptr;
 #endif
 
 namespace detail {
@@ -72,6 +96,9 @@ inline void* from_system(std::size_t size, std::size_t align) noexcept {
 struct Header {
     std::size_t size;
     std::size_t offset;
+#if defined(PINEFORGE_TEST_ALLOCATION_CENSUS)
+    std::size_t allocated_size;
+#endif
     bool recorded;
 };
 constexpr std::size_t kPrefix =
@@ -91,10 +118,28 @@ inline void* allocate(std::size_t size, std::size_t align) noexcept {
     auto* base = static_cast<unsigned char*>(from_system(prefix + size, align));
     if (base == nullptr) return nullptr;
     unsigned char* block = base + prefix;
+#if defined(PINEFORGE_TEST_ALLOCATION_CENSUS)
+    std::size_t allocated = prefix + size;
+#if defined(__linux__)
+    allocated = ::malloc_usable_size(base);
+#elif defined(__APPLE__)
+    allocated = ::malloc_size(base);
+#endif
+    const Header header{size, prefix, allocated, recording};
+#else
     const Header header{size, prefix, recording};
+#endif
     std::memcpy(block - sizeof(Header), &header, sizeof header);
     if (recording) {
         live_bytes += size;
+        ++live_blocks;
+        ++recorded_allocations;
+        if (live_bytes > peak_bytes) peak_bytes = live_bytes;
+        if (live_blocks > peak_blocks) peak_blocks = live_blocks;
+#if defined(PINEFORGE_TEST_ALLOCATION_CENSUS)
+        system_live_bytes += header.allocated_size;
+        if (system_live_bytes > system_peak_bytes) system_peak_bytes = system_live_bytes;
+#endif
         if (on_recorded != nullptr) on_recorded(size);
     }
 #else
@@ -111,7 +156,20 @@ inline void deallocate(void* block) noexcept {
     auto* bytes = static_cast<unsigned char*>(block);
     Header header{};
     std::memcpy(&header, bytes - sizeof(Header), sizeof header);
-    if (recording && header.recorded) live_bytes -= header.size;
+#if defined(PINEFORGE_TEST_ALLOCATION_CENSUS)
+    const bool subtract = header.recorded;
+#else
+    const bool subtract = recording && header.recorded;
+#endif
+    if (subtract) {
+        live_bytes -= header.size;
+        --live_blocks;
+        ++recorded_releases;
+#if defined(PINEFORGE_TEST_ALLOCATION_CENSUS)
+        system_live_bytes -= header.allocated_size;
+#endif
+        if (on_released != nullptr) on_released(header.size);
+    }
     std::free(bytes - header.offset);
 #else
     std::free(block);

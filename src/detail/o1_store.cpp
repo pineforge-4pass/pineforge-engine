@@ -8,13 +8,18 @@
 // record. Chunk 0 always exists and holds the 16-byte big-endian header (logical
 // size, alignment) followed by its data bytes; chunk k>0 holds its data bytes. The
 // data of a chunk is exactly the logical bytes that chunk covers, so growth and
-// shrink only rewrite the boundary chunk and add or erase whole records.
+// shrink only rewrite the boundary chunk and add or erase whole records. Creation
+// records only chunk 0; an absent data chunk is an implicit zero chunk until a
+// write publishes it.
 //
-// Residency. The layer owns no per-object directory: every lookup is a lower_bound
-// over the ScratchStore index, and the only heap storage is the fixed ScratchStore
-// workspace, one chunk buffer and a fixed Tx-handle pool, all sized at open.
-// Comparison buffers are inline. Finished handles can retain the pool after the
-// store is destroyed; no handle can cause it to grow.
+// Residency. The layer owns no per-object directory: lookup misses use lower_bound
+// over the ScratchStore index. Two fixed eight-slot inline tables cache decoded
+// headers and verified integer chunk handles (384 bytes per Store). Every put,
+// erase and rollback attempt clears both tables; no cache-page pointer is kept.
+// The only heap storage is the fixed ScratchStore workspace, one chunk buffer and
+// a fixed Tx-handle pool, all sized at open. Comparison buffers are inline.
+// Finished handles can retain the pool after the store is destroyed; no handle
+// can cause it to grow.
 // ScratchStore spills to the backing and never refuses for lack of a cache slot.
 //
 // Transactions. There is one outer transaction, mapped onto the ScratchStore
@@ -147,12 +152,38 @@ class StoreImpl final : public Store {
     else ++cleanup_failed_;
   }
   Stats stats() const override;
+  std::uint64_t rollback_epoch() const noexcept override { return rollback_epoch_; }
 
  private:
   struct Header {
     std::uint64_t size = 0;
     std::uint64_t align = 1;
   };
+
+  struct HeaderEntry {
+    Id id = kNullId;
+    Header header{};
+  };
+  struct LookupEntry {
+    Id id = kNullId;
+    std::uint64_t chunk = 0;
+    ScratchHandle handle = scratch_no_handle;
+  };
+  struct ReadCache {
+    HeaderEntry headers[kStoreReadCacheSlots]{};
+    LookupEntry chunks[kStoreReadCacheSlots]{};
+  };
+  static_assert(kStoreReadCacheSlots == 8, "Store read cache has eight slots per table");
+  static_assert(sizeof(HeaderEntry) == 3 * sizeof(std::uint64_t),
+                "Header cache entry is its id and the decoded two-word header");
+  static_assert(sizeof(LookupEntry) == 3 * sizeof(std::uint64_t),
+                "Lookup cache entry is its id, chunk and integer handle");
+  static_assert(std::is_trivially_copyable<ReadCache>::value &&
+                    std::is_standard_layout<ReadCache>::value,
+                "Store read cache is inline fixed storage");
+  static_assert(sizeof(ReadCache) == kStoreReadCacheBytes &&
+                    sizeof(ReadCache) == 384,
+                "The actual Store read cache must fit its documented byte bound");
 
   class StoreTx;
   class TxPool;
@@ -162,6 +193,7 @@ class StoreImpl final : public Store {
   std::uint64_t chunk_length(std::uint64_t chunk, std::uint64_t bytes) const noexcept;
   std::size_t value_prefix(std::uint64_t chunk) const noexcept;
   void encode_key(Id id, std::uint64_t chunk) const noexcept;
+  void invalidate_read_cache() const noexcept;
   ScratchStatus lookup(Id id, std::uint64_t chunk, ScratchHandle& handle) const;
   Header header_for(Id id) const;
   [[noreturn]] void throw_status(const char* what, ScratchStatus status) const;
@@ -193,9 +225,11 @@ class StoreImpl final : public Store {
   std::uint64_t baseline_objects_live_ = 0;
   std::uint64_t cleanup_skipped_rollback_only_ = 0;
   std::uint64_t cleanup_failed_ = 0;
+  std::uint64_t rollback_epoch_ = 0;
   bool outer_active_ = false;
   mutable bool rollback_only_ = false;
   mutable std::byte key_buffer_[kKeyBytes] = {};
+  mutable ReadCache read_cache_{};
 };
 
 class StoreImpl::ImplicitTx {
@@ -207,7 +241,10 @@ class StoreImpl::ImplicitTx {
   ImplicitTx(const ImplicitTx&) = delete;
   ImplicitTx& operator=(const ImplicitTx&) = delete;
   ~ImplicitTx() {
-    if (begun_) (void)store_->store_->rollback();
+    if (begun_) {
+      store_->invalidate_read_cache();
+      (void)store_->store_->rollback();
+    }
   }
   void commit() {
     if (!begun_) return;
@@ -423,8 +460,18 @@ void StoreImpl::encode_key(Id id, std::uint64_t chunk) const noexcept {
   store_be64(key_buffer_ + 8, chunk);
 }
 
+void StoreImpl::invalidate_read_cache() const noexcept {
+  for (auto& entry : read_cache_.headers) entry.id = kNullId;
+  for (auto& entry : read_cache_.chunks) entry.id = kNullId;
+}
+
 ScratchStatus StoreImpl::lookup(Id id, std::uint64_t chunk,
                                 ScratchHandle& handle) const {
+  auto& cached = read_cache_.chunks[(id ^ chunk) % kStoreReadCacheSlots];
+  if (id != kNullId && cached.id == id && cached.chunk == chunk) {
+    handle = cached.handle;
+    return ScratchStatus::ok;
+  }
   encode_key(id, chunk);
   ScratchSpanSource probe(
       ScratchBytes{key_buffer_, static_cast<std::size_t>(kKeyBytes)});
@@ -441,12 +488,15 @@ ScratchStatus StoreImpl::lookup(Id id, std::uint64_t chunk,
   if (status != ScratchStatus::ok) return status;
   if (std::memcmp(stored, key_buffer_, static_cast<std::size_t>(kKeyBytes)) != 0)
     return ScratchStatus::not_found;
+  cached = LookupEntry{id, chunk, found};
   handle = found;
   return ScratchStatus::ok;
 }
 
 StoreImpl::Header StoreImpl::header_for(Id id) const {
   if (id == kNullId) throw std::invalid_argument("o1 store: null id");
+  auto& cached = read_cache_.headers[id % kStoreReadCacheSlots];
+  if (cached.id == id) return cached.header;
   ScratchHandle handle = scratch_no_handle;
   const ScratchStatus status = lookup(id, 0, handle);
   if (status == ScratchStatus::end || status == ScratchStatus::not_found)
@@ -460,6 +510,7 @@ StoreImpl::Header StoreImpl::header_for(Id id) const {
   Header header;
   header.size = load_be64(raw);
   header.align = load_be64(raw + 8);
+  cached = HeaderEntry{id, header};
   return header;
 }
 
@@ -467,6 +518,7 @@ StoreImpl::Header StoreImpl::header_for(Id id) const {
                                          ScratchStatus status) const {
   // Lookup/read failures can follow successful chunk puts/erases. Poison before
   // constructing the exception too: its string allocation can itself throw.
+  invalidate_read_cache();
   if (outer_active_) rollback_only_ = true;
   if (status == ScratchStatus::io_error && store_ && store_->carried_failure()) {
     rethrow_carried_scratch_failure(store_->carried_failure());
@@ -487,17 +539,27 @@ void StoreImpl::take(ScratchStatus status, const char* what) {
 
 void StoreImpl::load_chunk(Id id, std::uint64_t chunk,
                            std::size_t value_length) const {
+  std::memset(chunk_buffer_.get(), 0, value_length);
   ScratchHandle handle = scratch_no_handle;
   const ScratchStatus status = lookup(id, chunk, handle);
+  if (status == ScratchStatus::end || status == ScratchStatus::not_found) return;
   if (status != ScratchStatus::ok) throw_status("chunk lookup", status);
+  ScratchRecordInfo info{};
+  const ScratchStatus point_status = store_->point(handle, info);
+  if (point_status != ScratchStatus::ok) throw_status("chunk point", point_status);
+  const std::size_t available = static_cast<std::size_t>(
+      std::min<std::uint64_t>(info.value_bytes, value_length));
+  if (available == 0) return;
   const ScratchStatus read_status = store_->read(
       handle, ScratchField::value, 0,
-      ScratchBuffer{chunk_buffer_.get(), value_length});
+      ScratchBuffer{chunk_buffer_.get(), available});
   if (read_status != ScratchStatus::ok) throw_status("chunk read", read_status);
 }
 
 void StoreImpl::put_chunk(Id id, std::uint64_t chunk, const std::byte* value,
                           std::size_t length) {
+  // Upsert can move blobs or partially fail. No old result survives either.
+  invalidate_read_cache();
   encode_key(id, chunk);
   ScratchSpanSource key(
       ScratchBytes{key_buffer_, static_cast<std::size_t>(kKeyBytes)});
@@ -511,6 +573,7 @@ void StoreImpl::erase_chunk(Id id, std::uint64_t chunk) {
   const ScratchStatus status = lookup(id, chunk, handle);
   if (status == ScratchStatus::end || status == ScratchStatus::not_found) return;
   if (status != ScratchStatus::ok) throw_status("chunk lookup", status);
+  invalidate_read_cache();
   take(store_->erase(handle), "erase");
 }
 
@@ -527,19 +590,13 @@ Id StoreImpl::create(std::uint64_t bytes, std::uint64_t align) {
     throw std::overflow_error("o1 store: id space exhausted");
   const Id id = next_id_;
   ++next_id_;
-  const std::uint64_t chunks = chunk_count(bytes);
   std::memset(chunk_buffer_.get(), 0, chunk_buffer_bytes_);
   store_be64(chunk_buffer_.get(), bytes);
   store_be64(chunk_buffer_.get() + 8, alignment);
   ImplicitTx transaction(this);
-  put_chunk(id, 0, chunk_buffer_.get(),
-            static_cast<std::size_t>(kHeaderBytes + chunk_length(0, bytes)));
-  // Data chunks start zeroed: the buffer head held the header bytes above.
-  std::memset(chunk_buffer_.get(), 0, chunk_buffer_bytes_);
-  for (std::uint64_t chunk = 1; chunk < chunks; ++chunk) {
-    put_chunk(id, chunk, chunk_buffer_.get(),
-              static_cast<std::size_t>(chunk_length(chunk, bytes)));
-  }
+  // Data chunks are implicit zeroes until a write reaches them. Chunk 0 still
+  // carries the logical size and alignment header required by alive()/size().
+  put_chunk(id, 0, chunk_buffer_.get(), static_cast<std::size_t>(kHeaderBytes));
   transaction.commit();
   bytes_live_ += bytes;
   ++objects_live_;
@@ -549,10 +606,35 @@ Id StoreImpl::create(std::uint64_t bytes, std::uint64_t align) {
 void StoreImpl::release(Id id) {
   require_mutable();
   const Header header = header_for(id);
-  const std::uint64_t chunks = chunk_count(header.size);
   ImplicitTx transaction(this);
-  for (std::uint64_t chunk = chunks; chunk-- > 1;) erase_chunk(id, chunk);
-  erase_chunk(id, 0);
+  ScratchHandle current = scratch_no_handle;
+  const ScratchStatus first_status = lookup(id, 0, current);
+  if (first_status != ScratchStatus::ok)
+    throw_status("release lookup", first_status);
+  std::uint64_t current_chunk = 0;
+  while (current != scratch_no_handle) {
+    ScratchHandle successor = scratch_no_handle;
+    const ScratchStatus next_status = store_->next(current, successor);
+    if (next_status != ScratchStatus::ok && next_status != ScratchStatus::end)
+      throw_status("release next", next_status);
+
+    bool same_object = false;
+    std::uint64_t successor_chunk = 0;
+    if (successor != scratch_no_handle) {
+      std::byte key[kKeyBytes] = {};
+      const ScratchStatus key_status = store_->read(
+          successor, ScratchField::key, 0,
+          ScratchBuffer{key, static_cast<std::size_t>(kKeyBytes)});
+      if (key_status != ScratchStatus::ok)
+        throw_status("release successor key read", key_status);
+      same_object = load_be64(key) == id;
+      if (same_object) successor_chunk = load_be64(key + sizeof(std::uint64_t));
+    }
+    erase_chunk(id, current_chunk);
+    if (!same_object) break;
+    current = successor;
+    current_chunk = successor_chunk;
+  }
   transaction.commit();
   bytes_live_ -= header.size;
   --objects_live_;
@@ -625,6 +707,7 @@ std::size_t StoreImpl::read(Id id, std::uint64_t off, void* dst,
   const std::size_t count = static_cast<std::size_t>(
       std::min<std::uint64_t>(n, header.size - off));
   auto* out = static_cast<unsigned char*>(dst);
+  if (out == nullptr) throw_status("chunk read", ScratchStatus::programming_error);
   std::size_t done = 0;
   while (done < count) {
     const std::uint64_t position = off + done;
@@ -635,13 +718,30 @@ std::size_t StoreImpl::read(Id id, std::uint64_t off, void* dst,
         std::min<std::uint64_t>(count - done, room));
     ScratchHandle handle = scratch_no_handle;
     const ScratchStatus status = lookup(id, chunk, handle);
+    if (status == ScratchStatus::end || status == ScratchStatus::not_found) {
+      std::memset(out + done, 0, take);
+      done += take;
+      continue;
+    }
     if (status != ScratchStatus::ok) throw_status("chunk lookup", status);
+    ScratchRecordInfo info{};
+    const ScratchStatus point_status = store_->point(handle, info);
+    if (point_status != ScratchStatus::ok) throw_status("chunk point", point_status);
     const std::size_t prefix = value_prefix(chunk);
-    const ScratchStatus read_status = store_->read(
-        handle, ScratchField::value,
-        static_cast<std::uint64_t>(prefix) + within,
-        ScratchBuffer{reinterpret_cast<std::byte*>(out + done), take});
-    if (read_status != ScratchStatus::ok) throw_status("chunk read", read_status);
+    const std::uint64_t data_bytes =
+        info.value_bytes > prefix ? info.value_bytes - prefix : 0;
+    if (within >= data_bytes) {
+      std::memset(out + done, 0, take);
+    } else {
+      const std::size_t available = static_cast<std::size_t>(
+          std::min<std::uint64_t>(take, data_bytes - within));
+      const ScratchStatus read_status = store_->read(
+          handle, ScratchField::value,
+          static_cast<std::uint64_t>(prefix) + within,
+          ScratchBuffer{reinterpret_cast<std::byte*>(out + done), available});
+      if (read_status != ScratchStatus::ok) throw_status("chunk read", read_status);
+      if (available < take) std::memset(out + done + available, 0, take - available);
+    }
     done += take;
   }
   return done;
@@ -703,7 +803,7 @@ Stats StoreImpl::stats() const {
   const ScratchStoreStats scratch = store_->stats();
   Stats out;
   out.bytes_live = bytes_live_;
-  out.bytes_resident = scratch.resident_bytes;
+  out.bytes_resident = scratch.resident_bytes + sizeof(read_cache_);
   out.pages_spilled = scratch.backing_pages;
   out.bytes_backing = scratch.backing_bytes;
   out.max_live_handles = tx_pool_->max_live_handles();
@@ -718,6 +818,7 @@ void StoreImpl::commit_outer_tx() {
   if (!outer_active_)
     throw std::logic_error("o1 store: no active transaction");
   if (rollback_only_) {
+    invalidate_read_cache();
     const ScratchStatus status = store_->rollback();
     if (status != ScratchStatus::ok) throw_status("rollback", status);
     finish_outer(false);
@@ -733,6 +834,8 @@ void StoreImpl::commit_outer_tx() {
 
 void StoreImpl::rollback_outer_tx() {
   if (!outer_active_) return;
+  // Rollback may fail after restoring only some pages; clear before every try.
+  invalidate_read_cache();
   const ScratchStatus status = store_->rollback();
   if (status != ScratchStatus::ok) {
     rollback_only_ = true;
@@ -758,6 +861,7 @@ void StoreImpl::finish_outer(bool committed) noexcept {
   if (!committed) {
     bytes_live_ = baseline_bytes_live_;
     objects_live_ = baseline_objects_live_;
+    ++rollback_epoch_;
   }
 }
 

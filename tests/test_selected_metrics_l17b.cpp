@@ -6,6 +6,7 @@
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
 
+#include <pineforge/cache_policy.hpp>
 #include <pineforge/metrics_stream.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/execution_observer.h>
@@ -13,6 +14,7 @@
 #include <pineforge/run_failure.hpp>
 #include <pineforge/selected_window.h>
 #include <pineforge/report_sink_writer.hpp>
+#include <pineforge/detail/read_through_cache.hpp>
 
 #ifdef PINEFORGE_L17B_SOURCE
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -1931,6 +1933,12 @@ void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
     const auto page_table_bytes = (TradeLedger::kSinkCacheRows / 256) * sizeof(void*);
     CHECK(cache_bound == fixed_bytes + 20447232 + page_table_bytes);
     CHECK(cache_bound <= TradeLedger::resident_cache_bytes(TradeLedger::kDefaultCacheRows));
+    const auto point_bytes = sizeof(pf_equity_point_t);
+    const auto curve_line_bytes = detail::ReadThroughCache::line_bytes(point_bytes);
+    const CacheDefaults defaults;
+    CHECK(defaults.equity_curve_pages.capacity_bytes
+          == report_sink::kScratchWindowPoints * curve_line_bytes);
+    CHECK(CacheDefaults::ledger_cache_rows(defaults.ledger_rows) == TradeLedger::kSinkCacheRows);
     for (int mode = 0; mode < 3; ++mode) {
         const bool selected = mode == 1;
         const bool observed = mode == 2;
@@ -1963,8 +1971,19 @@ void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
         CHECK(capped.ledger_cache_bytes == cache_bound);
         CHECK(large.ledger_cache_bytes == cache_bound);
         const auto window = report_sink::kScratchWindowBytes;
-        const auto small_budget = 1024 * TradeLedger::kLedgerEntryBytes + 2 * window;
-        const auto budget = cache_bound - fixed_bytes + 2 * window;
+        // The ordinary reader keeps kScratchWindowPoints complete shared
+        // lines, each with its own metadata (docs/design/tail-page-windows.md).
+        // Preserve the original two-window allowance, adding the line tags
+        // and State's separate kScratchWindowPoints block workspace.
+        // Selected/observed budgets retain their existing two-window bound.
+        const auto curve_metadata = selected || observed ? std::size_t{0}
+            : report_sink::kScratchWindowPoints * (curve_line_bytes - point_bytes);
+        const auto curve_workspace = selected || observed ? std::size_t{0}
+            : report_sink::kScratchWindowPoints * point_bytes;
+        const auto small_budget = page_table_bytes + 1024 * TradeLedger::kLedgerEntryBytes
+            + 2 * window + curve_metadata + curve_workspace;
+        const auto budget = cache_bound - fixed_bytes + 2 * window + curve_metadata
+            + curve_workspace;
         CHECK(small.largest_request > 0 && small.peak_live > 0);
         CHECK(capped.largest_request > 0 && capped.peak_live > 0);
         CHECK(large.largest_request > 0 && large.peak_live > 0);

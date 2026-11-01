@@ -5,6 +5,7 @@
 #include "../src/native_cohort_target_work.hpp"
 #include "native_cohort_target_fixture.hpp"
 
+#include <pineforge/cache_policy.hpp>
 #include <pineforge/detail/scratch_errors.hpp>
 #include <cerrno>
 #include <sys/syscall.h>
@@ -158,17 +159,31 @@ void oversized_population() {
     require(checked == 1, "over-budget row was not executed");
 }
 
-void backing_errors() {
+void backing_errors_for_cache(std::size_t root_lines) {
     Host h;
+    CacheDefaults caches;
+    // The complete oracle warms root reads. Zero exercises direct backing;
+    // one complete row exercises real cache misses/evictions rather than
+    // retaining the whole 64-row disk prefix across the fault boundary.
+    caches.successor_root_pages = CacheDefaults::lines(2 * sizeof(std::uint64_t), root_lines);
+    h.set_cache_policy(caches);
     std::size_t checked = 0;
     h.calculation = [&](Host& host) {
         const auto p = populate(host, 70, true);
         const auto request = live(host, p.closes.front());
         const auto expected = reference(host, request);
         require(!expected.openings.empty(), "backing fault has no live successor witness");
+        const auto healthy = host.consumer().request_core().tail_read_cache_stats(
+            no::TailWindowKind::successor_roots);
+        require(healthy.current_bytes == caches.successor_root_pages.capacity_bytes,
+                "root cache retains exactly the selected complete-line allowance");
+        require(root_lines == 0 || healthy.evictions != 0,
+                "healthy root reads exercise the one-row cache's replacement");
         const auto fault = [&](bool indexed) {
             Probe::cold(host.consumer());
             const auto before = backing_fault::injected;
+            const auto errors_before = host.consumer().request_core().tail_read_cache_stats(
+                no::TailWindowKind::successor_roots).io_errors;
             backing_fault::once = true;
             std::string result;
             try {
@@ -183,6 +198,9 @@ void backing_errors() {
             backing_fault::once = false;
             require(backing_fault::injected == before + 1, "backing fault was not injected");
             require(!result.empty(), "authoritative backing failure was swallowed");
+            require(host.consumer().request_core().tail_read_cache_stats(
+                        no::TailWindowKind::successor_roots).io_errors == errors_before + 1,
+                    "the injected backing error crosses the root cache boundary");
             return result;
         };
         const auto original = fault(false);
@@ -198,6 +216,11 @@ void backing_errors() {
     require(h.set_scratch_tables_v1(&tables) == 0, "disk roots configuration failed");
     run(h, spec(), tape(1));
     require(checked == 1, "authoritative backing fault row was not reached");
+}
+
+void backing_errors() {
+    for (const std::size_t lines : {std::size_t{0}, std::size_t{1}})
+        backing_errors_for_cache(lines);
 }
 }
 

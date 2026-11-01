@@ -55,7 +55,7 @@ public:
     ~IdPairScratchFile() = default;
 
     bool opened() const noexcept { return file_.opened(); }
-    bool disk_backed() const noexcept { return file_.descriptor() >= 0; }
+    bool disk_backed() const noexcept { return file_.disk_backed(); }
     void reset() noexcept { file_.clear(); }
     void open(const std::string& directory) {
         if (opened()) return;

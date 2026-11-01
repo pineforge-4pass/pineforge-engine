@@ -35,8 +35,9 @@ using pineforge::detail::ScratchSpanSource;
 using pineforge::detail::ScratchStatus;
 using pineforge::detail::CommandScratchStore;
 
-// At most this many scope rows per teardown transaction. The final
-// partial batch commits once; scope population never sizes resident storage.
+// At most this many selected rows per construction transaction, or stored
+// records per teardown transaction. Each final partial batch commits once;
+// scope population never sizes resident storage.
 inline constexpr std::size_t kExitScopeEraseBatch = 64;
 
 // Terminal diagnostic only, like CommandScratchStore::carried_failure().
@@ -353,23 +354,25 @@ inline ScratchHandle exit_scratch_seek(ExitScratchContext& context,
     exit_scratch_check(status, context.store);
     return handle;
 }
+inline void exit_scratch_edit_failure(ExitScratchContext& context,
+                                      ScratchStatus status) {
+    // Rollback makes further backing calls. Preserve the first failure before
+    // cleanup can replace the backing's borrowed diagnostic.
+    std::optional<pineforge::detail::ReportScratchIoError> failure;
+    if (status == ScratchStatus::io_error)
+        if (const auto* carried = context.store.carried_failure()) failure = *carried;
+    const auto rollback_status = context.store.rollback();
+    pineforge::detail::rethrow_carried_scratch_failure(failure ? &*failure : nullptr);
+    exit_scratch_check(rollback_status, context.store);
+    exit_scratch_failure(status);
+}
 template<class Edit> void exit_scratch_edit(ExitScratchContext& context, Edit operation) {
     exit_scratch_check_teardown(context);
     exit_scratch_check(context.store.begin(), context.store);
     auto status = operation();
     if (status == ScratchStatus::ok)
         status = context.store.commit(ScratchDurability::buffered);
-    if (status != ScratchStatus::ok) {
-        // Rollback makes further backing calls. Preserve the first failure
-        // before cleanup can replace the backing's borrowed diagnostic.
-        std::optional<pineforge::detail::ReportScratchIoError> failure;
-        if (status == ScratchStatus::io_error)
-            if (const auto* carried = context.store.carried_failure()) failure = *carried;
-        const auto rollback_status = context.store.rollback();
-        pineforge::detail::rethrow_carried_scratch_failure(failure ? &*failure : nullptr);
-        exit_scratch_check(rollback_status, context.store);
-        exit_scratch_failure(status);
-    }
+    if (status != ScratchStatus::ok) exit_scratch_edit_failure(context, status);
 }
 
 // Teardown uses only status-returning store operations. Snapshot the original
@@ -578,10 +581,18 @@ template<> struct ExitScratchValue<native_order::RequestHandle> {
     }
 };
 
-// No store visitor is active while a caller cancels, replaces, executes or
-// creates another scope. Each edit commits separately, so nested Applied
-// callbacks require neither nested transactions nor owning snapshots.
-template<class T> class ExitScratchRows {
+// No store visitor survives a call. Per-row mode commits each edit separately;
+// bounded mode can keep a transaction open across appends until finish().
+// Finish construction before a caller cancels, replaces, executes or creates
+// another scope, so nested Applied callbacks need no nested transactions or
+// owning snapshots. Observed construction retains per-row commits.
+enum class ExitScratchRowMode : std::uint8_t {
+    per_row,
+    bounded_batch,
+};
+
+template<class T, ExitScratchRowMode Mode = ExitScratchRowMode::per_row>
+class ExitScratchRows {
 public:
     explicit ExitScratchRows(const PineExecutionAdapter& owner)
         : ExitScratchRows(exit_scratch(owner)) {}
@@ -589,7 +600,9 @@ public:
     ExitScratchRows(const ExitScratchRows&) = delete;
     ExitScratchRows& operator=(const ExitScratchRows&) = delete;
     ExitScratchRows(ExitScratchRows&& other) noexcept
-        : scope_(std::move(other.scope_)), count_(other.count_) {}
+        : scope_(std::move(other.scope_)), count_(other.count_),
+          batch_open_(std::exchange(other.batch_open_, false)) {}
+    ~ExitScratchRows() noexcept(false) { rollback_batch_noexcept(); }
     std::uint64_t scope() const noexcept { return scope_.scope(); }
     ExitScratchContext& context() const noexcept { return scope_.context(); }
     std::size_t size() const noexcept { return static_cast<std::size_t>(count_); }
@@ -597,15 +610,59 @@ public:
 
     void push_back(const T& value) {
         if constexpr (std::is_same_v<T, native_order::RequestHandle>) {
-            if (value.run != context().run)
+            if (value.run != context().run) {
+                if constexpr (Mode == ExitScratchRowMode::bounded_batch)
+                    if (batch_open_ && context().store.transaction_active())
+                        fail_batch(ScratchStatus::programming_error);
                 exit_scratch_failure(ScratchStatus::programming_error);
+            }
         }
-        put(count_, value);
-        ++count_;
+        if constexpr (Mode == ExitScratchRowMode::bounded_batch) {
+            if (batch_enabled()) {
+                if (count_ % kExitScopeEraseBatch == 0
+                        || !context().store.transaction_active())
+                    begin_batch();
+                put_batch(count_, value);
+                ++count_;
+                if (count_ % kExitScopeEraseBatch == 0) finish();
+            } else {
+                finish();
+                put(count_, value);
+                ++count_;
+            }
+        } else {
+            put(count_, value);
+            ++count_;
+        }
         observe();
+    }
+    // Publish this builder's open partial batch before consumers can mutate
+    // scratch or create another scope. Per-row/finished builders are no-ops.
+    // After an append/finish failure, abandon the builder: a rolled-back batch
+    // can include earlier appends. Destruction rolls back any unfinished batch
+    // before scope erase; it never implicitly publishes construction.
+    void finish() {
+        if constexpr (Mode == ExitScratchRowMode::bounded_batch) {
+            if (!batch_open_) return;
+            if (!context().store.transaction_active()) {
+                batch_open_ = false;
+                return;
+            }
+            try {
+                exit_scratch_check_teardown(context());
+            } catch (...) {
+                rollback_batch_noexcept();
+                throw;
+            }
+            const auto status = context().store.commit(ScratchDurability::buffered);
+            if (status != ScratchStatus::ok)
+                fail_batch(status);
+            batch_open_ = false;
+        }
     }
     void set(std::size_t index, const T& value) {
         static_assert(!std::is_same_v<T, std::string>, "text selections are immutable");
+        finish();
         put(index, value);
     }
     auto operator[](std::size_t index) const {
@@ -613,6 +670,7 @@ public:
     }
     auto front() const { return (*this)[0]; }
     void clear() {
+        finish();
         scope_.clear();
         count_ = 0;
         observe();
@@ -679,6 +737,55 @@ public:
     const_iterator end() const { return {this, size()}; }
 
 private:
+    bool batch_enabled() const noexcept {
+        if constexpr (Mode != ExitScratchRowMode::bounded_batch) {
+            return false;
+        } else {
+            return !context().store.has_io_observer()
+                && context().observe_rows == nullptr
+                && context().observe_lookup == nullptr;
+        }
+    }
+    void begin_batch() {
+        exit_scratch_check_teardown(context());
+        exit_scratch_check(context().store.begin(), context().store);
+        batch_open_ = true;
+    }
+    void fail_batch(ScratchStatus status) {
+        try {
+            exit_scratch_edit_failure(context(), status);
+        } catch (...) {
+            batch_open_ = context().store.transaction_active();
+            throw;
+        }
+    }
+    void rollback_batch_noexcept() noexcept {
+        if constexpr (Mode == ExitScratchRowMode::bounded_batch) {
+            if (!batch_open_) return;
+            batch_open_ = false;
+            if (!context().store.transaction_active()) return;
+            const auto status = context().store.rollback();
+            context().teardown_failure.remember(status, context().store);
+        }
+    }
+    ScratchStatus put_value(std::uint64_t index, const T& value) {
+        const ExitScratchKey key(scope(), 0, 0, index);
+        const auto payload = ExitScratchValue<T>::source(value);
+        ScratchHandle handle = 0;
+        auto status = context().store.put(key, payload, handle);
+        if constexpr (std::is_same_v<T, std::string>) {
+            if (status != ScratchStatus::ok) return status;
+            const ExitScratchKey ordered(scope(), 1, 0, index, &payload);
+            const ScratchSpanSource empty({nullptr, 0});
+            status = context().store.put(ordered, empty, handle);
+        }
+        return status;
+    }
+    void put_batch(std::uint64_t index, const T& value) {
+        const auto status = put_value(index, value);
+        if (status != ScratchStatus::ok)
+            fail_batch(status);
+    }
     void observe() const noexcept {
         if (context().observe_rows)
             context().observe_rows(context().observation, scope(), size());
@@ -692,23 +799,18 @@ private:
         return handle;
     }
     void put(std::uint64_t index, const T& value) {
-        const ExitScratchKey key(scope(), 0, 0, index);
-        const auto payload = ExitScratchValue<T>::source(value);
         exit_scratch_edit(context(), [&] {
-            ScratchHandle handle = 0;
-            auto status = context().store.put(key, payload, handle);
-            if constexpr (std::is_same_v<T, std::string>) {
-                if (status != ScratchStatus::ok) return status;
-                const ExitScratchKey ordered(scope(), 1, 0, index, &payload);
-                const ScratchSpanSource empty({nullptr, 0});
-                status = context().store.put(ordered, empty, handle);
-            }
-            return status;
+            return put_value(index, value);
         });
     }
     ExitScratchScope scope_;
     std::uint64_t count_ = 0;
+    // Transient transaction ownership only; never part of durable row state.
+    bool batch_open_ = false;
 };
+
+template<class T>
+using ExitScratchBatchRows = ExitScratchRows<T, ExitScratchRowMode::bounded_batch>;
 
 } // namespace detail
 } // namespace pineforge::source

@@ -32,7 +32,7 @@ the temporary name with the rest.
 Fails closed, one diagnostic line on stderr and no output file, with exit status:
 
      2  usage error (argparse)
-    10  the inventory cannot be read, or is over 8 MiB
+    10  the inventory cannot be read, or exceeds --max-inventory-bytes
     11  the inventory is not strict JSON (bad UTF-8, syntax, a duplicate key or a
         non-finite number)
     12  the compiled C++ or the linked library cannot be read
@@ -61,11 +61,6 @@ EXIT_BINDER_MISSING = 13
 EXIT_BINDER_REFUSED = 14
 EXIT_OUTPUT_REFUSED = 15
 
-# The consumer (docker/request_feed_inventory.py) reads at most this much; a
-# larger inventory is incomplete there, so it is refused here, before binding.
-INVENTORY_MAX_BYTES = 8 * 1024 * 1024
-
-
 class Refusal(Exception):
     """An outcome that ends the run with exit_code and one line on stderr."""
 
@@ -87,16 +82,19 @@ def _no_constant(name: str) -> Any:
     raise ValueError(f"non-finite JSON number {name}")
 
 
-def _read_inventory(path: str) -> Any:
+def _read_inventory(path: str, max_inventory_bytes: Optional[int] = None) -> Any:
     try:
         with open(path, "rb") as handle:
-            data = handle.read(INVENTORY_MAX_BYTES + 1)
+            try:
+                data = handle.read(max_inventory_bytes + 1 if max_inventory_bytes else -1)
+            except OverflowError:  # a limit larger than a platform read size
+                data = handle.read()
     except (OSError, ValueError) as error:
         raise Refusal(EXIT_INVENTORY_UNREADABLE,
                       f"the inventory cannot be read: {error}") from None
-    if len(data) > INVENTORY_MAX_BYTES:
+    if max_inventory_bytes and len(data) > max_inventory_bytes:
         raise Refusal(EXIT_INVENTORY_UNREADABLE,
-                      f"the inventory is over {INVENTORY_MAX_BYTES} bytes")
+                      f"the inventory is over {max_inventory_bytes} bytes")
     try:
         return json.loads(data.decode("utf-8"), object_pairs_hook=_no_duplicate_keys,
                           parse_constant=_no_constant)
@@ -175,6 +173,10 @@ def _publish(directory: str, out: str, text: str) -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # Isolated runpy callers do not add this tool's companion directory.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from run_json import TV_COMPAT_LIMITS, nonnegative_limit
+
     parser = argparse.ArgumentParser(
         prog=PROG, allow_abbrev=False,
         description="Bind a source-bound request-feed inventory to the linked strategy "
@@ -184,9 +186,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--cpp", required=True, help="the C++ file g++ compiled; only read")
     parser.add_argument("--so", required=True, help="the library g++ linked; read, not loaded")
     parser.add_argument("--out", required=True, help="the bound inventory to create")
+    parser.add_argument("--max-inventory-bytes", type=nonnegative_limit, default=None, metavar="N",
+                        help="Maximum inventory bytes; unset or 0 = unlimited.")
+    parser.add_argument("--tv-compat", action="store_true",
+                        help="Use the runner's compatibility default unless a limit is explicit.")
     args = parser.parse_args(argv)
+    if args.tv_compat and args.max_inventory_bytes is None:
+        args.max_inventory_bytes = TV_COMPAT_LIMITS["max_inventory_bytes"]
     try:
-        inventory = _read_inventory(args.inventory)
+        inventory = _read_inventory(args.inventory, args.max_inventory_bytes)
         cpp_bytes = _read_bytes(args.cpp, "compiled C++ source")
         artifact_bytes = _read_bytes(args.so, "linked library")
         directory = _check_output(args.out)

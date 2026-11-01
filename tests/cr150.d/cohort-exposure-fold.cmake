@@ -1,0 +1,6 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_cohort_exposure_fold)
+    pineforge_add_unit_test(test_cohort_exposure_fold)
+    list(APPEND TEST_SOURCES test_cohort_exposure_work)
+    pineforge_add_unit_test(test_cohort_exposure_work)
+endif()

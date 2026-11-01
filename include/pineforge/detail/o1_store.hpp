@@ -9,7 +9,7 @@
 // STORE GUARANTEES:
 //  - A write or resize never fails because the resident window is full; it spills.
 //    Creation is bounded by Shape::max_live_objects, independent of lifetime ids.
-//  - Resident bytes are bounded by the ScratchStore workspace picked at open,
+//  - Resident workspace plus kStoreReadCacheBytes is fixed at open,
 //    independent of bars B and of objects created.
 //  - Ids are stable and never recycled while reachable; a released id is dead, and
 //    reads of a dead id are a caller error, not a silent zero.
@@ -24,8 +24,10 @@
 // chunk records, each record keyed by the 16-byte big-endian pair (object id, chunk
 // number) and ordered by a plain bytewise compare. Chunk 0's value is the 16-byte
 // header (logical size, alignment) followed by that chunk's data bytes; every later
-// chunk's value is its data bytes. The layer keeps no per-object, per-chunk or
-// per-byte heap state: an id counter, a few scalars and fixed buffers only.
+// chunk's value is its data bytes. Creation records only the header chunk.
+// Unmaterialized data chunks read as zero and are published on first write. The
+// layer keeps no per-object, per-chunk or per-byte heap state: an id counter,
+// a few scalars and fixed buffers only.
 //
 // DECLARATIONS ONLY. The single implementation is src/detail/o1_store.cpp;
 // all store consumers use this header rather than separate implementations.
@@ -65,6 +67,13 @@ inline constexpr std::uint64_t kMaxLiveObjectsCap = UINT64_C(1024) * 1024;
 // from a valid script, rather than a limit on objects or nesting.
 inline constexpr std::size_t kMaxTxHandles = 4;
 
+// Two fixed direct-mapped tables per StoreImpl: decoded headers and verified
+// chunk handles, eight slots each. Each entry uses three 64-bit words.
+// No chunk payloads or population-sized directory are resident in this cache.
+inline constexpr std::size_t kStoreReadCacheSlots = 8;
+inline constexpr std::size_t kStoreReadCacheBytes =
+    kStoreReadCacheSlots * (3 * sizeof(std::uint64_t) + 3 * sizeof(std::uint64_t));
+
 class TxPoolExhausted : public std::runtime_error {
  public:
   TxPoolExhausted()
@@ -101,7 +110,7 @@ struct Shape {
 
 struct Stats {
   std::uint64_t bytes_live = 0;     // logical bytes held by live ids
-  std::uint64_t bytes_resident = 0; // fixed ScratchStore workspace, constant per store
+  std::uint64_t bytes_resident = 0; // fixed ScratchStore workspace + Store read cache
   std::uint64_t pages_spilled = 0;  // backing pages currently allocated
   std::uint64_t bytes_backing = 0;  // file growth, never charged as resident
   std::uint64_t max_live_handles = 0; // caller high-water, finished handles included
@@ -138,7 +147,7 @@ class Tx {
 
 class TxScope;
 
-// Single-threaded: read() const mutates its key and chunk buffers.
+// Single-threaded: read() const mutates its key/chunk buffers and fixed cache.
 class Store {
  public:
   virtual ~Store();
@@ -163,6 +172,7 @@ class Store {
 
   // Exact page-granular access. Return the byte count moved; a short count means
   // the request crossed the logical end, which the caller must treat as an error.
+  // An unmaterialized data chunk reads as zero bytes.
   // A mutating call outside a transaction runs as its own one-call transaction.
   virtual std::size_t read(Id, std::uint64_t off, void* dst, std::size_t n) const = 0;
   virtual std::size_t write(Id, std::uint64_t off, const void* src, std::size_t n) = 0;
@@ -226,6 +236,13 @@ class Store {
   // Wrappers forward the reason unchanged.
   virtual void note_cleanup_skipped(CleanupSkip reason) noexcept = 0;
   virtual Stats stats() const = 0;
+
+  // Cache invalidation token, not transactional state. Advances whenever an
+  // outer transaction restores the previous version, including a rollback-only
+  // commit or abandonment. Joined rollbacks only poison the outer transaction;
+  // the token advances when that outer transaction actually rolls back.
+  // Forwarding wrappers must return the inner store's token unchanged.
+  virtual std::uint64_t rollback_epoch() const noexcept = 0;
 };
 
 // Allocation-free joined operation. An unfinished joined scope poisons its

@@ -5,6 +5,11 @@
 #include "../src/command_scratch_cache.hpp"
 #include "command_scratch_arena_share_fixture.hpp"
 #include "command_scratch_extent_probe.hpp"
+#include "command_scratch_cache_run_fixture.hpp"
+#include "global_allocation_replacement.hpp"
+#include <pineforge/pineforge.h>
+#include <pineforge/detail/script_store.hpp>
+#include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
 
 #include <algorithm>
@@ -15,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <new>
 #include <string>
@@ -33,6 +39,8 @@ std::uint64_t fail_write_at = 0;
 int write_error = 0; // Zero selects a real short write instead of errno.
 bool fail_next_array = false;
 std::uint64_t allocation_faults = 0;
+std::size_t allocation_fault_bytes = 0;
+std::uint64_t array_allocation_attempts = 0;
 }
 
 extern "C" ssize_t __real_pread(int, void*, std::size_t, off_t);
@@ -44,9 +52,11 @@ extern "C" int __real_fsync(int);
 extern "C" void* __real__ZnamRKSt9nothrow_t(std::size_t, const std::nothrow_t&) noexcept;
 extern "C" void* __wrap__ZnamRKSt9nothrow_t(
         std::size_t size, const std::nothrow_t& tag) noexcept {
+    ++spill_test::array_allocation_attempts;
     if (spill_test::fail_next_array) {
         spill_test::fail_next_array = false; // Error construction can allocate.
         ++spill_test::allocation_faults;
+        spill_test::allocation_fault_bytes = size;
         return nullptr;
     }
     return __real__ZnamRKSt9nothrow_t(size, tag);
@@ -301,26 +311,317 @@ void extent_probe_covers_backing_lifetimes() {
             "probe teardown restores the previous observer for later factory calls");
 }
 
-void allocation_failure_is_typed() {
+// This row uses only the previous constructor/factory API. On the unchanged
+// engine the real allocation seam reports scratch_io_failed with ENOMEM.
+void allocation_failure_bypasses_cache() {
+    RunCacheDiagnostics diagnostics;
+    RunCacheDiagnosticsScope diagnostics_scope(diagnostics);
     require(!fail_next_array, "allocation fault starts disarmed");
     const auto before = allocation_faults;
-    bool caught = false;
+    std::unique_ptr<ScratchBacking> backing;
     fail_next_array = true;
     try {
+        backing = make_command_scratch_backing(page);
+    } catch (const std::system_error& error) {
+        fail_next_array = false;
+        if (error.code() == std::error_code(ENOMEM, std::generic_category())
+            && pineforge::classify_run_failure(error).code == pineforge::RunFailureCode::scratch_io_failed)
+            throw std::runtime_error(
+                "optional command cache allocation must bypass; got scratch_io_failed/ENOMEM");
+        throw;
+    }
+    fail_next_array = false;
+    require(backing && allocation_faults == before + 1,
+            "bypass fixture refused exactly one real page allocation");
+    const auto& cached = dynamic_cast<const CachedScratchBacking&>(*backing);
+    require(cached.read_cache_stats().allocation_bypass_count == 1
+            && cached.cache_slot_count() == 0 && cached.cache_storage_bytes() == 0,
+            "allocation bypass is visible immediately and holds no slab");
+    auto healthy = make_command_scratch_backing(page);
+    auto reference = make_command_scratch_backing(page, 0);
+    auto disabled = make_command_scratch_backing(page, 0, 0);
+    require(dynamic_cast<const CachedScratchBacking&>(*healthy)
+                .read_cache_stats().allocation_bypass_count == 0
+            && dynamic_cast<const CachedScratchBacking&>(*disabled)
+                .read_cache_stats().allocation_bypass_count == 0,
+            "healthy and explicitly disabled caches report no allocation failure");
+    const auto expected = command_cache_test::run(*healthy);
+    physical = {};
+    std::vector<std::byte> actual;
+    { Window window; actual = command_cache_test::run(*backing); }
+    require(actual == expected && actual == command_cache_test::run(*reference),
+            "allocation bypass completes with identical full records, handles and continuation bytes");
+    require(physical.reads != 0 && physical.writes != 0
+            && physical.errors == 0 && physical.short_io == 0,
+            "allocation bypass really reads and writes its inner file");
+    const auto attempts = array_allocation_attempts;
+    const auto reads = physical.reads;
+    std::array<std::byte, page> repeated{};
+    for (unsigned i = 0; i != 4; ++i) {
+        Window window;
+        require(backing->read_page(0, {repeated.data(), repeated.size()}) == ScratchStatus::ok,
+                "repeated bypass reads continue through the backing");
+    }
+    const auto stats = cached.read_cache_stats();
+    require(array_allocation_attempts == attempts && allocation_faults == before + 1
+            && physical.reads == reads + 4 && stats.allocation_bypass_count == 1
+            && stats.hits == 0 && stats.current_bytes == 0 && stats.peak_bytes == 0,
+            "bypass stays off without allocation retries or duplicate diagnostics");
+    require(diagnostics.allocation_bypass_count() == 1,
+            "the slab's failed core borrow must not report a second production bypass");
+    std::uint64_t command_bytes = 0;
+    for (const auto* owner : {backing.get(), healthy.get(), reference.get(), disabled.get()})
+        command_bytes += sizeof(CachedScratchBacking)
+            + dynamic_cast<const CachedScratchBacking&>(*owner).cache_storage_bytes();
+    require(diagnostics.resident_bytes() == command_bytes,
+            "the production sink counts each command slab once across prefix and core use");
+    {
+        pineforge::TradeLedger ledger(std::size_t{3});
+        ledger.set_scratch_directory(".");
+        pineforge::Trade row{};
+        row.entry_price = 100;
+        ledger.push_back(row);
+        const auto refused = global_allocation::refused;
+        require(global_allocation::fail_after == std::numeric_limits<std::size_t>::max(),
+                "ledger aggregation fault starts disarmed");
+        global_allocation::fail_after = 0;
+        const auto price = ledger.entry_price_at(0);
+        const bool consumed = global_allocation::fail_after
+            == std::numeric_limits<std::size_t>::max();
+        global_allocation::fail_after = std::numeric_limits<std::size_t>::max();
+        require(consumed && global_allocation::refused == refused + 1
+                && price == 100 && ledger.cache_allocation_failed(),
+                "aggregation really refuses the optional ledger directory and preserves its read");
+        require(diagnostics.allocation_bypass_count() == 2
+                && diagnostics.resident_bytes() == command_bytes + ledger.cache_resident_bytes(),
+                "the same production sink sums command and ledger bypasses and resident owners once");
+    }
+    require(diagnostics.allocation_bypass_count() == 2
+            && diagnostics.resident_bytes() == command_bytes,
+            "released ledger storage detaches while its run's bypass event remains");
+}
+
+class AllocationHost final : public pineforge::NativeStrategyHost {
+public:
+    AllocationHost() {
+        pineforge::NativeRunSpec spec;
+        spec.identity = {"command-cache-allocation", 1};
+        spec.input_tf = spec.script_tf = "1";
+        spec.tickerid = "TEST:CACHE";
+        spec.timezone = "UTC";
+        spec.session = "24x7";
+        spec.initial_capital = 10000;
+        spec.point_value = spec.account_fx = 1;
+        spec.price_tick = 0.01;
+        spec.close_execution = pineforge::NativeCloseExecution::AfterCalculation;
+        spec.report_policy = pineforge::NativeReportPolicy::KernelRecorded;
+        require(configure_native(spec).status == pineforge::NativeSetupStatus::Applied,
+                "configure the native cache-allocation run");
+        set_broker_state_hash_recording(true);
+    }
+    void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {
+        namespace no = pineforge::native_order;
+        const auto bar = callbacks++;
+        if (bar % 2 != 0) return;
+        no::Request request;
+        if (bar % 4 == 0) request.intent = no::Transact{1.0};
+        else request.intent = no::Flatten{};
+        request.label = bar % 4 == 0 ? "entry" : "exit";
+        const auto result = submit(request);
+        require(result.status == no::SubmitStatus::Accepted && result.handle,
+                "native cache-allocation run accepts every scheduled order");
+    }
+    const std::vector<std::uint64_t>& recorded_hashes() const { return broker_state_hashes_; }
+    unsigned callbacks = 0;
+};
+
+void append_double(std::vector<std::byte>& output, double value) {
+    std::uint64_t bits = 0;
+    static_assert(sizeof bits == sizeof value, "binary64 transcript");
+    std::memcpy(&bits, &value, sizeof bits);
+    command_cache_test::append_word(output, bits);
+}
+
+void append_string(std::vector<std::byte>& output, const std::string& value) {
+    command_cache_test::append_word(output, value.size());
+    const auto* begin = reinterpret_cast<const std::byte*>(value.data());
+    output.insert(output.end(), begin, begin + value.size());
+}
+
+std::vector<std::byte> native_allocation_run(bool fault) {
+    AllocationHost host;
+    const auto handle = static_cast<pf_strategy_t>(
+        static_cast<pineforge::BacktestEngine*>(&host));
+    std::uint64_t cache_bytes = 91, bypasses = 92;
+    require(pf_report_cache_stats(handle, &cache_bytes, &bypasses) == 0
+            && cache_bytes == 0 && bypasses == 0,
+            "a configured handle has no admitted-run cache diagnostics");
+    std::array<pineforge::Bar, 8> bars{};
+    for (std::size_t i = 0; i < bars.size(); ++i) {
+        const double price = 100 + static_cast<double>(i);
+        bars[i] = {price, price, price, price, 1,
+                   INT64_C(1704067200000) + static_cast<std::int64_t>(i) * INT64_C(60000)};
+    }
+    const auto before = allocation_faults;
+    fail_next_array = fault;
+    try {
+        host.run(bars.data(), static_cast<int>(bars.size()));
+    } catch (const std::system_error& error) {
+        fail_next_array = false;
+        if (pineforge::classify_run_failure(error).code == pineforge::RunFailureCode::scratch_io_failed)
+            throw std::runtime_error(
+                "native run must complete after optional cache ENOMEM; got scratch_io_failed");
+        throw;
+    }
+    fail_next_array = false;
+    // RunCommandScratch's immutable geometry is 512 bytes. Preserve its
+    // 64-KiB payload and include every shared-cache tag in the real request.
+    const auto slab_bytes = CachedScratchBacking::kCacheBytes
+        + (CachedScratchBacking::kCacheBytes / page)
+            * (ReadThroughCache::line_bytes(page) - page);
+    require(allocation_faults == before + (fault ? 1 : 0)
+            && (!fault || allocation_fault_bytes == slab_bytes),
+            "native allocation fixture refuses exactly the real payload-plus-metadata cache slab");
+    require(pineforge::run_failure_value_of(host).code != pineforge::RunFailureCode::scratch_io_failed,
+            "native run must complete after optional cache ENOMEM; got scratch_io_failed");
+    require(host.last_run_status() == 0 && host.last_error().empty()
+            && host.native_state().kind == pineforge::NativeLifecycleKind::Completed
+            && host.callbacks == bars.size() && host.closed_trade_count() == 2
+            && host.trade_count() == 2 && !host.recorded_hashes().empty(),
+            "native cache-allocation run completes both actual round trips");
+    pineforge::ReportC report{};
+    host.fill_report(&report);
+    pineforge::BacktestEngine::free_report(&report);
+    require(pf_report_cache_stats(handle, &cache_bytes, &bypasses) == 0
+            && cache_bytes >= pineforge::TradeLedger::resident_cache_bytes(0)
+            && bypasses == static_cast<std::uint64_t>(fault),
+            "the exported getter retains the real slab refusal after report finalization and release");
+    const auto reported_bytes = cache_bytes;
+    const auto reported_bypasses = bypasses;
+    require(pf_report_cache_stats(handle, &cache_bytes, &bypasses) == 0
+            && cache_bytes == reported_bytes && bypasses == reported_bypasses,
+            "repeated exported queries neither count a borrowed slab nor repeat its bypass");
+    std::uint64_t untouched = 93;
+    require(pf_report_cache_stats(nullptr, &untouched, &bypasses) == -1
+            && untouched == 93 && bypasses == reported_bypasses
+            && pf_report_cache_stats(handle, nullptr, &untouched) == -1
+            && untouched == 93
+            && pf_report_cache_stats(handle, &untouched, nullptr) == -1
+            && untouched == 93
+            && pf_report_cache_stats(handle, &untouched, &untouched) == -1
+            && untouched == 93,
+            "invalid exported cache queries leave every supplied output unchanged");
+    std::vector<std::byte> output;
+    const auto word = [&](std::uint64_t value) { command_cache_test::append_word(output, value); };
+    word(host.trade_count());
+    for (int i = 0; i < host.trade_count(); ++i) {
+        const auto& trade = host.get_trade(i);
+        word(static_cast<std::uint64_t>(trade.entry_time));
+        word(static_cast<std::uint64_t>(trade.exit_time));
+        append_double(output, trade.entry_price); append_double(output, trade.exit_price);
+        append_double(output, trade.qty); append_double(output, trade.pnl);
+        append_double(output, trade.pnl_pct); word(trade.is_long);
+        word(static_cast<std::uint64_t>(trade.entry_bar_index));
+        word(static_cast<std::uint64_t>(trade.exit_bar_index));
+        append_string(output, trade.entry_id); append_string(output, trade.entry_comment);
+        append_string(output, trade.exit_comment); append_string(output, trade.exit_id);
+        word(trade.exit_from_bracket); append_double(output, trade.max_runup);
+        append_double(output, trade.max_drawdown); append_double(output, trade.commission);
+        word(trade.entry_incarnation); word(trade.open_at_end);
+        word(static_cast<std::uint64_t>(trade.close_cause));
+    }
+    word(host.native_continuation_hash());
+    word(host.broker_state_hash());
+    word(host.recorded_hashes().size());
+    for (const auto hash : host.recorded_hashes()) word(hash);
+    return output;
+}
+
+void native_allocation_failure_completes() {
+    const auto healthy = native_allocation_run(false);
+    require(native_allocation_run(true) == healthy,
+            "native allocation bypass preserves every trade field and ordered continuation hash");
+    require(native_allocation_run(false) == healthy,
+            "a later healthy run reports no inherited allocation bypass");
+}
+
+void allocation_bypass_preserves_byte_admission() {
+    for (const int error : {ENOSPC, EDQUOT, EIO, 0}) {
+        Cap cap(3 * page);
+        fail_next_array = true;
         auto backing = make_command_scratch_backing(page);
+        require(!fail_next_array, "byte admission fixture really refused the cache allocation");
+        const auto image = pattern(page, 3), replacement = pattern(page, 17);
+        std::vector<std::byte> out(page);
+        require(backing->write_page(0, bytes(image)) == ScratchStatus::ok,
+                "allocation bypass writes its admitted first page");
+        physical = {};
+        fail_write_at = 1;
+        write_error = error;
+        ScratchStatus status;
+        { Window window; status = backing->write_page(1, bytes(replacement)); }
+        fail_write_at = 0;
+        require(status == ScratchStatus::io_error && backing->page_count() == 2
+                && physical.writes == 1 && physical.errors == (error != 0)
+                && physical.short_io == (error == 0),
+                "bypass preserves a real failed write and its already extended file extent");
+        auto other = make_command_scratch_backing(page);
+        require(other->write_page(0, bytes(image)) == ScratchStatus::ok,
+                "a bypass failure releases no bytes belonging to the real extent");
+        physical = {};
+        { Window window; status = backing->write_page(2, bytes(image)); }
+        require(status == ScratchStatus::io_error,
+                "bypass admission charges failed-write extent against the shared cap");
+        no_physical_io(physical);
+        require(backing->write_page(1, bytes(replacement)) == ScratchStatus::ok
+                && backing->read_page(0, buffer(out)) == ScratchStatus::ok && out == image
+                && backing->read_page(1, buffer(out)) == ScratchStatus::ok && out == replacement,
+                "bypass retries the failed page without losing an earlier page");
+        other.reset();
+        require(backing->write_page(2, bytes(image)) == ScratchStatus::ok,
+                "released shared capacity admits the retried extension");
+        backing.reset();
+        auto reused = make_command_scratch_backing(page);
+        require(reused->write_page(2, bytes(image)) == ScratchStatus::ok,
+                "bypass destruction releases every charged extent byte");
+    }
+    physical = {};
+}
+
+void required_script_allocation_failure() {
+    command_arena_test::ArenaAttachment attachment(command_arena_test::kSmallArenaBytes);
+    // The optional slab is ready before arming. The first script write needs
+    // the arena chunk directory, whose allocation is required for backing I/O.
+    CachedScratchBacking cached(make_script_scratch_backing());
+    std::array<std::byte, 4096> image{}, out{};
+    image.fill(std::byte{0x5a});
+    const auto claimed = ScratchArena::attached()->stats().bytes_used;
+    const auto before = global_allocation::refused;
+    const auto disabled = std::numeric_limits<std::size_t>::max();
+    require(!global_allocation::refusing && global_allocation::fail_after == disabled,
+            "required allocation fault starts disarmed");
+    global_allocation::fail_after = 0;
+    const auto status = cached.write_page(0, {image.data(), image.size()});
+    const bool consumed = global_allocation::fail_after == disabled;
+    global_allocation::fail_after = disabled;
+    require(consumed && global_allocation::refused == before + 1
+            && status == ScratchStatus::io_error && cached.carried_failure(),
+            "exactly one required script directory allocation fails and carries its cause");
+    bool caught = false;
+    try {
+        rethrow_carried_scratch_failure(cached.carried_failure());
     } catch (const std::system_error& error) {
         caught = error.code() == std::error_code(ENOMEM, std::generic_category())
             && pineforge::classify_run_failure(error).code == pineforge::RunFailureCode::out_of_memory;
     }
-    fail_next_array = false;
-    require(caught && allocation_faults == before + 1, "real page allocation fails typed as out_of_memory with ENOMEM");
-    auto retry = make_command_scratch_backing(page);
-    const auto image = pattern(page, 3);
-    physical = {};
-    ScratchStatus status;
-    { Window window; status = retry->write_page(0, bytes(image)); }
-    require(status == ScratchStatus::ok, "factory remains usable after allocation failure");
-    no_physical_io(physical);
+    require(caught && cached.page_count() == 0
+            && ScratchArena::attached()->stats().bytes_used == claimed
+            && cached.read_cache_stats().allocation_bypass_count == 0,
+            "required allocation fails typed as out_of_memory with ENOMEM and publishes no page");
+    require(cached.write_page(0, {image.data(), image.size()}) == ScratchStatus::ok
+            && cached.read_page(0, {out.data(), out.size()}) == ScratchStatus::ok
+            && out == image && !cached.carried_failure(),
+            "an unarmed retry completes the required allocation and preserves all page bytes");
 }
 
 void failed_spill_preserves_pages_and_budget() {
@@ -373,6 +674,47 @@ void failed_spill_preserves_pages_and_budget() {
         auto reused = make_command_scratch_backing(page);
         require(reused->write_page(2, bytes(image)) == ScratchStatus::ok,
                 "destruction releases resident and spilled logical byte charges");
+    }
+}
+
+void failed_overwrite_invalidates_warm_page() {
+    for (const int error : {ENOSPC, EDQUOT, EIO, 0}) {
+        auto backing = make_command_scratch_backing(page, 0);
+        const auto image = pattern(page, 51), replacement = pattern(page, 52);
+        auto expected = image;
+        std::vector<std::byte> out(page);
+        require(backing->write_page(0, bytes(image)) == ScratchStatus::ok,
+                "seed the write-through cache before a failed overwrite");
+        physical = {};
+        ScratchStatus status;
+        { Window window; status = backing->read_page(0, buffer(out)); }
+        require(status == ScratchStatus::ok && out == image && physical.reads == 0,
+                "failed-overwrite fixture begins with a genuinely warm page");
+        fail_write_at = 1;
+        write_error = error;
+        { Window window; status = backing->write_page(0, bytes(replacement)); }
+        fail_write_at = 0;
+        require(status == ScratchStatus::io_error && backing->page_count() == 1
+                && physical.writes == 1 && physical.errors == (error != 0)
+                && physical.short_io == (error == 0),
+                "warm overwrite reaches the real failed or short backing write");
+        if (error == 0)
+            std::copy_n(replacement.begin(), page / 2, expected.begin());
+        physical = {};
+        { Window window; status = backing->read_page(0, buffer(out)); }
+        require(status == ScratchStatus::ok && out == expected && physical.reads == 1
+                && physical.read_bytes == page && physical.errors == 0 && physical.short_io == 0,
+                "failed overwrite invalidates its tag and rereads every actual backing byte");
+        physical = {};
+        {
+            Window window;
+            status = backing->write_page(0, bytes(replacement));
+            require(status == ScratchStatus::ok, "retry completes the full backing overwrite");
+            status = backing->read_page(0, buffer(out));
+        }
+        require(status == ScratchStatus::ok && out == replacement && physical.writes == 1
+                && physical.reads == 0 && physical.errors == 0 && physical.short_io == 0,
+                "only a complete retry publishes the new warm page");
     }
 }
 
@@ -524,10 +866,15 @@ void spill_arena_exhaustion_is_typed() {
 }
 } // namespace spill_test
 
-int main() {
+int main(int argc, char** argv) {
     try {
         spill_test::DiskDirectory directory;
         spill_test::Cap unlimited(0);
+        if (argc == 2 && std::strcmp(argv[1], "--native-allocation") == 0) {
+            spill_test::native_allocation_failure_completes();
+            std::puts("PASS native_allocation_failure_completes");
+            return 0;
+        }
         spill_test::spill_boundary_matches_file(512, false);
         spill_test::spill_boundary_matches_file(1536, false);
         spill_test::spill_boundary_matches_file(4096, false);
@@ -535,10 +882,18 @@ int main() {
         std::puts("PASS spill_boundary_matches_file");
         spill_test::extent_probe_covers_backing_lifetimes();
         std::puts("PASS extent_probe_covers_backing_lifetimes");
-        spill_test::allocation_failure_is_typed();
-        std::puts("PASS allocation_failure_is_typed");
+        spill_test::allocation_failure_bypasses_cache();
+        std::puts("PASS allocation_failure_bypasses_cache");
+        spill_test::native_allocation_failure_completes();
+        std::puts("PASS native_allocation_failure_completes");
+        spill_test::allocation_bypass_preserves_byte_admission();
+        std::puts("PASS allocation_bypass_preserves_byte_admission");
+        spill_test::required_script_allocation_failure();
+        std::puts("PASS required_script_allocation_failure");
         spill_test::failed_spill_preserves_pages_and_budget();
         std::puts("PASS failed_spill_preserves_pages_and_budget");
+        spill_test::failed_overwrite_invalidates_warm_page();
+        std::puts("PASS failed_overwrite_invalidates_warm_page");
         spill_test::store_commit_rollback_reopen_matches_file();
         std::puts("PASS store_commit_rollback_reopen_matches_file");
         spill_test::store_rolls_back_failed_spill();

@@ -1,5 +1,6 @@
 #include "pine_position_tail.hpp"
 #include "pine_position_tail_binding.hpp"
+#include "../read_through_window.hpp"
 
 #include <pineforge/engine.hpp>
 #include <pineforge/run_failure.hpp>
@@ -28,12 +29,20 @@ struct PositionTailSpill::State {
     PositionTailBinding::File file;
     std::uint64_t end = 0;
     std::uint64_t rows = 0;
-    // One fixed read window; append writes directly from the existing row.
-    mutable std::array<unsigned char, kWindowBytes> window{};
-    mutable std::uint64_t window_begin = 0;
-    mutable std::size_t window_size = 0;
+    mutable ::pineforge::detail::ReadThroughWindow cache;
+    mutable std::array<unsigned char, kPageBytes> transfer{};
 
-    explicit State(const std::string& directory) : file(directory) {}
+    State(const std::string& directory, std::size_t cache_bytes)
+        : file(directory),
+          cache(cache_bytes ? std::min(cache_bytes, kPageBytes) : kPageBytes,
+                cache_bytes, this, read_backing) {}
+    State(const std::string& directory, CacheCapacity capacity)
+        : file(directory), cache(kPageBytes, capacity, this, read_backing) {}
+
+    static void read_backing(void* context, std::uint64_t offset,
+                             void* destination, std::size_t size) {
+        static_cast<State*>(context)->file.read(offset, destination, size);
+    }
 
     void write(std::uint64_t offset, const void* data, std::size_t size) {
         const auto* bytes = static_cast<const unsigned char*>(data);
@@ -45,39 +54,35 @@ struct PositionTailSpill::State {
         }
     }
 
-    void refill(std::uint64_t offset) const {
-        // End a backwards window at the requested byte. A footer crossing
-        // this boundary is copied in pieces, just like an oversized id.
-        const std::uint64_t limit = offset + 1;
-        const std::uint64_t begin = limit > kWindowBytes ? limit - kWindowBytes : 0;
-        const auto size = static_cast<std::size_t>(limit - begin);
-        window_size = 0;
-        file.read(begin, window.data(), size);
-        window_begin = begin;
-        window_size = size;
-    }
-
     void read(std::uint64_t offset, void* data, std::size_t size) const {
         if (offset > end || size > end - offset) invalid_record();
         auto* bytes = static_cast<unsigned char*>(data);
-        // Copy backwards so a reverse walk consumes each cached window
-        // before loading the preceding one.
+        const auto page_size = cache.page_size();
+        // Copy backwards, including footers and ids crossing page boundaries.
+        // Request only the existing prefix of the final backing page.
         std::size_t left = size;
         while (left != 0) {
             const std::uint64_t last = offset + left - 1;
-            if (last < window_begin || last - window_begin >= window_size) refill(last);
+            const auto page = last / page_size;
+            const auto begin = page * page_size;
+            const auto prefix = static_cast<std::size_t>(
+                std::min<std::uint64_t>(page_size, end - begin));
+            cache.get(page, transfer.data(), prefix);
             const std::size_t count = static_cast<std::size_t>(
-                std::min<std::uint64_t>(left, last - window_begin + 1));
-            std::memcpy(bytes + left - count,
-                        window.data() + static_cast<std::size_t>(last - window_begin + 1) - count,
-                        count);
+                std::min<std::uint64_t>(left, last - begin + 1));
+            std::memcpy(bytes + left - count, transfer.data() + last - begin + 1 - count, count);
             left -= count;
         }
     }
 };
 
-PositionTailSpill::PositionTailSpill(const std::string& scratch_directory)
-    : state_(std::make_unique<State>(scratch_directory)) {}
+PositionTailSpill::PositionTailSpill(const std::string& scratch_directory,
+                                   std::size_t cache_bytes)
+    : state_(std::make_unique<State>(scratch_directory, cache_bytes)) {}
+
+PositionTailSpill::PositionTailSpill(const std::string& scratch_directory,
+                                   CacheCapacity capacity)
+    : state_(std::make_unique<State>(scratch_directory, capacity)) {}
 
 PositionTailSpill::~PositionTailSpill() = default;
 
@@ -99,24 +104,39 @@ void PositionTailSpill::append(const Trade& trade) {
     footer[24] = trade.is_long ? 1 : 0;
     footer[25] = trade.exit_id == kMarginCallLabel ? 1 : 0;
     std::memcpy(footer.data() + 26, &id_size, 4);
+    state_->cache.invalidate();
     state_->write(state_->end, trade.entry_id.data(), length);
     state_->write(state_->end + length, footer.data(), footer.size());
     // Publish only after both writes. A failed append leaves the logical
     // end intact, so the caller never drops the row whose write failed.
     state_->end += static_cast<std::uint64_t>(length) + kFooterBytes;
     ++state_->rows;
-    state_->window_size = 0;
 }
 
 void PositionTailSpill::clear() {
+    state_->cache.invalidate();
     state_->file.clear();
     state_->end = 0;
     state_->rows = 0;
-    state_->window_size = 0;
 }
 
 std::uint64_t PositionTailSpill::size_bytes() const noexcept { return state_->end; }
 std::uint64_t PositionTailSpill::row_count() const noexcept { return state_->rows; }
+std::size_t PositionTailSpill::cache_capacity_bytes() const noexcept {
+    return state_->cache.payload_bytes();
+}
+std::uint64_t PositionTailSpill::backing_read_count() const noexcept {
+    return state_->file.read_count();
+}
+std::uint64_t PositionTailSpill::backing_read_bytes() const noexcept {
+    return state_->file.read_bytes();
+}
+::pineforge::detail::ReadThroughCacheStats PositionTailSpill::cache_stats() const noexcept {
+    return state_->cache.stats();
+}
+std::size_t PositionTailSpill::cache_control_bytes() const noexcept {
+    return sizeof(PositionTailSpill) + sizeof(State) - sizeof(state_->transfer);
+}
 
 bool PositionTailSpill::previous(std::uint64_t& cursor, Row& row) const {
     if (cursor > state_->end) invalid_record();

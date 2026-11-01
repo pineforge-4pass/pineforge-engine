@@ -80,7 +80,8 @@ void budgets_and_accounting() {
     CHECK(sink_bound <= TradeLedger::resident_cache_bytes(TradeLedger::kDefaultCacheRows));
     // Exceed the small/default caps. For the maximum setting, verify real
     // lazy allocation with 129 rows instead of constructing a million-row run.
-    for (const Size budget : {Size{4}, Size{7}, Size{128}, Size{300}, TradeLedger::kDefaultCacheRows,
+    for (const Size budget : {Size{0}, Size{1}, Size{4}, Size{7}, Size{128}, Size{300},
+                              TradeLedger::kDefaultCacheRows,
                               TradeLedger::kMaxCacheRows}) {
         TradeLedger ledger;
         CHECK(ledger.cache_rows() == TradeLedger::kDefaultCacheRows);
@@ -237,9 +238,9 @@ void invalid_and_late_budgets() {
     TradeLedger ledger;
     ledger.set_scratch_directory(".");
     ledger.set_cache_rows(7);
-    for (const Size bad : {Size{0}, TradeLedger::kMaxCacheRows + 1,
+    for (const Size bad : {TradeLedger::kMaxCacheRows + 1,
                            std::numeric_limits<Size>::max()}) {
-        const auto* reason = bad == 0 ? "value_below_minimum" : "value_above_maximum";
+        const auto* reason = "value_above_maximum";
         refuses([&] { ledger.set_cache_rows(bad); }, reason);
         refuses([&] { (void)TradeLedger::resident_cache_bytes(bad); }, reason);
         CHECK(ledger.cache_rows() == 7);

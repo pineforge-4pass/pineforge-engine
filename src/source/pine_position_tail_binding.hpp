@@ -6,6 +6,7 @@
 #include "pine_position_tail.hpp"
 #include "../report_scratch.hpp"
 
+#include <pineforge/detail/cache_capacity.hpp>
 #include <pineforge/engine.hpp>
 #include <pineforge/run_failure.hpp>
 
@@ -21,6 +22,8 @@ struct PositionTailBinding {
         explicit File(const std::string& directory)
             : file_(directory, pineforge::detail::ScratchStore::position_tail) {}
         int descriptor() const noexcept { return file_.descriptor(); }
+        std::uint64_t read_count() const noexcept { return file_.read_count(); }
+        std::uint64_t read_bytes() const noexcept { return file_.read_bytes(); }
         void write(std::uint64_t offset, const void* bytes, std::size_t count) {
             file_.write(static_cast<std::int64_t>(offset), bytes, count);
         }
@@ -37,7 +40,23 @@ struct PositionTailBinding {
     // A failure propagates before any row can be discarded.
     static void preserve(std::shared_ptr<PositionTailSpill>& spill,
                          const TradeLedger& trades, std::size_t end,
-                         std::int64_t position_open, const std::string& directory) {
+                         std::int64_t position_open, const std::string& directory,
+                         std::size_t cache_bytes = PositionTailSpill::kWindowBytes) {
+        preserve_with_capacity(spill, trades, end, position_open, directory, cache_bytes);
+    }
+    static void preserve(std::shared_ptr<PositionTailSpill>& spill,
+                         const TradeLedger& trades, std::size_t end,
+                         std::int64_t position_open, const std::string& directory,
+                         CacheCapacity capacity) {
+        preserve_with_capacity(spill, trades, end, position_open, directory, capacity);
+    }
+
+private:
+    template<class Capacity>
+    static void preserve_with_capacity(std::shared_ptr<PositionTailSpill>& spill,
+                         const TradeLedger& trades, std::size_t end,
+                         std::int64_t position_open, const std::string& directory,
+                         Capacity cache_bytes) {
         if (end < trades.base() || end > trades.size()) {
             throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                           "invalid Pine position-tail seal prefix");
@@ -53,7 +72,7 @@ struct PositionTailBinding {
                 // times are not monotone in global trade-row order.
                 spill.reset();
             } else {
-                if (!spill) spill = std::make_shared<PositionTailSpill>(directory);
+                if (!spill) spill = std::make_shared<PositionTailSpill>(directory, cache_bytes);
                 spill->append(trade);
             }
         }

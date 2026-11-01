@@ -34,6 +34,12 @@ public:
     using Offset = std::uint64_t;
     DiskIdTable() = default;
     explicit DiskIdTable(std::size_t cache_bytes) : read_cache_(cache_bytes) {}
+    explicit DiskIdTable(IdTableReadCache::Policy cache) : read_cache_(cache) {}
+    explicit DiskIdTable(CacheCapacity capacity)
+        : DiskIdTable(IdTableReadCache::policy_for_capacity(capacity)) {}
+    void set_cache_capacity(CacheCapacity capacity) {
+        read_cache_.set_cache_capacity(capacity);
+    }
     DiskIdTable(const DiskIdTable&) = delete;
     DiskIdTable& operator=(const DiskIdTable&) = delete;
     DiskIdTable(DiskIdTable&& other) noexcept { *this = std::move(other); }
@@ -209,12 +215,12 @@ public:
 
 private:
     void read(Offset offset, void* data, std::size_t length) const {
-        // descriptor() is -1 for any arena, even an unjailed file arena,
+        // disk_backed() is false for any arena, even an unjailed file arena,
         // and for a slab. Never use the attached arena's inherited fd here.
-        read_cache_.read(file_, file_.descriptor() >= 0, end_, 0, offset, data, length);
+        read_cache_.read(file_, file_.disk_backed(), end_, 0, offset, data, length);
     }
     void write(Offset offset, const void* data, std::size_t length) {
-        if (file_.descriptor() >= 0) read_cache_.before_write(0, end_, offset, length);
+        if (file_.disk_backed()) read_cache_.before_write(0, end_, offset, length);
         file_.write(offset, data, length); // Always immediate, including errors.
     }
     void require_id_size(std::size_t key_size) const {

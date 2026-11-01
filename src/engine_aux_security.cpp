@@ -4,6 +4,7 @@
  */
 
 #include "engine_internal.hpp"
+#include <pineforge/cache_policy.hpp>
 
 #include <pineforge/run_failure.hpp>
 #include <pineforge/ta.hpp>
@@ -367,7 +368,7 @@ void BacktestEngine::prepare_chart_day_partition(const Bar* input_bars,
         for (const Bar& bar : feed.bars) stamps.push_back(bar.timestamp);
         build_native_day_partition(chart_day_partition_, syminfo_.timezone,
                                    syminfo_.session, stamps, input_bars,
-                                   n_input);
+                                   n_input, cache_policy_for_run().feed_calendar_pages.capacity_bytes, report_scratch_directory());
         return;
     }
 }

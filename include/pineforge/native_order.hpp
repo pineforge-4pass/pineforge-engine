@@ -27,11 +27,15 @@
 #include <variant>
 #include <vector>
 
-namespace pineforge::detail { class ScratchSlab; }
+namespace pineforge::detail {
+class ScratchSlab;
+struct ReadThroughCacheStats;
+}
 // The matcher (src/native_execution_consumer.hpp) is declared in the engine
 // epoch, as run_failure.hpp and execution_consumer.hpp declare epoch classes,
 // so the friends below name that one class and no other.
 namespace pineforge {
+struct CacheCapacity;
 inline namespace engine_script_run_v19 {
 class NativeExecutionConsumer;
 }
@@ -1792,12 +1796,52 @@ struct GroupEffectReceipt {
     uint64_t outcome_ordinal = 0;
 };
 
+/// Payload row policy for pending batches and committed-row read caches.
+/// Shared line metadata is additional; retained history/backing admission are
+/// independent. Zero disables optional residency. One fixed pending record
+/// per store remains so prepared installation cannot allocate or do I/O.
+struct TailWindowConfig {
+    std::size_t successor_root_rows = 64;
+    std::size_t receipt_rows = 64;
+    std::size_t chain_segment_rows = 16;
+};
+
+/// Storage observations only, excluded from continuation state.
+struct TailWindowStats {
+    std::size_t successor_root_capacity_rows = 0;
+    std::size_t receipt_capacity_rows = 0;
+    std::size_t chain_index_capacity_rows = 0;
+    std::uint64_t successor_root_reads = 0;
+    std::uint64_t receipt_reads = 0;
+    std::uint64_t chain_index_reads = 0;
+    std::uint64_t chain_id_reads = 0;
+    std::uint64_t successor_root_read_bytes = 0;
+    std::uint64_t receipt_read_bytes = 0;
+    std::uint64_t chain_index_read_bytes = 0;
+    std::size_t successor_root_pending_bytes = 0;
+    std::size_t receipt_pending_bytes = 0;
+    std::size_t chain_index_pending_bytes = 0;
+    std::size_t successor_root_control_bytes = 0;
+    std::size_t receipt_control_bytes = 0;
+    std::size_t chain_index_control_bytes = 0;
+};
+
+enum class TailWindowKind { successor_roots, receipts, chain_segments };
+
 class WorkingRequestCore {
 public:
     class CohortView;
     class JournalView;
     class LiveView;
     explicit WorkingRequestCore(RunIdentity identity);
+    WorkingRequestCore(RunIdentity identity, TailWindowConfig windows);
+    /// Inclusive committed-row read-cache allowances. Pending write batches
+    /// keep their internal defaults, independently of these optional caches.
+    WorkingRequestCore(RunIdentity identity, CacheCapacity successor_roots,
+                       CacheCapacity receipts, CacheCapacity chain_segments);
+    TailWindowConfig tail_window_config() const noexcept;
+    TailWindowStats tail_window_stats() const noexcept;
+    detail::ReadThroughCacheStats tail_read_cache_stats(TailWindowKind kind) const noexcept;
     WorkingRequestCore(const WorkingRequestCore&) = delete;
     WorkingRequestCore& operator=(const WorkingRequestCore&) = delete;
     /// Move transfers the complete run. The source becomes empty/unbound;
@@ -2291,6 +2335,11 @@ public:
                                 bool existing_matching_bit) const noexcept;
     bool working_is_buy(const LiveRequest& live,
                         std::optional<Side> cohort_side = std::nullopt) const noexcept;
+    /// Borrow the rosters holding origins, in ascending cohort-handle order.
+    /// No copies or allocation; use only until the next cohort mutation.
+    const std::map<std::uint64_t, CohortRoster>& nonempty_cohorts() const noexcept {
+        return cohorts_;
+    }
 
 private:
     enum class TargetKind { Live, NotWorking, InvalidHandle };
@@ -2353,6 +2402,7 @@ private:
     /// The external stores are created on first use, in the directory
     /// set_successor_roots_directory named.
     void ensure_receipt_store();
+    CacheCapacity tail_cache_capacity(TailWindowKind kind) const noexcept;
     void prepare_codec_frames();
     void ensure_chain_segments();
     /// Appends one event to the journal (storage reserved by reserve_plan or

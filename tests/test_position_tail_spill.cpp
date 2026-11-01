@@ -231,10 +231,24 @@ void bounded_heap(const char* directory) {
     const std::size_t before = global_allocation::live_bytes;
     {
         PositionTailSpill spill(directory);
+        const auto constructed = global_allocation::live_bytes;
+        const auto constructed_allocations = global_allocation::allocations;
         for (int i = 0; i < 1000; ++i) spill.append(row);
+        assert(global_allocation::live_bytes == constructed);
+        assert(global_allocation::allocations == constructed_allocations);
+        // Writes do not create the optional read cache. Its first read
+        // allocates all 16 complete 4096-byte lines, including metadata.
+        const auto cache_bytes = (PositionTailSpill::kWindowBytes / PositionTailSpill::kPageBytes)
+            * detail::ReadThroughCache::line_bytes(PositionTailSpill::kPageBytes);
+        auto warm_cursor = spill.size_bytes();
+        PositionTailSpill::Row warm;
+        assert(spill.previous(warm_cursor, warm));
+        assert(spill.entry_id_equals(warm, row.entry_id));
         const auto at_1k = global_allocation::live_bytes;
-        // No allocation at all is needed after construction, including
-        // reverse reads and comparisons of entry ids.
+        assert(at_1k == constructed + cache_bytes);
+        assert(global_allocation::allocations == constructed_allocations + 1);
+        // After the first read, neither a larger extent nor a complete
+        // reverse walk can allocate or retain another byte.
         const auto allocations = global_allocation::allocations;
         for (int i = 1000; i < 100000; ++i) spill.append(row);
         assert(spill.size_bytes() > PositionTailSpill::kWindowBytes);
@@ -245,7 +259,12 @@ void bounded_heap(const char* directory) {
         assert(spill.row_count() == 100000);
         assert(global_allocation::live_bytes == at_1k);
         assert(global_allocation::allocations == allocations);
-        assert(at_1k - before <= PositionTailSpill::kWindowBytes + 4096);
+        // State contains one fixed transfer page and cache control. The
+        // file keeps one directory string; allow its geometric capacity,
+        // independently of the row count and identifier bytes on disk.
+        assert(at_1k - before <= spill.cache_control_bytes()
+            + PositionTailSpill::kPageBytes + cache_bytes
+            + 2 * (std::strlen(directory) + 1));
     }
     assert(global_allocation::live_bytes == before);
     global_allocation::recording = false;

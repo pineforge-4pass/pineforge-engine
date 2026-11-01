@@ -675,7 +675,11 @@ def test_existing_ambiguous_prefix_keeps_its_error(tmp_path, monkeypatch, frozen
                 patch, "--ohlcv", "unread.csv", "--m", "4", library=MetricsLibrary())
         assert status == 2 and library.calls == []
         results.append(document)
-    assert results[0] == results[1]
+    # The two limit options added after the frozen runner also begin with "--m",
+    # so they join the candidate list; everything else is unchanged.
+    expected = dict(results[0])
+    expected["error"] += ", --max-symbol-feeds, --max-inventory-bytes"
+    assert results[1] == expected
 
 
 @pytest.mark.parametrize("arguments", [["--m", "4"], ["--magnifier-samples", "invalid"]])
