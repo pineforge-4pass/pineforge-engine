@@ -519,7 +519,7 @@ projected the spec (pine_strategy_host.cpp:554) and `configure_native` has
 folded it into the continuation digest. Measured: an env-gated probe printing
 the adapter's risk configuration inside `project()` on the corpus reads
 `max_drawdown=0 cap.active=0` for every risk probe. `NativeRunSpec::risk` is a
-begin-time declaration (`native_run_spec.hpp:677`, folded at
+begin-time declaration (`native_run_spec.hpp:677-684,504`, folded at
 native_execution_consumer.cpp:340-341); a statement-time limit has nowhere to
 land. Routing any rule needs either the transpiler to hoist constant risk
 statements into the constructor (out of this repository) or a kernel
