@@ -25,6 +25,9 @@ ENTRYPOINT = Path(os.environ.get("PINEFORGE_ENTRYPOINT_UNDER_TEST",
 WALL = "PINEFORGE_COMPILE_WALL_MS"
 ADDRESS = "PINEFORGE_COMPILE_AS_BYTES"
 DIAGNOSTIC = "PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES"
+# The largest wall the entrypoint accepts (ms): a row whose run must end by work, not by time, gives
+# the wall this value, so no amount of work (or a slow host) can reach it.
+NEVER_REACHED_WALL = "9007199254740990"
 MAXIMUM = (1 << 53) - 2
 COMPILE_LOG = b"[pineforge] compiling strategy.cpp ...\n"
 BIND_LOG = b"[pineforge] binding request-feed inventory ...\n"
@@ -269,14 +272,14 @@ def test_off_argv_environment_descriptors_and_success_bytes_match_frozen_main(bo
 
 def test_explicit_limits_allow_an_ordinary_success_without_changing_compile_argv(box):
     before = box.run(entrypoint=box.reference)
-    after = box.run({WALL: "10000", ADDRESS: str(2 << 30), DIAGNOSTIC: str(1 << 20)})
+    after = box.run({WALL: NEVER_REACHED_WALL, ADDRESS: str(2 << 30), DIAGNOSTIC: str(1 << 20)})
     assert before.returncode == after.returncode == 0, (before.stderr, after.stderr)
     assert before.stdout == after.stdout
     assert before.stderr == after.stderr
     assert before.argv == after.argv
 
 
-@pytest.mark.parametrize("limits", [{}, {WALL: "10000", ADDRESS: str(2 << 30),
+@pytest.mark.parametrize("limits", [{}, {WALL: NEVER_REACHED_WALL, ADDRESS: str(2 << 30),
                                         DIAGNOSTIC: str(1 << 20)}])
 def test_real_syntax_failure_keeps_exit_three_and_the_original_bytes(box, limits):
     with (box.indir / "strategy.cpp").open("ab") as source:
@@ -409,7 +412,7 @@ def test_zero_address_ceiling_is_unlimited_and_preserves_inherited_limit(box, in
 def test_zero_diagnostic_ceiling_streams_a_payload_larger_than_one_mib(box):
     minimum = 1 << 20
     payload = bytes(range(256)) * (minimum // 256 + 1)
-    result = box.run({WALL: "10000", DIAGNOSTIC: "0",
+    result = box.run({WALL: NEVER_REACHED_WALL, DIAGNOSTIC: "0",
                       "PF_ENTRYPOINT_FIXTURE_MODE": "flood",
                       "PF_ENTRYPOINT_FIXTURE_DIAGNOSTIC": box.payload(payload)},
                      trace_reads=True)
@@ -574,7 +577,7 @@ def test_binder_shares_the_compiler_diagnostic_allowance(selected_box):
     assert pipe_read_bytes(result) + pipe_read_bytes(result, "binder") == cap + 1
 
 
-@pytest.mark.parametrize("limits", [{}, {WALL: "10000", ADDRESS: str(2 << 30)}])
+@pytest.mark.parametrize("limits", [{}, {WALL: NEVER_REACHED_WALL, ADDRESS: str(2 << 30)}])
 def test_genuine_binder_failure_keeps_exit_three(selected_box, limits):
     result = selected_box.run({**limits, "PF_ENTRYPOINT_FIXTURE_BINDER": "fail"})
     assert result.returncode == 3, (result.stdout, result.stderr)

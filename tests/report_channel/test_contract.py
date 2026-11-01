@@ -2123,7 +2123,10 @@ class Contract(unittest.TestCase):
         msg = capture.failure_context()
         record = self.refusal(capture, "report_channel_failed", {
             "channel": "sink", "reason": "protocol"}, exit_class="transport_failure", status=1, msg=msg)
-        self.assertEqual(capture.finalizer_stdout(), native + b"x", msg=msg)
+        # V wrote exactly the bound, then ATTEMPTED one byte more (logged before the write, so the
+        # supervisor's TERM cannot race the log); the supervisor never kept it.
+        self.assertEqual(capture.finalizer_stdout(), native, msg=msg)
+        self.assertEqual(capture.finalizer_excess_attempts(), b"x", msg=msg)
         self.assertEqual(capture.sink, b"", msg=msg)
         self.assertEqual(record["channels"]["sink"]["accepted_bytes"], len(native), msg=msg)
         self.assertEqual(record["channels"]["sink"]["written_bytes"], 0, msg=msg)

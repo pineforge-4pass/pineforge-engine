@@ -37,6 +37,12 @@ version number follows semantic versioning over the surfaces the
   first byte or from the end of the pass that precedes it, so a sender that
   dribbles bytes cannot keep an unfinished line alive past a set message
   timeout.
+- **Validation grading ([#664]).** Strategies whose `strategy.exit` uses a
+  `trail_points`, `trail_offset` or `trail_price` parameter now use the
+  production profile with the existing count and entry limits, a 0.02% exit
+  limit and a 1% P&L limit. The exit-coupled P&L forgiveness window narrows
+  with that exit limit from 0.05% to 0.02% for trail_* probes. The exit and
+  P&L gates remain per-strategy 90th-percentile measurements.
 - An opt-in supervised report channel separates report and diagnostic output
   and records terminal delivery facts. It is not yet host-attested and needs
   an external sink for now, while the internal snapshot handoff is pending.
@@ -3401,6 +3407,7 @@ The JSON report of `docker/run_json.py`, the release image's
 [#324]: https://github.com/pineforge-4pass/pineforge-engine/pull/324
 [#325]: https://github.com/pineforge-4pass/pineforge-engine/pull/325
 [#327]: https://github.com/pineforge-4pass/pineforge-engine/pull/327
+[#664]: https://github.com/pineforge-4pass/pineforge-engine/issues/664
 
 ## 1.0.1 — 2026-10-02
 
