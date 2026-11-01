@@ -8204,6 +8204,22 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
 endif()
 # --- CR-150 roster-pass-work end ---
 
+# --- CR-150 memory-inventory-stores begin ---
+if(UNIX AND PINEFORGE_BUILD_SOURCE_LAYER)
+    # ControlDirectory needs only the existing header-only Json and pthreads;
+    # compiling this TU does not enable or link the optional live runner.
+    target_sources(test_memory_inventory_stores PRIVATE
+        ${PROJECT_SOURCE_DIR}/runner/service.cpp)
+    target_link_libraries(test_memory_inventory_stores PRIVATE Threads::Threads)
+endif()
+# --- CR-150 memory-inventory-stores end ---
+
+# --- CR-150 memory-spill-equity-curve begin ---
+if(UNIX)
+    target_link_libraries(test_memory_spill_equity_curve PRIVATE Threads::Threads)
+endif()
+# --- CR-150 memory-spill-equity-curve end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

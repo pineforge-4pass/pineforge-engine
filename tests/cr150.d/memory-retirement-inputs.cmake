@@ -1,0 +1,6 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_memory_retirement_inputs)
+    pineforge_add_unit_test(test_memory_retirement_inputs)
+    list(APPEND TEST_SOURCES test_memory_placement_sequence_index)
+    pineforge_add_unit_test(test_memory_placement_sequence_index)
+endif()

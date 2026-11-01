@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_memory_account_log_labels)
+pineforge_add_unit_test(test_memory_account_log_labels)

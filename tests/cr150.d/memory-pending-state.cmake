@@ -1,0 +1,7 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_memory_pending_state)
+    pineforge_add_unit_test(test_memory_pending_state)
+    list(APPEND TEST_SOURCES test_memory_pending_native_scratch)
+    pineforge_add_unit_test(test_memory_pending_native_scratch)
+    set_tests_properties(test_memory_pending_state PROPERTIES LABELS "slow")
+endif()
