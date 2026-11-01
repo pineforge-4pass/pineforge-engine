@@ -360,7 +360,7 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   WebSocket idle resets on text or PING/PONG; assembly runs from the first text fragment through the final fragment.
   Control frames never extend assembly; zero idle/message deadlines are independent of the connection/subscription timeout.
   HTTP idle limits lack of response-body progress; its message timeout bounds the entire finite snapshot, including connection.
-  Only the TCP/TLS connect keeps a 5000 ms bound; the handshake and response wait are unbounded and end on stop or peer close.
+  `--feed-connect-timeout S` (network feeds, integer seconds, default 0) bounds the TCP/TLS connect; 0 adds no runner bound, so libcurl's own 300 s connect default and the system's connect failure apply. The handshake and response wait are unbounded and end on stop or peer close.
   The engine only reports arrival age; the consumer owns freshness. Local files are finite and have no idle deadline.
   These flags do not change webhook delivery timeouts or deployment identity.
 - SIGTERM/SIGINT stop intake. An already-started atomic message finishes or

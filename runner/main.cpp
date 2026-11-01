@@ -62,6 +62,7 @@ struct Config {
     std::uint64_t from_input = 0, max_events = 0, max_attempts = 8;
     std::uint64_t checkpoint_interval = kDefaultReportCheckpointInterval;
     std::uint64_t status_interval = 1, max_ledger_bytes = 0, feed_idle_timeout = 15, feed_message_timeout = 15;
+    std::uint64_t feed_connect_timeout = 0;
     std::uint64_t ratio_interval = 1;
     long poll_ms = 1000;
     bool check = false, allow_http = false, ledger_unbounded = false;
@@ -90,9 +91,11 @@ void help() {
                  "         --report-jsonl=delta (mirror committed report deltas to stdout)\n"
                  "         --ratio-interval K (positive; default 1 keeps exact ratios at every input)\n"
                  "         --status-file PATH --status-interval 1 (seconds, 1..300)\n"
+                 "         --feed-connect-timeout S (network seconds; default 0 adds no connect bound)\n"
                  "         --feed-idle-timeout S --feed-message-timeout S (seconds)\n"
                  "           stdin/network: default 0 = no limit, no upper cap; files: default 15, 1..300\n"
-                 "           network values must fit milliseconds in a long; connect remains bounded at 5000 ms\n"
+                 "           network values must fit milliseconds in a long; files/stdin ignore connect timeout\n"
+                 "           connect 0 uses libcurl's own 300 s default and the system's connect failure\n"
                  "         --control-dir PATH --max-ledger-bytes N (0 disables budget)\n"
                  "         --ledger-unbounded (explicit unlimited service ledger)\n"
                  "JSONL: {\"type\":\"tick\",\"ts\":60000,\"seq\":1,\"price\":100,\"qty\":1}\n"
@@ -242,6 +245,12 @@ Config args(int argc, char **argv) {
         else if (a == "--status-file") c.status_file = v;
         else if (a == "--control-dir") c.control_dir = v;
         else if (a == "--status-interval") c.status_interval = seconds_arg(v);
+        else if (a == "--feed-connect-timeout") {
+            try { c.feed_connect_timeout = unsigned_arg(v); }
+            catch (const std::exception&) {
+                throw std::runtime_error(a + " requires nonnegative integer seconds");
+            }
+        }
         else if (a == "--feed-idle-timeout") c.feed_idle_timeout = unsigned_arg(v);
         else if (a == "--feed-message-timeout") c.feed_message_timeout = unsigned_arg(v);
         else if (a == "--max-ledger-bytes") {
@@ -296,6 +305,8 @@ Config args(int argc, char **argv) {
     };
     validate_feed_timeout("--feed-idle-timeout", c.feed_idle_timeout);
     validate_feed_timeout("--feed-message-timeout", c.feed_message_timeout);
+    if (!c.feed_url.empty())
+        (void)feed_connect_timeout_ms(c.feed_connect_timeout, static_cast<long>(c.feed_message_timeout * 1000));
     const bool websocket = c.feed_url.rfind("ws://", 0) == 0 || c.feed_url.rfind("wss://", 0) == 0;
     if (!c.feed_url.empty() && !websocket && c.from_input)
         throw std::runtime_error("HTTP snapshots require from-input 0");
@@ -1358,8 +1369,7 @@ int run(Config c) {
             feed.url = c.feed_url;
             feed.allow_insecure_http = c.allow_http;
             feed.total_timeout_ms = static_cast<long>(c.feed_message_timeout * 1000);
-            // Connecting is bounded even when an established feed has no deadline.
-            feed.connect_timeout_ms = feed.total_timeout_ms ? std::min<long>(5000, feed.total_timeout_ms) : 5000;
+            feed.connect_timeout_ms = feed_connect_timeout_ms(c.feed_connect_timeout, feed.total_timeout_ms);
             feed.idle_timeout_ms = static_cast<long>(c.feed_idle_timeout * 1000);
             feed.message_timeout_ms = static_cast<long>(c.feed_message_timeout * 1000);
             std::string subscription =
@@ -1379,8 +1389,7 @@ int run(Config c) {
             feed.url = c.feed_url;
             feed.allow_insecure_http = c.allow_http;
             feed.total_timeout_ms = static_cast<long>(c.feed_message_timeout * 1000);
-            // The finite request may be unlimited; connection setup retains its bound.
-            feed.connect_timeout_ms = feed.total_timeout_ms ? std::min<long>(5000, feed.total_timeout_ms) : 5000;
+            feed.connect_timeout_ms = feed_connect_timeout_ms(c.feed_connect_timeout, feed.total_timeout_ms);
             feed.idle_timeout_ms = static_cast<long>(c.feed_idle_timeout * 1000);
             do {
                 delivery.check();
