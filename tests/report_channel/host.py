@@ -257,6 +257,10 @@ class Capture:
     def finalizer_stdout(self):
         return b"".join(event[1:] for event in self.validator_events if event[:1] == b"O")
 
+    def finalizer_excess_attempts(self):
+        """The excess bytes V tried to add to its stdout, logged before each write ('U')."""
+        return b"".join(event[1:] for event in self.validator_events if event[:1] == b"U")
+
     def finalizer_environment_names(self):
         observations = [event[1:].rstrip(b"\0").split(b"\0")
                         for event in self.validator_events if event[:1] == b"E"]
