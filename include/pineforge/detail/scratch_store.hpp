@@ -103,6 +103,8 @@ public:
     // True from a successful begin until a successful commit or rollback,
     // including while the transaction is rollback-only.
     bool transaction_active() const noexcept;
+    // True when the borrowed backing has a passive logical-I/O observer.
+    bool has_io_observer() const noexcept;
 
     // begin snapshots logical state including handle allocation. Nested begin
     // is programming_error. Reads thereafter include successful pending edits.

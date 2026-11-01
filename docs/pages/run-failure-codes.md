@@ -402,6 +402,19 @@ catalog is not proof that the source paths it names enforce anything.
   `selected_window_preroll` `requested` is the pre-roll length. The registry
   does not tie an optional argument to a capability: the trusted wrappers that
   raise the code do.
+- **Optional feed and inventory limits.** The runner defaults to no limit.
+  `--max-symbol-feeds N` bounds both symbol count and total feed count;
+  exceeding it keeps `symbol_feeds_refused` with reason `too_many_symbols`
+  or `too_many_feeds` and a message naming N. `--max-inventory-bytes N`
+  bounds inventory input: an oversize inventory keeps
+  `window_mode_unsupported` with capability
+  `selected_window_request_feed_inventory` in the runner, or exit 10 in
+  `bind_compiled_inventory.py`. Unset or `0` means unlimited; positive
+  integers set limits; empty, negative and non-integer values are usage
+  errors (runner `run_request_invalid`, exit 2; binder argparse, exit 2).
+  `--tv-compat` selects defaults of 256 symbols/feeds and 8 MiB inventory
+  from the runner's one compatibility set. Explicit limits, including `0`,
+  always win.
 - **`window_calendar_unsupported`** takes `session` as a `nullable_string`: a
   JSON string, or `null` when the request names no session. `window_lineage_mismatch`
   and `report_shape_request_invalid` carry request values as `scalar`.
