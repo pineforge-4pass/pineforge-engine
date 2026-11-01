@@ -574,6 +574,13 @@ PoocCloseFillViewSwitches& pooc_close_fill_view_switches() noexcept;
 #define PINEFORGE_PLACEMENT_AUDIT 0
 #endif
 
+// Compile-time work observation, as in the adapter TU's lookup observer.
+// Tests count actual probes/comparisons and visited slots. Ordinary builds
+// have no observer storage, branch or increment; class layout is unchanged.
+#ifndef PINEFORGE_PLACEMENT_WORK
+#define PINEFORGE_PLACEMENT_WORK(field) ((void)0)
+#endif
+
 // Source placement evidence, keyed by the native request handle's
 // incarnation. Handles are monotonically allocated by the native core, so the
 // rows are held in incarnation order: a dense window of the recent
@@ -725,10 +732,12 @@ public:
     template<class Visit>
     [[gnu::always_inline]] void visit_rows(Visit&& visit) const {
         for (const auto& entry : old_) { ++visited_slots_;
+            PINEFORGE_PLACEMENT_WORK(placement_slots);
             if (visit(entry.first, static_cast<const PlacementSnapshot&>(*entry.second))) return;
         }
         for (std::size_t index = head_; index < window_.size(); ++index) {
             const auto& slot = window_[index]; ++visited_slots_;
+            PINEFORGE_PLACEMENT_WORK(placement_slots);
             if (slot
                 && visit(base_ + static_cast<std::uint64_t>(index - head_),
                          static_cast<const PlacementSnapshot&>(*slot))) {
@@ -911,6 +920,7 @@ private:
     }
 
     PlacementSnapshot* locate(std::uint64_t incarnation) const noexcept {
+        PINEFORGE_PLACEMENT_WORK(lookup_probes);
         if (incarnation >= base_) {
             const std::uint64_t offset = incarnation - base_;
             if (offset < window_.size() - head_)
@@ -918,7 +928,10 @@ private:
             return nullptr;
         }
         const auto found = std::lower_bound(old_.begin(), old_.end(), incarnation,
-            [](const auto& entry, std::uint64_t key) { return entry.first < key; });
+            [](const auto& entry, std::uint64_t key) {
+                PINEFORGE_PLACEMENT_WORK(lookup_comparisons);
+                return entry.first < key;
+            });
         return found != old_.end() && found->first == incarnation ? found->second.get()
                                                                   : nullptr;
     }
@@ -927,12 +940,20 @@ private:
     std::pair<std::uint64_t, PlacementSnapshot*> next_after(std::uint64_t after) const noexcept {
         if (after < base_) {
             const auto found = std::upper_bound(old_.begin(), old_.end(), after,
-                [](std::uint64_t key, const auto& entry) { return key < entry.first; });
-            if (found != old_.end()) { ++visited_slots_; return {found->first, found->second.get()}; }
+                [](std::uint64_t key, const auto& entry) {
+                    PINEFORGE_PLACEMENT_WORK(lookup_comparisons);
+                    return key < entry.first;
+                });
+            if (found != old_.end()) {
+                ++visited_slots_;
+                PINEFORGE_PLACEMENT_WORK(placement_slots);
+                return {found->first, found->second.get()};
+            }
         }
         std::size_t index = after < base_ ? head_
             : head_ + static_cast<std::size_t>(after - base_) + 1U;
         for (; index < window_.size(); ++index) { ++visited_slots_;
+            PINEFORGE_PLACEMENT_WORK(placement_slots);
             if (window_[index])
                 return {base_ + static_cast<std::uint64_t>(index - head_), window_[index].get()};
         }
@@ -3173,13 +3194,27 @@ private:
         bool roster_pass_due = true;
         // Derived live-family counts stay in step with placements and live handles
         // at their shared writer; they add no lifecycle or hash state. Contiguous
-        // Entry..Risk slots count families; extra slots count unpriced Order rows
-        // and rows eligible for dynamic-exit or capture policy.
+        // Entry..Risk slots count families; extra slots count policy populations.
+        // All are derived scratch, not continuation state. The price/bar maxima
+        // below summarize immutable placement operands, not native trigger state.
         static constexpr std::size_t family_count =
             static_cast<std::size_t>(PineOrderFamily::Risk) + 1;
         static constexpr std::size_t market_order_slot = family_count;
         static constexpr std::size_t exit_policy_slot = family_count + 1;
-        std::size_t live_families[family_count + 2]{};
+        static constexpr std::size_t trail_policy_slot = family_count + 2;
+        static constexpr std::size_t buy_stop_slot = family_count + 3;
+        static constexpr std::size_t sell_stop_slot = family_count + 4;
+        static constexpr std::size_t dual_stop_slot = family_count + 5;
+        static constexpr std::size_t reversal_slot = family_count + 6;
+        static constexpr std::size_t admission_slot = family_count + 7;
+        static constexpr std::size_t buy_limit_slot = family_count + 8;
+        static constexpr std::size_t opening_slot = family_count + 9;
+        static constexpr std::size_t live_count_slots = family_count + 10;
+        std::size_t live_families[live_count_slots]{};
+        double highest_buy_limit = 0.0;
+        std::size_t highest_buy_limit_count = 0;
+        std::int32_t newest_admission_bar = std::numeric_limits<std::int32_t>::min();
+        std::size_t newest_admission_count = 0;
         // True certifies the existing retire_origin_prefixes early return:
         // each nonempty front has a placement. Only placement erasure can
         // falsify it; a new origin is appended after remember().
@@ -3209,10 +3244,17 @@ private:
     void clear_live() noexcept;
     void erase_placement(std::uint64_t);
     void count_live(const PlacementSnapshot&, bool adding) noexcept;
+    // Independent recount in every profile: -1 if equal; otherwise the first
+    // count slot, then highest limit/count or newest admission bar/count.
+    // A mismatch prints its index and both values before the Debug abort.
+    int live_count_mismatch() const noexcept;
     void assert_live_counts() const noexcept;
     bool has_live_family(PineOrderFamily) const noexcept;
     bool has_live_exit_policy() const noexcept;
     bool has_live_trail_policy() const noexcept;
+    bool has_live_bar_policy(std::size_t slot) const noexcept;
+    bool has_open_admission_candidate(int source_bar) const noexcept;
+    bool has_open_marketable_buy_limit(double open_fill) const noexcept;
     // The configuration's part of the margin and admission scopes, which the
     // per-bar path asks several times a bar: each a conjunction of reads of
     // config_ and staged_ alone, formed again whenever either is set

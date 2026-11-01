@@ -51,6 +51,11 @@
 #ifndef PINEFORGE_LOOKUP_INDEX_WORK
 #define PINEFORGE_LOOKUP_INDEX_WORK(site, owner, run, count) ((void)0)
 #endif
+// Test-only scope around the real callback, excluding submission, matching,
+// publication and diagnostic reads outside on_bar_open.
+#ifndef PINEFORGE_BAR_OPEN_OBSERVE
+#define PINEFORGE_BAR_OPEN_OBSERVE() ((void)0)
+#endif
 #ifndef PINEFORGE_RETIREMENT_OBSERVE
 #define PINEFORGE_RETIREMENT_OBSERVE(rows, cycle, askable, roots, candidates, first) ((void)0)
 #endif
@@ -210,7 +215,7 @@ bool finite_non_negative(double value) noexcept {
 // present price level, including 0.0.
 bool price_present(double value) noexcept { return !std::isnan(value); }
 
-bool pure_stop_entry_marketable_at(const PlacementSnapshot& snapshot, double open) noexcept {
+bool pure_stop_entry(const PlacementSnapshot& snapshot) noexcept {
     if (snapshot.family != PineOrderFamily::Entry) return false;
     if (!finite_positive(snapshot.exit_levels.stop)) return false;
     if (finite_positive(snapshot.exit_levels.limit)
@@ -219,8 +224,13 @@ bool pure_stop_entry_marketable_at(const PlacementSnapshot& snapshot, double ope
         || finite_positive(snapshot.exit_levels.trail_offset)) {
         return false;
     }
-    return snapshot.is_long ? open >= snapshot.exit_levels.stop
-                            : open <= snapshot.exit_levels.stop;
+    return true;
+}
+
+bool pure_stop_entry_marketable_at(const PlacementSnapshot& snapshot, double open) noexcept {
+    return pure_stop_entry(snapshot)
+        && (snapshot.is_long ? open >= snapshot.exit_levels.stop
+                             : open <= snapshot.exit_levels.stop);
 }
 
 // An order resting at a LIMIT level alone (no stop, no trail).
@@ -230,6 +240,24 @@ bool pure_limit_entry(const PlacementSnapshot& snapshot) noexcept {
         && !finite_positive(snapshot.exit_levels.trail_points)
         && !finite_positive(snapshot.exit_levels.trail_price)
         && !finite_positive(snapshot.exit_levels.trail_offset);
+}
+
+bool open_buy_limit_entry(const PlacementSnapshot& row) noexcept {
+    return row.family == PineOrderFamily::Entry && row.opening && row.is_long
+        && pure_limit_entry(row);
+}
+
+bool open_admission_entry(const PlacementSnapshot& row) noexcept {
+    // apply_open_market_admission has no effect without an unpriced candidate:
+    // neither review records an empty book, and no cancellation is selected.
+    return row.family == PineOrderFamily::Entry
+        && !finite_positive(row.exit_levels.limit)
+        && !finite_positive(row.exit_levels.stop)
+        && !finite_positive(row.exit_levels.trail_points)
+        && !finite_positive(row.exit_levels.trail_price)
+        && !finite_positive(row.exit_levels.trail_offset)
+        && !row.birth.from_fill() && !row.birth.at_terminal_fill()
+        && !compat::pine::historical_cascade_reach(row.birth_reach);
 }
 
 double next_source_path_waypoint(const Bar& bar, NativePathPhase phase,
@@ -5099,6 +5127,10 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                         live->second.qty_percent = snapshot.qty_percent;
                         live->second.comment = snapshot.comment;
                         live->second.sizing = snapshot.sizing;
+                        // This is still an ExitTrail, independent of its
+                        // offset. None of the counted entry populations or
+                        // their immutable price/bar maxima can change here.
+                        assert_live_counts();
                     }
                     refresh_pending_view();
                     return existing_handle;
@@ -22625,7 +22657,7 @@ void PineExecutionAdapter::order_open_marketable_limit_entries(
             && !finite_positive(row.exit_levels.trail_offset)
             && open_fill <= row.exit_levels.limit;
     };
-    if (!has_live_family(PineOrderFamily::Entry) || !any_live_row(live_handles_, placement_, marketable)) return;
+    if (!has_open_marketable_buy_limit(open_fill)) return;
     // A flat book holding MARKET entries of both sides is the opposite-pair
     // family, whose own route decides its open: TradingView fills that pair
     // before the limit too, and also books the pair's later call as one
@@ -22872,6 +22904,7 @@ bool rested_stop_family(const PlacementSnapshot& row) noexcept {
 } // namespace
 
 void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionContext& context) {
+    PINEFORGE_BAR_OPEN_OBSERVE();
     // The script bar this opening follows, before it is replaced below: a
     // short process_orders_on_close filled at its close is margined at that
     // close (the opening slice below).
@@ -22969,15 +23002,12 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
             || coof_recalc_active_ || live_handles_.size() < 2)) {
         update_l4c_priority();
     }
-    // Quiet: every admission candidate is a live entry the previous source
-    // bar placed; without one no pair or pyramiding rule applies, nothing is
-    // cancelled and both reviews see no handle.
+    // Quiet: every admission candidate is an unpriced live entry the previous
+    // source bar placed; without one no pair or pyramiding rule applies,
+    // nothing is cancelled and both reviews see no handle.
     const int source_bar = context.coordinate.interval_index - 1;
-    if (!skip_quiet(QuietHook::OpenMarketAdmission, !has_live_family(PineOrderFamily::Entry) ||
-            !any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
-                return row.family == PineOrderFamily::Entry
-                    && row.projection_created_bar == source_bar;
-            }))) {
+    if (!skip_quiet(QuietHook::OpenMarketAdmission,
+            !has_open_admission_candidate(source_bar))) {
         apply_open_market_admission(context);
     }
     // Quiet: a sell is deferred only when both a live pure-stop buy entry and
@@ -22985,7 +23015,9 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     // under process_orders_on_close, else the open).
     const double sell_fill_point = config_.process_orders_on_close ? bar.close : bar.open;
     const auto marketable_stop_entry = [&](bool is_long) {
-        return has_live_family(PineOrderFamily::Entry) && any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
+        return has_live_bar_policy(is_long ? RetiredRowScratch::buy_stop_slot
+                                          : RetiredRowScratch::sell_stop_slot)
+            && any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
             return row.is_long == is_long
                 && pure_stop_entry_marketable_at(row, sell_fill_point);
         });
@@ -22999,10 +23031,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     // of its own id (of any id for a from_entry "" exit), which is an
     // opening entry or order.
     if (!skip_quiet(QuietHook::GappedBracketReaccept,
-            !any_live_row(live_handles_, placement_, [](const PlacementSnapshot& row) {
-                return row.opening && (row.family == PineOrderFamily::Entry
-                                       || row.family == PineOrderFamily::Order);
-            }))) {
+            !has_live_bar_policy(RetiredRowScratch::opening_slot))) {
         reaccept_gapped_bracket_behind_same_id_add(bar, context);
     }
     order_open_marketable_limit_entries(bar, context);
@@ -23061,10 +23090,13 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
                             : bar.low <= row.exit_levels.stop);
     };
     std::size_t touched_stop_entries = 0;
-    if (has_live_family(PineOrderFamily::Entry)) for (const auto& handle : live_handles_) {
-        const auto found = placement_.find(handle.incarnation);
-        if (found != placement_.end() && touched_stop_entry(found->second))
-            ++touched_stop_entries;
+    if (has_live_bar_policy(RetiredRowScratch::dual_stop_slot)
+        && retired_row_scratch_.live_families[RetiredRowScratch::dual_stop_slot] >= 2) {
+        for (const auto& handle : live_handles_) {
+            const auto found = placement_.find(handle.incarnation);
+            if (found != placement_.end() && touched_stop_entry(found->second))
+                ++touched_stop_entries;
+        }
     }
     if (!skip_quiet(QuietHook::DualEntryPath, touched_stop_entries < 2)
         && !config_.calc_on_order_fills && detail::run_position(require_host()).signed_units == 0.0) {
@@ -23097,11 +23129,8 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     if (!skip_quiet(QuietHook::CoofTail, pending_coof_requests_.empty()))
         flush_coof_tail(/*openings_only=*/false, /*include_next_open=*/true);
     // Quiet: brackets are suspended only for a live opening reversal entry.
-    const auto opening_reversal_entry = [](const PlacementSnapshot& row) {
-        return row.opening && row.family == PineOrderFamily::Entry && row.reverse_to;
-    };
-    if (!skip_quiet(QuietHook::CoofDeclinedReversal, !has_live_family(PineOrderFamily::Entry) ||
-            !any_live_row(live_handles_, placement_, opening_reversal_entry))) {
+    if (!skip_quiet(QuietHook::CoofDeclinedReversal,
+            !has_live_bar_policy(RetiredRowScratch::reversal_slot))) {
         suspend_coof_declined_reversal_at_open(bar, context);
     }
     if (close_all_pending_script_bar_ != context.script_bar_open_ms)
@@ -23488,7 +23517,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         // extreme on the same bar.
         // Quiet: only a live opening reversal entry can be declined.
         const bool declined_reversal = !skip_quiet(QuietHook::DeclinedReversalAtOpen,
-                !any_live_row(live_handles_, placement_, opening_reversal_entry))
+                !has_live_bar_policy(RetiredRowScratch::reversal_slot))
             && declined_reversal_at_open(bar);
         // A vetoed deficit pending at the open is checked at the bar's first
         // path point before an exit touched on the way (pending_veto_point_first).
@@ -29328,13 +29357,15 @@ void PineExecutionAdapter::remember_live(const native_order::RequestHandle& hand
 }
 
 void PineExecutionAdapter::forget_live(const native_order::RequestHandle& handle) noexcept {
-    const auto removed = std::remove(pending_write(live_handles_).begin(), live_handles_.end(), handle);
+    const auto removed = std::find(pending_write(live_handles_).begin(), live_handles_.end(), handle);
     if (removed != live_handles_.end()) {
-        assert(std::distance(removed, live_handles_.end()) == 1);
+        assert(std::count(live_handles_.begin(), live_handles_.end(), handle) == 1);
         const auto row = placement_.find(handle.incarnation);
         assert(row != placement_.end());
+        // Keep the live sequence intact until count_live has removed this row's
+        // contribution: losing a last maximum may recount its surviving peers.
         if (row != placement_.end()) count_live(row->second, false);
-        pending_write(live_handles_).erase(removed, live_handles_.end());
+        pending_write(live_handles_).erase(removed);
     }
     assert_live_counts();
 }
@@ -29351,6 +29382,10 @@ void PineExecutionAdapter::requeue_live(const native_order::RequestHandle& handl
 void PineExecutionAdapter::clear_live() noexcept {
     pending_write(live_handles_).clear();
     for (auto& count : retired_row_scratch_.live_families) count = 0;
+    retired_row_scratch_.highest_buy_limit = 0.0;
+    retired_row_scratch_.highest_buy_limit_count = 0;
+    retired_row_scratch_.newest_admission_bar = std::numeric_limits<std::int32_t>::min();
+    retired_row_scratch_.newest_admission_count = 0;
     retired_row_scratch_.origin_fronts_pinned = true;
 }
 
@@ -29384,11 +29419,75 @@ void PineExecutionAdapter::count_live(const PlacementSnapshot& row, bool adding)
         || row.family == PineOrderFamily::ExitStop || row.family == PineOrderFamily::ExitTrail
         || row.reservation_expansion.capture().has_value())
         change(RetiredRowScratch::exit_policy_slot);
+    if (rested_stop_family(row) || row.family == PineOrderFamily::ExitTrail)
+        change(RetiredRowScratch::trail_policy_slot);
+    if (pure_stop_entry(row))
+        change(row.is_long ? RetiredRowScratch::buy_stop_slot : RetiredRowScratch::sell_stop_slot);
+    if (row.family == PineOrderFamily::Entry && finite_positive(row.exit_levels.stop)
+        && !std::isfinite(row.exit_levels.limit) && !finite_positive(row.exit_levels.trail_offset))
+        change(RetiredRowScratch::dual_stop_slot);
+    if (row.opening && row.family == PineOrderFamily::Entry && row.reverse_to)
+        change(RetiredRowScratch::reversal_slot);
+    if (row.opening && (row.family == PineOrderFamily::Entry || row.family == PineOrderFamily::Order))
+        change(RetiredRowScratch::opening_slot);
+
+    auto& facts = retired_row_scratch_;
+    const auto add_maximum = [](auto value, auto& maximum, std::size_t& count) {
+        if (count == 0 || value > maximum) { maximum = value; count = 1; }
+        else if (value == maximum) ++count;
+    };
+    bool recount_limit = false;
+    bool recount_admission = false;
+    if (open_buy_limit_entry(row)) {
+        change(RetiredRowScratch::buy_limit_slot);
+        if (adding) {
+            add_maximum(row.exit_levels.limit, facts.highest_buy_limit, facts.highest_buy_limit_count);
+        } else if (row.exit_levels.limit == facts.highest_buy_limit) {
+            assert(facts.highest_buy_limit_count != 0);
+            if (--facts.highest_buy_limit_count == 0) {
+                facts.highest_buy_limit = 0.0;
+                recount_limit = facts.live_families[RetiredRowScratch::buy_limit_slot] != 0;
+            }
+        }
+    }
+    if (open_admission_entry(row)) {
+        change(RetiredRowScratch::admission_slot);
+        if (adding) {
+            add_maximum(row.projection_created_bar, facts.newest_admission_bar, facts.newest_admission_count);
+        } else if (row.projection_created_bar == facts.newest_admission_bar) {
+            assert(facts.newest_admission_count != 0);
+            if (--facts.newest_admission_count == 0) {
+                facts.newest_admission_bar = std::numeric_limits<std::int32_t>::min();
+                recount_admission = facts.live_families[RetiredRowScratch::admission_slot] != 0;
+            }
+        }
+    }
+    // A maximum changes only with an actual removal/replacement, never because
+    // another bar opened. Equal maxima share a count, so removing one of a large
+    // equal-price population does not recount. No order-sized index is needed.
+    if (recount_limit || recount_admission) for (const auto& handle : live_handles_) {
+        const auto found = placement_.find(handle.incarnation);
+        assert(found != placement_.end());
+        if (found == placement_.end() || &found->second == &row) continue;
+        const auto& peer = found->second;
+        if (recount_limit && open_buy_limit_entry(peer))
+            add_maximum(peer.exit_levels.limit, facts.highest_buy_limit, facts.highest_buy_limit_count);
+        if (recount_admission && open_admission_entry(peer))
+            add_maximum(peer.projection_created_bar, facts.newest_admission_bar, facts.newest_admission_count);
+    }
 }
 
-void PineExecutionAdapter::assert_live_counts() const noexcept {
-#ifndef NDEBUG
-    std::size_t actual[RetiredRowScratch::family_count + 2]{};
+int PineExecutionAdapter::live_count_mismatch() const noexcept {
+    const auto mismatch = [](std::size_t slot, auto actual, auto stored) {
+        std::fprintf(stderr, "live-count mismatch slot=%zu actual=%.21Lg stored=%.21Lg\n",
+                     slot, static_cast<long double>(actual), static_cast<long double>(stored));
+        return static_cast<int>(slot);
+    };
+    std::size_t actual[RetiredRowScratch::live_count_slots]{};
+    double highest_limit = 0.0;
+    std::size_t highest_limit_count = 0;
+    std::int32_t newest_bar = std::numeric_limits<std::int32_t>::min();
+    std::size_t newest_bar_count = 0;
     for (const auto& handle : live_handles_) {
         const auto found = placement_.find(handle.incarnation);
         assert(found != placement_.end());
@@ -29403,9 +29502,70 @@ void PineExecutionAdapter::assert_live_counts() const noexcept {
             || row.family == PineOrderFamily::ExitStop || row.family == PineOrderFamily::ExitTrail
             || row.reservation_expansion.capture().has_value())
             ++actual[RetiredRowScratch::exit_policy_slot];
+        // Recompute from operands independently of count_live and its helpers.
+        const auto& levels = row.exit_levels;
+        const bool entry = row.family == PineOrderFamily::Entry;
+        if (row.family == PineOrderFamily::ExitTrail
+            || (finite_positive(levels.stop)
+                && (entry || (row.family == PineOrderFamily::ExitStop
+                    && std::isnan(levels.trail_points) && std::isnan(levels.trail_price)
+                    && std::isnan(levels.trail_offset)))))
+            ++actual[RetiredRowScratch::trail_policy_slot];
+        if (entry && finite_positive(levels.stop) && !finite_positive(levels.limit)
+            && !finite_positive(levels.trail_points) && !finite_positive(levels.trail_price)
+            && !finite_positive(levels.trail_offset))
+            ++actual[row.is_long ? RetiredRowScratch::buy_stop_slot : RetiredRowScratch::sell_stop_slot];
+        if (entry && finite_positive(levels.stop) && !std::isfinite(levels.limit)
+            && !finite_positive(levels.trail_offset))
+            ++actual[RetiredRowScratch::dual_stop_slot];
+        if (entry && row.opening && row.reverse_to)
+            ++actual[RetiredRowScratch::reversal_slot];
+        if (row.opening && (entry || row.family == PineOrderFamily::Order))
+            ++actual[RetiredRowScratch::opening_slot];
+        if (entry && row.opening && row.is_long
+            && finite_positive(levels.limit) && !finite_positive(levels.stop)
+            && !finite_positive(levels.trail_points) && !finite_positive(levels.trail_price)
+            && !finite_positive(levels.trail_offset)) {
+            ++actual[RetiredRowScratch::buy_limit_slot];
+            if (levels.limit > highest_limit) {
+                highest_limit = levels.limit;
+                highest_limit_count = 1;
+            } else if (levels.limit == highest_limit) {
+                ++highest_limit_count;
+            }
+        }
+        if (entry && !finite_positive(levels.limit) && !finite_positive(levels.stop)
+            && !finite_positive(levels.trail_points) && !finite_positive(levels.trail_price)
+            && !finite_positive(levels.trail_offset)
+            && !row.birth.from_fill() && !row.birth.at_terminal_fill()
+            && !compat::pine::historical_cascade_reach(row.birth_reach)) {
+            ++actual[RetiredRowScratch::admission_slot];
+            if (newest_bar_count == 0 || row.projection_created_bar > newest_bar) {
+                newest_bar = row.projection_created_bar;
+                newest_bar_count = 1;
+            } else if (row.projection_created_bar == newest_bar) {
+                ++newest_bar_count;
+            }
+        }
     }
-    for (std::size_t i = 0; i < RetiredRowScratch::family_count + 2; ++i)
-        assert(actual[i] == retired_row_scratch_.live_families[i]);
+    const auto& facts = retired_row_scratch_;
+    for (std::size_t i = 0; i < RetiredRowScratch::live_count_slots; ++i)
+        if (actual[i] != facts.live_families[i]) return mismatch(i, actual[i], facts.live_families[i]);
+    constexpr auto scalar = RetiredRowScratch::live_count_slots;
+    if (highest_limit != facts.highest_buy_limit)
+        return mismatch(scalar, highest_limit, facts.highest_buy_limit);
+    if (highest_limit_count != facts.highest_buy_limit_count)
+        return mismatch(scalar + 1, highest_limit_count, facts.highest_buy_limit_count);
+    if (newest_bar != facts.newest_admission_bar)
+        return mismatch(scalar + 2, newest_bar, facts.newest_admission_bar);
+    if (newest_bar_count != facts.newest_admission_count)
+        return mismatch(scalar + 3, newest_bar_count, facts.newest_admission_count);
+    return -1;
+}
+
+void PineExecutionAdapter::assert_live_counts() const noexcept {
+#ifndef NDEBUG
+    assert(live_count_mismatch() == -1);
 #endif
 }
 
@@ -29420,11 +29580,34 @@ bool PineExecutionAdapter::has_live_exit_policy() const noexcept {
 }
 
 bool PineExecutionAdapter::has_live_trail_policy() const noexcept {
+    return has_live_bar_policy(RetiredRowScratch::trail_policy_slot);
+}
+
+bool PineExecutionAdapter::has_live_bar_policy(std::size_t slot) const noexcept {
     assert_live_counts();
-    const auto& counts = retired_row_scratch_.live_families;
-    return counts[static_cast<std::size_t>(PineOrderFamily::Entry)] != 0
-        || counts[static_cast<std::size_t>(PineOrderFamily::ExitStop)] != 0
-        || counts[static_cast<std::size_t>(PineOrderFamily::ExitTrail)] != 0;
+    assert(slot < RetiredRowScratch::live_count_slots);
+    return retired_row_scratch_.live_families[slot] != 0;
+}
+
+bool PineExecutionAdapter::has_open_marketable_buy_limit(double open_fill) const noexcept {
+    assert_live_counts();
+    return retired_row_scratch_.live_families[RetiredRowScratch::buy_limit_slot] != 0
+        && open_fill <= retired_row_scratch_.highest_buy_limit;
+}
+
+bool PineExecutionAdapter::has_open_admission_candidate(int source_bar) const noexcept {
+    assert_live_counts();
+    const auto& facts = retired_row_scratch_;
+    if (facts.live_families[RetiredRowScratch::admission_slot] == 0
+        || facts.newest_admission_bar < source_bar) return false;
+    if (facts.newest_admission_bar == source_bar) return true;
+    // A magnifier's projection_created_bar names an input slot, while this
+    // policy intentionally asks in script-bar space. A later-numbered input
+    // candidate does not prove an older-numbered one absent. Preserve that
+    // uncommon case's exact predicate; ordinary aged books return above.
+    return any_live_row(live_handles_, placement_, [&](const PlacementSnapshot& row) {
+        return row.projection_created_bar == source_bar && open_admission_entry(row);
+    });
 }
 
 // Original exact scans serve allocation failures and independent Debug checks.
