@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <initializer_list>
+#include <limits>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -649,6 +650,40 @@ void fixture_clock_refusals() {
                    "session");
 }
 
+void fixture_unlimited_preroll() {
+    scenario = "pre-roll is limited only by the uint32 request and supplied rows";
+    for (const std::uint32_t requested : {5001u, 20000u,
+                                         std::numeric_limits<std::uint32_t>::max()}) {
+        // Two extra pre-T rows exercise trimming; UINT32_MAX instead asks for
+        // more than a seven-row prehistory, without allocating the request.
+        const bool shortfall = requested == std::numeric_limits<std::uint32_t>::max();
+        const std::int64_t before = shortfall ? 7 : requested + 2;
+        const std::int64_t used = shortfall ? before : requested;
+        const std::int64_t trimmed = before - used;
+        const std::vector<Bar> rows = span(kBase, kBase + (before + 3) * kMin, kMin);
+        SelectedPlanRequest request = make_request(
+            kBase + before * kMin, kBase + (before + 3) * kMin, kBase, requested, "1", "1");
+        Expect x;
+        x.supplied_input = x.supplied_script = static_cast<std::uint64_t>(before + 3);
+        x.available = static_cast<std::uint64_t>(before);
+        x.used = x.preroll_input = static_cast<std::uint64_t>(used);
+        x.trimmed = x.trim_index = static_cast<std::uint64_t>(trimmed);
+        x.fed_input = x.fed_script = static_cast<std::uint64_t>(used + 3);
+        x.window_input = x.window_script = 3;
+        x.trim_start = kBase + trimmed * kMin;
+        x.preroll_first = x.fed_first = x.trim_start;
+        x.preroll_last = kBase + (before - 1) * kMin;
+        x.supplied_first = kBase;
+        x.supplied_last = x.fed_last = x.window_last = kBase + (before + 2) * kMin;
+        x.window_first = kBase + before * kMin;
+        x.shortfall = shortfall;
+        for (const bool tolerant : {true, false}) {
+            request.feed_tolerant = tolerant;
+            expect_ok(plan_of(rows, request), x);
+        }
+    }
+}
+
 void fixture_request_refusals() {
     scenario = "primary token and input timeframe";
     const char* const bad_scripts[] = {"",   "D",  "1D", "W", "M",   "2",   "7",
@@ -703,10 +738,8 @@ void fixture_request_refusals() {
     expect_refused(plan_of(full_six_hours(), request), SelectedPlanStatus::RequestInvalid,
                    "fed_start_ms", 2, request.fed_start_ms, 0, request.start_ms);
 
-    expect_refused(plan_of(full_six_hours(), full_six_hours_request(5001)),
-                   SelectedPlanStatus::RequestInvalid, "preroll_bars", -1, 5001);
     const SelectedPrimaryPlan cap = pineforge::plan_selected_primary(
-        nullptr, 0, full_six_hours_request(5000));
+        nullptr, 0, full_six_hours_request(std::numeric_limits<std::uint32_t>::max()));
     CHECK(cap.status == SelectedPlanStatus::Ok);
     CHECK(cap.shortfall);
 
@@ -790,6 +823,7 @@ int main() {
     fixture_utc_aliases();
     fixture_same_non_utc_zone();
     fixture_clock_refusals();
+    fixture_unlimited_preroll();
     fixture_request_refusals();
     fixture_boundary_refusals();
     fixture_row_refusals();

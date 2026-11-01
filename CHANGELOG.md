@@ -24,6 +24,8 @@ version number follows semantic versioning over the surfaces the
   `--t` also names `--tv-compat`, and `--m` and `--ma` also name
   `--max-symbol-feeds` and `--max-inventory-bytes`. The exit status, the code
   `run_request_invalid` and its args are unchanged.
+- Selected-window pre-roll has no ceiling by default; `--limit-preroll-bars N` applies only a positive operator limit, while 0 or omission is unlimited. Pre-roll reads the user's own input bars like any other bar.
+
 - Recorded output series are unlimited by default; 0 or omission of `--limit-output-series` means no limit, while a positive N is the operator's cap and any refusal reports that positive N as `max`. Report-window memory follows the declared count: 6 MiB + 64 KiB × S + a 64 KiB reader with the default I/O sizes.
 - Reading a map is cheaper: each map now keeps a fixed read cache of 8 slots
   for the keys and values it has just read, so a repeated `get` or `contains`

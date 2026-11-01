@@ -2294,9 +2294,9 @@ add_test(NAME test_selected_window_plan_python
 # Selected-window files that use pytest: Python3 -B -m pytest on the literal
 # path, from the repository root. No check that pytest is installed: the test
 # environment must provide it, and a missing pytest fails these rows.
-add_test(NAME test_run_json_selected_window
-    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_window.py
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+# test_run_json_selected_window is registered by
+# cr150.d/selected-window-preroll-limit.cmake; its native fixture wiring
+# lives in the owning CR-150 fence below.
 add_test(NAME test_run_json_nonfinite_report
     COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_nonfinite_report.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
@@ -8117,6 +8117,34 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
         PINEFORGE_ROSTER_PASS_OBSERVER=1)
 endif()
 # --- CR-150 roster-pass-work end ---
+
+# --- CR-150 selected-window-preroll-limit begin ---
+# The real CLI fixture needs the Pine scheduler's timeframe initialization.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(preroll_fixture_strategy MODULE preroll_fixture_strategy.cpp)
+    target_link_libraries(preroll_fixture_strategy PRIVATE pineforge)
+    target_compile_options(preroll_fixture_strategy PRIVATE -ffp-contract=off -UNDEBUG)
+    if(APPLE)
+        target_link_options(preroll_fixture_strategy PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(preroll_fixture_strategy PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    set_property(TEST test_run_json_selected_window APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_PREROLL_STRATEGY_SO=$<TARGET_FILE:preroll_fixture_strategy>"
+        "PINEFORGE_PREROLL_PLANNER_SO=$<TARGET_FILE:pineforge_window_plan>")
+    add_test(NAME test_run_json_selected_window_native
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_window.py
+            -k "real_cli"
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+    set_property(TEST test_run_json_selected_window_native APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_PREROLL_STRATEGY_SO=$<TARGET_FILE:preroll_fixture_strategy>"
+        "PINEFORGE_PREROLL_PLANNER_SO=$<TARGET_FILE:pineforge_window_plan>")
+endif()
+# --- CR-150 selected-window-preroll-limit end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))

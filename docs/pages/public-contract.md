@@ -177,7 +177,7 @@ The selected-window path is **PUBLIC for walk-forward use** through the
 A walk-forward driver such as the HPO native layer may submit successive
 non-overlapping windows over one chart, for example `[T0, T1)` followed by
 `[T1, T2)`. Each window is one independent request. The CLI creates a fresh
-strategy state for its request in `_make_state` (`docker/run_json.py:5008`)
+strategy state for its request in `_make_state` (`docker/run_json.py:5009`)
 inside `_selected_run` (`docker/run_json.py:4913`).
 
 ### Public request and capability surface
@@ -186,18 +186,19 @@ These are the selected-window options declared by the CLI:
 
 | Option | Contract | Declaration |
 | --- | --- | --- |
-| `--report-policy selected-window/v1` | Opt into the selected-window report policy. | `add_argument` (`docker/run_json.py:5453`) |
-| `--window-start-ms` | Start T in calendar-aligned Unix milliseconds. | `add_argument` (`docker/run_json.py:5456`) |
-| `--window-end-ms` | End E in calendar-aligned Unix milliseconds; T < E. | `add_argument` (`docker/run_json.py:5458`) |
-| `--preroll-bars` | Requested warm-up N in script bars, from 0 through 5000. | `add_argument` (`docker/run_json.py:5460`) |
-| `--fed-start-ms` | Frozen start F of the supplied primary feed; F <= T. | `add_argument` (`docker/run_json.py:5462`) |
-| `--capabilities-json` | With `--so LIB`, report runtime support without reading OHLCV or running a strategy. | `add_argument` (`docker/run_json.py:5464`) |
-| `--validate-window-only` | Validate and plan the request; return `report_window` with `applied: false`, without executing a strategy. | `add_argument` (`docker/run_json.py:5467`) |
-| `--run-phase-fd` | Inherited AF_UNIX SOCK_STREAM descriptor N >= 3 for phase transport v1. | `add_argument` (`docker/run_json.py:5470`) |
-| `--request-feed-inventory` | Inventory bound to the strategy library, used for selected-window admission. | `add_argument` (`docker/run_json.py:5473`) |
-| `--report-shape` | This build offers `full/v1` for selected-window requests. | `add_argument` (`docker/run_json.py:5476`) |
-| `--curve-point-budget` | Refused by this build, which does not offer a compact shape. | `add_argument` (`docker/run_json.py:5478`) |
-| `--results-digest` | Refused by this build, which does not offer a results digest. | `add_argument` (`docker/run_json.py:5481`) |
+| `--report-policy selected-window/v1` | Opt into the selected-window report policy. | `add_argument` (`docker/run_json.py:5454`) |
+| `--window-start-ms` | Start T in calendar-aligned Unix milliseconds. | `add_argument` (`docker/run_json.py:5457`) |
+| `--window-end-ms` | End E in calendar-aligned Unix milliseconds; T < E. | `add_argument` (`docker/run_json.py:5459`) |
+| `--preroll-bars` | Requested warm-up in script bars, with no ceiling by default; unsigned 32-bit count. | `add_argument` (`docker/run_json.py:5461`) |
+| `--limit-preroll-bars N` | Operator ceiling on the requested pre-roll; a positive N refuses requests above N. 0 or omission means unlimited. | `add_argument` (`docker/run_json.py:9349`) |
+| `--fed-start-ms` | Frozen start F of the supplied primary feed; F <= T. | `add_argument` (`docker/run_json.py:5463`) |
+| `--capabilities-json` | With `--so LIB`, report runtime support without reading OHLCV or running a strategy. | `add_argument` (`docker/run_json.py:5465`) |
+| `--validate-window-only` | Validate and plan the request; return `report_window` with `applied: false`, without executing a strategy. | `add_argument` (`docker/run_json.py:5468`) |
+| `--run-phase-fd` | Inherited AF_UNIX SOCK_STREAM descriptor N >= 3 for phase transport v1. | `add_argument` (`docker/run_json.py:5471`) |
+| `--request-feed-inventory` | Inventory bound to the strategy library, used for selected-window admission. | `add_argument` (`docker/run_json.py:5474`) |
+| `--report-shape` | This build offers `full/v1` for selected-window requests. | `add_argument` (`docker/run_json.py:5477`) |
+| `--curve-point-budget` | Refused by this build, which does not offer a compact shape. | `add_argument` (`docker/run_json.py:5479`) |
+| `--results-digest` | Refused by this build, which does not offer a results digest. | `add_argument` (`docker/run_json.py:5482`) |
 
 An execution request supplies the policy, all four window arguments and
 explicit `--input-tf` and `--script-tf` values, as checked by
@@ -217,13 +218,26 @@ the same semantics. The entrypoint forwards `PINEFORGE_MAX_SYMBOL_FEEDS`,
 `PINEFORGE_MAX_INVENTORY_BYTES` and `PINEFORGE_TV_COMPAT` to the relevant tools;
 the inventory setting reaches both binder and runner.
 
+Pre-roll reads the user's own input bars like any other bar, grouping them into
+script bars under the selected calendar. It admits any nonnegative count that
+fits the uint32 wire field (through 4,294,967,295), subject only to an explicitly
+configured positive `--limit-preroll-bars N`. A request above that operator's N
+keeps the typed `window_preroll_out_of_range` with `args.requested` equal to the
+requested count. The operator limit itself accepts 0 through `2^53 - 1`.
+The uint32 representation and the existing JSON integer bounds of `2^53 - 1`
+(signed timestamps and nonnegative counts) are safety limits. Negative or
+non-integer pre-roll requests remain refused. The planner uses the available
+input bars and reports a shortfall when fewer script bars exist than requested.
+Native hosts calling the planner directly apply any operator ceiling before
+the call; the planner has no built-in ceiling.
+
 Before relying on the CLI path, probe the library with
 `docker/run_json.py --so LIB --capabilities-json`. The probe is
 `_capabilities_main` (`docker/run_json.py:4896`); its support decision is
 `_runtime_supports_selected_window` (`docker/run_json.py:4867`), which checks
 the selected-window ABI, execution observer, phase transport and planner.
 The capability record is built by
-`capabilities_record` (`docker/selected_window_report.py:756`).
+`capabilities_record` (`docker/selected_window_report.py:755`).
 Require `capabilities.selected_window_wire_version == 1`,
 `capabilities.report_policy == "selected-window/v1"`, `full/v1` in
 `capabilities.report_shapes`, and a
@@ -269,15 +283,15 @@ The policy and report shape follow the [report schema](report-schema.md),
 including its [revision 3.1 clarification](../design/selected-window-wire-v1.3-revision-3.1.md).
 The report carries the window bounds and coverage, feed identity, and requested,
 available, used and trimmed preroll with its timestamps and shortfall, assembled
-by `build_report_window` (`docker/selected_window_report.py:460`). These warm-up
+by `build_report_window` (`docker/selected_window_report.py:459`). These warm-up
 bars precede the window and are counted separately. The lookback declaration
 is `unknown` in this build, so the requested preroll is not a proof of sufficient
 warm-up. The same `report_window` appears at the top level, in `applied_runtime`
 and in `fingerprint.provenance.runtime`, held by
-`check_report_placements` (`docker/selected_window_report.py:707`).
+`check_report_placements` (`docker/selected_window_report.py:706`).
 The selected curve has one anchor at T with initial capital and zero open
 profit, then one point per window script bar, held by
-`check_selected_curve` (`docker/selected_window_report.py:609`).
+`check_selected_curve` (`docker/selected_window_report.py:608`).
 
 An executed success is a complete report with `report_window.applied: true`
 and harness exit status 0. A validation-only plan has `applied: false` and

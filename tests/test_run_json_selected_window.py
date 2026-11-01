@@ -1,7 +1,7 @@
 """Tests of the single-run selected-window orchestration of docker/run_json.py and of
 docker/selected_window_report.py.
 
-The orchestration is tested on fakes. The strategy library is a Python
+The original orchestration rows are tested on fakes. The strategy library is a Python
 stand-in (FakeLib) with the frozen export names, the planner is a stand-in object, and the
 phase transport is a real AF_UNIX socketpair driven by the real RunPhaseWriter and the real
 ExecutionObserverBinding (the fake engine calls the registered callback through its raw C
@@ -10,7 +10,8 @@ library, planner or phase record exists, the trim / hash / R mapping, the compar
 counts with the plan, cleanup, and that an ordinary run is unchanged. The native engine itself
 (the planner library, the selected-window ABI, the observer inside run_backtest_full, the report
 of the selected generation and the socket boundaries) is not exercised here, and no fake result
-stands in for it.
+stands in for it. The pre-roll parameter rows below instead run the actual CLI
+in a subprocess with the real native planner and a native strategy module.
 
 Poison counters: the entries a refused request must never reach (load_bars, load_symbol_feeds,
 load_strategy, create_strategy, the planner constructor, ctypes.CDLL, a phase advance) are
@@ -24,13 +25,18 @@ import ctypes
 import hashlib
 import io
 import json
+import os
+import shutil
 import socket
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "docker"))
@@ -478,16 +484,17 @@ class ValidationTests(unittest.TestCase):
 
     def test_legacy_flag_range_and_preroll_refusals(self):
         self.refuse("window_legacy_flag_conflict", {"option": "trade_start_ms"}, trade_start_ms=5)
-        self.refuse("window_preroll_out_of_range", {"requested": 5001}, preroll_bars="5001")
         self.refuse("window_preroll_out_of_range", {"requested": -1}, preroll_bars="-1")
         self.refuse("window_range_invalid", {"start_ms": E, "end_ms": E, "fed_start_ms": F},
                     window_start_ms=str(E))
         self.refuse("window_range_invalid", {"start_ms": T, "end_ms": E, "fed_start_ms": T + 1},
                     fed_start_ms=str(T + 1))
 
-    def test_zero_and_the_maximum_preroll_are_accepted(self):
-        self.assertEqual(swr.validate_request(**{**self.GOOD, "preroll_bars": "0"}).preroll_bars, 0)
-        self.assertEqual(swr.validate_request(**{**self.GOOD, "preroll_bars": "5000"}).preroll_bars, 5000)
+    def test_preroll_has_no_default_ceiling_within_its_wire_type(self):
+        for count in (5001, 20_000, 2 ** 32 - 1, 0):
+            with self.subTest(count=count):
+                got = swr.validate_request(**{**self.GOOD, "preroll_bars": str(count)})
+                self.assertEqual(got.preroll_bars, count)
 
     def test_timeframe_seconds_is_a_unit_conversion_only(self):
         self.assertEqual([swr.timeframe_seconds(t) for t in ("1", "60", "D", "W", "30S", "2D")],
@@ -542,8 +549,6 @@ class PlanRefusalTests(unittest.TestCase):
                    {"option": "input_tf"})
         self.check(self.refusal(status=1, option="fed_start_ms"), "window_range_invalid",
                    {"start_ms": T, "end_ms": E, "fed_start_ms": F})
-        self.check(self.refusal(status=1, option="preroll_bars"), "window_preroll_out_of_range",
-                   {"requested": N})
         self.assertEqual(self.refusal(status=1, option="rows").code, "harness_internal_error")
 
     def test_calendar_boundary_range_rows_and_internal(self):
@@ -2063,6 +2068,143 @@ class AbbreviationTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(last_line(out)["code"], "results_digest_unsupported")
         self.assertEqual(set(counts.values()), {0})
+
+
+@pytest.fixture(scope="module")
+def preroll_runtime(tmp_path_factory):
+    """A real installation layout using CTest's source-host fixture and planner."""
+    supplied = (os.environ.get("PINEFORGE_PREROLL_STRATEGY_SO"),
+                os.environ.get("PINEFORGE_PREROLL_PLANNER_SO"))
+    if not any(supplied):
+        pytest.skip("SKIP lab module not supplied: PINEFORGE_PREROLL_STRATEGY_SO; CTest wires it")
+    assert all(supplied), "supply both pre-roll fixture libraries"
+    project = tmp_path_factory.mktemp("preroll-runtime")
+    prefix = project / "install"
+    binary, libraries = prefix / "bin", prefix / "lib"
+    binary.mkdir(parents=True)
+    libraries.mkdir()
+    # Preserve the production CLI and its sibling imports verbatim. Its real
+    # trusted_planner_path then resolves this installation's lib directory.
+    for source in (ROOT / "docker").glob("*.py"):
+        shutil.copy2(source, binary / source.name)
+    for source in (ROOT / "docker").glob("*.json"):
+        shutil.copy2(source, binary / source.name)
+    module = libraries / "preroll_fixture.so"
+    planner = libraries / "libpineforge_window_plan.so"
+    for source, destination in zip(supplied, (module, planner)):
+        source = Path(source).resolve()
+        assert source.is_file(), source
+        shutil.copy2(source, destination)
+    assert module.is_file() and planner.is_file(), (module, planner)
+    return binary / "run_json.py", module
+
+
+def preroll_cli(tmp_path, runtime, requested, *options, before=20_002):
+    cli, module = runtime
+    window_bars = 3
+    chart = tmp_path / "preroll.csv"
+    write_ohlcv(chart, csv_rows(before + window_bars))
+    inventory = tmp_path / "preroll-inventory.json"
+    inventory.write_text(json.dumps({
+        "schema": rfi.SCHEMA, "source_sha256": "0" * 64,
+        "artifact_sha256": hashlib.sha256(module.read_bytes()).hexdigest(),
+        "primary_chart_timeframe": "1", "entries": [],
+    }), encoding="utf-8")
+    command = [
+        sys.executable, "-B", str(cli), "--so", str(module), "--ohlcv", str(chart),
+        "--input-tf", "1", "--script-tf", "1", "--report-policy", "selected-window/v1",
+        "--window-start-ms", str(F + before * MINUTE),
+        "--window-end-ms", str(F + (before + window_bars) * MINUTE),
+        "--fed-start-ms", str(F), "--preroll-bars", str(requested),
+        "--request-feed-inventory", str(inventory), "--profile", "unjailed",
+        "--overrides", '{"initial_capital":"10000"}', *options,
+    ]
+    environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    done = subprocess.run(command, capture_output=True, text=True, env=environment)
+    assert len(done.stdout.splitlines()) == 1, (command, done.returncode, done.stdout, done.stderr)
+    return done.returncode, json.loads(done.stdout)
+
+
+def assert_preroll_counts(document, requested, before):
+    # Every input bar is one script bar. These expectations use only the
+    # input population and request, independently of the native plan/report.
+    used = min(requested, before)
+    trimmed = before - used
+    window = document["report_window"]
+    assert window["applied"] is True
+    assert window["counts"] == {
+        "supplied_input_bars": before + 3, "supplied_script_bars": before + 3,
+        "fed_input_bars": used + 3, "fed_script_bars": used + 3,
+        "preroll_input_bars": used, "window_input_bars": 3, "window_script_bars": 3,
+        "equity_points": 4, "anchor_points": 1,
+    }
+    assert window["preroll"] == {
+        "requested_script_bars": requested, "available_script_bars": before,
+        "used_script_bars": used, "trimmed_script_bars": trimmed,
+        "trim_start_ms": F + trimmed * MINUTE, "trimmed_input_bars": trimmed,
+        "first_bar_ms": F + trimmed * MINUTE,
+        "last_bar_ms": F + (before - 1) * MINUTE, "shortfall": requested > before,
+    }
+    assert window["indices"] == {
+        "fed_script_index_of_window_first": used,
+        "supplied_script_index_of_window_first": before,
+    }
+    assert window["metering"] == {
+        "billable_input_bars": 3, "preroll_billable_input_bars": 0,
+        "basis": "window-primary-input-bars/v1",
+    }
+
+
+@pytest.mark.parametrize("requested", (5001, 20_000, 2 ** 32 - 1))
+def test_preroll_is_unlimited_by_default_through_real_cli(tmp_path, preroll_runtime, requested):
+    before = 7 if requested == 2 ** 32 - 1 else requested + 2
+    status, document = preroll_cli(tmp_path, preroll_runtime, requested, before=before)
+    assert status == 0, document
+    assert_preroll_counts(document, requested, before)
+
+
+@pytest.mark.parametrize("limit", (5000, 19_999, 1))
+def test_preroll_operator_limit_binds_through_real_cli(tmp_path, preroll_runtime, limit):
+    requested = limit + 1
+    status, document = preroll_cli(tmp_path, preroll_runtime, requested)
+    assert status == 0, document
+    assert_preroll_counts(document, requested, 20_002)
+    status, document = preroll_cli(
+        tmp_path, preroll_runtime, requested, "--limit-preroll-bars", str(limit))
+    assert status == 1, document
+    assert (document["code"], document["args"]) == (
+        "window_preroll_out_of_range", {"requested": requested})
+
+
+def test_preroll_zero_limit_and_equal_edge_through_real_cli(tmp_path, preroll_runtime):
+    status, document = preroll_cli(tmp_path, preroll_runtime, 5001)
+    assert status == 0, document
+    assert_preroll_counts(document, 5001, 20_002)
+    for limit in (0, 5001, 20_000, 2 ** 53 - 1):
+        status, document = preroll_cli(
+            tmp_path, preroll_runtime, 5001, "--limit-preroll-bars", str(limit))
+        assert status == 0, document
+        assert_preroll_counts(document, 5001, 20_002)
+
+
+def test_preroll_numeric_refusals_through_real_cli(tmp_path, preroll_runtime):
+    status, document = preroll_cli(tmp_path, preroll_runtime, 5001)
+    assert status == 0, document
+    for requested, code, args in (
+            (-1, "window_preroll_out_of_range", {"requested": -1}),
+            (2 ** 32, "window_preroll_out_of_range", {"requested": 2 ** 32}),
+            ("1.5", "window_request_invalid", {"option": "preroll_bars"}),
+            (2 ** 53, "window_request_invalid", {"option": "preroll_bars"})):
+        status, document = preroll_cli(tmp_path, preroll_runtime, requested)
+        assert status == 1, document
+        assert (document["code"], document["args"]) == (code, args)
+    for limit in ("-1", "1.5", str(2 ** 53), "9" * 5000):
+        status, document = preroll_cli(
+            tmp_path, preroll_runtime, 5001, "--limit-preroll-bars", limit)
+        assert status == 2, document
+        assert "argument --limit-preroll-bars:" in document["error"]
+        assert (document["code"], document["args"]) == (
+            "run_request_invalid", {"option": "arguments"})
 
 
 class SourceShapeTests(unittest.TestCase):

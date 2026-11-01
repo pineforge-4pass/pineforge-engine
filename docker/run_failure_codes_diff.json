@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "7322ccb43b60d127e640ab68c992b99d84c5c0bd8c3464486aff31b6c68677b8"
+    "catalogSha256": "d8c756d566dba811d894bce92233326c6a93a69b1d9a393b1f22926875f319f5"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -54,6 +54,31 @@
             "outputs: the event queue is full",
             "outputs: the row count is at its limit",
             "outputs: the series count is at its limit"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "window_preroll_out_of_range",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "description",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": "The requested pre-roll is outside the range of zero to 5000 script bars.",
+          "after": "The requested pre-roll does not fit an unsigned 32-bit count or exceeds a configured positive operator limit."
+        },
+        {
+          "path": "english",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "Pre-roll must be between zero and 5000 script bars."
+          ],
+          "after": [
+            "Pre-roll must be between zero and 5000 script bars.",
+            "Pre-roll must fit an unsigned 32-bit count and the operator's configured limit."
           ]
         }
       ]

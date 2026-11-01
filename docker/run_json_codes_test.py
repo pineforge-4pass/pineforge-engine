@@ -1972,6 +1972,19 @@ def test_every_own_code_is_catalogued():
         assert catalogued(code, {})
 
 
+def test_every_fixed_text_is_a_catalog_english_template():
+    source = Path(__file__).resolve().parent / "selected_window_report.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    assignment = next(node.value for node in tree.body
+                      if isinstance(node, ast.Assign)
+                      and any(isinstance(target, ast.Name)
+                              and target.id == "_FIXED_TEXT" for target in node.targets))
+    fixed_text = ast.literal_eval(assignment)
+    for code, text in fixed_text.items():
+        assert text in CATALOG["codes"][code]["english"], (
+            f"{code}: fixed text is not in the catalog's English templates")
+
+
 @pytest.mark.parametrize("spelling,native", [
     (r'path\\length', 'path\\length'),
     (r'armed \"yes\"', 'armed "yes"'),

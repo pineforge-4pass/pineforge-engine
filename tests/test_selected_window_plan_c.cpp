@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
+#include <limits>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -427,6 +428,44 @@ void fixture_success() {
     }
 }
 
+void fixture_unlimited_preroll() {
+    scenario = "C bridge and C++ planner admit pre-roll through UINT32_MAX";
+    for (const std::uint32_t requested : {5001u, 20000u,
+                                         std::numeric_limits<std::uint32_t>::max()}) {
+        const bool shortfall = requested == std::numeric_limits<std::uint32_t>::max();
+        const std::int64_t before = shortfall ? 7 : requested + 2;
+        const std::int64_t used = shortfall ? before : requested;
+        const std::int64_t trimmed = before - used;
+        const Feed feed = span(kBase, kBase + (before + 3) * kMin, kMin);
+        auto request = make_request(kBase + before * kMin, kBase + (before + 3) * kMin,
+                                    kBase, requested, "1", "1");
+        for (const std::uint32_t tolerant : {1u, 0u}) {
+            request.feed_tolerant = tolerant;
+            const Run run = run_both(request, feed);
+            CHECK(run.rc == 0);
+            CHECK(run.c.status == 0);
+            expect_maps(run.c, run.plan);
+            // Independent minute-row arithmetic, not values from the C++ plan.
+            CHECK(run.c.supplied_input_bars == static_cast<std::uint64_t>(before + 3));
+            CHECK(run.c.supplied_script_bars == static_cast<std::uint64_t>(before + 3));
+            CHECK(run.c.available_script_bars == static_cast<std::uint64_t>(before));
+            CHECK(run.c.used_script_bars == static_cast<std::uint64_t>(used));
+            CHECK(run.c.trimmed_script_bars == static_cast<std::uint64_t>(trimmed));
+            CHECK(run.c.trim_index == static_cast<std::uint64_t>(trimmed));
+            CHECK(run.c.fed_input_bars == static_cast<std::uint64_t>(used + 3));
+            CHECK(run.c.fed_script_bars == static_cast<std::uint64_t>(used + 3));
+            CHECK(run.c.preroll_input_bars == static_cast<std::uint64_t>(used));
+            CHECK(run.c.window_input_bars == 3);
+            CHECK(run.c.window_script_bars == 3);
+            CHECK(run.c.trim_start_ms == kBase + trimmed * kMin);
+            CHECK(run.c.preroll_first_bar_ms == kBase + trimmed * kMin);
+            CHECK(run.c.preroll_last_bar_ms == kBase + (before - 1) * kMin);
+            CHECK(run.c.shortfall == (shortfall ? 1u : 0u));
+            CHECK(run.c.complete_pending_preroll_at_horizon == 0u);
+        }
+    }
+}
+
 // ── Nullable transport ───────────────────────────────────────────────────────
 
 void fixture_nullable_transport() {
@@ -490,7 +529,6 @@ void fixture_planner_refusals() {
         request.input_tf = "";  // an empty timeframe is a planner error, not a bridge one
         expect_refusal(run_both(request, rows), 1, "input_tf");
     }
-    expect_refusal(run_both(full_six_hours_request(5001), rows), 1, "preroll_bars", -1, 5001);
     // A NULL row pointer with a positive count is never dereferenced by the
     // bridge: it reaches the planner, which refuses it.
     expect_refusal(run_raw(full_six_hours_request(2), nullptr, nullptr, 3), 1, "rows");
@@ -613,6 +651,7 @@ void fixture_descriptor_refusals() {
 int main() {
     fixture_layout();
     fixture_success();
+    fixture_unlimited_preroll();
     fixture_nullable_transport();
     fixture_planner_refusals();
     fixture_descriptor_refusals();
