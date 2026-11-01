@@ -182,12 +182,22 @@ void run(Host& host, const std::vector<Bar>& bars) {
 void expect_fill(const Host& host, const char* id, int at, double price,
                  double opened, double closed, double position) {
     const auto* fill = host.fill(id);
-    if (!fill) return;
-    CHECK(fill->bar == at);
-    CHECK(fill->price == price);
-    CHECK(fill->opened == opened);
-    CHECK(fill->closed == closed);
-    CHECK(fill->position == position);
+    if (!fill) {
+        std::fprintf(stderr, "FAIL fill id=%s field=present actual=0 expected=1\n", id);
+        return;
+    }
+    const auto expect_field = [id](const char* field, auto actual, auto expected) {
+        if (actual != expected) {
+            std::fprintf(stderr, "FAIL fill id=%s field=%s actual=%.17g expected=%.17g\n",
+                         id, field, static_cast<double>(actual), static_cast<double>(expected));
+        }
+        CHECK(actual == expected);
+    };
+    expect_field("bar", fill->bar, at);
+    expect_field("price", fill->price, price);
+    expect_field("opened", fill->opened, opened);
+    expect_field("closed", fill->closed, closed);
+    expect_field("position", fill->position, position);
 }
 
 // (a) A single buy stop rests through two openings; only bar 3 reaches it.
@@ -275,7 +285,11 @@ void dual_stop() {
         CHECK(host.fills[0].id == "DOWN");
         CHECK(host.fills[1].id == "UP");
     }
-    expect_fill(host, "DOWN", 2, kPrice - distance, 1.0, 0.0, -1.0);
+    // Both explicit stops are placed flat: src/source/pine_adapter.cpp:8196
+    // and :8307 select Transact(+/-1). UP's unit closes DOWN, with no
+    // opening remainder (src/engine_execution.cpp:937). Applied opened_units
+    // is signed (src/engine_execution.cpp:769), so DOWN opens -1 and UP 0.
+    expect_fill(host, "DOWN", 2, kPrice - distance, -1.0, 0.0, -1.0);
     expect_fill(host, "UP", 2, kPrice + distance, 0.0, 1.0, 0.0);
 }
 
