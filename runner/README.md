@@ -217,7 +217,7 @@ retry after startup replay, before new inputs. Later opens add no startup copy
 when a checkpoint already exists.
 Startup and post-replay checkpoints intentionally have no input reservation
 behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1225`;
-the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1053`).
+the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1137`).
 With a large budget, either can spend most of the remaining headroom on an
 O(T) payload before the first live input. The run can stop sooner, never over
 budget; this is the intended cost of preparing the report shortcut at startup.
@@ -360,7 +360,7 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   WebSocket idle resets on text or PING/PONG; assembly runs from the first text fragment through the final fragment.
   Control frames never extend assembly; zero idle/message deadlines are independent of the connection/subscription timeout.
   HTTP idle limits lack of response-body progress; its message timeout bounds the entire finite snapshot, including connection.
-  Only the TCP/TLS connect keeps a 5000 ms bound; the handshake and response wait are unbounded and end on stop or peer close.
+  `--feed-connect-timeout S` (network feeds, integer seconds, default 0) bounds the TCP/TLS connect; 0 sets the connect option to the largest value libcurl accepts, so the runner adds no connect bound and connecting ends only on a system or peer failure unless a nonzero `--feed-message-timeout` ends it sooner (that total timeout covers connecting). Files and stdin ignore a well-formed value; malformed values are refused for every feed kind.
   The engine only reports arrival age; the consumer owns freshness. Local files are finite and have no idle deadline.
   These flags do not change webhook delivery timeouts or deployment identity.
 - SIGTERM/SIGINT stop intake. An already-started atomic message finishes or

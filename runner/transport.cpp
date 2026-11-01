@@ -92,11 +92,11 @@ void check_url(const HttpOptions& options, bool websocket, bool feed = false) {
             throw std::runtime_error("native HTTP URL must not contain user information or a fragment");
         }
     }
-    if (options.connect_timeout_ms <= 0 || options.total_timeout_ms < 0 ||
+    if (options.connect_timeout_ms < 0 || options.total_timeout_ms < 0 ||
         (options.total_timeout_ms && options.connect_timeout_ms > options.total_timeout_ms) ||
-        (!feed && (!options.total_timeout_ms || options.total_timeout_ms > 300000)))
+        (!feed && (!options.connect_timeout_ms || !options.total_timeout_ms || options.total_timeout_ms > 300000)))
         throw std::runtime_error(feed
-            ? "native feed requires a positive connect timeout and a nonnegative, ordered total timeout"
+            ? "native feed timeouts must be nonnegative and ordered when both are positive"
             : "native HTTP timeouts must be positive, ordered and at most 300 seconds");
     if (options.idle_timeout_ms < 0 || options.message_timeout_ms < 0 ||
         (!feed && (options.idle_timeout_ms > 300000 || options.message_timeout_ms > 300000)))
@@ -115,7 +115,7 @@ CurlHandle make_handle(const HttpOptions& options, bool websocket = false, bool 
         ? https_proxy : http_proxy;
     option(curl.get(), CURLOPT_PROXY, (proxy.empty() ? all_proxy : proxy).c_str());
     option(curl.get(), CURLOPT_NOPROXY, no_proxy.c_str());
-    option(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, options.connect_timeout_ms);
+    option(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, connect_timeout_option(options.connect_timeout_ms));
     option(curl.get(), CURLOPT_TIMEOUT_MS, options.total_timeout_ms);
     option(curl.get(), CURLOPT_NOSIGNAL, 1L);
     option(curl.get(), CURLOPT_FOLLOWLOCATION, 0L);
@@ -315,6 +315,33 @@ bool send_subscription(CURL* curl, std::string_view bytes, long timeout_ms,
 #endif
 
 } // namespace
+
+long connect_timeout_option(long connect_timeout_ms) {
+    return connect_timeout_ms ? connect_timeout_ms : std::numeric_limits<long>::max();
+}
+
+long feed_connect_timeout_ms(std::uint64_t seconds, long total_ms) {
+    if (!seconds) return 0;
+    if (seconds > static_cast<std::uint64_t>(std::numeric_limits<long>::max()) / 1000)
+        throw std::runtime_error("--feed-connect-timeout exceeds milliseconds range for network feeds");
+    const auto milliseconds = static_cast<long>(seconds * 1000);
+    if (total_ms && milliseconds > total_ms)
+        throw std::runtime_error("--feed-connect-timeout exceeds the nonzero feed total timeout");
+    return milliseconds;
+}
+
+HttpOptions feed_http_options(std::string url, bool allow_insecure_http, bool websocket,
+                              std::uint64_t connect_seconds, std::uint64_t idle_seconds,
+                              std::uint64_t message_seconds) {
+    HttpOptions options;
+    options.url = std::move(url);
+    options.allow_insecure_http = allow_insecure_http;
+    options.total_timeout_ms = static_cast<long>(message_seconds * 1000);
+    options.connect_timeout_ms = feed_connect_timeout_ms(connect_seconds, options.total_timeout_ms);
+    options.idle_timeout_ms = static_cast<long>(idle_seconds * 1000);
+    if (websocket) options.message_timeout_ms = options.total_timeout_ms;
+    return options;
+}
 
 std::string sha256_hex(std::string_view bytes) {
     std::array<unsigned char, EVP_MAX_MD_SIZE> digest {};

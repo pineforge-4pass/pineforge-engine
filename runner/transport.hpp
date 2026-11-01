@@ -15,7 +15,7 @@ namespace pineforge::live {
 struct HttpOptions {
     std::string url;
     std::string hmac_secret; // Runtime only; never passed to Ledger.
-    long connect_timeout_ms = 5000;
+    long connect_timeout_ms = 5000; // Feed requests accept 0 = no connect bound.
     long total_timeout_ms = 15000; // Feed requests accept 0 = no total deadline.
     long idle_timeout_ms = 0;
     long message_timeout_ms = 0;
@@ -32,6 +32,14 @@ struct DeliveryResult {
 
 std::string sha256_hex(std::string_view bytes);
 std::string hmac_sha256_hex(std::string_view secret, std::string_view bytes);
+// Map zero to libcurl's largest connect option; positive values pass through.
+long connect_timeout_option(long connect_timeout_ms);
+// Feed seconds must fit a long in milliseconds and not exceed a nonzero total.
+// Zero adds no connect bound; conversion to the libcurl option happens later.
+long feed_connect_timeout_ms(std::uint64_t seconds, long total_ms);
+HttpOptions feed_http_options(std::string url, bool allow_insecure_http, bool websocket,
+                              std::uint64_t connect_seconds, std::uint64_t idle_seconds,
+                              std::uint64_t message_seconds);
 void validate_http(const HttpOptions& options);
 void capture_proxy_environment();
 

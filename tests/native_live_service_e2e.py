@@ -511,6 +511,34 @@ try:
                 invoke(base(root / "invalid.sqlite") + ["--feed", feed, option, value], 1)
         for value in ("0", "301"):
             invoke(base(root / "invalid.sqlite") + ["--feed", feed, "--status-interval", value], 1)
+        for value in ("abc", "-1", str(1 << 64)):
+            invalid = root / f"invalid-connect-{value}.sqlite"
+            invoke(base(invalid) + ["--feed-url", f"http://{endpoint}/slow-http",
+                "--allow-insecure-http", "--feed-connect-timeout", value], 1,
+                error="pineforge-live: --feed-connect-timeout requires nonnegative integer seconds")
+            assert not invalid.exists()
+        long_max = (1 << (ctypes.sizeof(ctypes.c_long) * 8 - 1)) - 1
+        for scheme in ("http", "ws"):
+            for value in (str(long_max // 1000 + 1), str((1 << 64) - 1)):
+                invalid = root / f"{scheme}-invalid-connect-{value}.sqlite"
+                invoke(base(invalid) + ["--feed-url", f"{scheme}://{endpoint}/idle-ws",
+                    "--allow-insecure-http", "--feed-connect-timeout", value], 1,
+                    error="pineforge-live: --feed-connect-timeout exceeds milliseconds range for network feeds")
+                assert not invalid.exists()
+            invalid = root / f"{scheme}-unordered-connect.sqlite"
+            invoke(base(invalid) + ["--feed-url", f"{scheme}://{endpoint}/idle-ws",
+                "--allow-insecure-http", "--feed-connect-timeout", "7",
+                "--feed-message-timeout", "5"], 1,
+                error="pineforge-live: --feed-connect-timeout exceeds the nonzero feed total timeout")
+            assert not invalid.exists()
+        for name, source in (("file", feed), ("stdin", "-")):
+            for value in ("0", "7", str((1 << 64) - 1)):
+                ledger = root / f"{name}-ignored-connect-{value}.sqlite"
+                result = json.loads(invoke(base(ledger) + ["--feed", source,
+                    "--feed-connect-timeout", value], stdin=batch if source == "-" else None))
+                assert result["inputs_committed"] == 1 and result["inputs_processed"] == 1
+                assert query(ledger, "SELECT count(*) FROM inputs") == [(1,)]
+        print("PASS feed connect rejects bad values and unordered bounds; files and stdin ignore it", flush=True)
         for option in ("--feed-idle-timeout", "--feed-message-timeout"):
             for value in ("0", "301", str((1 << 64) - 1)):
                 ledger = root / f"stdin-{option[2:]}-{value}.sqlite"
@@ -528,7 +556,7 @@ try:
                     source["send_input"].set()
                     source["release"].set()
                     result = json.loads(invoke(base(ledger) + [option, value, "--feed-url", url,
-                        "--allow-insecure-http", "--max-events", "1"]))
+                        "--allow-insecure-http", "--feed-connect-timeout", "3", "--max-events", "1"]))
                     assert result["inputs_committed"] == 1 and result["inputs_processed"] == 1
                     assert query(ledger, "SELECT count(*) FROM inputs") == [(1,)]
                 for value in (str(long_max // 1000 + 1), str((1 << 64) - 1)):
