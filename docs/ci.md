@@ -1165,7 +1165,7 @@ python3 scripts/ci_preflight.py        # doc-anchors and doc-lint among its stag
 Their own self-tests are binding as well and register as CTest rows
 (`test_doc_anchors`, `test_doc_lint`).
 
-`scripts/check_doc_reverts.py` (`doc-reverts`, with `doc-reverts-tests`) holds
+`scripts/check_doc_reverts.py` (`doc-reverts` and `doc-reverts-net`, with `doc-reverts-tests`) holds
 what the other two cannot see: a sentence that leaves a published page, or older
 text put back over newer text, cites nothing wrong. Each commit it judges is
 compared with its parent sentence by sentence — paragraphs, list items and table
@@ -1180,6 +1180,9 @@ ancestor whose subject ends in a pull request number (`... (#N)`, the commit a
 merged pull request left on `main`, whose branch was judged commit by commit
 before it merged), else it walks back from `HEAD`; a commit whose tree predates
 the gate is never judged.
+Fast preflight also runs `doc-reverts-net` with `--head HEAD` against the same
+resolved base, judging the net change including merge resolutions with all
+branch commit messages available to name a removal.
 `--base R --head R [--message-file F]` judges one replayed change instead:
 lane B-C-SURFACE's pages replayed onto `db98990c` (the rebase that dropped
 V19-D's `keep_handle` row and put D2-C's runtime-block wording back) fail it,
