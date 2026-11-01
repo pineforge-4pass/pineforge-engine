@@ -3194,13 +3194,27 @@ private:
         bool roster_pass_due = true;
         // Derived live-family counts stay in step with placements and live handles
         // at their shared writer; they add no lifecycle or hash state. Contiguous
-        // Entry..Risk slots count families; extra slots count unpriced Order rows
-        // and rows eligible for dynamic-exit or capture policy.
+        // Entry..Risk slots count families; extra slots count policy populations.
+        // All are derived scratch, not continuation state. The price/bar maxima
+        // below summarize immutable placement operands, not native trigger state.
         static constexpr std::size_t family_count =
             static_cast<std::size_t>(PineOrderFamily::Risk) + 1;
         static constexpr std::size_t market_order_slot = family_count;
         static constexpr std::size_t exit_policy_slot = family_count + 1;
-        std::size_t live_families[family_count + 2]{};
+        static constexpr std::size_t trail_policy_slot = family_count + 2;
+        static constexpr std::size_t buy_stop_slot = family_count + 3;
+        static constexpr std::size_t sell_stop_slot = family_count + 4;
+        static constexpr std::size_t dual_stop_slot = family_count + 5;
+        static constexpr std::size_t reversal_slot = family_count + 6;
+        static constexpr std::size_t admission_slot = family_count + 7;
+        static constexpr std::size_t buy_limit_slot = family_count + 8;
+        static constexpr std::size_t opening_slot = family_count + 9;
+        static constexpr std::size_t live_count_slots = family_count + 10;
+        std::size_t live_families[live_count_slots]{};
+        double highest_buy_limit = 0.0;
+        std::size_t highest_buy_limit_count = 0;
+        std::int32_t newest_admission_bar = std::numeric_limits<std::int32_t>::min();
+        std::size_t newest_admission_count = 0;
         // True certifies the existing retire_origin_prefixes early return:
         // each nonempty front has a placement. Only placement erasure can
         // falsify it; a new origin is appended after remember().
@@ -3234,6 +3248,9 @@ private:
     bool has_live_family(PineOrderFamily) const noexcept;
     bool has_live_exit_policy() const noexcept;
     bool has_live_trail_policy() const noexcept;
+    bool has_live_bar_policy(std::size_t slot) const noexcept;
+    bool has_open_admission_candidate(int source_bar) const noexcept;
+    bool has_open_marketable_buy_limit(double open_fill) const noexcept;
     // The configuration's part of the margin and admission scopes, which the
     // per-bar path asks several times a bar: each a conjunction of reads of
     // config_ and staged_ alone, formed again whenever either is set
