@@ -12,6 +12,8 @@
 #include <pineforge/native_calendar.hpp>
 #include "../src/native_calendar_memo.hpp"
 #include "../src/live_report.hpp"
+#include "../src/trade_text_writer.hpp"
+#include <pineforge/trade_text_source.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -24,6 +26,7 @@
 #include <dlfcn.h>
 #include <filesystem>
 #include <fstream>
+#include <fcntl.h>
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -51,7 +54,7 @@ struct Config {
                                   symbol, name = "strategy";
     std::string session = "24x7", timezone = "UTC", chart_timezone = "UTC", secret_env, feed_url,
                 subscribe_path, native_config, routes_path;
-    std::string status_file, control_dir;
+    std::string status_file, control_dir, trade_text_path;
     RoutingConfig routing;
     std::vector<std::pair<std::string, std::string>> inputs, overrides, syminfo;
     std::set<std::string> explicit_flags;
@@ -88,6 +91,7 @@ void help() {
                  "         --check (one HTTP snapshot) --poll-ms 1000\n"
                  "         --report-jsonl[=full] (mirror cumulative reports to stdout)\n"
                  "         --report-jsonl=delta (mirror committed report deltas to stdout)\n"
+                 "         --trade-text PATH (finished report text companion; new file only)\n"
                  "         --ratio-interval K (positive; default 1 keeps exact ratios at every input)\n"
                  "         --status-file PATH --status-interval 1 (seconds, 1..300)\n"
                  "         --feed-idle-timeout S --feed-message-timeout S (seconds)\n"
@@ -239,6 +243,10 @@ Config args(int argc, char **argv) {
         else if (a == "--native-config")
             c.native_config = v;
         else if (a == "--status-file") c.status_file = v;
+        else if (a == "--trade-text") {
+            if (v.empty()) throw std::runtime_error("trade-text path must not be empty");
+            c.trade_text_path = v;
+        }
         else if (a == "--control-dir") c.control_dir = v;
         else if (a == "--status-interval") c.status_interval = seconds_arg(v);
         else if (a == "--feed-idle-timeout") c.feed_idle_timeout = unsigned_arg(v);
@@ -314,7 +322,8 @@ Config args(int argc, char **argv) {
     if (!c.status_file.empty()) {
         const auto status = fs::weakly_canonical(fs::absolute(c.status_file));
         for (const auto& protected_path : {c.ledger, c.ledger + "-wal", c.ledger + "-shm", c.ledger + ".lock",
-                c.strategy, c.warmup, c.feed == "-" ? std::string{} : c.feed, c.subscribe_path, c.routes_path, c.native_config})
+                c.strategy, c.warmup, c.feed == "-" ? std::string{} : c.feed, c.subscribe_path, c.routes_path,
+                c.native_config, c.trade_text_path})
             if (!protected_path.empty() && status == fs::weakly_canonical(fs::absolute(protected_path)))
                 throw std::runtime_error("status-file must not replace a ledger or input artifact");
     }
@@ -327,6 +336,16 @@ Config args(int argc, char **argv) {
                     throw std::runtime_error("ledger/sidecar overlaps an input artifact");
         }
     validate_ledger_budget(!c.status_file.empty(), c.max_ledger_bytes, c.ledger_unbounded);
+    if (!c.trade_text_path.empty()) {
+        const auto target = fs::weakly_canonical(fs::absolute(c.trade_text_path));
+        for (const auto& protected_path : {c.ledger, c.ledger + "-wal", c.ledger + "-shm", c.ledger + ".lock",
+                c.strategy, c.warmup, c.feed == "-" ? std::string{} : c.feed, c.subscribe_path, c.routes_path,
+                c.native_config, c.status_file})
+            if (!protected_path.empty() && target == fs::weakly_canonical(fs::absolute(protected_path)))
+                throw std::runtime_error("trade-text must not replace a ledger or input artifact");
+        if (fs::exists(fs::symlink_status(fs::absolute(c.trade_text_path))))
+            throw std::runtime_error("trade-text requires a new output path");
+    }
     return c;
 }
 std::string read_file(const std::string &path, std::size_t limit) {
@@ -810,6 +829,34 @@ std::string cumulative_report(Strategy& strategy, const std::string& deployment,
     }
     if (verify) verify(result);
     return result;
+}
+void finished_trade_text(const Config& config, const Strategy& strategy,
+                          const std::string& deployment, std::uint64_t cursor) {
+    if (config.trade_text_path.empty()) return;
+    if (!strategy.has_current_engine_layout)
+        throw std::runtime_error("trade-text requires the current engine layout; rebuild strategy");
+    const auto& engine = *static_cast<const pineforge::BacktestEngine*>(strategy.state);
+    const pineforge::report::EngineReportTradeSourceV1 source(engine);
+    int fd;
+    do {
+        fd = ::open(config.trade_text_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    } while (fd < 0 && errno == EINTR);
+    if (fd < 0) throw std::runtime_error("trade text companion open failed");
+    struct Close {
+        int fd;
+        ~Close() { if (fd >= 0) ::close(fd); }
+    } close{fd};
+    const auto run_id = deployment + ":" + std::to_string(cursor);
+    pineforge::report::write_trade_text_companion_to([&](std::string_view bytes) {
+        while (!bytes.empty()) {
+            const auto written = ::write(fd, bytes.data(), bytes.size());
+            if (written < 0 && errno == EINTR) continue;
+            if (written <= 0) throw std::runtime_error("trade text companion write failed");
+            bytes.remove_prefix(static_cast<std::size_t>(written));
+        }
+    }, run_id, source, 4096);
+    close.fd = -1;
+    if (::close(fd) != 0) throw std::runtime_error("trade text companion close failed");
 }
 std::vector<Event> actions(Strategy &s, const Config &c, const std::string &deployment) {
     std::vector<Event> out;
@@ -1418,6 +1465,7 @@ int run(Config c) {
     auto pending = ledger.unsent_count();
     pulse(true);
     service.stop(storage_stop ? "storage_budget" : "stopped");
+    if (!storage_stop) finished_trade_text(c, strategy, deployment, ledger.input_count());
     std::cout << Json::object(
                      {{"deployment", Json::string(deployment)},
                       {"effective_settings", settings_receipt.empty() ? Json{} : parse_json(settings_receipt)},

@@ -75,6 +75,23 @@ Without `--report-jsonl`, stdout contains exactly one line: that exit summary.
 A closed stdout pipe fails clearly with exit 1, never SIGPIPE; the last input
 and report are already durable, and export remains available.
 
+`run --trade-text PATH` writes a separate `pf-trade-text` version 1 JSONL
+companion after successful intake and delivery finish. It is off by default.
+The path must be new; existing files and input/ledger paths are refused.
+Stdout keeps its existing report and summary bytes. The companion run ID is
+`deployment:inputs_committed`, binding its zero-based row indices to the
+report at that deployment and cursor. Each row includes the entry incarnation,
+entry ID, exit ID, entry comment and exit comment, including report-only
+range-end rows when present. Text is never parsed as a number or truncated.
+JSON escaping and invalid UTF-8 replacement match the sink string encoder;
+valid UTF-8, including decimal digits, survives byte-for-byte after JSON
+decoding. A closing record supplies the row count and SHA-256 of all preceding
+bytes, including line feeds. There is no field, line or stream size cap.
+The 4096-byte read quantum is only a transfer size. The strategy must expose
+the current engine layout. A failed run or storage-budget stop produces no
+successful companion; an I/O failure can leave an incomplete file that must
+not be accepted without a valid trailer and successful runner exit.
+
 The input, engine hash, actions, report delta and its integrity digest commit in
 one SQLite transaction. Append-only `pineforge-native-report-delta/v1` rows
 contain changed scalar fields and appended/replaced array suffixes, not
