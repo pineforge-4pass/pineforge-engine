@@ -2360,9 +2360,9 @@ def failure_line(text, code=None, code_args=None) -> str:
     return line + "\n"
 
 
-def write_failure(text, code=None, code_args=None) -> None:
+def write_failure(text, code=None, code_args=None, *, destination=None) -> None:
     line = failure_line(text, code, code_args)
-    _publish_failure(line)
+    _publish_failure(line, destination=destination)
 
 
 def _c_text(raw) -> str:
@@ -2974,6 +2974,7 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
         lib.strategy_set_report_replay_v1.restype = ctypes.c_int
 
     _bind_scratch_tables(lib)  # optional unless the host selects the jailed profile
+    _bind_cache_policy(lib)
 
     if hasattr(lib, "strategy_get_last_error"):
         lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
@@ -3063,6 +3064,27 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     lib.strategy_free.argtypes = [ctypes.c_void_p]
     lib.report_free.argtypes   = [ctypes.POINTER(ReportC)]
     return lib
+
+
+class CachePolicyEntryC(ctypes.Structure):
+    """Native C alignment; mirrors pf_cache_policy_entry_v1."""
+    _fields_ = [("kind", ctypes.c_uint32),
+                ("capacity_bytes", ctypes.c_uint64)]
+
+
+class CachePolicyC(ctypes.Structure):
+    """Caller-owned descriptor; the runtime copies entries during the setter."""
+    _fields_ = [("struct_size", ctypes.c_uint32),
+                ("version", ctypes.c_uint32),
+                ("entry_count", ctypes.c_uint64),
+                ("entries", ctypes.POINTER(CachePolicyEntryC))]
+
+
+def _bind_cache_policy(lib) -> None:
+    if hasattr(lib, "strategy_set_cache_policy_v1"):
+        lib.strategy_set_cache_policy_v1.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(CachePolicyC)]
+        lib.strategy_set_cache_policy_v1.restype = ctypes.c_int
 
 
 class ScratchTablesC(ctypes.Structure):
@@ -4798,7 +4820,7 @@ def _syminfo_clock(syminfo_path) -> tuple:
     return clock[0], clock[1]
 
 
-def _write_report(text, phases=None) -> int:
+def _write_report(text, phases=None, *, destination=None) -> int:
     """Write the whole document to the report channel and flush: 0, or 1 when it cannot
     take it. No failure line (no second JSON document) may follow part of a report, so the reason
     goes to stderr, the report descriptor is discarded, the exit status is 1 and the phase writer is left
@@ -4807,29 +4829,33 @@ def _write_report(text, phases=None) -> int:
     outcome, and the stderr line names it as report_post_execution_failed with the real
     phase and the reason (resource, io or exception); without one, the line is the ordinary
     one and library calls retain their OSError/ValueError handling."""
-    caught = (OSError, ValueError) if phases is None and _REPORT_OUTPUT is None else Exception
-    already_published = _report_published()
+    caught = ((OSError, ValueError)
+              if phases is None and _REPORT_OUTPUT is None and destination is None else Exception)
+    already_published = _report_published(destination)
     try:
-        _begin_report()
+        _begin_report(destination)
         if isinstance(text, str):
-            _report_output().write(text)
+            _report_output(destination).write(text)
         else:
             # A fully prepared, ASCII JSON temporary. No report byte is
             # published until serialization and native cleanup have succeeded.
             try:
                 while chunk := text.read(1024 * 1024):
-                    written = _report_output().write(chunk)
+                    written = _report_output(destination).write(chunk)
                     if written is not None and written != len(chunk):
                         raise OSError("short report write")
             finally:
                 # Close errors after publication obey the same stderr-only
                 # rule as report-channel errors; the outer resource stack is idempotent.
                 text.close()
-        _finish_report()
+        _finish_report(destination)
     except caught as error:
         # A rejected second library publication must not discard the caller's stdout.
-        if _REPORT_OUTPUT is not None or not already_published:
-            _discard_stdout()
+        if destination is not None or _REPORT_OUTPUT is not None or not already_published:
+            if destination is None:
+                _discard_stdout()
+            else:
+                _discard_stdout(destination)
         if phases is None:
             print(f"run_json: the report could not be written: {error}", file=sys.stderr)
         else:
@@ -5125,6 +5151,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
+        _add_cache_diagnostics(lib, state, out["diagnostics"])
         out["report_window"] = window
         out["report_shape"] = swr.report_shape_full(
             equity_points, sink.counts["T"] if sink is not None else len(out["trades"]))
@@ -5760,6 +5787,7 @@ def _main(argv, binary_inputs) -> int:
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
+        _add_cache_diagnostics(lib, state, out["diagnostics"])
         if timing is not None:
             out["diagnostics"]["timing"] = timing
             out["diagnostics"]["throughput"] = _throughput_block(
@@ -5883,6 +5911,9 @@ def _bind_report_sink(lib) -> None:
         "pf_report_sink_version": (ctypes.c_uint32, []),
         "pf_report_scratch_arena_stats": (ctypes.c_int, [
             ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64)]),
+        "pf_report_cache_stats": (ctypes.c_int, [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint64),
+            ctypes.POINTER(ctypes.c_uint64)]),
         "strategy_require_report_scratch_arena_v1": (ctypes.c_int, [ctypes.c_void_p]),
         "strategy_set_report_sink_v1": (ctypes.c_int, [
             ctypes.c_void_p, ctypes.POINTER(ReportSinkC)]),
@@ -5920,6 +5951,21 @@ def _add_scratch_arena_counters(lib, diagnostics):
         raise _engine_invariant("the engine's scratch arena statistics could not be read")
     diagnostics["scratch_arena_high_water_bytes"] = high_water.value
     diagnostics["scratch_arena_bytes"] = arena_bytes.value
+
+
+def _add_cache_diagnostics(lib, state, diagnostics):
+    # Per-run counters: report assembly can read the ledger and fill its cache.
+    # Query afterwards, while its strategy and allocation owners are still live.
+    getter = getattr(lib, "pf_report_cache_stats", None)
+    if getter is None:
+        return  # older modules have no such diagnostics
+    resident_bytes, bypasses = ctypes.c_uint64(), ctypes.c_uint64()
+    if getter(state, ctypes.byref(resident_bytes), ctypes.byref(bypasses)) != 0:
+        raise _engine_invariant("the engine's cache statistics could not be read")
+    if bypasses.value > 0:
+        diagnostics["cache_resident_bytes"] = resident_bytes.value
+        diagnostics["cache_bypass_reason"] = "alloc_failed"
+        diagnostics["allocation_bypass_count"] = bypasses.value
 
 
 def _refuse_jailed_path_sink(args):
@@ -6008,7 +6054,10 @@ def _new_report_sink(lib, state, args, *, body=True):
                                        {"reason": "symbol_missing"})
         if int(lib.pf_report_sink_version()) != 1:
             raise _engine_invariant("the strategy library has an incompatible report sink ABI")
-        args._sink_fd_owner = _InheritedSinkFd(args.report_sink_fd)
+        args._sink_fd_owner = (
+            _SUPERVISED_NATIVE_SINK_OWNER
+            if _SUPERVISED_NATIVE_SINK_OWNER is not None
+            else _InheritedSinkFd(args.report_sink_fd))
         return _FdReportSink(lib, state, fd=args.report_sink_fd,
                              run_id=getattr(args, "run_id", ""),
                              owner=args._sink_fd_owner)
@@ -6024,6 +6073,11 @@ def _new_report_sink(lib, state, args, *, body=True):
         return None  # old modules keep their existing report ABI
     if not all(present) or int(lib.pf_report_sink_version()) != 1:
         raise _engine_invariant("the strategy library has an incompatible report sink ABI")
+    if isinstance(_REPORT_OUTPUT, _CandidateOutput):
+        # The automatic full projection needs S's read-only snapshot handoff.
+        # Until supplied, do not create an unmetered internal native sink.
+        raise RunFailure("the supervised internal sink handoff is unavailable",
+                         "run_isolation_unavailable", {"reason": "descriptor"})
     # Only the body run may create/truncate the caller's sink.
     return _ReportSink(lib, state, directory=getattr(args, "spill_dir", None),
                        run_id=getattr(args, "run_id", ""),
@@ -6105,6 +6159,10 @@ class _FdReportSink:
                 or (diagnostics.count_e and diagnostics.last.time_ms < diagnostics.first.time_ms)):
             raise _engine_invariant("the report sink diagnostics differ from its engine receipt")
         self.counts, self.summary, self.diagnostics = counts, summary, diagnostics
+        if self._owner is _SUPERVISED_NATIVE_SINK_OWNER:
+            # The engine borrows K. Receipt checks finish capture; EOF must
+            # precede candidate serialization and final strategy cleanup.
+            self.close()
 
     def close(self):
         if self.fd is not None:
@@ -8333,6 +8391,7 @@ def _read_strategy_initial_capital(lib, state):
 
 _REPORT_OUTPUT = None
 _LIBRARY_REPORT_RUN = None
+_SUPERVISED_NATIVE_SINK_OWNER = None
 
 
 class _LibraryReportRun:
@@ -8439,26 +8498,71 @@ class _ReportOutput:
                     raise
 
 
-def _report_output():
+class _CandidateOutput(_ReportOutput):
+    """Own only S's private candidate writer; stdio is already isolated by S."""
+
+    def __init__(self, text, *, native_sink=None):
+        if (not isinstance(text, str) or re.fullmatch(r"[0-9]{1,10}", text) is None
+                or not 3 <= int(text) <= (1 << 31) - 1 or int(text) == 5):
+            raise ValueError("invalid private candidate descriptor")
+        fd = int(text)
+        os.fstat(fd)
+        if _same_open_file(fd, 1) or _same_open_file(fd, 2):
+            raise ValueError("candidate aliases producer diagnostics")
+        os.set_inheritable(fd, False)
+        self.fd = fd
+        self.native_sink = native_sink
+        self._state = "open"
+
+    def write(self, text):
+        # Also covers parser/startup failures before a native sink is attached.
+        if self.native_sink is not None:
+            self.native_sink.close()
+        return super().write(text)
+
+    def discard(self):
+        if self.native_sink is not None:
+            self.native_sink.close()
+        self._state = "published"
+        fd, self.fd = self.fd, None
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def close(self):
+        if self.native_sink is not None:
+            self.native_sink.close()
+        super().close()
+
+
+def _report_output(destination=None):
     # Library callers may replace sys.stdout between writes or between runs.
+    if destination is not None:
+        return destination
     return sys.stdout if _REPORT_OUTPUT is None else _REPORT_OUTPUT
 
 
-def _report_published():
+def _report_published(destination=None):
+    if destination is not None:
+        return destination.published
     if _REPORT_OUTPUT is not None:
         return _REPORT_OUTPUT.published
     return _LIBRARY_REPORT_RUN is not None and _LIBRARY_REPORT_RUN.published
 
 
-def _begin_report():
-    if _report_published():
+def _begin_report(destination=None):
+    if _report_published(destination):
         raise OSError("the report channel has already been published")
-    if _REPORT_OUTPUT is None and _LIBRARY_REPORT_RUN is not None:
+    if destination is None and _REPORT_OUTPUT is None and _LIBRARY_REPORT_RUN is not None:
         _LIBRARY_REPORT_RUN.published = True
 
 
-def _finish_report():
-    if _REPORT_OUTPUT is None:
+def _finish_report(destination=None):
+    if destination is not None:
+        destination.finish()
+    elif _REPORT_OUTPUT is None:
         sys.stdout.flush()
     else:
         _REPORT_OUTPUT.finish()
@@ -8517,14 +8621,68 @@ _REPORT_MAIN = main
 
 
 def _host_main(argv=None) -> int:
-    global _REPORT_OUTPUT
+    global _REPORT_OUTPUT, _SUPERVISED_NATIVE_SINK_OWNER
+    candidate_fd = None
+    native_sink = None
+    if os.environ.get("PINEFORGE_REPORT_PRODUCER") == "supervised/v1":
+        candidate_fd = os.environ.pop("PINEFORGE_REPORT_CANDIDATE_FD", None)
+        native_sink_text = os.environ.pop("PINEFORGE_REPORT_NATIVE_SINK_FD", None)
+        os.environ.pop("PINEFORGE_REPORT_PRODUCER")
+        if candidate_fd is None:
+            _write_diagnostic("run_json: missing private candidate destination\n")
+            return 1
+        if native_sink_text is not None:
+            if (re.fullmatch(r"[0-9]{1,10}", native_sink_text) is None
+                    or not 3 <= int(native_sink_text) <= (1 << 31) - 1
+                    or int(native_sink_text) == 5):
+                _write_diagnostic("run_json: invalid private native sink descriptor\n")
+                return 1
+            native_sink = _InheritedSinkFd(int(native_sink_text))
+            tokens = list(sys.argv[1:] if argv is None else argv)
+            # S removes external sink options before launching this process.
+            # The private descriptor preserves the inherited-sink projection.
+            argv = ["--report-sink-fd", native_sink_text, *tokens]
+    else:
+        # Keep the OFF parser, help bytes and legacy abbreviations untouched.
+        # Import the supervisor only when an exact new control is supplied.
+        tokens = list(sys.argv[1:] if argv is None else argv)
+        if argv is not None:
+            argv = tokens
+        channel_flags = {
+            "--report-channel", "--terminal-status-fd", "--report-max-bytes",
+            "--diagnostic-max-bytes", "--channel-wall-ms", "--channel-stall-ms",
+            "--post-exit-drain-ms", "--stop-grace-ms", "--planned-sink-bytes",
+            "--attempt-id", "--host-attestation-fd", "--test-only-host-attestation-fd",
+        }
+        channel_environment = {
+            "PINEFORGE_REPORT_CHANNEL", "PINEFORGE_TERMINAL_STATUS_FD",
+            "PINEFORGE_REPORT_MAX_BYTES", "PINEFORGE_DIAGNOSTIC_MAX_BYTES",
+            "PINEFORGE_CHANNEL_WALL_MS", "PINEFORGE_CHANNEL_STALL_MS",
+            "PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS", "PINEFORGE_CHANNEL_STOP_GRACE_MS",
+            "PINEFORGE_REPORT_PLANNED_SINK_BYTES",
+            "PINEFORGE_REPORT_ATTEMPT_ID", "PINEFORGE_REPORT_HOST_ATTESTATION_FD",
+        }
+        channel_tokens = tokens[:tokens.index("--")] if "--" in tokens else tokens
+        if (any(token.partition("=")[0] in channel_flags for token in channel_tokens)
+                or channel_environment.intersection(os.environ)):
+            import pineforge_report_supervise
+            return pineforge_report_supervise.main(
+                pineforge_report_supervise.direct_arguments(tokens))
     try:
-        output = _ReportOutput()
+        output = (_ReportOutput() if candidate_fd is None else
+                  _CandidateOutput(candidate_fd, native_sink=native_sink))
+        if native_sink is not None:
+            os.fstat(native_sink.fd)
+            if (native_sink.fd == output.fd or _same_open_file(native_sink.fd, output.fd)
+                    or _same_open_file(native_sink.fd, 1) or _same_open_file(native_sink.fd, 2)):
+                raise ValueError("native sink aliases another producer channel")
+            os.set_inheritable(native_sink.fd, False)
     except Exception as error:
         sys.stderr.write(f"run_json: report channel setup failed: {error}\n")
         sys.stderr.flush()
         return 1
     _REPORT_OUTPUT = output
+    _SUPERVISED_NATIVE_SINK_OWNER = native_sink
     status = 1
     try:
         status = _REPORT_MAIN(argv)
@@ -8554,6 +8712,7 @@ def _host_main(argv=None) -> int:
                 except Exception:
                     traceback.print_exc(file=sys.stderr)
         _REPORT_OUTPUT = None
+        _SUPERVISED_NATIVE_SINK_OWNER = None
     return status
 
 
@@ -8562,26 +8721,32 @@ def _write_diagnostic(text):
     sys.stderr.flush()
 
 
-def _publish_failure(line):
-    if _report_published():
+def _publish_failure(line, *, destination=None):
+    if _report_published(destination):
         _write_diagnostic(f"run_json: fault after report publication: {line}")
         return
-    _begin_report()
-    if _REPORT_OUTPUT is None:
+    _begin_report(destination)
+    if destination is None and _REPORT_OUTPUT is None:
         sys.stdout.write(line)
         sys.stdout.flush()
         return
     try:
-        output = _report_output()
+        output = _report_output(destination)
         output.write(line)
         output.finish()
     except (OSError, ValueError) as error:
-        _discard_stdout()
+        if destination is None:
+            _discard_stdout()
+        else:
+            _discard_stdout(destination)
         _write_diagnostic(f"run_json: the failure could not be written: {error}\n")
 
 
-def _discard_stdout() -> None:
+def _discard_stdout(destination=None) -> None:
     """Discard the host's report descriptor, or the library caller's current stdout."""
+    if destination is not None:
+        destination.discard()
+        return
     if _REPORT_OUTPUT is not None:
         _REPORT_OUTPUT.discard()
         return

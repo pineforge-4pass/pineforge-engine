@@ -18,6 +18,7 @@ struct WorkObserver {
 
 // Borrowed registration on the calling thread. A nonnull observer must have a
 // valid callback and outlive its registration; restore the returned pointer.
+// payload_source/read cover stored and admission-encoded sources alike.
 // payload_read reports requested bytes; the other operations report zero.
 inline thread_local const WorkObserver* work_observer = nullptr;
 inline const WorkObserver* set_work_observer(const WorkObserver* observer) noexcept {

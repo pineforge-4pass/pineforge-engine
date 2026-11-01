@@ -326,10 +326,10 @@ def _arena_term(facts: Mapping) -> dict:
         if arena_bytes > MAX_ARENA_BYTES:
             return unavailable(
                 "PLATFORM_RANGE: finite bound exceeds ScratchArena's uint32 chunk "
-                f"table limit ({MAX_ARENA_BYTES} bytes); RETURN TO CORE-TOP")
+                f"table limit ({MAX_ARENA_BYTES} bytes); RETURN TO MAINTAINERS")
         return {"arenaBytes": arena_bytes, "inputs": inputs, "unbounded": False}
     except BoundOverflow as error:
-        return unavailable(f"PLATFORM_RANGE: {error}; RETURN TO CORE-TOP")
+        return unavailable(f"PLATFORM_RANGE: {error}; RETURN TO MAINTAINERS")
     except MissingProof as error:
         return unavailable(f"UNCERTIFIED: {error}")
 

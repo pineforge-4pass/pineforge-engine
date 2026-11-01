@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Share the host's descriptor and policy arithmetic, including typed refusals.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "docker"))
-from run_json import (RunFailure, _bind_scratch_tables, _check_bench_run,
+from run_json import (RunFailure, _bind_cache_policy, _bind_scratch_tables, _check_bench_run,
                       apply_scratch_tables, default_scratch_manifest, failure_line)
 
 class pf_bar_t(ctypes.Structure):
@@ -199,6 +199,7 @@ def main():
     lib.report_free.restype = None
 
     _bind_scratch_tables(lib)
+    _bind_cache_policy(lib)
     for name in ("strategy_get_last_error", "strategy_get_last_error_code",
                  "strategy_get_last_error_args"):
         if hasattr(lib, name):

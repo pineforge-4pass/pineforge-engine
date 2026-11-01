@@ -28,6 +28,10 @@ G = "engine_command_value_invalid"
 R = "report_result_invalid"
 X = "report_post_execution_failed"
 PRODUCERS = {S, G, R, X}
+NATIVE_ORDER_DESCRIPTOR_PROVIDERS = {
+    "ReadThroughCacheStats": "include/pineforge/detail/read_through_cache.hpp",
+    "CacheCapacity": "include/pineforge/detail/cache_capacity.hpp",
+}
 # These three later D6 decisions are a closed part of the contract, so a
 # manifest cannot erase a KEEP or turn it back into a producer obligation.
 KEPT_BRANCH_DECISIONS = {
@@ -807,7 +811,8 @@ def discover_descriptors(cpp_files):
     for i in range(limit):
         if order.tokens[i] == "struct" and i + 1 < limit and IDENT.fullmatch(order.tokens[i + 1]):
             name = order.tokens[i + 1]
-            put("native_order." + name, order, name, order.fields(name))
+            provider = cpp_files[NATIVE_ORDER_DESCRIPTOR_PROVIDERS.get(name, order.file)]
+            put("native_order." + name, provider, name, provider.fields(name))
     for name, _, _, args in doors.calls():
         if name.startswith("admit_strategy_"):
             put(name, doors, name, [arg[-1] for arg in args])

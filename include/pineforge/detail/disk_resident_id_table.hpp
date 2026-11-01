@@ -262,6 +262,12 @@ public:
 
     DiskResidentIdTable() = default;
     explicit DiskResidentIdTable(std::size_t cache_bytes) : index_(cache_bytes) {}
+    explicit DiskResidentIdTable(IdTableReadCache::Policy cache) : index_(cache) {}
+    explicit DiskResidentIdTable(CacheCapacity capacity)
+        : DiskResidentIdTable(IdTableReadCache::policy_for_capacity(capacity)) {}
+    void set_cache_capacity(CacheCapacity capacity) {
+        index_.set_cache_capacity(capacity);
+    }
     DiskResidentIdTable(const DiskResidentIdTable&) = delete;
     DiskResidentIdTable& operator=(const DiskResidentIdTable&) = delete;
     DiskResidentIdTable(DiskResidentIdTable&& other) noexcept { *this = std::move(other); }
@@ -506,7 +512,7 @@ private:
             if (!row.second.owner->second.spillable()) ++live;
         }
         if (live > kMaxResidentCohorts || extra > kMaxResidentCohorts - live)
-            throw ScratchCapacityError(ScratchResource::cohort,
+            throw ScratchCapacityError(ScratchResource::cohort_orders_live,
                 scratch_resident_cohort_limit_message(kMaxResidentCohorts));
     }
     void spill_before_admission(std::size_t extra) const {

@@ -21,10 +21,15 @@
 #include "global_allocation_replacement.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cerrno>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
+#include <typeinfo>
 #include <vector>
 
 namespace {
@@ -52,10 +57,12 @@ struct CohortSlots { friend auto access(CohortSlots); };
 struct CancelText { friend auto access(CancelText); };
 struct Relative { friend auto access(Relative); };
 struct ScratchOwner { friend auto access(ScratchOwner); };
+struct ScratchState { friend auto access(ScratchState); };
 template struct Access<CancelText, static_cast<void (Adapter::*)(
     const source::detail::ScratchByteSource&)>(&Adapter::cancel_exit_orders_for_full_close)>;
 template struct Access<Relative, &Adapter::pending_relative_exits_>;
 template struct Access<ScratchOwner, &Adapter::exit_scratch_>;
+template struct Access<ScratchState, &pineforge::detail::CommandScratchStore::state_>;
 #endif
 template struct Access<Placements, &Adapter::placement_>;
 template struct Access<Live, &Adapter::live_handles_>;
@@ -223,6 +230,646 @@ native_order::ExecutionAppliedEvent event() {
     result.terminal = false;
     return result;
 }
+
+#if PF_HAS_EXIT_SCRATCH
+struct IoChargeLog {
+    // Fixed fixture: P=512, two cache slots, 1024 backing pages, at most 65 rows.
+    // Keys (32 bytes) and incarnations (8 bytes) each occupy one 56-byte cell.
+    // Ordered leaves hold (512-16-32)/8=58 handles; handle leaves hold
+    // (512-16-16)/32=15, with radix fanout (512-16-16)/8=60.
+    // Thus both trees have height <=2, with at most one ordered separator.
+    static_assert(pineforge::detail::scratch_min_page_size == 512);
+    static_assert(source::detail::kExitScopeEraseBatch == 64);
+    static constexpr std::size_t max_population = source::detail::kExitScopeEraseBatch + 1;
+    // A cache rd costs <=2 charges (dirty eviction + read); wr costs <=4
+    // (that fetch + pool read + journal write). A fresh wr_page costs <=1.
+    // descend: root/leaf counts + child read, then <=1+6+1 comparisons,
+    // each reading an index slot, two handle pages and one stored-key cell.
+    static constexpr std::size_t comparisons = 1 + 6 + 1;
+    static constexpr std::size_t descend_reads = 3 + comparisons * (1 + 2 + 1);
+    // hset insertion: two new pages, four rd, four wr. Erase: four rd,
+    // six wr, including the empty handle leaf and its parent slot/count.
+    static constexpr std::size_t handle_insert_charges = 2 + 4 * 2 + 4 * 4;
+    static constexpr std::size_t handle_erase_charges = 4 * 2 + 6 * 4;
+    // Ordered append split: rd leaf, wr leaf, two fresh pages. Ordered erase:
+    // four rd + six wr, plus separator hget, cell free and possible hset.
+    static constexpr std::size_t index_insert_charges = 2 + 4 + 2;
+    static constexpr std::size_t index_erase_charges =
+        4 * 2 + 6 * 4 + 2 * 2 + (2 + 4) + handle_erase_charges;
+    // Buffered commit: journal-tail read/write, <=2 dirty cache writes,
+    // one superblock write. begin and create_empty issue no backing calls.
+    static constexpr std::size_t commit_charges = 2 + 2 + 1;
+    static constexpr std::size_t insert_charges =
+        2 * descend_reads + 2 * (1 + 4) + handle_insert_charges
+        + index_insert_charges + commit_charges;
+    // Consumption is idle/clean: lower_bound adds two rd after descend,
+    // and reading key words and value each adds two handle rd + one cell rd.
+    static constexpr std::size_t consume_charges = descend_reads + 2 + 2 * (2 + 1);
+    // Teardown seeks may evict dirty pages. Erase adds a stored probe read
+    // per comparison, initial hget, leaf_entry, and one separator-name read.
+    static constexpr std::size_t scope_seek_charges = 2 * (descend_reads + 2 + 2 + 1);
+    static constexpr std::size_t erase_charges =
+        2 * (descend_reads + comparisons + 2 + 1 + 1)
+        + 2 * (2 + 4) + handle_erase_charges + index_erase_charges;
+    // 119 + 43 + 80 + 212 + 5 = 459 charges/row, including teardown.
+    // Empty-scope lookups/destructors add zero: 459 * (64+1) = 29835.
+    static constexpr std::size_t capacity = max_population
+        * (insert_charges + consume_charges + scope_seek_charges
+           + erase_charges + commit_charges);
+    std::array<pineforge::detail::ScratchIoCharge, capacity> entries{};
+    std::size_t count = 0;
+    bool overflow = false;
+
+    static void charge(void* opaque,
+                       const pineforge::detail::ScratchIoCharge& value) noexcept {
+        auto& log = *static_cast<IoChargeLog*>(opaque);
+        if (log.count == log.entries.size()) {
+            log.overflow = true;
+            return;
+        }
+        log.entries[log.count++] = value;
+    }
+};
+
+bool same_io_charge(const pineforge::detail::ScratchIoCharge& left,
+                    const pineforge::detail::ScratchIoCharge& right) {
+    return left.kind == right.kind
+        && left.operation == right.operation
+        && left.page == right.page
+        && left.bytes == right.bytes
+        && left.status == right.status;
+}
+
+// Observe the first consumer comparison after the unconditional live-handle
+// snapshot. Read fixed Core counters only; do not perform I/O, invoke another
+// consumer, or install a row/I/O observer in this construction fixture.
+struct ConstructionCounter {
+    pineforge::detail::scratch_impl::Core* core = nullptr;
+    IoChargeLog* charge_log = nullptr;
+    std::uint64_t population = 0;
+    std::uint64_t sequence_before = 0;
+    std::uint64_t handles_before = 0;
+    std::uint64_t publications = 0;
+    std::uint64_t inserted = 0;
+    std::uint64_t records = 0;
+    std::size_t charge_count = 0;
+    bool captured = false;
+    bool consumer_idle = false;
+
+    pineforge::detail::ScratchKeyOrder order() noexcept {
+        const auto original = source::detail::exit_scratch_key_order();
+        return {original.id, this,
+            [](void* opaque, const source::detail::ScratchByteSource& left,
+               const source::detail::ScratchByteSource& right, int& result) noexcept {
+                auto& counter = *static_cast<ConstructionCounter*>(opaque);
+                if (counter.core && !counter.captured && counter.population != 0
+                        && counter.core->cur_.record_count == counter.population) {
+                    // Each distinct ordinal allocates one fresh handle. The
+                    // final put increments record_count after its comparisons;
+                    // reaching this population identifies the first consumer,
+                    // even if a broken builder left its transaction open.
+                    counter.captured = true;
+                    counter.consumer_idle = !counter.core->active_;
+                    counter.publications = counter.core->cur_.seq - counter.sequence_before;
+                    counter.inserted = counter.core->cur_.next_handle - counter.handles_before;
+                    counter.records = counter.core->cur_.record_count;
+                    counter.charge_count = counter.charge_log
+                        ? counter.charge_log->count : 0;
+                }
+                const auto compare = source::detail::exit_scratch_key_order();
+                return compare.compare(compare.context, left, right, result);
+            }};
+    }
+};
+
+void construction_publications() {
+    namespace pd = pineforge::detail;
+    namespace sd = source::detail;
+    scenario = "bounded handle snapshot publications";
+    // The insertion policy is the fixed 64-row batch constant shared with
+    // teardown. It is not a page capacity: at P=512 the store's ordered leaf has
+    // (512 - 16 trailer bytes - 32 header bytes) / 8 = 58 entries.
+    constexpr std::size_t batch = sd::kExitScopeEraseBatch;
+    static_assert(batch == 64, "construction acceptance uses a fixed 64-row batch");
+    constexpr std::size_t page_size = pd::scratch_min_page_size;
+    constexpr std::size_t backing_pages = 1024;
+    for (const std::size_t population : {std::size_t{0}, std::size_t{1}, batch, batch + 1}) {
+        std::array<std::byte, backing_pages * page_size> bytes{};
+        pd::FixedMemoryScratchBacking backing({bytes.data(), bytes.size()}, page_size);
+        ConstructionCounter counter;
+        pd::CommandScratchStore store{
+            {2, page_size, 1, 1, counter.order(), pd::ScratchOpenMode::create_empty}, &backing};
+        CHECK(!backing.has_io_observer());
+        CHECK(store.status() == pd::ScratchStatus::ok);
+        CHECK(!store.has_io_observer());
+        auto* state = store.*access(ScratchState{});
+        CHECK(state != nullptr);
+        if (!state || store.status() != pd::ScratchStatus::ok) continue;
+        counter.core = state;
+        counter.population = population;
+        counter.sequence_before = state->cur_.seq;
+        counter.handles_before = state->cur_.next_handle;
+        sd::ExitScratchContext context{store, handle(1).run};
+        EmptyHost host;
+        Adapter adapter(host);
+        adapter.bind_exit_scratch(context);
+        auto& live = adapter.*access(Live{});
+        for (std::size_t i = 0; i < population; ++i)
+            live.push_back(handle(population - i));
+        // No placements, cohorts or pending requests: only the generic flat
+        // live-handle snapshot creates records. Its consumer finds no placement
+        // and cannot cancel, submit, or build another nonempty selection.
+        CHECK(!context.observe_rows && !context.observe_lookup);
+        CHECK(!store.transaction_active()); // Applied entry
+        adapter.on_applied(event(), {});
+        CHECK(!store.transaction_active()); // Applied return and scope teardown
+        CHECK(!context.teardown_failure.pending());
+        CHECK(store.record_count() == 0);
+        CHECK(state->cur_.next_handle - counter.handles_before == population);
+        if (population == 0) {
+            CHECK(!counter.captured);
+            counter.publications = state->cur_.seq - counter.sequence_before;
+            counter.inserted = state->cur_.next_handle - counter.handles_before;
+        } else {
+            CHECK(counter.captured);
+            CHECK(counter.consumer_idle);
+            CHECK(counter.records == population);
+        }
+        // Successful buffered commit_impl publishes one alternate superblock
+        // and increments seq once. Sampled before consumption/erase, this is
+        // construction work only; teardown publications are checked separately.
+        const auto expected = population / batch + (population % batch != 0);
+        CHECK(counter.inserted == population);
+        CHECK(counter.publications == expected);
+        CHECK(state->cur_.seq - counter.sequence_before
+            == counter.publications + expected);
+        std::array<std::byte, page_size> page{};
+        std::uint64_t digest = 0;
+        CHECK(store.state_digest({page.data(), page.size()}, digest) == pd::ScratchStatus::ok);
+        CHECK(!store.transaction_active()); // hash boundary
+        std::printf("%s: rows=%zu inserted=%llu publications=%llu expected=%zu\n",
+            scenario, population, static_cast<unsigned long long>(counter.inserted),
+            static_cast<unsigned long long>(counter.publications), expected);
+    }
+}
+
+void observed_construction_publications() {
+    namespace pd = pineforge::detail;
+    namespace sd = source::detail;
+    scenario = "observed handle snapshot publications";
+    constexpr std::size_t batch = sd::kExitScopeEraseBatch;
+    constexpr std::size_t page_size = pd::scratch_min_page_size;
+    constexpr std::size_t backing_pages = 1024;
+    for (const std::size_t population : {std::size_t{0}, std::size_t{1}, batch, batch + 1}) {
+        std::array<std::byte, backing_pages * page_size> bytes{};
+        IoChargeLog actual_log;
+        pd::FixedMemoryScratchBacking backing(
+            {bytes.data(), bytes.size()}, page_size,
+            {&actual_log, &IoChargeLog::charge});
+        ConstructionCounter counter;
+        counter.charge_log = &actual_log;
+        pd::CommandScratchStore store{
+            {2, page_size, 1, 1, counter.order(), pd::ScratchOpenMode::create_empty}, &backing};
+        CHECK(backing.has_io_observer());
+        CHECK(store.has_io_observer());
+        CHECK(store.status() == pd::ScratchStatus::ok);
+        auto* state = store.*access(ScratchState{});
+        CHECK(state != nullptr);
+        if (!state || store.status() != pd::ScratchStatus::ok) continue;
+        counter.core = state;
+        counter.population = population;
+        counter.sequence_before = state->cur_.seq;
+        counter.handles_before = state->cur_.next_handle;
+        const auto actual_start = actual_log.count;
+        sd::ExitScratchContext context{store, handle(1).run};
+        EmptyHost host;
+        Adapter adapter(host);
+        adapter.bind_exit_scratch(context);
+        auto& live = adapter.*access(Live{});
+        for (std::size_t i = 0; i < population; ++i)
+            live.push_back(handle(population - i));
+        CHECK(!context.observe_rows && !context.observe_lookup);
+        CHECK(!store.transaction_active());
+        adapter.on_applied(event(), {});
+        CHECK(!store.transaction_active());
+        CHECK(store.record_count() == 0);
+        CHECK(state->cur_.next_handle - counter.handles_before == population);
+        if (population == 0) {
+            CHECK(!counter.captured);
+            counter.publications = state->cur_.seq - counter.sequence_before;
+            counter.inserted = state->cur_.next_handle - counter.handles_before;
+            counter.charge_count = actual_log.count;
+        } else {
+            CHECK(counter.captured);
+            CHECK(counter.consumer_idle);
+            CHECK(counter.records == population);
+        }
+        CHECK(counter.inserted == population);
+        CHECK(counter.publications == population);
+        CHECK(counter.charge_count >= actual_start);
+
+        // This is the unchanged per-row path: each scalar append invokes
+        // exit_scratch_edit, so every row begins and publishes independently.
+        std::array<std::byte, backing_pages * page_size> expected_bytes{};
+        IoChargeLog expected_log;
+        pd::FixedMemoryScratchBacking expected_backing(
+            {expected_bytes.data(), expected_bytes.size()}, page_size,
+            {&expected_log, &IoChargeLog::charge});
+        ConstructionCounter expected_counter;
+        expected_counter.charge_log = &expected_log;
+        expected_counter.population = population;
+        pd::CommandScratchStore expected_store{
+            {2, page_size, 1, 1, expected_counter.order(),
+             pd::ScratchOpenMode::create_empty}, &expected_backing};
+        CHECK(expected_backing.has_io_observer());
+        CHECK(expected_store.has_io_observer());
+        CHECK(expected_store.status() == pd::ScratchStatus::ok);
+        expected_counter.core = expected_store.*access(ScratchState{});
+        CHECK(expected_counter.core != nullptr);
+        sd::ExitScratchContext expected_context{expected_store, handle(1).run};
+        const auto expected_start = expected_log.count;
+        std::size_t expected_end = expected_start;
+        {
+            // The flat Applied path first creates an empty owner-selection
+            // scope, performs its empty ordered lookup, then creates an empty
+            // ended-source scope before the live-handle snapshot.
+            sd::ExitScratchRows<std::string> exit_owners(expected_context);
+            exit_owners.ordered_text(
+                [](const sd::ExitScratchText&) { return true; }, true);
+            sd::ExitScratchRows<std::string> ended_sources(expected_context);
+            sd::ExitScratchRows<Handle> rows(expected_context);
+            for (std::size_t i = 0; i < population; ++i)
+                rows.push_back(handle(population - i));
+            rows.finish();
+            expected_end = expected_log.count;
+            if (!rows.empty()) {
+                // The adapter samples at the first consumer comparison,
+                // after descend has already read index/handle pages. Reach
+                // that same boundary in this independent scalar reference.
+                (void)rows.front();
+                CHECK(expected_counter.captured);
+                CHECK(expected_counter.consumer_idle);
+                expected_end = expected_counter.charge_count;
+            }
+        }
+        if (population == 0) expected_end = expected_log.count;
+        CHECK(!expected_store.transaction_active());
+        CHECK(!actual_log.overflow);
+        CHECK(!expected_log.overflow);
+        CHECK(expected_end >= expected_start);
+        if (counter.charge_count >= actual_start && expected_end >= expected_start) {
+            const auto actual_count = counter.charge_count - actual_start;
+            const auto expected_count = expected_end - expected_start;
+            CHECK(actual_count == expected_count);
+            if (actual_count == expected_count) {
+                for (std::size_t index = 0; index < actual_count; ++index) {
+                    CHECK(same_io_charge(actual_log.entries[actual_start + index],
+                                         expected_log.entries[expected_start + index]));
+                }
+            }
+        }
+    }
+}
+
+void batch_visibility_boundaries() {
+    namespace pd = pineforge::detail;
+    namespace sd = source::detail;
+    scenario = "batched row visibility boundaries";
+    constexpr std::size_t page_size = pd::scratch_min_page_size;
+    constexpr std::size_t backing_pages = 1024;
+    std::array<std::byte, backing_pages * page_size> bytes{};
+    pd::FixedMemoryScratchBacking backing({bytes.data(), bytes.size()}, page_size);
+    pd::CommandScratchStore store{
+        {2, page_size, 1, 1, sd::exit_scratch_key_order(),
+         pd::ScratchOpenMode::create_empty}, &backing};
+    CHECK(!backing.has_io_observer());
+    CHECK(store.status() == pd::ScratchStatus::ok);
+    if (store.status() != pd::ScratchStatus::ok) return;
+    auto* state = store.*access(ScratchState{});
+    CHECK(state != nullptr);
+    if (!state) return;
+    const auto sequence_before = state->cur_.seq;
+    {
+        sd::ExitScratchContext context{store, handle(1).run};
+        sd::ExitScratchBatchRows<Handle> rows(context);
+        try {
+            rows.push_back(handle(2));
+            rows.push_back(handle(1));
+        } catch (const sd::ExitScratchError& error) {
+            CHECK(false);
+            CHECK(error.status() == pd::ScratchStatus::programming_error);
+            if (store.transaction_active())
+                CHECK(store.rollback() == pd::ScratchStatus::ok);
+            return;
+        }
+        CHECK(rows.size() == 2);
+        CHECK(store.transaction_active());
+        CHECK(state->cur_.seq == sequence_before);
+        CHECK(rows[0] == handle(2));
+        CHECK(rows[1] == handle(1));
+        rows.finish();
+        CHECK(!store.transaction_active());
+        CHECK(state->cur_.seq == sequence_before + 1);
+        CHECK(rows[0] == handle(2));
+        CHECK(rows[1] == handle(1));
+    }
+    CHECK(!store.transaction_active());
+    CHECK(store.record_count() == 0);
+}
+
+namespace pd = pineforge::detail;
+namespace sd = source::detail;
+
+struct RowFailureObservation {
+    const std::type_info* type = nullptr;
+    std::string message;
+    RunFailureValue failure;
+    std::optional<pd::ScratchStatus> status;
+    std::optional<std::error_code> error_code;
+};
+
+template<class Operation>
+RowFailureObservation observe_row_failure(Operation operation) {
+    RowFailureObservation result;
+    try {
+        operation();
+    } catch (const std::exception& error) {
+        result.type = &typeid(error);
+        result.message = error.what();
+        result.failure = classify_run_failure(error);
+        if (const auto* scratch = dynamic_cast<const sd::ExitScratchError*>(&error))
+            result.status = scratch->status();
+        if (const auto* io = dynamic_cast<const std::system_error*>(&error))
+            result.error_code = io->code();
+    }
+    return result;
+}
+
+void compare_row_failures(const RowFailureObservation& actual,
+                          const RowFailureObservation& expected) {
+    CHECK(expected.type != nullptr);
+    CHECK(actual.type != nullptr);
+    if (actual.type && expected.type) CHECK(*actual.type == *expected.type);
+    CHECK(actual.message == expected.message);
+    CHECK(actual.status == expected.status);
+    CHECK(actual.error_code == expected.error_code);
+    CHECK(actual.failure.code == expected.failure.code);
+    CHECK(bool(actual.failure.args) == bool(expected.failure.args));
+    if (actual.failure.args && expected.failure.args)
+        CHECK(*actual.failure.args == *expected.failure.args);
+}
+
+class RowFaultBacking final : public pd::ScratchBacking {
+public:
+    explicit RowFaultBacking(pd::FixedMemoryScratchBacking& inner)
+        : ScratchBacking(inner.kind(), inner.page_size()), inner_(inner) {}
+    std::uint64_t page_count() const noexcept override { return inner_.page_count(); }
+    const pd::ReportScratchIoError* carried_failure() const noexcept override {
+        return last_failed_ && typed_ ? &failure_ : nullptr;
+    }
+    void arm(bool typed) noexcept {
+        fail_publication_ = true;
+        typed_ = typed;
+    }
+    std::size_t faults = 0;
+    pd::ScratchPageId failed_page = pd::scratch_no_page;
+
+protected:
+    pd::ScratchStatus do_read_page(pd::ScratchPageId page,
+                                   pd::ScratchBuffer destination) const noexcept override {
+        last_failed_ = false;
+        return inner_.read_page(page, destination);
+    }
+    pd::ScratchStatus do_write_page(pd::ScratchPageId page,
+                                    pd::ScratchBytes bytes) noexcept override {
+        last_failed_ = false;
+        // commit_impl publishes to next.seq & 1, so only pages 0 and 1
+        // identify publication writes. Other writes still exercise the real
+        // backing, including dirty evictions while comparing keys.
+        if (fail_publication_ && page < 2) {
+            fail_publication_ = false; // One refused write; rollback is serviceable.
+            ++faults;
+            failed_page = page;
+            last_failed_ = true;
+            return pd::ScratchStatus::io_error;
+        }
+        return inner_.write_page(page, bytes);
+    }
+    pd::ScratchStatus do_sync(pd::ScratchDurability durability) noexcept override {
+        last_failed_ = false;
+        return inner_.sync(durability);
+    }
+
+private:
+    pd::FixedMemoryScratchBacking& inner_;
+    pd::ReportScratchIoError failure_{ENOSPC, "exit scratch backing write"};
+    bool fail_publication_ = false;
+    bool typed_ = false;
+    mutable bool last_failed_ = false;
+};
+
+struct PartialBatchFixture {
+    // Same backing geometry as the construction fixtures; no observers, so
+    // the bounded-batch path is exercised rather than its per-row fallback.
+    static constexpr std::size_t page_size = pd::scratch_min_page_size;
+    std::array<std::byte, 1024 * page_size> bytes{};
+    pd::FixedMemoryScratchBacking memory{{bytes.data(), bytes.size()}, page_size};
+    RowFaultBacking backing{memory};
+    pd::CommandScratchStore store{
+        {2, page_size, 1, 1, sd::exit_scratch_key_order(),
+         pd::ScratchOpenMode::create_empty}, &backing};
+    sd::ExitScratchContext context{store, handle(1).run};
+
+    PartialBatchFixture() {
+        CHECK(store.status() == pd::ScratchStatus::ok);
+        CHECK(!store.has_io_observer());
+        CHECK(!context.observe_rows && !context.observe_lookup);
+    }
+    void check_clean() const {
+        CHECK(!store.transaction_active());
+        CHECK(!context.teardown_failure.pending());
+        CHECK(store.record_count() == 0);
+    }
+};
+
+enum class PartialBatchFailure { identity, commit, teardown };
+
+template<sd::ExitScratchRowMode Mode>
+RowFailureObservation partial_batch_failure(PartialBatchFailure fault,
+        std::size_t committed, std::size_t pending, bool typed = false) {
+    PartialBatchFixture fixture;
+    RowFailureObservation result;
+    const auto cleanup = observe_row_failure([&] {
+        sd::ExitScratchRows<Handle, Mode> rows(fixture.context);
+        for (std::size_t i = 0; i < committed; ++i) rows.push_back(handle(i + 1));
+        rows.finish();
+        // Both modes attempt the same input rows. For a commit fault the
+        // per-row reference fails while appending its last row; the batch
+        // fails when finish publishes those already staged rows.
+        const auto prepared = fault == PartialBatchFailure::commit
+                && Mode == sd::ExitScratchRowMode::per_row ? pending - 1 : pending;
+        for (std::size_t i = 0; i < prepared; ++i)
+            rows.push_back(handle(committed + i + 1));
+        CHECK(rows.size() == committed + prepared);
+        CHECK(fixture.store.transaction_active()
+            == (Mode == sd::ExitScratchRowMode::bounded_batch));
+        if (fault == PartialBatchFailure::teardown)
+            fixture.context.teardown_failure.remember(pd::ScratchStatus::corrupt, fixture.store);
+        result = observe_row_failure([&] {
+            switch (fault) {
+            case PartialBatchFailure::identity: {
+                auto foreign = handle(committed + prepared + 1);
+                ++foreign.run.run_number;
+                rows.push_back(foreign);
+                break;
+            }
+            case PartialBatchFailure::commit:
+                fixture.backing.arm(typed);
+                if constexpr (Mode == sd::ExitScratchRowMode::per_row)
+                    rows.push_back(handle(committed + pending));
+                else rows.finish();
+                break;
+            case PartialBatchFailure::teardown:
+                if constexpr (Mode == sd::ExitScratchRowMode::per_row)
+                    rows.push_back(handle(committed + prepared + 1));
+                else rows.finish();
+                break;
+            }
+        });
+        CHECK(result.type != nullptr);
+        // Check before destruction too: a destructor-only fix cannot hide
+        // an active transaction from the caller that catches this failure.
+        CHECK(!fixture.store.transaction_active());
+        CHECK(rows.size() == committed + prepared);
+        // Rollback restores the last batch boundary. In the per-row reference
+        // all preceding successful appends are already committed.
+        const auto survivors = Mode == sd::ExitScratchRowMode::bounded_batch
+            ? committed : committed + prepared;
+        CHECK(fixture.store.record_count() == survivors);
+        if (!fixture.store.transaction_active()) {
+            // Inspect the store directly: the failed builder is abandoned,
+            // and the teardown test deliberately still has a pending failure.
+            pd::ScratchHandle current = 0;
+            auto status = fixture.store.first(current);
+            std::size_t visited = 0;
+            for (; visited < survivors && status == pd::ScratchStatus::ok; ++visited) {
+                sd::ExitScratchKeyWords key{};
+                std::uint64_t incarnation = 0;
+                CHECK(fixture.store.read(current, pd::ScratchField::key, 0,
+                    {reinterpret_cast<std::byte*>(key.data()), sizeof(key)})
+                    == pd::ScratchStatus::ok);
+                CHECK((key == sd::ExitScratchKeyWords{rows.scope(), 0, 0, visited}));
+                CHECK(fixture.store.read(current, pd::ScratchField::value, 0,
+                    {reinterpret_cast<std::byte*>(&incarnation), sizeof(incarnation)})
+                    == pd::ScratchStatus::ok);
+                CHECK(incarnation == handle(visited + 1).incarnation);
+                status = fixture.store.next(current, current);
+            }
+            CHECK(visited == survivors);
+            CHECK(status == pd::ScratchStatus::end);
+        }
+        if (fault == PartialBatchFailure::commit) {
+            CHECK(fixture.backing.faults == 1); // The armed failure is one shot.
+            CHECK(fixture.backing.failed_page != pd::scratch_no_page);
+            CHECK(fixture.backing.failed_page < 2);
+        }
+        if (fault == PartialBatchFailure::teardown) {
+            CHECK(fixture.context.teardown_failure.pending());
+            // Clear only this deliberately injected prior failure, after
+            // observing rollback, so the ordinary scope erase can run.
+            fixture.context.teardown_failure = sd::ExitScratchTeardownFailure{};
+        } else CHECK(!fixture.context.teardown_failure.pending());
+    });
+    CHECK(cleanup.type == nullptr);
+    // The relation differs just after rollback, but scope destruction erases
+    // every surviving row in either mode. It must leave the context reusable.
+    fixture.check_clean();
+    return result;
+}
+
+void partial_batch_errors() {
+    constexpr auto per_row = sd::ExitScratchRowMode::per_row;
+    constexpr auto batched = sd::ExitScratchRowMode::bounded_batch;
+    constexpr auto batch = sd::kExitScopeEraseBatch;
+    for (const std::size_t committed : {std::size_t{0}, batch}) {
+        for (const std::size_t pending : {std::size_t{17}, batch - 1}) {
+            for (const auto fault : {PartialBatchFailure::identity, PartialBatchFailure::teardown}) {
+                scenario = fault == PartialBatchFailure::identity
+                    ? "partial batch foreign-run rollback" : "partial batch teardown rollback";
+                // Derive exception type, status, code, arguments and message
+                // from the unchanged per-row path with the same failed input.
+                const auto expected = partial_batch_failure<per_row>(fault, committed, pending);
+                const auto actual = partial_batch_failure<batched>(fault, committed, pending);
+                compare_row_failures(actual, expected);
+            }
+            scenario = "partial batch backing commit failure";
+            for (bool typed : {false, true}) {
+                const auto expected = partial_batch_failure<per_row>(
+                    PartialBatchFailure::commit, committed, pending, typed);
+                const auto actual = partial_batch_failure<batched>(
+                    PartialBatchFailure::commit, committed, pending, typed);
+                compare_row_failures(actual, expected);
+            }
+        }
+    }
+}
+
+void unfinished_batch_cleanup() {
+    scenario = "unfinished batch scope cleanup";
+    const std::runtime_error caller_failure("snapshot caller failure");
+    const auto expected = observe_row_failure([&] { throw caller_failure; });
+    for (bool unwinding : {false, true}) {
+        PartialBatchFixture fixture;
+        const auto actual = observe_row_failure([&] {
+            sd::ExitScratchBatchRows<Handle> rows(fixture.context);
+            for (std::size_t i = 0; i < sd::kExitScopeEraseBatch - 1; ++i)
+                rows.push_back(handle(i + 1));
+            CHECK(fixture.store.transaction_active());
+            if (unwinding) throw caller_failure;
+        });
+        if (unwinding) compare_row_failures(actual, expected);
+        else CHECK(actual.type == nullptr);
+        fixture.check_clean();
+    }
+}
+
+void partial_batch_boundary() {
+    scenario = "partial batch final publication and move";
+    PartialBatchFixture fixture;
+    auto* state = fixture.store.*access(ScratchState{});
+    CHECK(state != nullptr);
+    if (!state) return;
+    const auto sequence_before = state->cur_.seq;
+    constexpr auto population = sd::kExitScopeEraseBatch - 1;
+    const auto cleanup = observe_row_failure([&] {
+        std::optional<sd::ExitScratchBatchRows<Handle>> moved;
+        {
+            sd::ExitScratchBatchRows<Handle> rows(fixture.context);
+            for (std::size_t i = 0; i < population; ++i)
+                rows.push_back(handle(population - i));
+            CHECK(rows.size() == population);
+            CHECK(state->cur_.seq == sequence_before);
+            CHECK(fixture.store.transaction_active());
+            moved.emplace(std::move(rows));
+        } // The moved-from builder must not roll back the transferred batch.
+        CHECK(fixture.store.transaction_active());
+        CHECK(moved->size() == population);
+        for (std::size_t i = 0; i < population; ++i)
+            CHECK((*moved)[i] == handle(population - i));
+        moved->finish();
+        CHECK(!fixture.store.transaction_active());
+        const auto publications = population / sd::kExitScopeEraseBatch
+            + (population % sd::kExitScopeEraseBatch != 0);
+        CHECK(state->cur_.seq == sequence_before + publications);
+        moved->finish();
+        CHECK(state->cur_.seq == sequence_before + publications);
+        for (std::size_t i = 0; i < population; ++i)
+            CHECK((*moved)[i] == handle(population - i));
+    });
+    CHECK(cleanup.type == nullptr);
+    fixture.check_clean();
+}
+#endif
 
 void child_rows(std::size_t population) {
     scenario = "X25 child snapshot";
@@ -735,6 +1382,16 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "expected all, x25, x26, or x27\n");
         return 2;
     }
+#if PF_HAS_EXIT_SCRATCH
+    if (row == "all") {
+        construction_publications();
+        batch_visibility_boundaries();
+        observed_construction_publications();
+        partial_batch_errors();
+        unfinished_batch_cleanup();
+        partial_batch_boundary();
+    }
+#endif
     for (const auto population : {17U, 129U, 513U}) {
         if (row == "all" || row == "x25") child_rows(population);
         if (row == "all" || row == "x26") paired_closes(population);

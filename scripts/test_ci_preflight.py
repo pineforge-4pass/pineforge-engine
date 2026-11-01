@@ -35,6 +35,20 @@ from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES,
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def reader_run_timeout(environment):
+    """The fake-gh reader runs under no deadline unless the operator names one.
+
+    PINEFORGE_TEST_READER_TIMEOUT_SECONDS holds a positive number of seconds; unset, empty or 0 means no
+    deadline. A genuine hang is caught by the CI's own no-new-output guard, not by a limit in this file.
+    """
+    value = environment.get('PINEFORGE_TEST_READER_TIMEOUT_SECONDS', '').strip()
+    seconds = float(value) if value else 0.0
+    return seconds if seconds > 0 else None
+
+
+READER_RUN_TIMEOUT = reader_run_timeout(os.environ)
+
+
 class ParallelCommand(tuple):
     """Exercise the opt-in protocol without depending on a new constructor."""
 
@@ -3940,9 +3954,9 @@ class PreflightFailures(unittest.TestCase):
         inventory = re.findall(
             r'pins all (\d+) source-labelled names: (\d+) from the\n'
             r'`PINEFORGE_PR_SLOW_TESTS` loop and (\d+) direct CMake', text)
-        self.assertEqual(inventory, [('69', '43', '26')])
-        self.assertIn('The timing list contains 43 names, and 26 additional names', text)
-        self.assertIn('making 69 distinct pinned slow names.', text)
+        self.assertEqual(inventory, [('71', '43', '28')])
+        self.assertIn('The timing list contains 43 names, and 28 additional names', text)
+        self.assertIn('making 71 distinct pinned slow names.', text)
 
     def test_floor_table_documentation_anchors_point_to_definition(self):
         source = (ROOT / 'scripts/ci_verify.py').read_text().splitlines()
@@ -8891,6 +8905,20 @@ class PreflightSliceLoader(unittest.TestLoader):
         return self.suiteClass(cases[test_id] for test_id in selected)
 
 
+class ReaderRunTimeoutTests(unittest.TestCase):
+    """The reader deadline is a parameter whose default is no deadline."""
+
+    def test_default_is_no_deadline_and_the_variable_names_one(self):
+        name = 'PINEFORGE_TEST_READER_TIMEOUT_SECONDS'
+        self.assertIsNone(reader_run_timeout({}))
+        self.assertIsNone(reader_run_timeout({name: ''}))
+        self.assertIsNone(reader_run_timeout({name: '0'}))
+        self.assertEqual(reader_run_timeout({name: '30'}), 30.0)
+        self.assertEqual(reader_run_timeout({name: ' 2.5 '}), 2.5)
+        with self.assertRaises(ValueError):
+            reader_run_timeout({name: 'soon'})
+
+
 class GkeCompareReaderTests(unittest.TestCase):
     """Execute both real compare steps; only the gh executable is a fixture."""
 
@@ -8962,7 +8990,7 @@ print(json.dumps(fixture["response"] if not requests else {"files": None}))
                    'REPO': 'pfrel/pineforge-engine', 'BASE_SHA': 'b' * 40, 'HEAD_SHA': 'a' * 40,
                    'PATH_FILE': str(paths), 'GITHUB_OUTPUT': str(output)}
             result = subprocess.run([sys.executable, '-I', str(script)], cwd=ROOT, env=env,
-                                    capture_output=True, text=True, timeout=30)
+                                    capture_output=True, text=True, timeout=READER_RUN_TIMEOUT)
             requests = ([json.loads(line) for line in calls.read_text().splitlines()]
                         if calls.exists() else [])
             return (result, paths.read_bytes() if paths.exists() else None, requests,

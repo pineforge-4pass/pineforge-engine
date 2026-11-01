@@ -38,15 +38,18 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+from parity_paths import resolve_paths
+
 # THIS FILE IS THE CANONICAL PARITY RUBRIC (single source of truth).
 # pineforge-utils/validator/validate.py and any other comparator must track
 # THESE thresholds/semantics, not the other way around.
 # Two profiles available:
 #  - STRICT: tight on all four dims (indicator-style strategies whose exits
 #    land on deterministic OHLC levels).
-#  - PRODUCTION: relaxes exit (5x) and per-trade pnl (~100x) to absorb TV's
-#    broker-emulator sub-bar fill drift. Auto-applied when strategy.pine uses
-#    any trail_* parameter on strategy.exit.
+#  - PRODUCTION: keeps count and entry at the strict limits, relaxes exit to
+#    0.02% and keeps per-strategy P&L at 1.0% to absorb trail fill drift.
+#    Auto-applied when strategy.pine uses any trail_* parameter on
+#    strategy.exit.
 STRICT_COUNT_DELTA = 0.01      # 1.0%
 STRICT_ENTRY_DELTA = 0.0001    # 0.01%
 STRICT_EXIT_DELTA  = 0.0001    # 0.01%
@@ -54,8 +57,8 @@ STRICT_PNL_DELTA   = 0.01      # 1.0%
 
 PRODUCTION_COUNT_DELTA = 0.01    # 1.0%   — same as strict
 PRODUCTION_ENTRY_DELTA = 0.0001  # 0.01%  — entries must stay tight
-PRODUCTION_EXIT_DELTA  = 0.0005  # 0.05%  — exits absorb sub-bar broker drift
-PRODUCTION_PNL_DELTA   = 1.0     # 100%   — gate only catastrophic divergence
+PRODUCTION_EXIT_DELTA  = 0.0002  # 0.02%  — exits absorb trail fill drift
+PRODUCTION_PNL_DELTA   = 0.01    # 1.0%   — same P&L limit as strict
 
 STRONG_COUNT_DELTA = 0.06
 STRONG_ENTRY_DELTA = 0.001
@@ -1583,6 +1586,12 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("strategy_dir", nargs="?", help="Single strategy folder, e.g. corpus/basic/greedy")
+    ap.add_argument("--corpus-root", type=Path, default=None,
+                    help="Mounted corpus root (default: checkout corpus/).")
+    ap.add_argument("--derived-workspace", type=Path, default=None,
+                    help="Derived-feed workspace (accepted for bundle-wide CLI parity).")
+    ap.add_argument("--harness-dir", type=Path, default=None,
+                    help="Installed harness directory (accepted for bundle-wide CLI parity).")
     ap.add_argument("--all", action="store_true",
                     help="Verify all reference-tier strategies (basic/, community/, validation/). "
                          "parity-anomalies/ is excluded unless --include-anomalies is given.")
@@ -1598,8 +1607,10 @@ def main() -> int:
     ap.add_argument("--quiet", action="store_true", help="Print only summary")
     args = ap.parse_args()
 
-    repo_root = Path(__file__).resolve().parent.parent
-    corpus_root = repo_root / "corpus"
+    paths = resolve_paths(corpus_root=args.corpus_root,
+                          derived_workspace=args.derived_workspace,
+                          harness_dir=args.harness_dir)
+    corpus_root = paths.corpus_root
 
     if args.strategy_dir:
         label = verify_one(Path(args.strategy_dir).resolve(),
@@ -1615,6 +1626,12 @@ def main() -> int:
             cats = ["basic", "community", "validation"]
             if args.include_anomalies:
                 cats.append("parity-anomalies")
+        if not corpus_root.is_dir():
+            print(
+                f"error: corpus root is missing or not a directory: {corpus_root}",
+                file=sys.stderr,
+            )
+            return 1
         n_total = 0
         counts = {k: 0 for k in ("excellent", "strong", "moderate", "weak",
                                   "minimal", "anomaly", "engine_only", "missing")}
@@ -1642,6 +1659,13 @@ def main() -> int:
                 # (declared via inputs.json::expected_tier) — not failures.
                 if label not in {"excellent", "strong", "anomaly", "engine_only"}:
                     n_fail.append(f"{cat}/{strat.name}")
+        if n_total == 0:
+            print(
+                f"error: refused corpus root {corpus_root}: "
+                "zero strategies discovered",
+                file=sys.stderr,
+            )
+            return 1
         print()
         print(
             "Verified "
