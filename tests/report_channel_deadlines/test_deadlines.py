@@ -86,20 +86,12 @@ class Process:
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
             stream.close()
 
-    def line(self, timeout=None):
-        """Wait for one outcome line; no time limit unless a caller passes one (none does): a real hang is
-        caught by the CI runner's own no-new-output guard."""
-        expiry = None if timeout is None else time.monotonic() + timeout
+    def line(self):
+        """Wait for one outcome line with no time limit: a real hang is caught by the platform's own maximum job time (the workflows set no timeout-minutes: ci.yml:25)."""
         poller = select.poll()
         poller.register(self.process.stdout, select.POLLIN)
         while b"\n" not in self.buffer:
-            wait_ms = None
-            if expiry is not None:
-                remaining = expiry - time.monotonic()
-                if remaining <= 0:
-                    raise AssertionError("fixture exceeded its external wall bound")
-                wait_ms = max(1, math.ceil(remaining * 1000))
-            if not poller.poll(wait_ms):
+            if not poller.poll():
                 continue
             part = os.read(self.process.stdout.fileno(), 65536)
             if not part:
@@ -123,8 +115,8 @@ class Process:
     def go(self):
         self.command("go")
 
-    def result(self, timeout=None):
-        value = self.line(timeout)
+    def result(self):
+        value = self.line()
         self.finish()
         return value
 
@@ -235,7 +227,7 @@ class DeadlineProcesses(unittest.TestCase):
             with Process("worker", config, (*fds, trace.fileno()),
                          env=environment) as worker:
                 worker.go()
-                outcome = worker.result(None)
+                outcome = worker.result()
             events = trace_events(trace)
             return outcome, self.operation_elapsed(outcome, events), events
 
@@ -265,7 +257,7 @@ class DeadlineProcesses(unittest.TestCase):
                 self.pause(peer)
             early_peer = None
             if peer_config.get("close_after") == 0:
-                early_peer = peer.result(None)
+                early_peer = peer.result()
             storm_process = None
             if storm:
                 storm_process = stack.enter_context(Process("storm", {
@@ -273,7 +265,6 @@ class DeadlineProcesses(unittest.TestCase):
                     "duration_ms": config["wall_ms"] + 1000,
                 }))
                 storm_process.go()
-            started = time.monotonic()
             worker.go()
             if (peer_config.get("mode") == "after_backpressure"
                     or resume_after_ms is not None):
@@ -296,17 +287,17 @@ class DeadlineProcesses(unittest.TestCase):
                             peer.command("drain")
                         break
                     time.sleep(0.003)
-            outcome = worker.line(None)
+            outcome = worker.line()
             if storm_process is not None:
                 storm_process.command("stop")
-                self.assertGreater(storm_process.result(None)["sent"], 10)
+                self.assertGreater(storm_process.result()["sent"], 10)
                 worker.command("release")
             worker.finish()
             if paused:
                 os.kill(peer.process.pid, signal.SIGCONT)
             if peer_config.get("mode") == "never":
                 peer.command("drain")
-            peer_result = early_peer if early_peer is not None else peer.result(None)
+            peer_result = early_peer if early_peer is not None else peer.result()
             events = trace_events(trace)
             elapsed = self.operation_elapsed(outcome, events, "send")
             return outcome, peer_result, elapsed, events
@@ -333,8 +324,8 @@ class DeadlineProcesses(unittest.TestCase):
             outgoing.close()
             writer.go()
             worker.go()
-            outcome = worker.result(None)
-            peer = writer.result(None)
+            outcome = worker.result()
+            peer = writer.result()
             events = trace_events(trace)
             return outcome, peer, self.operation_elapsed(outcome, events, "read"), events
 
@@ -372,11 +363,11 @@ class DeadlineProcesses(unittest.TestCase):
                 self.pause(reader)
             writer.go()
             worker.go()
-            outcome = worker.result(None)
+            outcome = worker.result()
             if paused:
                 os.kill(reader.process.pid, signal.SIGCONT)
-            peer = reader.result(None)
-            sent = writer.result(None)
+            peer = reader.result()
+            sent = writer.result()
             events = trace_events(trace)
             elapsed = self.operation_elapsed(outcome, events, "send")
             return outcome, peer, sent, elapsed, events
@@ -386,7 +377,7 @@ class DeadlineProcesses(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with Process("import", {}, cwd=directory) as probe:
                 probe.go()
-                result = probe.result(None)
+                result = probe.result()
         self.assertEqual(result["before"], result["after"])
         self.assertEqual(result["after"]["files"], [])
         self.assertEqual(len(result["after"]["tasks"]), 1)
@@ -412,7 +403,7 @@ class DeadlineProcesses(unittest.TestCase):
         """None/zero expose infinity; invalid durations still raise ValueError."""
         with Process("constructors", {}) as probe:
             probe.go()
-            result = probe.result(None)
+            result = probe.result()
         self.assertEqual(
             [(row["wall_ms"], row["stall_ms"]) for row in result["snapshots"]],
             [(None, None), (None, 0), (0, None), (0, 0),

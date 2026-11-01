@@ -132,7 +132,7 @@ class Box:
                                    preexec_fn=inherit_limits if inherited_as is not None else None)
         self.processes.append(process)
         # No outside time limit: the run ends when the entrypoint does (a real hang is caught by
-        # the CI runner's own no-new-output guard).
+        # the platform's own maximum job time (the workflows set no timeout-minutes: ci.yml:25)).
         stdout, stderr = process.communicate(input=b"")
         if stderr_sink is not None:
             stderr = Path(stderr_sink.name).read_bytes()

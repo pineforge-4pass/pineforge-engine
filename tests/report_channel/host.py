@@ -214,11 +214,15 @@ def validator_observer():
     """Build only on the executing CLOUD test host; absence is a failure."""
     with tempfile.TemporaryDirectory(prefix="pf-finalizer-observer-") as directory:
         library = Path(directory) / "observe.so"
-        subprocess.run(
+        build = subprocess.run(
             [os.environ.get("CC", "cc"), "-std=c11", "-shared", "-fPIC",
              "-Wall", "-Wextra", "-Werror", "-o", str(library),
              str(Path(__file__).with_name("observe_finalizer.c"))],
-            capture_output=True, check=True, timeout=30)
+            capture_output=True, check=False)
+        if build.returncode != 0:
+            raise AssertionError(
+                "the finalizer observer did not build: " + " ".join(build.args)
+                + "\n" + build.stderr.decode(errors="replace"))
         yield library
 
 
@@ -654,7 +658,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                 f"M accepted a host probe before cancellation; {current_capture().failure_context()}")
 
         # watchdog_seconds None or 0 = no host deadline: the launch ends when the supervisor does
-        # (a real hang is caught by the CI runner's own no-new-output guard, not by a limit here).
+        # (a real hang is caught by the platform's own maximum job time (the workflows set no timeout-minutes: ci.yml:25), not by a limit here).
         if watchdog_seconds is not None and watchdog_seconds < 0:
             raise ValueError("watchdog_seconds must be None, 0 or a positive number of seconds")
         if watchdog_after_stall_seconds is not None and watchdog_after_stall_seconds < 0:

@@ -27,7 +27,7 @@ HANG_GUARD_ENVIRONMENT = "PINEFORGE_REPORT_TEST_HANG_GUARD_SECONDS"
 def hang_guard_from_environment(environment=os.environ):
     """The test host's deadline for the launches below, as a parameter: unset, empty or 0 = no
     deadline (None); a positive number of seconds applies exactly; anything else is a usage error
-    naming the variable. A real hang is caught by the CI runner's own no-new-output guard."""
+    naming the variable. A real hang is caught by the platform's own maximum job time (the workflows set no timeout-minutes: ci.yml:25)."""
     text = environment.get(HANG_GUARD_ENVIRONMENT, "")
     if text.strip() == "":
         return None
@@ -1086,14 +1086,11 @@ class Contract(unittest.TestCase):
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            end = time.monotonic() + 2
             while process_info(pid) is not None:
                 try:
                     os.waitpid(pid, os.WNOHANG)
                 except ChildProcessError:
                     pass  # Adoption can follow the leader's final exit.
-                if time.monotonic() >= end:
-                    raise AssertionError(f"TEST cleanup could not reap {process_info(pid)}")
                 time.sleep(0.01)
 
     def test_diagnostic_refusal_stops_descendant_after_leader_exit(self):
