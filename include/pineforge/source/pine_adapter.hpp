@@ -3244,6 +3244,10 @@ private:
     void clear_live() noexcept;
     void erase_placement(std::uint64_t);
     void count_live(const PlacementSnapshot&, bool adding) noexcept;
+    // Independent recount in every profile: -1 if equal; otherwise the first
+    // count slot, then highest limit/count or newest admission bar/count.
+    // A mismatch prints its index and both values before the Debug abort.
+    int live_count_mismatch() const noexcept;
     void assert_live_counts() const noexcept;
     bool has_live_family(PineOrderFamily) const noexcept;
     bool has_live_exit_policy() const noexcept;

@@ -3917,6 +3917,8 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND TARGET test_adapter_quiet_bar)
         add_test(NAME test_adapter_bar_open_${_pf_bar_open_case}
             COMMAND test_adapter_bar_open_candidates ${_pf_bar_open_case})
     endforeach()
+    pineforge_add_twin_test(test_adapter_bar_open_short_seed_counts
+        test_l8c_short_seed_guards live-counts)
 endif()
 
 if(UNIX)

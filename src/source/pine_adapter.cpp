@@ -29477,8 +29477,12 @@ void PineExecutionAdapter::count_live(const PlacementSnapshot& row, bool adding)
     }
 }
 
-void PineExecutionAdapter::assert_live_counts() const noexcept {
-#ifndef NDEBUG
+int PineExecutionAdapter::live_count_mismatch() const noexcept {
+    const auto mismatch = [](std::size_t slot, auto actual, auto stored) {
+        std::fprintf(stderr, "live-count mismatch slot=%zu actual=%.21Lg stored=%.21Lg\n",
+                     slot, static_cast<long double>(actual), static_cast<long double>(stored));
+        return static_cast<int>(slot);
+    };
     std::size_t actual[RetiredRowScratch::live_count_slots]{};
     double highest_limit = 0.0;
     std::size_t highest_limit_count = 0;
@@ -29544,12 +29548,24 @@ void PineExecutionAdapter::assert_live_counts() const noexcept {
             }
         }
     }
+    const auto& facts = retired_row_scratch_;
     for (std::size_t i = 0; i < RetiredRowScratch::live_count_slots; ++i)
-        assert(actual[i] == retired_row_scratch_.live_families[i]);
-    assert(highest_limit == retired_row_scratch_.highest_buy_limit);
-    assert(highest_limit_count == retired_row_scratch_.highest_buy_limit_count);
-    assert(newest_bar == retired_row_scratch_.newest_admission_bar);
-    assert(newest_bar_count == retired_row_scratch_.newest_admission_count);
+        if (actual[i] != facts.live_families[i]) return mismatch(i, actual[i], facts.live_families[i]);
+    constexpr auto scalar = RetiredRowScratch::live_count_slots;
+    if (highest_limit != facts.highest_buy_limit)
+        return mismatch(scalar, highest_limit, facts.highest_buy_limit);
+    if (highest_limit_count != facts.highest_buy_limit_count)
+        return mismatch(scalar + 1, highest_limit_count, facts.highest_buy_limit_count);
+    if (newest_bar != facts.newest_admission_bar)
+        return mismatch(scalar + 2, newest_bar, facts.newest_admission_bar);
+    if (newest_bar_count != facts.newest_admission_count)
+        return mismatch(scalar + 3, newest_bar_count, facts.newest_admission_count);
+    return -1;
+}
+
+void PineExecutionAdapter::assert_live_counts() const noexcept {
+#ifndef NDEBUG
+    assert(live_count_mismatch() == -1);
 #endif
 }
 

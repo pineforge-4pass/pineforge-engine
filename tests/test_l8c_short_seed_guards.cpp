@@ -74,6 +74,20 @@ struct RememberLiveTag {
 template struct PrivateAccess<RememberLiveTag,
     &source::PineExecutionAdapter::remember_live>;
 
+struct LiveCountMismatchTag {
+    using type = int (source::PineExecutionAdapter::*)() const noexcept;
+    friend type access(LiveCountMismatchTag);
+};
+template struct PrivateAccess<LiveCountMismatchTag,
+    &source::PineExecutionAdapter::live_count_mismatch>;
+
+struct ActivatePlanTag {
+    using type = void (source::PineExecutionAdapter::*)(const NativeDecisionContext&);
+    friend type access(ActivatePlanTag);
+};
+template struct PrivateAccess<ActivatePlanTag,
+    &source::PineExecutionAdapter::activate_short_seed_plan_at_open>;
+
 struct BrokerEpochTag {
     using type = std::uint64_t source::PineExecutionAdapter::*;
     friend type access(BrokerEpochTag);
@@ -116,7 +130,8 @@ enum class QualificationCase {
 
 class QualificationProbe final : public source::PineNativeHost {
 public:
-    explicit QualificationProbe(QualificationCase which) : which_(which) {
+    explicit QualificationProbe(QualificationCase which, bool exercise_openings = false)
+        : which_(which), exercise_openings_(exercise_openings) {
         source::PineStrategyConfig config;
         config.initial_capital = 1'000'000.0;
         config.default_qty_type = static_cast<int>(QtyType::FIXED);
@@ -134,8 +149,14 @@ public:
     bool baseline = false;
     bool qualified = false;
     bool roles_before_qualification_zero = false;
+    int openings_checked = 0;
+    int activations_checked = 0;
 
     void on_source_bar(const Bar&) override {
+        // No fill recalculations: each source callback follows one real host
+        // opening. CHECK stays active when the library is built with NDEBUG.
+        CHECK((adapter_.*access(LiveCountMismatchTag{}))() == -1);
+        ++openings_checked;
         if (pine_bar_index() == 0) {
             strategy_entry("seed-id", false);
             return;
@@ -194,12 +215,17 @@ public:
             break;
         }
         case QualificationCase::FillBorn: {
-            auto& row = placements.at(pending.plan.long_entry.incarnation);
+            const auto handle = pending.plan.long_entry;
+            auto row = placements.at(handle.incarnation);
             row.birth = OrderBirth::fill_evaluation(
                 1, 2'000,
                 BirthCursor::point(BirthCursorDomain::HistoricalPath, 1, 4),
                 100.0, 1, 1, 2);
             row.birth_reach = compat::pine::HistoricalBirthReach::ExtremeWaypoints;
+            // Birth/reach are admission-count operands. Rewrite the live
+            // snapshot through the same subtract/install/add writer as a
+            // replacement, preserving this guard's fill-born input.
+            (adapter_.*access(RememberLiveTag{}))(handle, std::move(row));
             break;
         }
         case QualificationCase::NamedCancelRecreation:
@@ -221,19 +247,39 @@ public:
             break;
         }
         qualified = (adapter_.*access(QualifyTag{}))(pending.plan);
+        CHECK((adapter_.*access(LiveCountMismatchTag{}))() == -1);
+        if (exercise_openings_) {
+            // Use the same modeled next-open epoch as the qualification
+            // guards, but also execute the production activation itself.
+            const auto plan = pending.plan;
+            const bool should_activate = which_ == QualificationCase::Baseline
+                || which_ == QualificationCase::StreamPhase;
+            (adapter_.*access(ActivatePlanTag{}))(NativeDecisionContext{});
+            CHECK(!pending.ready);
+            CHECK(adapter_.short_seed_collision_role_v1(plan.long_entry) == (should_activate ? 1 : 0));
+            CHECK(adapter_.short_seed_collision_role_v1(plan.materialize_long) == (should_activate ? 2 : 0));
+            CHECK(adapter_.short_seed_collision_role_v1(plan.final_short) == (should_activate ? 3 : 0));
+            CHECK((adapter_.*access(LiveCountMismatchTag{}))() == -1);
+            ++activations_checked;
+            --epoch; // Let the following real host opening advance it normally.
+        }
     }
 
 private:
     QualificationCase which_;
+    bool exercise_openings_;
 };
 
-void run_qualification_case(QualificationCase which) {
+void run_qualification_case(QualificationCase which, bool exercise_openings = false) {
     std::printf("qualification case %d\n", static_cast<int>(which));
-    QualificationProbe host(which);
-    const Bar bars[] = {bar(60'000), bar(120'000)};
-    host.run(bars, 2, "1", "1", false, 4,
+    QualificationProbe host(which, exercise_openings);
+    const Bar bars[] = {bar(60'000), bar(120'000), bar(180'000), bar(240'000)};
+    const int count = exercise_openings ? 4 : 2;
+    host.run(bars, count, "1", "1", false, 4,
              MagnifierDistribution::ENDPOINTS);
     CHECK(host.last_error().empty());
+    CHECK(host.openings_checked == count);
+    CHECK(host.activations_checked == (exercise_openings ? 1 : 0));
     if (which != QualificationCase::Magnifier
         && which != QualificationCase::NonHundredMargins) {
         CHECK(host.baseline);
@@ -276,6 +322,10 @@ int main(int argc, char** argv) {
         }
     }
     if (selected == "all") run_qualification_case(QualificationCase::Baseline);
+    if (selected == "all" || selected == "live-counts") {
+        run_qualification_case(QualificationCase::Baseline, true);
+        run_qualification_case(QualificationCase::FillBorn, true);
+    }
     std::printf("L8c ShortSeed guards: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
