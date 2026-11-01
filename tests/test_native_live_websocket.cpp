@@ -7,6 +7,7 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -30,6 +31,78 @@ int failures = 0;
 template<class F> bool throws(F&& f) {
     try { f(); } catch (const std::exception&) { return true; }
     return false;
+}
+
+void connect_timeout_option_tests() {
+    CHECK(connect_timeout_option(0) == std::numeric_limits<long>::max());
+    CHECK(connect_timeout_option(3000) == 3000);
+    CHECK(connect_timeout_option(1) == 1);
+}
+
+void feed_http_options_default_tests() {
+    for (bool websocket : {false, true}) {
+        const std::string url = websocket ? "wss://feed.example.test/events" : "https://feed.example.test/events";
+        const auto feed = feed_http_options(url, false, websocket, 0, 0, 0);
+        CHECK(feed.url == url);
+        CHECK(!feed.allow_insecure_http);
+        CHECK(feed.hmac_secret.empty());
+        CHECK(feed.connect_timeout_ms == 0);
+        CHECK(feed.total_timeout_ms == 0);
+        CHECK(feed.idle_timeout_ms == 0);
+        CHECK(feed.message_timeout_ms == 0);
+        CHECK(connect_timeout_option(feed.connect_timeout_ms) == std::numeric_limits<long>::max());
+    }
+}
+
+void feed_http_options_explicit_tests() {
+    for (bool websocket : {false, true}) {
+        const std::string url = websocket ? "ws://feed.example.test/events" : "http://feed.example.test/events";
+        const auto feed = feed_http_options(url, true, websocket, 3, 4, 15);
+        CHECK(feed.url == url);
+        CHECK(feed.allow_insecure_http);
+        CHECK(feed.hmac_secret.empty());
+        CHECK(feed.connect_timeout_ms == 3000);
+        CHECK(feed.idle_timeout_ms == 4000);
+        CHECK(feed.total_timeout_ms == 15000);
+        CHECK(feed.message_timeout_ms == (websocket ? 15000 : 0));
+        CHECK(connect_timeout_option(feed.connect_timeout_ms) == 3000);
+        CHECK(throws([&] { (void)feed_http_options(url, true, websocket, 7, 4, 5); }));
+    }
+}
+
+void feed_connect_timeout_tests() {
+    CHECK(feed_connect_timeout_ms(0, 0) == 0);
+    CHECK(feed_connect_timeout_ms(0, 5000) == 0);
+    CHECK(feed_connect_timeout_ms(7, 0) == 7000);
+    CHECK(feed_connect_timeout_ms(3, 5000) == 3000);
+    CHECK(feed_connect_timeout_ms(7, 7000) == 7000);
+    CHECK(throws([] { feed_connect_timeout_ms(7, 5000); }));
+    const auto max_seconds = static_cast<std::uint64_t>(std::numeric_limits<long>::max()) / 1000;
+    CHECK(feed_connect_timeout_ms(max_seconds, 0) == static_cast<long>(max_seconds) * 1000);
+    CHECK(throws([&] { feed_connect_timeout_ms(max_seconds + 1, 0); }));
+    CHECK(throws([] { feed_connect_timeout_ms(std::numeric_limits<std::uint64_t>::max(), 0); }));
+}
+
+void feed_connect_validation_tests() {
+    HttpOptions feed;
+    feed.url = "wss://feed.example.test/events";
+    feed.total_timeout_ms = 0;
+    feed.connect_timeout_ms = feed_connect_timeout_ms(0, feed.total_timeout_ms);
+    feed.idle_timeout_ms = 0;
+    feed.message_timeout_ms = 0;
+    CHECK(!throws([&] { validate_websocket(feed); }));
+    feed.total_timeout_ms = 5000;
+    feed.connect_timeout_ms = feed_connect_timeout_ms(0, feed.total_timeout_ms);
+    CHECK(!throws([&] { validate_websocket(feed); }));
+    feed.connect_timeout_ms = -1;
+    CHECK(throws([&] { validate_websocket(feed); }));
+    feed.connect_timeout_ms = feed_connect_timeout_ms(7, 0);
+    CHECK(throws([&] { validate_websocket(feed); }));
+    feed.connect_timeout_ms = feed_connect_timeout_ms(3, feed.total_timeout_ms);
+    CHECK(!throws([&] { validate_websocket(feed); }));
+    feed.url = "https://receiver.example.test/events";
+    feed.connect_timeout_ms = 0;
+    CHECK(throws([&] { validate_http(feed); }));
 }
 
 bool supports_ws() {
@@ -218,6 +291,31 @@ void websocket_tests() {
     empty_final.finish();
     CHECK(received == std::vector<std::string>{large});
 
+    constexpr int silent_feed_stimulus_ms = 100;
+    WebSocketServer no_idle({frame(1, "after silence")}, false, false, silent_feed_stimulus_ms);
+    options.url = no_idle.url();
+    options.connect_timeout_ms = 20;
+    options.total_timeout_ms = 30;
+    received.clear();
+    receive_websocket(options, "", capture, running);
+    no_idle.finish();
+    CHECK(received == std::vector<std::string>{"after silence"});
+
+    WebSocketServer no_message({frame(1, "unfinished", false)}, false, false,
+                               0, silent_feed_stimulus_ms);
+    options.url = no_message.url();
+    options.idle_timeout_ms = 1000;
+    received.clear();
+    std::string closure_error;
+    try { receive_websocket(options, "", capture, running); }
+    catch (const std::exception& error) { closure_error = error.what(); }
+    CHECK(closure_error == "native WebSocket truncated text message");
+    CHECK(received.empty());
+    no_message.finish();
+    options.idle_timeout_ms = 0;
+    options.connect_timeout_ms = 500;
+    options.total_timeout_ms = 1000;
+
     for (const auto& bad : {frame(2, "binary"), frame(1, std::string("\xc0\x80", 2)),
                             frame(1, large + "x"), frame(1, "unfinished", false),
                             std::string("\x81\x0a", 2) + "abc", frame(8, "")}) {
@@ -234,6 +332,8 @@ void websocket_tests() {
     options.url = unfinished_ping.url();
     options.connect_timeout_ms = 20;
     options.total_timeout_ms = 30;
+    options.idle_timeout_ms = 30;
+    options.message_timeout_ms = 30;
     received.clear();
     bool timeout_error = false;
     try { receive_websocket(options, "", capture, running); }
@@ -247,11 +347,19 @@ void websocket_tests() {
     options.url = idle.url();
     options.connect_timeout_ms = 20;
     options.total_timeout_ms = 30;
-    CHECK(throws([&] { receive_websocket(options, "", capture, running); }));
+    options.idle_timeout_ms = 30;
+    options.message_timeout_ms = 0;
+    timeout_error = false;
+    try { receive_websocket(options, "", capture, running); }
+    catch (const std::exception& error) {
+        timeout_error = std::string(error.what()) == "native WebSocket idle or message timeout";
+    }
+    CHECK(timeout_error);
     idle.finish();
     WebSocketServer stop({}, false, false, 200);
     options.url = stop.url();
     options.total_timeout_ms = 1000;
+    options.idle_timeout_ms = 0;
     const auto start = std::chrono::steady_clock::now();
     receive_websocket(options, "", capture, [&] {
         return std::chrono::steady_clock::now() - start > std::chrono::milliseconds(50);
@@ -263,6 +371,10 @@ void websocket_tests() {
 
 int main() {
     try {
+        connect_timeout_option_tests();
+        feed_http_options_default_tests();
+        feed_http_options_explicit_tests();
+        feed_connect_timeout_tests();
         const auto* info = curl_version_info(CURLVERSION_NOW);
         if (!info || info->version_num < 0x080e01) {
             for (const auto* url : {"ws://127.0.0.1:1/feed", "wss://127.0.0.1:1/feed"}) {
@@ -297,6 +409,7 @@ int main() {
             std::puts("native WebSocket: unsupported-build refusal verified; loopback tests skipped (no WS in libcurl)");
             return failures ? 1 : 77;
         }
+        feed_connect_validation_tests();
         websocket_tests();
     } catch (const std::exception& e) {
         std::fprintf(stderr, "UNEXPECTED: %s\n", e.what());
