@@ -353,9 +353,9 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   alive control-loop heartbeat no older than S seconds (integer 1..86400).
   Add `--ready` to also require readiness. Missing, malformed, future-dated,
   stale, stopped or unready status exits 1. It opens no listener.
-- `--feed-idle-timeout S` and `--feed-message-timeout S` are independent,
-  integer 1..300 seconds, default 15 each. Stdin idle measures time without
-  bytes, and assembly runs from the first byte to the complete JSONL line.
+- `--feed-idle-timeout S` and `--feed-message-timeout S`: integer seconds; stdin defaults to 0 (no limit).
+  Network/file defaults: 15 each (1..300); stdin has no upper cap and its idle bound excludes consume time.
+  A nonzero message timeout bounds a partial line from its first byte or the end of the preceding consume pass.
   WebSocket idle resets on text or PING/PONG; assembly runs from the first
   text fragment through the final fragment and control frames never extend
   it. A feed server's unsolicited PONG every 5 seconds is compatible with

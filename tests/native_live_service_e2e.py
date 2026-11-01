@@ -111,11 +111,13 @@ def wait_for(predicate):
         time.sleep(0.02)
 
 
-def invoke(arguments, code=0, stdin=None, env=None):
+def invoke(arguments, code=0, stdin=None, env=None, error=None):
     result = subprocess.run([runner] + list(map(str, arguments)), input=stdin, text=True,
         capture_output=True, env=env)
     assert result.returncode == code, (arguments, result.returncode, result.stdout, result.stderr)
     assert secret not in result.stdout + result.stderr
+    if error is not None:
+        assert error in result.stderr.splitlines(), result.stderr
     return result.stdout
 
 
@@ -426,7 +428,26 @@ try:
         assert "stdout write failed" in pipe.stderr.read().decode()
 
         for option in ("--feed-idle-timeout", "--feed-message-timeout", "--status-interval"):
-            for value in ("0", "301", "-1", "no"):
+            for value in ("-1", "no"):
+                invoke(base(root / "invalid.sqlite") + ["--feed", feed, option, value], 1)
+        for value in ("0", "301"):
+            invoke(base(root / "invalid.sqlite") + ["--feed", feed, "--status-interval", value], 1)
+        for option in ("--feed-idle-timeout", "--feed-message-timeout"):
+            for value in ("0", "301", str((1 << 64) - 1)):
+                ledger = root / f"stdin-{option[2:]}-{value}.sqlite"
+                # Exceed the read buffer without a newline so message=0 and
+                # large bounds also exercise an incomplete stdin message.
+                result = json.loads(invoke(base(ledger) + [option, value, "--feed", "-"],
+                    stdin=" " * 65536 + batch))
+                assert result["inputs_committed"] == 1 and result["inputs_processed"] == 1
+                assert query(ledger, "SELECT count(*) FROM inputs") == [(1,)]
+                for scheme in ("http", "ws"):
+                    invalid = root / f"{scheme}-{option[2:]}-{value}.sqlite"
+                    invoke(base(invalid) + [option, value, "--feed-url", f"{scheme}://{endpoint}/idle-ws",
+                        "--allow-insecure-http"], 1,
+                        error=f"pineforge-live: {option} must be 1..300 seconds; bound stays for network feeds")
+                    assert not invalid.exists()
+            for value in ("0", "301"):
                 invoke(base(root / "invalid.sqlite") + ["--feed", feed, option, value], 1)
         process, ledger, health = start("idle", ["--feed-idle-timeout", "1", "--feed-message-timeout", "3"])
         finish(process, 1, stop=False)

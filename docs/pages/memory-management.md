@@ -594,7 +594,7 @@ or bounds the row.
 
 | Signal | Meaning |
 | --- | --- |
-| `scratch_capacity_exceeded`, argument `resource` | A slab region ran out, more than 4,096 cohorts are live in the bounded profile, or an id is longer than 64 bytes in the bounded profile (refused before any store change). Admit larger maxima or shorter ids before another attempt |
+| `scratch_capacity_exceeded`, argument `resource` | `cohort_ids_total`: historical cohort IDs or their aggregate bytes exceed `U/B_U` (default 65,536 IDs / 4,194,304 bytes); `cohort_orders_live`: more than 4,096 order IDs are live in the bounded profile; `cohort`: an ID is longer than 64 bytes, generic cohort-region capacity, or the generic store's live-object cap. Other names identify the exhausted slab region. Refusals precede store changes; message text and limits are unchanged. Admit larger maxima, close/cancel live orders sooner, or use shorter/reused IDs as applicable before another attempt |
 | `report_sink_failed`, reason `arena_exhausted` | The inherited arena filled. A host may re-place the run on a larger arena; one that makes a single attempt returns the failure |
 | `scratch_io_failed` | A scratch read, write, create or resize failed, including real syscall `ENOMEM`, or the command-scratch byte cap was reached |
 | `report_sink_failed`, reason `scratch_io` | The native command journal's scratch read or write failed, or its stored bytes or page directory are damaged. An event whose serialized form exceeds the 32,768 B page is refused with `EFBIG` and stays resident. Genuine file-offset exhaustion, disk errors and missing event bytes remain typed failures |
