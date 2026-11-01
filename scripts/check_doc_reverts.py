@@ -413,9 +413,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.message_file is not None:
             extra += args.message_file.read_text(encoding='utf-8') + '\n'
         if args.head:
-            if not args.base:
+            base = resolve(args.base, root) if args.base else default_base(root)
+            if base is None:
                 raise GitError('--head needs --base')
-            base, head = resolve(args.base, root), resolve(args.head, root)
+            head = resolve(args.head, root)
             pages = args.files if args.files is not None else sorted(
                 set(changed_pages(root, base, head)))
             # The messages that may name a deletion: the ones given, or else

@@ -3373,13 +3373,14 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'detached-comments-tests', 'detached-comments', 'native-tempdir-tests',
             'dangling-comment-names-tests', 'doc-anchors-tests', 'doc-anchors',
             'doc-lint-tests', 'doc-lint', 'doc-reverts-tests', 'doc-reverts',
+            'doc-reverts-net',
             'kernel-seam-rows-tests', 'kernel-seam-rows', 'doc-pine-coverage',
             'doc-pine-coverage-tests', 'duplicate-test-names-tests', 'duplicate-test-names',
         ]
         self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
         # main() prepends actionlint-version to all/fast/github-only.
-        self.assertEqual(len(expected) + 1, 60)
-        self.assertEqual(len(check_commands(ROOT, tier='fast')), 55)
+        self.assertEqual(len(expected) + 1, 61)
+        self.assertEqual(len(check_commands(ROOT, tier='fast')), 56)
         self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
         self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
 
@@ -4835,7 +4836,8 @@ exit "$lookup_exit"
                     self.assertFalse({entry[0] for entry in fast} & slow_names)
                     self.assertEqual(sorted(fast + slow), sorted(all_stages))
                     self.assertEqual(len({entry[0] for entry in fast + slow}), len(all_stages))
-                    self.assertTrue({'doc-lint', 'doc-anchors', 'doc-reverts', 'runner-allowlist',
+                    self.assertTrue({'doc-lint', 'doc-anchors', 'doc-reverts', 'doc-reverts-net',
+                                     'runner-allowlist',
                                      'ci-workflow-contract', 'preflight-tests'} <=
                                     {entry[0] for entry in fast})
                     self.assertTrue({name for name, _ in ci_verify.source_guard_commands(ROOT)} <=
@@ -7218,7 +7220,7 @@ finally:
         plan = {entry[0]: entry for entry in check_commands(Path('/src'))}
         for name in ('doc-anchors', 'doc-lint', 'doc-anchors-tests', 'doc-lint-tests',
                      'doc-pine-coverage', 'design-inventory', 'design-inventory-tests',
-                     'doc-reverts', 'doc-reverts-tests',
+                     'doc-reverts', 'doc-reverts-net', 'doc-reverts-tests',
                      'kernel-seam-rows', 'kernel-seam-rows-tests',
                      'run-json-harness-tests'):
             self.assertIn(name, plan)
