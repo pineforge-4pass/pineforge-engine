@@ -65,6 +65,7 @@ def main():
             os.close(ready_write)
             lifetime_ms = request.get("diagnostic_child_lifetime_ms")
             end = None if lifetime_ms is None else time.monotonic() + lifetime_ms / 1000
+            parent_gone_at = None
             while end is None or time.monotonic() < end:
                 try:
                     os.write(2, b"diagnostic child continues\n")
@@ -75,11 +76,16 @@ def main():
                     Path(request["diagnostic_child_progress"]).touch()
                     if request.get("diagnostic_child_after_parent_marker"):
                         # An EVENT the host can read back: output that exists only after the
-                        # producer's exit, so a supervisor that stopped draining at once loses it.
-                        try:
-                            os.write(2, b"diagnostic child after parent exit\n")
-                        except BrokenPipeError:
-                            pass
+                        # producer's exit AND a scenario delay (250 ms, well inside the 1000 ms
+                        # default grace), so a supervisor that stopped draining at once loses it
+                        # and one that drains for its grace reads it.
+                        if parent_gone_at is None:
+                            parent_gone_at = time.monotonic()
+                        if time.monotonic() - parent_gone_at >= 0.25:
+                            try:
+                                os.write(2, b"diagnostic child after parent exit\n")
+                            except BrokenPipeError:
+                                pass
                 time.sleep(0.01)
             if "diagnostic_child_exit" in request:
                 Path(request["diagnostic_child_exit"]).write_text(
