@@ -3,9 +3,8 @@
 #include <pineforge/source/magnifier_intrabars.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/compat/pine/market_admission.hpp>
-
 #include <pineforge/pending_order_mirror.hpp>
-
+#include "pine_cohort_exposure.hpp"
 #include <pineforge/native_calendar.hpp>
 #include <pineforge/timeframe.hpp>
 
@@ -21,12 +20,15 @@
 #include "pine_run_failure.hpp"
 #include "pine_checked_arith.hpp"
 #include "pine_command_scratch_production.hpp"
+#include "../command_scratch_cache.hpp"
+#include "pine_sequence_cache_observer.hpp"
 #include "exit_scratch_versions_production.hpp"
 #include "pine_value_admission.hpp"
 #include "pine_position_tail.hpp"
 #include "pine_position_tail_binding.hpp"
 #include "pine_position_tail_summary.hpp"
 #include "pine_source_key_test.hpp"
+#include "roster_pass_work.hpp"
 // Only an adapter TU using the existing observation seam selects the
 // counting instantiations. Normal builds select the empty diagnostic tag.
 #ifndef PINEFORGE_POSITION_TAIL_DIAGNOSTICS
@@ -1116,12 +1118,12 @@ namespace detail {
 struct CommandScratchRun {
     // Fixed geometry, independent of bars, handles and text widths.
     static constexpr std::size_t page_size = 512;
-    std::unique_ptr<pineforge::detail::ScratchBacking> backing =
-        make_command_scratch_backing(page_size);
+    std::unique_ptr<pineforge::detail::ScratchBacking> backing;
     CommandScratchStore store;
 
-    explicit CommandScratchRun(ScratchKeyOrder order)
-        : store{{2, page_size, 1, 1, order,
+    CommandScratchRun(ScratchKeyOrder order, CacheCapacity capacity)
+        : backing(make_command_scratch_backing(page_size, capacity)),
+          store{{2, page_size, 1, 1, order,
                  pineforge::detail::ScratchOpenMode::create_empty}, backing.get()} {
         exit_scratch_check(store.status(), store);
     }
@@ -1129,19 +1131,19 @@ struct CommandScratchRun {
 
 namespace {
 struct ExitScratchRun {
-    CommandScratchRun scratch{exit_scratch_key_order()};
+    CommandScratchRun scratch;
     ExitScratchContext context;
     ExitScratchVersionsProduction versions{scratch.store};
 
-    explicit ExitScratchRun(const native_order::RunIdentity& run)
-        : context{scratch.store, run} {
+    ExitScratchRun(const native_order::RunIdentity& run, CacheCapacity capacity)
+        : scratch(exit_scratch_key_order(), capacity), context{scratch.store, run} {
         context.versions = &versions;
     }
 };
 
 std::shared_ptr<ExitScratchContext> make_exit_scratch(
-        const native_order::RunIdentity& identity) {
-    auto run = std::make_shared<ExitScratchRun>(identity);
+        const native_order::RunIdentity& identity, CacheCapacity capacity) {
+    auto run = std::make_shared<ExitScratchRun>(identity, capacity);
     return {run, &run->context};
 }
 } // namespace
@@ -3198,7 +3200,9 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     }
     // Projection owns only the standalone exit service. Trade and dependency
     // workspaces are installed once by the admitted run's consumer/host setup.
-    auto exit_scratch = detail::make_exit_scratch(spec.identity);
+    const CacheDefaults defaults;
+    const auto& cache_policy = host_ ? host_->cache_policy_for_run() : defaults;
+    auto exit_scratch = detail::make_exit_scratch(spec.identity, cache_policy.projection_exit_pages);
     exit_scratch_ = std::move(exit_scratch);
     return spec;
 }
@@ -4413,14 +4417,14 @@ void PineExecutionAdapter::clear_bracket_families() noexcept {
 void PineExecutionAdapter::release_closed_cohort_origins() {
     auto& scratch = retired_row_scratch_;
     if (!scratch.roster_pass_due) return;
-    scratch.roster_pass_due = false;
+    scratch.roster_pass_due = false; PF_ROSTER_PASS_WORK(due_passes);
     IExecutionConsumer* consumer = bound_consumer();
     if (!consumer) return;
     auto* pine = pine_view_of(host_);
     if (!pine) return;
     const auto& core = as_native_consumer(*consumer).request_core();
     std::size_t members = 0;
-    for (const auto& roster : core.cohorts()) members += roster.origins.size();
+    for (const auto& [key, roster] : core.nonempty_cohorts()) { PF_ROSTER_PASS_WORK(roster_cohort_visits); members += roster.origins.size(); }
     if (members == 0) return;
     // The common case, in a direct scan with nothing allocated or sorted:
     // every member still opened a lot that is open, or roots a working
@@ -4432,7 +4436,7 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     constexpr std::size_t kDirectScan = 64;
     if (members * (pine->pyramid_entries_.size() + core.live().size()) <= kDirectScan) {
         bool every_member_bound = true;
-        for (const auto& roster : core.cohorts()) {
+        for (const auto& [key, roster] : core.nonempty_cohorts()) { PF_ROSTER_PASS_WORK(roster_cohort_visits);
             for (const auto& origin : roster.origins) {
                 const std::uint64_t incarnation = origin.incarnation;
                 const bool bound = std::any_of(pine->pyramid_entries_.begin(),
@@ -4470,7 +4474,7 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     for (const auto& lot : pine->pyramid_entries_) lots.push_back(lot.entry_incarnation);
     std::sort(lots.begin(), lots.end());
     lots.erase(std::unique(lots.begin(), lots.end()), lots.end());
-    for (const auto& roster : core.cohorts()) {
+    for (const auto& [key, roster] : core.nonempty_cohorts()) { PF_ROSTER_PASS_WORK(roster_cohort_visits);
         PINEFORGE_LOOKUP_INDEX_WORK("cohort_origin_roster", this, run_counter_, 1);
         for (const auto& origin : roster.origins)
             roster_roots.push_back(origin.incarnation);
@@ -4487,14 +4491,14 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
         }
     }
     auto& probe = scratch.lot_probe;
-    for (const auto& roster : core.cohorts()) {
+    for (const auto& [key, roster] : core.nonempty_cohorts()) { PF_ROSTER_PASS_WORK(roster_cohort_visits);
         const auto& origins = roster.origins;
         if (origins.empty()) continue;
         if (probe.run != origins.front().run) probe.run = origins.front().run;
         // The newest open successor lot this roster binds: every member older
         // than it may be its root.
         std::uint64_t kept_below = 0;
-        for (const auto opening : successor_lots) {
+        for (const auto opening : successor_lots) { PF_ROSTER_PASS_WORK(roster_cohort_visits);
             probe.incarnation = opening;
             if (core.cohort_contains(roster.handle, probe)) kept_below = opening;
         }
@@ -5358,37 +5362,37 @@ double PineExecutionAdapter::cohort_exposure_for(const SourceId& id) const noexc
 }
 
 double PineExecutionAdapter::cohort_exposure_for(const CohortFacts& facts) const noexcept {
-    double total = 0.0;
-    // `live_units_by_origin` is a lookup table.  Quantities must follow the
-    // cohort's deterministic source insertion order, never its hash buckets.
-    // Only roster positions whose incarnation has a unit row can contribute:
-    // step through just those, ascending, rather than the id's whole entry
-    // history. Allocation-free (the pending-order readback calls this).
-    bool have_previous = false;
-    std::size_t previous = 0;
-    for (;;) {
-        bool have_next = false;
-        std::size_t next = 0;
-        double units = 0.0;
-        for (const auto& unit : facts.live_units_by_origin) {
-            const auto* positions = facts.origins.positions_of(unit.first);
-            if (!positions) continue;
-            for (const auto position : *positions) {
-                if (have_previous && position <= previous) continue;
-                if (!have_next || position < next) {
-                    have_next = true;
-                    next = position;
-                    units = unit.second;
-                }
-                break;
-            }
-        }
-        if (!have_next) break;
-        if (std::isfinite(units) && units > 0.0) total += units;
-        have_previous = true;
-        previous = next;
-    }
-    return std::isfinite(total) && total > 0.0 ? total : 0.0;
+    PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_call", this, run_counter_, 1);
+    // Quantities follow source insertion order, never the lookup table's
+    // hash buckets. Each retained position contributes separately.
+    // Repeated incarnations contribute once per occurrence, in that order.
+    // Allocation-free: pending-order readback calls this const noexcept member.
+    // Finite/positive filtering and the final clamp preserve overflow to zero.
+    // Reordering, regrouping or multiplying repeated units changes bits.
+    // Diagnostic work belongs to the returned value, never adapter state.
+    // The seam receives the original roster and map by const reference.
+    // Global positions keep their order after prefix retirement.
+    // A unit row without a retained position contributes no term.
+    const auto folded = detail::fold_cohort_exposure(facts.origins,
+                                                    facts.live_units_by_origin);
+    PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_step", this, run_counter_, folded.steps);
+    PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_window", this, run_counter_,
+                               facts.origins.members().size());
+    PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_rows", this, run_counter_,
+                               facts.live_units_by_origin.size());
+    if (folded.path == 2)
+        PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_path_b", this, run_counter_, 1);
+    if (folded.path == 3)
+        PINEFORGE_LOOKUP_INDEX_WORK("cohort_exposure_b_abandoned", this, run_counter_, 1);
+#ifdef PINEFORGE_COHORT_EXPOSURE_FIXTURES
+    detail::verify_cohort_exposure(facts.origins, facts.live_units_by_origin,
+                                  folded.total);
+#endif
+    // The fixture oracle is independent of the selected production path.
+    // It checks every call, including both empty-state early returns.
+    // No aggregate or reservation state is updated by this read.
+    // Callers receive only the clamped exposure value.
+    return folded.total;
 }
 
 // The units of the position an exit's entry (from_entry) holds; none for an
@@ -25851,8 +25855,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // The generic cohort is already the quantity authority.  Rebind only
         // adapter lifecycle/reservation receipts after the opening becomes a
         // live physical fact; no request is resized or resubmitted here.
-        detail::ExitScratchRows<native_order::RequestHandle> handles(*this);
+        detail::ExitScratchBatchRows<native_order::RequestHandle> handles(*this);
         for (const auto& handle : live_handles_) handles.push_back(handle);
+        handles.finish();
         for (const auto& handle : handles) {
             const auto pending = placement_.find(handle.incarnation);
             if (pending == placement_.end()) continue;
@@ -26366,8 +26371,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             ::pineforge::detail::clear_exposure_storage(cohort.second.live_units_by_origin);
             cohorts_by_id_.refresh_held(current);
         }
-        detail::ExitScratchRows<native_order::RequestHandle> handles(*this);
+        detail::ExitScratchBatchRows<native_order::RequestHandle> handles(*this);
         for (const auto& handle : live_handles_) handles.push_back(handle);
+        handles.finish();
         for (const auto& handle : handles) {
             const auto found = placement_.find(handle.incarnation);
             if (found == placement_.end()) continue;
@@ -28662,7 +28668,8 @@ void PineExecutionAdapter::preserve_position_tail_before_seal(
     }
     observe_position_tail_rows(); // never miss a row retired by the row source
     detail::PositionTailBinding::preserve(position_tail_spill_, pine->trades_, global_end,
-                                         position_open_script_bar_, scratch_directory);
+        position_open_script_bar_, scratch_directory,
+        pine->cache_policy_for_run().position_tail_pages);
 }
 
 PineExecutionAdapter::PositionTailWork
@@ -28995,6 +29002,13 @@ void PineExecutionAdapter::set_id_tables_directory(const std::string& directory)
     if (!position_tail_summary_)
         position_tail_summary_ = std::make_shared<detail::AdapterPositionTailSummary>();
     position_tail_summary_->set_directory(directory);
+}
+
+void PineExecutionAdapter::set_cache_policy_for_run(const CacheDefaults& policy) {
+    cohorts_by_id_.set_cache_capacity(policy.cohort_id_pages);
+    exit_rank_keys_.set_cache_capacity(policy.exit_rank_pages);
+    placement_.set_cache_capacity(policy.erased_minima_pages, policy.retained_sequence_pages);
+    consumed_partial_exit_cycles_.set_cache_capacity(policy.consumed_cycle_pages);
 }
 
 PineExecutionAdapter::CohortTable::iterator
@@ -29637,7 +29651,8 @@ struct PlacementTable::SequenceIndex {
         return Status::ok;
     }
 
-    static std::unique_ptr<::pineforge::detail::ScratchBacking> make_backing() {
+    static std::unique_ptr<::pineforge::detail::ScratchBacking> make_backing(
+            CacheCapacity capacity) {
         // Derived identities are not command scopes. The factory snapshots
         // the observer, so isolate their accounting without changing the
         // backing selection, shared byte budget or failure propagation.
@@ -29646,17 +29661,22 @@ struct PlacementTable::SequenceIndex {
                 detail::set_command_scratch_io_observer({});
             ~RestoreObserver() { detail::set_command_scratch_io_observer(previous); }
         } restore;
-        return detail::make_command_scratch_backing(512);
+        // One allowance sizes the shared slab in both prefix and read phases.
+        auto backing = ::pineforge::detail::make_command_scratch_backing(512, capacity);
+        const auto observer = detail::sequence_cache_observer;
+        if (observer.created) observer.created(observer.context, *backing);
+        return backing;
     }
 
     mutable std::uint64_t operations = 0;
-    std::unique_ptr<::pineforge::detail::ScratchBacking> backing = make_backing();
+    std::unique_ptr<::pineforge::detail::ScratchBacking> backing;
     ::pineforge::detail::CommandScratchStore store{
         {2, 512, 1, 1, {0x6578697473657131ULL, this, compare},
          ::pineforge::detail::ScratchOpenMode::create_empty}, backing.get()};
     bool certified = false;
 
-    SequenceIndex() { require(store.status()); }
+    explicit SequenceIndex(CacheCapacity capacity)
+        : backing(make_backing(capacity)) { require(store.status()); }
     void require(Status status) const {
         if (status == Status::ok) return;
         if (status == Status::io_error)
@@ -29820,7 +29840,7 @@ struct PlacementTable::SequenceIndex {
 
 PlacementTable::SequenceIndex& PlacementTable::sequence_index() const {
     if (!sequence_index_) {
-        auto next = std::make_shared<SequenceIndex>();
+        auto next = std::make_shared<SequenceIndex>(sequence_cache_capacity_);
         SequenceIndex::Transaction transaction(*next);
         // A deferred first insertion leaves at most one row to build.
         // Failed derived writes or a backing rebind can need a recovery walk.
@@ -30277,3 +30297,159 @@ std::array<std::uint64_t, 3> PineExecutionAdapter::retirement_validation_state()
 }
 #endif
 } // namespace pineforge::source
+
+namespace pineforge::source::detail {
+
+CohortExposureFold fold_cohort_exposure(
+        const OriginRoster& origins,
+        const std::unordered_map<std::uint64_t, double>& live_units_by_origin) noexcept {
+    if (live_units_by_origin.empty() || origins.members().empty()) return {0.0, 0, 0};
+    std::uint64_t steps = 0;
+    std::uint8_t path = 1;
+    if (origins.members().size() > 4 * live_units_by_origin.size() + 16) {
+        // Positions are disjoint across incarnations and ascending within
+        // each row. Sorting all occurrences restores the roster's order.
+        struct Term { std::size_t position; double units; };
+        Term buf[kCohortFoldStack];
+        std::size_t n = 0;
+        std::size_t mapped = 0;
+        bool abandoned = false;
+        for (const auto& unit : live_units_by_origin) {
+            ++steps;
+            const auto* positions = origins.positions_of(unit.first);
+            if (!positions) continue;
+            for (const auto position : *positions) {
+                ++steps;
+                ++mapped;
+                if (n == kCohortFoldStack) {
+                    abandoned = true;
+                    continue;
+                }
+                buf[n++] = {position, unit.second};
+            }
+        }
+        if (!abandoned) {
+            std::sort(buf, buf + n, [](const Term& a, const Term& b) noexcept {
+                return a.position < b.position;
+            });
+            // Deterministic sort charge: P * ceil(log2 P), zero for P <= 1.
+            std::uint64_t levels = 0;
+            for (auto remaining = n > 0 ? n - 1 : 0; remaining; remaining >>= 1)
+                ++levels;
+            steps += static_cast<std::uint64_t>(n) * levels;
+            double total = 0.0;
+            for (std::size_t i = 0; i < n; ++i) {
+                ++steps;
+                const double units = buf[i].units;
+                if (std::isfinite(units) && units > 0.0) total += units;
+            }
+            return {std::isfinite(total) && total > 0.0 ? total : 0.0, steps, 2};
+        }
+        // The partial stack gather is discarded. Comparing this charge with
+        // M keeps either overflow completion bounded by the frozen selector.
+        const auto mapped_count = static_cast<std::uint64_t>(mapped);
+        const auto row_count =
+            static_cast<std::uint64_t>(live_units_by_origin.size());
+        // The selector has P + 1 passes. Each pass can inspect all R rows
+        // and all P positions, including positions in exhausted rows.
+        const auto charge_max = std::numeric_limits<std::uint64_t>::max();
+        const auto charge_add = [charge_max](std::uint64_t left,
+                                             std::uint64_t right) noexcept {
+            return right > charge_max - left ? charge_max : left + right;
+        };
+        const auto charge_mul = [charge_max](std::uint64_t left,
+                                             std::uint64_t right) noexcept {
+            return left != 0 && right > charge_max / left
+                ? charge_max : left * right;
+        };
+        const auto pass_count = mapped_count == charge_max
+            ? charge_max : mapped_count + 1;
+        const auto selector_charge =
+            charge_mul(pass_count, charge_add(row_count, mapped_count));
+        path = 3;
+        if (static_cast<std::uint64_t>(origins.members().size()) >= selector_charge) {
+            // Frozen selector, kept term-for-term so its acceptance-ordered
+            // floating-point additions remain the old fold's additions.
+            double total = 0.0;
+            bool have_previous = false;
+            std::size_t previous = 0;
+            for (;;) {
+                bool have_next = false;
+                std::size_t next = 0;
+                double units = 0.0;
+                for (const auto& unit : live_units_by_origin) {
+                    ++steps;
+                    const auto* positions = origins.positions_of(unit.first);
+                    if (!positions) continue;
+                    for (const auto position : *positions) {
+                        ++steps;
+                        if (have_previous && position <= previous) continue;
+                        if (!have_next || position < next) {
+                            have_next = true;
+                            next = position;
+                            units = unit.second;
+                        }
+                        break;
+                    }
+                }
+                if (!have_next) break;
+                if (std::isfinite(units) && units > 0.0) total += units;
+                have_previous = true;
+                previous = next;
+            }
+            return {std::isfinite(total) && total > 0.0 ? total : 0.0, steps, path};
+        }
+    }
+    double total = 0.0;
+    for (const auto& origin : origins) {
+        ++steps;
+        const auto unit = live_units_by_origin.find(origin.incarnation);
+        if (unit == live_units_by_origin.end()) continue;
+        const double units = unit->second;
+        if (std::isfinite(units) && units > 0.0) total += units;
+    }
+    return {std::isfinite(total) && total > 0.0 ? total : 0.0, steps, path};
+}
+
+#ifdef PINEFORGE_COHORT_EXPOSURE_FIXTURES
+void verify_cohort_exposure(
+        const OriginRoster& origins,
+        const std::unordered_map<std::uint64_t, double>& live_units_by_origin,
+        double actual) noexcept {
+    // Frozen selector: deliberately independent of the production fold.
+    double total = 0.0;
+    // `live_units_by_origin` is a lookup table.  Quantities must follow the
+    // cohort's deterministic source insertion order, never its hash buckets.
+    // Only roster positions whose incarnation has a unit row can contribute:
+    // step through just those, ascending, rather than the id's whole entry
+    // history. Allocation-free (the pending-order readback calls this).
+    bool have_previous = false;
+    std::size_t previous = 0;
+    for (;;) {
+        bool have_next = false;
+        std::size_t next = 0;
+        double units = 0.0;
+        for (const auto& unit : live_units_by_origin) {
+            const auto* positions = origins.positions_of(unit.first);
+            if (!positions) continue;
+            for (const auto position : *positions) {
+                if (have_previous && position <= previous) continue;
+                if (!have_next || position < next) {
+                    have_next = true;
+                    next = position;
+                    units = unit.second;
+                }
+                break;
+            }
+        }
+        if (!have_next) break;
+        if (std::isfinite(units) && units > 0.0) total += units;
+        have_previous = true;
+        previous = next;
+    }
+    const double expected = std::isfinite(total) && total > 0.0 ? total : 0.0;
+    if (std::memcmp(&actual, &expected, sizeof expected) != 0) std::abort();
+}
+#endif
+
+} // namespace pineforge::source::detail

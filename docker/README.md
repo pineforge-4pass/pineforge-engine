@@ -95,6 +95,116 @@ Mount points (provide exactly one of `strategy.pine` / `strategy.cpp`):
 | `strategy.cpp`   | `/in/strategy.cpp`    | back-compat | Pre-transpiled PineForge translation unit (used only if no `.pine`). Refused unless `PINEFORGE_STRATEGY_CPP_SHA256` holds the sha256 of exactly these bytes, or `PINEFORGE_ALLOW_UNATTESTED_CPP=1` (local trust only; a hosted caller must never set it) |
 | `ohlcv.csv`      | `/in/ohlcv.csv`       | yes      | `timestamp,open,high,low,close,volume` |
 
+### Opt-in compile guards
+
+The entrypoint can apply cooperative limits to compilation on Linux. The
+feature is off when all three settings are unset. Once any setting opts it in,
+an unset dimension and a dimension set to `0` are both unlimited. With no
+positive setting, the entrypoint keeps its original compiler and
+inventory-binding commands, environment, output and exit statuses after
+validating the supplied values.
+
+| Environment setting | Unit and scope | Value resolution |
+| --- | --- | --- |
+| `PINEFORGE_COMPILE_WALL_MS` | Milliseconds from before compiler launch through all helpers and selected inventory binding | Unset or `0`: unlimited; positive: exact |
+| `PINEFORGE_COMPILE_AS_BYTES` | Per-process address space, installed as inherited `RLIMIT_AS` with equal soft and hard limits before compiler or binder execution | Unset or `0`: unlimited; positive: exact |
+| `PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES` | Combined raw stdout and stderr bytes from the compiler, its helpers and the binder | Unset or `0`: unlimited; positive: exact |
+
+A set value must contain decimal digits only and fit `0..9007199254740990`.
+An omitted setting is unlimited once the feature is opted in, and `0` is also
+unlimited. A positive value is used exactly. A positive address-space request
+above the inherited hard limit is refused before launch. Empty strings, signs,
+whitespace, fractions and values outside the range are usage errors: one
+`run_request_invalid` failure line with
+`args: {"option":"arguments"}` on stdout and exit 4.
+
+For example, these settings allow 30 seconds, 2 GiB of address space per
+compiler process, and 64 KiB of compiler/binder diagnostics:
+
+```bash
+docker run --rm \
+  -e PINEFORGE_COMPILE_WALL_MS=30000 \
+  -e PINEFORGE_COMPILE_AS_BYTES=2147483648 \
+  -e PINEFORGE_COMPILE_DIAGNOSTIC_MAX_BYTES=65536 \
+  -v "$(pwd)/strategy.pine:/in/strategy.pine:ro" \
+  -v "$(pwd)/ohlcv.csv:/in/ohlcv.csv:ro" \
+  pineforge > report.json
+```
+
+The wall deadline is absolute and includes waiting for descendants after
+the driver exits. Progress and binder launch do not renew it. On expiry,
+the guard stops and reaps descendants, including detached orphans adopted
+through Linux child-subreaper support, and returns exit 4 with
+`run_deadline_exceeded` and `args: {"stage":"compile"}`. Cleanup has a
+1,000 ms grace; the hosting layer must retain ownership if a task cannot
+be reaped within it.
+
+The diagnostic collector reads at most the byte cap plus one probe byte.
+It forwards at most the cap to stderr, without decoding bytes or adding a
+truncation marker. Observing the probe stops compilation and returns exit 4
+with `diagnostic_budget_exceeded` and
+`args: {"cap_bytes":B,"used_bytes":B,"requested_bytes":1}`. Exact fit followed
+by EOF is allowed. Both compiler streams share one allowance, which is also
+shared with the binder. Fixed entrypoint progress and failure messages are
+separate from this compiler-output cap.
+
+An ordinary compiler or binding failure still exits 3. Address-space
+allocation failures also retain that status: the guard does not infer a
+memory-limit cause from diagnostics, allocation errors or child signals.
+The compiler flags, including `-ffp-contract=off` and whole-archive linking,
+are unchanged.
+
+These controls are engine guards. They do not establish namespaces, cgroups,
+RSS or aggregate memory quotas, cumulative tree CPU limits, temporary-storage
+quotas, task quotas, or signed installation evidence. The host supplies those
+controls and owns the outer process lifetime and report channels. These
+settings apply to compilation and binding; transpilation and backtesting
+have their own controls. A requested guard requires Linux procfs and
+child-subreaper support; an unavailable mechanism is a usage refusal.
+
+### Opt-in supervised report channel
+
+`docker/pineforge_report_supervise.py` is an opt-in, separate-process report
+channel (`--report-channel supervised/v1 --terminal-status-fd M ...`, or the
+environment names listed in its module docstring). It is OFF by default: with
+no channel option or variable set, `run_json.py` behaves exactly as before. It
+is **not yet host-attested**: an ordinary invocation refuses with
+`run_isolation_unavailable{reason:"policy"}` before starting a producer, and
+only an explicit test attestation can run it. For now the full report needs an
+external sink descriptor; the internal snapshot handoff is pending. It does not
+forward the host run-quota marker, so it refuses to start when any variable
+whose name starts with `PF_RUN_QUOTA_` is set.
+
+Limits. Report, diagnostic, wall and stall limits are unlimited when unset or
+`0`; a positive value is exact and a positive host grant can only constrain it
+(a request above the grant is refused, never clamped). Two cleanup graces have a
+default: `--post-exit-drain-ms` (how long diagnostic and receipt pipes may stay
+open after their owners exit) and `--stop-grace-ms` (the wait between the
+terminate request and the forced kill), both 1000 ms by default and unlimited
+at `0`. A value of `0` for `--stop-grace-ms` disables the forced kill, so the
+supervisor then waits for the producer's process group to exit. The same
+unsigned-decimal grammar applies to every limit.
+
+Terminal record. Each handled outcome produces one `pf-run-terminal/v1` record
+with the members `schema`, `version`, `contract`, `attempt_id`, `invocation`,
+`complete`, `exit_class`, `failure`, `exit_status`, `diagnostics`, `producer`,
+`limits`, `report_charged_bytes`, `channels`, `sink_verification`, `usage` and
+`cleanup`. `diagnostics` is a list of text strings, each cut at 1,024 bytes;
+refusals and expired graces name their parameter there. Each entry of `limits`
+(including `post_exit_drain_ms` and `stop_grace_ms`) reports `requested`,
+`granted` and `effective`, with `effective` null for an unlimited dimension.
+`complete` stays false while the native execution domain is not measured empty,
+so a test-attested run records `complete: false`.
+
+Sink validation. Unjailed runs validate the native sink in file mode with an
+optional cap. Under the jailed profile the validator runs in provisional stdout
+mode with a positive bound: `--planned-sink-bytes`
+(`PINEFORGE_REPORT_PLANNED_SINK_BYTES`) or the positive report allowance, and the
+run is refused before launch when neither exists. The supervisor holds up to
+that bound in memory until the validator exits 0 with a complete receipt, so an
+operator who sets a very large report allowance on a jailed profile lets the
+supervisor grow to that size.
+
 ### Transpile only (Pine → C++, no backtest)
 
 Set `PINEFORGE_TRANSPILE_ONLY=1` to emit the generated C++ on stdout and exit
@@ -270,7 +380,14 @@ docker run --rm \
   requested bar whose close is at or before the chart bar's close; with it on,
   the latest that opened at or before the chart bar's open. A missing requested
   bar carries the last value forward (`gaps` off) or reads na (`gaps` on).
-- Limits: at most 256 symbols and 256 feeds in one index. The chart must be its
+- Symbol and total feed counts default to no limit. `--max-symbol-feeds N`
+  (`PINEFORGE_MAX_SYMBOL_FEEDS`) applies N to both counts; unset or `0` means
+  unlimited. `--max-inventory-bytes N` (`PINEFORGE_MAX_INVENTORY_BYTES`) applies
+  the same rule to inventory bytes in both the binder and runner. Empty,
+  negative and non-integer values are usage errors. `--tv-compat`
+  (`PINEFORGE_TV_COMPAT=1`) opts into defaults of 256 symbols/feeds and 8 MiB
+  inventory from the runner's one compatibility set; explicit limits,
+  including `0`, win. The chart must be its
   own input (`PINEFORGE_SCRIPT_TF` unset or equal to the input timeframe), else
   the run fails with `request.security of another symbol needs the chart's own
   bars as input; input '<i>' aggregated to chart '<s>' is not supported`. The run
@@ -284,7 +401,8 @@ docker run --rm \
 - An index or feed the harness cannot install (for example: not JSON, a bad
   timeframe spelling, two feeds at one timeframe, a CSV without `close`,
   timestamps that do not strictly increase, a close after the next bar's open,
-  a non-positive `mintick`, more than 256 feeds, a library without the setters,
+  a non-positive `mintick`, exceeding an explicit or compatibility feed limit,
+  a library without the setters,
   a feed the engine refuses)
   fails the run before it starts: one line
   `{"engine":"pineforge","error":"--symbol-feeds: ...","code":"symbol_feeds_refused",...}`
@@ -769,8 +887,8 @@ directly (for example `base64 -d | shasum -a 256`).
 | ---: | ------- |
 |  `0` | Success — JSON report (or C++ in transpile-only mode) on stdout |
 |  `2` | Missing input mount (`/in/strategy.pine` or `/in/strategy.cpp`, and `/in/ohlcv.csv`), or a mounted `strategy.cpp` the host did not vouch for (one typed `run_request_invalid` line on stdout) |
-|  `3` | `g++` compile of the strategy translation unit failed |
-|  `4` | Backtest aborted at runtime |
+|  `3` | `g++` compile or selected inventory binding failed |
+|  `4` | Backtest aborted at runtime, or an explicitly requested compile guard refused its settings or stopped compilation |
 |  `5` | Transpile failed (unsupported Pine construct or syntax error) |
 
 ## Smoke test

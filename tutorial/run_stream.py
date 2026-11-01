@@ -13,7 +13,7 @@ import ctypes
 import sys
 from datetime import datetime, timezone
 
-from run import BarC, OHLCV, ReportC, SO, check_abi, declare_error_code, error_code
+from run import BarC, OHLCV, ReportC, SO, bind_cache_policy, check_abi, declare_error_code, error_code
 
 LIVE_BARS = 32
 INPUT_TF_MS = 15 * 60 * 1000
@@ -81,6 +81,7 @@ def main() -> int:
 
     lib = ctypes.CDLL(str(SO))
     check_abi(lib)
+    bind_cache_policy(lib)
     lib.strategy_create.argtypes = [ctypes.c_char_p]
     lib.strategy_create.restype = ctypes.c_void_p
     lib.strategy_free.argtypes = [ctypes.c_void_p]

@@ -5,6 +5,8 @@
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/detail/journal_codec.hpp>
 #include "native_journal_codec.hpp"
+#include "optional_window.hpp"
+#include "read_through_window.hpp"
 #include <pineforge/native_host.hpp>
 #include "native_execution_consumer.hpp"
 #include <cassert>
@@ -1054,6 +1056,8 @@ public:
         file_.set_directory(directory);
     }
     uint64_t size() const noexcept { return end_; }
+    uint64_t read_count() const noexcept { return reads_; }
+    uint64_t read_bytes() const noexcept { return read_bytes_; }
     // Physical backing only: do not publish any logical records. In arena mode
     // this also claims the first chunk/table entry before a bounded operation.
     void prepare(uint64_t bytes) {
@@ -1090,12 +1094,16 @@ public:
         if (offset > end_ || length > end_ - offset) {
             throw detail::ScratchIoError(EIO, "native o1 store read past its end");
         }
+        ++reads_;
         file_.read(offset, out, length);
+        read_bytes_ += length;
     }
 
 private:
     detail::ScratchFile file_;
     uint64_t end_ = 0;
+    mutable uint64_t reads_ = 0;
+    mutable uint64_t read_bytes_ = 0;
 };
 
 // Fixed-width records addressed by absolute index. The newest records stay in
@@ -1109,67 +1117,95 @@ private:
 template <class Record, std::size_t kTail>
 class TailLog {
     static_assert(std::is_trivially_copyable_v<Record>, "log records are raw bytes");
-    static_assert(kTail >= 4 && kTail % 2 == 0, "the tail flushes in halves");
 
 public:
-    TailLog() { tail_.reserve(kTail); }
+    explicit TailLog(std::size_t rows = kTail, bool cache_reads = false)
+        : tail_(rows), cache_(sizeof(Record),
+              cache_reads ? detail::window_payload_bytes(rows, sizeof(Record)) : 0,
+              this, read_backing) {}
+    TailLog(std::size_t rows, CacheCapacity capacity)
+        : tail_(rows), cache_(sizeof(Record), capacity, this, read_backing) {}
     void set_directory(const std::string& directory) { file_.set_directory(directory); }
     uint64_t base() const noexcept { return base_; }
-    uint64_t size() const noexcept { return flushed_ + tail_.size(); }
+    uint64_t size() const noexcept { return flushed_ + tail_size_; }
     // The number of records not yet retired.
     uint64_t retained() const noexcept { return size() - base_; }
     // How many records the process holds in memory.
-    std::size_t resident() const noexcept { return tail_.size(); }
+    std::size_t resident() const noexcept { return tail_size_; }
+    std::size_t capacity() const noexcept { return tail_.size(); }
+    uint64_t read_count() const noexcept { return file_.read_count(); }
+    uint64_t read_bytes() const noexcept { return file_.read_bytes(); }
+    std::size_t pending_bytes() const noexcept { return tail_.cache_bytes() + sizeof(Record); }
+    detail::ReadThroughCacheStats cache_stats() const noexcept { return cache_.stats(); }
     void prepare() {
-        file_.prepare((flushed_ - origin_ + kTail / 2) * sizeof(Record));
+        file_.prepare((flushed_ - origin_ + flush_rows()) * sizeof(Record));
     }
     void make_room() {
-        if (tail_.size() < kTail) return;
-        const std::size_t half = kTail / 2;
+        if (tail_size_ < tail_.size()) return;
+        const std::size_t half = flush_rows();
+        cache_.invalidate();
         file_.write((flushed_ - origin_) * sizeof(Record), tail_.data(), half * sizeof(Record));
-        tail_.erase(tail_.begin(), tail_.begin() + static_cast<std::ptrdiff_t>(half));
+        drop_front(half);
         flushed_ += half;
     }
-    void push(const Record& record) noexcept { tail_.push_back(record); }
+    void push(const Record& record) noexcept {
+        assert(tail_size_ < tail_.size());
+        tail_[tail_size_++] = record;
+    }
     Record get(uint64_t index) const {
+        // Explicit retirement changes the valid index domain. It is a caller
+        // error to read below base; an evicted but retained row reads the file.
         if (index < base_ || index >= size()) {
             throw std::out_of_range("native o1 log index is not retained");
         }
         if (index >= flushed_) return tail_[static_cast<std::size_t>(index - flushed_)];
         Record record{};
-        file_.read((index - origin_) * sizeof(Record), &record, sizeof record);
+        cache_.get(index - origin_, &record, sizeof record);
         return record;
     }
     void retire_to(uint64_t new_base) noexcept {
         if (new_base <= base_) return;
         base_ = new_base;
         if (base_ > flushed_) {
-            const uint64_t drop = std::min<uint64_t>(base_ - flushed_, tail_.size());
-            tail_.erase(tail_.begin(), tail_.begin() + static_cast<std::ptrdiff_t>(drop));
+            const uint64_t drop = std::min<uint64_t>(base_ - flushed_, tail_size_);
+            drop_front(static_cast<std::size_t>(drop));
             flushed_ += drop;
         }
-        if (tail_.empty() && base_ == flushed_) {
+        if (tail_size_ == 0 && base_ == flushed_) {
             // Every record is retired: nothing in the file is read again.
             origin_ = flushed_;
+            cache_.invalidate();
             file_.reset();
         }
     }
     // Forgets every record, retired or not, and the file behind them; the
     // next record is index 0 again.
     void reset() noexcept {
-        tail_.clear();
+        tail_size_ = 0;
         flushed_ = 0;
         base_ = 0;
         origin_ = 0;
+        cache_.invalidate();
         file_.reset();
     }
 
 private:
-    std::vector<Record> tail_;
+    static void read_backing(void* context, uint64_t offset, void* out, std::size_t bytes) {
+        static_cast<TailLog*>(context)->file_.read(offset, out, bytes);
+    }
+    std::size_t flush_rows() const noexcept { return std::max<std::size_t>(1, tail_.size() / 2); }
+    void drop_front(std::size_t count) noexcept {
+        tail_size_ -= count;
+        if (tail_size_ != 0)
+            std::memmove(tail_.data(), tail_.data() + count, tail_size_ * sizeof(Record));
+    }
+    detail::TailWindowStorage<Record> tail_;
+    std::size_t tail_size_ = 0;
     uint64_t flushed_ = 0;   // records before the tail: written to the file or retired
     uint64_t base_ = 0;      // the first record not retired
     uint64_t origin_ = 0;    // the index the file's first record has
     ExtFile file_;
+    mutable detail::ReadThroughWindow cache_;
 };
 
 class ByteWriter {
@@ -1671,6 +1707,10 @@ constexpr std::size_t kBookMax = 4096;
 // their chunk. Positions are absolute (the core's history_base()..
 // history_end()), ordinals ascend with positions.
 struct WorkingRequestCore::JournalStore {
+    // Construction policy for the three lazy tail stores. Keeping physical
+    // policy in this existing opaque owner preserves the public core layout.
+    TailWindowConfig tail_windows;
+    std::optional<std::array<CacheCapacity, 3>> tail_cache_capacities;
     detail::CommandScratchStore* codec = nullptr; // borrowed, run-owned backing
     mutable std::vector<std::byte> codec_page; // allocated once from store geometry
     mutable std::array<std::optional<CommandEvent>, 4> codec_values;
@@ -1929,7 +1969,7 @@ struct WorkingRequestCore::JournalStore {
         }
         if (low == pages.base()) return false;
         const JournalPage found = pages.get(low - 1);
-        if (position >= found.first_position + found.count) return false;
+        if (position - found.first_position >= found.count) return false;
         *page_no = low - 1;
         *page = found;
         return true;
@@ -2077,6 +2117,7 @@ const detail::ScratchReadback& journal_readback(const WorkingRequestCore& core) 
 // The group-effect keys: a resident tail over an external fixed-record log.
 struct WorkingRequestCore::ReceiptStore {
     TailLog<ReceiptRec, 64> log;
+    ReceiptStore(std::size_t rows, CacheCapacity capacity) : log(rows, capacity) {}
 };
 
 // The id lists of resolutions that spent a long chain, and the index that
@@ -2084,6 +2125,7 @@ struct WorkingRequestCore::ReceiptStore {
 struct WorkingRequestCore::ChainSegments {
     ExtFile ids;
     TailLog<ChainSegmentRec, 16> index;
+    ChainSegments(std::size_t rows, CacheCapacity capacity) : index(rows, capacity) {}
     void set_directory(const std::string& directory) {
         ids.set_directory(directory);
         index.set_directory(directory);
@@ -2990,7 +3032,8 @@ void WorkingRequestCore::apply_receipt_base(std::size_t base) noexcept {
 
 void WorkingRequestCore::ensure_receipt_store() {
     if (receipt_store_) return;
-    auto store = std::make_shared<ReceiptStore>();
+    auto store = std::make_shared<ReceiptStore>(
+        tail_window_config().receipt_rows, tail_cache_capacity(TailWindowKind::receipts));
     const std::string& directory = scratch_directory();
     if (!directory.empty()) store->log.set_directory(directory);
     receipt_store_ = std::move(store);
@@ -3013,7 +3056,8 @@ void WorkingRequestCore::prepare_codec_frames() {
 
 void WorkingRequestCore::ensure_chain_segments() {
     if (chain_segments_) return;
-    auto segments = std::make_shared<ChainSegments>();
+    auto segments = std::make_shared<ChainSegments>(
+        tail_window_config().chain_segment_rows, tail_cache_capacity(TailWindowKind::chain_segments));
     const std::string& directory = scratch_directory();
     if (!directory.empty()) segments->set_directory(directory);
     chain_segments_ = std::move(segments);
@@ -3521,11 +3565,53 @@ InstallResult WorkingRequestCore::commit(MutationPlan& plan) noexcept {
     return Installed{EventRange{first, count}};
 }
 
-WorkingRequestCore::WorkingRequestCore(RunIdentity identity) {
+WorkingRequestCore::WorkingRequestCore(RunIdentity identity)
+    : WorkingRequestCore(std::move(identity), TailWindowConfig{}) {}
+
+WorkingRequestCore::WorkingRequestCore(RunIdentity identity, TailWindowConfig windows) {
     require_identity(identity);
     identity_ = std::move(identity);
     instance_ = std::make_shared<InstanceBinding>();
     journal_ = std::make_shared<JournalStore>();
+    journal_->tail_windows = windows;
+}
+
+WorkingRequestCore::WorkingRequestCore(RunIdentity identity, CacheCapacity successor_roots,
+                                      CacheCapacity receipts, CacheCapacity chain_segments)
+    : WorkingRequestCore(std::move(identity), TailWindowConfig{}) {
+    journal_->tail_cache_capacities =
+        std::array<CacheCapacity, 3>{{successor_roots, receipts, chain_segments}};
+}
+
+TailWindowConfig WorkingRequestCore::tail_window_config() const noexcept {
+    return journal_ ? journal_->tail_windows : TailWindowConfig{};
+}
+
+CacheCapacity WorkingRequestCore::tail_cache_capacity(TailWindowKind kind) const noexcept {
+    const auto windows = tail_window_config();
+    std::size_t index = 0, rows = 0, width = 0;
+    switch (kind) {
+    case TailWindowKind::successor_roots:
+        index = 0;
+        rows = windows.successor_root_rows;
+        width = 2 * sizeof(uint64_t);
+        break;
+    case TailWindowKind::receipts:
+        index = 1;
+        rows = windows.receipt_rows;
+        width = sizeof(ReceiptRec);
+        break;
+    case TailWindowKind::chain_segments:
+        index = 2;
+        rows = windows.chain_segment_rows;
+        width = sizeof(ChainSegmentRec);
+        break;
+    default:
+        return {};
+    }
+    if (journal_ && journal_->tail_cache_capacities)
+        return (*journal_->tail_cache_capacities)[index];
+    return CacheCapacity::from_payload(width, detail::window_payload_bytes(rows, width));
 }
 
 WorkingRequestCore::WorkingRequestCore(WorkingRequestCore&& other) noexcept {
@@ -3597,7 +3683,8 @@ void WorkingRequestCore::reset(RunIdentity identity) {
         prepare_codec_frames();
         return;
     }
-    WorkingRequestCore next(std::move(identity));
+    WorkingRequestCore next(std::move(identity), tail_window_config());
+    if (journal_) next.journal_->tail_cache_capacities = journal_->tail_cache_capacities;
     *this = std::move(next);
 }
 
@@ -8061,7 +8148,7 @@ struct WorkingRequestCore::SuccessorRootIndex {
     // These are storage metadata, not additional broker state: the prefix
     // and tail partition the root sequence already in chain_roots_. The slab,
     // backing, directory and partition boundary do not enter its digest.
-    std::array<Row, kTailRows> tail{};
+    detail::TailWindowStorage<Row> tail;
     std::size_t tail_size = 0;
     uint64_t disk_rows = 0;
     detail::ScratchFile file{detail::ScratchFile::IoRaiser::auxiliary};
@@ -8069,10 +8156,17 @@ struct WorkingRequestCore::SuccessorRootIndex {
     std::shared_ptr<detail::ScratchSlab> slab;
     // Transient input for one bounded-memory preparation, never a root count.
     bool next_adds_root = true;
+    mutable std::uint64_t reads = 0;
+    mutable std::uint64_t read_bytes = 0;
+    mutable detail::ReadThroughWindow cache;
 
-    SuccessorRootIndex() { file.set_store(detail::ScratchStore::successor_roots); }
-    explicit SuccessorRootIndex(const std::shared_ptr<detail::ScratchSlab>& owner) noexcept
-        : SuccessorRootIndex() { slab = owner; }
+    SuccessorRootIndex(std::size_t rows, CacheCapacity capacity)
+        : tail(rows), cache(sizeof(Row), capacity, this, read_backing) {
+        file.set_store(detail::ScratchStore::successor_roots);
+    }
+    explicit SuccessorRootIndex(const std::shared_ptr<detail::ScratchSlab>& owner,
+                                std::size_t rows, CacheCapacity capacity) noexcept
+        : SuccessorRootIndex(rows, capacity) { slab = owner; }
     SuccessorRootIndex(const SuccessorRootIndex&) = delete;
     SuccessorRootIndex& operator=(const SuccessorRootIndex&) = delete;
 
@@ -8113,6 +8207,7 @@ struct WorkingRequestCore::SuccessorRootIndex {
         }
         if (tail_size < tail.size()) return;
         const std::size_t length = tail_size * sizeof(Row);
+        cache.invalidate();
         if (slab) {
             slab->write_at(detail::ScratchResource::successor_roots,
                            disk_rows * sizeof(Row), tail.data(), length);
@@ -8142,9 +8237,10 @@ struct WorkingRequestCore::SuccessorRootIndex {
         tail[tail_size++] = Row{successor, root};
     }
 
-    Row read(uint64_t index) const {
+    Row read_uncached(uint64_t index) const {
         PF_COHORT_WORK(RootDiskRead); assert((slab || file.opened()) && index < disk_rows);
         Row row;
+        ++reads;
         if (slab) {
             slab->read_at(detail::ScratchResource::successor_roots,
                           index * sizeof(Row), &row, sizeof(Row));
@@ -8155,9 +8251,22 @@ struct WorkingRequestCore::SuccessorRootIndex {
                 throw detail::AuxiliaryScratchIoError(error.code().value(), "native successor roots read");
             }
         }
+        read_bytes += sizeof(Row);
         if (row.root == 0 || row.root >= row.successor) {
             throw detail::AuxiliaryScratchIoError(EIO, "native successor roots invalid row");
         }
+        return row;
+    }
+
+    static void read_backing(void* context, uint64_t offset, void* out, std::size_t bytes) {
+        assert(bytes == sizeof(Row));
+        const auto row = static_cast<SuccessorRootIndex*>(context)->read_uncached(offset / sizeof(Row));
+        std::memcpy(out, &row, bytes);
+    }
+
+    Row read(uint64_t index) const {
+        Row row;
+        cache.get(index, &row, sizeof(Row));
         return row;
     }
 
@@ -8181,6 +8290,47 @@ struct WorkingRequestCore::SuccessorRootIndex {
         return std::nullopt;
     }
 };
+
+TailWindowStats WorkingRequestCore::tail_window_stats() const noexcept {
+    TailWindowStats stats;
+    if (successor_roots_) {
+        stats.successor_root_capacity_rows = successor_roots_->tail.size();
+        stats.successor_root_reads = successor_roots_->reads;
+        stats.successor_root_read_bytes = successor_roots_->read_bytes;
+        stats.successor_root_pending_bytes = successor_roots_->tail.cache_bytes()
+            + sizeof(SuccessorRootIndex::Row);
+        stats.successor_root_control_bytes = sizeof(SuccessorRootIndex) - sizeof(SuccessorRootIndex::Row);
+    }
+    if (receipt_store_) {
+        stats.receipt_capacity_rows = receipt_store_->log.capacity();
+        stats.receipt_reads = receipt_store_->log.read_count();
+        stats.receipt_read_bytes = receipt_store_->log.read_bytes();
+        stats.receipt_pending_bytes = receipt_store_->log.pending_bytes();
+        stats.receipt_control_bytes = sizeof(ReceiptStore) - sizeof(ReceiptRec);
+    }
+    if (chain_segments_) {
+        stats.chain_index_capacity_rows = chain_segments_->index.capacity();
+        stats.chain_index_reads = chain_segments_->index.read_count();
+        stats.chain_id_reads = chain_segments_->ids.read_count();
+        stats.chain_index_read_bytes = chain_segments_->index.read_bytes();
+        stats.chain_index_pending_bytes = chain_segments_->index.pending_bytes();
+        stats.chain_index_control_bytes = sizeof(ChainSegments) - sizeof(ChainSegmentRec);
+    }
+    return stats;
+}
+
+detail::ReadThroughCacheStats WorkingRequestCore::tail_read_cache_stats(
+        TailWindowKind kind) const noexcept {
+    switch (kind) {
+    case TailWindowKind::successor_roots:
+        return successor_roots_ ? successor_roots_->cache.stats() : detail::ReadThroughCacheStats{};
+    case TailWindowKind::receipts:
+        return receipt_store_ ? receipt_store_->log.cache_stats() : detail::ReadThroughCacheStats{};
+    case TailWindowKind::chain_segments:
+        return chain_segments_ ? chain_segments_->index.cache_stats() : detail::ReadThroughCacheStats{};
+    }
+    return {};
+}
 
 // These reservations need the complete private helper to stage its transient
 // ticket. Their declarations and all callers keep their existing signatures.
@@ -8259,14 +8409,19 @@ void WorkingRequestCore::seal_direct(std::size_t events, bool push_live, bool ad
 void WorkingRequestCore::bind_scratch_slab(
         const std::shared_ptr<::pineforge::detail::ScratchSlab>& slab) {
     if (slab) {
-        successor_roots_ = std::make_shared<SuccessorRootIndex>(slab);
+        successor_roots_ = std::make_shared<SuccessorRootIndex>(
+            slab, tail_window_config().successor_root_rows,
+            tail_cache_capacity(TailWindowKind::successor_roots));
     } else if (successor_roots_ && successor_roots_->slab) {
         successor_roots_.reset();
     }
 }
 
 void WorkingRequestCore::set_successor_roots_directory(const std::string& directory) {
-    if (!successor_roots_) successor_roots_ = std::make_shared<SuccessorRootIndex>();
+    if (!successor_roots_)
+        successor_roots_ = std::make_shared<SuccessorRootIndex>(
+            tail_window_config().successor_root_rows,
+            tail_cache_capacity(TailWindowKind::successor_roots));
     successor_roots_->set_directory(directory);
     // The journal's pages, the group-effect keys, the long chains' id lists
     // and the working book's spilled rows spill beside the successor roots;
@@ -8287,7 +8442,10 @@ const std::string& WorkingRequestCore::scratch_directory() const noexcept {
 }
 
 void WorkingRequestCore::reserve_successor_root() {
-    if (!successor_roots_) successor_roots_ = std::make_shared<SuccessorRootIndex>();
+    if (!successor_roots_)
+        successor_roots_ = std::make_shared<SuccessorRootIndex>(
+            tail_window_config().successor_root_rows,
+            tail_cache_capacity(TailWindowKind::successor_roots));
     successor_roots_->prepare_append();
 }
 

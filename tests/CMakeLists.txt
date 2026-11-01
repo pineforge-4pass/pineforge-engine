@@ -2307,6 +2307,63 @@ add_test(NAME test_compile_inventory_pipeline
     COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
+# Opt-in supervised report channel and compile-step limits: real-process rows (Linux only,
+# /proc and real sockets) that start the supervisor, a producer or the entrypoint and judge
+# bytes, packets, wall time and wait statuses from outside. The entrypoint row compiles a
+# plain strategy.so, so it is not registered where the archive needs a sanitizer runtime.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME test_report_channel_contract COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/report_channel/test_contract.py
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+    add_test(NAME test_report_channel_deadlines COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/report_channel_deadlines/test_deadlines.py
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+    set_tests_properties(test_report_channel_contract PROPERTIES LABELS "report-channel")
+    set_tests_properties(test_report_channel_deadlines PROPERTIES LABELS "report-channel" RUN_SERIAL TRUE)
+    if(NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+        add_test(NAME test_entrypoint_compile_limits COMMAND ${CMAKE_COMMAND} -E env
+                "PINEFORGE_ENTRYPOINT_TEST_ARCHIVE=$<TARGET_FILE:pineforge>"
+                ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+                ${PROJECT_SOURCE_DIR}/tests/entrypoint_limits/test_compile_limits.py
+            WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+        set_tests_properties(test_entrypoint_compile_limits PROPERTIES LABELS "report-channel")
+    endif()
+endif()
+
+# OFF identity of the opt-in report channel: the same fixed requests through main's own
+# docker/ closure (read from git at the pinned base) and through this tree, over the
+# corpus parity subset; needs the corpus strategy modules, so it exists only in a build
+# that has them.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
+   AND PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_CORPUS_STRATEGIES)
+    file(STRINGS "${PROJECT_SOURCE_DIR}/scripts/corpus_parity_subset.txt"
+        _pf_report_off_lines)
+    set(_pf_report_off_map "")
+    foreach(_pf_report_off_line IN LISTS _pf_report_off_lines)
+        string(REGEX REPLACE "#.*$" "" _pf_report_off_probe "${_pf_report_off_line}")
+        string(STRIP "${_pf_report_off_probe}" _pf_report_off_probe)
+        if(_pf_report_off_probe STREQUAL "")
+            continue()
+        endif()
+        string(MAKE_C_IDENTIFIER "strategy_${_pf_report_off_probe}"
+            _pf_report_off_target)
+        string(APPEND _pf_report_off_map
+            "${_pf_report_off_probe}\t$<TARGET_FILE:${_pf_report_off_target}>\n")
+    endforeach()
+    file(GENERATE
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/report-off-modules-$<CONFIG>.tsv"
+        CONTENT "${_pf_report_off_map}")
+    add_test(NAME test_report_channel_off_identity
+        COMMAND ${CMAKE_COMMAND} -E env
+            "PINEFORGE_REPORT_OFF_MODULE_MAP=${CMAKE_CURRENT_BINARY_DIR}/report-off-modules-$<CONFIG>.tsv"
+            "PINEFORGE_REPORT_OFF_DEFAULT_OHLCV=${PROJECT_SOURCE_DIR}/corpus/data/derived/ohlcv_ETH-USDT-USDT_15m.csv"
+            ${Python3_EXECUTABLE} -B
+                ${PROJECT_SOURCE_DIR}/tests/report_channel/test_off_identity.py
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+    set_tests_properties(test_report_channel_off_identity PROPERTIES
+        LABELS "report-channel" RUN_SERIAL TRUE)
+endif()
+
 # The seven ABI-provider manifests and the four receipt-gated rows. The
 # private-fixture PRs take every manifest below out of the public tree, and
 # scripts/prepare_settlement_cpp_abi_base.py answers a missing one with the
@@ -3809,7 +3866,6 @@ list(APPEND TEST_SOURCES test_native_unreachable_book)
 list(APPEND TEST_SOURCES test_native_dormant_book_cost)
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     list(APPEND TEST_SOURCES test_standing_orders_wall test_projected_pending_scaling)
-    list(APPEND TEST_SOURCES test_adapter_cohort_origin_release)
     list(APPEND TEST_SOURCES test_abi_layout_probe)
 endif()
 list(APPEND TEST_SOURCES test_native_dormant_book_resident)
@@ -7453,7 +7509,18 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_jailed_temp_files_witness
             -- -q -p no:cacheprovider
             ${PROJECT_SOURCE_DIR}/tests/test_jailed_temp_files_witness.py)
+    add_test(NAME test_parity_jailed_adapter
+        COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/run_pytest_no_skips.py
+            --artifacts ${CMAKE_CURRENT_BINARY_DIR}/pytest-no-skips/test_parity_jailed_adapter
+            -- -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_parity_jailed_adapter.py)
 endif()
+
+add_test(
+    NAME test_parity_packaged_paths
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_parity_packaged_paths.py
+)
 
 # Property reads and the diagnostic belong before the lane loop;
 # the fence grammar permits target definitions, not get_target_property/message.
@@ -7496,6 +7563,37 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX
         set_target_properties(${_pf_metrics_module} PROPERTIES
             PREFIX "" SUFFIX ".so"
             LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/metrics_only_fixture")
+    endforeach()
+endif()
+
+option(PINEFORGE_COHORT_EXPOSURE_FIXTURES
+    "Compare every cohort exposure call with the frozen selector" OFF)
+if(PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    target_compile_definitions(pineforge PRIVATE PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    if(TARGET pineforge_source_quiet_ungated)
+        target_compile_definitions(pineforge_source_quiet_ungated PRIVATE
+            PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    endif()
+    if(TARGET pineforge_source_quiet_probe)
+        target_compile_definitions(pineforge_source_quiet_probe PRIVATE
+            PINEFORGE_COHORT_EXPOSURE_FIXTURES)
+    endif()
+    # These TUs compile the adapter directly, including two through the
+    # position-tail retirement fixture header. Source properties also cover
+    # any additional target built from the same TU in this directory.
+    foreach(_pf_cohort_adapter_tu IN ITEMS
+            test_adapter_growth_storage.cpp
+            test_adapter_reversal_storage.cpp
+            test_adapter_tree_ram.cpp
+            test_cohort_exposure_work.cpp
+            test_live_source_key_alias_adapter.cpp
+            test_live_source_key_spellings_strict_adapter.cpp
+            test_position_tail_retirement.cpp
+            test_position_tail_retirement_work.cpp
+            test_position_tail_summary_scale.cpp
+            test_reversal_exit_owner_gate.cpp)
+        set_property(SOURCE ${_pf_cohort_adapter_tu} APPEND PROPERTY
+            COMPILE_DEFINITIONS PINEFORGE_COHORT_EXPOSURE_FIXTURES)
     endforeach()
 endif()
 
@@ -7966,6 +8064,25 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
         "-Wl,--wrap=_ZnamRKSt9nothrow_t")
 endif()
 # --- CR-150 resident-command-scratch end ---
+# --- CR-150 cache-policy-v1 begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    add_library(cache_policy_module MODULE cache_policy_module.cpp)
+    target_link_libraries(cache_policy_module PRIVATE pineforge)
+    target_compile_options(cache_policy_module PRIVATE -ffp-contract=off -fvisibility=hidden)
+    target_link_libraries(test_cache_policy_v1 PRIVATE ${CMAKE_DL_LIBS})
+    target_compile_definitions(test_cache_policy_v1 PRIVATE
+        PF_CACHE_POLICY_MODULE_PATH="$<TARGET_FILE:cache_policy_module>")
+    add_dependencies(test_cache_policy_v1 cache_policy_module)
+endif()
+# --- CR-150 cache-policy-v1 end ---
+# --- CR-150 ta-history-cache begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    target_link_options(test_ta_history_cache_faults PRIVATE
+        "-Wl,--wrap=pread" "-Wl,--wrap=pwrite"
+        "-Wl,--wrap=_ZnwmRKSt9nothrow_t")
+endif()
+# --- CR-150 ta-history-cache end ---
+
 # --- CR-150 core-cr150-replay begin ---
 # Test-only strategy orders for the real-library JSON replay test. The module
 # links the actual runtime; it supplies no replay accessor or replay option.
@@ -8039,6 +8156,41 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8
     target_link_options(test_ledger_block_zeroing PRIVATE "-Wl,--wrap=pwrite")
 endif()
 # --- CR-150 ledger-block-zeroing end ---
+
+# --- CR-150 outputs-series-limit begin ---
+target_link_libraries(test_outputs_series_limit PRIVATE ${CMAKE_DL_LIBS})
+if(APPLE)
+    target_link_options(test_outputs_series_limit PRIVATE "-Wl,-export_dynamic")
+elseif(UNIX)
+    target_link_options(test_outputs_series_limit PRIVATE "-Wl,--export-dynamic")
+endif()
+if(UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(outputs_series_fixture_strategy MODULE outputs_series_fixture_strategy.cpp)
+    target_link_libraries(outputs_series_fixture_strategy PRIVATE pineforge)
+    target_compile_options(outputs_series_fixture_strategy PRIVATE -ffp-contract=off -UNDEBUG)
+    if(APPLE)
+        target_link_options(outputs_series_fixture_strategy PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(outputs_series_fixture_strategy PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    add_test(NAME test_run_json_output_series_parameter
+        COMMAND ${CMAKE_COMMAND} -E env
+            "PINEFORGE_OUTPUT_SERIES_SO=$<TARGET_FILE:outputs_series_fixture_strategy>"
+            ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/docker/run_json_window_budget_test.py
+            -k "declared_series_determine_real_run_window_bound or operator_limit_fails_typed_through_real_cli or cli_option_accepts_the_edge_and_default_remains_unlimited")
+endif()
+# --- CR-150 outputs-series-limit end ---
+# --- CR-150 roster-pass-work begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    # The fixture includes the real adapter translation unit before linking
+    # the archive, so only this test target needs the counting overlay.
+    target_compile_definitions(test_adapter_cohort_origin_release PRIVATE
+        PINEFORGE_ROSTER_PASS_OBSERVER=1)
+endif()
+# --- CR-150 roster-pass-work end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))

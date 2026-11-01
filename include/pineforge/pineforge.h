@@ -711,6 +711,21 @@ PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms)
 PF_API int pf_report_scratch_arena_stats(uint64_t* high_water_bytes,
                                        uint64_t* arena_bytes);
 
+/** Read the handle's admitted-run command-cache and trade-ledger diagnostics.
+ *  resident_bytes is the current sum of live command-cache control/slabs and
+ *  the ledger's fixed workspace, allocated directory and decoded-entry pages.
+ *  Each allocation owner contributes once; borrowed shared-cache storage does
+ *  not add another charge. Arena chunks and backing-file extents are separate.
+ *  allocation_bypass_count counts optional command-slab and ledger-directory/
+ *  page allocation failures, once per sticky bypass, including released owners.
+ *  Both outputs are 0 before the first admitted run; admission resets them.
+ *  Returns 0, or -1 with both outputs unchanged for a NULL handle/output or
+ *  aliased outputs. Never allocates, throws or changes last_error.
+ *  Query on the invoking thread after report finalization and before freeing
+ *  the strategy. No existing report, receipt or diagnostics layout changes. */
+PF_API int pf_report_cache_stats(pf_strategy_t s, uint64_t* resident_bytes,
+                                 uint64_t* allocation_bypass_count);
+
 /** Admit a jailed handle only with an attached scratch arena.
  *  Attach the inherited environment arena, if configured (fixed fd 5:
  *  PF_SCRATCH_ARENA_FD=5, positive PF_SCRATCH_ARENA_BYTES);
@@ -894,6 +909,93 @@ PF_API int strategy_stream_fill_report(pf_strategy_t s, pf_report_t* out);
  *  them changes a historical run unless enabled. @{ */
 
 #define PINEFORGE_HAS_SCRATCH_TABLES_V1 1
+
+#define PINEFORGE_HAS_CACHE_POLICY_V1 1
+
+/** Append-only cache-kind vocabulary. Zero is reserved and is rejected as
+ *  an unknown kind. Values are contiguous, starting at one; new kinds take
+ *  the next unused value and existing values are never renumbered.
+ *  A kind whose cache a later release deletes remains accepted as a
+ *  documented retired no-op, never an unknown-kind error. */
+typedef uint32_t pf_cache_kind_t;
+#define PF_CACHE_KIND_LEDGER_CACHE             1u
+#define PF_CACHE_KIND_TRADE_PAGES              2u
+#define PF_CACHE_KIND_DEPENDENCY_PAGES         3u
+#define PF_CACHE_KIND_EXIT_PAGES               4u
+#define PF_CACHE_KIND_BOOK_PAGES               5u
+#define PF_CACHE_KIND_RETAINED_SEQUENCE_PAGES  6u
+#define PF_CACHE_KIND_COHORT_ID_PAGES          7u
+#define PF_CACHE_KIND_EXIT_RANK_PAGES          8u
+#define PF_CACHE_KIND_ERASED_MINIMA_PAGES      9u
+#define PF_CACHE_KIND_CONSUMED_CYCLE_PAGES    10u
+#define PF_CACHE_KIND_POSITION_TAIL_PAGES     11u
+#define PF_CACHE_KIND_SUCCESSOR_ROOT_PAGES    12u
+#define PF_CACHE_KIND_RECEIPT_TAIL_PAGES       13u
+#define PF_CACHE_KIND_CHAIN_SEGMENT_PAGES     14u
+#define PF_CACHE_KIND_EQUITY_CURVE_PAGES       15u
+#define PF_CACHE_KIND_TA_HISTORY_PAGES         16u
+#define PF_CACHE_KIND_FEED_CALENDAR_PAGES      17u
+#define PF_CACHE_KIND_RECORDED_SERIES_PAGES    18u
+#define PF_CACHE_KIND_PROJECTION_EXIT_PAGES   19u
+
+/** One optional resident cache size. Ordinary C alignment applies: kind is
+ *  uint32_t and capacity_bytes is uint64_t, with no packed wire layout.
+ *  Every capacity is in bytes. For PF_CACHE_KIND_LEDGER_CACHE, the engine
+ *  selects the largest row count R with
+ *  R * TradeLedger::kLedgerEntryBytes + ceil(R / 256) * sizeof(void*) <= capacity_bytes
+ *  (312 bytes per decoded entry and 8 bytes per page pointer on LP64).
+ *  The default is 20,449,280 bytes for 65,536 rows on LP64.
+ *  Zero selects the existing zero-row
+ *  bypass minimum. A nonzero capacity converting to fewer than one row fails
+ *  with setting_rejected, input="cache_policy", reason="value_below_minimum";
+ *  above the existing 1,048,576-row ceiling it fails with the same input and
+ *  reason="value_above_maximum". No clamping or sub-row bypass occurs.
+ *  The ledger keeps private pages; its allowance includes their page directory.
+ *  Allocated pointers and pages are reported once in cache resident bytes.
+ *  Optional directory/page allocation failure permanently bypasses further
+ *  cache allocation for that ledger, preserving backing reads and writes.
+ *  Other kinds include optional line metadata in their byte allowances and
+ *  bypass when below one line. Reads still use backing at zero capacity.
+ *  reserved must be zero; a nonzero word is a typed setting_rejected error. */
+typedef struct pf_cache_policy_entry_v1 {
+    uint32_t kind;
+    uint32_t reserved;
+    uint64_t capacity_bytes;
+} pf_cache_policy_entry_v1;
+
+/** Versioned resident cache policy. Set struct_size = sizeof(pf_cache_policy_v1)
+ *  and version = 1; both reserved words and every entry's reserved word must
+ *  be zero. Nonzero reserved words fail with setting_rejected,
+ *  input="cache_policy", reason="unparseable_value".
+ *  The caller owns this descriptor and its entries; the setter copies their
+ *  values before returning and retains neither pointer.
+ *  entry_count is a uint64_t count; entries may be NULL only when it is zero.
+ *  Each successful replacement starts from internal defaults, then applies
+ *  the entries. Omitted kinds use defaults; duplicate and unknown kinds fail.
+ *  No entry limits logical records, retained history or backing extent. */
+typedef struct pf_cache_policy_v1 {
+    uint32_t struct_size;
+    uint32_t version;
+    uint64_t entry_count;
+    const pf_cache_policy_entry_v1* entries;
+    uint32_t reserved[2];
+} pf_cache_policy_v1;
+
+/** Copy cache settings before run admission; NULL restores internal defaults.
+ *  A run freezes its settings before its first store begin/append. Calls in
+ *  begin callbacks, during execution or during an active stream fail without
+ *  changing either configuration or the admitted run. An idle call between
+ *  runs affects the next run, including stream warmup, and never resizes the
+ *  preceding run's retained stores or borrowed views.
+ *  Returns 0 on success and -1 on invalid descriptor, nonzero reserved word,
+ *  duplicate/unknown kind, ledger capacity outside its setting range,
+ *  unrepresentable size or busy/frozen handle. A valid handle records the
+ *  typed setting_rejected configuration error through
+ *  #strategy_get_last_error_code and #strategy_get_last_error_args.
+ *  Optional cache allocation failure bypasses caching; it is not admission
+ *  failure. This policy does not change scratch-table maxima or arena shares. */
+PF_API int strategy_set_cache_policy_v1(pf_strategy_t s,
+                                        const pf_cache_policy_v1* policy);
 
 /** Storage policy for the nine historical scratch-table regions. */
 typedef enum pf_scratch_table_backend_e {
@@ -2013,7 +2115,7 @@ PF_API int strategy_set_symbol_feed_borrowed_v1(
 
 /** Exact C++ engine layout accepted by the live report accumulator.
  *  Bump whenever that layout changes, independently of #PF_ABI_VERSION. */
-#define PF_STREAM_ENGINE_LAYOUT_VERSION 1u
+#define PF_STREAM_ENGINE_LAYOUT_VERSION 2u
 
 /** Optional module declaration that its strategy handles point directly to
  *  a BacktestEngine with the returned #PF_STREAM_ENGINE_LAYOUT_VERSION.
@@ -2023,6 +2125,27 @@ PF_API int strategy_set_symbol_feed_borrowed_v1(
  *  stream ABI and execution-capabilities versions alone do not prove layout.
  *  This query reads no strategy state and changes no report or hash. */
 PF_API uint32_t strategy_stream_engine_layout_version(void);
+
+/** Set this module's creation-time recorded-series limit on the calling thread.
+ *  Call before strategy_create/strategy_create_checked (or C++ construction):
+ *  the base engine snapshots it before the derived constructor declares.
+ *  NULL or 0 means unlimited, the default. A non-NULL positive int64 is the
+ *  operator's maximum.
+ *  Returns a pf_settings_status_t; negative values return
+ *  #PF_SETTINGS_INVALID_ARGUMENT without changing the previous setting.
+ *  Errors follow the checked-settings buffer protocol. Success also clears
+ *  the typed declaration refusal read by #pf_output_series_limit_failure.
+ *  The host must restore NULL after its factory call; existing hosts retain
+ *  their snapshot. Different threads have independent defaults and refusals. */
+PF_API int pf_output_series_limit_set_checked(const int64_t* maximum,
+                                             char* error, size_t error_capacity);
+/** Read an outputs_limit / too_many_series declaration refusal even when a
+ *  factory returned NULL. Returns 1 and writes the positive operator maximum
+ *  from the refused setting (NULL or 0 selects unlimited), 0 when no refusal
+ *  has occurred since the last successful setter (leaving the destination
+ *  unchanged), or -1 for NULL. Query on the creation thread before restoring
+ *  the default. No exception or allocation crosses the ABI. */
+PF_API int pf_output_series_limit_failure(int64_t* maximum);
 
 #ifdef __cplusplus
 } /* extern "C" */

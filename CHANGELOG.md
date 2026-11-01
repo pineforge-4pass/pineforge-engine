@@ -13,6 +13,86 @@ version number follows semantic versioning over the surfaces the
   limit and a 1% P&L limit. The exit-coupled P&L forgiveness window narrows
   with that exit limit from 0.05% to 0.02% for trail_* probes. The exit and
   P&L gates remain per-strategy 90th-percentile measurements.
+- An opt-in supervised report channel separates report and diagnostic output
+  and records terminal delivery facts. It is not yet host-attested and needs
+  an external sink for now, while the internal snapshot handoff is pending.
+  Unset or zero report, diagnostic, wall and stall limits are unlimited;
+  positive values apply exactly, subject to any positive host grant.
+- the supervised report channel does not forward the host run-quota marker; it refuses to start when a PF_RUN_QUOTA_ variable is set.
+- The supervised channel's `--post-exit-drain-ms`
+  (`PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS`) controls how long diagnostic and
+  receipt pipes may stay open after their owners exit. The default is 1000 ms;
+  zero waits without a drain deadline. This guards against a leaked descendant
+  that outlives its parent and keeps an output pipe open. Progress does not
+  renew the grace; expiry names the parameter in terminal diagnostics.
+  `--stop-grace-ms` (`PINEFORGE_CHANNEL_STOP_GRACE_MS`) controls the separate
+  TERM-to-KILL cleanup grace, with the same 1000 ms default and zero meaning
+  unlimited. For both grace parameters, operator 0 means unlimited; an absent
+  operator value takes the 1000 ms default; an absent or zero host grant means
+  no host limit, so that default still applies when the operator gave no value;
+  a positive host grant makes an absent operator value take the grant, refuses
+  a positive operator value above it, and refuses operator 0 as exceeding it.
+  Terminal records carry a `diagnostics` list of text strings, each cut at
+  1,024 bytes; a jailed refusal names its parameter there.
+- Sink validation preserves the effective producer profile in an explicit
+  environment. Under the jailed profile it uses provisional binary stdout,
+  with no sink spool or file, and buffers at most the planned sink bound in
+  memory. `--planned-sink-bytes` (`PINEFORGE_REPORT_PLANNED_SINK_BYTES`) or
+  attested `planned_sink_bytes` supplies that bound; unset or zero uses a
+  positive report allowance when available, otherwise admission refuses before
+  launching the producer. On a jailed profile the arena is fixed, so an
+  unlimited sink has no meaning there. Publication requires exit 0, a complete
+  receipt, and independent byte-count and hash agreement. Unjailed validation
+  keeps file mode and an unlimited report allowance supplies no finalizer cap.
+- Container compile guards are opt-in and off when all three settings are
+  unset. Once opted in, an unset or zero value is unlimited and a positive
+  value is exact; when no dimension is limited, the original compile and
+  binding behavior is retained.
+- The runner no longer refuses more than 256 symbols or total extra feeds in a
+  `--symbol-feeds` index, and the two request-feed inventory readers (the
+  runner's and `bind_compiled_inventory.py`) no longer refuse an inventory over
+  8 MiB: both limits are now parameters whose default is no limit.
+  `--max-symbol-feeds N` and `--max-inventory-bytes N` (environment
+  `PINEFORGE_MAX_SYMBOL_FEEDS` and `PINEFORGE_MAX_INVENTORY_BYTES` in the
+  container entrypoint) set a limit; unset or `0` is unlimited and anything
+  else that is not a nonnegative integer is a usage error. With a limit set the
+  typed refusals (`too_many_symbols`, `too_many_feeds`, the inventory
+  incompleteness refusal, binder exit 10) are unchanged and name the limit in
+  force. `--tv-compat` (`PINEFORGE_TV_COMPAT`) selects the former values, 256
+  and 8 MiB, as defaults; an explicit value, including `0`, wins. The key
+  length limit is unchanged. The ambiguous-prefix message of the runner's
+  argument parser now lists the new options where they share a prefix:
+  `--t` also names `--tv-compat`, and `--m` and `--ma` also name
+  `--max-symbol-feeds` and `--max-inventory-bytes`. The exit status, the code
+  `run_request_invalid` and its args are unchanged.
+- Recorded output series are unlimited by default; 0 or omission of `--limit-output-series` means no limit, while a positive N is the operator's cap and any refusal reports that positive N as `max`. Report-window memory follows the declared count: 6 MiB + 64 KiB × S + a 64 KiB reader with the default I/O sizes.
+- Reading a map is cheaper: each map now keeps a fixed read cache of 8 slots
+  for the keys and values it has just read, so a repeated `get` or `contains`
+  of the same key no longer reads the Store again. The cache adds a fixed 528
+  bytes per map identity for a `map<string, float>` whatever the number of
+  pairs, is cleared by every mutation of the map and invalidated when the
+  Store rolls back an outer transaction, and is never filled from an absent
+  key. Results are unchanged. The internal `detail::o1::Store` interface gains
+  a pure virtual `rollback_epoch()` for that invalidation; a Store
+  implementation outside the engine tree must provide it.
+- Reading a script container (string, array, map or object store) is cheaper:
+  each Store now keeps two fixed tables of 8 slots, one for decoded object
+  headers and one for chunk lookup handles, so a repeated read of the same
+  object or chunk no longer descends the scratch index again. The tables add a
+  fixed 384 bytes per Store to `bytes_resident` whatever the number of objects
+  or chunks, and are cleared before every scratch put, erase and rollback and
+  on every scratch failure. Results are unchanged.
+- Creating an empty map now writes two header records; its arena and index
+  data chunks are published on first write. The Store does this for every
+  script container: an object is created with its header record only, so a
+  string created with a bound and a UDT object made without a payload behave
+  the same way. Declared sizes, the 50,000-pair
+  capacity, iteration order and the refusal at the cap are unchanged. Scratch
+  exhaustion from publishing a container's data chunks now surfaces at the
+  first operation that publishes them (for a map `put`, `remove`, `clear`,
+  `copy`, `snapshot` or `restore`) instead of at creation, with the same typed failure
+  `report_sink_failed` and `reason: arena_exhausted`. Scripts that create maps
+  they never fill can now run where they used to fail at `map.new`.
 
 ## 1.9.1 — 2026-10-31
 
