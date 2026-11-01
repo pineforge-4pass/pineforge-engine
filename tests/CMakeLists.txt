@@ -2304,7 +2304,7 @@ add_test(NAME test_run_json_post_execution
     COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_post_execution.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 add_test(NAME test_compile_inventory_pipeline
-    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py ${PROJECT_SOURCE_DIR}/tests/test_entrypoint_build_only.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
 # Opt-in supervised report channel and compile-step limits: real-process rows (Linux only,

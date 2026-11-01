@@ -43,6 +43,15 @@ version number follows semantic versioning over the surfaces the
   limit and a 1% P&L limit. The exit-coupled P&L forgiveness window narrows
   with that exit limit from 0.05% to 0.02% for trail_* probes. The exit and
   P&L gates remain per-strategy 90th-percentile measurements.
+- Full and transpile-only runs with `PINEFORGE_WORK_DIR` set are refused with exit status 4.
+
+- The container entrypoint accepts `PINEFORGE_BUILD_ONLY=1` with an empty
+  caller-owned `PINEFORGE_WORK_DIR`, retaining the compiled artifacts and an
+  `engine-step.json` manifest for a separate engine invocation. The manifest
+  records the exact arguments, working directory, artifact hashes,
+  inherited-descriptor contract and structured status mapping distinguishing
+  engine exits from build-phase failures; the two-phase run documentation
+  describes the caller's integrity checks and read-only execution boundary.
 - An opt-in supervised report channel separates report and diagnostic output
   and records terminal delivery facts. It is not yet host-attested and needs
   an external sink for now, while the internal snapshot handoff is pending.
