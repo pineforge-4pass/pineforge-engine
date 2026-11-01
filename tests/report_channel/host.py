@@ -796,6 +796,12 @@ def launch(request=None, *, options=(), environment=None, status="valid",
                                 descendant_samples[-1][name] != sample[name]
                                 for name in ("leader", "child"))):
                             descendant_samples.append(sample)
+                        release = request.get("diagnostic_child_release_path")
+                        if (release is not None and sample["leader"] is None
+                                and sample["child"] is not None):
+                            # The EVENT the descendant waits for: the host has seen the producer gone
+                            # while the descendant is alive (no delay, no duration).
+                            Path(release).touch()
                     except (FileNotFoundError, ValueError):
                         pass
                 expired = deadline is not None and time.monotonic() >= deadline

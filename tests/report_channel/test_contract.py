@@ -1213,7 +1213,7 @@ class Contract(unittest.TestCase):
                 "leader_completes": True, "detached_diagnostic_child": True,
                 "double_fork_diagnostic_child": True,
                 "diagnostic_child_lifetime_ms": 2200 if effective is None else 5000,
-                "diagnostic_child_after_parent_marker": True,
+                "diagnostic_child_release_path": str(Path(directory) / "marker-release"),
             }
             try:
                 capture = launch(
