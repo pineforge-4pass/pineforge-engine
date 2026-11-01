@@ -23,6 +23,41 @@ version number follows semantic versioning over the surfaces the
   first byte or from the end of the pass that precedes it, so a sender that
   dribbles bytes cannot keep an unfinished line alive past a set message
   timeout.
+- An opt-in supervised report channel separates report and diagnostic output
+  and records terminal delivery facts. It is not yet host-attested and needs
+  an external sink for now, while the internal snapshot handoff is pending.
+  Unset or zero report, diagnostic, wall and stall limits are unlimited;
+  positive values apply exactly, subject to any positive host grant.
+- the supervised report channel does not forward the host run-quota marker; it refuses to start when a PF_RUN_QUOTA_ variable is set.
+- The supervised channel's `--post-exit-drain-ms`
+  (`PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS`) controls how long diagnostic and
+  receipt pipes may stay open after their owners exit. The default is 1000 ms;
+  zero waits without a drain deadline. This guards against a leaked descendant
+  that outlives its parent and keeps an output pipe open. Progress does not
+  renew the grace; expiry names the parameter in terminal diagnostics.
+  `--stop-grace-ms` (`PINEFORGE_CHANNEL_STOP_GRACE_MS`) controls the separate
+  TERM-to-KILL cleanup grace, with the same 1000 ms default and zero meaning
+  unlimited. For both grace parameters, operator 0 means unlimited; an absent
+  operator value takes the 1000 ms default; an absent or zero host grant means
+  no host limit, so that default still applies when the operator gave no value;
+  a positive host grant makes an absent operator value take the grant, refuses
+  a positive operator value above it, and refuses operator 0 as exceeding it.
+  Terminal records carry a `diagnostics` list of text strings, each cut at
+  1,024 bytes; a jailed refusal names its parameter there.
+- Sink validation preserves the effective producer profile in an explicit
+  environment. Under the jailed profile it uses provisional binary stdout,
+  with no sink spool or file, and buffers at most the planned sink bound in
+  memory. `--planned-sink-bytes` (`PINEFORGE_REPORT_PLANNED_SINK_BYTES`) or
+  attested `planned_sink_bytes` supplies that bound; unset or zero uses a
+  positive report allowance when available, otherwise admission refuses before
+  launching the producer. On a jailed profile the arena is fixed, so an
+  unlimited sink has no meaning there. Publication requires exit 0, a complete
+  receipt, and independent byte-count and hash agreement. Unjailed validation
+  keeps file mode and an unlimited report allowance supplies no finalizer cap.
+- Container compile guards are opt-in and off when all three settings are
+  unset. Once opted in, an unset or zero value is unlimited and a positive
+  value is exact; when no dimension is limited, the original compile and
+  binding behavior is retained.
 - The runner no longer refuses more than 256 symbols or total extra feeds in a
   `--symbol-feeds` index, and the two request-feed inventory readers (the
   runner's and `bind_compiled_inventory.py`) no longer refuse an inventory over
