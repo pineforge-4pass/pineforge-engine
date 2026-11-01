@@ -221,7 +221,7 @@ class DeadlineProcesses(unittest.TestCase):
         self.assertTrue(os.WIFSTOPPED(status),
                         "reader must really be stopped before publication")
 
-    def single(self, config, fds=(), faults=None, bound_ms=1000):
+    def single(self, config, fds=(), faults=None):
         with tempfile.TemporaryFile() as trace:
             environment = self.environment(trace, config, faults or {})
             with Process("worker", config, (*fds, trace.fileno()),
@@ -232,7 +232,7 @@ class DeadlineProcesses(unittest.TestCase):
             return outcome, self.operation_elapsed(outcome, events), events
 
     def write_case(self, peer_options=None, options=None, faults=None,
-                   bound_ms=1000, paused=False, storm=False, tcp=False,
+                   paused=False, storm=False, tcp=False,
                    resume_after_ms=None):
         config = {"operation": "write", "size": 262144, "seed": 93,
                   "wall_ms": 1000, "stall_ms": 500, "stage_hint": "publish"}
@@ -302,8 +302,7 @@ class DeadlineProcesses(unittest.TestCase):
             elapsed = self.operation_elapsed(outcome, events, "send")
             return outcome, peer_result, elapsed, events
 
-    def read_case(self, writer_options=None, options=None, faults=None,
-                  bound_ms=1000):
+    def read_case(self, writer_options=None, options=None, faults=None):
         config = {"operation": "read", "nmax": 31, "wall_ms": 1000,
                   "stall_ms": 400, "stage_hint": "finalize"}
         config.update(options or {})
@@ -331,9 +330,7 @@ class DeadlineProcesses(unittest.TestCase):
 
     def relay_case(self, size, allowance, chunk=127, paused=False,
                    wall_ms=1000, stall_ms=500, writer_options=None,
-                   faults=None, bound_ms=None):
-        if bound_ms is None:
-            bound_ms = wall_ms if wall_ms else 1000
+                   faults=None):
         with contextlib.ExitStack() as stack:
             source, producer = socket_pair()
             destination, consumer = socket_pair()
@@ -389,7 +386,7 @@ class DeadlineProcesses(unittest.TestCase):
         outcome, elapsed, _ = self.single({
             "operation": "deadline", "wall_ms": wall_ms, "stall_ms": stall_ms,
             "progress_after_ms": delay_ms, "progress_bytes": 11,
-        }, bound_ms=wall_ms)
+        })
         self.assertTrue(outcome["ok"], outcome)
         result = outcome["result"]
         self.assertLessEqual(result["wall_after"], result["wall_before"])
@@ -435,7 +432,7 @@ class DeadlineProcesses(unittest.TestCase):
             options={"wall_ms": 2000, "stall_ms": stall_ms,
                      "size": size, "seed": seed},
             faults={"SEND_FAULTS": "eintr", "POLL_FAULTS": "eintr"},
-            bound_ms=2000, paused=True, resume_after_ms=hold_ms)
+            paused=True, resume_after_ms=hold_ms)
         self.assertTrue(outcome["ok"], outcome)
         self.assertTrue(outcome["fd_live"])
         self.assertEqual(outcome["stall_remaining_ms"], math.inf)
@@ -471,8 +468,7 @@ class DeadlineProcesses(unittest.TestCase):
                     {"size": size, "step": 1, "interval_ms": 400},
                     {"operation": "read_many", "nmax": 1,
                      "wall_ms": wall_ms, "stall_ms": 800},
-                    {"READ_FAULTS": "eintr,eagain", "POLL_FAULTS": "eintr"},
-                    bound_ms=3500)
+                    {"READ_FAULTS": "eintr,eagain", "POLL_FAULTS": "eintr"})
                 self.assertTrue(outcome["ok"], outcome)
                 self.assertTrue(outcome["fd_live"])
                 self.assertEqual(outcome["wall_remaining_ms"], math.inf)
@@ -501,7 +497,7 @@ class DeadlineProcesses(unittest.TestCase):
             with self.subTest(stall_ms=stall_ms):
                 outcome, peer, elapsed, events = self.write_case(
                     options={"wall_ms": wall_ms, "stall_ms": stall_ms},
-                    bound_ms=wall_ms, paused=True)
+                    paused=True)
                 written = positive_total(events, "send")
                 self.assertGreater(written, 0)
                 self.assert_failure(outcome, "DeadlineError", "wall", written)
@@ -517,8 +513,7 @@ class DeadlineProcesses(unittest.TestCase):
                 outcome, peer, elapsed, events = self.read_case(
                     {"size": 2, "step": 1, "interval_ms": 500},
                     {"operation": "read_many", "nmax": 1,
-                     "wall_ms": wall_ms, "stall_ms": stall_ms},
-                    bound_ms=wall_ms)
+                     "wall_ms": wall_ms, "stall_ms": stall_ms})
                 self.assert_failure(outcome, "DeadlineError", "wall", 0,
                                     stage="finalize")
                 self.assertEqual(bytes.fromhex(outcome["data_hex"]), reference(1, 19))
@@ -533,8 +528,7 @@ class DeadlineProcesses(unittest.TestCase):
         for wall_ms in (None, 0):
             with self.subTest(wall_ms=wall_ms):
                 outcome, peer, elapsed, events = self.write_case(
-                    {"mode": "never"}, {"wall_ms": wall_ms, "stall_ms": stall_ms},
-                    bound_ms=stall_ms)
+                    {"mode": "never"}, {"wall_ms": wall_ms, "stall_ms": stall_ms})
                 written = positive_total(events, "send")
                 self.assertGreater(written, 0)
                 self.assert_failure(outcome, "DeadlineError", "stall", written)
@@ -600,7 +594,7 @@ class DeadlineProcesses(unittest.TestCase):
                      "stall_ms": stall_ms},
                     {"SEND_LIMIT": 1, "SEND_FAULTS": "real,late_eagain",
                      "REPEAT_SEND_EINTR": 1},
-                    bound_ms=600, paused=True)
+                    paused=True)
                 self.assert_failure(outcome, "DeadlineError", "stall", 1)
                 self.assert_prefix(peer, 1, 93)
                 self.assertEqual(positive_total(events, "send"), 1)
@@ -624,7 +618,7 @@ class DeadlineProcesses(unittest.TestCase):
         outcome, peer, _, events = self.write_case(options={
             "operation": "idle_write", "idle_ms": 190, "stall_ms": 70,
             "wall_ms": 700, "size": size, "seed": seed,
-        }, bound_ms=700)
+        })
         self.assertTrue(outcome["ok"], outcome)
         self.assertFalse(outcome["result"]["idle_expired"])
         self.assertEqual(outcome["result"]["written"], size)
@@ -636,7 +630,7 @@ class DeadlineProcesses(unittest.TestCase):
         outcome, peer, _, events = self.write_case(options={
             "operation": "idle_write", "idle_ms": 180,
             "wall_ms": 100, "stall_ms": 500,
-        }, bound_ms=250)
+        })
         self.assert_failure(outcome, "DeadlineError", "wall", 0)
         self.assert_prefix(peer, 0, 93)
         self.assertEqual(positive_total(events, "send"), 0)
@@ -645,8 +639,7 @@ class DeadlineProcesses(unittest.TestCase):
         """T18/T20, R16/R17: open reader, no reads, P plus 40 ms slack."""
         stall_ms = 150
         outcome, peer, elapsed, events = self.write_case(
-            {"mode": "never"}, {"wall_ms": 1400, "stall_ms": stall_ms},
-            bound_ms=stall_ms)
+            {"mode": "never"}, {"wall_ms": 1400, "stall_ms": stall_ms})
         written = positive_total(events, "send")
         self.assertGreater(written, 0)
         self.assert_failure(outcome, "DeadlineError", "stall", written)
@@ -660,7 +653,7 @@ class DeadlineProcesses(unittest.TestCase):
         outcome, peer, elapsed, events = self.write_case(
             {"mode": "bytewise", "interval_ms": 20},
             {"wall_ms": wall_ms, "stall_ms": stall_ms},
-            {"SEND_LIMIT": 1}, bound_ms=wall_ms)
+            {"SEND_LIMIT": 1})
         written = positive_total(events, "send")
         self.assert_failure(outcome, "DeadlineError", "wall", written)
         self.assert_prefix(peer, written, 93)
@@ -679,7 +672,7 @@ class DeadlineProcesses(unittest.TestCase):
         outcome, peer, _, events = self.write_case(
             {"mode": "after_backpressure"},
             options={"size": size, "seed": seed, "wall_ms": 2500,
-                     "stall_ms": 800}, bound_ms=2500)
+                     "stall_ms": 800})
         self.assertTrue(outcome["ok"], outcome)
         self.assertTrue(outcome["fd_live"])
         self.assertEqual(outcome["result"]["written"], size)
@@ -777,7 +770,7 @@ class DeadlineProcesses(unittest.TestCase):
         cut = 129
         outcome, peer, _, events = self.write_case(
             {"close_after": cut, "reset": True},
-            {"size": 1048609, "wall_ms": 2000}, tcp=True, bound_ms=2000)
+            {"size": 1048609, "wall_ms": 2000}, tcp=True)
         self.assert_failure(outcome, "PeerClosed",
                             moved=positive_total(events, "send"))
         self.assertIn(outcome["errno"], (errno.ECONNRESET, errno.EPIPE))
@@ -801,7 +794,7 @@ class DeadlineProcesses(unittest.TestCase):
         wall_ms = 330
         outcome, peer, elapsed, events = self.write_case(
             options={"wall_ms": wall_ms, "stall_ms": 1000},
-            faults={"REPEAT_SEND_EINTR": 1}, bound_ms=wall_ms)
+            faults={"REPEAT_SEND_EINTR": 1})
         self.assert_failure(outcome, "DeadlineError", "wall", 0)
         self.assert_prefix(peer, 0, 93)
         self.assert_not_early(elapsed, wall_ms)
@@ -812,7 +805,7 @@ class DeadlineProcesses(unittest.TestCase):
         wall_ms = 330
         outcome, peer, elapsed, events = self.write_case(
             {"mode": "never"}, {"wall_ms": wall_ms, "stall_ms": 1000},
-            {"REPEAT_POLL_EINTR": 1}, bound_ms=wall_ms)
+            {"REPEAT_POLL_EINTR": 1})
         written = positive_total(events, "send")
         self.assert_failure(outcome, "DeadlineError", "wall", written)
         self.assert_prefix(peer, written, 93)
@@ -830,7 +823,7 @@ class DeadlineProcesses(unittest.TestCase):
                 outcome, peer, elapsed, events = self.write_case(
                     {"mode": "never"}, {"wall_ms": wall_ms, "stall_ms": stall_ms,
                                         "signal_handler": True},
-                    bound_ms=bound, storm=True)
+                    storm=True)
                 written = positive_total(events, "send")
                 self.assert_failure(outcome, "DeadlineError", kind, written)
                 self.assert_prefix(peer, written, 93)
@@ -843,7 +836,7 @@ class DeadlineProcesses(unittest.TestCase):
         wall_ms = 390
         outcome, peer, elapsed, events = self.write_case(
             options={"wall_ms": wall_ms, "stall_ms": 1500},
-            bound_ms=wall_ms, paused=True)
+            paused=True)
         written = positive_total(events, "send")
         self.assert_failure(outcome, "DeadlineError", "wall", written)
         self.assertGreater(written, 0)
@@ -890,8 +883,7 @@ class DeadlineProcesses(unittest.TestCase):
         outcome, _, elapsed, events = self.read_case(
             {"size": 2, "step": 1, "interval_ms": 500},
             {"operation": "read_many", "nmax": 1,
-             "wall_ms": 1300, "stall_ms": stall_ms},
-            bound_ms=stall_ms)
+             "wall_ms": 1300, "stall_ms": stall_ms})
         self.assert_failure(outcome, "DeadlineError", "stall", 0, stage="finalize")
         self.assertEqual(bytes.fromhex(outcome["data_hex"]), reference(1, 19))
         self.assertEqual(positive_total(events, "read"), 1)
@@ -903,7 +895,7 @@ class DeadlineProcesses(unittest.TestCase):
         outcome, peer, elapsed, events = self.read_case(
             {"size": 100, "step": 1, "interval_ms": 50},
             {"operation": "read_many", "nmax": 1,
-             "wall_ms": wall_ms, "stall_ms": 150}, bound_ms=wall_ms)
+             "wall_ms": wall_ms, "stall_ms": 150})
         self.assert_failure(outcome, "DeadlineError", "wall", 0, stage="finalize")
         actual = bytes.fromhex(outcome["data_hex"])
         self.assertGreater(len(actual), 7)
@@ -930,7 +922,7 @@ class DeadlineProcesses(unittest.TestCase):
         wall_ms = 340
         outcome, peer, elapsed, events = self.read_case(
             {"size": 37}, {"wall_ms": wall_ms, "stall_ms": 1300},
-            {"REPEAT_READ_EINTR": 1}, bound_ms=wall_ms)
+            {"REPEAT_READ_EINTR": 1})
         self.assert_failure(outcome, "DeadlineError", "wall", 0, stage="finalize")
         self.assertEqual(peer["count"], 37)
         self.assertEqual(positive_total(events, "read"), 0)
