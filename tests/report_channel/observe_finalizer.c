@@ -259,8 +259,12 @@ ssize_t write(int fd, const void *buffer, size_t length)
     }
     if (finalizer_process && fd == receipt_fd && getenv("PF_REPORT_TEST_EXCESS_STDOUT")) {
         char extra = 'x';
-        if (syscall(SYS_write, 1, &extra, 1) == 1 && stdout_audit)
-            event('O', &extra, 1);
+        /* 'U' = the excess byte was ATTEMPTED. It is logged BEFORE the write: the supervisor reacts
+           to that byte with TERM, and on a slow host the TERM ended this process between the write
+           and a later event, so the byte it had just delivered was never logged. */
+        if (stdout_audit)
+            event('U', &extra, 1);
+        (void)syscall(SYS_write, 1, &extra, 1);
     }
     ssize_t count = syscall(SYS_write, fd, output, length);
     if (count > 0 && finalizer_process && fd == 1 && stdout_audit)
