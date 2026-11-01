@@ -503,7 +503,6 @@ def test_blocked_compile_failure_message_still_honors_the_wall_deadline(box):
         while not (box.trace / "failure-ready").is_file():
             assert process.poll() is None, "entrypoint exited before the compiler was ready"
             time.sleep(0.005)
-        assert (box.trace / "failure-ready").is_file(), "compiler never reached the release gate"
         assert fcntl.fcntl(writer, fcntl.F_GETFL) & os.O_NONBLOCK
         pressure_bytes = 0
         while True:
