@@ -51,6 +51,11 @@
 #ifndef PINEFORGE_LOOKUP_INDEX_WORK
 #define PINEFORGE_LOOKUP_INDEX_WORK(site, owner, run, count) ((void)0)
 #endif
+// Test-only scope around the real callback, excluding submission, matching,
+// publication and diagnostic reads outside on_bar_open.
+#ifndef PINEFORGE_BAR_OPEN_OBSERVE
+#define PINEFORGE_BAR_OPEN_OBSERVE() ((void)0)
+#endif
 #ifndef PINEFORGE_RETIREMENT_OBSERVE
 #define PINEFORGE_RETIREMENT_OBSERVE(rows, cycle, askable, roots, candidates, first) ((void)0)
 #endif
@@ -22872,6 +22877,7 @@ bool rested_stop_family(const PlacementSnapshot& row) noexcept {
 } // namespace
 
 void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionContext& context) {
+    PINEFORGE_BAR_OPEN_OBSERVE();
     // The script bar this opening follows, before it is replaced below: a
     // short process_orders_on_close filled at its close is margined at that
     // close (the opening slice below).

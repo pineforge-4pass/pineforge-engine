@@ -574,6 +574,13 @@ PoocCloseFillViewSwitches& pooc_close_fill_view_switches() noexcept;
 #define PINEFORGE_PLACEMENT_AUDIT 0
 #endif
 
+// Compile-time work observation, as in the adapter TU's lookup observer.
+// Tests count actual probes/comparisons and visited slots. Ordinary builds
+// have no observer storage, branch or increment; class layout is unchanged.
+#ifndef PINEFORGE_PLACEMENT_WORK
+#define PINEFORGE_PLACEMENT_WORK(field) ((void)0)
+#endif
+
 // Source placement evidence, keyed by the native request handle's
 // incarnation. Handles are monotonically allocated by the native core, so the
 // rows are held in incarnation order: a dense window of the recent
@@ -725,10 +732,12 @@ public:
     template<class Visit>
     [[gnu::always_inline]] void visit_rows(Visit&& visit) const {
         for (const auto& entry : old_) { ++visited_slots_;
+            PINEFORGE_PLACEMENT_WORK(placement_slots);
             if (visit(entry.first, static_cast<const PlacementSnapshot&>(*entry.second))) return;
         }
         for (std::size_t index = head_; index < window_.size(); ++index) {
             const auto& slot = window_[index]; ++visited_slots_;
+            PINEFORGE_PLACEMENT_WORK(placement_slots);
             if (slot
                 && visit(base_ + static_cast<std::uint64_t>(index - head_),
                          static_cast<const PlacementSnapshot&>(*slot))) {
@@ -911,6 +920,7 @@ private:
     }
 
     PlacementSnapshot* locate(std::uint64_t incarnation) const noexcept {
+        PINEFORGE_PLACEMENT_WORK(lookup_probes);
         if (incarnation >= base_) {
             const std::uint64_t offset = incarnation - base_;
             if (offset < window_.size() - head_)
@@ -918,7 +928,10 @@ private:
             return nullptr;
         }
         const auto found = std::lower_bound(old_.begin(), old_.end(), incarnation,
-            [](const auto& entry, std::uint64_t key) { return entry.first < key; });
+            [](const auto& entry, std::uint64_t key) {
+                PINEFORGE_PLACEMENT_WORK(lookup_comparisons);
+                return entry.first < key;
+            });
         return found != old_.end() && found->first == incarnation ? found->second.get()
                                                                   : nullptr;
     }
@@ -927,12 +940,20 @@ private:
     std::pair<std::uint64_t, PlacementSnapshot*> next_after(std::uint64_t after) const noexcept {
         if (after < base_) {
             const auto found = std::upper_bound(old_.begin(), old_.end(), after,
-                [](std::uint64_t key, const auto& entry) { return key < entry.first; });
-            if (found != old_.end()) { ++visited_slots_; return {found->first, found->second.get()}; }
+                [](std::uint64_t key, const auto& entry) {
+                    PINEFORGE_PLACEMENT_WORK(lookup_comparisons);
+                    return key < entry.first;
+                });
+            if (found != old_.end()) {
+                ++visited_slots_;
+                PINEFORGE_PLACEMENT_WORK(placement_slots);
+                return {found->first, found->second.get()};
+            }
         }
         std::size_t index = after < base_ ? head_
             : head_ + static_cast<std::size_t>(after - base_) + 1U;
         for (; index < window_.size(); ++index) { ++visited_slots_;
+            PINEFORGE_PLACEMENT_WORK(placement_slots);
             if (window_[index])
                 return {base_ + static_cast<std::uint64_t>(index - head_), window_[index].get()};
         }

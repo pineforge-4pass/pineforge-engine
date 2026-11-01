@@ -3882,6 +3882,25 @@ foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
 
+# One real-adapter counting fixture for the bar-open work, three independently addressable
+# rows. The fixture includes the adapter TU with test-only observation;
+# production compilation and the existing verification gates are unchanged.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_executable(test_adapter_bar_work test_adapter_bar_work.cpp)
+    target_link_libraries(test_adapter_bar_work PRIVATE pineforge)
+    target_compile_options(test_adapter_bar_work PRIVATE -ffp-contract=off)
+    # Count the production decision path in every profile: Debug's independent
+    # assert_live_counts() scans are intentionally linear. This fixture uses
+    # unconditional CHECK/require, never assert(), for all of its own checks.
+    target_compile_definitions(test_adapter_bar_work PRIVATE NDEBUG)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(test_adapter_bar_work PRIVATE ${_pf_cov_test_flags})
+    endif()
+    add_test(NAME test_adapter_bar_work COMMAND test_adapter_bar_work doubling)
+    add_test(NAME test_adapter_bar_work_absolute COMMAND test_adapter_bar_work absolute)
+    add_test(NAME test_adapter_bar_work_control COMMAND test_adapter_bar_work control)
+endif()
+
 if(UNIX)
     # PASS_REGULAR_EXPRESSION makes output matching replace CTest's exit-code
     # result, while WILL_FAIL accepts every nonzero result. The driver checks
