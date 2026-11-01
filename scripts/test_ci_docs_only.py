@@ -316,7 +316,8 @@ class CommandLineTests(unittest.TestCase):
                     result = self.run_script(repo.path, env, output, where)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(output.read_text(),
-                                     f'earlier=1\ndocs_only={answer}\ngithub_only=false\n')
+                                     f'earlier=1\ndocs_only={answer}\ngithub_only=false\n'
+                                     f'arm_relevant={"false" if answer == "true" else "true"}\n')
                     self.assertIn('docs-only', result.stdout)
 
 
@@ -324,17 +325,95 @@ class PathListTests(unittest.TestCase):
     """The SHA-bound compare list is data, including rename and hostile names."""
 
     def test_exact_prefixes_and_classifier_script_are_not_overbroad(self) -> None:
-        self.assertEqual(classify_paths(['.github/workflows/new.yml']), (False, True))
-        self.assertEqual(classify_paths(['.github_evil/workflows/new.yml']), (False, False))
-        self.assertEqual(classify_paths(['docs-evil/readme.txt']), (False, False))
-        self.assertEqual(classify_paths(['scripts/ci_docs_only.py']), (False, False))
-        self.assertEqual(classify_paths(['docs/ci.md']), (True, False))
-        self.assertEqual(classify_paths([]), (False, False))
+        self.assertEqual(classify_paths(['.github/workflows/new.yml']), (False, True, False))
+        self.assertEqual(classify_paths(['.github_evil/workflows/new.yml']), (False, False, True))
+        self.assertEqual(classify_paths(['docs-evil/readme.txt']), (False, False, True))
+        self.assertEqual(classify_paths(['scripts/ci_docs_only.py']), (False, False, True))
+        self.assertEqual(classify_paths(['docs/ci.md']), (True, False, False))
+        self.assertEqual(classify_paths([]), (False, False, True))
 
     def test_nul_names_are_data_and_renames_supply_both_sides(self) -> None:
         paths = ['docs/old name "quoted"\n..', '.github/workflows/new.yml']
-        self.assertEqual(classify_paths(paths), (False, False))
-        self.assertEqual(classify_paths(['.github/old', '.github/new']), (False, True))
+        self.assertEqual(classify_paths(paths), (False, False, False))
+        self.assertEqual(classify_paths(['.github/old', '.github/new']), (False, True, False))
+
+    def test_arm_relevant_source_and_test_paths(self) -> None:
+        paths = ('tests/foo.cpp', 'tests/fixture.json', 'runner/main.cpp', 'runner/config.json',
+                 'include/pineforge/api.hpp', 'include/generated.inc', 'src/engine.cpp',
+                 'src/generated.inc', 'docker/x.c', 'docker/Dockerfile', 'CMakeLists.txt',
+                 'scripts/test_x.py', 'third-party/lib/x.c', 'third_party/lib/CMakeLists.txt')
+        paths += tuple(f'elsewhere/file{suffix}' for suffix in (
+            '.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.cmake'))
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertEqual(classify_paths([path]), (False, False, True))
+        # Mixed known classes exercise explicit source rules as well as the
+        # conservative fallback for paths outside both known classes.
+        for suffix in ('.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.cmake'):
+            with self.subTest(mixed_suffix=suffix):
+                self.assertEqual(classify_paths(['docs/ci.md', f'.github/helper{suffix}']),
+                                 (False, False, True))
+        for directory in ('runner', 'include', 'src', 'docker'):
+            with self.subTest(mixed_directory=directory):
+                self.assertEqual(classify_paths(
+                    ['.github/workflows/ci.yml', f'{directory}/README.md']),
+                    (False, False, True))
+
+    def test_arm_relevant_unknown_path_fails_closed(self) -> None:
+        for paths in (['weird/blob.bin'], ['docs/ci.md', 'weird/blob.bin'],
+                      ['.github/workflows/ci.yml', 'weird/blob.bin'], [], ['']):
+            with self.subTest(paths=paths):
+                self.assertEqual(classify_paths(paths), (False, False, True))
+
+    def test_arm_relevant_docs_and_github_only_counter_control(self) -> None:
+        for paths, docs_only, github_only in (
+                (['README.md', 'docs/ci.md'], True, False),
+                (['docs/example.cpp', 'docker/README.md', 'runner/README.md'], True, False),
+                (['.github/workflows/ci.yml', '.github/test.cpp'], False, True)):
+            with self.subTest(paths=paths):
+                self.assertEqual(classify_paths(paths), (docs_only, github_only, False))
+        self.assertEqual(classify_paths(['docs/ci.md', '.github/workflows/ci.yml']),
+                         (False, False, False))
+        self.assertEqual(classify_paths(['tests/foo.cpp', 'docs/ci.md']),
+                         (False, False, True))
+        self.assertEqual(classify_paths(['.github/workflows/ci.yml'], pull_request=False),
+                         (False, False, False))
+
+    def test_path_cli_publishes_arm_relevant_and_fails_closed(self) -> None:
+        cases = (
+            ('source', b'tests/foo.cpp\0', ('false', 'false', 'true')),
+            ('runner', b'runner/main.cpp\0', ('false', 'false', 'true')),
+            ('docker', b'docker/x.c\0', ('false', 'false', 'true')),
+            ('cmake', b'CMakeLists.txt\0', ('false', 'false', 'true')),
+            ('script-test', b'scripts/test_x.py\0', ('false', 'false', 'true')),
+            ('unknown', b'weird/blob.bin\0', ('false', 'false', 'true')),
+            ('empty', b'', ('false', 'false', 'true')),
+            ('missing', None, ('false', 'false', 'true')),
+            ('truncated', b'docs/ci.md', ('false', 'false', 'true')),
+            ('invalid', b'\xff\0', ('false', 'false', 'true')),
+            ('empty-path', b'\0', ('false', 'false', 'true')),
+            ('docs', b'README.md\0docs/ci.md\0', ('true', 'false', 'false')),
+            ('github', b'.github/workflows/ci.yml\0', ('false', 'true', 'false')),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, data, expected in cases:
+                with self.subTest(case=name):
+                    paths, output = root / name, root / f'{name}-output'
+                    if data is not None:
+                        paths.write_bytes(data)
+                    output.write_text('earlier=1\n')
+                    result = subprocess.run(
+                        [sys.executable, '-I', str(SCRIPT), '--root', str(root),
+                         '--paths', str(paths), '--github-output', str(output)],
+                        capture_output=True, text=True,
+                        env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    docs_only, github_only, arm_relevant = expected
+                    self.assertEqual(
+                        output.read_text(),
+                        f'earlier=1\ndocs_only={docs_only}\ngithub_only={github_only}\n'
+                        f'arm_relevant={arm_relevant}\n')
 
     def test_path_file_requires_a_complete_utf8_nul_list(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
