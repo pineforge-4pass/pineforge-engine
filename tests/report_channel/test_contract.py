@@ -1265,11 +1265,15 @@ class Contract(unittest.TestCase):
                 self.assertEqual(record["limits"]["stop_grace_ms"], {
                     "requested": None, "granted": None, "effective": 1000}, msg=msg)
                 self.assertTrue(capture.diagnostic, msg=msg)
+                # No corruption: every complete line the host captured is one of the two lines the
+                # descendant writes, and a cut last line is a prefix of one of them.
                 line = b"diagnostic child continues\n"
-                self.assertEqual(
-                    capture.diagnostic,
-                    (line * (len(capture.diagnostic) // len(line) + 1))[:len(capture.diagnostic)],
-                    msg=msg)
+                marker = b"diagnostic child after parent exit\n"
+                *complete, tail = capture.diagnostic.split(b"\n")
+                for text in complete:
+                    self.assertIn(text + b"\n", (line, marker), msg=msg)
+                self.assertTrue(tail == b"" or line.startswith(tail) or marker.startswith(tail),
+                                msg=msg)
                 return capture
             finally:
                 self.cleanup_fixture_child(state)
