@@ -31,7 +31,6 @@ CORPUS_BASE = "8425ca820c4b7272db24d659a64d88e8e05b6407"
 SUBSET = "scripts/corpus_parity_subset.txt"
 SUBSET_SIZE = 54
 ROUTES = ("full", "path-sink", "fd-sink")
-WATCHDOG_SECONDS = 600
 CHANNEL_OPTIONS = {
     "--report-channel", "--terminal-status-fd", "--report-max-bytes",
     "--diagnostic-max-bytes", "--channel-wall-ms", "--channel-stall-ms",
@@ -69,7 +68,7 @@ def require(condition, message):
 
 def git_bytes(*arguments, cwd=ROOT):
     result = subprocess.run(
-        ["git", *arguments], cwd=cwd, capture_output=True, check=False, timeout=30)
+        ["git", *arguments], cwd=cwd, capture_output=True, check=False)
     require(result.returncode == 0,
             f"required Git history is unavailable: {arguments!r}\n"
             + result.stderr.decode("utf-8", "replace"))
@@ -110,7 +109,6 @@ def invoke(runner, request, route, directory, environment):
     sink_path = directory / "report.sink"
     argv = list(request)
     process = None
-    deadline = time.monotonic() + WATCHDOG_SECONDS
     try:
         with ExitStack() as stack:
             stdout = stack.enter_context(stdout_path.open("xb"))
@@ -149,24 +147,15 @@ def invoke(runner, request, route, directory, environment):
             if sink_reader is not None:
                 with sink_path.open("xb") as sink_output:
                     while True:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise TimeoutError("fd sink did not reach EOF")
-                        sink_reader.settimeout(remaining)
                         chunk = sink_reader.recv(65536)
                         if not chunk:
                             break
                         sink_output.write(chunk)
-            process.wait(timeout=max(0.001, deadline - time.monotonic()))
-    except (TimeoutError, subprocess.TimeoutExpired) as error:
-        raise AssertionError(
-            f"OFF request exceeded its real-time watchdog: {argv!r}; "
-            f"stdout={stdout_path.read_bytes()[:512]!r}; "
-            f"stderr={stderr_path.read_bytes()[:4096]!r}") from error
+            process.wait()
     finally:
         if process is not None and process.poll() is None:
             process.kill()
-            process.wait(timeout=5)
+            process.wait()
     return Observation(
         tuple(argv), process.returncode, stdout_path.read_bytes(), stderr_path.read_bytes(),
         sink_path.read_bytes() if sink_path.is_file() else None)

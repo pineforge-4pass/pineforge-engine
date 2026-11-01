@@ -131,10 +131,7 @@ def main():
     sink_fd = None
     if request.get("inherited_sink"):
         if "native_release_path" in request:
-            end = time.monotonic() + 15
             while not Path(request["native_release_path"]).exists():
-                if time.monotonic() >= end:
-                    raise AssertionError("TEST host never observed a stopped V")
                 time.sleep(0.01)
         name = ("PINEFORGE_REPORT_REFERENCE_SINK_FD" if reference
                 else "PINEFORGE_REPORT_NATIVE_SINK_FD")

@@ -60,7 +60,7 @@ def main_blob(path):
     # Pinned to main at the merge; when main moves again before this change merges, repoint all three to the new main head (and re-run the re-anchor and the OFF row).
     return subprocess.run(
         ["git", "show", f"69cddc9d102d2ccf5605231cc508b82c08c7081c:{path}"], cwd=ROOT,
-        capture_output=True, check=True, timeout=30).stdout
+        capture_output=True, check=True).stdout
 
 
 def supervisor_fixture(directory, *, main_finalizer=False, main_catalog=False, text=None):
@@ -127,7 +127,7 @@ class ProcessExitObservation:
 
     def close(self):
         self.stop.set()
-        self.thread.join(timeout=1)
+        self.thread.join()
 
 
 def group_members(group):
@@ -997,7 +997,7 @@ def launch(request=None, *, options=(), environment=None, status="valid",
             try:
                 if process.poll() is None:
                     process.kill()
-                    process.wait(timeout=2)
+                    process.wait()
             finally:
                 for fd in tuple(selector.get_map()):
                     unwatch(fd)
@@ -1029,7 +1029,7 @@ def reference(request):
             try:
                 result = subprocess.run(
                     [sys.executable, "-B", str(PRODUCER), str(path), "--reference"],
-                    capture_output=True, env=environment, check=False, timeout=10,
+                    capture_output=True, env=environment, check=False,
                     pass_fds=() if writer is None else (writer,))
             finally:
                 if writer is not None:

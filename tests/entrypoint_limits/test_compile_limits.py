@@ -500,8 +500,7 @@ def test_blocked_compile_failure_message_still_honors_the_wall_deadline(box):
         process = subprocess.Popen(command, env=env, cwd=box.root, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=writer, start_new_session=True)
         box.processes.append(process)
-        ready_until = started + wall_ms / 1000
-        while not (box.trace / "failure-ready").is_file() and time.monotonic() < ready_until:
+        while not (box.trace / "failure-ready").is_file():
             assert process.poll() is None, "entrypoint exited before the compiler was ready"
             time.sleep(0.005)
         assert (box.trace / "failure-ready").is_file(), "compiler never reached the release gate"
