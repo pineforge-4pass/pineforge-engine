@@ -2616,6 +2616,12 @@ add_test(
 )
 
 add_test(
+    NAME test_verify_corpus_trail_profile
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_verify_corpus_trail_profile.py
+)
+
+add_test(
     NAME test_run_strategy_range_end
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/test_run_strategy_range_end.py

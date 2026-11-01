@@ -994,8 +994,9 @@ against the TradingView export shipped beside it;
 `python3 scripts/verify_corpus.py --all` grades the shipped trade lists by
 the canonical rubric. Its strict profile gates count + entry-price +
 exit-price + P&L within `1.0% / 0.01% / 0.01% / 1.0%`; a strategy whose
-`strategy.exit` uses a `trail_*` parameter gets the production profile,
-which relaxes exit to 0.05% and P&L to 100%.
+`strategy.exit` uses a `trail_*` parameter gets the production profile, with
+the same count and entry limits, exit within 0.02%, and P&L within 1%.
+The exit and P&L gates are graded per strategy at the 90th percentile, not every trade.
 
 One probe, `corpus/validation/anomaly-equity-mirror-strategy-equity-01`,
 declares `expected_tier: anomaly` in its `inputs.json`: it pins the 1× equity
