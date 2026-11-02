@@ -30298,6 +30298,8 @@ std::array<std::uint64_t, 3> PineExecutionAdapter::retirement_validation_state()
 #endif
 } // namespace pineforge::source
 
+#include "pine_adapter_probe.hpp"
+
 namespace pineforge::source::detail {
 
 CohortExposureFold fold_cohort_exposure(
@@ -30451,5 +30453,22 @@ void verify_cohort_exposure(
     if (std::memcmp(&actual, &expected, sizeof expected) != 0) std::abort();
 }
 #endif
+
+LookupIndexCounts probe_lookup_index(const NativeHostCache* cache) noexcept {
+    if (cache == nullptr || typeid(*cache) != typeid(AdapterLookupIndex)) return {};
+    const auto& index = static_cast<const AdapterLookupIndex&>(*cache);
+    LookupIndexCounts counts{true, index.cohort_sides.size(), index.unbound.size()};
+    std::size_t kind = 0;
+    for (const auto& by_origin : index.legs_by_origin) {
+        counts.legs_by_origin_keys[kind] = by_origin.size();
+        for (const auto& row : by_origin)
+            counts.legs_by_origin_ids[kind] += row.second.size();
+        ++kind;
+    }
+    counts.immediate_closes_keys = index.immediate_closes_by_bar.size();
+    for (const auto& row : index.immediate_closes_by_bar)
+        counts.immediate_closes_ids += row.second.size();
+    return counts;
+}
 
 } // namespace pineforge::source::detail
