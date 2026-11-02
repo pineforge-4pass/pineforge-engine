@@ -586,7 +586,7 @@ struct NativeInstrumentFeed {
 };
 
 /// What the kernel keeps of a run's event record, the rows native_events()
-/// returns (R5 lane V19-B). It is reporting: no fill, no decision and no
+/// returns (the bounded event journal). It is reporting: no fill, no decision and no
 /// state the continuation folds depends on it; it bounds what a run holds.
 ///
 /// Window, the default, keeps the command journal only until every reader has
@@ -722,7 +722,7 @@ struct NativeRunSpec {
     /// surface: the settlement stays exact, a quantity it cannot book exactly
     /// is that request's MatchRejectReason::UnrepresentableQuantity, and the
     /// continuation digest is the pre-tolerance one; the value folds only
-    /// when present (R5 lane K-ULP4).
+    /// when present (the representable-quantity refusal change).
     std::optional<double> quantity_tolerance;
 };
 
@@ -1019,7 +1019,7 @@ std::uint64_t native_instrument_feeds_digest(
 /// generation distance is therefore zero and the digest is a property of the
 /// spec value alone. It is NOT a continuation hash and never comparable with
 /// one: a raw continuation hash also folds the resolved timezone identity,
-/// which since R5 lane E23 is the zone's content rather than its paths — the
+/// which since the timezone-content identity change is the zone's content rather than its paths — the
 /// same value on every machine carrying the same tzdata release, a different
 /// one after a tzdata update that rewrites the zone's rules. Only this digest
 /// is independent of the installed zone data, so only this one is pinnable as

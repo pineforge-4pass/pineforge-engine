@@ -1,7 +1,7 @@
 #pragma once
 // The TradingView market-admission observation journal: every field of
 // `Configuration` is a strategy() declaration parameter and every event is a
-// TradingView admission review, so this is source-layer state (R5 lane N14:
+// TradingView admission review, so this is source-layer state (the source-runtime extraction:
 // moved from include/pineforge/market_admission.hpp, where no kernel
 // translation unit consumed it). It is hashed through the source host's
 // extension fold (src/source/pine_state_hash.cpp), never by the kernel.

@@ -571,15 +571,15 @@ claimed.
 | `live-tsan` | Debug, live runner enabled, ThreadSanitizer | Separate build instruments every runner target, audits compile commands and runs all runner rows and Python E2Es; WebSocket-enabled curl is mandatory and skips are refused |
 | `kernel` | Release, live runner enabled, Pine source layer OFF | The source-free CTest set behind a row floor (`PRIVATE_FIXTURE_PROFILE_FLOORS`; `--min-tests N` overrides it), installed package, and the `nm` half of the include-independence proof over `libpineforge_kernel.a` |
 
+The `mem;LAB-DISKSCRATCH` row `test_run_json_bounded_transport` logs pytest's scratch filesystem from `/proc/self/mountinfo`. `disk` and `unknown` keep the strict one-page cache bound after write/read; `overlay` and `tmpfs` end that check with `pytest.skip` naming the class because eviction is not guaranteed. Python peak, byte, and cleanup checks stay strict on every class; pytest reports captured output and skip reasons.
+
 **2026-10-24 clarification of the Debug row above:** no default row floor
 means no default execution floor; `debug` and `sanitizers` now enforce their
-registration minima and strict selection accounting through the default
-`slow` exclusion, and an explicit `--min-tests N` also gates executed rows.
+registration minima and strict selection accounting through the default `slow` exclusion, and an explicit `--min-tests N` also gates executed rows.
 
 By default each profile uses `build-ci-<profile>`. Keep separate build directories
 for different profiles and toolchains. The verifier never deletes a build tree
-or replaces an incompatible historical ABI receipt. Use a fresh directory when
-its configuration no longer matches.
+or replaces an incompatible historical ABI receipt. Use a fresh directory when its configuration no longer matches.
 
 Run Release, Debug and sanitizer profiles sequentially in one checkout, or use
 separate worktrees for parallel runs. Their tutorial targets write shared `.so`
@@ -780,7 +780,7 @@ for parallel CTest and individual shard invocations.
 
 Preflight also runs the detached-comment census of the kernel compile closure
 (`detached-comments`: `scripts/measure_detached_comments.py --check-ceiling`)
-against the checked-in `DETACHED_LINE_CEILING`, which is 0: R5 lane B-DOCS
+against the checked-in `DETACHED_LINE_CEILING`, which is 0: the comment-attachment cleanup
 cleared the census, so one detached comment line fails the stage. Its self-test
 (`detached-comments-tests`) requires a fixture one detached line above the
 ceiling to be refused and one at the ceiling to pass.
@@ -1064,7 +1064,7 @@ exactly one witness in the corpus is therefore in the subset by construction —
 `strategy.cancel_all`, `calc_on_order_fills=true` and
 `commission.cash_per_order`.
 
-**Measured against mutations (R5 lane H-MEASURE, AUDIT3 H12).** A battery of
+**Measured against mutations (the kernel/adapter differential study, the third review H12).** A battery of
 44 single-line mutations — kernel matching, fees, sizing, path order, sessions,
 timeframe aggregation, adapter policy and the `ta.*` library — each built and
 run over all 312 probes, then 17 more designed afterwards as a holdout: the full
@@ -1295,7 +1295,7 @@ both Release jobs, Ubuntu Debug, kernel-only, sanitizers and the native cell
 of native-live run the registered set excluding
 the 43 CTest rows labelled `slow` in `tests/CMakeLists.txt`
 ([PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where)). The first 27 were
-chosen from INT23/INT24 job logs: over 60 seconds in either sanitizer run or
+chosen from the two recorded CI runs: over 60 seconds in either sanitizer run or
 over 30 seconds in either Debug run. Preflight and the proof jobs start as soon
 after admission has classified the compare list and chosen the verifier tier.
 The hosted `result` succeeds only if every required job succeeds, or the proof
@@ -1309,8 +1309,8 @@ run on the same host and is the 28th. The largest unlabelled rows there were
 `test_adapter_quiet_bar_differential` (39.3 s sanitizers),
 `test_native_state_continuation` (34.7 s sanitizers, 18.9 s Debug) and
 `test_adapter_lookup_index_scaling` (24.3 s sanitizers); the whole sanitizers
-set took 7.9 min of wall time, the PR set 614 s of summed test time. INT26 read
-wave H's new rows from the lanes' own sanitizers and Debug runs on the same
+set took 7.9 min of wall time, the PR set 614 s of summed test time. A later review read
+The new integration rows from their separate sanitizers and Debug runs on the same
 hosts: K-OCA-KEEP's `test_native_group_keep_handle` took 89.0 s under
 sanitizers (20.3 s Debug) and is the 29th; no other new row comes near a
 threshold (the largest, `test_magnified_aggregated_tape`, 3.4 s under
@@ -1503,7 +1503,7 @@ A pull request or a push to `main` whose change is documentation only runs
 (three legs on a pull request, four on `main`), `sanitizers`, `kernel-only`,
 `native-live` and `corpus-parity-subset`. Every other check that reads the
 pages is a `preflight` stage: `doc-anchors`, `doc-lint`, `doc-reverts`,
-`doc-pine-coverage`, `design-inventory`, `kernel-seam-rows`, the native C
+`public-role-words` (public working-name check over `docs/`, `README.md`, `CHANGELOG.md`, `src/`, `include/` and the two retained arena-bound files), `doc-pine-coverage`, `design-inventory`, `kernel-seam-rows`, the native C
 surface table (`source-guard-native-c-surface`) and their self-tests, beside
 the workflow wiring guards. The `build` job's `Build site` step in
 `.github/workflows/docs.yml` runs `bash docs/build.sh --self-test-seo` before
@@ -1589,25 +1589,25 @@ the aggregate's own shell, the latter over every outcome of every lane.
 
 ### CI-LITE timing estimate
 
-The INT24 PR run `36105656107` measured 9.1 min preflight, 30.2/27.8 min
+The later PR run `36105656107` measured 9.1 min preflight, 30.2/27.8 min
 macOS/Ubuntu Debug, 25.1 min native, 20.5/16.5 min Ubuntu/macOS Release,
 15.8 min kernel, and 3.8 min parity subset. Its sanitizer job ran 61.5 min
 and hit the verifier's then-30-minute CTest stage timeout (the verifier now
-supplies no stage deadline). The complete INT23 sanitizer
+supplies no stage deadline). The earlier complete sanitizer
 job `107895095058` measured 42.1 min: 20.0 min CTest and 22.1 min outside
 CTest, including a 21.1 min build. The 27 labelled rows consumed 34.8 and
-42.3 min of summed test time in the INT24 Ubuntu and macOS Debug jobs. The
-26 rows then present in INT23 sanitizers consumed 57.5 of its 76.7 min of
-summed test time; the 27th row landed by INT24.
+42.3 min of summed test time in the later Ubuntu and macOS Debug jobs. The
+26 rows then present in the earlier sanitizer run consumed 57.5 of its 76.7 min of
+summed test time; the 27th row landed by the later run.
 
 At four concurrent CTest jobs, the remaining rows have scheduling lower
 bounds of 1.1 min Ubuntu Debug, 1.6 min macOS Debug, 0.5 min native, and
-4.8 min INT23 sanitizers. Adding observed non-CTest time and a small CTest
+4.8 min for the earlier sanitizer run. Adding observed non-CTest time and a small CTest
 scheduling allowance estimates about 19 min Ubuntu Debug, 20 min macOS
-Debug, 16 min native, and 28 min sanitizer on the complete INT23 run. Release
+Debug, 16 min native, and 28 min sanitizer on that earlier complete run. Release
 and kernel keep their measured full durations. With preflight running in
-parallel, the modeled PR wall time is about 28 min on INT23 conditions. The
-INT24 sanitizer build-to-CTest interval alone was 30.3 min, so its conditions
+parallel, the modeled PR wall time is about 28 min under the earlier conditions. The
+later sanitizer build-to-CTest interval alone was 30.3 min, so its conditions
 imply a wall time above 35 min even after excluding the rows. The 25 min
 target needs a measured sanitizer build improvement; the current job logs do
 not separate compile from link time or report a ccache hit rate, so CI-LITE

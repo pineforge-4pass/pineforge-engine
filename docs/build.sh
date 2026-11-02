@@ -442,7 +442,7 @@ run_doxygen_with_retry
 # indexable, with 404 untouched.
 python3 -I -B seo_postprocess.py site/html
 
-# 3b. The scoped warning gate (R5 lane L14-A).
+# 3b. The scoped warning gate (the documentation warning gate).
 #
 # Doxygen has one global WARN_AS_ERROR, so FAIL_ON_WARNINGS would let a stale
 # comment in a legacy Pine-adapter header stop the site from building. The

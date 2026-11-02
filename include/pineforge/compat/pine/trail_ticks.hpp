@@ -4,7 +4,7 @@
 // level is materialized on the tick grid. Every constant here is a
 // TradingView calibration (the pins are quoted below), so it belongs to the
 // source layer; the kernel's own trail is TrailTicks (native_order.hpp),
-// which needs none of it (R5 lane N14: moved verbatim from
+// which needs none of it (the source-runtime extraction: moved verbatim from
 // src/engine_internal.hpp, where no kernel translation unit used it).
 #include <algorithm>
 #include <cmath>

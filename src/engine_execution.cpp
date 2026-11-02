@@ -30,7 +30,7 @@ void fixture_execution_counters(
 #endif
 namespace {
 // The fused settlement's test switch and probe (internal::set_fused_settlement,
-// internal::count_settlement_paths; R5 lane PERF-L2). A run only reads the
+// internal::count_settlement_paths; the compact context reads). A run only reads the
 // mode: the shipped one is 0, fused and uncounted.
 constexpr unsigned kSettlementStagedOnly = 1u;
 constexpr unsigned kSettlementCounting = 2u;
@@ -168,7 +168,7 @@ struct CloseSplit {
 // no row can be chosen to add up to it; above, the split was refused, and
 // below, a 2^-51 rest was left over. A sum that is the request is unchanged.
 // A whole lot whose sum falls short is not where the request ends: the rest
-// beyond it is real, and the walk goes on (R5 lane K-ULP2).
+// beyond it is real, and the walk goes on (the exact-sum opening rule).
 //
 // One exception to closing r: when the lot's full size brings the sum exactly
 // to the request, fl(C + qty) == requested -- the request is the binary64 sum
@@ -181,7 +181,7 @@ struct CloseSplit {
 // keep. Kept, it was a dust lot, and a dust position after a close of the
 // whole book. The rows are now the whole lots and add up to the request;
 // closed, remaining and every other lot are what the walk gave before
-// (R5 lane K-ULP3).
+// (the exact-sum closing rule).
 CloseSplit next_close_split(const PyramidEntry& lot, bool closes, bool flatten,
                             double requested, double& closed, double& remaining) {
     const double amount = !closes ? 0.0
@@ -235,7 +235,7 @@ CloseSplit next_close_split(const PyramidEntry& lot, bool closes, bool flatten,
 // half an ulp of the first lot it meets (a request of at most t, or a lot far
 // larger than the rest), and a rest or running sum above t that a lot absorbs.
 // Zero is not a boundary to snap to: a request of at most t closes what it
-// asks of a larger lot, or is refused (R5 lane K-ULP4).
+// asks of a larger lot, or is refused (the representable-quantity refusal change).
 CloseSplit tolerant_close_split(const PyramidEntry& lot, double requested,
                                 double tolerance, double& closed, double& remaining) {
     if (remaining == 0.0) return {execution::Status::Applied, 0.0, lot.qty};
@@ -1046,7 +1046,7 @@ void BacktestEngine::finish_native_settlement_stage(
         // Under a quantity tolerance t, a surviving book of at most t that the
         // opening absorbs stays as it is -- dust beside the new lot, which
         // the next close takes whole (tolerant_close_split) -- and is not a
-        // refusal (R5 lane K-ULP4). An opening the book absorbs still is.
+        // refusal (the representable-quantity refusal change). An opening the book absorbs still is.
         const bool dust_book = native_quantity_tolerance_ > 0.0
             && after_qty <= native_quantity_tolerance_;
         if (!std::isfinite(next) || (after_qty > 0.0

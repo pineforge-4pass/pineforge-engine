@@ -1,6 +1,6 @@
 #pragma once
 
-// R5 lane D2-C: the source layer's reads of the run it serves, taken in place.
+// The per-pump state cache: the source layer's reads of the run it serves, taken in place.
 //
 // NativeStrategyHost answers its reads of kernel state out of line and by
 // value: native_state() builds a whole NativeStateView -- the failure record
@@ -15,7 +15,7 @@
 // (tests/test_adapter_in_place_reads.cpp holds them to the accessors at every
 // callback). One fact derived from the spec -- whether the chart aggregates
 // its input bars -- is taken once per run and kept with the consumer for the
-// host (run_aggregates_input_bars, the host cache of R5 lane PERF-P7).
+// host (run_aggregates_input_bars, the host cache of the host bookkeeping index cache).
 // Not installed API.
 
 #include "../native_execution_consumer.hpp"
@@ -82,8 +82,8 @@ inline const NativeCurrentPointView* callback_point(const NativeStrategyHost& ho
     return live_callback_point(host);
 }
 
-// The source layer's state parked with the consumer for one run (R5 lane
-// PERF-P7's NativeHostCache: the adapter's lookup index derives from this,
+// The source layer's state parked with the consumer for one run (the
+// host bookkeeping index cache's NativeHostCache: the adapter's lookup index derives from this,
 // pine_adapter.cpp). The consumer drops it at every run begin and never reads
 // it. `owner` and `run` are the adapter and run counter it was adopted for;
 // the facts below are the running spec's, taken once at the run's begin

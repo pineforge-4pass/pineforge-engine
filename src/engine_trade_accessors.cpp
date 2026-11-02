@@ -140,7 +140,7 @@ double BacktestEngine::open_trade_max_runup_percent(int idx) const {
 // "no cause" value on a VALID trade (no live derivation below currently
 // produces it -- every in-range row falls through to at worst SCRIPT).
 //
-// R5 lane L12 (2.ii l): the kernel no longer decodes any caller's exit
+// The kernel/source boundary extraction (2.ii l): the kernel no longer decodes any caller's exit
 // strings. A closer that knows why it closed records execution::CloseCause on
 // the row -- a kernel-originated liquidation or risk flatten through the
 // settling Fill, a host forced-close policy (the Pine adapter's margin call,

@@ -227,7 +227,7 @@ struct TimezoneIdentityDescriptor {
     std::string effective_definition;
     // Where this machine keeps the zone data, and which files under it were
     // read. DIAGNOSTICS: both are absolute paths of the host that resolved
-    // the zone, so no digest folds either member (R5 lane E23).
+    // the zone, so no digest folds either member (the timezone-content identity change).
     std::string zoneinfo_root;
     std::vector<std::string> resource_paths;
     // The CONTENT of `resource_paths`, as one value: FNV-1a 64 over the

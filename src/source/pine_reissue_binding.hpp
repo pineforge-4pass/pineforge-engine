@@ -1,6 +1,6 @@
 #pragma once
 
-// R5 lane V19-D: the test-only switch behind the adapter's re-issue binding.
+// The handle-preserving reissue change: the test-only switch behind the adapter's re-issue binding.
 //
 // PineExecutionAdapter::submit_or_replace re-issues a source order through
 // NativeStrategyHost::replace with ReplaceOptions::keep_binding set, so an

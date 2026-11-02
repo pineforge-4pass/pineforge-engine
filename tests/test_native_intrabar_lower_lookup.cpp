@@ -61,6 +61,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -270,6 +271,10 @@ constexpr bool kUnderAsan = false;
 constexpr bool kUnderAsan = false;
 #endif
 
+bool near(double actual, double expected) {
+    return std::fabs(actual - expected) <= 1e-12 * std::fabs(expected);
+}
+
 void a_noisy_ratio_uses_one_quiet_remeasurement() {
     int remeasurements = 0;
     const double ratio = ratio_timing::ratio_with_remeasurement(
@@ -278,7 +283,7 @@ void a_noisy_ratio_uses_one_quiet_remeasurement() {
             return ratio_timing::LegSeconds{0.1140, 0.4800};
         });
     CHECK(remeasurements == 1);
-    CHECK(ratio == 0.4800 / 0.1140);
+    CHECK(near(ratio, 0.4800 / 0.1140));
     CHECK(ratio < kShapeBound);
 }
 
@@ -290,7 +295,7 @@ void a_persistently_high_ratio_still_fails_the_bound() {
             return ratio_timing::LegSeconds{0.1140, 0.7000};
         });
     CHECK(remeasurements == 1);
-    CHECK(ratio == 0.6934 / 0.1140);
+    CHECK(near(ratio, 0.6934 / 0.1140));
     CHECK(ratio >= kShapeBound);
 }
 
@@ -302,7 +307,7 @@ void a_quadratic_ratio_is_not_remeasured() {
             return ratio_timing::LegSeconds{0.1140, 0.4800};
         });
     CHECK(remeasurements == 0);
-    CHECK(ratio == 1.8200 / 0.1140);
+    CHECK(near(ratio, 1.8200 / 0.1140));
     CHECK(ratio >= kShapeBound);
 }
 
@@ -314,7 +319,7 @@ void a_linear_ratio_is_not_remeasured() {
             return ratio_timing::LegSeconds{0.1140, 1.8200};
         });
     CHECK(remeasurements == 0);
-    CHECK(ratio == 0.4600 / 0.1140);
+    CHECK(near(ratio, 0.4600 / 0.1140));
     CHECK(ratio < kShapeBound);
 }
 
