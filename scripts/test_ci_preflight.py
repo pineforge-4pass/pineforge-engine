@@ -4795,8 +4795,16 @@ exit "$lookup_exit"
             block = '  ' + job + ':' + _jobs(admission)[job]
             for before, after in ((block, ''), (f'  {job}:\n', f'  {job}-renamed:\n')):
                 with self.subTest(job=job, replacement=after):
-                    self.assertIn(f'gke-pr.yml is missing job {job}',
-                                  self.gke_mutated_findings(None, before, after))
+                    findings = self.gke_mutated_findings(None, before, after)
+                    if job == 'build-arm':
+                        # The arm job is the one optional job: without it the OLD
+                        # variant applies, so no "missing job" finding. Dropping or
+                        # renaming only this job still leaves the NEW outputs and
+                        # needs behind, a hybrid that must be refused.
+                        self.assertNotIn(f'gke-pr.yml is missing job {job}', findings)
+                        self.assertTrue(findings)
+                    else:
+                        self.assertIn(f'gke-pr.yml is missing job {job}', findings)
             self.assertIn(f'gke-pr.yml {job} must keep its default check name',
                           self.gke_mutated_findings(
                               job, '    runs-on:', '    name: renamed\n    runs-on:'))
@@ -5664,7 +5672,11 @@ exit "$lookup_exit"
                 with self.subTest(workflow=name, missing_job=job):
                     before = '  ' + job + ':' + _jobs(workflows[name])[job]
                     findings = self.routed_file_findings(name, None, before, '')
-                    self.assertIn(f'{name} is missing job {job}', findings)
+                    if (name, job) == ('gke-pr.yml', 'build-arm'):
+                        # Optional job: its absence selects the OLD variant.
+                        self.assertNotIn(f'{name} is missing job {job}', findings)
+                    else:
+                        self.assertIn(f'{name} is missing job {job}', findings)
 
     def test_authz_header_spacing_and_comment_are_verbatim(self):
         self.assertEqual(ci_preflight.runner_findings(self.light_workflows()), [])
