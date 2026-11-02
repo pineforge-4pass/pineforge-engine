@@ -571,15 +571,15 @@ claimed.
 | `live-tsan` | Debug, live runner enabled, ThreadSanitizer | Separate build instruments every runner target, audits compile commands and runs all runner rows and Python E2Es; WebSocket-enabled curl is mandatory and skips are refused |
 | `kernel` | Release, live runner enabled, Pine source layer OFF | The source-free CTest set behind a row floor (`PRIVATE_FIXTURE_PROFILE_FLOORS`; `--min-tests N` overrides it), installed package, and the `nm` half of the include-independence proof over `libpineforge_kernel.a` |
 
+The `mem;LAB-DISKSCRATCH` row `test_run_json_bounded_transport` logs pytest's scratch filesystem from `/proc/self/mountinfo`. `disk` and `unknown` keep the strict one-page cache bound after write/read; `overlay` and `tmpfs` end that check with `pytest.skip` naming the class because eviction is not guaranteed. Python peak, byte, and cleanup checks stay strict on every class; pytest reports captured output and skip reasons.
+
 **2026-10-24 clarification of the Debug row above:** no default row floor
 means no default execution floor; `debug` and `sanitizers` now enforce their
-registration minima and strict selection accounting through the default
-`slow` exclusion, and an explicit `--min-tests N` also gates executed rows.
+registration minima and strict selection accounting through the default `slow` exclusion, and an explicit `--min-tests N` also gates executed rows.
 
 By default each profile uses `build-ci-<profile>`. Keep separate build directories
 for different profiles and toolchains. The verifier never deletes a build tree
-or replaces an incompatible historical ABI receipt. Use a fresh directory when
-its configuration no longer matches.
+or replaces an incompatible historical ABI receipt. Use a fresh directory when its configuration no longer matches.
 
 Run Release, Debug and sanitizer profiles sequentially in one checkout, or use
 separate worktrees for parallel runs. Their tutorial targets write shared `.so`
