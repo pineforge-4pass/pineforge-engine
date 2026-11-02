@@ -348,7 +348,9 @@ class MergeCommits(unittest.TestCase):
     def conflict_with_main(self, r: Repo, lane: str, main: str) -> None:
         result = subprocess.run(
             ['git', '-C', str(r.root), 'merge', '--no-ff', '--no-commit', 'main'],
-            capture_output=True, text=True)
+            # The assertion below matches git's English "CONFLICT (content)"
+            # message, so pin the message language whatever the host locale.
+            capture_output=True, text=True, env={**os.environ, 'LC_ALL': 'C'})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn('CONFLICT (content)', result.stdout + result.stderr)
         self.assertEqual(r.git('rev-parse', 'HEAD'), lane)

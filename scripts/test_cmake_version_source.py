@@ -87,6 +87,9 @@ class VersionSourceTests(unittest.TestCase):
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_SYSTEM": os.devnull,
             "GIT_TERMINAL_PROMPT": "0",
+            # The tests match git's English messages ("No names found"), so
+            # pin the message language whatever locale the host runs in.
+            "LC_ALL": "C",
             "GIT_AUTHOR_NAME": "version-source-test",
             "GIT_AUTHOR_EMAIL": "version-source-test@pineforge.invalid",
             "GIT_COMMITTER_NAME": "version-source-test",
