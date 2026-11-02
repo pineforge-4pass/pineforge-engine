@@ -2229,11 +2229,9 @@ if(NOT PINEFORGE_BUILD_SOURCE_LAYER)
             "skipped (PINEFORGE_BUILD_SOURCE_LAYER is OFF)")
     endif()
 endif()
-
 add_test(NAME test_cmake_version_source
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_cmake_version_source.py)
-# Compute each slice from real unittest collection at invocation, never from
-# a handwritten method list. One parent becomes eight slices plus a cover: +8.
+# Slice real unittest collection at invocation: eight slices plus a cover (+8 rows).
 set(PINEFORGE_CI_VERIFY_SLICE_COUNT 8)
 set(PINEFORGE_CI_VERIFY_SLICES)
 foreach(_pf_ci_verify_slice RANGE 1 ${PINEFORGE_CI_VERIFY_SLICE_COUNT})
@@ -2245,6 +2243,8 @@ endforeach()
 add_test(NAME test_ci_verify_slices_cover
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_verify_split.py
         --slice-count ${PINEFORGE_CI_VERIFY_SLICE_COUNT})
+add_test(NAME test_ci_verify_fetch_lock
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_verify_fetch_lock.py)
 add_test(NAME test_ci_preflight_slice_1
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py --slice 1/8)
 add_test(NAME test_ci_preflight_slice_2
@@ -7385,7 +7385,7 @@ endforeach()
 # execute every slice. Both covers only collect and stay outside the slow
 # population. All are PUBLIC with no private-fixture label or SKIP_RETURN_CODE,
 # and register in both fixture modes.
-set_tests_properties(${PINEFORGE_CI_VERIFY_SLICES} test_ci_verify_slices_cover PROPERTIES
+set_tests_properties(${PINEFORGE_CI_VERIFY_SLICES} test_ci_verify_slices_cover test_ci_verify_fetch_lock PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 set_tests_properties(
     test_ci_preflight_slice_1
