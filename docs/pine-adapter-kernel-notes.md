@@ -8,8 +8,8 @@
 > `src/source/pine_strategy_host.cpp`) or in the surviving helpers of
 > `src/engine_orders.cpp`. None of it is a kernel contract, and a native host
 > that does not attach the Pine frontend sees none of it. The text is kept
-> verbatim so the measurement provenance (campaign notes, reference pins, tape
-> names) survives the move.
+> with synthetic numerical examples; the rule descriptions and reference
+> locations preserve the explanation without quoting market records.
 
 ## 1. TradingView's ten-significant-digit money rule
 
@@ -30,44 +30,44 @@ pinned and implemented, with the per-rule scopes described below:
   1. SIZING — a default percent_of_equity order is floored from the
      ROUNDED equity (calc_qty): the lot count flips one lot early/late
      when the exact equity is within half a money unit of a lot boundary
-     (~200 reference capital sweeps on OANDA:EURUSD 15 2025-04-01, scratch
-     famr-adm-*: revc 998763.3420484 -> 922832.66, 998763.3420503 ->
-     922832.67; S2 1001759.6342676 -> one lot BELOW the exact floor).
+     (synthetic OANDA:EURUSD example, price 2.00, lot step 0.01:
+     equity 1000000.01949 -> 500000.00 units; 1000000.01951 ->
+     500000.01 after ten-digit rounding, one lot above the exact floor).
      The divisor is the price AS TRADINGVIEW HOLDS IT — the tick count
      times the mintick double (round_to_mintick; fl(1e-5) sits 8.2e-17
-     relative above 1e-5, so tick(1.085) is one ulp above double(1.085))
+     relative above 1e-5, so tick(1.23457) is one ulp above double(1.23457))
      — and the lot floor is the RAW double floor, no 1e-6 nudge
-     (tv_money_floor_lot): famr-rev-everybar 2025-04-02 20:00Z, close
-     1.085, E 996097.5955029: Pine prints floor(E/close*100)/100 =
-     918062.30 while the broker filled 918062.29 = floor(sig10(E) /
-     tick(1.085) / 0.01), the quotient being 918062.29999999992 (round 9
-     family R follow-up, campaign note log-20260905t210117z-ab914192).
+     (tv_money_floor_lot): synthetic close 1.23457 and
+     E 123457.0123458 give floor(E/close*100)/100 = 100000.01,
+     while the broker's rounded equity 123457.0123 and tick-built price
+     give 100000.00 = floor(sig10(E) / tick(1.23457) / 0.01) * 0.01.
+     Both the money rounding and the raw double floor matter.
   2. ADMISSION — a default 100 %-of-equity, margin-100 MARKET entry is
      DROPPED iff the exact sizing equity is below the ROUNDED cost,
      E_s < tv_money_round(Q x tick(close_S)); for a reversal only the
      entry leg is dropped and the closing leg still fills (the fill-time
      gate in the source adapter, ahead of the exact fill-price check).
-     Bare account: L06..L17 / FL00..02 (C = 1000000.0015396 ..
-     1000000.0019980) rejected, L18 (1000000.0020196) admitted against
-     round(1000000.0018862) = 1000000.002, flat p0000 (C == cost) admitted;
+     Synthetic bare account: C = 2000000.0019 is
+     rejected, C = 2000000.0021 admitted against
+     round(2000000.0018) = 2000000.002; equality with the cost is admitted;
      with a history: 24/24 close-leg-only rejections of the taro probe and
      the every-bar sensors have E_s < round(cost), 0/3086 admissions do.
   3. MARGIN CALL — a margin-100 LONG is liquidated (one contract, the
      broker's minimum) at the first bar path point where the exact equity
      is below the position value ROUNDED to 10 significant digits
      (process_margin_call): revL L18..L25 16/16, taro 6/6 one-unit trims.
-Where equity ~ 1e6 and a lot is worth ~0.011 (EURUSD: qty step 0.01 at
-price ~1.1) the 0.0005 rounding crosses a lot boundary on ~9 % of all-in
+Where equity ~ 1e6 and a lot is worth 0.02 (synthetic EURUSD: step 0.01 at
+price 2.00) the 0.0005 rounding can cross a lot boundary on some all-in
 placements; on F / AAPL / indices (a lot is 10..250k) it crosses one only
-at an exact-decimal tie — and there it does (round 10 family AE, NASDAQ:
-AAPL 2025-09-05 16:15Z: E_s 1094521.68 = 4584 x 238.77 exactly; TradingView
-floors the ten-digit equity's raw double quotient 4583.999999999999 to
-4583, the float-accumulated ledger's 4584.000000000001 or a 1e-6-nudged
-floor gives 4584, one share the account cannot pay at the 238.78 fill), so
+at an exact-decimal tie — illustrated synthetically on NASDAQ:
+AAPL by E_s 469187.60 = 2345 x 200.08 exactly; TradingView
+floors the ten-digit equity's raw double quotient 2344.9999999999995 to
+2344, while a ledger quotient at 2345 or a 1e-6-nudged
+floor gives 2345, one share the account cannot pay at the 200.09 fill), so
 rule 1 sizes every lot-stepped instrument (tv_money_lot_sizing). Rule 2
 additionally covers ordinary, fee-free high-value fractional lots (R24),
 as does the price-scale check in rule 5 (R39). Other admission keeps its existing
-checks (1094521.681 -> Q 4584 dropped on AAPL). Rule 3
+checks (synthetic 469187.6001 -> Q 2345 dropped at 200.09 on AAPL). Rule 3
 additionally covers ordinary MARKET-opened, fee/slippage-free single-position
 fractional unit-pointvalue/same-currency books with lot value >=1 (R21 pins).
   5. WHOLE-ORDER DROP (round 9 family R follow-up, campaign notes
@@ -92,10 +92,10 @@ fractional unit-pointvalue/same-currency books with lot value >=1 (R21 pins).
      same-bar strategy.close and filling from flat takes rule 2 only
      (round 12 AG-C1, six famag-C-cf-d tapes: four rounded-cost drops,
      two admits). Rule 5 is excluded for that ordering; a deficit that
-     appears only at the fill is margin-called (demete1226 2025-04-04
-     02:30Z, 9.14 USD short after a one-pip gap down: 6008.48 'Margin call';
-     2025-04-07 08:00Z, E_s in rule 5's tie band, a six-pip gap up:
-     1 unit + 13681.2 'Margin call'). Pinned on 507 famr3 sweep
+     appears only at the fill is margin-called (a synthetic 4-unit
+     close-then-entry order can open and be reduced after a one-pip gap;
+     even with E_s in rule 5's tie band, a six-pip gap can likewise
+     trigger calls rather than a whole-order drop). Pinned on 507 sweep
      decisions
      (famr3-F6: 153 bare-capital longs at C = sig10(cost) + 0.0002, 83
      filled / 70 dropped, a pure function of the close; F7 7-digit ties
@@ -123,11 +123,11 @@ construction (n x fl(1e-9), 6.7e-17 above the decimal) would decide the
 ties wrongly — 100/507 on the famr3 sweeps.
 The broker's lot floor on ten-digit money (rule 1): the RAW double floor
 of the scaled quantity, no representation nudge — a nudge would promote
-the 918062.29999999992 quotient above to918062.30, one lot more than TV.
+synthetic 100000.00999999998 to 100000.01, one cent-lot above its raw floor.
 R22 cent-lot pins: division by binary64(0.01) can lose a grid point that
 is exactly representable by qty. Try the *100 candidate only when its
-reconstructed grid quantity does not exceed the input. The 1.169 pin
-keeps8595.81; the older 1.085 pin still floors918062.29999999993 to918062.29
+reconstructed grid quantity does not exceed the input. A synthetic grid input
+25.00 keeps 25.00; a 25.009999999999998 input still floors to 25.00
 because the next grid point is above that input. Other scales stay unchanged.
 ```
 
@@ -592,15 +592,15 @@ the physical lots did.
 Two edges of the pyramiding records that population tapes show and no
 committed tape pins:
 - How an exit books when the record and the physical lot belong to different
-  ids. On the population script thulashimohanr prev-day-week-levels-or-vwap
-  (OANDA:XAUUSD 15), the records count admits the 2025-09-10 15:00 add as
-  TradingView does. TradingView then closes all three units at 15:00, and the
-  engine keeps one of them open until 2025-09-12 13:45.
+  ids. On a third-party strategy, illustrated by a synthetic
+  OANDA:XAUUSD 15-minute book, the records count admits an add as
+  TradingView does. If the held book totals four units, all four should close
+  on that bar; the engine can instead keep the add open until a later bar.
 - The order of a same-bar reversal and an add to the held side. The script
   places the add first, then its reversal (close the held ids, then the
   opposite entry). TradingView fills the reversal first, and the add then
   closes the new position; the engine fills the add first (NSE:NIFTY 15,
-  2025-08-19 06:00 UTC). The records count admits that add as TradingView
+  a 15-minute bar). The records count admits that add as TradingView
   does, and the row it books has the wrong side.
 - The control for both: a fixed-quantity script with pyramiding 2, a held
   position of one id, then on one bar an add of a second id and a reversal of
@@ -634,7 +634,7 @@ pyramiding record count had moved closed trades in 32 of 38 runs.
 
 What the tree does not reproduce yet, each listed in its test:
 - The residual call on the G + L cash after a trade history (the
-  `proozac-history-k0` ledgers, `G+L residual call: history regime unpinned`).
+  history-residual probe ledgers, `G+L residual call: history regime unpinned`).
 - The carried short's source-close and fresh-opening call schedule, a short's
   call quantum at margin 50, a multi-lot short's call at the high, and a
   multi-lot long at margin 50 with a per-contract fee.
@@ -642,8 +642,8 @@ What the tree does not reproduce yet, each listed in its test:
 - The money of a long's one-unit call after a trade history. The slipped
   long's call (`slipped_long_margin_units`) reads the closed-trade equity, the
   running net profit, not G + L. On a population NYSE:F strategy, a two-unit
-  long at 13.68 meets a 27.36 cost on TradingView's G + L money,
-  27.359999999956926, and is called; a running sum need not be, and the
+  synthetic long at 25.00 meets a 50.00 cost on G + L money of
+  49.99999999999999 and is called; a running sum need not be, and the
   engine misses the call.
 
 The shipped rules also decide cases no tape covers: the decimal lot floor at
@@ -673,8 +673,8 @@ with a control of each:
   own shortfall, the open does not re-size it (`close_margined_units`). Then it
   is a queued order, and it executes at the open before any exit the open
   reaches. TradingView's tape of a population script decides this
-  (axealgo-tp-sl-toolkit-axealgo, OANDA:XAUUSD 15, 2025-06-01 22:00: the call
-  of 1, then the gapped stop's 1.62). A call the open re-sizes, because the
+  (a third-party strategy on OANDA:XAUUSD 15m; synthetic example: a call
+  of 1, then the gapped stop's remaining 2). A call the open re-sizes, because the
   open's shortfall is larger, is the open's own check, and it comes after the
   exits; no tape decides that shape. Two committed controls are requested:
   - an explicit short of 3 on the XAUUSD bars of `admission_rules`, fee 0.05 %,
@@ -727,7 +727,7 @@ Entry ids that have filled at least once in the CURRENT position cycle.
 TV keeps a from_entry bracket live for the life of the POSITION, not the
 life of its own entry leg: once the leg's units are FIFO-consumed by a
 sibling bracket, the leg still fires against the remaining position
-(thulashimohanr 06-17/10-14/01-14: Short's T2 closes a ShortAdd unit).
+(the paired-bracket probe: Short's T2 closes a ShortAdd unit on a later bar).
 Per-entry-id UNCLOSED quantity ledger, used ONLY by strategy.close(id)
 under the default FIFO close-entries rule to decide how much to close.
 
@@ -864,7 +864,7 @@ scratches at that open (duration-0, PnL-0). On a market REVERSAL parent
 this is the standing prior-bar strategy.exit whose levels were computed
 from the reversed-away position's avg price: TV honors that stale order
 at the fill bar's open instead of waiting for the re-priced bracket
-(rhyme17 finding 278 seed (b), six tape-proven limit-leg events).
+(the stale-exit probe, finding 278 seed (b), six tape-proven limit-leg events).
 The helper proves the parent/child/fresh-lot provenance; it deliberately
 excludes POOC, COOF, magnifier, same-direction adds, priced parents,
 multi-child groups, and dual-marketable brackets.
@@ -896,7 +896,7 @@ Since the margin-schedule correction the adapter keeps the placement quantity ab
 the fill's (the private test `test_adapter_margin_schedule_differential`, "M10 on
 tapes"). The margin call those tapes book at a half-cent low is TradingView's
 market execution at that print, so since the intrabar margin correction the pre-open
-slice books the print's nearest tick (12.105 books 12.11), where a stop or
+slice books the print's nearest tick (synthetic 25.005 books 25.01), where a stop or
 limit crossed at its own off-grid level keeps the directional tick
 (the private fixture set `half_tick_rounding`).
 

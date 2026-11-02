@@ -532,8 +532,8 @@ double source_trigger_threshold(double level, double tick,
 // A trailing exit's activation is reached on the tick-quantized path whatever
 // its trailing offset: the one-shot's (test_trail_activation_tick_bar) and a
 // trailing leg's arm alike. A measured TradingView run on NYSE:F 15m with
-// trail_offset 1 (tests/fixtures/offset_trail_arm): lows 9.415 / 13.041 /
-// 12.641 and highs 11.899 / 13.049 / 13.419 arm the activations their ticks
+// trail_offset 1 (tests/fixtures/offset_trail_arm): synthetic lows 25.041 /
+// 26.041 and highs 25.049 / 26.049 arm the activations their ticks
 // equal, 6 of 6 exits on that bar. The generic Trail compares arm_price with
 // the raw path, so the arm is the half-tick boundary where the quantized path
 // first reaches the activation, the threshold a one-shot leg rests at; a
@@ -558,10 +558,10 @@ int legacy_volume_weighted_max_samples(int samples) noexcept {
 // resting level rounded AWAY from the position (a sell up, a buy down), a
 // price the limit admits by construction. A measured TradingView run on
 // BINANCE:ETHUSDT.P 15m (tests/fixtures/trail_activation_tick_reach): a long
-// filled 2550.85 with trail_price 2550.854 rests at 2550.855 and books 2550.86
-// (5 of 5 exits), a short filled 1791.83 with 1791.826 rests at 1791.825 and
-// books 1791.82 (4 of 4); the stop-style snap toward the position (2550.85,
-// 1791.83) was refused as InvalidTerms. On the grid it is the activation.
+// filled at synthetic 25.00 with trail_price 25.004 rests at 25.005 and books 25.01
+// (5 of 5 exits); a synthetic short filled at 35.00 with 34.996 rests at 34.995 and
+// books 34.99 (4 of 4); the stop-style snap toward the position (25.00,
+// 35.00) is refused as InvalidTerms. On the grid it is the activation.
 double source_one_shot_reach_tick(double resting_level, double tick, bool exit_is_buy) noexcept {
     return directional_tick(resting_level, tick, !exit_is_buy);
 }
@@ -570,8 +570,8 @@ double source_one_shot_reach_tick(double resting_level, double tick, bool exit_i
 // path, like every print the arm is tested on (source_trail_arm_level), the
 // placement print included. A measured TradingView run on NYSE:F 15m
 // (tests/fixtures/trail_activation_tick_reach): a placement close half a tick
-// short of the activation whose tick IS the activation (11.295 under 11.30,
-// 14.415 over a short's 14.41) has reached it; 8 of 8 trades exit on the next
+// short of the activation whose tick IS the activation (synthetic 25.005 under 25.01,
+// 35.035 over a short's 35.03) has reached it; 8 of 8 trades exit on the next
 // bar, trail_offset 1 and 0 alike. On an on-grid feed no print lies in the
 // half cell, so it admits what the raw compare did, save a print on the
 // activation's own grid point that the raw compare missed by a binary64 ULP.
@@ -682,9 +682,9 @@ std::optional<int> decimal_grid_exponent(double grid) noexcept {
 
 // Margin rule 1: TradingView floors the SHORTEST round-trip decimal of the
 // binary64 quotient to the lot, not the binary quotient, and keeps the
-// nearest double of that decimal. ETH Blackelon's sig10(E) / 2198.9 prints
-// 17.557 and buys 17.557 where the binary floor took 17.5569; ETH's
-// 25.268199999999997 prints as such and buys 25.2681 (tests/fixtures/
+// nearest double of that decimal. Synthetic ETH quotient 0.0003 keeps 0.0003
+// on a 0.0001 grid where a binary floor can take 0.0002; a quotient of
+// 0.0002999999999999999 stays below 0.0003 and floors to 0.0002 (tests/fixtures/
 // margin_call_rules sizing and boundary tapes). Nullopt off a power-of-ten
 // lot grid, where the decimal floor is not pinned.
 std::optional<double> decimal_floor_lot(double units, double grid) noexcept {
@@ -2253,15 +2253,15 @@ void PineExecutionAdapter::hold_reversal_pair_brackets(const SourceId& from_entr
 // strategy.cancel / strategy.cancel_all withdraw an exit whatever its state:
 // a live exit the cancel takes off the book, and a dormant one -- an exit a
 // declined reversal held (finding-311) -- alike. TradingView never brings a
-// cancelled exit back. The lab tv tapes badapter-v19dp1-control / -cancel
-// (NYSE:F 15, 2025-04-30 .. 05-06) show one script with and without
-// strategy.cancel("X") on 05-01, while X is dormant: the margin call revives
+// cancelled exit back. The paired control and cancel tapes
+// (NYSE:F 15m) show one script with and without
+// strategy.cancel("X") while X is dormant: the margin call revives
 // the standing dormant X and closes the position through it; after the cancel
 // it does not, and a second margin call follows. The tapes
-// v19fix-cancel-before-pair and v19fix-cancel-at-1000 (the cancelled-origin retirement) cancel
-// X while it is still live -- on 04-30 15:45 before the reversal pair, and on
-// 04-30 10:00 -- and book the same two margin-call slices, 836 left open: the
-// declined pair's suspension still makes the cancelled leg dormant on 05-01,
+// that cancel before the pair and after the entry fill (the cancelled-origin retirement) cancel
+// X while it is still live. Synthetic accounting: 1000 initial shares,
+// calls of 20 and 80, then 900 left open (1000 - 20 - 80): the
+// declined pair's suspension still makes the cancelled leg dormant later,
 // and the revival must not read that as a standing exit. The legacy engine
 // skipped any cancelled order in the same pass (ab9714be
 // pine_fills.cpp:2065-2076). The lifecycle records the withdrawal where the
@@ -2280,8 +2280,8 @@ void PineExecutionAdapter::hold_reversal_pair_brackets(const SourceId& from_entr
 // retires waits in pending_margin_revivals_ for the next margin-call slice
 // (apply_reversal_gap_bracket_policy), and the declined pair's suspension
 // can still make its row dormant. A cancel drops the waiting revival and
-// withdraws the row -- the lab tv tapes v19fix-gapped-stop-control / -cancel
-// (stop 10.15, which the 05-01 open gaps through) close 928 through X at the
+// withdraws the row -- the paired gapped-stop control and cancel tapes
+// (synthetic stop 25.15) close the remaining 980 shares through X at the
 // margin call without the cancel and book the cancel tape's trades with it.
 void PineExecutionAdapter::retire_cancelled_exits(
         const SourceId* id,
@@ -6168,12 +6168,12 @@ void PineExecutionAdapter::schedule_preopen_margin_slice(
         // max(1e-9, |equity|*1e-12) guard; a gap-through fill price is the
         // rounded open).  Arming the deferred close for such a candidate
         // leaves a stale Reduce that a LATER bar's different opening matches:
-        // OANDA:XAUUSD 2025-06-01 22:00 sizes 3.1872003125 units against
-        // equity 10525.244578, costs 3.1872003125 * 3303.415 = 10528.64 at
+        // A synthetic OANDA:XAUUSD example sizes 3.20 units against
+        // equity 8000.00, costs 3.20 * 2501.00 = 8003.20 at
         // the open, so the owner never opens there -- its all-in long fills on
-        // the 22:15 open (3.18228862 * 3307.24 = 10524.59) as ONE lot.  The
-        // ETH feed's admitted all-in short (4.08281952 * 2463.00 against
-        // equity 10055.984463, cost 10055.984463) keeps its legitimate
+        // the next open (3.19 * 2502.00 = 7981.38) as ONE lot.  A synthetic
+        // ETH feed's admitted all-in short (4.00 * 2000.00 against
+        // equity 8000.00, cost 8000.00) keeps its legitimate
         // same-bar slice.
         const double admission_cost = units * entry * staged_.syminfo.pointvalue
             * fx * margin / 100.0;
@@ -7866,7 +7866,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             // declared with margin_long=0 / margin_short=0 therefore keeps taking
             // explicit-qty entries after its equity has gone negative; without the
             // gate required == 0 > equity rejected every later entry once the
-            // account traded below zero (NQ1 ORB probe: flat after trade #73).
+            // account traded below zero (the NQ1 probe went flat after a later trade).
             if (!slipped_signal_scope && finite_positive(margin) && margin <= 100.0
                 && (!std::isfinite(required) || !std::isfinite(equity)
                     || required > equity)) {
@@ -8323,7 +8323,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         // ab9714be pine_policy_members.cpp:11-17 + engine.hpp:1374-1381: every
         // entry limit, explicit-qty included, is tested against the
         // tick-quantized bar, so an off-grid level triggers on the half-up
-        // rounded print (NYSE:F ORB 10.845 / 11.425 / 11.89 limits).
+        // rounded print (synthetic NYSE:F limits 25.045 / 26.045 / 27.00).
         native_limit = source_trigger_threshold(
             limit_price, staged_.syminfo.mintick, is_long, true, value_field::entry_limit_price);
     } else if (finite_positive(stop_price) && !finite_positive(limit_price)
@@ -8536,7 +8536,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         // extreme keeps its level fill: TradingView rests it there (-d), but
         // a magnified script's next point is an intrabar one, and resting
         // it to the chart bar's extreme delayed the unmagnified
-        // bystry1991-ema200 refills by a bar or more. Not pinned under
+        // EMA200 probe's refills by a bar or more. Not pinned under
         // process_orders_on_close, on the close leg or on a leg-end fill --
         // but a fill the adapter FORCED onto the first extreme starts the
         // next leg the same way: its entry fills at the second extreme when
@@ -8626,9 +8626,9 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         }
         // A fill on the chart bar's last intrabar-path point leaves the next
         // bar's opening as the next fill point: the entry is live from that
-        // open, as off the magnified path (lab tv tailc-mag-coof-refill-leg,
-        // 2025-04-05 02:30 UTC: a buy limit placed at the 1819.51 close print
-        // fills at the next bar's 1819.5 open).
+        // open, as off the magnified path (tailc-mag-coof-refill-leg; synthetic buy limit
+        // placed at a 25.01 close print is live at the next bar's open
+        // and fills at that open's better 25.00 print).
         if ((lower_limit || lower_stop) && lower_next && lower_next->next_open
             && coof_context_.is_terminal_sub_bar) {
             coof_priced_next_open = true;
@@ -8838,13 +8838,13 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     // Under process_orders_on_close TradingView sizes a default-quantity
     // percent_of_equity MARKET short at its slipped fill -- the close less the
     // slippage ticks -- but opens it only while those units' margin at the
-    // close itself fits the equity the calculation marked there: 99.99 % of
-    // 100000 at slippage 15 opens (64.1385 x 1559.12 = 99999.6), 99.995 % and
-    // 100 % never do (lab tv w4-f14m-*). An unfunded one is dropped from a flat
+    // close itself fits the equity the calculation marked there: synthetic 99.99 % of
+    // 100000 at slippage 15 opens (49.9987 x 2000.00 = 99997.40), 99.995 % and
+    // 100 % do not at that price/lot grid. An unfunded one is dropped from a flat
     // book and keeps only its closing leg when it reverses a long, whether a
     // strategy.close of that long precedes it or follows it (w4-f14-pooc-v6-slip:
     // TradingView closes every long and opens no short; lane
-    // W4-ENG-POOC-SAMEPASS -- julzalgo's NYSE:F, ETH and EURUSD tapes hold no
+    // the third-party NYSE:F, ETH and EURUSD strategies hold no
     // short at all, where the engine opened each one and margin-called it on its
     // entry bar). A lot step coarse against the slippage absorbs the gap, so
     // most such shorts still open on BTC.
@@ -8867,9 +8867,9 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     // flat book, which fills at the next open: TradingView sizes it at the
     // signal close less the slippage ticks (and the commission) and opens it
     // only while those units' margin at the signal close, on its tick, fits
-    // the equity there, whatever the open. On NYSE:F at slippage 1 a short of
-    // all 10000 at a close of 9.905 sizes 1010 at 9.90 and does not open
-    // (1010 x 9.91 = 10009.1); the commission's smaller quantity opens where
+    // the equity there, whatever the open. Synthetic NYSE:F at slippage 1:
+    // all 10000 at a close of 25.005 sizes 400 at 25.00 and does not open
+    // (400 x 25.01 = 10004.00); the commission's smaller quantity opens where
     // the floor left the tick's room, and at slippage 4 none does (lab tv
     // tapes tests/fixtures/slipped_short int28fix-adm-s-s and int28fix-ou-s4;
     // The slipped-short admission rule). A long, and a short without slippage, are
@@ -10181,10 +10181,10 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         // Under process_orders_on_close TradingView checks the book at the
         // close after the script, and executes a call there ahead of the
         // orders the script placed at that close: a close_all keeps the size
-        // it was placed with and opens the called unit on the other side (lab
-        // tv tape w5b-sz-eur-p100-10m 2025-04-10 12:30 and 2025-04-25 06:30 on
-        // OANDA:EURUSD: the one-unit money call at the close, then a short of
-        // one unit by the close order; lane W13-ENG-MARGIN-OPP). A call the
+        // it was placed with and opens the called unit on the other side
+        // (w5b-sz-eur-p100-10m; synthetic OANDA:EURUSD close for 6 units, then a
+        // 2-unit money call at the close, leaves 4 held and opens a short of
+        // 2 when that unchanged close executes). A call the
         // path fired earlier stands before the script, and the close closes
         // what it left.
         bool close_sized_before_call = false;
@@ -12940,7 +12940,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // from a prior cycle are neither pending nor opened; keeping
             // them prevents the empty-origins origin-zero fallback a first
             // cycle uses while the new parent is still in
-            // pending_same_bar_commands_ (probe9 A v0 / bprakaash).
+            // pending_same_bar_commands_ (probe9 A v0 / the pending-parent probe).
             // Retired origins cannot be pending or opened; collect global
             // positions from the retained index and keep roster order.
             const auto& roster = found->second.origins;
@@ -13116,9 +13116,9 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // ride starts at. Already armed, the placement print is part of
             // that ride and joins it on the favourable side: the same carried
             // best the explicit-zero trail's sibling stop rests at, raw.
-            // Lane E14's four NYSE:F shorts pin the raw reading: their
-            // placement closes sit half a tick past the activation (13.035
-            // under 13.04, 14.075 under 14.08) and TradingView's stop is
+            // The NYSE:F short controls pin the raw reading: synthetic
+            // placement closes sit half a tick past the activation (25.005
+            // under 25.01, 26.005 under 26.01) and TradingView's stop is
             // that close + the offset, reached by a high the activation's own
             // stop never would be.
             double best_seed = trail_price;
@@ -13741,7 +13741,7 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
                     // + engine.hpp:1374-1381: the entry-bar exit is tested
                     // against the tick-quantized bar, so an on-grid level is
                     // touched by a raw extreme half a tick short of it
-                    // (NYSE:F high 13.455 -> 13.46 reaches a 13.46 sell limit).
+                    // (synthetic NYSE:F high 25.045 -> 25.05 reaches a 25.05 sell limit).
                     // Only the calc_on_order_fills scheduler compares raw.
                     const double tick = staged_.syminfo.mintick;
                     const bool raw_bar = config_.calc_on_order_fills
@@ -14920,12 +14920,12 @@ double PineExecutionAdapter::exit_limit_trigger(double limit_price, double tick,
     // ab9714be pine_policy_members.cpp:11-17 + engine.hpp:1374-1381: an
     // exit limit is tested against the tick-quantized bar, so an ON-grid
     // level is reached by a raw extreme half a tick short of it (NYSE:F
-    // high 10.175 -> 10.18 fills a 10.18 sell limit).  Under
+    // synthetic high 25.045 -> 25.05 fills a 25.05 sell limit).  Under
     // calc_on_order_fills an on-grid level stays raw, except for a limit
     // left resting on the chart path that closes the position held when it
-    // is placed (resting_limit_tick_reach): a 9.73 sell limit born in the
-    // opening fill's recalculation fills on that bar, whose H of 9.725
-    // prints 9.73 (`lab tv` synthetics tests/fixtures/callback_lifecycle
+    // is placed (resting_limit_tick_reach): a synthetic 25.05 sell limit born in the
+    // opening fill's recalculation fills on that bar, whose H of 25.045
+    // prints 25.05 (`lab tv` synthetics tests/fixtures/callback_lifecycle
     // newborn-limit-*, NYSE:F 15m, 4 identical exports each).
     if (!finite_positive(tick)) return limit_price;
     const double threshold = source_trigger_threshold(limit_price, tick, exit_is_buy, true);
@@ -14957,9 +14957,9 @@ double PineExecutionAdapter::one_shot_trail_trigger(double activation, double so
     // onto the division grid handed back a value one binary64 ULP
     // away from the owner's fill and that ULP rode the equity path
     // into printed PnL
-    // (zz-pop-stevenygabbyperez-fast-scalper-with-stops short exit
-    // 2025-04-02 22:00Z, activation 1870.0 - 3741 * 0.01: owner
-    // 1832.5900000000001, re-spelled 1832.59).
+    // (a synthetic illustration of the one-shot trailing-stop rule:
+    // tick count 115 at tick 0.01 gives the product 1.1500000000000001,
+    // while the division grid re-spells it as 1.15).
     // ab9714be pine_fills.cpp:4607-4610: snap_trail_level_to_tick_grid
     // aligns the trail level to the tick grid (sell one-shot).
     if (!exit_is_buy) one_shot_level = source_level_on_price_grid(one_shot_level, tick);
@@ -14973,8 +14973,8 @@ double PineExecutionAdapter::one_shot_trail_trigger(double activation, double so
     // explicit-zero trail's dormant activation on the same
     // tick-quantized path, so its arm threshold is the same half-up
     // projection boundary: a buy one-shot is reached only strictly
-    // below activation + half a tick (NYSE:F 2026-04-10 16:30Z low
-    // 12.075 prints 12.08 and does not reach the 12.07 activation).
+    // below activation + half a tick (synthetic NYSE:F low
+    // 25.005 prints 25.01 and does not reach the 25.00 activation).
     if (quantized_activation && finite_positive(tick)) {
         one_shot_level = source_trigger_threshold(one_shot_level, tick, exit_is_buy, true);
     }
@@ -15440,11 +15440,11 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
 // was then booked after the script keeps the close quantity the script saw
 // (switch frozen_reversal_close): at its fill it buys that quantity against
 // the smaller book and the excess opens on the other side, its own open leg
-// on top when that leg was affordable. On NYSE:F at slippage 1 a short of
-// 8540 shares that a reversal long of 11117 (unaffordable) was placed against
-// gives up 8 more to a follow-up at the close; the next open closes 8532 and
-// opens a long of 8, and a reversal of 100 opens 108 (lab tv tapes
-// tests/fixtures/margin_schedule_rules frozen/; lane W13 rule CP for a
+// on top when that leg was affordable. Synthetic NYSE:F at slippage 1: a short of
+// 400 shares that a reversal long of 700 (unaffordable) was placed against
+// gives up 4 to a follow-up at the close; the next open closes 396 and
+// opens a long of 4, and an affordable reversal of 50 opens 54 (lab tv tapes
+// tests/fixtures/margin_schedule_rules frozen/; the analogous rule for a
 // close_all).
 void PineExecutionAdapter::apply_frozen_reversal_close(
         const PlacementSnapshot& source, const NativeExecutionTermsFacts& facts,
@@ -15533,7 +15533,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         }
         // An armed trail's running best starts at its activation: the E5
         // tapes book activation -/+ offset while the raw extreme stays inside
-        // the activation's tick cell (13.041 -> 13.05, 11.899 -> 11.89),
+        // the activation's tick cell (synthetic 26.041 -> 26.05, 25.049 -> 25.04),
         // whereas the kernel's best starts at the half-tick arm
         // (source_trail_arm_level). On the grid the two never differ.
         if (std::isfinite(source.trail_activation_level)) {
@@ -15861,7 +15861,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         // (schedule_preopen_margin_slice) but is TradingView's margin call, a
         // MARKET execution at that print: the print's nearest tick, then the
         // exit side's slippage (source_margin_fill_price), not a stop level's
-        // adverse tick -- 12.105 books 12.11 (lab tv tapes pm-m10-f-k4-1007
+        // adverse tick -- synthetic 25.005 books 25.01 (lab tv tapes pm-m10-f-k4-1007
         // and -gapup-0501, the intrabar margin correction). A stop crossed at its own
         // off-grid LEVEL keeps the directional rule (pm2-round-f, -es).
         if (!open_gapped) {
@@ -16725,10 +16725,10 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
             // running sum of many closed profits carries a residue of its own
             // the engine does not reproduce: where the engine's sum and that
             // sum on the money grid disagree on the tie, TradingView takes it
-            // on some books and not on others (not: antoniolinux-obv-with-sma-
-            // and-max-50gg on NASDAQ:AAPL 15, taro-s-rsi-ma-signals-on-chart on
-            // NYSE:F 15; taken: job-2553-ttagkoin-adaptive-multi-factor-v1-
-            // update-9-years on NYSE:F 15), and the adapter keeps the no-gap
+            // on some books and not on others (declined on third-party
+            // NASDAQ:AAPL 15 and NYSE:F 15 strategies, taken on another
+            // third-party NYSE:F 15 strategy). Those differing ledgers
+            // do not establish a broader rule, so the adapter keeps the no-gap
             // rule it had there (ab9714be pine_fills.cpp:5190-5219). While the
             // book is still the signal's the settled sum is read (lane TAIL-D).
             if (whole_lot_tie_scope) {
@@ -17157,8 +17157,8 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     // tapes tests/fixtures/margin_open_rules lots/close-id-*,
     // close-all-overfill-gap: the entry "L" opens beside the over-fill lot), and
     // a default-sized one is not re-checked for affordability at the fill
-    // either (OANDA:EURUSD 15 2026-04-09 01:45: a default-sized "LONG" of
-    // 18624.97 opens beside 0.56; lab tv tapes lots/overfill-*-then-close-entry).
+    // either (synthetic OANDA:EURUSD 15m: a default-sized "LONG" of
+    // 40000 opens beside 0.20; the over-fill controls cover the ordering).
     // Other shapes beside the lot -- a priced entry, a fill on a later bar --
     // keep every gate: no tape decides them.
     const auto beside_frozen_close_lot = [&]() {
@@ -17198,9 +17198,9 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     // Nor an order sized when it was placed (close_point_margin_call): a
     // margin call or close whose book shrank before it filled opens the rest
     // on the other side, or beside the lot the other side already holds, as
-    // placed -- no entry gate, pyramiding included, reads it (lab tv tape
-    // w13-b1s-close-f 2025-04-10: the close_all's 4 and the follow-up's 1
-    // both open long at the 9.135 open).
+    // placed -- no entry gate, pyramiding included, reads it (w13-b1s-close-f; synthetic:
+    // the close_all's 6 units and the follow-up's 2, once the short is flat,
+    // both open long at the next 25.00 open).
     // The scope includes the current batch phase. Cross-phase frozen sizing
     // remains outside this route; persisting placement scope also needs the
     // snapshot's state-hash and placement-receipt representation.
@@ -17466,8 +17466,8 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         // that opens from flat at full margin is dropped only when the equity
         // is below sig10(Q x the fill's UNSLIPPED quote); its slippage was
         // judged at placement, on the price scale (tests/fixtures/
-        // margin_call_rules admit-eth-nonpooc-s2-m04u: 1.5 at the 1588.37
-        // open fits 2382.5849996 though its slipped 1588.39 does not;
+        // margin_call_rules admit-eth-nonpooc-s2-m04u; synthetic 2.5 at the 200.11
+        // open fits 500.32499996 though its slipped 200.13 does not;
         // admit-eth-nonpooc-s2-gapup: a gap-up open whose unslipped
         // cost exceeds the equity drops). Pinned with slippage only: without
         // it TradingView fills such an entry and calls it at the open
@@ -17493,13 +17493,13 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             const double tick = staged_.syminfo.mintick;
             // The fill's own price decides (switch open_fill_admission): the
             // order is dropped where sig10(sig10(E) / Q) is below the slipped
-            // open tick it fills at. On BINANCE:ETHUSDT.P at slippage 2 and
-            // commission 0.05 % a long of 4.9204 placed on 9083.616855 fills
-            // at no price above 1846.113498, and the 1846.10 open fills at
-            // 1846.12: dropped; 0.05 more cash admits it (lab tv tapes
+            // open tick it fills at. Synthetic BINANCE:ETHUSDT.P at slippage 2 and
+            // commission 0.05 %: a long of 4 placed on 1000.04 fills
+            // at no price above 250.01, and the 250.00 open fills at
+            // 250.02: dropped; 0.05 more cash admits it (lab tv tapes
             // tests/fixtures/margin_open_rules admission/). A tie on the ten
-            // significant digits admits: 1.5 at the 1588.37 open, filled at
-            // 1588.39, on 2382.5849996 (admit-eth-nonpooc-s2-m04u).
+            // significant digits admits: synthetic 2.5 at the 200.11 open, filled at
+            // 200.13, on 500.32499996 (admit-eth-nonpooc-s2-m04u).
             if (PF_RARE(detail::margin_opening_switches().open_fill_admission)) {
                 const double exec = std::floor(view.resolved_price / tick + 0.5) * tick;
                 const double per_unit = source_money_round(
@@ -17516,10 +17516,10 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         // tick-built signal close, not at its slipped fill, against the
         // fee-charged equity there, with and without process_orders_on_close
         // (switch add_signal_close): on NYSE:F 1D at slippage 3 and commission 0.1 %
-        // 867 shares plus an add of 12 cost 10126.08 at the 11.52 signal
-        // close and fit the 10150.5151 equity, where the 11.55 fill's
-        // 10152.45 does not (lab tv tapes tests/fixtures/margin_schedule_rules
-        // add/; NYSE:F 1D TON grid, 2026-03-23).
+        // synthetic 200 shares plus an add of 10 cost 5250.00 at a 25.00 signal
+        // close and fit fee-charged equity of 5253.00, where the 25.03 fill's
+        // 5256.30 does not (lab tv tapes tests/fixtures/margin_schedule_rules
+        // add/ establish the signal-close rule).
         const double add_price = PF_RARE(same_side && source.family == PineOrderFamily::Entry
                 && detail::margin_schedule_switches().add_signal_close && margin_pct == 100.0
                 && finite_positive(source.projection_affordability_signal_price))
@@ -18243,10 +18243,10 @@ double PineExecutionAdapter::source_margin_units(
         // The lots the restore floors to count the shortfall as TradingView's
         // money, on its ten-significant-digit ladder: a shortfall of exactly
         // two units' margin floors to two, not one below it for binary64
-        // residue (NYSE:F at slippage 1: 636 shares 21.52 short at the 10.76
-        // mark take 8 at the close, where the unrounded difference
-        // 21.519999999999527 floors to one unit and calls 4; lab tv tape
-        // tests/fixtures/margin_opposite w13-b1s-close-f 2025-06-11).
+        // residue (synthetic NYSE:F book: 600 shares 50.00 short at the 25.00
+        // mark take 8 at the close, where an unrounded difference of
+        // 49.99999999999999 floors to one unit and calls 4 instead;
+        // the margin_opposite fixtures establish the rounding rule).
         const double floor_basis = opening_basis
             ? raw_minimum
             : source_money_round(money.required - money.equity) / money.unit_margin;
@@ -18270,13 +18270,13 @@ double PineExecutionAdapter::source_margin_units(
         // above the mark, a long's sell below it -- against the equity at the
         // mark, and closes nothing when that requirement exceeds the equity by
         // a unit's margin or more. A long's sell never does, nor does a call at
-        // zero slippage. On NYSE:F at slippage 1 a short of 968 shares filled
-        // at 10.32, 9.12 short of its margin at the 10.33 print, takes no call
-        // (968 x 10.34 exceeds the equity by 18.80), and at slippage 3 one of
-        // 382 filled at 10.43, 8.77 short at 10.46, takes none either (lab tv
-        // tapes tests/fixtures/slipped_short int28fix-adm-s-s and
-        // int28fix-ou-s3; the calls int28fix-adm-s-c and -adm-l-cs take;
-        // The slipped-short margin rule).
+        // zero slippage. A synthetic NYSE:F short of 1000 shares filled
+        // at 20.00, 15.00 short at 20.01, takes no one-unit call at slippage 1:
+        // 1000 x 20.02 exceeds equity by 25.00, over one unit's margin.
+        // At slippage 3, 400 shares filled at 20.00, 10.00 short at 20.03,
+        // lack 22.00 at the 20.06 fill and also take no one-unit call.
+        // These synthetic slipped_short books illustrate the slipped-short margin rule;
+        // an otherwise similar book inside the band can take the call.
         const double slip = config_.slippage > 0
             ? config_.slippage * staged_.syminfo.mintick : 0.0;
         const bool short_book = detail::run_position(require_host()).signed_units < 0.0;
@@ -18304,9 +18304,9 @@ double PineExecutionAdapter::source_margin_units(
 // sell never binds, nor does a call at zero slippage, whose print is its mark;
 // with slippage it suppresses the calls whose deficit is below about a third
 // of the position's slippage cost: on OANDA:EURUSD at slippage 1 a short of
-// 78381.71 found 0.2437 short at the 1.13876 high would call 0.84, whose
-// 0.9566 at the 1.13877 print does not cover the 1.0275 the book lacks there,
-// so nothing is called until the next bar's high calls 33.88 (lab tv tapes
+// synthetic 50000 units found 0.10 short at a 2.00000 high would call 0.20,
+// worth 0.400002 at the 2.00001 fill, below the 0.60 the book lacks there,
+// so nothing is called until a later high needs a larger call (lab tv tapes
 // tests/fixtures/margin_call_rules short-cutoff-gate/, 67 tapes, and
 // tests/fixtures/margin_schedule_rules gate/). An opening checkpoint at a
 // fill keeps the earlier rules.
@@ -18341,9 +18341,9 @@ double PineExecutionAdapter::lagged_margin_follow_up_units(
         const std::vector<NativeOpenLot>& lots, const SourceMarginMoney& money, double called,
         double fill, std::int64_t sub_bar_open_ms) const {
     // A whole-share grid takes it too (switch whole_share_lagged_follow_up):
-    // on NYSE:F at slippage 3 and commission 0.1 % lots of 7, 29 and 700 shares
-    // 116.017 short at an open call 36 there and 8 more (lab tv tapes
-    // tests/fixtures/margin_schedule_rules follow/; NYSE:F 1D TON grid).
+    // on NYSE:F at slippage 3 and commission 0.1 %, synthetic lots of
+    // 5, 15 and 500 shares can require a follow-up after the open's call;
+    // the last still-short FIFO check sizes it (margin_schedule_rules fixtures).
     const bool whole_share = detail::margin_schedule_switches().whole_share_lagged_follow_up
         && staged_.quantity_grid && *staged_.quantity_grid == 1.0;
     if (!money.valid || !(money.required > money.equity) || !(called > internal::kQtyEpsilon)
@@ -18384,7 +18384,7 @@ double PineExecutionAdapter::lagged_margin_follow_up_units(
 // sell (slippage subtracts); reducing a short is a buy (it adds). A margin
 // call is a MARKET execution at the print it fired at, so an off-ladder print
 // (a half-cent low) books its nearest tick, as every TradingView market fill
-// at a print does -- 12.105 books 12.11, 9.815 books 9.81 (lab tv tapes
+// at a print does -- synthetic 25.005 books 25.01; 1.005 books 1.00 (lab tv tapes
 // tests/fixtures/margin_entry_bar/pm-m10-f-k4-1007, -gapup-0501, -gapup-0424
 // and, beyond margin calls, pm2-round-f-print; the intrabar margin correction). A print
 // on the ladder is its own tick (source_bar_fill_tick is idempotent there).
@@ -18637,8 +18637,8 @@ bool PineExecutionAdapter::submit_margin_call_units(
 // TradingView's realized money (switch gain_loss_money): the profit of every
 // closed trade, margin calls included, in booking order, summed into gains
 // and into losses apart; strategy.netprofit is G + L, not one running sum.
-// A long ledger of NYSE:F trades reaches 73331.99999999993 where the running
-// sum reaches 73332 and is dropped close-only at that cost (tests/fixtures/
+// A synthetic NYSE:F ledger reaches 9999.999999999998 where the running
+// sum reaches 10000 and is dropped close-only at that cost (tests/fixtures/
 // margin_ledger_rules). Folded as trades book; the state hash carries both.
 // Most asks find nothing booked since the last fold: they stop at the count,
 // inline in the per-bar callers.
@@ -18713,11 +18713,11 @@ double PineExecutionAdapter::gain_loss_signal_equity(double mark) const {
 
 // The closed part of that money, initial + (G + L), for a commission-free
 // long's one-unit call after a trade history (switch long_call_gain_loss):
-// TradingView's 27.359999999956926 of G + L money is 4.3e-11 under a 2 x 13.68
+// Synthetic G + L money of 49.99999999999999 is 7.1e-15 under a 2 x 25.00
 // cost and calls, where the running sum need not (lab tv tapes
 // tests/fixtures/margin_schedule_rules money/: histories whose sequential
-// sum, initial + sequential net and G + L sums straddle the cost of 8192
-// shares of NYSE:F at 13.68). NaN outside gain_loss_regime() -- a fee-bearing
+// sum, initial + sequential net and G + L sums can straddle the cost of 400
+// synthetic NYSE:F shares at 25.00). NaN outside gain_loss_regime() -- a fee-bearing
 // book keeps the engine's closed-trade equity, which no tape decides yet.
 double PineExecutionAdapter::gain_loss_closed_equity() const {
     if (!detail::margin_schedule_switches().long_call_gain_loss || !gain_loss_regime()) return kNaN;
@@ -18821,7 +18821,7 @@ bool PineExecutionAdapter::unified_admission_scope(
     // its tapes match (stop/stop-11-percent, -38-percent and -40-percent;
     // test_stop_entry_placement_open_qty_l4b), and no tape decides a percent
     // stop entry under the fill check (a population script's percent stops,
-    // OANDA:EURUSD cleightyp bos-sma-macd-vwap, booked other trades there).
+    // a third-party OANDA:EURUSD strategy, booked other trades there).
     if (finite_positive(source.exit_levels.stop) && !std::isfinite(source.requested_qty))
         return false;
     const bool default_all_in = !std::isfinite(source.requested_qty)
@@ -19059,12 +19059,12 @@ bool PineExecutionAdapter::slipped_long_book_scope() const {
 // ten-significant-digit money ladder, the shortfall is that against the cash
 // plus the open profit, four times its lot-floored quotient is called, and a
 // shortfall under one unit's worth calls one unit (tests/fixtures/
-// margin_call_rules: an F long of 2 filled at 13.68 with 27.359999999 of cash
-// is 1e-9 short at the 13.66 open and sells 1 at 13.64). The cash is the
+// margin_call_rules: a synthetic F long of 2 at 25.00 with 49.999999999 cash
+// is 1e-9 short at a 24.98 open and sells 1 at 24.96). The cash is the
 // closed-trade equity -- the running net profit, not the G + L money -- so
 // after a trade history a ten-digit tie can fall on either side of the cost:
 // on a population NYSE:F 15-minute strategy TradingView's G + L money,
-// 27.359999999956926, is 4.3e-11 under a 2 x 13.68 cost and calls, where a
+// illustrated by 49.99999999999999, is 7.1e-15 under 2 x 25.00 and calls, where a
 // running sum need not (reconstructed from the trade set, not replayed). The
 // money basis of the long call after a history is unpinned.
 // Out of line and cold: a narrow scope's body, kept off the per-bar
@@ -19250,8 +19250,8 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
     // ab9714be pine_fills.cpp:1929-1965: a single-entry, commission-free book
     // whose cached net profit carries tracked addition roundoff narrows the
     // 1e-7 guard to what the current evaluation and that history support, so
-    // a real 1e-7 rounding deficit fires (Q 891538.56 at 1.15798 marked at
-    // 1.15808: equity 1032472.9759999 against required money 1032472.976).
+    // a genuine 1e-7 rounding deficit fires (synthetic Q 10000 at 2.00000,
+    // mark 2.00010: equity 20000.9999999 against required money 20001.00).
     const auto* pine = pine_view_of(&require_host());
     const bool supported_guard_scope = pine
         && pine->position_entry_count_ == 1 && pine->pyramid_entries_.size() == 1
@@ -19760,10 +19760,10 @@ bool PineExecutionAdapter::whole_unit_follow_up_due(double called_units, double 
 // The runs whose margin calls TradingView follows (margin_follow_up_units):
 // slipped, with no commission or a percent one, on a whole-unit lot grid --
 // or on any lot grid under a percent commission: on OANDA:EURUSD's 0.01 lots
-// at slippage 2 and commission 0.05 % a short of 6801.42 called 0.16 at the
-// 1.15648 high, 0.1359 short re-marked at its 1.1565 fill, gives up 0.44 more
-// at the 1.15584 close (lab tv tape tests/fixtures/margin_open_print
-// taili-mop-eur, 2025-04-21 08:45 UTC; lane TAIL-I).
+// at slippage 2 and commission 0.05 %, a synthetic short's call of 0.20
+// can leave a deficit at its fill; if that deficit is 0.30 at a 2.00002
+// fill, the next-point follow-up is 4 x 0.14 = 0.56 units on that lot grid
+// (the margin_open_print fixtures establish the follow-up rule).
 bool PineExecutionAdapter::margin_follow_up_scope() const noexcept {
     if (!(config_.slippage > 0) || !staged_.quantity_grid
         || !(*staged_.quantity_grid > 0.0)) {
@@ -19784,13 +19784,13 @@ bool PineExecutionAdapter::margin_follow_up_scope() const noexcept {
 // than two slippage steps for each unit called and the exit fees of those
 // units and of one more, and the follow-up takes four times the shortfall's
 // lot floor over the fill, or one unit where that floors to none: on NYSE:F
-// at slippage 2 and commission 0.05 % a short of 979 shares filled at 10.12
-// and called 4 at 10.16 off the 10.14 open print, 11.72 short re-marked
-// there, gives up 4 more at the 10.16 high (filled 10.18), 10.02 short there,
-// then one at the 10.115 low (filled 10.14), while one of 694 called 4 at
-// 11.17 off the 11.15 high, 0.185 short re-marked there, takes none (lab tv
-// tapes tests/fixtures/margin_open_print taili-mop-f 2025-04-02 15:00 UTC and
-// taili-mop-f3 2025-07-31 16:45 UTC; lane TAIL-I). Zero where none is due.
+// at slippage 2 and commission 0.05 %, use synthetic check snapshots.
+// A re-marked deficit of 30.00 at a 25.02 fill, above the fee/slip band,
+// calls 4 x floor(30.00 / 25.02) = 4 whole shares at the next point.
+// A sub-unit restore takes the one-unit fallback if it restores the book.
+// A deficit of 0.01 below the fee/slip band takes no follow-up instead.
+// These illustrate the margin_open_print fixtures without trade records;
+// each snapshot supplies its own deficit. Zero where none is due.
 double PineExecutionAdapter::margin_follow_up_units(
         double called_units, double fill, std::int64_t sub_bar_open_ms) const {
     const auto money = source_margin_money(fill, sub_bar_open_ms);
@@ -19823,22 +19823,22 @@ double PineExecutionAdapter::margin_follow_up_units(
 // TradingView follows a margin call on a whole-unit lot grid at the bar's
 // next path point while the call did not restore the book at its own fill
 // (margin_follow_up_units) -- without a commission a one-unit call only: one
-// of four called at the 9.50 high, 0.12 short re-marked at its 9.51 fill, is
-// not followed at the 9.44 low (lab tv tape tests/fixtures/margin_opposite
-// w13-b1s-close-f 2025-04-15 14:45 UTC). That point books the follow-up where its own
+// of four called at a synthetic 25.00 high, 0.10 short at its 25.01 fill, is
+// not followed at the 24.94 low (the margin_opposite fixtures establish
+// the one-unit restriction). That point books the follow-up where its own
 // check calls nothing and its print is inside the call's fill (below it for a
 // short); a print at or beyond the fill is judged by its own check alone. A
 // follow-up so taken is followed alike, and the close is the last point a bar
 // offers. A long's call is never followed -- its sell lowers the requirement
 // with the equity -- nor is a call at zero slippage, whose fill is its mark.
-// On NYSE:F at slippage 1 a short of 352 shares filled at 9.86 and called one
-// share at 9.88 off the 9.87 open print, 0.068 short re-marked there, gives
-// up one more at the 9.855 low; one of 359 filled at 9.63 and called at 9.65,
-// 0.001 inside its margin re-marked there, takes none; and one of 396 filled
-// at 9.97 and called at 9.99 meets the 9.995 high at that fill, where its own
-// check calls the next share, followed at the 9.94 low (lab tv tapes
-// tests/fixtures/slipped_short int28fix-ou-s1 and int28fix-adm-s-cs;
-// The follow-up rule). `called_units` is the call's size, `fill` its own fill,
+// Synthetic NYSE:F snapshots at slippage 1 illustrate the three cases:
+// a one-share call at 25.00 leaving a 0.10 re-marked deficit can owe one
+// more at a later low of 24.97; a call at 26.00 leaving a 0.01 surplus
+// owes none. A call at 27.00 followed by a 27.005 high reaches a point
+// beyond that fill: its own check, rather than the owed follow-up, decides.
+// If that check calls, a later low of 26.95 may follow the new call.
+// These are independent synthetic checks of the follow-up rule in slipped_short.
+// `called_units` is the call's size, `fill` its own fill,
 // `current` the print its check point fired at.
 void PineExecutionAdapter::follow_margin_call(
         double called_units, double fill, double current,
@@ -19911,11 +19911,11 @@ bool PineExecutionAdapter::lagged_short_scope() const noexcept {
 // `taken` lists the units the call took from each lot with the lot's entry
 // price, `equity_before` is the equity at the fill before the call and
 // `held_before` the units held then. On OANDA:EURUSD at slippage 1 a short of
-// 78381.71 that calls 0.96 at the 1.13877 print of its 1.13876 high is still
-// short there with those units out and unbooked, and gives up 2.64 more at the
-// 1.13865 print of the bar's close; at slippage 0 lots of 0.5 and 60000 called
-// 0.5 + 2.98 at a high leave the first lot's check still short and give up
-// 1.48 at the close (lab tv tapes tests/fixtures/margin_call_rules
+// synthetic 50000 units can remain short after a 0.40 call at 2.00001:
+// the last still-short unbooked-lot check, not the final booked state,
+// decides the next call. At slippage 0, synthetic lots of 0.25 and 40000
+// can likewise leave the first lot's check short after that lot is removed;
+// its lot-floored restore is followed at the close (lab tv tapes tests/fixtures/margin_call_rules
 // short-cutoff-gate/cutoff-*, tests/fixtures/margin_schedule_rules lag/).
 double PineExecutionAdapter::lagged_short_follow_up_units(
         const std::vector<std::pair<double, double>>& taken, double equity_before,
@@ -19998,10 +19998,10 @@ bool PineExecutionAdapter::close_sized_open_call_scope(bool short_book, bool sev
 // `print`: money and unit margin at c', long or short (switch
 // close_sized_long_call for a long), its one-unit band and the short gate
 // priced at that print (switch close_call_gate_at_print). On OANDA:EURUSD at
-// slippage 1 a long of 60000 42.962325 short at its 1.13894 close takes 4 x
-// floor(37.721) = 150.88, where the 1.13898 open would give 150.84; on
-// NYSE:F at slippage 2 a short's one unit passes the band at the 14.35 open
-// print and fails it at the close's own print 14.37 (lab tv tapes
+// slippage 1, a synthetic deficit of 50.0005 at a 2.00000 close takes 4 x
+// floor(25.00025 / 0.01) x 0.01 = 100.00; a 2.00004 open gives 99.96. A
+// synthetic NYSE:F short at slippage 2 can pass the band at a 25.00 open
+// print and fail it at the close's own 25.02 print (lab tv tapes
 // tests/fixtures/margin_open_rules po/ and replica/).
 double PineExecutionAdapter::close_sized_open_units(
         double close_mark, double print, std::int64_t sub_bar_open_ms) const {
@@ -20060,10 +20060,10 @@ double PineExecutionAdapter::open_print_follow_up_units(
 // of the book with their P&L and exit fee unbooked, the earlier lots' booked
 // at the fill net of their exit fees, the rest re-marked there -- and the
 // last check still short is called four times its lot-floored restore at the
-// fill, with the one-unit fallback. On OANDA:EURUSD at slippage 2 longs of 20
-// and 599000.37 a close opened give up 20 + 338.96 at the next open's
-// 1.18604 print and then 279.12; lots of 12, 18 and 599000.37 give up
-// 12 + 18 + 309.08 and then 219.24, the last still-short check's (lab tv tapes
+// fill, with the one-unit fallback. Synthetic OANDA:EURUSD longs of 10
+// and 40000 units can have their initial call cross a lot boundary;
+// with lots of 5, 10 and 40000, it can cross two boundaries instead.
+// In either case the last still-short check sizes the follow-up (lab tv tapes
 // tests/fixtures/margin_open_rules lots/two-longs-one-close,
 // lots/three-longs-last-short).
 double PineExecutionAdapter::open_print_lot_follow_up_units(
@@ -20124,9 +20124,9 @@ double PineExecutionAdapter::open_print_lot_follow_up_units(
 // (open_print_follow_up_units, switch open_print_follow_up), except that a
 // short's re-check that booked owes it to the bar's first extreme (switch
 // short_point_drops_owed). On
-// OANDA:EURUSD at slippage 1 a short of 60000 1.036 short at its close gives
-// up 3.52 at the open three ticks above it, then 1.68 on the booked book at
-// the open's mark; across a weekend gap 14.08 + 12.76 (lab tv tapes
+// a synthetic OANDA:EURUSD short at slippage 1 can give up 0.20 at an open
+// three ticks above the close, then 0.12 on a still-short booked book;
+// a larger weekend gap can enlarge both calls (lab tv tapes
 // tests/fixtures/margin_open_rules po/short-booked-recheck,
 // po/short-weekend-gap). TradingView does not repeat these calls at one
 // price: on_applied's recheck_at_fill stands down while they book.
@@ -20174,12 +20174,12 @@ bool PineExecutionAdapter::run_close_sized_open_calls(
         // where it finds the book short but books nothing the open is a point
         // short itself, so the follow-up the call before it owes is dropped
         // as at a path point (execute_owed_short_follow_up). On OANDA:EURUSD
-        // at slippage 1 a short of 79764.22 1.59244 short at its 1.14753
-        // close gives up 5.52 at the 1.14757 print of an open three ticks
-        // above it; the booked book is 0.046979 short at the 1.14756 mark,
-        // its 0.16 fails the gate there (0.18 against 0.84), and TradingView
-        // books neither that 0.16 nor the 5.08 the first call would be
-        // followed by: its next call is the high's own 522.36.
+        // at slippage 1, consider an independent synthetic re-check snapshot:
+        // 50000 units 0.12 short at a 2.00003 mark would call 0.20.
+        // At the 2.00004 fill those units cover about 0.40, below the
+        // book's 0.62 deficit, so the short gate vetoes the re-check.
+        // Neither that call nor the preceding call's owed follow-up books;
+        // the next high is decided by its own check.
         const auto booked = source_margin_money(opening_mark, context.sub_bar_open_ms);
         const double again = source_margin_units(booked, false, true, print);
         if (again > 0.0) {
@@ -20224,10 +20224,10 @@ bool PineExecutionAdapter::run_close_sized_open_calls(
             // A re-check that booked owes its follow-up to the bar's first
             // extreme, where a point short itself drops it (rule 7), as the
             // open's own call does (open_call_owing_follow_up). On
-            // OANDA:EURUSD at slippage 1 a re-check of 1.44 at the 1.16944
-            // print owes 1.16 to the low, booked at its 1.16926 print; where
+            // synthetic OANDA:EURUSD at slippage 1: a re-check of 0.20 at a 2.00001
+            // print can owe 0.12 to the low, booked at 1.99981; where
             // the first extreme is a high short itself, TradingView drops the
-            // owed 2.72 and books the high's own 89.84 (lab tv tapes
+            // owed 0.24 and books the high's own 40.00 instead (lab tv tapes
             // tests/fixtures/margin_open_rules po/short-recheck-owes-low,
             // po/short-recheck-owed-dropped-high).
             if (rechecked && short_book && PF_RARE(rules.short_point_drops_owed)
@@ -20298,11 +20298,11 @@ bool PineExecutionAdapter::whole_share_lag_scope() const noexcept {
 
 // lagged_short_follow_up_units on a whole-share book, with the one-unit
 // fallback: where the last still-short check's restore floors to no lot, one
-// share is called if it restores that book at the fill. On NYSE:F at
-// slippage 2 and commission 0.05 % a short of 499 shares that gave up one at
-// the 12.40 print of a high is still short there with that share out and
-// unbooked, and gives up one more at the 12.27 print of the low; one that
-// called four at an open gives up none (lab tv tapes
+// share is called if it restores that book at the fill. Synthetic NYSE:F:
+// at full margin, 200 shares at 25.00 require 5000.00; an unbooked prior unit
+// leaves 199 at 4975.00. With adjusted equity 4965.00, the 10.00 shortfall
+// floors to zero whole units and calls one more; an eagerly booked
+// close would use another money basis (lab tv tapes
 // tests/fixtures/margin_open_rules lag/whole-share-chain,
 // replica/f-path-follow-up-0209).
 double PineExecutionAdapter::whole_share_lag_units(
@@ -20355,10 +20355,10 @@ double PineExecutionAdapter::whole_share_lag_units(
 // whose lagged follow-up is owed to the bar's first extreme rather than
 // repeated at that print (switch short_point_drops_owed, with the follow-up's
 // own scope); there it is dropped if that point's own check finds the book
-// short (execute_owed_short_follow_up). On OANDA:EURUSD at slippage 1 a short
-// of 59992.2 called 1.16 at the 1.17362 open print owes 0.64 to the high,
-// whose 1.17373 print is short itself: TradingView books the high's own 41.52
-// there, not 0.64 at the open and 38.96 (lab tv tapes
+// short (execute_owed_short_follow_up). Synthetic OANDA:EURUSD at slippage 1:
+// a short called 0.20 at a 2.00001 open print can owe 0.12 to the high.
+// If that high is short itself, its own check sizes its call,
+// instead of booking 0.12 at the open and then checking the high (lab tv tapes
 // tests/fixtures/margin_open_rules lag/owed-dropped-fractional,
 // lag/whole-share-follow-up: on a bar opening at its low one share owed
 // there books at the open's print).
@@ -20456,8 +20456,8 @@ void PineExecutionAdapter::execute_owed_short_follow_up(
     // The point's own check comes first: where it finds the book short --
     // whether its call books or is vetoed -- the owed follow-up is dropped
     // (switch short_point_drops_owed; lab tv tapes
-    // tests/fixtures/margin_open_rules lag/: NYSE:F's high 7.28 short with its
-    // unit vetoed books nothing owed, OANDA:EURUSD's high calls its own 41.52).
+    // tests/fixtures/margin_open_rules lag/: a synthetic NYSE:F high 12.00 short
+    // with its unit vetoed books nothing owed; an OANDA:EURUSD high can call 40.00).
     if (PF_RARE(detail::margin_opening_switches().short_point_drops_owed)) {
         const auto here = source_margin_money(price, context.sub_bar_open_ms);
         if (here.valid && here.required > here.equity) return;
@@ -20508,10 +20508,10 @@ void PineExecutionAdapter::hold_owed_close_follow_up(
 // close_all() buys the units the script saw and opens the excess long as its
 // own lot (flush_pending_closes, size_close_alls_at_placement), a
 // reversal entry's excess joins the entry's own lot
-// (apply_frozen_reversal_close). On OANDA:EURUSD at slippage 1 a short of
-// 18667.69 that owes 0.56 to its 1.16618 close books them at 1.16619 after
-// the script's strategy.close("S"), which then buys 18667.69: it closes
-// 18667.13 and opens 0.56 long, its entry the close order, ahead of the entry
+// (apply_frozen_reversal_close). A synthetic OANDA:EURUSD short of
+// 40000 owing 0.20 at a 2.00000 close books them at 2.00001 after
+// the script's strategy.close("S"), which then buys 40000: it closes
+// 39999.80 and opens 0.20 long, its entry the close order, ahead of the entry
 // "L" (lab tv tapes tests/fixtures/margin_open_rules lots/).
 void PineExecutionAdapter::book_owed_close_follow_up(
         const Bar& bar, const NativeDecisionContext& context) {
@@ -20586,9 +20586,9 @@ void PineExecutionAdapter::walk_short_path_points(
 // there, or the close, booked there after the script ahead of the close's own
 // check (close_point_margin_call). The book before the call is the one after
 // it with the called units back: the event's closed trades, first in first
-// out, and their exit fees (OANDA:EURUSD 15, margin 1 %: a short of fourteen
-// lots called 37606.48 at the 1.16546 high gives up 560.48 more at the 1.16542
-// close).
+// out, and their exit fees (synthetic OANDA:EURUSD 15m, margin 1 %: a short of
+// several lots can owe a follow-up at the close after a high-point call;
+// its size comes from the last still-short unbooked-lot check).
 void PineExecutionAdapter::schedule_lagged_short_follow_up(
         const native_order::ExecutionAppliedEvent& event, const NativeDecisionContext& context) {
     const auto phase = context.coordinate.path_phase;
@@ -20665,12 +20665,12 @@ void PineExecutionAdapter::schedule_lagged_short_follow_up(
 // TradingView checks margin at the first path point whose segment touches a
 // resting exit, before that exit (switch pending_veto_first). A call there
 // re-issues the exit for the reduced book, which, marketable there, fills at
-// that point's print with the exit's slippage. On NYSE:F at slippage 1 a short
-// of 515 shares 9.41 short at the 11.43 open, its unit vetoed there, with a
-// buy stop at 11.49015 resting, falls to the 11.38 low, then calls 32 at the
-// 11.52 high's 11.53 print and fills the stop's 483 there, where the stop
-// alone fills 515 at 11.51 (lab tv tapes tests/fixtures/margin_schedule_rules
-// veto/; NYSE:F 15 silver-surfer, 2026-03-20 19:45 UTC). With nothing pending
+// that point's print with the exit's slippage. Synthetic NYSE:F at slippage 1:
+// 400 shares 24.00 short at a 25.00 open, its unit vetoed there, with a
+// buy stop at 25.06015 resting, fall to 24.95, then call 16 at the
+// 25.10 high's 25.11 print and fill the stop's 384 there, where the stop
+// alone fills 400 at 25.08 (the margin_schedule_rules fixtures
+// establish the pending-veto ordering). With nothing pending
 // a touched level fills at its level first. Called only where the open's own
 // check ran on this book and called nothing.
 bool PineExecutionAdapter::pending_veto_point_first(
@@ -20932,11 +20932,11 @@ bool PineExecutionAdapter::schedule_margin_call_path(
     // short of margin -- a short filled the slippage ticks under its print is
     // still short at a low above its fill -- and so can one after it, where
     // the one-unit band's call restores the book that the extreme's own print
-    // would not: a short of 429 shares 9.44 short at the 11.63 high takes no
-    // unit there (its fill at 11.65 would leave it 18.02 short) and gives one
-    // up at the 11.615 low that follows, 0.86 short (lab tv tape
-    // tests/fixtures/margin_open_print taili-mop-f3, 2025-09-22 18:00 UTC;
-    // lane TAIL-I). The first point that calls is rested there, and the rest
+    // would not: a synthetic full-margin short of 200 shares, 22.00 short at
+    // the 25.00 high, takes no unit (a 25.02 fill leaves 26.00 short), then
+    // gives one up at the 24.99 low, 18.00 short; the same 0.02 slippage
+    // makes one unit restorative there where it was not at the high (taili-mop-f3).
+    // The first point that calls is rested there, and the rest
     // of the path is checked again on the book it leaves.
     withdraw_waypoint_margin_calls();
     if (close_point_margin_scope()) {
@@ -21215,10 +21215,10 @@ void PineExecutionAdapter::size_close_alls_at_placement(
 // the next open, where the follow-up waits behind the orders the script placed
 // at the close and is taken only where that open's print is not beyond the
 // call's fill (close_point_margin_call_at_open). A call of any size is followed
-// so: on NYSE:F at slippage 1, 4 called at 9.15 off a 9.14 close mark leave
-// 1115 shares 0.52 short at 9.15 and one more is taken at the 9.135 open,
-// behind the script's close_all (lab tv tape w13-b1s-close-f 2025-04-10; 33 of
-// its 34 close calls follow this).
+// so: a synthetic NYSE:F call at slippage 1 can leave 200 shares 0.10 short
+// at its 25.01 fill off a 25.00 close; a 24.995 next open can take one more,
+// behind the script's close_all. The follow-up is owed at the next point,
+// rather than being booked ahead of the script's queued orders.
 void PineExecutionAdapter::close_point_follow_up(
         double mark, double called_units, const NativeDecisionContext& context) {
     if (!margin_follow_up_scope()) return;
@@ -21234,12 +21234,12 @@ void PineExecutionAdapter::close_point_follow_up(
 // The next open of a close that owed a one-unit call (close_point_margin_call):
 // the book is the one that close checked, so its money is re-read at that
 // close's mark and the unit is tested at this open's fill. One the close left
-// standing executes here, ahead of the orders of that bar (TradingView exports,
-// tests/fixtures/slipped_short int28fix-adm-s-cs 2025-06-26: a short of 810
-// shares 4.95 short at the 10.62 close mark gives one up at 10.62 off the
-// 10.61 open); one the script cancelled and placed again is withdrawn here
-// when its fill would not restore the book (w13-b2-cancel-close-f
-// 2025-06-10 and 2025-06-30).
+// standing executes here, ahead of the orders of that bar (a measured TradingView run, shown with synthetic numbers; a short:
+// 100 shares, a 2.00 margin shortfall at a 25.01 close mark; buying one
+// at 25.01 off the next 25.00 open leaves 99 shares and restores margin);
+// one the script cancelled and placed again is withdrawn here
+// when its fill would not restore the book (w13-b2-cancel-close-f), rather than being forced
+// through on the strength of the close's earlier one-unit verdict.
 bool PineExecutionAdapter::close_point_margin_call_at_open(
         const Bar& bar, const Bar& prior, const NativeDecisionContext& context) {
     if (close_margin_open_bar_ == std::numeric_limits<std::int64_t>::min()) return false;
@@ -21271,9 +21271,9 @@ bool PineExecutionAdapter::close_point_margin_call_at_open(
     }
     // A one-unit call is tested at this open's fill against the money of the
     // book at that close; a follow-up is taken where this open's print is not
-    // beyond the fill of the call it follows (lab tv tape w13-b1s-close-f: six
-    // opens at or inside that fill take their unit, 2025-06-10's at 10.64 over
-    // a 10.60 fill none).
+    // beyond the fill of the call it follows (w13-b1s-close-f; synthetic short:
+    // opens at or inside a 25.00 fill take their unit; an open at 25.04
+    // takes none).
     const bool buy = position.signed_units < 0.0;
     const double fill = source_margin_fill_price(bar.open, buy);
     const double open_mark = nearest_tick(bar.open, staged_.syminfo.mintick);
@@ -21305,8 +21305,8 @@ bool PineExecutionAdapter::close_point_margin_call_at_open(
     if (!submit_margin_call_units(bar.open, context, units, true)) return false;
     // A follow-up so taken is followed alike, at this same open while the
     // book re-marked at its fill is still short by more than two slippage
-    // steps (margin_follow_up_units; lab tv tape w13-b5s-none-f 2025-06-30
-    // 14:30 UTC: two units at the 10.73 open, each filled at 10.74).
+    // steps (margin_follow_up_units; w13-b5s-none-f; synthetic next open at 25.00 with
+    // one-tick buy slippage: successive unit buys each fill at 25.01).
     for (int more = 0; more < 8 && margin_follow_up_scope(); ++more) {
         if (detail::run_position(require_host()).signed_units == 0.0) break;
         const double follow_up = margin_follow_up_units(units, fill, context.sub_bar_open_ms);
@@ -22048,7 +22048,7 @@ void PineExecutionAdapter::apply_open_market_admission(
     // exceeded the equity when it was placed is not one of them: TradingView
     // dropped it there (entry(): the same rule inside the cap), so it never
     // reverses the book back once its sibling has reversed it (the
-    // van007trader-quick-reversal-candles-dyna tapes; lane W5-ENG-MARGIN-V6).
+    // reversal-candle probe's tapes).
     const double held = detail::run_position(require_host()).signed_units;
     const auto dropped_at_placement = [&](const PlacementSnapshot& row) {
         return !foreign_live_order
@@ -23378,7 +23378,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         // and executes it at this open, re-sized at the open only when it no
         // longer covers the open's own shortfall. Every first opening call of
         // the 258 such shorts in lab tv tape
-        // officialjackofalltrades-caldera-meridian-strategy-joat (ETHUSDT.P 15,
+        // the opening-margin probe (ETHUSDT.P 15,
         // commission 0.05 %, slippage 1) follows this; marking at the open
         // alone books 118 (lab tv tapes tests/fixtures/margin_v6
         // w5-m2-pooc-short-comm; lane W5-ENG-MARGIN-V6).
@@ -23423,8 +23423,8 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         // previous close that the open does not re-size (close_margined_units:
         // it still covers the open's own shortfall) is a queued order: it
         // executes first and the exits after it (TradingView's tape of
-        // axealgo-tp-sl-toolkit-axealgo on OANDA:XAUUSD 15, 2025-06-01 22:00:
-        // the call of 1, then the gapped stop's 1.62;
+        // a third-party strategy on OANDA:XAUUSD 15m; synthetic illustration:
+        // a call of 1 unit, then the gapped stop's remaining 2 units;
         // tests/test_point_order_open_call.cpp). A call the open re-sizes is
         // the open's own check, after the exits; no tape decides that shape
         // yet. And a partial exit fills first only when what it leaves is
@@ -23464,11 +23464,11 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
             // left, re-marked at that fill, is still short
             // (margin_follow_up_units): TradingView books the follow-up at
             // the first slice's price (switch close_call_follow_up_at_open).
-            // lab tv tape tests/fixtures/margin_call_rules literals/literal-21
-            // (NYSE:F 15m, commission 0.05 %, slippage 2): a short of 758
-            // filled at 11.59 at the close gives up 4 at 11.63 off the 11.61
-            // open, then 1 more at 11.63, then 20 at the 11.68 high (11.70);
-            // followed only at the next path point, the high took 24. One
+            // Synthetic check snapshots illustrate the margin_call_rules fixtures
+            // (NYSE:F 15m, commission 0.05 %, slippage 2): an initial call
+            // at a 25.02 open fills at 25.04; if still short at that fill,
+            // its follow-up also fills at 25.04, before any high-point check.
+            // Waiting for the high instead changes that check's book. One
             // follow-up restores the book at that fill -- four times its
             // lot-floored shortfall, or one unit under one lot of it -- so
             // none follows it.
@@ -24355,8 +24355,8 @@ void PineExecutionAdapter::fill_pooc_close_exits(
     // earlier bar, one this close pass opened or reversed into (the exit
     // placed with its entry), and a from_entry "" exit, with or without
     // calc_on_order_fills. The close's tick, not the raw close, decides
-    // (NYSE:F half-cent closes, w4-f08t-pooc: a sell limit 11.467 over a raw
-    // 11.465 close fills there, a sell stop 11.447 over a raw 11.445 close
+    // (synthetic NYSE:F half-cent closes: a sell limit 25.047 over a raw
+    // 25.045 close fills there, a sell stop 25.027 over a raw 25.025 close
     // rests, on either side and in either scope). The fill books the close,
     // a stop slipped like any stop fill (w4-f08s-pooc-slip).
     const auto physical = detail::run_position(require_host());
@@ -24511,10 +24511,10 @@ void PineExecutionAdapter::fill_pooc_close_exits(
 // it, the level itself staying the raw running best +/- the offset: the
 // static stop's rule (source_trigger_threshold), now for the stop a trail
 // rides. TradingView, lab tv tape tests/fixtures/callback_lifecycle
-// carried-trail-14 (NYSE:F 15m, calc_on_order_fills off): a short trailing
-// 14 ticks behind a best of 10.345 rests at 10.485, and the 2025-05-22 17:45
-// high, the decimal 10.485 whose binary64 value lies two ULPs under that
-// level, prints 10.49 and exits there; the raw compare waited for 18:15.
+// (NYSE:F 15m, calc_on_order_fills off): a synthetic short trailing
+// 14 ticks behind a best of 20.385 rests at 20.525000000000002; a
+// high of decimal 20.525 lies one ULP below that computed
+// level, prints 20.53 and exits there; the raw compare would wait.
 // The kernel's generic Trail compares the raw path with the raw level, so
 // for one bar the adapter walks the bar's path as the kernel will (the best
 // is tested on each leg and then moved by its end), finds the point the
@@ -25018,11 +25018,11 @@ void PineExecutionAdapter::run_opening_checkpoint(
         // follow-up taken at the bar's next path point. At margins
         // of 100 the book's shortfall is the same at any mark, so
         // the print decides the call only through its divisor: a
-        // shortfall of 830.4416 is 0.535102 lots of ETH over the
-        // 1551.93 print and 0.535096 over the 1551.95 fill slipped
-        // from it, and TradingView calls 2.1404, four times the
-        // first (lab tv tape tests/fixtures/int30_compositions
-        // int30-c4-grid-pk-mkt, 2025-04-11 07:00 UTC; lane TAIL-I).
+        // synthetic shortfall of 30.005 is 1.2002 lots of ETH over the
+        // 25.00 print and 1.1992406... over the 25.02 fill slipped
+        // from it. On a 0.0001 grid, the call is 4.8008, four times the
+        // first lot floor, rather than 4.7968 from the slipped divisor
+        // (int30-c4-grid-pk-mkt; lot floor before multiplying by four).
         const bool adds_book = adds_book_last && opened_position.signed_units > 0.0;
         const double print = source_bar_fill_tick(
             fill - config_.slippage * staged_.syminfo.mintick,
@@ -25507,9 +25507,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     // order's label and ahead of the entry beside it: the nameless fills that
     // take it first in first out -- the next open's margin calls -- book it,
     // and a later strategy.close of that entry closes all of the entry's units
-    // (switch close_follow_up_after_script; OANDA:EURUSD 15 2026-04-09 05:30:
-    // strategy.close("LONG") closes 18547.61 and the entry "SHORT" opens
-    // 18606.31). No script id names it, so it has no cohort.
+    // (switch close_follow_up_after_script; synthetic OANDA:EURUSD 15m:
+    // strategy.close("LONG") closes 40000.00 and the entry "SHORT" opens
+    // 40100.00). No script id names it, so it has no cohort.
     if (PF_RARE(placement_snapshot && placement_snapshot->crosses_zero
                 && !placement_snapshot->opening)
         && (placement_snapshot->family == PineOrderFamily::Close
@@ -26465,8 +26465,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 // reuse event.resolved_price unchanged until margin is covered.
                 // TradingView repeats at one price (tests/fixtures/margin_residual
                 // px-f2b-eth-short-0/1, -eth-slip-3). Population confirmations:
-                // ETHUSDT.P 1D caldera 2026-01-21; EURUSD axealgo 2025-06-25
-                // and caldera 2025-04-22 (both OANDA).
+                // third-party ETHUSDT.P 1D and OANDA:EURUSD strategies
+                // also repeat their calls at the same slipped fill.
                 // Not the calls after one sized at the source close
                 // (run_close_sized_open_calls): those are TradingView's whole
                 // sequence at that print.
@@ -26762,10 +26762,10 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             // The open's own check runs after the market adds that fill at
             // that open, on the book holding them and their entry fees
             // (switch open_check_after_add_fill): on OANDA:EURUSD at margin
-            // 1 % a short of 500000 that adds 500000 at the 1.13796 open is
+            // 1 %, a synthetic short of 20000 adding 20000 at a 2.00000 open is
             // short of margin there only with the add and its fee, and
-            // TradingView calls 35150.6 at that open before the path's
-            // 175488.6 at the high (lab tv tapes tests/fixtures/
+            // TradingView checks the combined book at that open before the path's
+            // high-point check (lab tv tapes tests/fixtures/
             // margin_schedule_rules add-fee/, margin_open_rules add-open/).
             if (PF_RARE(detail::margin_opening_switches().open_check_after_add_fill)
                 && placed_add && !add_fill_follows && !config_.process_orders_on_close
@@ -28981,7 +28981,7 @@ bool PineExecutionAdapter::CohortFacts::spillable() const noexcept {
 }
 
 bool PineExecutionAdapter::CohortFacts::held() const noexcept {
-    // Predicate and held-walk design credited to letiep97, external PR #458.
+    // Predicate and held-walk design credited to the contributor of external PR #458.
     return !opened.empty() || !live_units_by_origin.empty();
 }
 

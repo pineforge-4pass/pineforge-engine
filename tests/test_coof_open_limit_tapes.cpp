@@ -7,7 +7,7 @@
  * the open print -- at the print, without slippage, on the entry bar -- and
  * rests one that sits short of the print at its own level for the rest of
  * that bar. The adapter judged both against the slipped entry fill and held
- * them for the next bar (finnp17-cleantradequantum on NSE:NIFTY 1D: a TP1
+ * them for the next bar (the open-limit probe on NSE:NIFTY 1D: a TP1
  * already below the open fills there on TradingView).
  *
  * The lane's own synthetic script (tests/fixtures/coof_open_limit, one `lab

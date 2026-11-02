@@ -3522,8 +3522,8 @@ def _tv_metrics_range_end(metrics: dict) -> tuple[int, str] | None:
 
     Two spellings carry it. One records the exact requested
     window as ``rangeProvenance.requestedRange.to`` (ms
-    UTC), and every campaign tape's value is 1777593600000 = 2026-05-01
-    00:00 UTC for ``"to": "2026-05-01"``; the other (ETH, AAPL 15,
+    UTC), identifying the requested date's
+    00:00 UTC boundary; the other (ETH, AAPL 15,
     EURUSD) carries only the date. They agree wherever both exist, and the
     integer is what TradingView actually saw, so it wins. None without a
     range (a hand-made metrics.json, or none)."""
@@ -3579,12 +3579,12 @@ def _tv_tape_marks_open_rows(strategy_dir: Path, meta: dict) -> bool:
     an ordinary closed trade — exit row on the last bar at its close, EMPTY
     Signal, counted in closedTrades — which is the shape the engine's
     ``open_at_end`` row emulates. The other shape (the
-    3commas grid-bot tapes among them, 22/22/28 open lots each at
-    2026-05-01 08:00 +8; metrics.json without ``tapeChannel``) writes the
+    grid-bot probes among them, with open lots at the range end;
+    metrics.json without ``tapeChannel``) writes the
     same row with Signal "Open". TV nets commission on BOTH legs of that row
-    exactly as it does on a close (3commas-xlm-grid-bot #615: qty 0.0912,
-    entry 2189.13, mark 2261.44 -> 6.3511 = TV's 6.35 = the engine's
-    6.351137), so per-lot P&L is not the difference; the difference is
+    exactly as it does on a close (synthetic XLM book: qty 0.1,
+    entry 102.61, mark 166.39, 0.1% per leg: 6.378 - 0.0269 = 6.3511
+    -> 6.35 at cents), so per-lot P&L is not the difference; the difference is
     only how the tape spells the row. Both shapes are measured the same
     way (_apply_range_end_regime); the marker is read for the run's log
     line, because the grader's pairing of the engine's marked rows
@@ -3614,53 +3614,53 @@ def _load_tv_range_end(strategy_dir: Path, meta: dict) -> tuple[int, str] | None
 
     The rule is TradingView's own, read off the reference tapes'
     ``returnedRange.to`` (the open of the last bar TV reported) against the
-    ``requestedRange.to`` = 2026-05-01 00:00 UTC every campaign tape asked
-    for, and off where each lane's open-position row sits:
+    ``requestedRange.to`` at a requested UTC midnight, denoted T here,
+    and off where each symbol's open-position row sits:
 
       BINANCE:BTCUSDT / CME_MINI:ES1! / NQ1! / OANDA:XAUUSD 15
-                             returned.to = 05-01 00:00 UTC   (== to: the bar
-                             OPENING at ``to`` is inside; 00:15 is not — on
+                             returned.to = T (== to: the bar
+                             OPENING at ``to`` is inside; T + 15m is not — on
                              CME's America/Chicago chart too, so ``to`` is
                              UTC midnight, not the chart tz's);
-      NYSE:F 1D              returned.to = 04-30 13:30 UTC   (the 05-01 13:30
-                             session bar exists on TV and is excluded);
-      CME_MINI:ES1!/NQ1! 1D  returned.to = 04-30 22:00 UTC;
-      NSE:NIFTY 15 / 1D      returned.to = 04-30 09:45 / 03:45 UTC;
-      OANDA:XAUUSD 1D        returned.to = 04-30 21:00 UTC;
-      NYSE:F 15              returned.to = 04-30 19:45 UTC;
+      NYSE:F 1D              returned.to = the last daily open before T
+                             (the next session's open is excluded);
+      CME_MINI:ES1!/NQ1! 1D  returned.to = the last daily open before T;
+      NSE:NIFTY 15 / 1D      the last intraday / daily open before T;
+      OANDA:XAUUSD 1D        the last daily open before T;
+      NYSE:F 15              the last 15-minute open before T;
 
     and every open-position row (date-only "Open" rows and unmarked rows with an
     empty Signal alike) sits on exactly that bar: BTC/ES/NQ/XAU/EURUSD 15
-    and BINANCE:ETHUSDT.P 15 at 05-01 00:00 UTC (ETH: 228 of 397 reference
-    tapes, @ 2261.44 = that bar's close), F 1D at 04-30 13:30 (@ 12.08),
-    ES/NQ 1D at 04-30 22:00, XAU 1D at 04-30 21:00, NIFTY 1D at 04-30
-    03:45, AAPL 15 at 04-30 19:45. Survey of 2026-09-02 over the campaign's
-    17 lane directories (1,356 tapes; every one ``to: 2026-05-01``).
+    and BINANCE:ETHUSDT.P 15 at T; synthetic closes of 2000.00 for ETH
+    and 25.00 for NYSE:F daily illustrate the mark, without quoting tapes.
+    ES/NQ, XAU and NIFTY daily rows likewise use their final daily bars;
+    AAPL 15 uses its final intraday bar. The survey covers
+    17 datasets (1,356 tapes sharing the same requested end).
 
     This bounds the feed the engine measures. The engine books a position
     still open after its FINAL bar as TradingView's range-end close
     (record_range_end_close_trades, engine_orders.cpp), so that final bar
-    must be TV's last bar, not the feed's: the ETH chart feed runs on to
-    2026-05-04 15:00 UTC, and unbounded the row would be booked on 05-04
-    15:00 @ 2365.09 — a different bar, ~4.6% off TV's row — and fail
+    must be TV's last bar, not the feed's: a synthetic ETH feed continuing
+    to a later session could end at 2200.00 rather than 2000.00;
+    that is a different bar and a 10% price difference, and would fail
     exit/pnl against TV's Open row (review finding on the first cut of this
     change, 2026-09-02).
 
     The bound is the RANGE end, never the tape's last trade row. A first
     cut bounded the feed at the tape's latest stamp, and the full-population
-    gate (gate-cand-range-end-close-20260902) failed hard.regression on
-    scrapper:data/standard/waranyutrkm-asian-box-breakout-eda-tuned (ETH
-    15): 110 -> 109 trades. Its last trade closes 04-29 18:00 UTC, so the
+    gate found a regression on a
+    third-party ETH 15-minute strategy: cutting at its last closed trade
+    removed a later entry. If the last close is inside a daily bar, the
     feed was cut mid-day, and the strategy gates entries on
     request.security(.., "D", close / ta.ema(close, 50), lookahead_on) —
-    under the historical lookahead projection every 04-29 chart bar reads
-    the 04-29 daily bar's FINAL value. Cut at 18:00 the partial day gave
-    d_close 2240.35 < d_ema 2241.85 and no long; the complete day (as TV
-    sees it, its range running to 05-01) gives 2251.52 > 2242.29 and TV's
-    trade 110 at 09:45. Any probe with a lookahead_on HTF projection and a
+    under the historical lookahead projection every chart bar in that day reads
+    the daily bar's FINAL value. A synthetic partial day can give
+    d_close 2000.00 < d_ema 2001.00 and no long; the complete day can
+    instead give 2010.00 > 2002.00, admitting the entry that a full
+    daily projection should see. Any probe with a lookahead_on HTF projection and a
     closed last trade inside the final HTF period is exposed the same way,
     and the four other near-range-end closed probes in that shard were
-    byte-identical either way (spark smoke-asianbox, 2026-09-02). Trades
+    byte-identical either way. Trades
     ENTERED after TV's last entry are still dropped by
     _filter_trades_to_window; the range end only decides which bars the
     strategy computes on and where a position still open at the end is
@@ -3729,10 +3729,10 @@ def _apply_range_end_regime(strategy_dir: Path, meta: dict, run_kwargs: dict) ->
     marked rows with the tape's Open rows lot for lot, gates neither exit
     nor pnl on the pair and keeps both sides out of every aggregate
     (scripts/verify_corpus.py pair_range_end_marks), so the bounded run
-    grades a marked tape the way it grades an unmarked one: the 22/22/28
-    open lots of the three 3commas grid bots pair exactly (21 of 22 xlm
-    marks agree with TV to the cent, the 22nd is a FIFO lot-size split)
-    and alexgrover / aborkan89 (one Open row each) grade 100% at every
+    grades a marked tape the way it grades an unmarked one: the
+    open lots of the grid-bot probes pair exactly (the XLM probe's
+    marks agree with TV to the cent except for a FIFO lot-size split)
+    and single-open-row probes A / B (one Open row each) grade 100% at every
     p90 = 0 (spark diag/r4, 2026-09-02).
 
     Only called with a TV tape window in use; an explicit
@@ -3792,12 +3792,12 @@ def format_trade_qty(qty: float) -> str:
 
     The previous ``f"{qty:g}"`` kept only 6 significant digits, so any
     quantity with more digits than that was silently rewritten on the way
-    out: an OANDA:EURUSD all-in lot of 923941.16 units (TV export, 0.01 lot
-    step) printed as ``923941``, 897902.68 printed as ``897903`` (rounded UP),
-    92293.36 as ``92293.4``, and anything >= 1e6 as ``1e+06``. The ledger held
+    out: a synthetic OANDA:EURUSD lot of 654321.12 units (0.01 lot
+    step) prints as ``654321``, 654321.78 as ``654322`` (rounded UP),
+    54321.12 as ``54321.1``, and 1e6 as ``1e+06``. The ledger held
     the exact value; only the CSV lied, which put a spurious 0.01-0.5 unit
     "qty miss" on 1933/2708 entries of the EURUSD all-in probe and on
-    every giua64 entry while the fills themselves were exact.
+    other third-party entries while the fills themselves were exact.
 
     Eight decimals cover every lot step in use (1 share, 0.01 unit, 0.0001
     contract, satoshi-scale 1e-8) and absorb binary noise from
@@ -3893,7 +3893,7 @@ def write_engine_trades_csv(trades: list[dict] | _SinkRows, path: Path) -> None:
 
     Excursion columns use TradingView's export convention: favorable excursion
     is a non-negative total-USD run-up, adverse excursion is emitted as a
-    NEGATIVE total-USD drawdown (TV exports e.g. -8579.36). The engine ABI's
+    NEGATIVE total-USD drawdown (synthetic example: -250.00). The engine ABI's
     `max_drawdown` stays positive — that mirrors Pine's
     `strategy.*trades.max_drawdown` accessors — so the sign flip happens only
     here, in the TV-compatible export representation.
@@ -3902,7 +3902,7 @@ def write_engine_trades_csv(trades: list[dict] | _SinkRows, path: Path) -> None:
     position still open after the final bar) is written like any other
     trade — TradingView's reference tape reports that position as an
     ordinary closed trade whose exit row is the last bar at its close with
-    an EMPTY Signal (orb-lite NYSE:F 1D — Exit short 2026-04-30 @ 12.08),
+    an EMPTY Signal (synthetic NYSE:F daily example: Exit short @ 26.00),
     so the row must look like every other exit for the verifier to pair
     it — with one addition: its exit row says so in the trailing
     ``Engine range-end`` column (ENGINE_RANGE_END_OPEN, "open"), the
@@ -4025,13 +4025,13 @@ def _tv_first_bar(strategy_dir: Path, meta: dict) -> tuple[int, str] | None:
     from no earlier bar, and records that bar's open as
     ``returnedRange.from``. Pinned by recorded reference tapes
     (tests/fixtures/run_harness_window): a script reads bar_index 0 on it
-    (rh-diag-firstbar, rh-diag-firstbar2 on BINANCE:ETHUSDT.P 15 over
-    2025-04-01 .. 2025-04-08 and .. 2026-05-01, OANDA:EURUSD / OANDA:XAUUSD /
-    CME_MINI:ES1! 15 at 00:00 UTC, NYSE:F 15 at 13:30, NSE:NIFTY 15 at
-    03:45, BINANCE:BTCUSDT 1D at 00:00, OANDA:XAUUSD 1D at 21:00 -- each
+    (diagnostic probes on BINANCE:ETHUSDT.P 15,
+    OANDA:EURUSD / OANDA:XAUUSD / CME_MINI:ES1! 15 at UTC midnight;
+    NYSE:F 15 and NSE:NIFTY 15 at their session opens;
+    BINANCE:BTCUSDT 1D and OANDA:XAUUSD 1D at their daily stamps -- each
     equal to its returnedRange.from), and a command on a bar before it never
-    runs: a stop, a limit and two market entries placed on 2025-03-31 bars
-    yield no trade (rh-prerange-stop, rh-prerange-limit, rh-prerange-fills).
+    runs: a stop, a limit and two market entries placed before the first bar
+    yield no trade (the controls exercise each order kind).
 
     None for a tape without it: the date-only reference records no returned range
     (and its deep backtest computes bars before ``from``: an entry filled
@@ -4089,11 +4089,11 @@ def _tv_entry_emit_window(feed_ts: list[int], first_entry_ms: int, last_entry_ms
     strategy.entry TradingView filled on the next session's first bar —
     every ladder candidate produced 0 trades on six single-entry tapes
     (round 7, ledger log-20260905t054904z-a9baf07e; signal bar vs the old
-    gate): jos-protrader NQ1@1D 2025-06-26 22:00Z vs 06-27 22:00Z (fill
-    06-29 22:00Z), rakesh NIFTY@1D 11-14 03:45Z vs 11-15 03:45Z, vasanth
-    F@1D 10-03 13:30Z vs 10-04 13:30Z, stockhunter2025 XAUUSD@1D 2026-01-08
-    22:00Z vs 01-09 22:00Z, heneralmomo25 XAUUSD@1D 10-30 21:00Z vs 10-31
-    22:00Z (the DST shift), ayusattv AAPL@15 04-09 19:45Z vs 04-10 13:00Z.
+    gate): third-party NQ1@1D, NIFTY@1D and NYSE:F@1D strategies
+    placed the signal on the last daily bar before a session gap.
+    OANDA:XAUUSD@1D strategies also crossed overnight breaks and a DST
+    shift. A NASDAQ:AAPL@15 strategy crossed the break from one session's
+    final 15-minute bar to the next session's first bar.
     Walking the feed the engine is actually fed (after the probe's
     ohlcv_start_ms / range-end bounds) handles every gap shape by
     construction, no calendar arithmetic; on a gapless feed the preceding

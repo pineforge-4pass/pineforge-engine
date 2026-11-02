@@ -334,7 +334,7 @@ static void test_label() {
     CHECK(pf_label_get_text(a, l) == "world");
     CHECK(pf_label_get_text(a, cp) == "changed");
 
-    // na.new(na,na,na) -> LIVE record with na coords (jevondijefferson pattern).
+    // na.new(na,na,na) -> LIVE record with na coords (the breakout probe's pattern).
     Label na_label = pf_label_new(a, na<int64_t>(), na<double>(), "");
     CHECK(!is_na(na_label));
     CHECK(is_na(pf_label_get_x(a, na_label)));

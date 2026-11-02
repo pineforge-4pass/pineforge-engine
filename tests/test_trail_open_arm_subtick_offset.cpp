@@ -308,7 +308,7 @@ void test_subtick_offset_gapped_open_arms_and_rides() {
 void test_whole_tick_offsets_keep_floored_trailing_distance() {
     std::printf("test_whole_tick_offsets_keep_floored_trailing_distance\n");
     // Guard against over-reach: 1.0 and 1.4 ticks both floor to ONE tick
-    // (the nils123456-orb / legalrice rule) and keep trailing the running
+    // (the opening-range and trailing-offset probes' rule) and keep trailing the running
     // extreme: armed at the low 1.08314, filled at 1.08315 on the L->H leg.
     Bar eur = mk(1.08330, 1.08350, 1.08314, 1.08320);
     const double offsets[] = {1.0, 1.4};
@@ -327,11 +327,11 @@ void test_whole_tick_offsets_keep_floored_trailing_distance() {
 
 void test_subtick_offset_arms_from_the_carried_best() {
     std::printf("test_subtick_offset_arms_from_the_carried_best\n");
-    // The #148 pin (test_zero_offset_trail_arms_from_the_carried_best,
-    // boztilkiserhan 14:15 bar) extended to a sub-tick offset. With the best
-    // family Z actually carries (the issuing close 1475.99 < activation
-    // 1500.98) the trail is dormant, the bar opens BELOW the activation and
-    // never crosses it -> HOLD, as TV does.
+    // The carried-best pin (test_zero_offset_trail_arms_from_the_carried_best,
+    // on a later bar) extended to a sub-tick offset. In a synthetic example,
+    // the issuing close 25.00 is below activation 26.00; with the best
+    // still below that level, the trail is dormant, the bar opens BELOW it
+    // and never crosses it -> HOLD. Assertions below keep the original inputs.
     Bar serhan_hold = mk(1475.99, 1491.82, 1475.89, 1486.23);
     const double offsets[] = {0.0, 0.5, 0.9};
     for (double off : offsets) {
@@ -341,12 +341,12 @@ void test_subtick_offset_arms_from_the_carried_best() {
                                            /*mintick=*/0.01);
         CHECK(f.filled == false);
     }
-    // A carried best past the activation ARMS every zero-tick offset (round
-    // 10 family AC: the product trusts the best the placement point hands
-    // it; the command layer's restart keeps the #148 peak out): the open
-    // through the level 1501.03 is the open print. Two already-armed legs
+    // A carried best past the activation ARMS every zero-tick offset (the
+    // product trusts the best the placement point hands it; the command
+    // layer's restart keeps the old peak out): synthetic best 26.05 with
+    // an open at 25.00 books that open print. Two already-armed legs
     // stand at that carried best -- the generic Trail, whose running best
-    // lane E14 seeds there, and the sibling kernel STOP the adapter rests
+    // starts there, and the sibling kernel STOP the adapter rests
     // for the touch the zero-distance ride cannot take -- and the gapping
     // open is strictly past the best, so the Trail books it first. Either
     // way it is the open print, a point price and not a level.

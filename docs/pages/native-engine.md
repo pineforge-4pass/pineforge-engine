@@ -1864,7 +1864,7 @@ P9 left one ruling open, and lane E5 settled it with TradingView's own tapes
 `tests/test_offset_trail_quantized_arm.cpp`): a trail WITH a trailing offset
 arms on the tick-quantized path exactly like the one-shot. On NYSE:F 15m, six
 trades whose bar's raw extreme stops inside the activation's tick cell
-(9.415, 13.041, 12.641 lows; 11.899, 13.049, 13.419 highs) exit on that bar at
+(synthetic lows 25.041 / 26.041 / 27.041; highs 25.049 / 26.049 / 27.049) exit on that bar at
 activation -/+ the offset; on the on-grid ETH feed a sub-tick activation is
 never rounded onto the fill. The adapter therefore arms the generic `Trail`
 at the half-tick threshold its one-shot leg rests at and books from a running
@@ -1876,10 +1876,10 @@ Lane E9 closed the two findings E5 left
 (the private fixture set `trail_activation_tick_reach`, replayed by
 the private test `test_trail_activation_tick_reach`). A one-shot with a sub-tick
 `trail_price` books the tick the quantized path reaches — its resting half-tick
-level rounded away from the position (ETH fill 2550.85, level 2550.854,
-@2550.86) — where the adapter had booked the snap toward it, which the kernel's
+level rounded away from the position (synthetic ETH fill 25.00, level 25.004,
+@25.01) — where the adapter had booked the snap toward it, which the kernel's
 limit-or-better check rightly refused (`InvalidTerms`). And a placement close
-inside the activation's tick cell (NYSE:F 11.295 under 11.30) has reached the
+inside the activation's tick cell (synthetic NYSE:F 25.005 under 25.01) has reached the
 activation: 8 of 8 trades exit on the next bar, `trail_offset` 1 and 0 alike,
 so P9's carried-best row (9.996 under 10.00) now asserts the fill @9.98, with
 its `expectation corrected:` note. Both stay adapter policy; the kernel is

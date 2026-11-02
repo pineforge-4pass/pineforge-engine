@@ -51,7 +51,7 @@ bool& ema_na_warmup_flag();
 // slots are skipped, and the result is na iff ``bar_index < length - 1`` — NOT
 // until ``length`` executions have accumulated. Pinned 2026-09-03 with
 // ``lab tv`` on NYSE:F 1D (``if bar_index % 7 == 3: v = ta.highest(high, 5)``
-// 39/39 entry sizes exact, cadence 9 30/30; production: colasbreugnon-sma
+// 39/39 entry sizes exact, cadence 9 30/30; a third-party SMA strategy on
 // F@1D 31/31 only with K = 6). ``ta.sma`` inside ``if`` is NOT ring-addressed
 // (per-execution buffer, pinned separately) and is untouched.
 //
@@ -77,13 +77,13 @@ bool& ema_na_warmup_flag();
 // ``(best, b - k_best)``; otherwise the cache is kept. The output is the
 // cached value (the *Bars offset is ``b - bar``). Pinned 2026-09-04 with 8
 // ``lab tv`` tapes on NYSE:F 1D (696/696 entries), the BINANCE:ETHUSDT.P
-// geometry pin (82/82) and the jayentriken BBWP ETH replay (593/593):
+// geometry pin (82/82) and a third-party BBWP ETH replay (593/593):
 // ``m = bar_index % 49; if m < 4 or 37 <= m < 47 or m == 48: v =
-// ta.lowest(low, 10)`` answers 9.88 (cached from bar 42) on bars 48..51
-// although bar 3's stale 9.20 sits one slot behind bar 48 — the plain ring
-// would say 9.20 — and rescans to 9.20 on bar 52 once the cache has aged;
-// on ETH the run-start bar 4990 (low 2648.62 < the expired cache 2650.47)
-// answers its own low and never reads the aliased 08:15 slot the plain ring
+// ta.lowest(low, 10)`` can answer synthetic 25.00 from bar 42 on bars 48..51
+// although bar 3's stale 24.00 sits one slot behind bar 48 — the plain ring
+// would say 24.00 — and rescans to 24.00 on bar 52 once the cache has aged;
+// a synthetic ETH run-start low of 2000.00 below an expired cache of 2010.00
+// answers its own low and never reads the aliased slot the plain ring
 // returned. For an every-bar caller the cache is exactly the positional
 // window, so nothing changes there.
 //
@@ -100,15 +100,15 @@ bool& ema_na_warmup_flag();
 // 0 slots among them included) and na when the newest slot is itself na; the
 // na write also poisons the cache to ``(na, b)``, so the next valid call
 // restarts from its own src without reading the slots. ``ta.lowest(
-// sma(close, 14), 10)`` at cadence 13 answers na (bar 5 writes na), 2998
+// sma(close, 14), 10)`` at cadence 13 can answer na (bar 5 writes na), then 2000
 // (bar 18: restart on src, the never-written slot behind it unread), 0, 0,
-// 0, 0 (rescans: never-written slots newer than the na slot), 3357.6 (bar
-// 83: the na slot re-entered at k = 1, src is the only live member), 3327.4
-// (new minimum), 2998, 2998, 2998, 2998 (the stale first valid write, once
-// newer than the na slot), 3112. Every-bar ``x = bar_index % 4 == 0 ? na :
+// 0, 0 (rescans: never-written slots newer than the na slot), 2200 (bar
+// 83: the na slot re-entered at k = 1, src is the only live member), 2100
+// (new minimum), 2000, 2000, 2000, 2000 (the stale first valid write, once
+// newer than the na slot), 2050. Every-bar ``x = bar_index % 4 == 0 ? na :
 // low``: ``ta.lowest(x, 5) == ta.highest(x, 5)`` on the bar after every na
 // bar — a single live member — where the old "skip the gap" reading kept
-// the pre-gap extremum (bar 9: TV 9.20, the untouched cache 8.44).
+// the pre-gap extremum (synthetic bar 9: 25.00, the untouched cache 24.00).
 struct BarContext {
     bool installed = false;
     long long bar_index = 0;   // ring address: the context's current bar index

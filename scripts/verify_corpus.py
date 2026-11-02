@@ -572,10 +572,10 @@ def pair_range_end_marks(
 
     A date-only TradingView tape prints a position still open at the range's end as a
     trade whose exit row is Signal "Open", priced at the range end's last
-    close and netted of commission on both legs, to the cent (3commas-xlm
-    #615: qty 0.0912, entry 2189.13, mark 2261.44 -> 6.3511, TV 6.35). The
+    close and netted of commission on both legs, to the cent (synthetic XLM qty 0.1,
+    entry 102.61, mark 166.39, 0.1% per leg: 6.378 - 0.0269 = 6.3511 -> 6.35). The
     engine, fed to TradingView's range end, books the same lot as its
-    range-end close (open_at_end) — 6.351137 for that lot — and marks the
+    range-end close (open_at_end) — 6.3511 in that illustration — and marks the
     exit row in ENGINE_RANGE_END_COLUMN. The two rows are one lot marked
     twice, so they are paired here, lot for lot, by the alignment every
     other trade gets (:func:`align_by_time`: same direction, entry within
@@ -587,9 +587,9 @@ def pair_range_end_marks(
     counts on both sides, it covers, its entry is gated like any other —
     whose exit and P&L are compared nowhere that is gated. The engine's
     P&L is exact and TradingView's is rounded to cents, and on a grid bot
-    with 22 open lots that rounding, summed into the schedule aggregate
+    with open lots that rounding, summed into the schedule aggregate
     that scores pnlP90 on such probes, moved the metric by itself (round
-    3, 2026-09-02: 0.5536 -> 0.6675 on 3commas-xlm). So the pairs leave
+    3, 2026-09-02: 0.5536 -> 0.6675 on the XLM grid probe). So the pairs leave
     both raw lists before consolidation, alignment, the trim window, the
     schedule path and every report-only percentile, and their P&L
     agreement is reported at TradingView's own precision instead

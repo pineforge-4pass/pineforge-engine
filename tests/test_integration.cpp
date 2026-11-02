@@ -1092,7 +1092,7 @@ public:
 // broker rounds the tick count up before applying — engine previously kept
 // the raw float and let round_to_mintick(round-half-to-nearest) settle the
 // fill. That biased the activation 1 tick toward entry on ~40% of
-// community/scalping-strategy trades. Regression for the ceil rule.
+// the scalping probe's trades. Regression for the ceil rule.
 static void test_trail_points_activation_ceils_to_mintick() {
     std::printf("test_trail_points_activation_ceils_to_mintick\n");
 
@@ -2656,7 +2656,7 @@ static void test_position_reversal_state() {
     // during bar 4; the flat state and realized +15 become visible on
     // bar 5. (Close fills moved to the end-of-bar order-processing point
     // by the same-bar multi-close single-fill batch — validated against
-    // the 3commas grid-bot TV exports, xau 10.8%->81.2% / xlm
+    // the grid-bot probes' TV exports, xau 10.8%->81.2% / xlm
     // 22.4%->99.0% matched with pol/xrp held at 100%.)
     CHECK(near(strat.pos_size[4], -1.0));
     CHECK(near(strat.pos_avg[4], 110.0));
@@ -2674,7 +2674,7 @@ static void test_position_reversal_state() {
 // surviving fill — the LAST nonzero-target call wins, its id-ledger is NOT
 // consumed by the fill (the remainder stays closable by a later close of the
 // same id). The first replaced call's unreserved logical slot is consumed;
-// intermediate replaced calls keep theirs. Empirically derived from 3commas
+// intermediate replaced calls keep theirs. Empirically derived from grid-bot probes
 // (xau/xlm/pol/xrp) — see fix/same-bar-multi-close-single-fill.
 
 class SameBarMultiCloseStrategy : public pineforge::source::PineStrategyHost {
@@ -5960,7 +5960,7 @@ static void test_strategy_close_pooc_fifo_only_closes_requested_leg_size() {
 // leaves TWO physical lots carrying it, while only ONE is logically unclosed.
 // strategy.close(id) must close ONE slot (the logical/unclosed quantity), not
 // the physical sum of both lots — otherwise it over-closes 2x (the bug this
-// guards). Mirrors the 3Commas grid-bot corpus strategies.
+// guards). Mirrors the grid-bot probes.
 static void test_strategy_close_reused_id_closes_one_logical_slot() {
     std::printf("test_strategy_close_reused_id_closes_one_logical_slot\n");
 

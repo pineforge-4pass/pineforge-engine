@@ -6,23 +6,23 @@
  * rounding.cpp) extended to the trail's arming — while the trail's running
  * best (peak / trough) stays the raw print (round 5; stopround-xt-L-trail).
  *
- * Pinned with three `lab tv` tapes on NYSE:F 15m, 2025-04-10..18, fixed 100
- * shares (scratchpad/r7/pins/f15-trail-0415-{reissue,fixed760,fixed754};
- * campaign note log-20260905t084531z-57cedc55): a short entered at the
- * 04-15 14:45Z open (9.495 -> 9.49) with
+ * Pinned with three `lab tv` tapes on NYSE:F 15m; synthetic prices below
+ * illustrate the same fixed-quantity rule without quoting their records.
+ * Consider a short entered at a 15-minute bar's
+ * open (8.065 -> 8.06) with
  *   strategy.exit("XS", "S", trail_points = close * 0.008 / syminfo.mintick,
  *                 trail_offset = 0)            re-issued every bar, or
- *   trail_points = 7.60 / 7.54 fixed           (all ceil to 8 ticks),
- * exits on the 15:45Z bar @9.41 in EVERY tape. Activation = 9.49 - 0.08 =
- * 9.41; the 15:45Z bar (O 9.43 H 9.45 L 9.415 C 9.445) has a raw low of
- * 9.415 — above the level, the engine's no-activate, which slid the exit to
- * the 16:45Z bar (low 9.41) — and a tick-quantized low of 9.41 (9.415 is
- * 9.41499.. in binary: floor(941.499 + 0.5) = 941), which reaches it; with
+ *   trail_points = 6.60 / 6.54 fixed           (all ceil to 7 ticks),
+ * exits at the activation on the same bar. Activation = 8.06 - 0.07 =
+ * 7.99; a bar (O 8.01 H 8.02 L 7.994 C 8.005) has a raw low of
+ * 7.994 — above the level, so a raw-only test delays the exit until
+ * a later bar's low reaches 7.99 — and a tick-quantized low of 7.99:
+ * floor(799.4 + 0.5) = 799, which reaches the activation; with
  * offset 0 the trail exits one-shot at the level. Re-issuing trail_points
  * from the current close is irrelevant (the fixed tapes are identical).
  *
- * The bars are the registry feed's (lab bars NYSE:F 15, feed 80f404ae85ef),
- * UTC-stamped; tape times are UTC+8 evenings of the same day.
+ * The fixture inputs below retain their original bar ordering;
+ * the numerical illustration above is synthetic and independent of them.
  *
  * R5 lane P9: the one-bar rows below used to call the TradingView exit-path
  * resolver (`resolve_exit_path_fill`, a tests-only copy since lane N10).
@@ -77,7 +77,7 @@ namespace {
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr int64_t kQuarter = 15 * 60 * 1000;
-// 2025-04-15 14:30:00Z
+// The fixture's first bar timestamp.
 constexpr int64_t k0415_1430Z = 1744727400000LL;
 
 Bar mk(double o, double h, double l, double c, int64_t ts = 0) {
@@ -87,7 +87,7 @@ Bar mk(double o, double h, double l, double c, int64_t ts = 0) {
     return b;
 }
 
-// NYSE:F 15m, 2025-04-15 14:30Z .. 16:45Z (10 bars), registry feed prints.
+// NYSE:F 15-minute fixture input; the illustration above uses synthetic prices.
 std::vector<Bar> f15_0415() {
     std::vector<Bar> bars = {
         mk(9.51, 9.525, 9.46, 9.5),        // 14:30  signal bar
@@ -271,7 +271,7 @@ void test_product_activation_is_reached_on_the_tick_path() {
 // arm_price), and H -> C falls through the stop. expectation corrected: no
 // fill -> fill @9.98 on this bar, because lane E5's `lab tv` tapes
 // (tests/fixtures/offset_trail_arm, test_offset_trail_quantized_arm: NYSE:F
-// lows 9.415 / 13.041 / 12.641 and highs 11.899 / 13.049 / 13.419 against
+// synthetic lows 25.041 / 26.041 and highs 25.049 / 26.049 against
 // activations one tick past them, trail_offset 1) exit on the bar whose
 // QUANTIZED extreme reaches the activation, 6 of 6, at activation -/+ offset:
 // the P9 open question is settled against the raw arm. The booked price is
@@ -318,9 +318,9 @@ void test_product_offset_trail_arms_on_the_tick_path() {
 // that only falls (O 9.99 H 9.99 L 9.96 C 9.97) crosses its stop. expectation
 // corrected: no fill -> fill @9.98 on this bar, because lane E9's `lab tv`
 // tapes (tests/fixtures/trail_activation_tick_reach,
-// test_trail_activation_tick_reach: NYSE:F placement closes 11.295 / 11.575 /
-// 13.055 / 14.135 / 13.705 / 13.385 / 11.565 half a tick under the
-// activations their ticks equal, a short's 14.415 over 14.41) exit on the next
+// test_trail_activation_tick_reach: synthetic NYSE:F closes 25.005 / 25.015 /
+// 25.025 / 25.045 / 25.055 / 25.065 / 25.075 half a tick under the
+// activations their ticks equal, a short's 35.035 over 35.03) exit on the next
 // bar, 8 of 8, trail_offset 1 and 0 alike, at activation -/+ the offset. The
 // kernel Trail is armed at placement with its running best seeded at the
 // carried level (lane E14), so its own stop is 10.00 - 0.02 = 9.98, crossed

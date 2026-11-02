@@ -564,9 +564,9 @@ void test_request_security_helper_ta_uses_security_local_state() {
 // FIRST intrabar of each calling bar there); under lookahead_off TV merges
 // the LAST intrabar, so every finer-period completion must publish
 // unchanged. Regression coverage for both sides:
-//   - gated lookahead_off broke masayanfx-multi-time-score-strategy
+//   - gated lookahead_off broke the multi-timeframe scoring probe
 //     (ta.highest(high,20)[1], lookahead_off, "5" on 15m): 100.0% -> 93.7%
-//   - ungated lookahead_on broke 3commas triple-RSI DCA
+//   - ungated lookahead_on broke the triple-RSI DCA probe
 //     (ta.rsi(close,7)[1], lookahead_on, "5" on 15m): 100.0% -> 50.5%
 class FinerTfPublishGateHarness : public pineforge::source::PineStrategyHost {
 public:

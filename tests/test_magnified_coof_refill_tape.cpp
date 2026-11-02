@@ -10,7 +10,7 @@
  * bar's last path point -- its close print -- the next fill point is the next
  * bar's opening, and R is live from that open. The engine applied the chart
  * path's leg-end rule (lane W8D-NOTRADES) only off the magnified path and
- * filled R at once at its own level on the exit's leg (the bystry1991
+ * filled R at once at its own level on the exit's leg (the magnified
  * EMA200 regime BOS/CHoCH FVG strategy on CME_MINI:ES1! 15, which declares
  * the magnifier).
  *

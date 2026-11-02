@@ -13,12 +13,12 @@
  *   grid), trail_offset 1. On the bar TradingView exits on, the raw extreme
  *   stops inside the activation's tick cell and only its tick-quantized value
  *   reaches the activation:
- *     e5-f-short-arm-qlow   lows 9.415 / 13.041 / 12.641 -> activations
- *                           9.41 / 13.04 / 12.64: exits @9.42 / 13.05 / 12.65
- *     e5-f-long-arm-qhigh   highs 11.899 / 13.049 / 13.419 -> 11.90 / 13.05 /
- *                           13.42: exits @11.89 / 13.04 / 13.41
+ *     synthetic short lows 25.041 / 26.041 / 27.041 -> activations
+ *                           25.04 / 26.04 / 27.04: exits @25.05 / 26.05 / 27.05
+ *     synthetic long highs 25.049 / 26.049 / 27.049 -> 25.05 / 26.05 /
+ *                           27.05: exits @25.04 / 26.04 / 27.04
  *   6 of 6 exit on that bar, so the arm is tested on the QUANTIZED path, like
- *   the one-shot's (e5-f-*-oneshot-*, trail_offset 0: the same six bars, at
+ *   the one-shot's (the controls, trail_offset 0: the same six bars, at
  *   the activation, the rule test_trail_activation_tick_bar pins). Every
  *   booked exit is activation -/+ one tick although the raw extreme sits
  *   inside the cell: the running best starts at the activation.

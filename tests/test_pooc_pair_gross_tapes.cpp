@@ -7,7 +7,7 @@
  * shape. The adapter's gross decline (apply_terminal_explicit_market_policy)
  * held only under calc_on_order_fills, without slippage and without
  * commission; under process_orders_on_close alone, or with costs, the later
- * call became a full reversal (officialjackofalltrades-helios on OANDA:EURUSD
+ * call became a full reversal (a third-party strategy on OANDA:EURUSD
  * 1D: slippage 1, a 0.01 % commission, two engine-only reversals).
  *
  * The lane's own synthetic scripts (tests/fixtures/pooc_pair_gross, one `lab

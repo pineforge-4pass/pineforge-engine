@@ -42,7 +42,7 @@ namespace pineforge {
 //     with c reset (block 63 of both tapes drops an 18-unit / 182-unit
 //     residue to exactly 1.1 there; block 69 reads (0.7 + 0.3) + 0.7000000000000001
 //     = 1.7000000000000002, the oldest-first order gives 1.7);
-//   * round 9 (family W, jayentriken stochRSI on six lanes) generalised that
+//   * round 9 (family W, stochRSI probe A on six charts) generalised that
 //     trigger on a full-coverage NYSE:F@15 oracle (pineforge-workflow
 //     famw-f15-kdhi-*: 7,035 bars of math.sum(stoch, 3), k, math.sum(k, 3),
 //     d, every value exported as its exact double): the re-sum fires whenever
@@ -54,7 +54,7 @@ namespace pineforge {
 //     every k vs d sign / ta.crossover event on the lane (round 7: 24 signs,
 //     12 events wrong). The re-summed bar stores its raw source as its ring
 //     addend (c is 0 after the re-sum);
-//   * round 10 (family W, stage 2: onuriano macd-stoch-rsi on NYSE:F@15, whose
+//   * round 10 (family W, stage 2: stochRSI probe B on NYSE:F@15, whose
 //     d = sma(k, 3) sits on residue-only plateaus |k| ~ 1e-15 ~ |c|) closed
 //     that pin: the quantity TradingView tests is src + |c|, the compensation's
 //     MAGNITUDE added to the source -- fire iff |fl(x + |c|) - x| < |c|. On
@@ -63,14 +63,14 @@ namespace pineforge {
 //     |c| of a power of two, and on negative sources the two forms differ and
 //     TradingView follows x + |c| (its decision flips under negation of the
 //     series because x + |c| is not odd in x). Pinned on 21,509 labelled
-//     decisions: the two NYSE:F@15 stochRSI oracles (jayentriken ta.stoch and
-//     onuriano literal stoch: math.sum(stoch, 3) 7,018/7,018 and math.sum(k, 3)
+//     decisions: the two NYSE:F@15 stochRSI oracles (probe A's ta.stoch and
+//     probe B's literal stoch: math.sum(stoch, 3) 7,018/7,018 and math.sum(k, 3)
 //     7,016/7,016 each, bit-exact), the stdev sums 7,029/7,029 x2, and 1,003
 //     literal-replay decisions (pineforge-workflow r9-famW-5, lab tv w5-scan*:
 //     dense +-40 ulp neighbourhoods, sign mirrors, binade straddles, window
 //     lengths 3 and 5).
 //
-// The stochRSI consequence (round-7 family D, jayentriken): k = sma(stoch, 3)
+// The stochRSI consequence (round-7 family D, probe A): k = sma(stoch, 3)
 // and d = sma(k, 3) sit on ALGEBRAIC ties whenever stoch plateaus; TradingView
 // resolves each tie by this arithmetic's residue and ta.crossover fires on its
 // exact sign. The previous exact-order window re-sum (round 6) kept every such

@@ -10,7 +10,7 @@
  * Regression coverage for the SHORT-seed default-FIFO close collision under
  * frozen PERCENT_OF_EQUITY / CASH default sizing (finding 272).
  *
- * TV rule (25/25 exact on the alpha-forge-liquidity-matrix-v2 tape): with a
+ * TV rule (25/25 exact on the liquidity-matrix probe's tape): with a
  * SHORT seed of qty S entered on an earlier bar and the exact same-bar book
  *   entry(Long); entry(Short); close(Long)[no-op]; close(Short)[frozen S]
  * all filling at the next open P, TV emits: (1) the old short S exits via
