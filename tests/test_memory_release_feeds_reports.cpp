@@ -831,21 +831,22 @@ void live_trade_scratch(const char* row) {
 
 struct HashHost final : SourceFixture {
     std::size_t calculations = 0, positive = 0, changed = 0;
+    HashHost() {
+        source::StrategyOverrides overrides;
+        overrides.process_orders_on_close = 1;
+        set_strategy_override(overrides);
+    }
     void on_source_bar(const Bar&) override {
         const auto index = calculations++;
-        if (index == 0) {
+        // The empty-id close takes the adapter's ordinary POOC CloseAll
+        // freeze path before flattening. Refill the same physical lots so
+        // later callbacks observe both the retained snapshot and the book.
+        if (index == 1) strategy_close("");
+        if (index < 2) {
             strategy_entry("B", true, missing, missing, 2.0);
             strategy_entry("A", true, missing, missing, 1.0);
             return;
         }
-        // PineScheduler::freeze_script_position_view fills this map; opening
-        // lots alone does not fill it. Freeze the real filled B=2, A=1 book
-        // through PineStrategyHost::freeze_script_position_view before sampling: its
-        // persistent snapshot allocations are input ownership, not the local
-        // hash copy's lifetime. The expected fold below remains A=1, B=2.
-        // This is fixture setup, not a warm-up call to the hash helper: its
-        // very first measured nonempty copy must still release all storage.
-        freeze_script_position_view();
         auto& scheduler = this->*access(SchedulerMember{});
         const auto& map = scheduler.language().*access(FrozenEntries{});
         const auto a = map.find("A"), b = map.find("B");
@@ -873,7 +874,7 @@ void reachable_hash_component(const char* row) {
     std::array<std::size_t, 2> retained{};
     std::size_t trial = 0;
     for (const std::size_t calls : {16U, 64U}) {
-        const auto bars = flat_tape(calls + 1);
+        const auto bars = flat_tape(calls + 2);
         HashHost host;
         host.set_broker_state_hash_recording(true);
         host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
