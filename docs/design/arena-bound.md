@@ -226,7 +226,7 @@ The producer must be trusted build tooling, never user-supplied assertions.
 The compiler owner must additionally bind imported library closures, the
 target/compiler profile and any external request/environment identity not
 already in the resolved plan. **That producer and external provenance
-integration remain RETURN TO CORE-TOP.**
+integration remain with the maintainers for a decision.**
 
 ## Compiler facts the bound needs
 
@@ -340,8 +340,8 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | --- | --- | --- |
 | Equity writer / selected hold-back / SpillCurve | 24*E | `pf_equity_point_t` size assertion `include/pineforge/metrics_stream.hpp:16`; `src/report_scratch.cpp:238` |
 | Position tail | (30+L)*T | `src/source/pine_position_tail.hpp:20`; footer packing at `src/source/pine_position_tail.cpp:94` |
-| Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `include/pineforge/detail/disk_id_table.hpp:109`; `CohortFacts::Record` at `include/pineforge/source/pine_adapter.hpp:2059-2062` |
-| Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:6773-6774`; `include/pineforge/detail/disk_id_table.hpp:109` |
+| Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `Links` at `include/pineforge/detail/disk_id_table.hpp:165-182`, `end_` at `:348`; `CohortFacts::Record` at `include/pineforge/source/pine_adapter.hpp:2059-2062` |
+| Entry-rank AVL | (60+L)*J + 1[J>0] | `exit_rank_keys_` at `src/source/pine_adapter.cpp:6773-6774`; `Links` at `include/pineforge/detail/disk_id_table.hpp:165-182`, `end_` at `:348` |
 | Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:960`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:69` |
 | Erased minima index | indexPeak(D+Q) | 16-byte slot at `include/pineforge/detail/id_pair_store.hpp:69`; replacement at `:642` |
 | Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2834`; joined key at `src/source/pine_adapter.cpp:25477` |
@@ -716,8 +716,8 @@ Slab allocation failure or unrepresentable optional geometry bypasses
 without refusing a valid backing read. No I/O-time allocation is needed.
 Charge K (prose ledger; scripts/arena_bound.py has no K input) alongside existing workspaces/inner backings, replacing the old read-cache allowance; K changes no arena-storage formula or certification.
 
-CORE-TOP's A5-WIDER brief reports a **44.4–46.2 MB pre-flat-port resident
-constant**, referring to Q2 at 15:43. That is a historical measurement,
+The maintainers' wider A5 note reports a **44.4–46.2 MB pre-flat-port resident
+constant**, citing an earlier note. That is a historical measurement,
 not a source-derived upper bound for this merged tree or arbitrary
 compiled strategy state. No P_as measurement was supplied. The calculator
 therefore installs neither value by default. A supplied historical RSS
@@ -966,7 +966,7 @@ The full mode enumerates every source-marked validation directory plus
 every parity-baseline probe, uses the same manifest reader before each
 run, and drives the canonical run_strategy CLI. Missing proofs are printed
 and cause incomplete proof coverage to fail. The
-`RETURN TO CORE-TOP: no corpus probe has a certified FACTS record` guard is
+`RETURN TO MAINTAINERS: no corpus probe has a certified FACTS record` guard is
 retained: this lab harness must not pass without any certified arena to
 compare with actual usage. It is a certification failure, not a production
 admission or sizing decision. Production still uses the default attempt-0

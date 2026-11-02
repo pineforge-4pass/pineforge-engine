@@ -98,11 +98,11 @@ For each source-marked probe:
 The source inventory is deliberately not a complete Pine type/dataflow
 analyzer. No trusted general finite-proof producer currently exists in
 this engine tree. Completing that compiler/lowering integration and
-reading the pinned sources is **RETURN TO CORE-TOP**, not an authorization
+reading the pinned sources is **pending a maintainer decision**, not an authorization
 to invent a census number.
 
 The hard failure
-`RETURN TO CORE-TOP: no corpus probe has a certified FACTS record` is
+`RETURN TO MAINTAINERS: no corpus probe has a certified FACTS record` is
 retained in `corpus_run`. It guards a lab proof that compares actual arena
 usage to a certified value. Passing without any certified run would claim
 evidence that does not exist. This guard does not implement production

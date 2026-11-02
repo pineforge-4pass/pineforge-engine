@@ -38,15 +38,18 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+from parity_paths import resolve_paths
+
 # THIS FILE IS THE CANONICAL PARITY RUBRIC (single source of truth).
 # pineforge-utils/validator/validate.py and any other comparator must track
 # THESE thresholds/semantics, not the other way around.
 # Two profiles available:
 #  - STRICT: tight on all four dims (indicator-style strategies whose exits
 #    land on deterministic OHLC levels).
-#  - PRODUCTION: relaxes exit (5x) and per-trade pnl (~100x) to absorb TV's
-#    broker-emulator sub-bar fill drift. Auto-applied when strategy.pine uses
-#    any trail_* parameter on strategy.exit.
+#  - PRODUCTION: keeps count and entry at the strict limits, relaxes exit to
+#    0.02% and keeps per-strategy P&L at 1.0% to absorb trail fill drift.
+#    Auto-applied when strategy.pine uses any trail_* parameter on
+#    strategy.exit.
 STRICT_COUNT_DELTA = 0.01      # 1.0%
 STRICT_ENTRY_DELTA = 0.0001    # 0.01%
 STRICT_EXIT_DELTA  = 0.0001    # 0.01%
@@ -54,8 +57,8 @@ STRICT_PNL_DELTA   = 0.01      # 1.0%
 
 PRODUCTION_COUNT_DELTA = 0.01    # 1.0%   — same as strict
 PRODUCTION_ENTRY_DELTA = 0.0001  # 0.01%  — entries must stay tight
-PRODUCTION_EXIT_DELTA  = 0.0005  # 0.05%  — exits absorb sub-bar broker drift
-PRODUCTION_PNL_DELTA   = 1.0     # 100%   — gate only catastrophic divergence
+PRODUCTION_EXIT_DELTA  = 0.0002  # 0.02%  — exits absorb trail fill drift
+PRODUCTION_PNL_DELTA   = 0.01    # 1.0%   — same P&L limit as strict
 
 STRONG_COUNT_DELTA = 0.06
 STRONG_ENTRY_DELTA = 0.001
@@ -277,10 +280,12 @@ class TradePair:
     # physical multiplicity at a TV-proven collision key.
     entry_identity: str = ""
     # Report-only fields (compared but NOT gated — see the field-coverage
-    # disclosure). pnl_pct is in percent. mfe/mae are TOTAL USD excursions
-    # ((price diff) * qty, summed over pyramid entries) in TV's export
-    # convention: mfe (favorable) >= 0, mae (adverse) <= 0.
-    pnl_pct: float = 0.0
+    # disclosure). pnl_pct is in percent, or None when the export carries no
+    # percent for the trade: a missing percent is "not observed", never 0.0,
+    # and the report-only delta skips a pair with a None side. mfe/mae are
+    # TOTAL USD excursions ((price diff) * qty, summed over pyramid entries)
+    # in TV's export convention: mfe (favorable) >= 0, mae (adverse) <= 0.
+    pnl_pct: float | None = None
     mfe: float = 0.0
     mae: float = 0.0
     # The exit leg is a mark of a position still open at the range's end,
@@ -434,6 +439,22 @@ def _is_open_mark(value) -> bool:
     return str(value or "").strip().lower() == "open"
 
 
+# A trade's percent return, in percent: TradingView's export names the column
+# "Return %"; the engine's CSV (and older exports) spell it "Net PnL %" /
+# "Net P&L %". A blank or absent cell is None, never 0.0 — a percent the
+# tape does not carry is not observed, and a 0.0 would be compared as if it
+# were. An explicit "0" or "0.00" is observed and stays 0.0.
+PNL_PCT_COLUMNS = ("Net P&L %", "Net PnL %", "Return %")
+
+
+def _pnl_pct_cell(row: dict) -> float | None:
+    for name in PNL_PCT_COLUMNS:
+        cell = row.get(name)
+        if cell is not None and cell.strip():
+            return float(cell)
+    return None
+
+
 def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
     by_num: dict[int, dict] = {}
     # TradingView exports include a UTF-8 BOM; utf-8-sig strips it.
@@ -478,9 +499,7 @@ def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
                 return None
             pnl = float(_ccy_col(row, "Net P&L", "Net PnL") or 0.0)
             # Report-only fields (TV vs engine column spellings differ).
-            pnl_pct = float(
-                row.get("Net P&L %") or row.get("Net PnL %") or 0.0
-            )
+            pnl_pct = _pnl_pct_cell(row)
             mfe = float(_ccy_col(row, "Favorable excursion") or row.get("MFE") or 0.0)
             # TV exports adverse excursion as a NEGATIVE USD value; current
             # engine CSVs use the same name + convention. Legacy engine CSVs
@@ -495,7 +514,10 @@ def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
             r["direction"] = direction
             r["qty"] = qty
             r["pnl"] = pnl
-            r["pnl_pct"] = pnl_pct
+            # A blank percent on one row of a trade must not erase the one
+            # its other row carries: the last percent observed wins.
+            if pnl_pct is not None or "pnl_pct" not in r:
+                r["pnl_pct"] = pnl_pct
             r["mfe"] = mfe
             r["mae"] = mae
             if kind.startswith("Entry"):
@@ -531,7 +553,7 @@ def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
             trade_num=n,
             entry_signal=r.get("entry_signal", ""),
             entry_identity=r.get("entry_identity", ""),
-            pnl_pct=r.get("pnl_pct", 0.0),
+            pnl_pct=r.get("pnl_pct"),
             mfe=r.get("mfe", 0.0),
             mae=r.get("mae", 0.0),
             open_mark=bool(r.get("open_mark", False)),
@@ -874,6 +896,10 @@ def consolidate_fragments(
             # average exit price, settled at the final close time.
             exit_price = sum(m.exit_price * m.qty for m in members) / denom
             exit_time = max(m.exit_time for m in members)
+        # One fragment without a percent leaves the merged deal's percent
+        # not observed: the average of the others would not be the deal's.
+        pnl_pct = (None if any(m.pnl_pct is None for m in members)
+                   else sum(m.pnl_pct * m.qty for m in members) / denom)
         out.append(TradePair(
             direction=rep.direction,
             entry_time=rep.entry_time,
@@ -885,7 +911,7 @@ def consolidate_fragments(
             trade_num=min(m.trade_num for m in members),
             entry_signal=rep.entry_signal,
             entry_identity=rep.entry_identity,
-            pnl_pct=sum(m.pnl_pct * m.qty for m in members) / denom,
+            pnl_pct=pnl_pct,
             mfe=sum(m.mfe for m in members),
             mae=sum(m.mae for m in members),
         ))
@@ -1325,7 +1351,11 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     # below: the engine's exact P&L rounded to cents against TV's cents.
     qty_deltas    = ([relative_max(t.qty, e.qty) for t, e in gating_matched]
                      + [relative_max(t.qty, e.qty) for t, e in gate_marks])
-    pnlpct_deltas = [abs(t.pnl_pct - e.pnl_pct) for t, e in gating_matched]  # pct-points
+    # A pair whose percent is missing on either side (None: the export does
+    # not carry it) is not observed, so it is skipped rather than compared.
+    pnlpct_deltas = [abs(t.pnl_pct - e.pnl_pct)  # pct-points
+                     for t, e in gating_matched
+                     if t.pnl_pct is not None and e.pnl_pct is not None]
     open_mark_pnl_misses = [abs(round(e.pnl, 2) - t.pnl) for t, e in mark_pairs]
     open_mark_pnl_cent_exact = sum(
         1 for miss in open_mark_pnl_misses if miss < TV_PNL_ROUNDING_EPSILON_USD)
@@ -1583,6 +1613,12 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("strategy_dir", nargs="?", help="Single strategy folder, e.g. corpus/basic/greedy")
+    ap.add_argument("--corpus-root", type=Path, default=None,
+                    help="Mounted corpus root (default: checkout corpus/).")
+    ap.add_argument("--derived-workspace", type=Path, default=None,
+                    help="Derived-feed workspace (accepted for bundle-wide CLI parity).")
+    ap.add_argument("--harness-dir", type=Path, default=None,
+                    help="Installed harness directory (accepted for bundle-wide CLI parity).")
     ap.add_argument("--all", action="store_true",
                     help="Verify all reference-tier strategies (basic/, community/, validation/). "
                          "parity-anomalies/ is excluded unless --include-anomalies is given.")
@@ -1598,8 +1634,10 @@ def main() -> int:
     ap.add_argument("--quiet", action="store_true", help="Print only summary")
     args = ap.parse_args()
 
-    repo_root = Path(__file__).resolve().parent.parent
-    corpus_root = repo_root / "corpus"
+    paths = resolve_paths(corpus_root=args.corpus_root,
+                          derived_workspace=args.derived_workspace,
+                          harness_dir=args.harness_dir)
+    corpus_root = paths.corpus_root
 
     if args.strategy_dir:
         label = verify_one(Path(args.strategy_dir).resolve(),
@@ -1615,6 +1653,12 @@ def main() -> int:
             cats = ["basic", "community", "validation"]
             if args.include_anomalies:
                 cats.append("parity-anomalies")
+        if not corpus_root.is_dir():
+            print(
+                f"error: corpus root is missing or not a directory: {corpus_root}",
+                file=sys.stderr,
+            )
+            return 1
         n_total = 0
         counts = {k: 0 for k in ("excellent", "strong", "moderate", "weak",
                                   "minimal", "anomaly", "engine_only", "missing")}
@@ -1642,6 +1686,13 @@ def main() -> int:
                 # (declared via inputs.json::expected_tier) — not failures.
                 if label not in {"excellent", "strong", "anomaly", "engine_only"}:
                     n_fail.append(f"{cat}/{strat.name}")
+        if n_total == 0:
+            print(
+                f"error: refused corpus root {corpus_root}: "
+                "zero strategies discovered",
+                file=sys.stderr,
+            )
+            return 1
         print()
         print(
             "Verified "

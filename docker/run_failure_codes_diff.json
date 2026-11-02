@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "7322ccb43b60d127e640ab68c992b99d84c5c0bd8c3464486aff31b6c68677b8"
+    "catalogSha256": "803c8cf11d7d058facf32e55df114bb3143bc52d8482b89376d87eee1b352c30"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -54,6 +54,43 @@
             "outputs: the event queue is full",
             "outputs: the row count is at its limit",
             "outputs: the series count is at its limit"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "scratch_capacity_exceeded",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.resource.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "layout",
+            "sequence_data",
+            "sequence_index",
+            "erased_data",
+            "erased_index",
+            "consumed_data",
+            "consumed_index",
+            "cohort",
+            "exit_rank",
+            "successor_roots"
+          ],
+          "after": [
+            "layout",
+            "sequence_data",
+            "sequence_index",
+            "erased_data",
+            "erased_index",
+            "consumed_data",
+            "consumed_index",
+            "cohort",
+            "exit_rank",
+            "successor_roots",
+            "cohort_ids_total",
+            "cohort_orders_live"
           ]
         }
       ]

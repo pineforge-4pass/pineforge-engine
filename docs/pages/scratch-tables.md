@@ -241,7 +241,15 @@ and HPO drivers are in other repositories; their integration is **planned**.
 
 Capacity resources are `layout`, `sequence_data`, `sequence_index`,
 `erased_data`, `erased_index`, `consumed_data`, `consumed_index`, `cohort`,
-`exit_rank`, and `successor_roots`. q names remain in the wire vocabulary.
+`exit_rank`, `successor_roots`, `cohort_ids_total`, and `cohort_orders_live`.
+q names remain in the wire vocabulary. `cohort_ids_total` identifies the
+historical distinct-ID count or aggregate ID-byte budget (`U/B_U`, default
+65,536 IDs / 4,194,304 bytes); `cohort_orders_live` identifies the separate
+4,096 live-order-ID cap. `cohort` remains for the 64-byte single-ID refusal,
+generic cohort-region capacity and the generic store's live-object cap.
+Only failure labels change; message text, limit values and refusal order
+are unchanged. The slab region and `report_sink_failed`'s `store=cohort`
+retain their existing identities.
 The implemented bounded-memory checks cover the entire operation's count and
 byte workset before its first semantic mutation, with no grow/rehash/fallback.
 Physical allocator failure stays `out_of_memory`; it is not relabeled as a

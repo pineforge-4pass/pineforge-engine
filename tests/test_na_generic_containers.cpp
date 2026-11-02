@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -141,6 +142,21 @@ struct PlainObject {
 struct NumericView {
     double number;
     operator double() const { return number; }
+};
+
+// Only a NON-const conversion: called on a non-const lvalue it binds exactly to
+// the generic template unless the `T&` clause in na.hpp keeps it away, which
+// would then answer false instead of isnan(double(x)).
+struct MutableView {
+    double number;
+    operator double() { return number; }
+};
+
+// Converts implicitly to const std::string& (the shape of the engine's
+// SessionKey), without being a std::string.
+struct StringLike {
+    std::string text;
+    operator const std::string&() const { return text; }
 };
 
 template <class Handle>
@@ -273,6 +289,12 @@ void check_scalars() {
     const double numbers[] = {std::numeric_limits<double>::quiet_NaN(), 0.0};
     for (const auto number : numbers)
         check_value("numeric_view_conversion", NumericView{number}, std::isnan(number));
+    // The non-const conversion is called on a NON-const lvalue (a const object
+    // could not convert at all): the answer is the old isnan(double) one.
+    for (const auto number : numbers) {
+        MutableView view{number};
+        check("mutable_view_conversion", pineforge::is_na(view) == std::isnan(number));
+    }
 
     if constexpr (HasEngineIsNa<double>::value)
         check("na_double", std::isnan(pineforge::na<double>()));
@@ -319,6 +341,12 @@ int main() {
     check_value("string_nonempty", std::string{"item"}, false);
     check_value("string_blank", std::string{" "}, false);
     check_value("string_na_roundtrip", pineforge::na<std::string>(), true);
+    // A type that converts to const std::string& is read through the string
+    // rule, not answered "present" by the generic template. String views are
+    // not std::string and are never na.
+    check_value("string_like_empty", StringLike{std::string{}}, true);
+    check_value("string_like_nonempty", StringLike{std::string{"item"}}, false);
+    check_value("string_view_never_na", std::string_view{}, false);
     check_present_value("script_string_empty", ScriptString{});
     check_present_value("map_empty", std::map<std::string, double>{});
     check_present_value("map_nonempty", std::map<std::string, double>{

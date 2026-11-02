@@ -30,11 +30,17 @@ import os
 import tempfile
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-SOURCE_1M = REPO_ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_1m.csv"
-DERIVED_DIR = REPO_ROOT / "corpus" / "data" / "derived"
+from parity_paths import resolve_paths
+
+
+_DEFAULT_PATHS = resolve_paths()
+REPO_ROOT = _DEFAULT_PATHS.repo_root
+SOURCE_1M = (_DEFAULT_PATHS.corpus_root / "data"
+             / "ohlcv_ETH-USDT-USDT_1m.csv")
+DERIVED_DIR = _DEFAULT_PATHS.derived_workspace
 DERIVED_15M = DERIVED_DIR / "ohlcv_ETH-USDT-USDT_15m.csv"
-DERIVED_15M_WINDOW = DERIVED_DIR / "ohlcv_ETH-USDT-USDT_15m_window.csv"
+DERIVED_15M_WINDOW = (
+    DERIVED_DIR / "ohlcv_ETH-USDT-USDT_15m_window.csv")
 DERIVATION_STAMP = DERIVED_DIR / ".derive_corpus_feeds.version"
 
 # Bump whenever the materialization semantics change. This invalidates
@@ -162,29 +168,48 @@ def _write_atomic(path: Path, text: str) -> None:
             pass
 
 
-def ensure_derived(verbose: bool = False) -> None:
+def ensure_derived(verbose: bool = False, *, corpus_root=None,
+                   derived_workspace=None) -> None:
     """Create/refresh the derived feeds. Cheap no-op when up to date."""
-    if not SOURCE_1M.exists():
+    if corpus_root is None and derived_workspace is None:
+        paths = _DEFAULT_PATHS
+        source_1m = SOURCE_1M
+        derived_dir = DERIVED_DIR
+        derived_15m = DERIVED_15M
+        derived_15m_window = DERIVED_15M_WINDOW
+        derivation_stamp = DERIVATION_STAMP
+    else:
+        paths = resolve_paths(corpus_root=corpus_root,
+                              derived_workspace=derived_workspace)
+        source_1m = (paths.corpus_root / "data"
+                     / "ohlcv_ETH-USDT-USDT_1m.csv")
+        derived_dir = paths.derived_workspace
+        derived_15m = derived_dir / "ohlcv_ETH-USDT-USDT_15m.csv"
+        derived_15m_window = (
+            derived_dir / "ohlcv_ETH-USDT-USDT_15m_window.csv")
+        derivation_stamp = derived_dir / ".derive_corpus_feeds.version"
+
+    if not source_1m.exists():
         raise FileNotFoundError(
-            f"{SOURCE_1M} missing — is the corpus submodule checked out "
+            f"{source_1m} missing — is the corpus submodule checked out "
             "with git-lfs installed? (file should be ~176 MB, not a "
             "small LFS pointer)")
-    if SOURCE_1M.stat().st_size < 1_000_000:
+    if source_1m.stat().st_size < 1_000_000:
         raise RuntimeError(
-            f"{SOURCE_1M} is suspiciously small — likely an unsmudged "
+            f"{source_1m} is suspiciously small — likely an unsmudged "
             "Git LFS pointer. Run: git lfs install && git lfs pull "
             "(inside the corpus submodule).")
-    outputs = (DERIVED_15M, DERIVED_15M_WINDOW)
-    if _derived_cache_is_fresh(SOURCE_1M, outputs, DERIVATION_STAMP):
+    outputs = (derived_15m, derived_15m_window)
+    if _derived_cache_is_fresh(source_1m, outputs, derivation_stamp):
         return
 
     if verbose:
-        print(f"[derive] resampling {SOURCE_1M.name} -> 15m ...")
-    with SOURCE_1M.open() as fh:
+        print(f"[derive] resampling {source_1m.name} -> 15m ...")
+    with source_1m.open() as fh:
         next(fh)  # header
         buckets = _resample_15m(fh)
 
-    DERIVED_DIR.mkdir(parents=True, exist_ok=True)
+    derived_dir.mkdir(parents=True, exist_ok=True)
     full_lines = [HEADER]
     window_lines = [HEADER]
     for bucket in buckets:
@@ -193,15 +218,30 @@ def ensure_derived(verbose: bool = False) -> None:
         ts = bucket[0]
         if WINDOW_START_MS <= ts <= WINDOW_END_MS:
             window_lines.append(row)
-    for path, lines in ((DERIVED_15M, full_lines),
-                        (DERIVED_15M_WINDOW, window_lines)):
+    for path, lines in ((derived_15m, full_lines),
+                        (derived_15m_window, window_lines)):
         _write_atomic(path, "\n".join(lines) + "\n")
         if verbose:
-            print(f"[derive] wrote {path.relative_to(REPO_ROOT)} "
+            try:
+                display_path = path.relative_to(paths.repo_root)
+            except ValueError:
+                display_path = path
+            print(f"[derive] wrote {display_path} "
                   f"({len(lines) - 1} bars)")
     # Publish the cache version only after both feed replacements succeed.
-    _write_atomic(DERIVATION_STAMP, DERIVATION_CACHE_VERSION + "\n")
+    _write_atomic(derivation_stamp, DERIVATION_CACHE_VERSION + "\n")
 
 
 if __name__ == "__main__":
-    ensure_derived(verbose=True)
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--corpus-root", type=Path, default=None,
+                    help="Mounted corpus root (default: checkout corpus/).")
+    ap.add_argument("--derived-workspace", type=Path, default=None,
+                    help="Writable derived-feed workspace.")
+    ap.add_argument("--harness-dir", type=Path, default=None,
+                    help="Installed harness directory (accepted for bundle-wide CLI parity).")
+    args = ap.parse_args()
+    ensure_derived(verbose=True, corpus_root=args.corpus_root,
+                   derived_workspace=args.derived_workspace)

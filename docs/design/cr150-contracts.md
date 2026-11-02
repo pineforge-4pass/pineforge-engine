@@ -27,17 +27,17 @@ the pinned coordinate basis here remains explicit.
 The freeze adds declarations, value-type defaults and the provider's approved
 defaulted virtual destructor. Existing execution paths, feature probes,
 versions and caller-visible layouts stay unchanged. Operation definitions
-and lab proof belong to CORE-TOP and the implementation lanes. Nothing is
-built, compiled or tested on the P00 machine.
+and lab proof belong to the maintainers and implementers. Nothing is
+built, compiled or tested on the declaration-only authoring machine.
 
 ## Sink ABI and line writer
 
 | File / declaration | DESIGN / amendment authority | Implementing lane |
 |---|---|---|
 | `include/pineforge/report_sink.h`: `pf_report_sink_v1` | 6:1283-1289,1307-1309 | L6b-1 |
-| `pf_report_sink_fd_v1` and `strategy_set_report_sink_fd_v1(pf_strategy_t,const pf_report_sink_fd_v1*)` | CORE-TOP CX-SINK-B1/B2 inherited-fd amendment, 10-20 | L22a |
+| `pf_report_sink_fd_v1` and `strategy_set_report_sink_fd_v1(pf_strategy_t,const pf_report_sink_fd_v1*)` | Maintainers' inherited-fd amendment, 10-20 | Report-sink fd implementers |
 | `pf_report_sink_receipt_v1` and its layout assertions | 6:1291-1298,1305-1306 | L6b-1 |
-| `pf_report_sink_summary_v1` and `strategy_report_sink_summary_v1(pf_strategy_t,pf_report_sink_summary_v1*)` | CORE-TOP CX-SINK-B5a ordered T-summary amendment, 10-20; [layout and lifecycle](../pages/abi-stability.md#report-sink-summary-receipt) | L22q |
+| `pf_report_sink_summary_v1` and `strategy_report_sink_summary_v1(pf_strategy_t,pf_report_sink_summary_v1*)` | Maintainers' ordered T-summary amendment, 10-20; [layout and lifecycle](../pages/abi-stability.md#report-sink-summary-receipt) | Report-sink summary implementers |
 | `pf_report_sink_version(void)` | 6:1300 | L6b-1 |
 | `strategy_set_report_sink_v1(pf_strategy_t,const pf_report_sink_v1*)` | 6:1301,1307-1317 | L6b-1 |
 | `strategy_report_sink_receipt_v1(pf_strategy_t,pf_report_sink_receipt_v1*)` | 6:1302; 3.7:791-793; amendment S1 | L6b-1 |
@@ -54,13 +54,13 @@ built, compiled or tested on the P00 machine.
 `report_sink.h` follows the additive runtime-header pattern used by
 `execution_observer.h`. `scripts/check_c_abi_runtime.py` currently names
 `pineforge.h`, `execution_observer.h`, `selected_window.h` in `RUNTIME_HEADERS`.
-P00 adds no definitions, so it leaves that inventory and its counts intact.
+This phase adds no definitions, so it leaves that inventory and its counts intact.
 L6b-1 must enroll `report_sink.h`, the three definitions and their counts
 together, and add `PINEFORGE_HAS_REPORT_SINK_V1` only with runtime support
 (DESIGN 6:1268-1271,1333-1338). There is no transitive include from an existing
-header in P00. O/V/K/X/H operations remain L6b-3's extension.
+header in this phase. O/V/K/X/H operations remain L6b-3's extension.
 
-CORE-TOP's CX-SINK-B1/B2 amendment supersedes DESIGN 3.11's path-only
+The maintainers' inherited-fd amendment supersedes DESIGN 3.11's path-only
 statement for jailed children. `LineWriter` also accepts a borrowed
 `pf_report_sink_fd_v1`, with no path or scratch directory; both modes share
 the canonical v1 builder and receipt. The fd route retries sequential writes
@@ -68,7 +68,7 @@ and waits on back-pressure without growing its buffer. It never closes the
 caller's fd or changes SIGPIPE handling. The trusted finalizer owns file
 creation. See the [fd ABI contract](../pages/abi-stability.md).
 
-CX-SINK-B5a adds a separate 64-byte, 8-byte-aligned summary receipt without
+The T-summary amendment adds a separate 64-byte, 8-byte-aligned summary receipt without
 changing the 144-byte trailer receipt. Report-only sealed-prefix folds and
 a copy folded over the resident/presented suffix preserve the Python T-fold
 bits, strict win/loss counts, first zero sign and first nonfinite T-field
@@ -95,7 +95,7 @@ state hashes; completion is published with the successful trailer.
 The total-count versus resident-window distinction and closedtrades.*
 retention exception are binding doc contracts (3.4:613-620,690-711).
 `set_trade_history_streamable` and its feature probe remain the engine/codegen
-lanes' work; P00 neither advertises them nor changes `trades_`.
+lanes' work; this phase neither advertises them nor changes `trades_`.
 
 References and iterators invalidate as a `std::vector`'s (amendment T1).
 
@@ -246,19 +246,19 @@ metadata, validation and continuation identity remain the existing contract.
 | ID | Status | Contract / remaining gap | Owner |
 |---|---|---|---|
 | S1 | RESOLVED | Amendment S1: caller sets struct_size and version; 0 with the receipt filled; -1 with *out unchanged for a bad handle, struct_size or version. No sink installed: 0, counts 0, sha256_hex "", complete 0. | L6b-1 |
-| S2 | OPEN | Internal writer error transport, oversized-line/unsafe-integer failure details, and what a repeated fill/capture does after a trailer; DESIGN requires repeatable metric reads but gives no writer reset/idempotence contract (3.3:550-551; 3.7:790,881-888). | CORE-TOP / L6a/L6b-1 |
+| S2 | OPEN | Internal writer error transport, oversized-line/unsafe-integer failure details, and what a repeated fill/capture does after a trailer; DESIGN requires repeatable metric reads but gives no writer reset/idempotence contract (3.3:550-551; 3.7:790,881-888). | Maintainers / line-writer and sink implementers |
 | T1 | RESOLVED | Amendment T1: clear() resets size/base to 0; reserve(size_type) is a hint; both at(size_type global) forms throw engine_invariant below base() or at/after size(); empty() const means size() == 0. References and iterators invalidate as a std::vector's. | L8a |
-| M1 | OPEN | Point-source malformed-region/bounds/short-read error transport and concurrent-reader rules are not specified; the 24-byte binary points, 64 KiB pread window and repeated forward walks ARE fixed (3.3:535-546; 3.8:902-909). | CORE-TOP / L6b-4/L7c |
-| V1 | RESOLVED | CORE-TOP 19:24 amendment: consumer pending-only staging, active query, indexed nullable slots, explicit accessor and context validation/digest overloads, as amended by required changes 1-5 and 8-9. | L15a/L15b |
-| V2 | RESOLVED | CORE-TOP 19:24 amendment: four-operation virtual provider with nonthrowing visitor, const read context, cached count, overlapping/repeated segments, separate look-ahead and exclusive consumer ownership; eager configure component digests propagate failures (changes 1-2,4,6-9). | L15a/L16 |
+| M1 | OPEN | Point-source malformed-region/bounds/short-read error transport and concurrent-reader rules are not specified; the 24-byte binary points, 64 KiB pread window and repeated forward walks ARE fixed (3.3:535-546; 3.8:902-909). | Maintainers / scratch-curve and point-source implementers |
+| V1 | RESOLVED | The later design amendment: consumer pending-only staging, active query, indexed nullable slots, explicit accessor and context validation/digest overloads, as amended by required changes 1-5 and 8-9. | Bar-view and feed-view implementers |
+| V2 | RESOLVED | The later design amendment: four-operation virtual provider with nonthrowing visitor, const read context, cached count, overlapping/repeated segments, separate look-ahead and exclusive consumer ownership; eager configure component digests propagate failures (changes 1-2,4,6-9). | Bar-view and path-provider implementers |
 
 S1's model is the observation query, `strategy_execution_observation_v1`
 `include/pineforge/execution_observer.h:144-151`.
 
 ## Lab handoff
 
-CORE-TOP runs the headers' compile proof, `scripts/check_c_abi_runtime.py`,
-and `scripts/check_native_cpp_versions.py` on the lab queue. P00 supplies no
+The maintainers run the headers' compile proof, `scripts/check_c_abi_runtime.py`,
+and `scripts/check_native_cpp_versions.py` on the lab queue. Declaration work supplies no
 local test or guard verdict. Repository-wide unit/corpus and merge-gate proof
 remain required before integration is declared verified.
 

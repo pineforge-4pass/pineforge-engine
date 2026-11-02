@@ -84,18 +84,69 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from parity_paths import (
+    CORPUS_ENV,
+    DERIVED_ENV,
+    HARNESS_ENV,
+    resolve_paths,
+)
+
+
+_PARITY_PATHS = resolve_paths()
+REPO_ROOT = _PARITY_PATHS.repo_root
+HARNESS_DIR = _PARITY_PATHS.harness_dir
 # The corpus ships a single committed feed (full-history 1m, Git LFS);
 # the 15m chart feeds are derived from it locally. main() calls
 # ensure_derived() only for a run that reads a derived feed
 # (_reads_derived_feed): importing this module stays side-effect free for
 # consumers that only want the ABI mirrors, and a run on its own feed
 # (every benchmark slot) needs no corpus checkout.
+import derive_corpus_feeds as _derive_corpus_feeds  # noqa: E402
 from derive_corpus_feeds import (  # noqa: E402
     DERIVED_15M, DERIVED_15M_WINDOW, DERIVED_DIR, ensure_derived)
 REFERENCE_OHLCV = DERIVED_15M_WINDOW
 WARMUP_OHLCV = DERIVED_15M
 DEFAULT_OHLCV = WARMUP_OHLCV
+
+
+def _apply_parity_paths(paths) -> None:
+    global _PARITY_PATHS, REPO_ROOT, HARNESS_DIR
+    global DERIVED_DIR, DERIVED_15M, DERIVED_15M_WINDOW
+    global REFERENCE_OHLCV, WARMUP_OHLCV, DEFAULT_OHLCV
+
+    _PARITY_PATHS = paths
+    REPO_ROOT = paths.repo_root
+    HARNESS_DIR = paths.harness_dir
+    DERIVED_DIR = paths.derived_workspace
+    DERIVED_15M = DERIVED_DIR / "ohlcv_ETH-USDT-USDT_15m.csv"
+    DERIVED_15M_WINDOW = (
+        DERIVED_DIR / "ohlcv_ETH-USDT-USDT_15m_window.csv")
+    REFERENCE_OHLCV = DERIVED_15M_WINDOW
+    WARMUP_OHLCV = DERIVED_15M
+    DEFAULT_OHLCV = WARMUP_OHLCV
+    _derive_corpus_feeds.REPO_ROOT = paths.repo_root
+    _derive_corpus_feeds.SOURCE_1M = (
+        paths.corpus_root / "data" / "ohlcv_ETH-USDT-USDT_1m.csv")
+    _derive_corpus_feeds.DERIVED_DIR = DERIVED_DIR
+    _derive_corpus_feeds.DERIVED_15M = DERIVED_15M
+    _derive_corpus_feeds.DERIVED_15M_WINDOW = DERIVED_15M_WINDOW
+    _derive_corpus_feeds.DERIVATION_STAMP = (
+        DERIVED_DIR / ".derive_corpus_feeds.version")
+
+
+def _ensure_derived() -> None:
+    ensure_derived()
+
+
+def _path_selection_requested(args) -> bool:
+    return (
+        args.corpus_root is not None
+        or args.derived_workspace is not None
+        or args.harness_dir is not None
+        or any(os.environ.get(name)
+               for name in (CORPUS_ENV, DERIVED_ENV, HARNESS_ENV))
+    )
+
 
 # Keys in inputs.json that are validator/harness metadata, not Pine input()
 # values. Mirrors the canonical validator's VALIDATION_INPUT_META_KEYS so
@@ -2006,9 +2057,14 @@ REPORT_SINK_ENV = "PINEFORGE_REPORT_SINK"
 KEEP_REPORT_SINK_ENV = "PINEFORGE_KEEP_REPORT_SINK"
 
 
-def _new_harness_report_sink(lib, state):
+def _new_harness_report_sink(lib, state, *, harness_dir=None):
     """Reuse run_json's v1 bindings, temporary owner and receipt verification."""
-    docker_dir = str(REPO_ROOT / "docker")
+    selected_harness = resolve_paths(harness_dir=(
+        HARNESS_DIR if harness_dir is None else harness_dir)).harness_dir
+    if not selected_harness.is_dir():
+        raise RuntimeError(
+            f"report sink harness directory not found: {selected_harness}")
+    docker_dir = str(selected_harness)
     if docker_dir not in sys.path:
         sys.path.insert(0, docker_dir)
     import run_json
@@ -4522,6 +4578,13 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
 
 # --- CLI ---------------------------------------------------------------
 
+def _help_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
 def _refuse_jailed_profile() -> None:
     """Read run_json's host selector once, before any driver side effects."""
     profile = os.environ.get("PINEFORGE_RUN_JSON_PROFILE", "unjailed")
@@ -4546,8 +4609,14 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("strategy_dir", type=Path,
                     help="Path to corpus/<cat>/<name>/ — must contain strategy.so")
-    ap.add_argument("--ohlcv", type=Path, default=DEFAULT_OHLCV,
-                    help=f"OHLCV CSV (default: {DEFAULT_OHLCV.relative_to(REPO_ROOT)})")
+    ap.add_argument("--corpus-root", type=Path, default=None,
+                    help="Mounted corpus root (default: checkout corpus/).")
+    ap.add_argument("--derived-workspace", type=Path, default=None,
+                    help="Writable derived-feed workspace.")
+    ap.add_argument("--harness-dir", type=Path, default=None,
+                    help="Directory containing the installed report-sink harness.")
+    ap.add_argument("--ohlcv", type=Path, default=None,
+                    help=f"OHLCV CSV (default: {_help_path(DEFAULT_OHLCV)})")
     ap.add_argument("--so-name", default="strategy.so",
                     help="Library filename inside strategy_dir (default: strategy.so)")
     ap.add_argument("-o", "--output", type=Path, default=None,
@@ -4634,6 +4703,15 @@ def main() -> int:
                          "$PINEFORGE_RELEASE_IMAGE or ghcr .../pineforge-release:latest).")
     args = ap.parse_args()
 
+    if _path_selection_requested(args):
+        _apply_parity_paths(resolve_paths(
+            corpus_root=args.corpus_root,
+            derived_workspace=args.derived_workspace,
+            harness_dir=args.harness_dir,
+        ))
+    if args.ohlcv is None:
+        args.ohlcv = DEFAULT_OHLCV
+
     with ExitStack() as resources:
         return _main_run(args, resources)
 
@@ -4655,7 +4733,7 @@ def _main_run(args, resources) -> int:
         with inputs_path.open(encoding="utf-8") as f:
             params = json.load(f)
     if _reads_derived_feed(params, strategy_dir, args.ohlcv, args.emit_window_ohlcv):
-        ensure_derived()
+        _ensure_derived()
     # Per-probe inputs.json metadata (ohlcv_csv / chart_timezone /
     # input_tf / script_tf / ohlcv_start_ms / runtime_overrides) is
     # resolved by the shared helper — see inputs_run_kwargs docstring.
@@ -4690,7 +4768,7 @@ def _main_run(args, resources) -> int:
         tv_span = _load_tv_entry_span(strategy_dir, params)
         tv_window_used = tv_span is not None
         if tv_span is None:
-            ensure_derived()
+            _ensure_derived()
             emit_window = report_window = _load_window_ms(REFERENCE_OHLCV)
     # The measurement ENDS where TradingView's range ends
     # (_apply_range_end_regime): the feed is bounded at the bars opening at
