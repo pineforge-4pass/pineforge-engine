@@ -4,6 +4,7 @@
 #include "../src/command_scratch_cache.hpp"
 #include "../src/native_execution_consumer.hpp"
 
+#include <pineforge/cache_policy.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/source/exit_scratch.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -18,6 +19,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <unistd.h>
 
 namespace {
 using namespace command_arena_test;
@@ -25,6 +27,8 @@ using pineforge::NativeExecutionConsumer;
 using pineforge::RunFailureCode;
 
 constexpr auto kDisabled = std::numeric_limits<std::size_t>::max();
+
+enum class EntryKind { run, exit };
 
 struct AllocationFault {
     const std::size_t before = global_allocation::refused;
@@ -66,8 +70,6 @@ struct Environment {
     }
 };
 
-enum class EntryKind { run, exit };
-
 // Observe successful setup allocations with the existing allocator callback.
 // No ordinal countdown is armed across owner, file or cache construction.
 struct WorkspaceBoundary {
@@ -78,6 +80,22 @@ struct WorkspaceBoundary {
     unsigned boundaries = 0;
     bool store_object_matches = true;
     std::size_t workspace_bytes = 0;
+    const std::size_t page_bytes = setup_page_bytes(kind);
+    const std::size_t cache_bytes = setup_cache_bytes(kind, page_bytes);
+
+    static std::size_t setup_page_bytes(EntryKind entry) {
+        if (entry == EntryKind::run) return 512;
+        const long page = ::sysconf(_SC_PAGESIZE);
+        require(page > 0, "read the source exit service's platform page geometry");
+        return static_cast<std::size_t>(page);
+    }
+    static std::size_t setup_cache_bytes(EntryKind entry, std::size_t page) {
+        const pineforge::CacheDefaults defaults;
+        const auto capacity = entry == EntryKind::run
+            ? defaults.trade_pages : defaults.exit_pages;
+        return CachedScratchBacking::cache_allocation_bytes(
+            page, capacity.payload_bytes(page));
+    }
 
     void before_workspace() noexcept {
         ++boundaries;
@@ -93,7 +111,10 @@ struct WorkspaceBoundary {
     void allocated(std::size_t bytes) noexcept {
         switch (next) {
         case Next::cache:
-            if (bytes == CachedScratchBacking::kCacheBytes) {
+            // Trade uses 512-byte pages; the source host first constructs
+            // its platform-page exit service. Observe each owner's payload
+            // AND metadata, before the later temporary projection store.
+            if (bytes == cache_bytes) {
                 if (kind == EntryKind::run) next = Next::store_object;
                 else before_workspace();
             }
@@ -190,7 +211,7 @@ std::exception_ptr enter(Entry& entry, WorkspaceBoundary& boundary) {
 }
 
 void require_memory(std::exception_ptr failure) {
-    require(failure != nullptr, "the production run entry must throw its workspace failure");
+    require(failure != nullptr, "the production run entry must throw its allocation failure");
     try { std::rethrow_exception(failure); }
     catch (const std::exception& error) {
         const auto* typed = dynamic_cast<const pineforge::RunFailureInfo*>(&error);
@@ -200,7 +221,7 @@ void require_memory(std::exception_ptr failure) {
             throw std::runtime_error(std::string("expected out_of_memory, observed ")
                 + pineforge::run_failure_code_name(observed));
         require(observed != RunFailureCode::scratch_io_failed,
-                "workspace allocation failure must not become scratch_io_failed");
+                "scratch allocation failure must not become scratch_io_failed");
     }
 }
 
@@ -214,6 +235,8 @@ void workspace_allocation_failure(EntryKind kind) {
         if (const auto error = enter(control, boundary)) std::rethrow_exception(error);
         boundary.check();
         auto& store = control.store();
+        require(store.page_size() == boundary.page_bytes,
+                "the observed workspace belongs to the retained production store");
         require(store.status() == ScratchStatus::ok && !store.carried_failure()
                     && store.record_count() == 0 && !store.transaction_active(),
                 "the same unarmed production entry opens a healthy empty store");

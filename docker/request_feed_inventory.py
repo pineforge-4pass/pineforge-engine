@@ -70,7 +70,6 @@ _POLICY_KEYS = frozenset(("primary_chart_timeframes", "preroll", "request_feed_t
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _TIMEFRAME_RE = re.compile(r"(?:(?P<minutes>[1-9][0-9]*)"
                            r"|(?P<count>[1-9][0-9]*)?(?P<unit>[DWMS]))")
-_INVENTORY_MAX_BYTES = 8 * 1024 * 1024
 _READ_CHUNK = 1024 * 1024
 
 
@@ -157,16 +156,19 @@ def _policy_members(policy: Any) -> Optional[Tuple[Any, Any]]:
     return members[0], members[1]
 
 
-def _read_inventory_bytes(path: Any) -> bytes:
+def _read_inventory_bytes(path: Any, max_inventory_bytes: Optional[int] = None) -> bytes:
     if not isinstance(path, (str, os.PathLike)):
         raise _incomplete("no inventory path was given")
     try:
         with open(path, "rb") as handle:
-            data = handle.read(_INVENTORY_MAX_BYTES + 1)
+            try:
+                data = handle.read(max_inventory_bytes + 1 if max_inventory_bytes else -1)
+            except OverflowError:  # a limit larger than a platform read size
+                data = handle.read()
     except (OSError, ValueError) as error:
         raise _incomplete(f"the inventory cannot be read: {error}") from None
-    if len(data) > _INVENTORY_MAX_BYTES:
-        raise _incomplete(f"the inventory is over {_INVENTORY_MAX_BYTES} bytes")
+    if max_inventory_bytes and len(data) > max_inventory_bytes:
+        raise _incomplete(f"the inventory is over {max_inventory_bytes} bytes")
     return data
 
 
@@ -238,10 +240,12 @@ def _artifact_digest(path: Any) -> str:
 
 def resolve_request_feed_inventory(inventory_path: Any, artifact_path: Any,
                                    validated_inputs: Any, *,
-                                   primary_timeframe: Any) -> List[str]:
+                                   primary_timeframe: Any,
+                                   max_inventory_bytes: Optional[int] = None) -> List[str]:
     """The sorted, unique canonical request-feed timeframes of one request, from
     the artifact's inventory. Reads the inventory file, then the artifact's bytes
-    for their digest, and nothing else.
+    for their digest, and nothing else. max_inventory_bytes absent or zero reads
+    the whole inventory; a positive value probes one byte beyond that limit.
 
     Raises InventoryAdmissionError (code window_mode_unsupported, detail
     {"capability": "selected_window_request_feed_inventory"}) when the inventory
@@ -255,7 +259,7 @@ def resolve_request_feed_inventory(inventory_path: Any, artifact_path: Any,
     primary = _require_primary(primary_timeframe)
     if not isinstance(validated_inputs, Mapping):
         raise _incomplete("the request's validated inputs are not a mapping")
-    doc = _parse_inventory(_read_inventory_bytes(inventory_path))
+    doc = _parse_inventory(_read_inventory_bytes(inventory_path, max_inventory_bytes))
     entries = _checked_entries(doc)
     if _artifact_digest(artifact_path) != doc["artifact_sha256"]:
         raise _incomplete("the inventory is bound to another artifact")
@@ -281,7 +285,8 @@ def resolve_request_feed_inventory(inventory_path: Any, artifact_path: Any,
 
 
 def admit_selected_request(primary_timeframe: Any, inventory_path: Any, artifact_path: Any,
-                           validated_inputs: Any, support_policy: Any) -> Optional[List[str]]:
+                           validated_inputs: Any, support_policy: Any, *,
+                           max_inventory_bytes: Optional[int] = None) -> Optional[List[str]]:
     """Admit a selected-window request against the build's support policy, or
     raise InventoryAdmissionError. In this order: canonicalize the primary
     timeframe; enforce the policy's primary list (a policy that is missing or not
@@ -312,7 +317,8 @@ def admit_selected_request(primary_timeframe: Any, inventory_path: Any, artifact
     if members[1] == "all":
         return None
     tokens = resolve_request_feed_inventory(inventory_path, artifact_path, validated_inputs,
-                                            primary_timeframe=primary)
+                                            primary_timeframe=primary,
+                                            max_inventory_bytes=max_inventory_bytes)
     for token in tokens:
         if token not in members[1]:
             raise InventoryAdmissionError(

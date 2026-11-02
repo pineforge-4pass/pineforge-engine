@@ -418,10 +418,12 @@ def test_maps_outlive_every_native_cleanup_and_close_on_error(tmp_path, monkeypa
             inputs = [mm for fileno, mm in maps if fileno >= 0]
             artifacts = [mm for fileno, mm in maps if fileno < 0]
             assert len(inputs) == 3 and all(not mm.closed for mm in inputs)
-            # The bounded serializer adds one anonymous 64 KiB I/O window
+            # The bounded serializer adds one final artifact I/O window
             # only after execution succeeds. It also survives native cleanup.
             assert len(artifacts) == int(not fail)
-            assert all(not mm.closed and len(mm) == 64 * 1024 for mm in artifacts)
+            expected_windows = [1024 * 1024] if not fail else []
+            assert [len(mm) for mm in artifacts] == expected_windows
+            assert all(not mm.closed for mm in artifacts)
         library.report_free = library.export("report_free", freed)
         library.strategy_free = library.export("strategy_free", freed)
         status, _, _, _ = invoke(monkeypatch, "--ohlcv-bin", path, "--symbol-feeds", index,

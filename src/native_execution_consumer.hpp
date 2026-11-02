@@ -1,5 +1,7 @@
 #pragma once
 
+#include <pineforge/cache_policy.hpp>
+
 #include <pineforge/detail/scratch_store.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/execution_consumer.hpp>
@@ -11,6 +13,7 @@
 #include "native_selected_epoch.hpp"
 #include "runtime_ambient.hpp"
 #include "native_calc_plan.hpp"
+#include "run_cache_diagnostics.hpp"
 #include <array>
 #include <cstdint>
 #include <exception>
@@ -89,7 +92,13 @@ inline constexpr bool kRetireEveryPointDefault = false;
 #endif
 
 class NativeExecutionConsumer final : public IExecutionConsumer {
+    // Declared first so embedded cache registrations detach before this sink
+    // dies. Its destructor also detaches the engine's longer-lived ledger.
+    detail::RunCacheDiagnostics run_cache_diagnostics_;
 public:
+    static int report_cache_stats(const BacktestEngine& engine,
+                                  std::uint64_t* resident_bytes,
+                                  std::uint64_t* allocation_bypass_count) noexcept;
     enum class CommandScratchBinding : std::size_t {
         Trade, Dependency, Book, Exit, Count
     };
@@ -197,6 +206,13 @@ public:
     // (NativeStrategyHost::native_state, out of line and by value). running()
     // is the branch view() takes.
     bool running() const noexcept { return running_spec_ != nullptr; }
+    const CacheDefaults& cache_policy_config() const noexcept { return cache_policy_config_; }
+    const CacheDefaults& cache_policy_for_run() const noexcept {
+        return cache_policy_preparing_ ? cache_policy_attempt_ : cache_policy_run_;
+    }
+    void set_cache_policy_config(const CacheDefaults& policy) noexcept {
+        cache_policy_config_ = policy;
+    }
     // Whether the configured spec's script bars are buckets gathered from its
     // input under the resolved pairing (native_aggregates_input_bars).
     bool aggregates_input() const noexcept {
@@ -1789,6 +1805,12 @@ private:
     bool running_tolerant_labels_ = false;
     bool running_raw_labels_ = false;
     void cache_running_policy() noexcept;
+    // Physical settings only. Each attempt snapshots before any host provider
+    // can construct a run store; an idle replacement leaves that copy intact.
+    CacheDefaults cache_policy_config_{};
+    CacheDefaults cache_policy_attempt_{};
+    CacheDefaults cache_policy_run_{};
+    bool cache_policy_preparing_ = false;
     void leave_running() noexcept { running_spec_ = nullptr; }
     // The caches beside the lookups they replace, compared bit for bit by
     // tests/test_native_callback_caches.cpp.
@@ -2483,16 +2505,17 @@ private:
         const int uncaught_;
         const bool nested_;
         const bool allow_live_;
+        detail::RunCacheDiagnosticsScope cache_diagnostics_scope_;
     public:
-        // Inline: the stream pushes are per-input entries, and an untracked
-        // handle must pay only these loads.
+        // Inline: stream pushes are per-input entries. Keep the lifecycle
+        // guard and the run's allocation-owner binding in the same scope.
         EntryExitGuard(NativeExecutionConsumer& c, BacktestEngine& engine,
                        bool allow_live) noexcept
             : c_(c), engine_(engine), tracked_(c.selected_epoch_tracked()),
               uncaught_(tracked_ ? std::uncaught_exceptions() : 0),
               nested_(c.in_attempt_call_ || c.preparing_begin_ || c.in_callback_
                          || c.processing_input_ || c.selected_epoch_.dispatching),
-              allow_live_(allow_live) {}
+              allow_live_(allow_live), cache_diagnostics_scope_(c.run_cache_diagnostics_) {}
         ~EntryExitGuard() {
             if (nested_) return;
             if (tracked_)
@@ -2831,6 +2854,43 @@ private:
     // Only BookSpill's index poison is permanent until the next run.
     bool match_dormant_was_fast_ = false;
     MatchDormantCounts match_dormant_counts_;
+
+    // Disposable observations, never continuation state. Const reads and
+    // invalidations belong to the run's single execution thread. No borrowed
+    // pointer into this index survives a read. Its constant payload, at most
+    // 64 KiB, is lazily reserved once and retained across commands and begin,
+    // even for a handful of lots; it is not a lot or trade history.
+    using CohortOpeningIndexRow = std::pair<std::uint64_t, std::uint64_t>;
+    static constexpr std::size_t kCohortOpeningIndexBytes = 64 * 1024;
+    // Test seam only; production uses the fixed payload budget.
+    std::size_t cohort_opening_index_bytes_ = kCohortOpeningIndexBytes;
+    // Allows extension witnesses to compile against the frozen previous headers;
+    // the cost witness itself requires no new member or build definition.
+#define PINEFORGE_HAS_COHORT_OPENING_INDEX 1
+    mutable std::vector<CohortOpeningIndexRow> cohort_opening_index_;
+    mutable bool cohort_opening_index_valid_ = false;
+    mutable bool cohort_opening_index_attempted_ = false;
+    mutable std::uint64_t cohort_opening_index_settlement_ = 0;
+    mutable std::uint64_t cohort_opening_index_lots_ = 0;
+    std::uint64_t cohort_lots_generation_ = 0;
+    bool cohort_opening_index_current() const noexcept;
+    bool read_indexed_cohort_target(const BacktestEngine&, native_order::CohortHandle,
+                                   const native_order::PositionNonflat&,
+                                   std::vector<native_order::OpeningObservation>&) const;
+    // A source host may retire dust lots in its applied notification. Treat
+    // the entire callback as a potential lot writer, including exception exits.
+    // Reads inside that window use the complete reader.
+    class CohortLotsWrite {
+    public:
+        explicit CohortLotsWrite(NativeExecutionConsumer& c) noexcept : consumer_(c) {
+            ++consumer_.cohort_lots_generation_;
+        }
+        ~CohortLotsWrite() { ++consumer_.cohort_lots_generation_; }
+        CohortLotsWrite(const CohortLotsWrite&) = delete;
+        CohortLotsWrite& operator=(const CohortLotsWrite&) = delete;
+    private:
+        NativeExecutionConsumer& consumer_;
+    };
 };
 
 // The same lazy backing used by RunCommandScratch's Book binding. Kept in
@@ -2839,6 +2899,7 @@ private:
 class DormantBookScratchBacking final : public detail::ScratchBacking {
 public:
     explicit DormantBookScratchBacking(std::size_t page_size) noexcept;
+    DormantBookScratchBacking(std::size_t page_size, CacheCapacity capacity) noexcept;
     void prepare();
     std::uint64_t page_count() const noexcept override;
     std::optional<std::uint64_t> arena_capacity_bytes() const noexcept override;
@@ -2852,6 +2913,7 @@ protected:
     detail::ScratchStatus do_sync(detail::ScratchDurability) noexcept override;
 
 private:
+    CacheCapacity cache_capacity_;
     std::unique_ptr<detail::ScratchBacking> inner_;
 };
 

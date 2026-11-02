@@ -121,6 +121,10 @@ try:
             ledger = root/(name + '.sqlite3')
             command = base + ['--ledger', str(ledger), '--feed-url',
                               f'ws://127.0.0.1:{server.server_port}/stream']
+            if stream_idle:
+                # The network feeds have no default idle or message deadline, so
+                # the case that expects the deadline names it (15 s, as before).
+                command += ['--feed-idle-timeout', '15', '--feed-message-timeout', '15']
             started = time.monotonic()
             result = subprocess.run(command, capture_output=True, text=True)
             elapsed = time.monotonic() - started

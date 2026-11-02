@@ -1,0 +1,5 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_adapter_cohort_origin_release)
+    pineforge_add_unit_test(test_adapter_cohort_origin_release)
+    set_tests_properties(test_adapter_cohort_origin_release PROPERTIES LABELS "roster_work")
+endif()

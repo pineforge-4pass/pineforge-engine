@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_read_through_cache)
+pineforge_add_unit_test(test_read_through_cache)

@@ -38,7 +38,7 @@ class AdmissionSchema(unittest.TestCase):
         try:
             for relative, token in (
                 ("src/source/market_admission.cpp",
-                 "fold_journal_record(source,page,result.digest)"),
+                 "fold_validated_journal_record(source,page,summary,result.digest,"),
                 ("src/source/pine_state_hash.cpp",
                  "const auto folded = admission_journal.folded_window();"),
                 ("src/source/pine_state_hash.cpp",

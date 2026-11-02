@@ -49,6 +49,7 @@
 // Fix2 fail-before on 6f036c8ff5 (not run here): the first attempted removal
 // restores the whole engine curve, failing (e)'s size/capacity sample before
 // the status assertion; an observer also allocates a full captured array.
+#include <pineforge/cache_policy.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/execution_observer.h>
 #include <pineforge/metrics_stream.hpp>
@@ -200,6 +201,7 @@ using pineforge::NativeRunSpec;
 using pineforge::NativeSetupStatus;
 using pineforge::NativeStrategyHost;
 using pineforge::ReportC;
+using pineforge::detail::CachedScratchBacking;
 namespace native_order = pineforge::native_order;
 namespace rs = pineforge::report_sink;
 
@@ -607,14 +609,20 @@ struct Oracle {
     CurveProbe host;
     std::unique_ptr<Filled> report;
 
-    Oracle(std::int64_t bars, bool trade, bool present, bool observer = false) : feed(tape(bars)) {
+    Oracle(std::int64_t bars, bool trade, bool present, bool observer = false,
+           report_arrays::Counts* fill_arrays = nullptr) : feed(tape(bars)) {
         host.probe_trade = trade;
         host.probe_present = present;
         const auto anonymous_before = anonymous_files();
         configure(host, 1);
         if (observer) observe(host, observer_calls);
         run_tape(host, feed);
-        report = std::make_unique<Filled>(host);
+        if (fill_arrays) {
+            const report_arrays::Scope count(*fill_arrays);
+            report = std::make_unique<Filled>(host);
+        } else {
+            report = std::make_unique<Filled>(host);
+        }
         check_sink_off_files(anonymous_before, bars, trade);
         check_sink_off_curve(host, *report, feed, trade);
     }
@@ -1257,11 +1265,9 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
                              std::int64_t bars, bool observer) {
     scenario = "(e) " + name;
     report_arrays::Counts off_arrays;
-    std::unique_ptr<Oracle> oracle;
-    {
-        const report_arrays::Scope count(off_arrays);
-        oracle = std::make_unique<Oracle>(bars, false, true, observer);
-    }
+    // Count report fill alone: the run's command slab includes shared-cache
+    // metadata and can be larger than the short tape's full curve.
+    const auto oracle = std::make_unique<Oracle>(bars, false, true, observer, &off_arrays);
     report_arrays::Counts run_arrays;
     report_arrays::Counts arrays;
     int observer_calls = 0;
@@ -1284,20 +1290,28 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
     // cr150-contracts.md, Report-sink presentation: one copied ordinary tail,
     // and the observer keeps its presented value inline, with no owning array.
     // This bare host opens only the Dependency command store (512-byte pages).
-    // Its CachedScratchBacking owns C = kCacheBytes; capture temporarily adds
+    // Its CachedScratchBacking owns C = the dependency policy's slab bytes,
+    // comprising payload and every set of shared-cache metadata.
+    // Capture temporarily adds
     // H = sizeof(one point) before the run exit guard releases the cache.
-    // Thus run peak = C + (observer ? H : 0), largest array = C, allocations =
-    // one cache + (observer ? one tail : none), and live bytes at return = 0.
+    // Run peak = C + (observer ? H : 0); largest array = max(C, observer ? H : 0).
+    // Allocations = (C ? one cache : none) + (observer ? one tail : none),
+    // and live bytes at return = 0.
     // Keep this census separate so C cannot hide an extra array during fill.
     // Mutation: in native_execution_consumer.cpp capture_presentation, change
     // new pf_equity_point_t[1]{*held} to new pf_equity_point_t[2]{*held};
     // observer run peak becomes C + 2H and must fail this equality.
-    constexpr std::size_t command_cache_bytes = pineforge::detail::CachedScratchBacking::kCacheBytes;
+    const auto capacity = pineforge::CacheDefaults{}.dependency_pages;
+    const std::size_t command_cache_bytes =
+        CachedScratchBacking::cache_allocation_bytes(512, capacity.payload_bytes(512));
+    const std::size_t command_cache_arrays = command_cache_bytes != 0 ? 1 : 0;
     const std::size_t capture_arrays = observer ? 1 : 0;
     require(run_arrays.peak_bytes == command_cache_bytes + capture_arrays * held_bytes
-                && run_arrays.capacity_bytes == command_cache_bytes
-                && run_arrays.allocations == 1 + capture_arrays,
-            "run census differs from one dependency cache plus the counted capture tail: peak_bytes="
+                && run_arrays.capacity_bytes
+                    == std::max(command_cache_bytes, capture_arrays * held_bytes)
+                && run_arrays.allocations == command_cache_arrays + capture_arrays,
+            "run census differs from the dependency shared-cache slab "
+            "plus the counted capture tail: peak_bytes="
             + std::to_string(run_arrays.peak_bytes)
             + ", capacity_bytes=" + std::to_string(run_arrays.capacity_bytes)
             + ", allocations=" + std::to_string(run_arrays.allocations));
@@ -1418,7 +1432,10 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
     peaks.report_capacity = arrays.capacity_bytes / sizeof(pf_equity_point_t);
     peaks.off_report_peak = off_arrays.peak_bytes / sizeof(pf_equity_point_t);
     peaks.off_report_capacity = off_arrays.capacity_bytes / sizeof(pf_equity_point_t);
-    require(peaks.off_report_capacity == oracle->curve().size(),
+    const std::size_t curve_bytes = oracle->curve().size() * sizeof(pf_equity_point_t);
+    require(peaks.off_report_capacity == oracle->curve().size()
+                && off_arrays.peak_bytes == curve_bytes
+                && off_arrays.live_bytes == curve_bytes && off_arrays.allocations == 1,
             "array census does not see the sink-off report's full curve");
     return peaks;
 }

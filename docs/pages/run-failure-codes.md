@@ -126,6 +126,15 @@ The 1.7.0 additions are `report_mode_unsupported`, `report_sink_failed`,
 `scratch_io_failed`. Their classes, retryability and typed arguments are
 listed below.
 
+For `scratch_capacity_exceeded`, `resource=cohort_ids_total` identifies the
+bounded cohort table's historical distinct-ID count or aggregate ID-byte
+budget (`U/B_U`, default 65,536 IDs / 4,194,304 bytes).
+`resource=cohort_orders_live` identifies the separate 4,096 live-order-ID cap.
+`resource=cohort` remains valid for the refusal of an ID longer than 64 bytes,
+generic cohort-region capacity and the generic store's live-object cap.
+The labels preserve the existing message text, limits and refusal order;
+the independent `report_sink_failed` argument `store=cohort` is unchanged.
+
 `report_mode_unsupported` (code 65) also covers a native begin when
 `SUMMARY_ONLY` (the v1 mode or the pending legacy equity mode) is combined with
 an execution observer or a selected window and no report sink is enabled:
@@ -139,6 +148,17 @@ described [after the tables](#run_failure_codes_selected_window).
 The `strategy_library_incompatible` row also includes the two released
 1.5.0 outputs reasons, `outputs_api_mismatch` and `outputs_manifest_invalid`,
 in addition to its six released 1.4.0 reasons.
+
+`outputs_limit` admits reasons `too_many_events`, `too_many_rows` and
+`too_many_series`. The first two carry `max` `INT_MAX`. Series are unlimited
+by default. `--limit-output-series N` (`N >= 0`) applies before strategy creation; 0
+or omission means unlimited. A declaration above a positive N throws
+`std::runtime_error` with `too_many_series`; its `max` is the operator's positive N
+before state changes; up to N slots are accepted, and zero imposes no limit.
+`run_json` reports the refused constructor as `strategy_create_failed`.
+Only that operator-limit refusal adds a top-level `cause` member to the failure line,
+shaped as `{"code":"outputs_limit","args":{"max":N,"reason":"too_many_series"}}`;
+other `strategy_create_failed` lines omit it.
 
 <!-- BEGIN generated from docker/run_failure_codes.json: python3 scripts/test_gen_run_failure_catalog_diff.py --write-docs-tables -->
 
@@ -172,7 +192,7 @@ in addition to its six released 1.4.0 reasons.
 | `other_symbol_feed_missing` | `no_data` | no | `timeframe` (timeframe, optional) | No feed is installed for another symbol's request at its timeframe. |
 | `other_symbol_request` | `no_data` | no | `call` (pine_source), `function` (vocab, 2 values), `line` (integer), `symbol` (symbol, optional) | The script read another symbol's request and no bars of that symbol were installed. |
 | `out_of_memory` | `resource` | yes | none | The run ran out of memory. |
-| `outputs_limit` | `strategy_limit` | no | `max` (integer), `reason` (vocab, 2 values) | A recorded-outputs capacity limit was reached during the run. |
+| `outputs_limit` | `strategy_limit` | no | `max` (integer), `reason` (vocab, 3 values) | A recorded-outputs capacity limit was reached at declaration or during the run. |
 | `outputs_rejected` | `input` | no | `reason` (vocab, 3 values) | Recorded outputs were asked of a strategy library that records none, or the recording cannot be honoured as asked. |
 | `pine_array_error` | `strategy` | no | `collection` (vocab, 2 values, optional), `method` (vocab, 12 values, optional), `reason` (vocab, 5 values) | An array call failed: an index out of bounds, an inverted slice, an empty array, an invalid size, or a modified historical collection. |
 | `pine_invalid_argument` | `strategy` | no | `argument` (identifier, optional), `function` (identifier, optional), `rule` (vocab, 6 values) | A built-in refused the value of one of its arguments. |
@@ -208,7 +228,7 @@ in addition to its six released 1.4.0 reasons.
 | `run_quota_configuration_invalid` | `input` | no | `reason` (vocab, 8 values), `setting` (vocab, 10 values), `stage` (vocab, 8 values) | The finite host run contract is missing, malformed, overflowing, unauthenticated or unsupported. An unset limit refuses with missing_limit; explicit decimal zero is literal zero capacity. There is no implicit unlimited mode. Limits, extents, deltas and reportable counters must fit 2^53-1. |
 | `run_request_invalid` | `input` | no | `option` (vocab, 25 values) | The harness command line or one of its JSON options is invalid. |
 | `run_resource_quota_exceeded` | `resource` | no | `artifact` (vocab, 14 values), `limit` (integer), `peak` (integer), `requested` (integer), `resource` (vocab, 3 values), `stage` (vocab, 8 values), `used` (integer) | An atomic reservation exceeded a finite run resource allowance before growth. used is committed plus pending before the denied delta; requested is additional capacity, not the desired total; peak is the preceding high water. Produced output is never refunded by deleting an artifact. Counters are host-owned nonnegative integers at most 2^53-1. |
-| `scratch_capacity_exceeded` | `resource` | no | `resource` (vocab, 10 values) | The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying. |
+| `scratch_capacity_exceeded` | `resource` | no | `resource` (vocab, 12 values) | The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying. |
 | `scratch_configuration_invalid` | `input` | no | `reason` (vocab, 3 values), `stage` (vocab, 1 values) | The command-scratch byte cap from the environment or the caller is malformed: not a positive decimal, out of uint64_t range, or zero. |
 | `scratch_io_failed` | `resource` | no | none | The engine could not create, resize, read or write command scratch or the storage of one of its auxiliary tables (the disk id table, the id-pair store or the placement table). Command scratch also raises this code when the default-directory policy fails a directory query or refuses memory-backed default candidates, or when an explicit memory-backed command directory is refused. Native runs create command scratch at begin, so these failures are resource failures before any strategy callback. The run has no successful completion. Report-sink scratch files, the curve writer and the position-tail facade do not raise this code: they raise report_sink_failed with reason scratch_io. |
 | `security_feed_refused` | `input` | no | `reason` (vocab, 11 values) | An auxiliary or native request.security feed was refused. |
@@ -391,6 +411,19 @@ catalog is not proof that the source paths it names enforce anything.
   `selected_window_preroll` `requested` is the pre-roll length. The registry
   does not tie an optional argument to a capability: the trusted wrappers that
   raise the code do.
+- **Optional feed and inventory limits.** The runner defaults to no limit.
+  `--max-symbol-feeds N` bounds both symbol count and total feed count;
+  exceeding it keeps `symbol_feeds_refused` with reason `too_many_symbols`
+  or `too_many_feeds` and a message naming N. `--max-inventory-bytes N`
+  bounds inventory input: an oversize inventory keeps
+  `window_mode_unsupported` with capability
+  `selected_window_request_feed_inventory` in the runner, or exit 10 in
+  `bind_compiled_inventory.py`. Unset or `0` means unlimited; positive
+  integers set limits; empty, negative and non-integer values are usage
+  errors (runner `run_request_invalid`, exit 2; binder argparse, exit 2).
+  `--tv-compat` selects defaults of 256 symbols/feeds and 8 MiB inventory
+  from the runner's one compatibility set. Explicit limits, including `0`,
+  always win.
 - **`window_calendar_unsupported`** takes `session` as a `nullable_string`: a
   JSON string, or `null` when the request names no session. `window_lineage_mismatch`
   and `report_shape_request_invalid` carry request values as `scalar`.

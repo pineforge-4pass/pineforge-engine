@@ -122,6 +122,19 @@ def reference_sink(runner, sink):
     return result
 
 
+def spool_windows(directory):
+    """Inspect the actual equity and trade spools of an empty verified sink."""
+    library = ordinary.SinkLibrary()
+    sink = run_json._ReportSink(library, 1, directory=str(directory))
+    try:
+        library.counts, library.sha = ordinary.write_sink(sink.path, [])
+        sink.verify(library, 1, run_json.ReportC())
+        return {"E": sink._equity_spool.file.window,
+                "T": sink._trades_spool.file.window}
+    finally:
+        sink.close()
+
+
 def clone_report(runner, report):
     assert ctypes.sizeof(report) == ctypes.sizeof(runner.ReportC)
     return runner.ReportC.from_buffer_copy(

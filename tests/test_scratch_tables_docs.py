@@ -40,3 +40,21 @@ def test_published_page_keeps_hand_derived_reservations_and_honest_scope():
             "consumed-exit combinations and replacement successors consume that budget; the "
             "default replacement reserve depends on input-bar count. This is not a guarantee "
             "that only OHLCV memory scales.") in page
+
+
+def test_jailed_wrapper_exclusions_and_safe_routes_are_documented():
+    page = (ROOT / "docs/pages/scratch-tables.md").read_text()
+    section = page.split("## Jail responsibilities and exclusions\n", 1)[1]
+    block = section.split("**The HOST must configure SIGXFSZ.**", 1)[0].strip()
+    assert len(block.splitlines()) <= 20
+    for claim in (
+        "`PINEFORGE_RUN_JSON_PROFILE`", "`unjailed`", "`jailed`",
+        "`scripts/run_strategy.py`", "`strategy_driver_no_jailed_route`",
+        "trace-name dedup, Docker feed trim and reverse-CSV staging",
+        "`pineforge-sink-finalize` file-output mode",
+        "`finalizer_file_output_no_jailed_route`", "`run_request_invalid`",
+        '`{"option":"arguments"}`', "exit 1", "exit 3", "diagnostic text",
+        "stdout mode (`--out -` with a positive `--max-bytes`)",
+        "final JSON spool and output-column/series temporaries are unreachable",
+    ):
+        assert claim in block, claim

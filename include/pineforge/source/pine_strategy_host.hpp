@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pineforge/detail/scratch_store.hpp>
+#include <pineforge/detail/feed_projection.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/session_time.hpp>
 #include <pineforge/source/pine_adapter.hpp>
@@ -50,11 +51,18 @@ struct SymbolFacts {
     double mintick = std::numeric_limits<double>::quiet_NaN();
 };
 
-// A recorded request series (strategy_set_recorded_series): the value a
-// request returned on each chart bar that opened at open_ms[i].
+// A recorded request series (strategy_set_recorded_series): exact values in
+// increasing chart-open order, read by logical bar index.
+struct RecordedSeriesRow {
+    std::int64_t open_ms = 0;
+    double value = 0.0;
+};
+
 struct RecordedSeries {
-    std::vector<std::int64_t> open_ms;
-    std::vector<double> values;
+    pineforge::detail::FeedProjection<RecordedSeriesRow> rows;
+    // Physical setup only: an omitted capacity follows the admitted run policy.
+    // Explicit zero and an explicit internal-default value are both overrides.
+    std::optional<std::size_t> cache_capacity_override;
 };
 
 // One projected higher-timeframe bucket of the opt-in historical
@@ -458,6 +466,20 @@ public:
                           const std::string& value) override;
     bool set_recorded_series(const std::string& key, const int64_t* chart_open_ms,
                              const double* values, int n) override;
+    // The raw-array setter still copies before returning. This overload
+    // selects optional resident bytes for that tape, including page tags,
+    // in preference to the run policy. The four-argument overload follows
+    // the run policy.
+    bool set_recorded_series(const std::string& key, const int64_t* chart_open_ms,
+                             const double* values, int n, std::size_t cache_capacity_bytes);
+    // The provider is a retained immutable snapshot with copy-out random
+    // reads. A miss reads the provider even with zero resident bytes.
+    // Omitting capacity follows the run policy; an explicit value overrides it.
+    bool set_recorded_series_reader(
+        const std::string& key, std::shared_ptr<const FeedReader<RecordedSeriesRow>> reader);
+    bool set_recorded_series_reader(
+        const std::string& key, std::shared_ptr<const FeedReader<RecordedSeriesRow>> reader,
+        std::size_t cache_capacity_bytes);
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     bool source_aux_security_feed_enabled() const override;
     void source_aux_security_input_view(const Bar*&, int&) const override;
@@ -957,7 +979,16 @@ private:
     // new bar: cleared at every chart bar, after the input's deliveries.
     void clear_gapped_foreign_security_sites();
     std::int64_t find_symbol_feed(const std::string& key, const std::string& tf) const;
-    void refresh_symbol_data_digest() noexcept;
+    bool set_recorded_series_impl(const std::string& key, const int64_t* chart_open_ms,
+                                 const double* values, int n,
+                                 std::optional<std::size_t> cache_capacity_bytes);
+    bool set_recorded_series_reader_impl(
+        const std::string& key, std::shared_ptr<const FeedReader<RecordedSeriesRow>> reader,
+        std::optional<std::size_t> cache_capacity_bytes);
+    void refresh_symbol_data_digest();
+    std::uint64_t calculate_symbol_data_digest(
+        const std::string* replacement_key = nullptr,
+        const RecordedSeries* replacement = nullptr) const;
     // AR-R4: feed i's bars, closes and column values, wherever they are held:
     // this host's store, or the kernel's run spec while they are lent to it.
     const NativeInstrumentFeed& installed_symbol_feed(std::size_t i) const;

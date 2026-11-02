@@ -44,6 +44,16 @@ using namespace sc412;
 using namespace pineforge::detail;
 constexpr std::size_t budget = 64 * 1024, page = 4096;
 
+std::size_t allocation_capacity(std::size_t payload) {
+#if __has_include(<pineforge/detail/read_through_cache.hpp>)
+    // The same number of payload pages now carries the shared cache's tags,
+    // pins and replacement metadata in its one measured allocation.
+    return (payload / page) * ReadThroughCache::line_bytes(page);
+#else
+    return payload;
+#endif
+}
+
 struct Row {
     struct Record { std::uint64_t value = 0; };
     std::uint64_t value = 0;
@@ -717,7 +727,8 @@ std::size_t budget_for(int entries) {
             AllocationWindow window;
             const auto at = table.insert(hot, 29).first;
             require(table.get(at) == 29, "allocate read cache on real disk path");
-            require(cache_blocks == (capacity_bytes ? 1U : 0U) && cache_bytes == capacity_bytes,
+            require(cache_blocks == (capacity_bytes ? 1U : 0U)
+                    && cache_bytes == allocation_capacity(capacity_bytes),
                     "first read allocates fixed cache");
             Measure warm;
             for (int n = 0; n < 64; ++n) require(table.get(at) == 29, "budget cache engagement");
@@ -754,8 +765,9 @@ std::size_t budget_for(int entries) {
                     }
                 }
                 require(n == entries, "budget tree scan covers the complete population");
-                require(cache_blocks == (capacity_bytes ? 1U : 0U) && cache_bytes == capacity_bytes,
-                        "exactly one fixed 64 KiB allocation");
+                require(cache_blocks == (capacity_bytes ? 1U : 0U)
+                        && cache_bytes == allocation_capacity(capacity_bytes),
+                        "exactly one allocation for 64 KiB payload plus shared metadata");
             }
             result.io = measure.finish()[ids];
             result.resident_bytes = cache_bytes;
@@ -780,8 +792,9 @@ std::size_t pair_budget_for(int entries) {
             AllocationWindow window;
             table.insert_or_assign(hot, 43);
             require(table.at(hot) == 43, "warm actual pair reads");
-            require(cache_blocks == (capacity_bytes ? 1U : 0U) && cache_bytes == capacity_bytes,
-                    "one opted-in 32 KiB data/index allocation");
+            require(cache_blocks == (capacity_bytes ? 1U : 0U)
+                    && cache_bytes == allocation_capacity(capacity_bytes),
+                    "one opted-in 32 KiB data/index payload plus metadata allocation");
             for (int n = 0; n < 64; ++n)
                 require(table.at(hot) == 43, "pair budget cache engagement");
             Measure warm;
@@ -827,7 +840,8 @@ std::size_t pair_budget_for(int entries) {
                     }
                 }
                 require(n == entries, "budget pair scan covers the complete population");
-                require(cache_blocks == (capacity_bytes ? 1U : 0U) && cache_bytes == capacity_bytes,
+                require(cache_blocks == (capacity_bytes ? 1U : 0U)
+                        && cache_bytes == allocation_capacity(capacity_bytes),
                         "rehashing never grows resident page cache");
             }
             result.io = measure.finish()[pairs];
@@ -860,8 +874,9 @@ void fixed_budget() {
     require(small == large, "512/1024 distinct entries and complete scans retain identical cache bytes");
     const auto pair_small = pair_budget_for(512);
     const auto pair_large = pair_budget_for(1024);
-    require(pair_small == pair_large && 2 * small + 2 * pair_small == 192 * 1024,
-            "two trees plus two pair-store halves retain exactly 192 KiB");
+    require(pair_small == pair_large
+            && 2 * small + 2 * pair_small == allocation_capacity(192 * 1024),
+            "two trees plus two pair-store halves retain 192 KiB payload plus shared metadata");
     auto tree = table_with_cache<DiskResidentIdTable<Row>>(budget);
     auto ranks = table_with_cache<DiskIdTable<std::uint32_t>>(budget);
     auto erased = table_with_cache<IdPairStore<std::uint64_t>>(budget / 2);
@@ -875,8 +890,8 @@ void fixed_budget() {
     require(tree.find("id")->second.value == 3 && ranks.get(rank) == 4
             && erased.at("id") == 5 && cycles.at("id") == 6,
             "all four real table constructions are read");
-    require(cache_blocks == 4 && cache_bytes == 192 * 1024,
-            "complete 192 KiB cache budget per adapter, not per engine");
+    require(cache_blocks == 4 && cache_bytes == allocation_capacity(192 * 1024),
+            "complete 192 KiB payload plus shared metadata per adapter, not per engine");
 }
 void bypass() {
     require_disk_cache(); // Establish the private-disk positive control first.

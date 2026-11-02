@@ -35,10 +35,12 @@ OUTPUT_KEYS = ("schema_version", "message_format", "manifest_sha256",
                "manifest", "constants", "hlines")
 REFERENCE_KEYS = ("path", "schema", "version", "run_id", "counts", "sha256")
 
-# ScratchCurveWriter holds 2,730 pf_equity_point_t values, each one int64
-# and two doubles (24 B): one batch is 65,520 B. This allowance is fixed
-# from that layout, before any RSS observations; it never scales with bars.
-SINK_RSS_ALLOWANCE_BYTES = 2_730 * 24
+# Own-peak sink-route excess (no recorded outputs): at most 1.86 MB measured
+# with 64 KiB windows, 2.5 MiB with the host swing, plus the two sink-only
+# large windows (equity, trade spool; the final report window is on both
+# routes) and the 64 KiB reader page; no bar or trade term. A bound, not a fit.
+SINK_RSS_ALLOWANCE_BYTES = (5 * 1024 * 1024 // 2
+                            + 2 * getattr(run_json, "_ARTIFACT_LARGE_WINDOW", 0) + 64 * 1024)
 
 
 class SummaryLibrary(full.SinkLibrary):
@@ -440,6 +442,21 @@ def test_native_sink_open_failure_never_publishes_summary(tmp_path):
     assert "summary" not in json.loads(result.stdout)
 
 
+CORPUS_OWN_PEAK_RSS = r'''
+if sys.platform == "linux":
+    own_peak_rss_bytes = None
+    for line in pathlib.Path("/proc/self/status").read_text(encoding="ascii").splitlines():
+        if line.startswith("VmHWM:"):
+            fields = line.split()
+            assert len(fields) == 3 and fields[1].isdigit() and fields[2] == "kB", (
+                "unparsable Linux VmHWM", line)
+            own_peak_rss_bytes = int(fields[1]) * 1024
+            break
+    assert own_peak_rss_bytes is not None, "missing Linux VmHWM"
+    observation["own_peak_rss_bytes"] = own_peak_rss_bytes
+'''
+
+
 CORPUS_PROJECTION_DRIVER = r'''
 import argparse, ctypes, json, pathlib, sys
 from contextlib import ExitStack
@@ -609,13 +626,14 @@ if sinks:
     sink = sinks[0]
     assert not sink.named and sink.closed and not pathlib.Path(sink.path).exists()
     observation["sink_counts"] = sink.counts
+''' + CORPUS_OWN_PEAK_RSS + r'''
 pathlib.Path(observation_path).write_text(json.dumps(observation), encoding="utf-8")
 raise SystemExit(status)
 '''
 
 
 def corpus_projection_run(directory, module, argv, mode):
-    """wait4 measures only the fresh producer; read its artifacts afterwards."""
+    """Measure the producer's peak RSS; read its artifacts after it exits."""
     assert hasattr(os, "wait4") and sys.platform in ("linux", "darwin"), "wait4 RSS required"
     directory.mkdir()
     document_path, stderr_path = directory / "report.json", directory / "stderr.txt"
@@ -638,14 +656,55 @@ def corpus_projection_run(directory, module, argv, mode):
     assert stderr_path.read_bytes() == b"", (mode, stderr_path.read_text())
     assert observation_path.is_file(), (mode, child.returncode, document_path.read_text())
     observation = json.loads(observation_path.read_text())
-    # Same per-child high-water accounting as the temporary-sink lab helper:
-    # Darwin reports bytes; Linux reports KiB. Never use RUSAGE_CHILDREN's
-    # cumulative high water, which could compare this run with an earlier one.
     observation.update(
-        peak_rss_bytes=int(usage.ru_maxrss) * (1 if sys.platform == "darwin" else 1024),
+        wait4_peak_rss_bytes=int(usage.ru_maxrss) * (1 if sys.platform == "darwin" else 1024),
         wall_seconds=elapsed, cpu_seconds=usage.ru_utime + usage.ru_stime)
+    # On Linux the kernel carries the parent's high-water into the child's
+    # rusage across the exec, so wait4 cannot measure just this producer.
+    if sys.platform == "linux":
+        observation["peak_rss_bytes"] = observation["own_peak_rss_bytes"]
+    else:
+        # Keep Darwin's existing wait4 accounting in bytes; the inheritance
+        # was observed on Linux only.
+        observation["peak_rss_bytes"] = observation["wait4_peak_rss_bytes"]
     assert observation["peak_rss_bytes"] > 0, observation
     return child.returncode, json.loads(document_path.read_text()), observation
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="Linux VmHWM separates the child's own peak from the parent's inherited high-water")
+def test_corpus_projection_measures_own_peak_rss(tmp_path, monkeypatch):
+    parent_allocation_bytes = 96 * 1024 * 1024
+    child_allocation_bytes = 24 * 1024 * 1024
+    page_size = os.sysconf("SC_PAGE_SIZE")
+    child_driver = r'''
+import json, pathlib, sys
+allocation_bytes, page_size = map(int, sys.argv[5:])
+allocation = bytearray(allocation_bytes)
+for offset in range(0, allocation_bytes, page_size):
+    allocation[offset] = 1
+print("{}")
+observation = {}
+''' + CORPUS_OWN_PEAK_RSS + r'''
+pathlib.Path(sys.argv[3]).write_text(json.dumps(observation), encoding="utf-8")
+'''
+    monkeypatch.setattr(sys.modules[__name__], "CORPUS_PROJECTION_DRIVER", child_driver)
+    parent_allocation = bytearray(parent_allocation_bytes)
+    try:
+        for offset in range(0, parent_allocation_bytes, page_size):
+            parent_allocation[offset] = 1
+        status, _, observation = corpus_projection_run(
+            tmp_path / "rss", __file__, [str(child_allocation_bytes), str(page_size)], "full")
+        assert status == 0, observation
+        own_peak = observation["own_peak_rss_bytes"]
+        assert child_allocation_bytes <= own_peak < parent_allocation_bytes // 2, observation
+        assert observation["peak_rss_bytes"] == own_peak, observation
+        wait4_peak = observation["wait4_peak_rss_bytes"]
+        assert wait4_peak >= parent_allocation_bytes, observation
+        assert wait4_peak - own_peak >= parent_allocation_bytes // 2, observation
+    finally:
+        del parent_allocation
 
 
 def assert_projection_bits(expected, actual, field):

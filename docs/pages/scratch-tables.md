@@ -241,7 +241,15 @@ and HPO drivers are in other repositories; their integration is **planned**.
 
 Capacity resources are `layout`, `sequence_data`, `sequence_index`,
 `erased_data`, `erased_index`, `consumed_data`, `consumed_index`, `cohort`,
-`exit_rank`, and `successor_roots`. q names remain in the wire vocabulary.
+`exit_rank`, `successor_roots`, `cohort_ids_total`, and `cohort_orders_live`.
+q names remain in the wire vocabulary. `cohort_ids_total` identifies the
+historical distinct-ID count or aggregate ID-byte budget (`U/B_U`, default
+65,536 IDs / 4,194,304 bytes); `cohort_orders_live` identifies the separate
+4,096 live-order-ID cap. `cohort` remains for the 64-byte single-ID refusal,
+generic cohort-region capacity and the generic store's live-object cap.
+Only failure labels change; message text, limit values and refusal order
+are unchanged. The slab region and `report_sink_failed`'s `store=cohort`
+retain their existing identities.
 The implemented bounded-memory checks cover the entire operation's count and
 byte workset before its first semantic mutation, with no grow/rehash/fallback.
 Physical allocator failure stays `out_of_memory`; it is not relabeled as a
@@ -261,6 +269,25 @@ same envelope. Catalog synchronization, billing/refund transport and those
 APP acceptance tests remain **planned**, not established by engine host fakes.
 
 ## Jail responsibilities and exclusions
+
+`PINEFORGE_RUN_JSON_PROFILE` accepts exactly `unjailed` (default) or
+`jailed` for these tools; neither has a CLI profile override.
+
+`scripts/run_strategy.py` is excluded from jailed execution:
+trace-name dedup, Docker feed trim and reverse-CSV staging need writable storage.
+It raises the existing typed RuntimeError (exit 1), reason
+`strategy_driver_no_jailed_route`, before any native result or output staging.
+`pineforge-sink-finalize` file-output mode is excluded before output removal and spool creation: exit 3,
+with a text diagnostic naming `finalizer_file_output_no_jailed_route` on stderr only when `--receipt-fd` is not 2 (no typed code or arguments).
+With `--receipt-fd 2`, the caller sees exit 3 and the ordinary failure receipt only, indistinguishable from a malformed stream.
+The strategy driver uses `run_request_invalid` and `{"option":"arguments"}`;
+its reason is in diagnostic text, without new typed argument keys.
+Unjailed file mode needs writable output and spool directories.
+
+The finalizer's stdout mode (`--out -` with a positive `--max-bytes`) remains
+accepted and writes no file. In valid jailed `docker/run_json.py` runs, the
+final JSON spool and output-column/series temporaries are unreachable:
+reports stay resident, fd outputs stay in the stream, and path sinks are refused.
 
 **The HOST must configure SIGXFSZ.** APP's `pf-jail.c` must install
 `SIG_IGN` for SIGXFSZ **before** applying `RLIMIT_FSIZE`, including the zero

@@ -394,13 +394,13 @@ def report_sink_fixture(tmp_path, *, temporary=False):
                          index, index + 1, False, number, 0, 'quote"\n漢', "", ""])
     rows += [["O", 0, ordinary.bars.T0, ordinary.bars.T0 + 1, -0., 4294967295.],
              ["V", 1, 1, 0, ordinary.bars.T0, ordinary.bars.T0 + 1, 0, 1, 1,
-              None, "0123456789abcdef", 'tail"\n漢' + "x" * 65537],
+              None, "0123456789abcdef", 'tail"\n漢' + "x" * (run_json._UncachedSinkFile.window + 1)],
              ["K", 50.]]
     library.counts, library.sha = ordinary.write_sink(sink.path, rows, outputs=True)
     report = run_json.ReportC()
     report.total_trades = library.counts["T"]
     assert library.counts == {"E": 5003, "T": 3, "O": 1, "V": 1, "K": 1}
-    assert Path(sink.path).stat().st_size > 3 * run_json._BoundedJSONFile.window
+    assert Path(sink.path).stat().st_size > 3 * run_json._UncachedSinkFile.window
     return sink, library, report, rows
 
 
@@ -526,13 +526,15 @@ def test_report_sink_changed_after_verification_consumes_the_tail(tmp_path, tag)
 
 
 def test_json_temporary_is_unbuffered_and_preserves_multichunk_bytes(tmp_path):
+    with ExitStack() as probe:
+        window = run_json._prepare_stream_report({}, probe, str(tmp_path)).window
     rows = [{"n": index, "message": 'quote"\n漢' + "x" * 513, "value": -0.}
-            for index in range(2051)]
+            for index in range(2051 + window // 513)]
     expected = (json.dumps({"rows": rows}, separators=(",", ":"), allow_nan=False) + "\n").encode("ascii")
-    assert len(expected) > 1024 * 1024 + run_json._BoundedJSONFile.window
     with ExitStack() as resources:
         artifact = run_json._prepare_stream_report(
             {"rows": run_json._JSONRecordArray(lambda: iter(rows))}, resources, str(tmp_path))
+        assert artifact.window == window and len(expected) > 2 * artifact.window
         assert isinstance(artifact.file, io.FileIO)
         assert os.fstat(artifact.fileno()).st_size == len(expected)
         actual = bytearray()
@@ -554,13 +556,14 @@ def test_failed_serialization_closes_unpublished_artifact_immediately(
     artifacts = []
     original = run_json._json_temporary
 
-    def temporary(resources, directory):
-        file = original(resources, directory)
+    def temporary(resources, directory, window=None):
+        file = original(resources, directory, window)
         artifacts.append((file, file.fileno()))
         return file
 
     def rows():
-        yield "x" * (run_json._BoundedJSONFile.window + 19)
+        final_window = artifacts[-1][0].window
+        yield "x" * (final_window + 19)
         raise failure("injected after a real write")
 
     monkeypatch.setattr(run_json, "_json_temporary", temporary)
@@ -585,8 +588,11 @@ def test_failed_serialization_closes_unpublished_artifact_immediately(
         assert list(tmp_path.iterdir()) == [sentinel]
 
 
-def test_automatic_sink_midwrite_failure_publishes_only_failure(tmp_path, monkeypatch):
-    original = run_json._BoundedJSONFile.write
+@pytest.mark.parametrize("method", ("write", "write_ascii"))
+def test_automatic_sink_midwrite_failure_publishes_only_failure(tmp_path, monkeypatch, method):
+    with ExitStack() as probe:
+        final_window = run_json._prepare_stream_report({}, probe, str(tmp_path)).window
+    original = getattr(run_json._BoundedJSONFile, method)
     artifacts = []
 
     def fail_after_window(file, text):
@@ -596,11 +602,26 @@ def test_automatic_sink_midwrite_failure_publishes_only_failure(tmp_path, monkey
             raise OSError("injected after a real write")
         return written
 
-    monkeypatch.setattr(run_json._BoundedJSONFile, "write", fail_after_window)
-    library = ordinary.SinkLibrary(pnls=tuple(float(i) for i in range(601)))
+    monkeypatch.setattr(run_json._BoundedJSONFile, method, fail_after_window)
+    prepared = []
+    prepare_report = run_json._prepare_stream_report
+
+    def counting_prepare(*args, **kwargs):
+        prepared.append(True)
+        return prepare_report(*args, **kwargs)
+
+    monkeypatch.setattr(run_json, "_prepare_stream_report", counting_prepare)
+    trade_count = final_window // 128 + 1
+    library = ordinary.SinkLibrary(pnls=tuple(float(i) for i in range(trade_count)))
     status, text, stderr, library = ordinary.invoke(
         tmp_path, monkeypatch, library=library, extra=["--spill-dir", str(tmp_path)])
     assert artifacts and artifacts[0].size > artifacts[0].window
+    # Pin WHICH file fails: the write row reaches the final artifact; the
+    # write_ascii row fails in a trade spool while the sink is verified, before
+    # the final artifact exists. Spools and the final artifact share the large
+    # window inside the per-run budget, so the window alone cannot tell them apart.
+    assert bool(prepared) == (method == "write")
+    assert artifacts[0].window == final_window
     assert status == 1 and stderr == ""
     assert text == run_json.failure_line(
         "report sink write failed", "report_sink_failed", {"reason": "scratch_io"})

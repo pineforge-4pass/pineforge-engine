@@ -21,6 +21,23 @@
 
 namespace pineforge::detail {
 
+void CommandScratchPhysicalIoStats::charge(void* context, const ScratchIoCharge& io) noexcept {
+    auto& self = *static_cast<CommandScratchPhysicalIoStats*>(context);
+    const auto add = [](std::uint64_t& counter, std::uint64_t value) noexcept {
+        const auto maximum = std::numeric_limits<std::uint64_t>::max();
+        counter = value > maximum - counter ? maximum : counter + value;
+    };
+    if (io.operation == ScratchIoOperation::read_page) {
+        add(self.reads, 1);
+        add(self.read_bytes, io.bytes);
+        if (io.status == ScratchStatus::ok) add(self.completed_reads, 1);
+    } else if (io.operation == ScratchIoOperation::write_page) {
+        add(self.writes, 1);
+        add(self.write_bytes, io.bytes);
+    } else add(self.syncs, 1);
+    if (io.status != ScratchStatus::ok) add(self.failures, 1);
+}
+
 bool CommandScratchByteBudget::reserve(std::uint64_t bytes) noexcept {
     if (limit == 0) return true;
     auto used = live_bytes.load(std::memory_order_relaxed);
@@ -71,6 +88,7 @@ std::uint64_t scale_bytes(std::uint64_t value, std::uint64_t multiplier,
 }
 
 thread_local ScratchIoObserver command_scratch_observer{};
+thread_local ScratchIoObserver command_scratch_physical_observer{};
 thread_local CommandScratchByteCap command_scratch_byte_cap;
 thread_local std::weak_ptr<CommandScratchByteBudget> command_scratch_environment_budget;
 
@@ -228,10 +246,27 @@ public:
         const auto create_message = scratch_create_message("command scratch create", path, refusal);
         if (path.back() != '/') path += '/';
         path += "pineforge-command-XXXXXX";
+        if (mode() == QuotaMode::managed)
+            quota_ = std::make_unique<ScratchFileQuota>(QuotaArtifact::table);
         const int opened = ::mkstemp(path.data());
-        if (opened < 0)
+        if (opened < 0) {
+            const int error = errno;
+            if (quota_) quota_->create_failed();
             throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
-                std::system_error(errno, std::generic_category(), create_message));
+                std::system_error(error, std::generic_category(), create_message));
+        }
+        try {
+            if (quota_) {
+                const int error = quota_->created(opened);
+                if (error != 0)
+                    throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
+                        std::system_error(error, std::generic_category(), "command scratch backing"));
+            }
+        } catch (...) {
+            ::close(opened);
+            ::unlink(path.c_str());
+            throw;
+        }
 
         int result;
         do {
@@ -243,12 +278,14 @@ public:
             throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
                 std::system_error(error, std::generic_category(), "command scratch unlink"));
         }
+        if (quota_) quota_->unlinked();
         do {
             result = ::fcntl(opened, F_SETFD, FD_CLOEXEC);
         } while (result < 0 && errno == EINTR);
         if (result < 0) {
             const int error = errno;
-            ::close(opened);
+            const int closed = ::close(opened);
+            if (closed == 0 && quota_) quota_->closed();
             throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
                 std::system_error(error, std::generic_category(), "command scratch cloexec"));
         }
@@ -258,7 +295,8 @@ public:
     ~CommandScratchFile() noexcept override {
         // Retrying close after EINTR could close a descriptor reused by another
         // thread on hosts where the first close already released it.
-        ::close(fd_);
+        const int result = ::close(fd_);
+        if (result == 0 && quota_) quota_->closed();
     }
 
     std::uint64_t page_count() const noexcept override { return extent_; }
@@ -287,33 +325,19 @@ protected:
     ScratchStatus do_write_page(ScratchPageId id, ScratchBytes source) noexcept override {
         off_t offset, end;
         if (!page_offsets(id, offset, end)) return ScratchStatus::programming_error;
-        if (id >= extent_) {
-            int result;
-            do {
-                result = ::ftruncate(fd_, end);
-            } while (result < 0 && errno == EINTR);
-            if (result < 0) {
-                const int error = errno;
-                return command_scratch_io_status(error);
-            }
-            // ftruncate exposes zero-filled holes. Keep the real new extent
-            // even if the following positional write fails or is short.
-            extent_ = id + 1;
+        // CachedScratchBacking has already checked its local logical byte
+        // budget and selected a real spill before reaching this disk hook.
+        if (!quota_) return write_disk_page(id, source, offset, end, nullptr);
+        try {
+            ScratchFileQuota::Growth reservation(*quota_, static_cast<std::uint64_t>(end));
+            const auto status = write_disk_page(id, source, offset, end, &reservation);
+            if (status == ScratchStatus::ok) reservation.finish();
+            return status;
+        } catch (...) {
+            // The active quota endpoint retains the original typed refusal
+            // for the status-only owner. No denied sizing/write syscall ran.
+            return ScratchStatus::io_error;
         }
-        std::size_t transferred = 0;
-        while (transferred < source.size) {
-            const auto chunk = std::min(source.size - transferred,
-                static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
-            ssize_t count;
-            do {
-                count = ::pwrite(fd_, source.data + transferred, chunk,
-                                 offset + static_cast<off_t>(transferred));
-            } while (count < 0 && errno == EINTR);
-            if (count < 0) return command_scratch_io_status(errno);
-            if (static_cast<std::size_t>(count) != chunk) return ScratchStatus::io_error;
-            transferred += static_cast<std::size_t>(count);
-        }
-        return ScratchStatus::ok;
     }
 
     ScratchStatus do_sync(ScratchDurability durability) noexcept override {
@@ -332,6 +356,38 @@ protected:
     }
 
 private:
+    ScratchStatus write_disk_page(ScratchPageId id, ScratchBytes source, off_t offset, off_t end,
+                                  ScratchFileQuota::Growth* reservation) noexcept {
+        if (id >= extent_) {
+            int result;
+            do {
+                result = ::ftruncate(fd_, end);
+            } while (result < 0 && errno == EINTR);
+            if (result < 0) {
+                const int error = errno;
+                return command_scratch_io_status(error);
+            }
+            // ftruncate exposes zero-filled holes. Keep the real new extent
+            // even if the following positional write fails or is short.
+            extent_ = id + 1;
+            if (reservation) reservation->truncated(static_cast<std::uint64_t>(end));
+        }
+        std::size_t transferred = 0;
+        while (transferred < source.size) {
+            const auto chunk = std::min(source.size - transferred,
+                static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+            ssize_t count;
+            do {
+                count = ::pwrite(fd_, source.data + transferred, chunk,
+                                 offset + static_cast<off_t>(transferred));
+            } while (count < 0 && errno == EINTR);
+            if (count < 0) return command_scratch_io_status(errno);
+            if (static_cast<std::size_t>(count) != chunk) return ScratchStatus::io_error;
+            transferred += static_cast<std::size_t>(count);
+        }
+        return ScratchStatus::ok;
+    }
+
     bool page_offsets(ScratchPageId id, off_t& offset, off_t& end) const noexcept {
         const auto limit = static_cast<std::uintmax_t>(std::numeric_limits<off_t>::max());
         const auto size = static_cast<std::uintmax_t>(page_size());
@@ -343,6 +399,7 @@ private:
 
     int fd_ = -1;
     std::uint64_t extent_ = 0;
+    std::unique_ptr<ScratchFileQuota> quota_;
 };
 
 } // namespace
@@ -351,6 +408,12 @@ pineforge::detail::ScratchIoObserver set_command_scratch_io_observer(
     pineforge::detail::ScratchIoObserver observer) noexcept {
     const auto previous = command_scratch_observer;
     command_scratch_observer = observer;
+    return previous;
+}
+
+ScratchIoObserver set_command_scratch_physical_io_observer(ScratchIoObserver observer) noexcept {
+    const auto previous = command_scratch_physical_observer;
+    command_scratch_physical_observer = observer;
     return previous;
 }
 
@@ -368,8 +431,19 @@ std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
     return make_command_scratch_backing(page_size, CachedScratchBacking::kCacheBytes);
 }
 
+std::unique_ptr<ScratchBacking> make_command_scratch_backing(
+    std::size_t page_size, CacheCapacity capacity) {
+    const auto payload = capacity.payload_bytes(page_size);
+    return make_command_scratch_backing(page_size, payload, payload);
+}
+
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
     std::size_t page_size, std::size_t resident_bytes) {
+    return make_command_scratch_backing(page_size, resident_bytes, CachedScratchBacking::kCacheBytes);
+}
+
+std::unique_ptr<ScratchBacking> make_command_scratch_backing(
+    std::size_t page_size, std::size_t resident_bytes, std::size_t cache_bytes) {
     if (page_size == 0)
         throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
                                            "command scratch page size is zero");
@@ -386,16 +460,18 @@ std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
             command_scratch_environment_budget = budget;
         }
     }
-    // The cache decorator owns the logical I/O observer (it charges hits too):
-    // the inner backing, file or arena, is constructed with NO observer.
+    // Only the cache decorator owns the logical observer (it charges hits too).
+    // The independent diagnostic observer sees inner operations, never hits.
+    // Its optional allocation may bypass caching. Disk byte admission still
+    // belongs to the decorator; arena admission still belongs to the inner.
     if (const auto* arena = ScratchArena::attached())
         return std::make_unique<CachedScratchBacking>(
             std::make_unique<CommandScratchArena>(
-                page_size, ScratchIoObserver{}, std::move(budget), arena->stats()),
-            command_scratch_observer);
+                page_size, command_scratch_physical_observer, std::move(budget), arena->stats()),
+            command_scratch_observer, 0, CommandScratchByteCap{}, cache_bytes);
     return std::make_unique<CachedScratchBacking>(
-        std::make_unique<CommandScratchFile>(page_size, ScratchIoObserver{}),
-        command_scratch_observer, resident_bytes, std::move(budget));
+        std::make_unique<CommandScratchFile>(page_size, command_scratch_physical_observer),
+        command_scratch_observer, resident_bytes, std::move(budget), cache_bytes);
 }
 
 } // namespace pineforge::detail

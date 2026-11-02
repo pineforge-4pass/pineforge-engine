@@ -68,7 +68,7 @@ struct Headers {
     }
 };
 
-void check_url(const HttpOptions& options, bool websocket) {
+void check_url(const HttpOptions& options, bool websocket, bool feed = false) {
     if (options.url.empty() || options.url.size() > 64 * 1024 ||
         options.url.find_first_of("\r\n") != std::string::npos ||
         options.url.find('\0') != std::string::npos)
@@ -92,19 +92,22 @@ void check_url(const HttpOptions& options, bool websocket) {
             throw std::runtime_error("native HTTP URL must not contain user information or a fragment");
         }
     }
-    if (options.connect_timeout_ms <= 0 || options.total_timeout_ms <= 0 ||
-        options.connect_timeout_ms > options.total_timeout_ms ||
-        options.total_timeout_ms > 300000)
-        throw std::runtime_error("native HTTP timeouts must be positive, ordered and at most 300 seconds");
-    if (options.idle_timeout_ms < 0 || options.idle_timeout_ms > 300000 ||
-        options.message_timeout_ms < 0 || options.message_timeout_ms > 300000)
-        throw std::runtime_error("feed timeouts must be at most 300 seconds");
+    if (options.connect_timeout_ms < 0 || options.total_timeout_ms < 0 ||
+        (options.total_timeout_ms && options.connect_timeout_ms > options.total_timeout_ms) ||
+        (!feed && (!options.connect_timeout_ms || !options.total_timeout_ms || options.total_timeout_ms > 300000)))
+        throw std::runtime_error(feed
+            ? "native feed timeouts must be nonnegative and ordered when both are positive"
+            : "native HTTP timeouts must be positive, ordered and at most 300 seconds");
+    if (options.idle_timeout_ms < 0 || options.message_timeout_ms < 0 ||
+        (!feed && (options.idle_timeout_ms > 300000 || options.message_timeout_ms > 300000)))
+        throw std::runtime_error(feed ? "feed timeouts must not be negative" :
+                                      "feed timeouts must be at most 300 seconds");
 }
 
-CurlHandle make_handle(const HttpOptions& options, bool websocket = false) {
+CurlHandle make_handle(const HttpOptions& options, bool websocket = false, bool feed = false) {
     initialize_curl();
     if (websocket) validate_websocket(options);
-    else check_url(options, false);
+    else check_url(options, false, feed);
     CurlHandle curl(curl_easy_init(), &curl_easy_cleanup);
     if (!curl) throw std::runtime_error("native HTTP handle allocation failed");
     option(curl.get(), CURLOPT_URL, options.url.c_str());
@@ -112,7 +115,7 @@ CurlHandle make_handle(const HttpOptions& options, bool websocket = false) {
         ? https_proxy : http_proxy;
     option(curl.get(), CURLOPT_PROXY, (proxy.empty() ? all_proxy : proxy).c_str());
     option(curl.get(), CURLOPT_NOPROXY, no_proxy.c_str());
-    option(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, options.connect_timeout_ms);
+    option(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, connect_timeout_option(options.connect_timeout_ms));
     option(curl.get(), CURLOPT_TIMEOUT_MS, options.total_timeout_ms);
     option(curl.get(), CURLOPT_NOSIGNAL, 1L);
     option(curl.get(), CURLOPT_FOLLOWLOCATION, 0L);
@@ -139,6 +142,8 @@ struct Response {
     bool retain = false;
     bool too_large = false;
     bool allocation_failed = false;
+    std::function<void()> on_input;
+    std::exception_ptr input_error;
 };
 
 struct FeedProgress {
@@ -158,7 +163,8 @@ int feed_progress(void* userdata, curl_off_t, curl_off_t received, curl_off_t, c
         if (progress.stopped && progress.stopped()) { progress.cancelled = true; return 1; }
         const auto now = std::chrono::steady_clock::now();
         if (received != progress.received) { progress.received = received; progress.last_data = now; }
-        if (now - progress.last_data >= std::chrono::milliseconds(progress.idle_timeout_ms)) {
+        if (progress.idle_timeout_ms &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - progress.last_data).count() >= progress.idle_timeout_ms) {
             progress.timed_out = true;
             return 1;
         }
@@ -181,6 +187,8 @@ std::size_t receive(char* data, std::size_t size, std::size_t nmemb, void* userd
     auto& response = *static_cast<Response*>(userdata);
     if (size != 0 && nmemb > std::numeric_limits<std::size_t>::max() / size) return 0;
     const auto count = size * nmemb;
+    try { if (count && response.on_input) response.on_input(); }
+    catch (...) { response.input_error = std::current_exception(); return 0; }
     if (count > max_feed_bytes - response.received) {
         response.too_large = true;
         return 0;
@@ -223,7 +231,9 @@ DeliveryResult response_result(CURL* curl, const Response& response, CURLcode co
 DeliveryResult perform(CURL* curl, Response& response) {
     option(curl, CURLOPT_WRITEFUNCTION, &receive);
     option(curl, CURLOPT_WRITEDATA, &response);
-    return response_result(curl, response, curl_easy_perform(curl));
+    const auto code = curl_easy_perform(curl);
+    if (response.input_error) std::rethrow_exception(response.input_error);
+    return response_result(curl, response, code);
 }
 
 bool valid_utf8(std::string_view bytes) {
@@ -247,13 +257,27 @@ bool valid_utf8(std::string_view bytes) {
 #if LIBCURL_VERSION_NUM >= 0x075600
 using Clock = std::chrono::steady_clock;
 
-bool wait_socket(CURL* curl, short events, Clock::time_point deadline,
+struct Deadline {
+    long timeout_ms;
+    Clock::time_point started = Clock::now();
+    explicit Deadline(long milliseconds) : timeout_ms(milliseconds) {}
+    long remaining_ms() const {
+        if (!timeout_ms) return std::numeric_limits<long>::max();
+        // Compare elapsed milliseconds without converting a large bound to clock ticks.
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            Clock::now() - started).count();
+        return elapsed >= timeout_ms ? 0 : timeout_ms - static_cast<long>(elapsed);
+    }
+    bool expired() const { return timeout_ms && remaining_ms() == 0; }
+};
+
+bool wait_socket(CURL* curl, short events, const Deadline& deadline,
                  const std::function<bool()>& stopped) {
     curl_socket_t socket = CURL_SOCKET_BAD;
     if (curl_easy_getinfo(curl, CURLINFO_ACTIVESOCKET, &socket) != CURLE_OK || socket == CURL_SOCKET_BAD)
         throw std::runtime_error("native WebSocket socket unavailable");
     while (!stopped()) {
-        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+        const auto left = deadline.remaining_ms();
         if (left <= 0) throw std::runtime_error("native WebSocket idle or message timeout");
         pollfd fd {socket, events, 0};
         const int rc = poll(&fd, 1, static_cast<int>(std::min<std::int64_t>(left, 100)));
@@ -272,7 +296,7 @@ bool send_subscription(CURL* curl, std::string_view bytes, long timeout_ms,
                        const std::function<bool()>& stopped) {
     std::size_t offset = 0;
     bool begun = false;
-    const auto deadline = Clock::now() + std::chrono::milliseconds(timeout_ms);
+    const Deadline deadline(timeout_ms);
     while (offset < bytes.size() && !stopped()) {
         std::size_t sent = 0;
         const auto code = curl_ws_send(curl, bytes.data() + offset, bytes.size() - offset,
@@ -283,7 +307,7 @@ bool send_subscription(CURL* curl, std::string_view bytes, long timeout_ms,
         if (sent > bytes.size() - offset)
             throw std::runtime_error("native WebSocket invalid subscription send count");
         offset += sent;
-        if (Clock::now() >= deadline) throw std::runtime_error("native WebSocket subscription timeout");
+        if (deadline.expired()) throw std::runtime_error("native WebSocket subscription timeout");
         if (offset < bytes.size() && !wait_socket(curl, POLLOUT, deadline, stopped)) return false;
     }
     return !stopped();
@@ -291,6 +315,33 @@ bool send_subscription(CURL* curl, std::string_view bytes, long timeout_ms,
 #endif
 
 } // namespace
+
+long connect_timeout_option(long connect_timeout_ms) {
+    return connect_timeout_ms ? connect_timeout_ms : std::numeric_limits<long>::max();
+}
+
+long feed_connect_timeout_ms(std::uint64_t seconds, long total_ms) {
+    if (!seconds) return 0;
+    if (seconds > static_cast<std::uint64_t>(std::numeric_limits<long>::max()) / 1000)
+        throw std::runtime_error("--feed-connect-timeout exceeds milliseconds range for network feeds");
+    const auto milliseconds = static_cast<long>(seconds * 1000);
+    if (total_ms && milliseconds > total_ms)
+        throw std::runtime_error("--feed-connect-timeout exceeds the nonzero feed total timeout");
+    return milliseconds;
+}
+
+HttpOptions feed_http_options(std::string url, bool allow_insecure_http, bool websocket,
+                              std::uint64_t connect_seconds, std::uint64_t idle_seconds,
+                              std::uint64_t message_seconds) {
+    HttpOptions options;
+    options.url = std::move(url);
+    options.allow_insecure_http = allow_insecure_http;
+    options.total_timeout_ms = static_cast<long>(message_seconds * 1000);
+    options.connect_timeout_ms = feed_connect_timeout_ms(connect_seconds, options.total_timeout_ms);
+    options.idle_timeout_ms = static_cast<long>(idle_seconds * 1000);
+    if (websocket) options.message_timeout_ms = options.total_timeout_ms;
+    return options;
+}
 
 std::string sha256_hex(std::string_view bytes) {
     std::array<unsigned char, EVP_MAX_MD_SIZE> digest {};
@@ -337,15 +388,17 @@ DeliveryResult post_webhook(const HttpOptions& options, const StoredEvent& event
 }
 #endif
 
-std::string get_feed_snapshot(const HttpOptions& options, const std::function<bool()>& stopped) {
-    auto curl = make_handle(options);
-    FeedProgress progress{stopped, options.idle_timeout_ms ? options.idle_timeout_ms : options.total_timeout_ms};
+std::string get_feed_snapshot(const HttpOptions& options, const std::function<bool()>& stopped,
+                              const std::function<void()>& on_input) {
+    auto curl = make_handle(options, false, true);
+    FeedProgress progress{stopped, options.idle_timeout_ms};
     attach_progress(curl.get(), progress);
     Headers headers;
     headers.add("Accept: application/x-ndjson, application/jsonl, text/plain");
     option(curl.get(), CURLOPT_HTTPHEADER, headers.value);
     Response response;
     response.retain = true;
+    response.on_input = on_input;
     const auto result = perform(curl.get(), response);
     check_progress(progress);
     if (progress.cancelled) return {};
@@ -457,7 +510,7 @@ void capture_proxy_environment() {
 
 void validate_websocket(const HttpOptions& options) {
     initialize_curl();
-    check_url(options, true);
+    check_url(options, true, true);
     const auto* info = curl_version_info(CURLVERSION_NOW);
     if (!info || info->version_num < 0x080e01)
         throw std::runtime_error("native WebSocket requires libcurl 8.14.1 or newer for complete-message finality (loaded " +
@@ -471,7 +524,8 @@ void validate_websocket(const HttpOptions& options) {
 void receive_websocket(const HttpOptions& options, std::string_view subscription,
                        const std::function<bool(std::string_view)>& on_message,
                        const std::function<bool()>& stopped,
-                       const std::function<void(std::size_t)>& buffered) {
+                       const std::function<void(std::size_t)>& buffered,
+                       const std::function<void()>& on_input) {
     if (!on_message || !stopped || subscription.size() > max_event_bytes || !valid_utf8(subscription))
         throw std::runtime_error("native WebSocket invalid callbacks or subscription");
     if (stopped()) return;
@@ -483,7 +537,7 @@ void receive_websocket(const HttpOptions& options, std::string_view subscription
     option(curl.get(), CURLOPT_CONNECT_ONLY, 2L);
     option(curl.get(), CURLOPT_HTTP_VERSION, static_cast<long>(CURL_HTTP_VERSION_1_1));
     Response handshake_response;
-    FeedProgress progress{stopped, options.idle_timeout_ms ? options.idle_timeout_ms : options.total_timeout_ms};
+    FeedProgress progress{stopped, options.idle_timeout_ms};
     attach_progress(curl.get(), progress);
     const auto handshake = perform(curl.get(), handshake_response);
     check_progress(progress);
@@ -491,9 +545,7 @@ void receive_websocket(const HttpOptions& options, std::string_view subscription
     if (handshake.status != 101 || (!handshake.error.empty() && handshake.error != "http_status"))
         throw std::runtime_error("native WebSocket handshake failed");
     if (!send_subscription(curl.get(), subscription, options.total_timeout_ms, stopped)) return;
-    const auto idle_timeout = std::chrono::milliseconds(options.idle_timeout_ms ? options.idle_timeout_ms : options.total_timeout_ms);
-    const auto message_timeout = std::chrono::milliseconds(options.message_timeout_ms ? options.message_timeout_ms : options.total_timeout_ms);
-    auto idle_deadline = Clock::now() + idle_timeout;
+    auto idle_deadline = Deadline(options.idle_timeout_ms);
     auto message_deadline = idle_deadline;
     bool assembling = false;
     std::string message;
@@ -501,8 +553,10 @@ void receive_websocket(const HttpOptions& options, std::string_view subscription
     int frame_flags = 0;
     for (;;) {
         if (stopped()) return;
-        const auto deadline = assembling ? std::min(idle_deadline, message_deadline) : idle_deadline;
-        if (Clock::now() >= deadline) throw std::runtime_error("native WebSocket idle or message timeout");
+        const auto deadline = assembling && message_deadline.timeout_ms &&
+            (!idle_deadline.timeout_ms || message_deadline.remaining_ms() < idle_deadline.remaining_ms())
+            ? message_deadline : idle_deadline;
+        if (deadline.expired()) throw std::runtime_error("native WebSocket idle or message timeout");
         std::array<char, 16384> buffer {};
         std::size_t received = 0;
         const curl_ws_frame* meta = nullptr;
@@ -514,13 +568,14 @@ void receive_websocket(const HttpOptions& options, std::string_view subscription
         if (code != CURLE_OK || !meta)
             throw std::runtime_error(assembling ? "native WebSocket truncated text message" :
                                                  "native WebSocket receive failed or connection closed");
+        if (on_input) on_input();
         if (meta->flags & CURLWS_CLOSE)
             throw std::runtime_error(assembling ? "native WebSocket closed during text message" :
                                                  "native WebSocket peer closed connection");
         if (meta->flags & (CURLWS_PING | CURLWS_PONG)) {
             // libcurl handles automatic PONG responses. No control frame may
             // become a strategy input or reset an incomplete-message deadline.
-            idle_deadline = Clock::now() + idle_timeout;
+            idle_deadline = Deadline(options.idle_timeout_ms);
             continue;
         }
         if ((meta->flags & CURLWS_BINARY) || !(meta->flags & CURLWS_TEXT) ||
@@ -530,7 +585,7 @@ void receive_websocket(const HttpOptions& options, std::string_view subscription
             throw std::runtime_error("native WebSocket requires ordered text frames");
         frame_flags = meta->flags;
         if (!assembling) {
-            message_deadline = Clock::now() + message_timeout;
+            message_deadline = Deadline(options.message_timeout_ms);
             assembling = true;
         }
         if (received > max_event_bytes - message.size() ||
@@ -539,7 +594,7 @@ void receive_websocket(const HttpOptions& options, std::string_view subscription
         message.append(buffer.data(), received);
         if (buffered) buffered(message.size());
         frame_offset += received;
-        idle_deadline = Clock::now() + idle_timeout;
+        idle_deadline = Deadline(options.idle_timeout_ms);
         if (meta->bytesleft != 0) continue;
         frame_offset = 0;
         if (meta->flags & CURLWS_CONT) continue;
@@ -548,7 +603,7 @@ void receive_websocket(const HttpOptions& options, std::string_view subscription
         message.clear();
         if (buffered) buffered(0);
         assembling = false;
-        idle_deadline = Clock::now() + idle_timeout;
+        idle_deadline = Deadline(options.idle_timeout_ms);
     }
 #endif
 }

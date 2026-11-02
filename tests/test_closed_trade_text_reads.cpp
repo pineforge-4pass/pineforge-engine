@@ -79,15 +79,12 @@ constexpr Size kPopulation = 25000;
 constexpr Size kChunk = detail::ScratchFile::kCacheBytes;
 constexpr Size kTail = TradeLedger::kResidentRows * TradeLedger::kRecordBytes;
 constexpr Size ceil_div(Size n, Size d) { return n / d + (n % d != 0); }
-constexpr Size cache_capacity(Size population) {
-    Size capacity = TradeLedger::kResidentRows;
-    while (capacity < population) capacity *= 2;
-    return capacity < TradeLedger::kDefaultCacheRows
-        ? capacity : TradeLedger::kDefaultCacheRows;
-}
-constexpr Size kCapacity = cache_capacity(kPopulation);
-static_assert(kCapacity == 32768 && kPopulation <= kCapacity,
-              "C=min(65536,next_power_of_two(max(64,25000)))=32768");
+constexpr Size kPageSlots = 256;
+constexpr Size kPageBytes = kPageSlots * TradeLedger::kLedgerEntryBytes;
+constexpr Size kPages = ceil_div(kPopulation, kPageSlots);
+constexpr Size kTableBytes = ceil_div(TradeLedger::kDefaultCacheRows, kPageSlots) * sizeof(void*);
+static_assert(kPages == 98 && kPopulation <= TradeLedger::kDefaultCacheRows,
+              "25000 contiguous distinct slots touch ceil(25000/256)=98 pages");
 
 enum class Field { EntryId, ExitId, EntryComment, ExitComment };
 constexpr const char* field_name(Field field) {
@@ -429,10 +426,10 @@ template<Field F> void cache_fit_population(View rhs, const char* label) {
     append_inputs<F>(host, oracle);
     REQUIRE(rhs.size() + 3 <= TradeLedger::kCacheStringBytes); // 96+1+1+1=99<=128.
     warm(host.ledger(), kPopulation);
-    // min(65536,next_power_of_two(max(64,25000)))=32768 entries;
-    // 32768*(168+2*sizeof(size_type)+128)=10,223,616 bytes on 64-bit.
-    const Size fixed = TradeLedger::resident_cache_bytes(1) - TradeLedger::kLedgerEntryBytes;
-    EXPECT(host.ledger().cache_resident_bytes() == fixed + kCapacity * TradeLedger::kLedgerEntryBytes);
+    // ceil(25000/256)=98 pages, each 256*312=79,872 bytes, plus
+    // ceil(65536/256) owning pointers. Full-cap allocation fails this equality.
+    const Size fixed = TradeLedger::resident_cache_bytes(1) - TradeLedger::kLedgerEntryBytes - sizeof(void*);
+    EXPECT(host.ledger().cache_resident_bytes() == fixed + kTableBytes + kPages * kPageBytes);
     // All P contiguous keys occupy distinct slots, so occupied entries=P.
     EXPECT(host.ledger().cache_size() == kPopulation);
     measured_pass<F, false>(host, oracle, rhs, label, kIterations,
@@ -618,6 +615,168 @@ template<class Action> void fails_allocation(Action action) {
     EXPECT(global_allocation::refused - refused_before == 1);
 }
 
+void page_allocation_failures_and_growth_hits() {
+    const Trade first = tiny_trade();
+    const auto begin_diagnostics_run = [](Reader& reader, std::uint64_t run_number = 1) {
+        NativeRunSpec spec;
+        spec.identity = {"ledger-cache-diagnostics", run_number};
+        spec.input_tf = spec.script_tf = "1";
+        spec.tickerid = "TEST:CACHE";
+        spec.timezone = "UTC";
+        spec.session = "24x7";
+        spec.initial_capital = 10000;
+        spec.point_value = spec.account_fx = 1;
+        spec.price_tick = .01;
+        spec.report_policy = NativeReportPolicy::KernelRecorded;
+        REQUIRE(reader.configure_native(spec).status == NativeSetupStatus::Applied);
+        const Bar bar{100, 100, 100, 100, 1, INT64_C(1704067200000)};
+        reader.run(&bar, 1);
+        REQUIRE(reader.last_run_status() == 0 && reader.last_error().empty());
+        ReportC report{};
+        reader.fill_report(&report);
+        BacktestEngine::free_report(&report);
+    };
+    const auto reported = [](Reader& reader, std::uint64_t expected_bypasses) {
+        std::uint64_t bytes = 0, bypasses = 0;
+        const auto handle = static_cast<pf_strategy_t>(
+            static_cast<BacktestEngine*>(&reader));
+        REQUIRE(pf_report_cache_stats(handle, &bytes, &bypasses) == 0);
+        EXPECT(bytes == reader.ledger().cache_resident_bytes());
+        EXPECT(bypasses == expected_bypasses);
+    };
+    const auto bypasses_allocation = [&](Reader& reader, auto action) {
+        auto& target = reader.ledger();
+        EXPECT(!target.cache_allocation_failed());
+        EXPECT(target.read_cache_stats().allocation_bypass_count == 0);
+        reported(reader, 0);
+        const auto refused = global_allocation::refused;
+        global_allocation::fail_after = 0;
+        try { action(); }
+        catch (...) {
+            global_allocation::fail_after = std::numeric_limits<Size>::max();
+            throw;
+        }
+        global_allocation::fail_after = std::numeric_limits<Size>::max();
+        REQUIRE(global_allocation::refused == refused + 1);
+        EXPECT(target.cache_allocation_failed());
+        EXPECT(target.read_cache_stats().allocation_bypass_count == 1);
+        EXPECT(target.read_cache_stats().bypass_reason
+               == TradeLedger::CacheBypassReason::allocation_failed);
+        reported(reader, 1);
+        reported(reader, 1); // Queries cannot add a second charge or bypass.
+    };
+    Reader cold;
+    begin_diagnostics_run(cold);
+    auto& bypassed = cold.ledger();
+    bypassed.set_scratch_directory(".");
+    bypassed.set_cache_rows(2 * kPageSlots + 3);
+    for (Size i = 0; i < kPageSlots; ++i) bypassed.push_back(first);
+    const auto fixed = bypassed.cache_resident_bytes();
+    bypasses_allocation(cold, [&] {
+        EXPECT(bypassed.entry_price_at(0) == first.entry_price);
+    });
+    EXPECT(bypassed.cache_resident_bytes() == fixed);
+    EXPECT(bypassed.cache_size() == 0);
+    check_row(cold, 0, first);
+    const auto allocations = global_allocation::allocations;
+    for (Size i = 0; i < bypassed.size(); ++i)
+        EXPECT(bypassed.entry_price_at(i) == first.entry_price);
+    EXPECT(global_allocation::allocations == allocations);
+    EXPECT(bypassed.read_cache_stats().allocation_bypass_count == 1);
+
+    Reader appender;
+    begin_diagnostics_run(appender);
+    auto& appended = appender.ledger();
+    appended.set_scratch_directory(".");
+    appended.set_cache_rows(2 * kPageSlots + 3);
+    for (Size i = 0; i < kPageSlots; ++i) appended.push_back(first);
+    check_row(appender, 0, first);
+    const auto append_bytes = appended.cache_resident_bytes();
+    bypasses_allocation(appender, [&] { appended.push_back(first); });
+    exact_count(appended, kPageSlots + 1);
+    EXPECT(appended.cache_size() == 1);
+    EXPECT(appended.cache_resident_bytes() == append_bytes);
+    check_row(appender, kPageSlots, first);
+    check_row(appender, 0, first);
+    // Move the published row outside the descriptor window and read backing.
+    for (Size i = 0; i < TradeLedger::kResidentRows; ++i) appended.push_back(first);
+    check_row(appender, kPageSlots, first);
+    EXPECT(appended.read_cache_stats().allocation_bypass_count == 1);
+
+    // Healthy growth retains the original page and its cached hits.
+    Reader host;
+    begin_diagnostics_run(host);
+    auto& ledger = host.ledger();
+    ledger.set_scratch_directory(".");
+    ledger.set_cache_rows(2 * kPageSlots + 3);
+    for (Size i = 0; i < kPageSlots; ++i) ledger.push_back(first);
+    check_row(host, 0, first);
+    const auto one_page = ledger.cache_resident_bytes();
+    ledger.push_back(first);
+    exact_count(ledger, kPageSlots + 1);
+    EXPECT(ledger.cache_size() == 2);
+    EXPECT(ledger.cache_resident_bytes() == one_page + kPageBytes);
+    // Key 0 is older than the descriptor tail. It must remain a hit after
+    // allocating page 1: discard-on-growth causes real descriptor/text I/O.
+    const auto reads_before = text_reads::reads;
+    text_reads::measuring = true;
+    const bool equal = ledger.entry_id_equals(0, first.entry_id);
+    text_reads::measuring = false;
+    EXPECT(equal);
+    EXPECT(text_reads::reads == reads_before);
+    reported(host, 0);
+    reported(cold, 1); // Another handle's healthy admission cannot reset this run.
+
+    Reader sparse;
+    begin_diagnostics_run(sparse);
+    auto& other = sparse.ledger();
+    other.set_scratch_directory(".");
+    other.set_cache_rows(2 * kPageSlots + 3);
+    for (Size i = 0; i <= 2 * kPageSlots; ++i) other.push_back(first);
+    check_row(sparse, 0, first); // Only page 0 exists.
+    const auto before = other.cache_resident_bytes();
+    bypasses_allocation(sparse, [&] {
+        EXPECT(other.entry_price_at(2 * kPageSlots) == first.entry_price);
+    });
+    EXPECT(other.cache_size() == 1);
+    EXPECT(other.cache_resident_bytes() == before);
+    auto replacement = first;
+    replacement.entry_id = "replaced";
+    other.replace(2 * kPageSlots, replacement);
+    exact_count(other, 2 * kPageSlots + 1);
+    EXPECT(other.cache_size() == 1);
+    EXPECT(other.cache_resident_bytes() == before);
+    check_row(sparse, 2 * kPageSlots, replacement);
+    check_row(sparse, 0, first);
+    EXPECT(other.read_cache_stats().allocation_bypass_count == 1);
+
+    // Independently refuse the page needed by a replacement fill. The new
+    // descriptor and strings still publish, without a preceding failed read.
+    Reader replacer;
+    begin_diagnostics_run(replacer);
+    auto& replaced = replacer.ledger();
+    replaced.set_scratch_directory(".");
+    replaced.set_cache_rows(2 * kPageSlots + 3);
+    for (Size i = 0; i <= 2 * kPageSlots; ++i) replaced.push_back(first);
+    check_row(replacer, 0, first);
+    const auto replace_bytes = replaced.cache_resident_bytes();
+    bypasses_allocation(replacer, [&] {
+        replaced.replace(2 * kPageSlots, replacement);
+    });
+    exact_count(replaced, 2 * kPageSlots + 1);
+    EXPECT(replaced.cache_size() == 1);
+    EXPECT(replaced.cache_resident_bytes() == replace_bytes);
+    check_row(replacer, 2 * kPageSlots, replacement);
+    for (Size i = 0; i < TradeLedger::kResidentRows; ++i) replaced.push_back(first);
+    check_row(replacer, 2 * kPageSlots, replacement);
+    check_row(replacer, 0, first);
+    EXPECT(replaced.read_cache_stats().allocation_bypass_count == 1);
+    begin_diagnostics_run(cold, 2);
+    reported(cold, 0);
+    EXPECT(cold.ledger().cache_size() == 0 && !cold.ledger().cache_allocation_failed());
+    reported(appender, 1);
+}
+
 void mutations_and_counts() {
     Reader host;
     auto& ledger = host.ledger();
@@ -633,14 +792,14 @@ void mutations_and_counts() {
     exact_count(ledger, 1); // 0+1.
     ledger.push_back(tiny_trade()); // rvalue overload.
     exact_count(ledger, 2); // 1+1.
-    check_row(host, 0, first); // Allocate the initial 64-entry cache.
+    check_row(host, 0, first); // Allocate the table and first 256-slot page.
     Size end = 2;
     while (end < TradeLedger::kResidentRows + 1) {
         ledger.push_back(first);
         ++end;
         exact_count(ledger, end); // Previous independent end+one append.
     }
-    check_row(host, 0, first); // Cache grows across 64 to 128 entries.
+    check_row(host, 0, first); // Crossing 64 preserves the page and its rows.
     exact_count(ledger, end);
     auto replaced = first;
     replaced.entry_id = "replace-id";
@@ -758,9 +917,9 @@ void collisions() {
         for (Size round = 0; round < 8; ++round)
             for (const Size index : {Size{0}, capacity, 2 * capacity})
                 check_row(host, index, oracle[index]);
-        const Size fixed = TradeLedger::resident_cache_bytes(1) - TradeLedger::kLedgerEntryBytes;
-        // Allocated capacity=min(cap,next_power_of_two(max(64,P)))=cap.
-        EXPECT(ledger.cache_resident_bytes() == fixed + capacity * TradeLedger::kLedgerEntryBytes);
+        const Size fixed = TradeLedger::resident_cache_bytes(1) - TradeLedger::kLedgerEntryBytes - sizeof(void*);
+        // Caps 1 and 3 each touch one clipped page and one owning pointer.
+        EXPECT(ledger.cache_resident_bytes() == fixed + sizeof(void*) + capacity * TradeLedger::kLedgerEntryBytes);
         exact_count(ledger, oracle.size());
     }
 }
@@ -1232,6 +1391,7 @@ int main() {
     run("entry comment", field_workloads<Field::EntryComment>);
     run("exit comment", field_workloads<Field::ExitComment>);
     run("mutations and counts", mutations_and_counts);
+    run("page allocation failures and growth hits", page_allocation_failures_and_growth_hits);
     run("collisions", collisions);
     run("refusals and retiring copies", refusals_and_retiring_copies);
     run("sealed reads", sealed_reads);

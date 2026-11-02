@@ -195,7 +195,7 @@ import traceback
 import types
 from contextlib import ExitStack
 from datetime import datetime, timezone
-from itertools import chain
+from itertools import chain, repeat
 from pathlib import Path
 
 
@@ -694,7 +694,7 @@ def build_fingerprint(provenance: dict) -> dict:
 _BAR_HEADER = b"timestamp,open,high,low,close,volume\n"
 _BAR_FLOAT = (
     rb"[+-]?(?:(?:[0-9]+\.[0-9]*|\.[0-9]+)"
-    rb"(?:[eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)"
+    rb"(?:[eE][+-]?[0-9]+)?|[0-9]+(?:[eE][+-]?[0-9]+)?)"
 )
 _BAR_CANONICAL_LINE = re.compile(
     rb"([0-9]{13}),(" + _BAR_FLOAT + rb"),(" + _BAR_FLOAT
@@ -2360,9 +2360,9 @@ def failure_line(text, code=None, code_args=None) -> str:
     return line + "\n"
 
 
-def write_failure(text, code=None, code_args=None) -> None:
+def write_failure(text, code=None, code_args=None, *, destination=None) -> None:
     line = failure_line(text, code, code_args)
-    _publish_failure(line)
+    _publish_failure(line, destination=destination)
 
 
 def _c_text(raw) -> str:
@@ -2654,10 +2654,12 @@ def _pack_bar_bulk_slab(matches):
     float_columns = [list(map(float, values)) for values in columns[1:]]
     for raw_values, values in zip(columns[1:], float_columns):
         for raw, value in zip(raw_values, values):
-            text = raw.decode("ascii")
-            if (not math.isfinite(value)
-                    or (value == 0.0 and text.startswith("-"))
-                    or repr(value) != text):
+            # Both paths apply float to the same ASCII text, so alternate
+            # decimal, exponent and integer spellings pack identical doubles.
+            # A finite double's repr contains at most 24 ASCII bytes.
+            # Keep that envelope so CSV's field-size refusals still fall back.
+            if (len(raw) > 24 or not math.isfinite(value)
+                    or (value == 0.0 and raw.startswith(b"-"))):
                 return None
     packed = bytearray(_SOURCE_FEED_RECORD.size * len(timestamps))
     struct.pack_into(
@@ -2671,6 +2673,10 @@ def _pack_bar_bulk_slab(matches):
 
 def _load_bars_bulk(raw: bytes):
     if not _bar_bulk_layout_matches() or not raw.startswith(_BAR_HEADER):
+        return None
+    # The line grammar requires LF. Decline a partial final line before
+    # converting any earlier slabs that DictReader would have to replay.
+    if not raw.endswith(b"\n"):
         return None
     body = raw[len(_BAR_HEADER):]
     packed = bytearray()
@@ -2968,6 +2974,7 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
         lib.strategy_set_report_replay_v1.restype = ctypes.c_int
 
     _bind_scratch_tables(lib)  # optional unless the host selects the jailed profile
+    _bind_cache_policy(lib)
 
     if hasattr(lib, "strategy_get_last_error"):
         lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
@@ -3057,6 +3064,27 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     lib.strategy_free.argtypes = [ctypes.c_void_p]
     lib.report_free.argtypes   = [ctypes.POINTER(ReportC)]
     return lib
+
+
+class CachePolicyEntryC(ctypes.Structure):
+    """Native C alignment; mirrors pf_cache_policy_entry_v1."""
+    _fields_ = [("kind", ctypes.c_uint32),
+                ("capacity_bytes", ctypes.c_uint64)]
+
+
+class CachePolicyC(ctypes.Structure):
+    """Caller-owned descriptor; the runtime copies entries during the setter."""
+    _fields_ = [("struct_size", ctypes.c_uint32),
+                ("version", ctypes.c_uint32),
+                ("entry_count", ctypes.c_uint64),
+                ("entries", ctypes.POINTER(CachePolicyEntryC))]
+
+
+def _bind_cache_policy(lib) -> None:
+    if hasattr(lib, "strategy_set_cache_policy_v1"):
+        lib.strategy_set_cache_policy_v1.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(CachePolicyC)]
+        lib.strategy_set_cache_policy_v1.restype = ctypes.c_int
 
 
 class ScratchTablesC(ctypes.Structure):
@@ -3216,7 +3244,7 @@ def uses_checked_settings(lib) -> bool:
     return True
 
 
-def create_strategy(lib, checked: bool):
+def _create_strategy(lib, checked: bool):
     """A new strategy handle, through strategy_create_checked when checked. A
     creation that fails (a NULL handle, or a checked status other than OK) is
     strategy_create_failed, whatever the cause: run_json reads no code from the
@@ -3426,7 +3454,6 @@ _SYMBOL_FEED_HASH_PREFIX = b"pineforge:symbol-feed:barc-close-le:v1\0"
 _SYMBOL_FEED_RECORD = struct.Struct("<5dqq")
 # The requests manifest's timeframe spelling and caps (scripts/run_strategy.py).
 _SYMBOL_TF_RE = re.compile(r"(?:[1-9][0-9]{0,4}|[1-9][0-9]{0,3}[DWMS])")
-_SYMBOL_FEEDS_MAX = 256
 _SYMBOL_KEY_MAX = 256
 _SYMBOL_STAMP_MAX = 2**53 - 1  # unix ms; the record is fingerprinted as a JSON number
 # Catalog syminfo key -> the strategy_set_symbol_facts field it sets.
@@ -3680,7 +3707,7 @@ def _resolve_chart_source(args):
         args.ohlcv = binary  # the effective input path used by the report
 
 
-def load_symbol_feeds(index_path: Path, *, verify_bin="full") -> list:
+def load_symbol_feeds(index_path: Path, *, verify_bin="full", max_symbol_feeds=None) -> list:
     """Read all CSV/binary feeds before state construction, relative to the index.
 
     Each exact symbol key holds facts and feeds as before. Binary feed records
@@ -3690,14 +3717,15 @@ def load_symbol_feeds(index_path: Path, *, verify_bin="full") -> list:
     doc = _read_symbol_index(index_path)
     _index_chart_path(doc, index_path)
     with ExitStack() as pending:
-        result = _load_index_feeds(index_path, doc["symbols"], verify_bin, pending)
+        result = _load_index_feeds(index_path, doc["symbols"], verify_bin, pending,
+                                   max_symbol_feeds)
         pending.pop_all()  # success transfers ownership to the returned records
         return result
 
 
-def _load_index_feeds(index_path, symbols, verify_bin, pending):
-    if len(symbols) > _SYMBOL_FEEDS_MAX:
-        raise SymbolFeedsError(f"--symbol-feeds: more than {_SYMBOL_FEEDS_MAX} symbols",
+def _load_index_feeds(index_path, symbols, verify_bin, pending, max_symbol_feeds):
+    if max_symbol_feeds and len(symbols) > max_symbol_feeds:
+        raise SymbolFeedsError(f"--symbol-feeds: more than {max_symbol_feeds} symbols",
                                "too_many_symbols")
     out, total = [], 0
     for symbol, entry in symbols.items():
@@ -3711,8 +3739,8 @@ def _load_index_feeds(index_path, symbols, verify_bin, pending):
             raise SymbolFeedsError(f"--symbol-feeds: {symbol}: feeds must be an object",
                                    "feeds_not_object")
         total += len(feeds)
-        if total > _SYMBOL_FEEDS_MAX:
-            raise SymbolFeedsError(f"--symbol-feeds: more than {_SYMBOL_FEEDS_MAX} feeds",
+        if max_symbol_feeds and total > max_symbol_feeds:
+            raise SymbolFeedsError(f"--symbol-feeds: more than {max_symbol_feeds} feeds",
                                    "too_many_feeds")
         named = {}
         for tf, file in feeds.items():
@@ -3751,8 +3779,12 @@ def _run_symbol_feeds(args, binary_inputs):
     if not args.symbol_feeds:
         return None
     # Keep the legacy call shape on the default path, including host test seams.
-    symbols = (load_symbol_feeds(args.symbol_feeds) if args.verify_bin == "full"
-               else load_symbol_feeds(args.symbol_feeds, verify_bin=args.verify_bin))
+    options = {}
+    if args.verify_bin != "full":
+        options["verify_bin"] = args.verify_bin
+    if getattr(args, "max_symbol_feeds", None):
+        options["max_symbol_feeds"] = args.max_symbol_feeds
+    symbols = load_symbol_feeds(args.symbol_feeds, **options)
     binary_inputs.callback(close_symbol_feeds, symbols)
     return symbols
 
@@ -4788,7 +4820,7 @@ def _syminfo_clock(syminfo_path) -> tuple:
     return clock[0], clock[1]
 
 
-def _write_report(text, phases=None) -> int:
+def _write_report(text, phases=None, *, destination=None) -> int:
     """Write the whole document to the report channel and flush: 0, or 1 when it cannot
     take it. No failure line (no second JSON document) may follow part of a report, so the reason
     goes to stderr, the report descriptor is discarded, the exit status is 1 and the phase writer is left
@@ -4797,29 +4829,33 @@ def _write_report(text, phases=None) -> int:
     outcome, and the stderr line names it as report_post_execution_failed with the real
     phase and the reason (resource, io or exception); without one, the line is the ordinary
     one and library calls retain their OSError/ValueError handling."""
-    caught = (OSError, ValueError) if phases is None and _REPORT_OUTPUT is None else Exception
-    already_published = _report_published()
+    caught = ((OSError, ValueError)
+              if phases is None and _REPORT_OUTPUT is None and destination is None else Exception)
+    already_published = _report_published(destination)
     try:
-        _begin_report()
+        _begin_report(destination)
         if isinstance(text, str):
-            _report_output().write(text)
+            _report_output(destination).write(text)
         else:
             # A fully prepared, ASCII JSON temporary. No report byte is
             # published until serialization and native cleanup have succeeded.
             try:
                 while chunk := text.read(1024 * 1024):
-                    written = _report_output().write(chunk)
+                    written = _report_output(destination).write(chunk)
                     if written is not None and written != len(chunk):
                         raise OSError("short report write")
             finally:
                 # Close errors after publication obey the same stderr-only
                 # rule as report-channel errors; the outer resource stack is idempotent.
                 text.close()
-        _finish_report()
+        _finish_report(destination)
     except caught as error:
         # A rejected second library publication must not discard the caller's stdout.
-        if _REPORT_OUTPUT is not None or not already_published:
-            _discard_stdout()
+        if destination is not None or _REPORT_OUTPUT is not None or not already_published:
+            if destination is None:
+                _discard_stdout()
+            else:
+                _discard_stdout(destination)
         if phases is None:
             print(f"run_json: the report could not be written: {error}", file=sys.stderr)
         else:
@@ -4899,10 +4935,12 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
     #    artifact's request-feed inventory (this --so, hashed and never loaded; the inventory
     #    beside it). Raises InventoryAdmissionError (window_mode_unsupported) before any feed,
     #    ctypes library, strategy or phase record. The refusal keeps its code and detail.
+    inventory_limits = ({"max_inventory_bytes": args.max_inventory_bytes}
+                        if args.max_inventory_bytes else {})
     try:
         request_feed_inventory.admit_selected_request(
             request.script_tf, args.request_feed_inventory, args.so, inputs,
-            swr.support_policy())
+            swr.support_policy(), **inventory_limits)
     except request_feed_inventory.InventoryAdmissionError as error:
         raise RunFailure(error.message, error.code, error.detail) from None
 
@@ -4975,7 +5013,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         """A fresh, fully configured strategy state (the ordinary run's setup without the
         legacy trade-start gate, which selected mode refuses); freed again if it fails."""
         nonlocal syminfo_applied
-        st = create_strategy(lib, checked)
+        st = create_strategy(lib, checked, getattr(args, "max_output_series", None))
         sink = None
         try:
             apply_settings(lib, st, inputs, overrides, checked)
@@ -5113,6 +5151,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
+        _add_cache_diagnostics(lib, state, out["diagnostics"])
         out["report_window"] = window
         out["report_shape"] = swr.report_shape_full(
             equity_points, sink.counts["T"] if sink is not None else len(out["trades"]))
@@ -5259,7 +5298,7 @@ def main(argv=None) -> int:
         except RunFailure as failure:
             if not abort.started and abort.requested():
                 failure = abort.failure()
-            write_failure(str(failure), failure.code, failure.code_args)
+            _write_run_failure(failure)
             return failure.exit_status
         except Exception as error:
             if not abort.started and abort.requested():
@@ -5305,6 +5344,21 @@ def _legacy_abbreviations(argv, legacy_long, all_long):
                     token = matches[0] + equals + value
         out.append(token)
     return out
+
+
+# Opt-in compatibility defaults; explicit values, including zero, always win.
+# The binder imports this table so both inventory readers use the same set.
+TV_COMPAT_LIMITS = {"max_symbol_feeds": 256, "max_inventory_bytes": 8 * 1024 * 1024}
+
+
+def nonnegative_limit(value):
+    try:
+        limit = int(value)
+        if limit >= 0:
+            return limit
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError("must be a nonnegative integer (0 means unlimited)")
 
 
 def _main(argv, binary_inputs) -> int:
@@ -5371,6 +5425,12 @@ def _main(argv, binary_inputs) -> int:
     # The long options of the command line BEFORE the selected-window flags below; see
     # _legacy_abbreviations (the option strings of the parser, captured here and not typed out).
     legacy_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
+    ap.add_argument("--max-symbol-feeds", type=nonnegative_limit, default=None, metavar="N",
+                    help="Maximum symbols and total extra feeds; unset or 0 = unlimited.")
+    ap.add_argument("--max-inventory-bytes", type=nonnegative_limit, default=None, metavar="N",
+                    help="Maximum request-feed inventory bytes; unset or 0 = unlimited.")
+    ap.add_argument("--tv-compat", action="store_true",
+                    help="Use TradingView compatibility limits as defaults; explicit limits win.")
     ap.add_argument("--ohlcv-bin", type=Path, default=None,
                     help="pf_bar_t/v1 binary chart (or the symbol index chart); alternative to --ohlcv.")
     ap.add_argument("--verify-bin", choices=("full", "sidecar"), default="full",
@@ -5444,7 +5504,11 @@ def _main(argv, binary_inputs) -> int:
     argv = _legacy_abbreviations(argv, pre_metrics_long, all_long)
     if not argv:
         ap.error("the following arguments are required: --so, --ohlcv")
-    args = ap.parse_args(argv)
+    args = _parse_output_series_limit(ap, argv)
+    if args.tv_compat:
+        for name, limit in TV_COMPAT_LIMITS.items():
+            if getattr(args, name) is None:
+                setattr(args, name, limit)
     if args.profile not in ("unjailed", "jailed"):
         raise _request_invalid("PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed", "arguments")
     missing = []
@@ -5553,7 +5617,7 @@ def _main(argv, binary_inputs) -> int:
         Match the validation harness's setup and free a state whose
         configuration fails before propagating its failure."""
         nonlocal syminfo_applied
-        st = create_strategy(lib, checked)
+        st = create_strategy(lib, checked, getattr(args, "max_output_series", None))
         sink = None
         try:
             apply_settings(lib, st, inputs, overrides, checked)
@@ -5723,6 +5787,7 @@ def _main(argv, binary_inputs) -> int:
         if sink is None:
             _validate_report_result(out)
         _add_scratch_arena_diagnostics(lib, out["diagnostics"], args)
+        _add_cache_diagnostics(lib, state, out["diagnostics"])
         if timing is not None:
             out["diagnostics"]["timing"] = timing
             out["diagnostics"]["throughput"] = _throughput_block(
@@ -5846,6 +5911,9 @@ def _bind_report_sink(lib) -> None:
         "pf_report_sink_version": (ctypes.c_uint32, []),
         "pf_report_scratch_arena_stats": (ctypes.c_int, [
             ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64)]),
+        "pf_report_cache_stats": (ctypes.c_int, [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint64),
+            ctypes.POINTER(ctypes.c_uint64)]),
         "strategy_require_report_scratch_arena_v1": (ctypes.c_int, [ctypes.c_void_p]),
         "strategy_set_report_sink_v1": (ctypes.c_int, [
             ctypes.c_void_p, ctypes.POINTER(ReportSinkC)]),
@@ -5883,6 +5951,21 @@ def _add_scratch_arena_counters(lib, diagnostics):
         raise _engine_invariant("the engine's scratch arena statistics could not be read")
     diagnostics["scratch_arena_high_water_bytes"] = high_water.value
     diagnostics["scratch_arena_bytes"] = arena_bytes.value
+
+
+def _add_cache_diagnostics(lib, state, diagnostics):
+    # Per-run counters: report assembly can read the ledger and fill its cache.
+    # Query afterwards, while its strategy and allocation owners are still live.
+    getter = getattr(lib, "pf_report_cache_stats", None)
+    if getter is None:
+        return  # older modules have no such diagnostics
+    resident_bytes, bypasses = ctypes.c_uint64(), ctypes.c_uint64()
+    if getter(state, ctypes.byref(resident_bytes), ctypes.byref(bypasses)) != 0:
+        raise _engine_invariant("the engine's cache statistics could not be read")
+    if bypasses.value > 0:
+        diagnostics["cache_resident_bytes"] = resident_bytes.value
+        diagnostics["cache_bypass_reason"] = "alloc_failed"
+        diagnostics["allocation_bypass_count"] = bypasses.value
 
 
 def _refuse_jailed_path_sink(args):
@@ -5971,7 +6054,10 @@ def _new_report_sink(lib, state, args, *, body=True):
                                        {"reason": "symbol_missing"})
         if int(lib.pf_report_sink_version()) != 1:
             raise _engine_invariant("the strategy library has an incompatible report sink ABI")
-        args._sink_fd_owner = _InheritedSinkFd(args.report_sink_fd)
+        args._sink_fd_owner = (
+            _SUPERVISED_NATIVE_SINK_OWNER
+            if _SUPERVISED_NATIVE_SINK_OWNER is not None
+            else _InheritedSinkFd(args.report_sink_fd))
         return _FdReportSink(lib, state, fd=args.report_sink_fd,
                              run_id=getattr(args, "run_id", ""),
                              owner=args._sink_fd_owner)
@@ -5987,6 +6073,11 @@ def _new_report_sink(lib, state, args, *, body=True):
         return None  # old modules keep their existing report ABI
     if not all(present) or int(lib.pf_report_sink_version()) != 1:
         raise _engine_invariant("the strategy library has an incompatible report sink ABI")
+    if isinstance(_REPORT_OUTPUT, _CandidateOutput):
+        # The automatic full projection needs S's read-only snapshot handoff.
+        # Until supplied, do not create an unmetered internal native sink.
+        raise RunFailure("the supervised internal sink handoff is unavailable",
+                         "run_isolation_unavailable", {"reason": "descriptor"})
     # Only the body run may create/truncate the caller's sink.
     return _ReportSink(lib, state, directory=getattr(args, "spill_dir", None),
                        run_id=getattr(args, "run_id", ""),
@@ -6068,6 +6159,10 @@ class _FdReportSink:
                 or (diagnostics.count_e and diagnostics.last.time_ms < diagnostics.first.time_ms)):
             raise _engine_invariant("the report sink diagnostics differ from its engine receipt")
         self.counts, self.summary, self.diagnostics = counts, summary, diagnostics
+        if self._owner is _SUPERVISED_NATIVE_SINK_OWNER:
+            # The engine borrows K. Receipt checks finish capture; EOF must
+            # precede candidate serialization and final strategy cleanup.
+            self.close()
 
     def close(self):
         if self.fd is not None:
@@ -6153,24 +6248,112 @@ _BULK_E_LINE = re.compile(
 # The bound keeps that stack, and every list built from one batch, the same for
 # any window and any file length; a window is consumed in successive batches.
 _BULK_E_BATCH = 128
-_BULK_E_RUN = re.compile(rb"(?:" + _BULK_E_LINE.pattern + (rb"){1,%d}" % _BULK_E_BATCH))
+_BULK_E_RUN_PREFIX = rb"(?:" + _BULK_E_LINE.pattern + rb")"
+_BULK_E_RUN = re.compile(_BULK_E_RUN_PREFIX + (rb"{1,%d}" % _BULK_E_BATCH))
+# Cache only this exact pattern's interval. A replacement run still supplies
+# its own bound, independently of the window and the original batch constant.
+_BULK_E_DEFAULT_RUN = _BULK_E_RUN
+_BULK_E_DEFAULT_BOUNDS = (1, _BULK_E_BATCH)
 _BULK_E_LINE_BYTES = 80
+_BULK_E_LITERAL_BYTES = len(b'["E",,,]\n')
+# Coverage adds nine literal bytes to the three captures; the page-tail bound
+# also depends on the timestamp and float token widths. Pin that arithmetic
+# to the grammar so a later grammar edit cannot silently invalidate either.
+assert (
+    _BULK_E_FLOAT == (
+        rb"(?=[-+0-9.e]{1,24}[,\]])-?(?:0|[1-9][0-9]*)"
+        rb"(?:\.[0-9]+(?:e[+-]?[0-9]+)?|e[+-]?[0-9]+)")
+    and _BULK_E_LINE.pattern == (
+        rb'\["E",(0|-?[1-9][0-9]{0,15}),(' + _BULK_E_FLOAT
+        + rb"),(" + _BULK_E_FLOAT + rb")\]\n")
+    and _BULK_E_LINE.groups == 3
+    and _BULK_E_LITERAL_BYTES == 9
+    and _BULK_E_LITERAL_BYTES + 17 + 2 * 24 <= _BULK_E_LINE_BYTES
+), "bulk equity coverage and line bounds must follow the grammar"
 
 
 class _BulkEquity:
-    """One accepted batch of lines, with only its two decoded endpoints retained."""
-    def __init__(self, raw, count, first, last):
-        self.raw, self.count, self.first, self.last = raw, count, first, last
+    """A batch's number text and endpoints; direct construction is unbounded."""
+    def __init__(self, raw, count, first, last, columns=None):
+        self.raw, self.count = raw, count
+        self._first = tuple(first.values()) if isinstance(first, dict) else first
+        self._last = tuple(last.values()) if isinstance(last, dict) else last
+        if columns is None:
+            # Directly constructed batches need no proof or bound. Recover
+            # captures only when they tile the input; columns remain absent
+            # only on direct batches that need substitution over unmatched bytes.
+            rows = _BULK_E_LINE.findall(raw)
+            columns = tuple(zip(*rows)) if rows else ((), (), ())
+            if (sum(map(len, chain.from_iterable(columns)))
+                    + _BULK_E_LITERAL_BYTES * len(rows) != len(raw)):
+                columns = None
+        self.columns = columns
+
+    @property
+    def first(self):
+        self._first = _bulk_equity_endpoint(self._first)
+        return self._first
+
+    @first.setter
+    def first(self, point):
+        self._first = point
+
+    @property
+    def last(self):
+        self._last = _bulk_equity_endpoint(self._last)
+        return self._last
+
+    @last.setter
+    def last(self, point):
+        self._last = point
+
+
+def _bulk_equity_endpoint(point):
+    if type(point) is tuple:
+        return dict(time_ms=point[0], equity=point[1], open_profit=point[2])
+    return point
 
 
 def _bulk_equity(raw):
     """Accept a strict subset; a failed proof never supplies an error.
 
-    ``raw`` is one run of at most _BULK_E_BATCH lines; a longer one is no match.
+    Product callers supply one complete _BULK_E_RUN match or, in the pending-line
+    caller, one LF-terminated line containing at most one row. The repeat bound
+    bounds captures retained for encoding independently of window and file sizes.
+    Direct proof callers have the same bound as the run pattern's fullmatch,
+    including when its repeat is replaced. Rebind _BULK_E_LINE only together with
+    a _BULK_E_RUN built from it, which takes the fullmatch branch.
     """
-    if not raw or _BULK_E_RUN.fullmatch(raw) is None:
+    if not raw:
         return None
-    times, equities, profits = zip(*_BULK_E_LINE.findall(raw))
+    rows = _BULK_E_LINE.findall(raw)
+    if not rows:
+        return None
+    times, equities, profits = columns = tuple(zip(*rows))
+    # findall returns disjoint complete lines. Their token lengths plus
+    # the nine literal bytes per line must cover every input byte, so no
+    # prefix, gap or suffix can have been skipped. No second match is needed.
+    if (sum(map(len, times)) + sum(map(len, equities)) + sum(map(len, profits))
+            + _BULK_E_LITERAL_BYTES * len(rows) != len(raw)):
+        return None
+    # Coverage proves a concatenation of complete lines. Read its permitted
+    # count from the run pattern itself, keeping that pattern the sole batch
+    # bound even when replaced. Other pattern shapes keep their fullmatch.
+    if _BULK_E_RUN is _BULK_E_DEFAULT_RUN:
+        lower, upper = _BULK_E_DEFAULT_BOUNDS
+    else:
+        prefix, _, repeat_text = _BULK_E_RUN.pattern.rpartition(b"{")
+        bounds = repeat_text[:-1].split(b",")
+        if (prefix == _BULK_E_RUN_PREFIX and repeat_text.endswith(b"}")
+                and len(bounds) == 2 and all(map(bytes.isdigit, bounds))
+                and _BULK_E_RUN.flags == 0):
+            lower, upper = map(int, bounds)
+        else:
+            if _BULK_E_RUN.fullmatch(raw) is None:
+                return None
+            lower = upper = len(rows)
+    if not lower <= len(rows) <= upper:
+        return None
     timestamps = list(map(int, times))
     if min(timestamps) < -((1 << 53) - 1) or max(timestamps) > (1 << 53) - 1:
         return None
@@ -6179,16 +6362,37 @@ def _bulk_equity(raw):
     if not all(map(math.isfinite, numbers)) or list(map(repr, numbers)) != texts:
         return None
     count = len(timestamps)
-    first = dict(time_ms=timestamps[0], equity=numbers[0], open_profit=numbers[count])
-    last = dict(time_ms=timestamps[-1], equity=numbers[count - 1], open_profit=numbers[-1])
-    return _BulkEquity(raw, count, first, last)
+    first = (timestamps[0], numbers[0], numbers[count])
+    last = (timestamps[-1], numbers[count - 1], numbers[-1])
+    return _BulkEquity(raw, count, first, last, columns)
 
 
 def _bulk_equity_ascii(batch):
-    rows = _BULK_E_LINE.sub(
-        rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
-        batch.raw).splitlines()
-    return b"".join(rows)[:-1] if rows else b""
+    columns = getattr(batch, "columns", None)
+    if columns is None:
+        rows = _BULK_E_LINE.sub(
+            rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
+            batch.raw).splitlines()
+        return b"".join(rows)[:-1] if rows else b""
+    times, equities, profits = columns
+    # Reuse the proof's captured text. zip/chain assemble the fixed keys
+    # without another regex traversal or a replacement expansion per row.
+    return b"".join(chain.from_iterable(zip(
+        repeat(b'{"time_ms":'), times, repeat(b',"equity":'), equities,
+        repeat(b',"open_profit":'), profits, repeat(b"},"))))[:-1]
+
+
+def _bulk_equity_rows(batch):
+    """Keep individual row boundaries for the ordinary array writer."""
+    columns = getattr(batch, "columns", None)
+    if columns is None:
+        return _BULK_E_LINE.sub(
+            rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
+            batch.raw).splitlines()
+    times, equities, profits = columns
+    return list(map(b"".join, zip(
+        repeat(b'{"time_ms":'), times, repeat(b',"equity":'), equities,
+        repeat(b',"open_profit":'), profits, repeat(b"},"))))
 
 
 class _BulkEquityFile:
@@ -6332,15 +6536,18 @@ class _SinkReportDiagnostics:
         # O/V/K/X/H do not enter the trade fold. A fused sink supplies the
         # optional sink argument so those records can be dispatched to their
         # bounded artifacts while the reader hashes every record.
+        last_bulk = None
         for record in _bulk_equity_records(reader):
             if isinstance(record, _BulkEquity):
                 if not self.count_e:
                     self.first = record.first
-                self.last = record.last
+                # Only the final batch contributes the curve's last point.
+                last_bulk = record
                 self.count_e += record.count
                 if sink is not None:
                     sink._append_equity_batch(record)
             elif record.tag == "E":
+                last_bulk = None
                 point = record.as_dict()
                 if not self.count_e:
                     self.first = point
@@ -6364,6 +6571,8 @@ class _SinkReportDiagnostics:
                 yield record
             elif sink is not None:
                 sink._append_output_record(record)
+        if last_bulk is not None:
+            self.last = last_bulk.last
 
 
 class _FusedOutputState:
@@ -6405,14 +6614,14 @@ class _FusedOutputState:
                 for entry in _manifest_entries(
                     self.manifest, "constants", ("index",))
             }
-            resources = sink._spool_resources
+            resources = _output_series_resources(sink, self.slots)
             directory = sink.directory
             self.opens = _JSONColumn(resources, directory)
             self.closes = _JSONColumn(resources, directory)
+            self.events = _JSONColumn(resources, directory)
             self.columns = [
                 _JSONColumn(resources, directory) for _ in self.entries
             ]
-            self.events = _JSONColumn(resources, directory)
         except Exception as error:
             self.remember(error)
 
@@ -6565,6 +6774,7 @@ class _ReportSink:
 
     def _prepare_fused_artifacts(self, lib, state):
         if not self.named:
+            self._spool_resources._window_budget = _artifact_windows(self)
             try:
                 self._equity_spool = _JSONColumn(
                     self._spool_resources, self.directory, indexed=True)
@@ -6601,10 +6811,31 @@ class _ReportSink:
                 or self._trades_spool_failed):
             return
         try:
-            self._trades_spool.append(_sink_trade(record))
+            trade = _sink_trade(record)
+            if _json_fast_value(trade):
+                try:
+                    encoded = json.dumps(trade, separators=(",", ":"), allow_nan=False)
+                except ValueError:
+                    pass  # retain the piecewise writer's prefix and exception
+                else:
+                    self._trades_spool.append_ascii(encoded.encode("ascii"))
+                    return
+            self._trades_spool.append(trade)
         except Exception as error:
             self._trades_spool_failed = True
             self._remember_spool_failure(error)
+
+    def _finish_fused_columns(self):
+        # Pending row text has the same deferred refusal as an append failure.
+        # Drain before assembly can inspect a column or select a later error.
+        for column, failed in (
+                (self._equity_spool, self._equity_spool_failed),
+                (self._trades_spool, self._trades_spool_failed)):
+            if column is not None and not failed:
+                try:
+                    column._flush_ascii()
+                except Exception as error:
+                    self._remember_spool_failure(error)
 
     def _append_output_record(self, record):
         if self._fused_outputs is not None:
@@ -6698,6 +6929,7 @@ class _ReportSink:
                         "the report sink trailer differs from its engine receipt")
                 self._check_fused_identity(reader, self.path, self.named)
                 self._close_fused_reader(reader)
+                self._finish_fused_columns()
         except SinkFormatError as error:
             raise _engine_invariant(
                 f"the engine's report sink is invalid: {error}") from error
@@ -7009,20 +7241,27 @@ class _BoundedJSONFile:
     Disk files use Linux O_DIRECT or Darwin F_NOCACHE. Legacy libraries with
     no engine sink can also use tmpfs/ramfs for the unjailed JSON artifact.
     Engine sink and scratch directories are selected by _disk_report_directory.
-    One aligned 64 KiB anonymous window is the I/O working set. Full windows
-    are written before reuse; flush synchronizes pending writes before readback.
+    One aligned anonymous window is the I/O working set (64 KiB by default).
+    Artifact callers choose larger windows within their per-run budget.
+    Full windows are written before reuse; flush synchronizes pending writes before readback.
     Jailed and fd routes use UTF-8 memory buffers.
     """
     window = 64 * 1024
 
-    def __init__(self, file):
+    def __init__(self, file, window=None):
         import fcntl
         self.file = file
+        if window is not None:
+            if window <= 0 or window % 4096:
+                raise ValueError("report artifact window must be a positive multiple of 4096")
+            self.window = window
         self.buffer = None
         self.used = self.base = self.size = self.position = 0
         self.read_base, self.read_size = -1, 0
         self.reading = False
         self._dirty = False
+        self._pending_ascii = []
+        self._pending_rows = self._pending_bytes = 0
         self.binary = False
         self.libc = ctypes.CDLL(None, use_errno=True)
         fd = file.fileno()
@@ -7079,6 +7318,7 @@ class _BoundedJSONFile:
             self.used = 0
 
     def write(self, text):
+        self._flush_ascii()
         if self.reading:
             raise ValueError("a prepared report artifact is read-only")
         for offset in range(0, len(text), self.window):
@@ -7087,6 +7327,7 @@ class _BoundedJSONFile:
 
     def write_ascii(self, data):
         """Append already encoded ASCII through the same aligned I/O window."""
+        self._flush_ascii()
         if self.reading:
             raise ValueError("a prepared report artifact is read-only")
         position = 0
@@ -7101,7 +7342,33 @@ class _BoundedJSONFile:
                 self._sync_window()
         return len(data)
 
+    def append_ascii(self, data, row_count):
+        """Join complete column rows within the ordinary streaming bounds."""
+        if self.reading:
+            raise ValueError("a prepared report artifact is read-only")
+        size = len(data)
+        if self._pending_ascii and (
+                self._pending_rows + row_count > _STREAM_BATCH_RECORDS
+                or self._pending_bytes + size > _STREAM_BATCH_BYTES):
+            self._flush_ascii()
+        self._pending_ascii.append(data)
+        self._pending_rows += row_count
+        self._pending_bytes += size
+        # A single oversized row is written alone, as in the array writer.
+        if (self._pending_rows >= _STREAM_BATCH_RECORDS
+                or self._pending_bytes >= _STREAM_BATCH_BYTES):
+            self._flush_ascii()
+        return size
+
+    def _flush_ascii(self):
+        if self._pending_ascii:
+            data = b"".join(self._pending_ascii)
+            self._pending_ascii.clear()  # never retry a failed write
+            self._pending_rows = self._pending_bytes = 0
+            self.write_ascii(data)
+
     def flush(self):
+        self._flush_ascii()
         self.file.flush()  # retain checked flush/close failure behavior
         if not self.reading and self._dirty:
             self._sync_window()
@@ -7177,14 +7444,21 @@ class _BoundedJSONFile:
         return (b"" if self.binary else "").join(pieces)
 
     def close(self):
-        if self.buffer is not None:
-            self.buffer.close()
-            self.buffer = None
-        self.file.close()
+        try:
+            self._flush_ascii()
+        finally:
+            try:
+                if self.buffer is not None:
+                    self.buffer.close()
+                    self.buffer = None
+            finally:
+                self.file.close()
 
 
 class _UncachedSinkFile(_BoundedJSONFile):
     """Uncached binary readback with an independent bounded window."""
+    window = 64 * 1024
+
     def __init__(self, file):
         position = file.tell()
         super().__init__(file)  # path sinks are unjailed only
@@ -7246,6 +7520,53 @@ def _open_uncached_sink(path, *, raw=False):
         raise
 
 
+# Six large windows for fixed files with outputs: report, equity/trade, open/close/event.
+_ARTIFACT_WINDOW_BUDGET_BYTES = 6 * 1024 * 1024
+_ARTIFACT_LARGE_WINDOW = 1024 * 1024
+# These are default I/O sizes, not admission limits. After the fixed files,
+# each declared output series adds one small window; the sink reader adds one.
+# The per-run accountant receives the actual declaration, with no built-in cap.
+# Indexed decoding bounds copied slices; sequential reads use the full file window.
+_JSON_COLUMN_LOOKUP_READ_SIZE = 64 * 1024
+
+
+class _ArtifactWindowBudget:
+    """Reserve the final report first, then allocate large windows in order.
+
+    Equity and trade spools precede open/close/event columns in creation
+    order, followed by recorded output series in slot order.
+    """
+
+    def __init__(self):
+        self.remaining = _ARTIFACT_WINDOW_BUDGET_BYTES
+        self.declared_series = 0
+        self.report_window = self.take()
+
+    def take(self):
+        if self.remaining >= _ARTIFACT_LARGE_WINDOW:
+            self.remaining -= _ARTIFACT_LARGE_WINDOW
+            return _ARTIFACT_LARGE_WINDOW
+        return _BoundedJSONFile.window
+
+    def declare_series(self, count):
+        self.declared_series = max(self.declared_series, count)
+
+    @property
+    def worst_case_bytes(self):
+        """Default artifact windows plus the independently bounded sink reader."""
+        return (_ARTIFACT_WINDOW_BUDGET_BYTES
+                + _BoundedJSONFile.window * self.declared_series
+                + _UncachedSinkFile.window)
+
+
+def _artifact_windows(owner):
+    """Share one accountant through a sink and its report resource scopes."""
+    budget = getattr(owner, "_window_budget", None)
+    if budget is None:
+        budget = owner._window_budget = _ArtifactWindowBudget()
+    return budget
+
+
 class _JSONColumn(_JSONRecordArray):
     """A comma-separated, already encoded column in an unlinked temporary."""
     # Some serializer callers supply only .file via object.__new__.
@@ -7253,7 +7574,8 @@ class _JSONColumn(_JSONRecordArray):
 
     def __init__(self, resources, directory, *, indexed=False):
         super().__init__(lambda: iter(self), 0, self._item_at if indexed else None)
-        self.file = _json_temporary(resources, directory)
+        self.file = _json_temporary(
+            resources, directory, _artifact_windows(resources).take())
         self.empty = True
         # One cursor: the next row number and its byte offset, never a row.
         self._cursor_index = self._cursor_offset = 0
@@ -7267,9 +7589,10 @@ class _JSONColumn(_JSONRecordArray):
         The first read freezes the report spool, after which it accepts no
         more rows. Iterate before the report's resources are closed;
         afterwards iteration raises ValueError, even for an empty column.
-        A single row larger than one 64 KiB window is decoded again after
-        each further window, taking time proportional to its size times the
-        number of windows (bounded by the sink's 1 MiB record cap).
+        A single row larger than the read size is decoded again after each
+        refill, taking time proportional to its size times the number of
+        refills. Iteration reads a full file window; indexed reads use a
+        separate fixed bound.
         Indexed columns support [i], which costs O(i) from the cursor;
         callers should iterate.
         """
@@ -7283,18 +7606,21 @@ class _JSONColumn(_JSONRecordArray):
             self._cursor_index = self._cursor_offset = 0
         # The decoder lives only for this call. Retaining its generator would
         # also retain the last yielded row and a private encoded window.
-        for value, offset in self._iter_rows(self._cursor_offset):
+        for value, offset in self._iter_rows(
+                self._cursor_offset, _JSON_COLUMN_LOOKUP_READ_SIZE):
             self._cursor_index += 1
             self._cursor_offset = offset
             if self._cursor_index == index + 1:
                 return value
         raise ValueError("invalid JSON report column: row count differs")
 
-    def _iter_rows(self, offset=0):
+    def _iter_rows(self, offset=0, read_size=None):
         """Yield each decoded row and the byte offset following its separator."""
         if self.file.closed:
             raise ValueError(
                 "a report column cannot be iterated after the report resources were closed")
+        if read_size is None:
+            read_size = self.file.window
 
         def invalid_constant(token):
             raise ValueError(f"invalid JSON report column: non-JSON number {token}")
@@ -7342,7 +7668,7 @@ class _JSONColumn(_JSONRecordArray):
             # encoded value can span windows; each iterator owns its offset.
             buffer, position = buffer[position:], 0
             try:
-                chunk = self.file.read_at(offset, self.file.window)
+                chunk = self.file.read_at(offset, read_size)
             except UnicodeDecodeError as error:
                 raise ValueError("invalid JSON report column: non-ASCII data") from error
             offset += len(chunk)
@@ -7364,17 +7690,22 @@ class _JSONColumn(_JSONRecordArray):
         if not data and row_count == 0:
             return
         try:
-            if not self.empty:
-                self.file.write_ascii(b",")
-            self.file.write_ascii(data)
+            self.file.append_ascii(data if self.empty else b"," + data, row_count)
         except OSError as error:
             raise RunFailure("report sink write failed", "report_sink_failed",
                              {"reason": "scratch_io"}) from error
         self.empty = False
         self.length += row_count
 
+    def _flush_ascii(self):
+        try:
+            self.file._flush_ascii()
+        except OSError as error:
+            raise RunFailure("report sink write failed", "report_sink_failed",
+                             {"reason": "scratch_io"}) from error
 
-def _json_temporary(resources, directory):
+
+def _json_temporary(resources, directory, window=None):
     try:
         # _BoundedJSONFile owns ASCII encoding and the aligned I/O window.
         # The owner supplies only an unbuffered, automatically unlinked fd.
@@ -7383,7 +7714,7 @@ def _json_temporary(resources, directory):
         raise RunFailure("report sink open failed", "report_sink_failed",
                          {"reason": "scratch_io"}) from error
     try:
-        file = _BoundedJSONFile(file)  # unjailed report artifacts
+        file = _BoundedJSONFile(file, window)  # unjailed report artifacts
         resources.callback(_close_json_temporary, file)
     except OSError as error:
         file.close()
@@ -7472,11 +7803,9 @@ def _stream_equity_array(value, destination):
     try:
         for record in value.sink._tagged_records("E", bulk=True):
             if isinstance(record, _BulkEquity):
-                # sub and splitlines walk the entire batch in C. No Python
-                # loop, decoder or serializer visits its individual points.
-                rows = _BULK_E_LINE.sub(
-                    rb'{"time_ms":\1,"equity":\2,"open_profit":\3},' + b"\n",
-                    record.raw).splitlines()
+                # Reuse the proof's captures, preserving the same row list
+                # and the ordinary writer's flush and failure boundaries.
+                rows = _bulk_equity_rows(record)
             else:
                 # The existing verified decoder owns all noncanonical cases.
                 rows = [json.dumps(record.as_dict(), separators=(",", ":"),
@@ -7600,7 +7929,9 @@ def _stream_json_value(value, destination):
 def _prepare_stream_report(document, resources, directory, *, sink_errors=True):
     try:
         with ExitStack() as prepared:
-            file = _json_temporary(prepared, directory)
+            # The report's window was reserved before any column allocation.
+            file = _json_temporary(
+                prepared, directory, _artifact_windows(resources).report_window)
             _stream_json(document, file)
             file.write("\n")
             file.flush()  # disk errors must precede the first report byte
@@ -7638,6 +7969,8 @@ def _prepare_report_json(document, resources, args, sink):
             raise sink._spool_failure
         # Keep the final artifact provisional until auxiliary files have closed.
         with ExitStack() as prepared_files:
+            prepared_files._window_budget = _declared_artifact_windows(
+                sink if sink is not None else resources, _report_series_count(document))
             prepared = _prepare_stream_report(
                 document, prepared_files,
                 sink.directory if sink is not None else args.spill_dir,
@@ -8021,6 +8354,9 @@ def _sink_outputs_block(lib, state, sink, resources, *, summary_only=False):
                      key=lambda entry: entry["slot"])
     outputs = {entry["index"]: entry for entry in
                _manifest_entries(block["manifest"], "outputs", ("index", "id"))}
+    # After the report reservation: equity/trade spools, then open/close/event
+    # columns in creation order, then recorded series in slot order.
+    resources._window_budget = _declared_artifact_windows(sink, slots)
     opens, closes, events = (_JSONColumn(resources, sink.directory) for _ in range(3))
     columns = [_JSONColumn(resources, sink.directory) for _ in entries]
     expected_row = 0
@@ -8055,6 +8391,7 @@ def _read_strategy_initial_capital(lib, state):
 
 _REPORT_OUTPUT = None
 _LIBRARY_REPORT_RUN = None
+_SUPERVISED_NATIVE_SINK_OWNER = None
 
 
 class _LibraryReportRun:
@@ -8161,26 +8498,71 @@ class _ReportOutput:
                     raise
 
 
-def _report_output():
+class _CandidateOutput(_ReportOutput):
+    """Own only S's private candidate writer; stdio is already isolated by S."""
+
+    def __init__(self, text, *, native_sink=None):
+        if (not isinstance(text, str) or re.fullmatch(r"[0-9]{1,10}", text) is None
+                or not 3 <= int(text) <= (1 << 31) - 1 or int(text) == 5):
+            raise ValueError("invalid private candidate descriptor")
+        fd = int(text)
+        os.fstat(fd)
+        if _same_open_file(fd, 1) or _same_open_file(fd, 2):
+            raise ValueError("candidate aliases producer diagnostics")
+        os.set_inheritable(fd, False)
+        self.fd = fd
+        self.native_sink = native_sink
+        self._state = "open"
+
+    def write(self, text):
+        # Also covers parser/startup failures before a native sink is attached.
+        if self.native_sink is not None:
+            self.native_sink.close()
+        return super().write(text)
+
+    def discard(self):
+        if self.native_sink is not None:
+            self.native_sink.close()
+        self._state = "published"
+        fd, self.fd = self.fd, None
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def close(self):
+        if self.native_sink is not None:
+            self.native_sink.close()
+        super().close()
+
+
+def _report_output(destination=None):
     # Library callers may replace sys.stdout between writes or between runs.
+    if destination is not None:
+        return destination
     return sys.stdout if _REPORT_OUTPUT is None else _REPORT_OUTPUT
 
 
-def _report_published():
+def _report_published(destination=None):
+    if destination is not None:
+        return destination.published
     if _REPORT_OUTPUT is not None:
         return _REPORT_OUTPUT.published
     return _LIBRARY_REPORT_RUN is not None and _LIBRARY_REPORT_RUN.published
 
 
-def _begin_report():
-    if _report_published():
+def _begin_report(destination=None):
+    if _report_published(destination):
         raise OSError("the report channel has already been published")
-    if _REPORT_OUTPUT is None and _LIBRARY_REPORT_RUN is not None:
+    if destination is None and _REPORT_OUTPUT is None and _LIBRARY_REPORT_RUN is not None:
         _LIBRARY_REPORT_RUN.published = True
 
 
-def _finish_report():
-    if _REPORT_OUTPUT is None:
+def _finish_report(destination=None):
+    if destination is not None:
+        destination.finish()
+    elif _REPORT_OUTPUT is None:
         sys.stdout.flush()
     else:
         _REPORT_OUTPUT.finish()
@@ -8239,14 +8621,68 @@ _REPORT_MAIN = main
 
 
 def _host_main(argv=None) -> int:
-    global _REPORT_OUTPUT
+    global _REPORT_OUTPUT, _SUPERVISED_NATIVE_SINK_OWNER
+    candidate_fd = None
+    native_sink = None
+    if os.environ.get("PINEFORGE_REPORT_PRODUCER") == "supervised/v1":
+        candidate_fd = os.environ.pop("PINEFORGE_REPORT_CANDIDATE_FD", None)
+        native_sink_text = os.environ.pop("PINEFORGE_REPORT_NATIVE_SINK_FD", None)
+        os.environ.pop("PINEFORGE_REPORT_PRODUCER")
+        if candidate_fd is None:
+            _write_diagnostic("run_json: missing private candidate destination\n")
+            return 1
+        if native_sink_text is not None:
+            if (re.fullmatch(r"[0-9]{1,10}", native_sink_text) is None
+                    or not 3 <= int(native_sink_text) <= (1 << 31) - 1
+                    or int(native_sink_text) == 5):
+                _write_diagnostic("run_json: invalid private native sink descriptor\n")
+                return 1
+            native_sink = _InheritedSinkFd(int(native_sink_text))
+            tokens = list(sys.argv[1:] if argv is None else argv)
+            # S removes external sink options before launching this process.
+            # The private descriptor preserves the inherited-sink projection.
+            argv = ["--report-sink-fd", native_sink_text, *tokens]
+    else:
+        # Keep the OFF parser, help bytes and legacy abbreviations untouched.
+        # Import the supervisor only when an exact new control is supplied.
+        tokens = list(sys.argv[1:] if argv is None else argv)
+        if argv is not None:
+            argv = tokens
+        channel_flags = {
+            "--report-channel", "--terminal-status-fd", "--report-max-bytes",
+            "--diagnostic-max-bytes", "--channel-wall-ms", "--channel-stall-ms",
+            "--post-exit-drain-ms", "--stop-grace-ms", "--planned-sink-bytes",
+            "--attempt-id", "--host-attestation-fd", "--test-only-host-attestation-fd",
+        }
+        channel_environment = {
+            "PINEFORGE_REPORT_CHANNEL", "PINEFORGE_TERMINAL_STATUS_FD",
+            "PINEFORGE_REPORT_MAX_BYTES", "PINEFORGE_DIAGNOSTIC_MAX_BYTES",
+            "PINEFORGE_CHANNEL_WALL_MS", "PINEFORGE_CHANNEL_STALL_MS",
+            "PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS", "PINEFORGE_CHANNEL_STOP_GRACE_MS",
+            "PINEFORGE_REPORT_PLANNED_SINK_BYTES",
+            "PINEFORGE_REPORT_ATTEMPT_ID", "PINEFORGE_REPORT_HOST_ATTESTATION_FD",
+        }
+        channel_tokens = tokens[:tokens.index("--")] if "--" in tokens else tokens
+        if (any(token.partition("=")[0] in channel_flags for token in channel_tokens)
+                or channel_environment.intersection(os.environ)):
+            import pineforge_report_supervise
+            return pineforge_report_supervise.main(
+                pineforge_report_supervise.direct_arguments(tokens))
     try:
-        output = _ReportOutput()
+        output = (_ReportOutput() if candidate_fd is None else
+                  _CandidateOutput(candidate_fd, native_sink=native_sink))
+        if native_sink is not None:
+            os.fstat(native_sink.fd)
+            if (native_sink.fd == output.fd or _same_open_file(native_sink.fd, output.fd)
+                    or _same_open_file(native_sink.fd, 1) or _same_open_file(native_sink.fd, 2)):
+                raise ValueError("native sink aliases another producer channel")
+            os.set_inheritable(native_sink.fd, False)
     except Exception as error:
         sys.stderr.write(f"run_json: report channel setup failed: {error}\n")
         sys.stderr.flush()
         return 1
     _REPORT_OUTPUT = output
+    _SUPERVISED_NATIVE_SINK_OWNER = native_sink
     status = 1
     try:
         status = _REPORT_MAIN(argv)
@@ -8276,6 +8712,7 @@ def _host_main(argv=None) -> int:
                 except Exception:
                     traceback.print_exc(file=sys.stderr)
         _REPORT_OUTPUT = None
+        _SUPERVISED_NATIVE_SINK_OWNER = None
     return status
 
 
@@ -8284,26 +8721,32 @@ def _write_diagnostic(text):
     sys.stderr.flush()
 
 
-def _publish_failure(line):
-    if _report_published():
+def _publish_failure(line, *, destination=None):
+    if _report_published(destination):
         _write_diagnostic(f"run_json: fault after report publication: {line}")
         return
-    _begin_report()
-    if _REPORT_OUTPUT is None:
+    _begin_report(destination)
+    if destination is None and _REPORT_OUTPUT is None:
         sys.stdout.write(line)
         sys.stdout.flush()
         return
     try:
-        output = _report_output()
+        output = _report_output(destination)
         output.write(line)
         output.finish()
     except (OSError, ValueError) as error:
-        _discard_stdout()
+        if destination is None:
+            _discard_stdout()
+        else:
+            _discard_stdout(destination)
         _write_diagnostic(f"run_json: the failure could not be written: {error}\n")
 
 
-def _discard_stdout() -> None:
+def _discard_stdout(destination=None) -> None:
     """Discard the host's report descriptor, or the library caller's current stdout."""
+    if destination is not None:
+        destination.discard()
+        return
     if _REPORT_OUTPUT is not None:
         _REPORT_OUTPUT.discard()
         return
@@ -9008,6 +9451,96 @@ class _MetricsOnlyRun:
             if self.failure is None and recovered is not None and recovered.route == 3:
                 raise _engine_invariant("the legacy metrics recovery requested another run")
         return self.result(recovered_settings)
+
+
+def _output_series_count(text):
+    if not re.fullmatch(r"[0-9]+", text) or int(text) > (1 << 63) - 1:
+        raise argparse.ArgumentTypeError("expected a nonnegative int64 series count")
+    return int(text)
+
+
+def _parse_output_series_limit(parser, argv):
+    parser.add_argument(
+        "--limit-output-series", dest="max_output_series", type=_output_series_count,
+        default=None, metavar="N",
+        help="Maximum declared output series (N >= 0); 0 or omitted means no limit.")
+    return parser.parse_args(argv)
+
+
+def _output_series_limit_functions(lib, maximum):
+    names = ("pf_output_series_limit_set_checked", "pf_output_series_limit_failure")
+    present = [hasattr(lib, name) for name in names]
+    if not any(present) and maximum is None:
+        return None
+    for name, found in zip(names, present):
+        if not found:
+            raise StrategyLibraryError(
+                f"the library lacks {name}; rebuild to configure output series",
+                {"reason": "symbol_missing", "missing": name})
+    setter, failure = (getattr(lib, name) for name in names)
+    setter.argtypes = [ctypes.POINTER(ctypes.c_int64), ctypes.c_char_p, ctypes.c_size_t]
+    setter.restype = ctypes.c_int
+    failure.argtypes = [ctypes.POINTER(ctypes.c_int64)]
+    failure.restype = ctypes.c_int
+    return setter, failure
+
+
+def create_strategy(lib, checked: bool, max_output_series=None):
+    """Apply the checked option before the generated constructor declares."""
+    if max_output_series == 0:
+        max_output_series = None
+    functions = _output_series_limit_functions(lib, max_output_series)
+    if functions is None:
+        return _create_strategy(lib, checked)
+    setter, read_failure = functions
+    maximum = None if max_output_series is None else ctypes.c_int64(max_output_series)
+    error = ctypes.create_string_buffer(_SETTINGS_ERROR_CAPACITY)
+    if setter(None if maximum is None else ctypes.byref(maximum),
+              error, len(error)) != PF_SETTINGS_OK:
+        raise _request_invalid(
+            "error: --limit-output-series: " + _c_text(error.value), "arguments")
+    try:
+        return _create_strategy(lib, checked)
+    except RunFailure as failure:
+        refused_max = ctypes.c_int64()
+        if (failure.code == "strategy_create_failed"
+                and read_failure(ctypes.byref(refused_max)) == 1):
+            failure.cause = {
+                "code": "outputs_limit",
+                "args": {"max": refused_max.value, "reason": "too_many_series"}}
+        raise
+    finally:
+        # Each handle has already snapshotted the option. Keep later creations
+        # in this interpreter unlimited unless their caller supplies a limit.
+        setter(None, error, len(error))
+
+
+def _write_run_failure(failure):
+    cause = getattr(failure, "cause", None)
+    if cause is None:
+        write_failure(str(failure), failure.code, failure.code_args)
+        return
+    # This path has the fixed empty strategy_create_failed args and the
+    # runtime's scalar series-limit cause; no engine message is parsed.
+    document = json.loads(failure_line(str(failure), failure.code, failure.code_args))
+    document["cause"] = cause
+    _publish_failure(_dump_line(document) + "\n")
+
+
+def _declared_artifact_windows(owner, series):
+    budget = _artifact_windows(owner)
+    budget.declare_series(series)
+    return budget
+
+
+def _output_series_resources(sink, series):
+    resources = sink._spool_resources
+    resources._window_budget = _declared_artifact_windows(sink, series)
+    return resources
+
+
+def _report_series_count(document):
+    return len((document.get("outputs") or {}).get("series", ()))
 
 
 if __name__ == "__main__":

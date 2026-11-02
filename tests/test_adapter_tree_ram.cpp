@@ -414,7 +414,7 @@ public:
         const auto source_before = source_hash();
         const auto bytes_before = snapshot(*slab());
         const auto requests_before = native_working_requests().size();
-        capacity_failure("cohort", [&] { strategy_order("B", true, 1.0); });
+        capacity_failure("cohort_ids_total", [&] { strategy_order("B", true, 1.0); });
         require(broker_state_hash() == broker_before && source_hash() == source_before
                 && snapshot(*slab()) == bytes_before
                 && native_working_requests().size() == requests_before,
@@ -442,7 +442,7 @@ public:
         const auto broker_before = broker_state_hash();
         const auto source_before = source_hash();
         const auto requests_before = native_working_requests().size();
-        capacity_failure("cohort", [&] { strategy_entry("B", false); });
+        capacity_failure("cohort_ids_total", [&] { strategy_entry("B", false); });
         require(broker_state_hash() == broker_before && source_hash() == source_before
                 && native_working_requests().size() == requests_before
                 && cohort_open().value == 2,
@@ -469,7 +469,7 @@ public:
         const auto broker_before = broker_state_hash();
         const auto source_before = source_hash();
         const auto requests_before = native_working_requests().size();
-        capacity_failure("cohort", [&] { strategy_entry("B", false); });
+        capacity_failure("cohort_ids_total", [&] { strategy_entry("B", false); });
         require(broker_state_hash() == broker_before && source_hash() == source_before
                 && native_working_requests().size() == requests_before
                 && cohort_open().value == 2,

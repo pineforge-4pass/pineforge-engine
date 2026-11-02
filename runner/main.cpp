@@ -29,6 +29,7 @@
 #include <iostream>
 #include <iterator>
 #include <locale>
+#include <optional>
 #include <poll.h>
 #include <set>
 #include <sstream>
@@ -61,10 +62,12 @@ struct Config {
     std::uint64_t from_input = 0, max_events = 0, max_attempts = 8;
     std::uint64_t checkpoint_interval = kDefaultReportCheckpointInterval;
     std::uint64_t status_interval = 1, max_ledger_bytes = 0, feed_idle_timeout = 15, feed_message_timeout = 15;
+    std::uint64_t feed_connect_timeout = 0;
     std::uint64_t ratio_interval = 1;
     long poll_ms = 1000;
     bool check = false, allow_http = false, ledger_unbounded = false;
     ReportJsonlMode report_jsonl = ReportJsonlMode::Off;
+    std::optional<std::int64_t> max_output_series;
 };
 
 void help() {
@@ -76,6 +79,7 @@ void help() {
                  "Options: --input-tf SCRIPT_TF (default) --name NAME --session 24x7 --timezone UTC\n"
                  "         --input TITLE=VALUE --override KEY=VALUE (repeatable)\n"
                  "         --syminfo KEY=VALUE --chart-timezone UTC\n"
+                 "         --limit-output-series N (N >= 0; 0 or absent = unlimited)\n"
                  "         --subscribe subscription.json (WebSocket only)\n"
                  "         --webhook-secret-env NAME --allow-insecure-http\n"
                  "         --webhook-routes FILE (strict per-action routing; optional webhooks)\n"
@@ -87,7 +91,11 @@ void help() {
                  "         --report-jsonl=delta (mirror committed report deltas to stdout)\n"
                  "         --ratio-interval K (positive; default 1 keeps exact ratios at every input)\n"
                  "         --status-file PATH --status-interval 1 (seconds, 1..300)\n"
-                 "         --feed-idle-timeout 15 --feed-message-timeout 15 (seconds, 1..300)\n"
+                 "         --feed-connect-timeout S (network seconds; default 0 uses libcurl's largest connect option)\n"
+                 "         --feed-idle-timeout S --feed-message-timeout S (seconds)\n"
+                 "           stdin/network: default 0 = no limit, no upper cap; files: default 15, 1..300\n"
+                 "           network values must fit milliseconds in a long; for connect, files and stdin ignore a well-formed value\n"
+                 "           connect 0 adds no bound: ends on system/peer failure or nonzero --feed-message-timeout (includes connect)\n"
                  "         --control-dir PATH --max-ledger-bytes N (0 disables budget)\n"
                  "         --ledger-unbounded (explicit unlimited service ledger)\n"
                  "JSONL: {\"type\":\"tick\",\"ts\":60000,\"seq\":1,\"price\":100,\"qty\":1}\n"
@@ -216,6 +224,11 @@ Config args(int argc, char **argv) {
             c.from_input = unsigned_arg(v);
         else if (a == "--max-events")
             c.max_events = unsigned_arg(v);
+        else if (a == "--limit-output-series") {
+            c.max_output_series = Json::number(v).integer<std::int64_t>();
+            if (*c.max_output_series < 0)
+                throw std::runtime_error("max-output-series must not be negative");
+        }
         else if (a == "--ratio-interval") {
             c.ratio_interval = unsigned_arg(v);
             if (!c.ratio_interval) throw std::runtime_error("ratio-interval must be positive");
@@ -232,8 +245,14 @@ Config args(int argc, char **argv) {
         else if (a == "--status-file") c.status_file = v;
         else if (a == "--control-dir") c.control_dir = v;
         else if (a == "--status-interval") c.status_interval = seconds_arg(v);
-        else if (a == "--feed-idle-timeout") c.feed_idle_timeout = seconds_arg(v);
-        else if (a == "--feed-message-timeout") c.feed_message_timeout = seconds_arg(v);
+        else if (a == "--feed-connect-timeout") {
+            try { c.feed_connect_timeout = unsigned_arg(v); }
+            catch (const std::exception&) {
+                throw std::runtime_error(a + " requires nonnegative integer seconds");
+            }
+        }
+        else if (a == "--feed-idle-timeout") c.feed_idle_timeout = unsigned_arg(v);
+        else if (a == "--feed-message-timeout") c.feed_message_timeout = unsigned_arg(v);
         else if (a == "--max-ledger-bytes") {
             c.max_ledger_bytes = unsigned_arg(v);
             if (c.max_ledger_bytes > static_cast<std::uint64_t>(INT64_MAX))
@@ -270,6 +289,24 @@ Config args(int argc, char **argv) {
     }
     if (!c.feed_url.empty() && seen.count("--feed"))
         throw std::runtime_error("choose feed or feed-url");
+    if (c.feed_url.empty() && c.feed == "-") {
+        if (!seen.count("--feed-idle-timeout")) c.feed_idle_timeout = 0;
+        if (!seen.count("--feed-message-timeout")) c.feed_message_timeout = 0;
+    }
+    if (!c.feed_url.empty()) {
+        if (!seen.count("--feed-idle-timeout")) c.feed_idle_timeout = 0;
+        if (!seen.count("--feed-message-timeout")) c.feed_message_timeout = 0;
+    }
+    const auto validate_feed_timeout = [&](const char* flag, std::uint64_t seconds) {
+        if (!c.feed_url.empty() && seconds > static_cast<std::uint64_t>(LONG_MAX) / 1000)
+            throw std::runtime_error(std::string(flag) + " exceeds milliseconds range for network feeds");
+        if (c.feed_url.empty() && c.feed != "-" && (!seconds || seconds > 300))
+            throw std::runtime_error(std::string(flag) + " must be 1..300 seconds for file feeds");
+    };
+    validate_feed_timeout("--feed-idle-timeout", c.feed_idle_timeout);
+    validate_feed_timeout("--feed-message-timeout", c.feed_message_timeout);
+    if (!c.feed_url.empty())
+        (void)feed_connect_timeout_ms(c.feed_connect_timeout, static_cast<long>(c.feed_message_timeout * 1000));
     const bool websocket = c.feed_url.rfind("ws://", 0) == 0 || c.feed_url.rfind("wss://", 0) == 0;
     if (!c.feed_url.empty() && !websocket && c.from_input)
         throw std::runtime_error("HTTP snapshots require from-input 0");
@@ -341,6 +378,35 @@ bool line(std::istream &in, std::string &out) {
 }
 bool blank(const std::string &s) { return s.find_first_not_of(" \t\r\n") == std::string::npos; }
 
+class OutputSeriesLimitScope {
+    decltype(&pf_output_series_limit_set_checked) setter_ = nullptr;
+    decltype(&pf_output_series_limit_failure) failure_ = nullptr;
+public:
+    OutputSeriesLimitScope(void* library, const std::optional<std::int64_t>& maximum) {
+        const std::int64_t* requested = maximum && *maximum != 0 ? &*maximum : nullptr;
+        setter_ = reinterpret_cast<decltype(setter_)>(
+            dlsym(library, "pf_output_series_limit_set_checked"));
+        failure_ = reinterpret_cast<decltype(failure_)>(
+            dlsym(library, "pf_output_series_limit_failure"));
+        if (!setter_ && !failure_ && !requested) return;
+        if (!setter_ || !failure_)
+            throw std::runtime_error("strategy lacks the output series limit API; rebuild");
+        char error[512]{};
+        if (setter_(requested, error, sizeof(error)) != PF_SETTINGS_OK)
+            throw std::runtime_error(std::string("output series limit refused: ") + error);
+    }
+    ~OutputSeriesLimitScope() {
+        if (setter_) setter_(nullptr, nullptr, 0);
+    }
+    std::string creation_failure(std::string text) const {
+        std::int64_t maximum = 0;
+        if (failure_ && failure_(&maximum) == 1)
+            text += "; outputs_limit {\"max\":" + std::to_string(maximum)
+                + ",\"reason\":\"too_many_series\"}";
+        return text;
+    }
+};
+
 class Strategy {
     void *library_ = nullptr;
     decltype(&strategy_stream_begin) begin_ = nullptr;
@@ -396,7 +462,7 @@ class Strategy {
                                      (e ? e : "unknown error"));
         }
     }
-    void load(const std::string &path) {
+    void load(const std::string &path, const std::optional<std::int64_t>& maximum) {
         library_ = dlopen(fs::absolute(path).c_str(), RTLD_NOW | RTLD_LOCAL);
         if (!library_)
             throw std::runtime_error("cannot load compiled strategy library");
@@ -445,6 +511,7 @@ class Strategy {
                 std::cerr << "pineforge-live: warning: compiled strategy lacks execution capabilities; "
                              "close-only eligibility cannot be proved (legacy behavior retained)\n";
             }
+            OutputSeriesLimitScope series_limit(library_, maximum);
             auto settings_version = optional_symbol<decltype(&strategy_settings_api_version)>(
                 "strategy_settings_api_version");
             if (settings_version) {
@@ -456,14 +523,14 @@ class Strategy {
                 char message[512]{};
                 auto create = symbol<decltype(&strategy_create_checked)>("strategy_create_checked");
                 if (create(nullptr, &state, message, sizeof(message)) != PF_SETTINGS_OK)
-                    throw std::runtime_error(std::string("strategy creation failed: ") + message);
+                    throw std::runtime_error(series_limit.creation_failure(std::string("strategy creation failed: ") + message));
             } else {
                 std::cerr << "pineforge-live: warning: compiled strategy lacks checked settings; "
                              "legacy settings may be ignored or defaulted\n";
                 state = symbol<decltype(&strategy_create)>("strategy_create")(nullptr);
             }
             if (!state)
-                throw std::runtime_error("strategy creation failed");
+                throw std::runtime_error(series_limit.creation_failure("strategy creation failed"));
             auto contract_fn = optional_symbol<decltype(&strategy_execution_contract)>(
                 "strategy_execution_contract");
             contract = 1;
@@ -903,7 +970,7 @@ int run(Config c) {
     auto original = read_file(c.warmup, 512ULL * 1024 * 1024);
     auto library = read_file(c.strategy, 512ULL * 1024 * 1024);
     Strategy strategy;
-    strategy.load(c.strategy);
+    strategy.load(c.strategy, c.max_output_series);
     if (sha256_hex(read_file(c.strategy, 512ULL * 1024 * 1024)) != sha256_hex(library))
         throw std::runtime_error("strategy library changed during initialization");
     strategy.require_contract(c);
@@ -1044,7 +1111,7 @@ int run(Config c) {
             {"verified_source_prefix", Json::boolean(false)}, {"no_unhealed_input_gap", Json::boolean(true)},
             {"storage_below_budget", Json::boolean(!c.max_ledger_bytes || ledger_bytes(c.ledger) <= c.max_ledger_bytes)}})},
         {"metrics", Json::object({{"committed_input", num(recorded)}, {"last_seq", Json{}},
-            {"source_timestamp_ms", Json{}}, {"source_lag_ms", Json{}}, {"queue_bytes", num(0)},
+            {"source_timestamp_ms", Json{}}, {"source_lag_ms", Json{}}, {"feed_idle_ms", Json{}}, {"queue_bytes", num(0)},
             {"ledger_bytes", num(ledger_bytes(c.ledger))}, {"report_cursor", num(ledger.report_cursor())}, {"targets", Json::object({})}})}});
     service.publish(recovering, true);
     for (std::uint64_t i = 0; i < recorded; ++i) {
@@ -1088,6 +1155,9 @@ int run(Config c) {
         return record.at("ts").integer<std::uint64_t>();
     };
     if (recorded) source_timestamp = source_time(parse_json(ledger.input(recorded - 1)->canonical_json), source_time);
+    // Arrival age includes processing; it is independent of the stdin deadline clock.
+    std::optional<std::chrono::steady_clock::time_point> feed_last_input;
+    const auto note_feed_input = [&] { feed_last_input = std::chrono::steady_clock::now(); };
     auto last_pulse = std::chrono::steady_clock::time_point{};
     std::string last_state;
     bool last_ready = false;
@@ -1123,6 +1193,8 @@ int run(Config c) {
             {"metrics", Json::object({{"committed_input", num(ledger.input_count())},
                 {"last_seq", cursor.seen_tick ? num(cursor.tick_seq) : Json{}},
                 {"source_timestamp_ms", num(source_timestamp)}, {"source_lag_ms", num(now > source_timestamp ? now - source_timestamp : 0)},
+                {"feed_idle_ms", feed_last_input ? num(static_cast<std::uint64_t>(
+                    std::max<std::chrono::milliseconds::rep>(0, std::chrono::duration_cast<std::chrono::milliseconds>(clock - *feed_last_input).count()))) : Json{}},
                 {"queue_bytes", num(intake_bytes + delivery.queue_bytes())}, {"ledger_bytes", num(c.max_ledger_bytes ? bytes : ledger_bytes(c.ledger))},
                 {"control_errors", num(delivery.control_errors())},
                 {"report_cursor", num(ledger.report_cursor())}, {"targets", std::move(pending)}})}}), force || changed);
@@ -1176,6 +1248,7 @@ int run(Config c) {
         std::string row;
         std::uint64_t index = start;
         while (!stopped && !storage_stop && line(in, row)) {
+            if (c.feed_url.empty()) note_feed_input();
             if (blank(row))
                 continue;
             bool last = false;
@@ -1227,8 +1300,13 @@ int run(Config c) {
                     pulse();
                     if (storage_stop) break;
                     const auto now = std::chrono::steady_clock::now();
-                    if (now - last_data >= std::chrono::seconds(c.feed_idle_timeout) ||
-                        (!pending.empty() && now - message_started >= std::chrono::seconds(c.feed_message_timeout)))
+                    // Convert elapsed time, so large unsigned bounds never narrow.
+                    const auto idle_seconds = static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::seconds>(now - last_data).count());
+                    const auto message_seconds = static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::seconds>(now - message_started).count());
+                    if ((c.feed_idle_timeout && idle_seconds >= c.feed_idle_timeout) ||
+                        (c.feed_message_timeout && !pending.empty() && message_seconds >= c.feed_message_timeout))
                         throw std::runtime_error("native stdin idle or message timeout");
                     pollfd fd{STDIN_FILENO, POLLIN, 0};
                     int rc = poll(&fd, 1, 100);
@@ -1253,8 +1331,10 @@ int run(Config c) {
                         break;
                     }
                     last_data = std::chrono::steady_clock::now();
+                    feed_last_input = last_data;
                     if (pending.empty()) message_started = last_data;
                     pending.append(buffer, static_cast<std::size_t>(n));
+                    bool consumed = false;
                     for (;;) {
                         auto end = pending.find('\n');
                         if (end == std::string::npos)
@@ -1265,13 +1345,18 @@ int run(Config c) {
                         pending.erase(0, end + 1);
                         intake_bytes = pending.size();
                         message_started = std::chrono::steady_clock::now();
-                        if (!blank(message))
+                        if (!blank(message)) {
                             consume_message(message, index);
+                            consumed = true;
+                        }
                         if (stopped || storage_stop || (c.max_events && processed >= c.max_events))
                             break;
                     }
                     if (pending.size() > MAX_FRAME)
                         throw std::runtime_error("input line exceeds 1 MiB");
+                    // Feed deadlines count waiting, excluding the consume pass.
+                    last_data = std::chrono::steady_clock::now();
+                    if (consumed && !pending.empty()) message_started = last_data;
                 }
             } else {
                 std::ifstream input(c.feed);
@@ -1280,36 +1365,29 @@ int run(Config c) {
                 consume(input, c.from_input, true);
             }
         } else if (c.feed_url.rfind("ws://", 0) == 0 || c.feed_url.rfind("wss://", 0) == 0) {
-            HttpOptions feed;
-            feed.url = c.feed_url;
-            feed.allow_insecure_http = c.allow_http;
-            feed.total_timeout_ms = static_cast<long>(c.feed_message_timeout * 1000);
-            feed.connect_timeout_ms = std::min<long>(5000, feed.total_timeout_ms);
-            feed.idle_timeout_ms = static_cast<long>(c.feed_idle_timeout * 1000);
-            feed.message_timeout_ms = static_cast<long>(c.feed_message_timeout * 1000);
+            const auto feed = feed_http_options(c.feed_url, c.allow_http, true, c.feed_connect_timeout,
+                                                c.feed_idle_timeout, c.feed_message_timeout);
             std::string subscription =
                 c.subscribe_path.empty() ? "" : read_file(c.subscribe_path, MAX_FRAME);
             std::uint64_t index = c.from_input;
             receive_websocket(
                 feed, subscription,
                 [&](std::string_view bytes) {
+                    note_feed_input();
                     consume_message(std::string(bytes), index);
                     return !stopped && !storage_stop && !(c.max_events && processed >= c.max_events);
                 },
                 [&] { delivery.check(); pulse(); return stopped != 0 || storage_stop; },
-                [&](std::size_t bytes) { intake_bytes = bytes; });
+                [&](std::size_t bytes) { intake_bytes = bytes; }, note_feed_input);
         } else {
-            HttpOptions feed;
-            feed.url = c.feed_url;
-            feed.allow_insecure_http = c.allow_http;
-            feed.total_timeout_ms = static_cast<long>(c.feed_message_timeout * 1000);
-            feed.connect_timeout_ms = std::min<long>(5000, feed.total_timeout_ms);
-            feed.idle_timeout_ms = static_cast<long>(c.feed_idle_timeout * 1000);
+            const auto feed = feed_http_options(c.feed_url, c.allow_http, false, c.feed_connect_timeout,
+                                                c.feed_idle_timeout, c.feed_message_timeout);
             do {
                 delivery.check();
                 pulse();
                 if (storage_stop || stopped) break;
-                auto snapshot = get_feed_snapshot(feed, [&] { pulse(); return stopped != 0 || storage_stop; });
+                auto snapshot = get_feed_snapshot(feed, [&] { pulse(); return stopped != 0 || storage_stop; },
+                    note_feed_input);
                 std::istringstream input(snapshot);
                 consume(input, 0, true);
                 recorded = ledger.input_count();

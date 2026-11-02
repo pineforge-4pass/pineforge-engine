@@ -394,9 +394,9 @@ def run_entrypoint(box, extra=None, xtrace=False, pythonpath=None):
                           check=False)
 
 
-def run_helper(box, inventory, cpp, so, out, pythonpath=None):
+def run_helper(box, inventory, cpp, so, out, pythonpath=None, extra=()):
     command = [sys.executable, str(HELPER), "--inventory", str(inventory), "--cpp", str(cpp),
-               "--so", str(so), "--out", str(out)]
+               "--so", str(so), "--out", str(out), *extra]
     return subprocess.run(command, env=box.env(None, pythonpath), stdin=subprocess.DEVNULL,
                           capture_output=True, encoding="utf-8", errors="replace",
                           check=False)
@@ -473,13 +473,61 @@ def test_helper_refuses_a_malformed_inventory(box, data, code):
     assert supplied.read_bytes() == data
 
 
-def test_helper_refuses_an_oversize_inventory(box):
+@pytest.mark.parametrize("extra", [["--max-inventory-bytes", "8388608"], ["--tv-compat"]])
+def test_helper_refuses_an_oversize_inventory(box, extra):
     supplied, cpp, so, out = helper_files(box)
-    supplied.write_bytes(b" " * (8 * 1024 * 1024 + 1))
-    result = run_helper(box, supplied, cpp, so, out)
+    document = supplied.read_bytes()
+    supplied.write_bytes(b" " * (8388609 - len(document)) + document)
+    result = run_helper(box, supplied, cpp, so, out, extra=extra)
     assert result.returncode == 10
     assert "over" in result.stderr
+    assert result.stderr == "bind_compiled_inventory: the inventory is over 8388608 bytes\n"
     assert not out.exists()
+
+
+@pytest.mark.parametrize("size,extra", [
+    (8388609, []),
+    (8388609, ["--max-inventory-bytes", "0"]),
+    (8388608, ["--max-inventory-bytes", "8388608"]),
+    (8388608, ["--tv-compat"]),
+    (8388609, ["--tv-compat", "--max-inventory-bytes", "0"]),
+    (8388609, ["--max-inventory-bytes", "0", "--tv-compat"]),
+    (8388609, ["--tv-compat", "--max-inventory-bytes", "8388609"]),
+])
+def test_helper_inventory_limits_accept_the_complete_inventory(box, size, extra):
+    supplied, cpp, so, out = helper_files(box, entries=MIXED)
+    document = supplied.read_bytes()
+    content = b" " * (size - len(document)) + document
+    supplied.write_bytes(content)
+    result = run_helper(box, supplied, cpp, so, out, extra=extra)
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert json.loads(out.read_bytes()) == bound_inventory(CPP_BYTES, SO_BYTES, MIXED)
+    assert supplied.read_bytes() == content
+
+
+@pytest.mark.parametrize("extra", [[], ["--max-inventory-bytes", "0"]])
+def test_helper_unlimited_read_still_checks_trailing_json(box, extra):
+    supplied, cpp, so, out = helper_files(box)
+    document = supplied.read_bytes()
+    supplied.write_bytes(document + b" " * (8388609 - len(document)) + b"{}")
+    result = run_helper(box, supplied, cpp, so, out, extra=extra)
+    assert result.returncode == 11
+    assert "the inventory is not strict JSON" in result.stderr
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("value", ["-1", "abc", "", "1.5"])
+def test_helper_inventory_limit_usage_errors(box, value):
+    supplied, cpp, so, out = helper_files(box)
+    result = run_helper(box, supplied, cpp, so, out, extra=["--max-inventory-bytes", value])
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr.startswith("usage: bind_compiled_inventory")
+    assert result.stderr.endswith("bind_compiled_inventory: error: argument --max-inventory-bytes: "
+                                  "must be a nonnegative integer (0 means unlimited)\n")
+    assert not out.exists()
+    assert box.events() == []
 
 
 def test_helper_refuses_an_unreadable_inventory(box):
@@ -593,6 +641,53 @@ def test_helper_source_reimplements_nothing_and_loads_no_library():
 
 
 # --- The entrypoint ---------------------------------------------------------------
+
+@pytest.mark.parametrize("name,flag", [
+    ("PINEFORGE_MAX_SYMBOL_FEEDS", "--max-symbol-feeds"),
+    ("PINEFORGE_MAX_INVENTORY_BYTES", "--max-inventory-bytes"),
+])
+@pytest.mark.parametrize("value,expected_status", [("0", 0), ("300", 0), ("", 2), ("-1", 2),
+                                                  ("abc", 2)])
+def test_entrypoint_forwards_limits_verbatim_to_runner(box, name, flag, value, expected_status):
+    put_cpp(box)
+    result = run_entrypoint(box, {name: value, "STUB_RUN_JSON_VALIDATE": "1"})
+    argv = box.logged("run_json.argv.json")
+    assert normalized(argv) == old_argv("false") + [flag, value]
+    assert box.logged("run_json.status.json") == expected_status
+    assert result.returncode == (0 if expected_status == 0 else 4)
+    if expected_status:
+        failure = json.loads(result.stdout)
+        assert (failure["code"], failure["args"]) == (
+            "run_request_invalid", {"option": "arguments"})
+        assert "must be a nonnegative integer (0 means unlimited)" in failure["error"]
+
+
+@pytest.mark.parametrize("value", ["0", "8388608"])
+def test_entrypoint_forwards_inventory_limit_and_compat_to_both_tools(box, value):
+    put_pine(box)
+    result = run_entrypoint(box, dict(SELECTED_ENV, PINEFORGE_TV_COMPAT="true",
+                                      PINEFORGE_MAX_INVENTORY_BYTES=value,
+                                      PINEFORGE_MAX_SYMBOL_FEEDS="0"))
+    assert result.returncode == 0, result.stderr
+    runner = box.logged("run_json.argv.json")
+    binder = box.logged("helper.argv.json")
+    assert runner.count("--tv-compat") == binder.count("--tv-compat") == 1
+    assert runner[runner.index("--max-inventory-bytes") + 1] == value
+    assert binder[binder.index("--max-inventory-bytes") + 1] == value
+    assert runner[runner.index("--max-symbol-feeds") + 1] == "0"
+    assert "--max-symbol-feeds" not in binder
+
+
+@pytest.mark.parametrize("value", ["", "-1", "abc"])
+def test_entrypoint_inventory_limit_usage_error_stops_at_binder(box, value):
+    put_pine(box)
+    result = run_entrypoint(box, dict(SELECTED_ENV, PINEFORGE_MAX_INVENTORY_BYTES=value))
+    assert result.returncode == 3
+    assert box.events() == ["codegen:transpile_with_request_inventory", "gxx", "helper"]
+    assert "argument --max-inventory-bytes: must be a nonnegative integer" in result.stderr
+    assert BINDING_FAILED in result.stderr
+    assert not (box.log / "run_json.argv.json").exists()
+
 
 def test_entrypoint_adds_no_deletion_beyond_its_one_exit_trap():
     text = ENTRYPOINT.read_text(encoding="utf-8")

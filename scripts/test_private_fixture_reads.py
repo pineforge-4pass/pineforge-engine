@@ -261,6 +261,11 @@ class TamperTree:
         (self.root / 'tests' / 'ownership').mkdir()
         shutil.copy(REPO / 'tests' / 'ownership' / 'test_manifest_checker.py',
                     self.root / 'tests' / 'ownership')
+        # The report-channel rows name their drivers under three nested test
+        # directories (each with the helpers its driver imports).
+        for nested in ('report_channel', 'report_channel_deadlines', 'entrypoint_limits'):
+            shutil.copytree(REPO / 'tests' / nested, self.root / 'tests' / nested,
+                            ignore=shutil.ignore_patterns('__pycache__'))
         (self.root / 'benchmarks').mkdir()
         shutil.copy(REPO / 'benchmarks' / 'check_provenance.py',
                     self.root / 'benchmarks')

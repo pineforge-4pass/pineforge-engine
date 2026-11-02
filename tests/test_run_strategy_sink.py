@@ -367,6 +367,28 @@ def test_cli_csv_and_diagnostic_values_equal_array_path(tmp_path, monkeypatch):
     assert owners and all(sink.closed for sink in owners)
 
 
+@pytest.mark.parametrize("profile", [None, "unjailed"], ids=["default", "explicit"])
+def test_cli_runs_normally_outside_jailed_profile(tmp_path, monkeypatch, profile):
+    # Making the entry guard unconditional must refuse this same main() call.
+    if profile is None:
+        monkeypatch.delenv("PINEFORGE_RUN_JSON_PROFILE", raising=False)
+    else:
+        monkeypatch.setenv("PINEFORGE_RUN_JSON_PROFILE", profile)
+    monkeypatch.setenv("PINEFORGE_REPORT_SINK", "1")
+    trades = trade_fixture()
+    library = HarnessLibrary(trades)
+    output, trace = tmp_path / "sink.csv", tmp_path / "trace.json"
+    assert invoke_main(tmp_path, monkeypatch, library, output,
+                       extra=("--trace-json", str(trace))) == 0
+    assert library.calls.count("run_backtest_full") == 1 and library.installed
+    expected = tmp_path / "expected.csv"
+    rs.write_engine_trades_csv(trades, expected)
+    assert output.read_bytes() == expected.read_bytes()
+    document = json.loads(trace.read_text())
+    assert document["trace_names"] == ["fixture", 'quote "\n漢']
+    assert len(document["trace"]) == 8
+
+
 @pytest.mark.parametrize("fault", ["hash", "truncated", "receipt", "incomplete"])
 def test_bad_sink_never_overwrites_csv_and_releases_resources(
         tmp_path, monkeypatch, fault):

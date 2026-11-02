@@ -948,10 +948,10 @@ public:
             const auto before_hash = broker_state_hash_projection();
             try { (adapter_.*access(CohortFor{}))("refused-before-kernel"); }
             catch (const pineforge::detail::ScratchCapacityError& error) {
-                refused = std::string(error.what()).find("4,096") != std::string::npos;
+                refused = std::string(error.what()) == "more than 4,096 order ids active at once (placed and not yet closed or cancelled); close or cancel orders sooner, or reuse ids";
                 const auto failure = pineforge::classify_run_failure(error);
                 require(failure.code == pineforge::RunFailureCode::scratch_capacity_exceeded
-                        && failure.args && *failure.args == "{\"resource\":\"cohort\"}",
+                        && failure.args && *failure.args == "{\"resource\":\"cohort_orders_live\"}",
                         "adapter cap refusal retains typed resource");
             }
             require(refused && broker_state_hash_projection() == before_hash

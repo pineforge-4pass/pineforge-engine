@@ -653,6 +653,17 @@ public:
 
     PlacementTable() = default;
     explicit PlacementTable(std::size_t cache_bytes) : erased_minima_(cache_bytes) {}
+    PlacementTable(std::size_t cache_bytes, std::size_t sequence_bytes)
+        : sequence_cache_capacity_(CacheCapacity::from_payload(512, sequence_bytes)),
+          erased_minima_(cache_bytes) {}
+    PlacementTable(CacheCapacity minima, CacheCapacity sequence)
+        : sequence_cache_capacity_(sequence), erased_minima_(minima) {}
+    // Run setup only, after clear() and before directory/slab binding.
+    void set_cache_capacity(CacheCapacity minima, CacheCapacity sequence) {
+        erased_minima_.set_cache_capacity(minima);
+        sequence_cache_capacity_ = sequence;
+        sequence_index_.reset();
+    }
     PlacementTable(const PlacementTable&) = delete;
     PlacementTable& operator=(const PlacementTable&) = delete;
     PlacementTable(PlacementTable&&) noexcept = default;
@@ -944,6 +955,8 @@ private:
     std::uint64_t erased_rows_ = 0; mutable std::uint64_t visited_slots_ = 0;
     std::uint64_t erased_digest_ = kFoldBasis;
     mutable std::shared_ptr<SequenceIndex> sequence_index_; mutable std::uint64_t sequence_queries_ = 0, sequence_rows_ = 0;
+    // Physical policy only; the derived backing remains lazy and rebuildable.
+    CacheCapacity sequence_cache_capacity_ = CacheCapacity::from_payload(512, 64 * 1024);
     Minima erased_minima_;
     // Up to three distinct source ids of erased non-margin rows: as many as
     // erased_non_margin_id_outside() can ever need.
@@ -1650,6 +1663,7 @@ public:
     int projection_bar_index(const NativeDecisionContext&) const noexcept;
     int projection_bar_index(const NativeCoordinate&) const noexcept;
     void reset_for_run();
+    void set_cache_policy_for_run(const CacheDefaults& policy);
     void set_configuration(const PineStrategyConfig& config) noexcept;
     void set_staged_configuration(const StagedConfiguration& staged);
     void set_begin_mode(bool is_stream, bool bar_magnifier = false) noexcept;

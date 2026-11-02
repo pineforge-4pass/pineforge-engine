@@ -1038,6 +1038,17 @@ class Machine:
                 # the same NOTFOUND binding as get_target_property below.
                 self.vars[values[-1]] = ['NOTFOUND']
                 index += 1
+            elif head == 'get_directory_property':
+                values = split_values(arguments(statement))
+                # The tests registered so far are the one directory property
+                # this walk knows; any other property is not modelled, so the
+                # sweep exits 2 rather than binding a guess.
+                if len(values) != 2 or values[1] != 'TESTS':
+                    raise Unreadable(
+                        f'{self.path}:{line}: unmodelled get_directory_property '
+                        f'{" ".join(values[1:])}')
+                self.vars[values[0]] = sorted(self.rows)
+                index += 1
             elif head in ('get_target_property',):
                 values = split_values(arguments(statement))
                 self.vars[values[1]] = ['NOTFOUND']

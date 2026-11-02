@@ -195,21 +195,32 @@ void unchanged_strings_only_write_descriptor() {
     ledger.push_back(expected);
     // All original strings are short and resident; only numeric bytes change.
     Measure measure;
-    constexpr int changes = 1000;
-    for (int n = 0; n < changes; ++n) {
+    constexpr int replacements = 1000;
+    std::uint64_t changed = 0;
+    double previous_runup = expected.max_runup;
+    for (int n = 0; n < replacements; ++n) {
         expected.max_runup = n + 0.5;
+        changed += expected.max_runup != previous_runup;
         ledger.replace(0, expected);
+        previous_runup = expected.max_runup;
         same_trade(ledger.read(0), expected);
     }
     const auto io = measure.finish();
     CHECK(io.reads == 0);
-    // Every replacement writes one descriptor; a 64 KiB scratch write
+    // Only changed values write a descriptor; a 64 KiB scratch write
     // boundary may split that descriptor into two actual pwrite calls.
-    const auto window_cuts = (changes + 1) * TradeLedger::kRecordBytes
+    const auto window_cuts = (changed + 1) * TradeLedger::kRecordBytes
         / detail::ScratchFile::kCacheBytes;
-    CHECK(io.writes >= changes);
-    CHECK(io.writes <= changes + window_cuts);
-    CHECK(io.written_bytes == changes * TradeLedger::kRecordBytes);
+    CHECK(io.writes >= changed);
+    CHECK(io.writes <= changed + window_cuts);
+    CHECK(io.written_bytes == changed * TradeLedger::kRecordBytes);
+    // Identical encoded records require no descriptor or string writes.
+    Measure identical_measure;
+    ledger.replace(0, expected);
+    const auto identical_io = identical_measure.finish();
+    CHECK(identical_io.written_bytes == 0);
+    CHECK(identical_io.writes == 0);
+    same_trade(ledger.read(0), expected);
     // A genuinely changed, embedded-NUL string must still write its bytes.
     expected.exit_comment.assign("changed\0comment", 15);
     Measure changed_measure;
@@ -272,11 +283,19 @@ void hungpixi_population_field_reads() {
     REQUIRE(cold.reads > 0); // Old descriptors/strings really leave the tails.
     CHECK(cold.writes == 0);
     CHECK(ledger.cache_size() == population);
+    constexpr std::size_t page_rows = 256;
+    const auto cache_rows = ledger.cache_rows();
+    // The one-row budget includes one entry and one page-table pointer.
     const auto fixed_bytes = TradeLedger::resident_cache_bytes(1)
-        - TradeLedger::kLedgerEntryBytes;
-    // next_power_of_two(24,238) = 32,768, below the 65,536-row default cap.
+        - TradeLedger::kLedgerEntryBytes - sizeof(void*);
+    const auto page_table_bytes = (cache_rows + page_rows - 1) / page_rows * sizeof(void*);
+    // Consecutive rows touch ceil(population/256) pages; clip at the row cap.
+    const auto allocated_pages = (population + page_rows - 1) / page_rows;
+    const auto rounded_slots = allocated_pages * page_rows;
+    const auto allocated_slots = rounded_slots < cache_rows ? rounded_slots : cache_rows;
     CHECK(ledger.cache_resident_bytes()
-          == fixed_bytes + 32768 * TradeLedger::kLedgerEntryBytes);
+          == fixed_bytes + page_table_bytes + allocated_slots * TradeLedger::kLedgerEntryBytes);
+    CHECK(ledger.cache_resident_bytes() <= TradeLedger::resident_cache_bytes(cache_rows));
     for (int bar = 0; bar < 8; ++bar) {
         Measure numeric;
         for (std::size_t i = 0; i < population; ++i) {

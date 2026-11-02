@@ -66,15 +66,15 @@ struct SourceExitScratchRun {
     // The native consumer retains this run through source-adapter destruction.
     // Geometry is fixed independently of the bar and order populations.
     const std::size_t page_size = command_scratch_page_size();
-    std::unique_ptr<::pineforge::detail::ScratchBacking> exit_backing =
-        source::detail::make_command_scratch_backing(page_size);
+    std::unique_ptr<::pineforge::detail::ScratchBacking> exit_backing;
     ::pineforge::detail::CommandScratchStore exit{
         command_scratch_config(page_size, source::detail::exit_scratch_key_order()),
         exit_backing.get()};
     source::detail::ExitScratchContext exit_context{exit, {}};
     source::detail::ExitScratchVersionsProduction exit_versions{exit};
 
-    SourceExitScratchRun() {
+    explicit SourceExitScratchRun(CacheCapacity capacity)
+        : exit_backing(source::detail::make_command_scratch_backing(page_size, capacity)) {
         if (exit.status() != ::pineforge::detail::ScratchStatus::ok) {
             if (exit.status() == ::pineforge::detail::ScratchStatus::io_error) // the store carries a refused workspace allocation
                 ::pineforge::detail::rethrow_carried_scratch_failure(exit.carried_failure() ? exit.carried_failure() : exit_backing->carried_failure());
@@ -632,10 +632,14 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
             "timestamped account-currency FX is not supported with bar magnifier");
 
     adapter_.reset_for_run();
+    adapter_.set_cache_policy_for_run(cache_policy_for_run());
+    for (auto& tape : recorded_series_)
+        tape.second.rows.set_capacity_bytes(tape.second.cache_capacity_override.value_or(
+            cache_policy_for_run().recorded_series_pages.capacity_bytes));
     const auto& scratch = scratch_tables_for_run();
     ::pineforge::detail::bind_tree_scratch_tables(adapter_, scratch);
     ::pineforge::detail::bind_id_pair_scratch_tables(adapter_, scratch);
-    auto command_scratch = std::make_shared<SourceExitScratchRun>();
+    auto command_scratch = std::make_shared<SourceExitScratchRun>(cache_policy_for_run().exit_pages);
     auto& consumer = NativeExecutionConsumer::bound(*this);
     using ScratchBinding = NativeExecutionConsumer::CommandScratchBinding;
     // Reserve placement evidence by incarnation once for the disclosed batch:
@@ -1120,7 +1124,7 @@ void source::PineStrategyHost::on_native_applied(
     for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
         const std::size_t index = event.first_trade_index + i;
         if (index >= trades_.size()) continue;
-        Trade row = trades_[index];
+        Trade row = trades_[index]; const auto previous_cause = row.close_cause;
         if (row.exit_id == source::kMarginCallLabel) {
             row.close_cause = execution::CloseCause::Liquidation;
         } else if (row.exit_id.empty()) {
@@ -1129,7 +1133,7 @@ void source::PineStrategyHost::on_native_applied(
             else if (row.exit_comment.rfind(source::kIntradayLossComment, 0) == 0)
                 row.close_cause = execution::CloseCause::RiskLimit;
         }
-        adapter_.invalidate_exit_group(index); trades_.replace(index, row);
+        adapter_.invalidate_exit_group(index); if (row.close_cause != previous_cause || index < trades_.base()) trades_.replace(index, row);
     }
     project_short_seed_report_rows(event);
     if (!other_exit_here) order_global_exit_children(event);

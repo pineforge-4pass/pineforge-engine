@@ -231,7 +231,8 @@ def test_bad_index_document_is_refused(tmp_path, text, message):
 def test_more_than_256_feeds_is_refused(tmp_path):
     symbols = {f"S{i}": {"feeds": {"240": "f.csv"}} for i in range(257)}
     with pytest.raises(run_json.SymbolFeedsError, match="more than 256"):
-        run_json.load_symbol_feeds(index(tmp_path, symbols, {"f.csv": GOOD}))
+        run_json.load_symbol_feeds(index(tmp_path, symbols, {"f.csv": GOOD}),
+                                   max_symbol_feeds=256)
 
 
 @pytest.mark.parametrize("setters", [FEED_SETTERS[:1], FEED_SETTERS[1:], ()],

@@ -397,6 +397,58 @@ def test_pipe_round_trip_from_path_writer(tmp_path, stdout_mode):
     assert_success(result, receipt, out, spool, payload)
 
 
+@pytest.mark.parametrize("profile", [None, "unjailed"], ids=["default", "explicit"])
+def test_file_mode_runs_normally_outside_jailed_profile(tmp_path, monkeypatch, profile):
+    # Making the file-mode refusal unconditional must turn this round trip red.
+    if profile is None:
+        monkeypatch.delenv("PINEFORGE_RUN_JSON_PROFILE", raising=False)
+    else:
+        monkeypatch.setenv("PINEFORGE_RUN_JSON_PROFILE", profile)
+    payload = fixture_stream(tmp_path)
+    result, receipt, out, spool = invoke(
+        tmp_path, payload, extra=("--max-bytes", str(len(payload))))
+    assert_success(result, receipt, out, spool, payload)
+    assert tuple(receipt) == RECEIPT_KEYS
+
+
+@pytest.mark.parametrize("profile,message", [
+    ("jailed", "jailed profile excludes pineforge-sink-finalize file-output mode: "
+               "finalizer_file_output_no_jailed_route"),
+    ("invalid", "PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed"),
+])
+@pytest.mark.parametrize("receipt_channel", ["stdout", "pipe", "stderr"])
+@pytest.mark.parametrize("existing_output", [False, True])
+def test_host_profile_refusals_keep_text_diagnostics_and_ordinary_receipts(
+        tmp_path, monkeypatch, profile, message, receipt_channel, existing_output):
+    monkeypatch.setenv("PINEFORGE_RUN_JSON_PROFILE", profile)
+    payload = fixture_stream(tmp_path)
+    output = tmp_path / "out.sink"
+    previous = b"previous output\n"
+    if existing_output:
+        output.write_bytes(previous)
+    result, receipt, out, spool = invoke(
+        tmp_path, payload, out=output, receipt_pipe=receipt_channel != "stdout",
+        extra=("--receipt-fd", "2") if receipt_channel == "stderr" else ())
+    assert result.returncode == 3, result.stderr
+    if receipt_channel == "stderr":  # fd 2 is silent by design: ordinary receipt only.
+        assert receipt is None and result.stdout == b""
+        receipt = json.loads(result.stderr)
+        assert result.stderr == encoded(receipt)
+    else:
+        assert result.stdout == (b"" if receipt_channel == "pipe" else result.receipt_bytes)
+        assert result.stderr == f"pineforge-sink-finalize: {message}\n".encode()
+    assert tuple(receipt) == RECEIPT_KEYS
+    assert "code" not in receipt and "args" not in receipt
+    assert receipt["complete"] is False and receipt["sha256"] == ""
+    assert receipt["sink_bytes"] == 0
+    assert all(receipt["count_" + tag.lower()] == 0 for tag in TAGS)
+    if existing_output:
+        assert out.read_bytes() == previous
+    else:
+        assert not os.path.lexists(out)
+    assert list(spool.iterdir()) == []
+
+
 @pytest.mark.parametrize("tiny,unix_socket,receipt_pipe,launcher", [
     (True, False, False, False), (True, True, True, False),
     (False, False, True, True),
@@ -779,11 +831,11 @@ def test_receipt_contract_text_lists_every_receipt_shape():
         for label, keys in re.findall(r"Keys \(([^)]+)\):\s*([a-z0-9_,\s]+)\.", section)
     }
     assert described == {
-        "success": RECEIPT_KEYS,
-        "ordinary failure": RECEIPT_KEYS,
-        "exit-8 exhaustion": EXHAUSTED_RECEIPT_KEYS,
-        "typed refusal with M=2": TYPED_REFUSAL_RECEIPT_KEYS,
+        "success": RECEIPT_KEYS, "ordinary failure": RECEIPT_KEYS,
+        "exit-8 exhaustion": EXHAUSTED_RECEIPT_KEYS, "typed refusal with M=2": TYPED_REFUSAL_RECEIPT_KEYS,
     }
+    assert finalizer.__doc__.count("on stderr only when --receipt-fd is not 2") == 2
+    assert finalizer.__doc__.count("ordinary failure receipt only, indistinguishable from a malformed stream") == 2
 
 
 @pytest.mark.parametrize("stdout_mode", [False, True])

@@ -9,6 +9,10 @@ so the call succeeds without a compiled engine .so:
   - metrics is a real MetricsC -> _stats_dict iterates its _fields_
   - net_profit + the diagnostics counters are read directly
 """
+import ctypes
+from types import SimpleNamespace
+
+import pytest
 import run_json  # docker/ is on sys.path in the engine test env
 
 
@@ -100,6 +104,64 @@ def test_trade_entry_incarnation_is_optional_and_positionally_aligned():
 
     assert with_identity["trades"][0]["entry_incarnation"] == 41
     assert legacy["trades"][0]["entry_incarnation"] == 0
+
+
+class _CacheStatsGetter:
+    """Wire-format fixture; real allocation refusal is exercised in C++."""
+    def __init__(self, bypasses, status=0):
+        self.bypasses, self.status, self.calls = bypasses, status, []
+
+    def __call__(self, state, resident, bypasses):
+        self.calls.append(state)
+        ctypes.cast(resident, ctypes.POINTER(ctypes.c_uint64))[0] = 160_704
+        ctypes.cast(bypasses, ctypes.POINTER(ctypes.c_uint64))[0] = self.bypasses
+        return self.status
+
+
+@pytest.mark.parametrize("count", [1, 3, (1 << 63) + 5])
+def test_cache_bypass_diagnostics_serializes_the_engine_count(count):
+    # test_command_scratch_spill and test_closed_trade_text_reads inject the
+    # actual slab/directory/page refusals and call this export, including zero.
+    getter = _CacheStatsGetter(count)
+    lib = SimpleNamespace(pf_report_cache_stats=getter)
+    run_json._bind_report_sink(lib)
+    report = _call()
+    run_json._add_cache_diagnostics(lib, 7, report["diagnostics"])
+    assert getter.restype is ctypes.c_int
+    assert getter.argtypes == [
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64)]
+    assert getter.calls == [7]
+    assert report["diagnostics"]["cache_resident_bytes"] == 160_704
+    assert report["diagnostics"]["cache_bypass_reason"] == "alloc_failed"
+    assert report["diagnostics"]["allocation_bypass_count"] == count
+
+
+def test_cache_bypass_diagnostics_is_absent_without_a_failure():
+    getter = _CacheStatsGetter(0)
+    report = _call()
+    run_json._add_cache_diagnostics(
+        SimpleNamespace(pf_report_cache_stats=getter), 7, report["diagnostics"])
+    assert getter.calls == [7]
+    assert "cache_resident_bytes" not in report["diagnostics"]
+    assert "cache_bypass_reason" not in report["diagnostics"]
+    assert "allocation_bypass_count" not in report["diagnostics"]
+
+
+def test_cache_diagnostics_skips_older_modules():
+    report = _call()
+    before = dict(report["diagnostics"])
+    run_json._add_cache_diagnostics(SimpleNamespace(), 7, report["diagnostics"])
+    assert report["diagnostics"] == before
+
+
+def test_cache_diagnostics_getter_refusal_cannot_publish_a_partial_snapshot():
+    report = _call()
+    before = dict(report["diagnostics"])
+    with pytest.raises(run_json.RunFailure):
+        run_json._add_cache_diagnostics(
+            SimpleNamespace(pf_report_cache_stats=_CacheStatsGetter(1, -1)),
+            7, report["diagnostics"])
+    assert report["diagnostics"] == before
 
 
 # --- --bench diagnostics contract (timing + throughput) ---------------------

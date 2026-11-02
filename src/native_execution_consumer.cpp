@@ -29,7 +29,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
-
+#include "native_cohort_target_work.hpp"
 namespace pineforge {
 inline namespace engine_script_run_v19 {
 namespace {
@@ -1261,7 +1261,8 @@ std::shared_ptr<const native_order::LiveRequest> unowned_live(
     return std::shared_ptr<const native_order::LiveRequest>(
             std::shared_ptr<const native_order::LiveRequest>(), &row);
 }
-std::unique_ptr<detail::ScratchBacking> make_book_scratch_backing(std::size_t page_size);
+std::unique_ptr<detail::ScratchBacking> make_book_scratch_backing(
+    std::size_t page_size, CacheCapacity capacity);
 }  // namespace
 
 struct NativeExecutionConsumer::RunCommandScratch {
@@ -1273,9 +1274,9 @@ struct NativeExecutionConsumer::RunCommandScratch {
     std::array<std::byte, page_size> digest_page{};
     CommandScratchSnapshot snapshot;
 
-    explicit RunCommandScratch(detail::ScratchKeyOrder order, bool book)
-        : backing(book ? make_book_scratch_backing(page_size)
-                       : detail::make_command_scratch_backing(page_size)),
+    RunCommandScratch(detail::ScratchKeyOrder order, bool book, CacheCapacity capacity)
+        : backing(book ? make_book_scratch_backing(page_size, capacity)
+                       : detail::make_command_scratch_backing(page_size, capacity)),
           store(std::make_unique<detail::CommandScratchStore>(
               detail::ScratchStoreConfig{2, page_size, 1, 1, order,
                                         detail::ScratchOpenMode::create_empty},
@@ -1316,7 +1317,11 @@ void NativeExecutionConsumer::provision_run_command_scratch(
     if (borrower && borrower->transaction_active())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "run command scratch borrower has an active transaction");
-    auto run = std::make_shared<RunCommandScratch>(order, binding == CommandScratchBinding::Book);
+    const auto& policy = cache_policy_for_run();
+    const CacheCapacity capacities[] = {
+        policy.trade_pages, policy.dependency_pages, policy.book_pages, policy.exit_pages};
+    auto run = std::make_shared<RunCommandScratch>(
+        order, binding == CommandScratchBinding::Book, capacities[index]);
     run->borrower = &borrower;
     borrower = run->store.get();
     run_command_scratch_[index] = std::move(run);
@@ -1835,6 +1840,13 @@ bool NativeExecutionConsumer::prepare_public_begin(
         render(engine, text);
         return false;
     }
+    cache_policy_attempt_ = cache_policy_config_;
+    struct RestorePolicyPreparation {
+        bool& flag;
+        bool previous;
+        ~RestorePolicyPreparation() { flag = previous; }
+    } restore_policy{cache_policy_preparing_, cache_policy_preparing_};
+    cache_policy_preparing_ = true;
     try {
         auto config = engine.scratch_table_config_;
         const auto& m = config.manifest;
@@ -3053,9 +3065,11 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         render(engine, "native run generation counter exhausted");
         return false;
     }
+    cache_policy_run_ = cache_policy_attempt_;
     release_run_command_scratch();
     for (auto& run : run_command_scratch_) run.reset();
     dependency_scratch_stats_ = {};
+    run_cache_diagnostics_.begin_run();
     engine.reset_run_state();
     engine.reset_trade_percent_prefix();
     closed_trade_prefix_ = {};
@@ -3108,7 +3122,10 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // Report-only: did this spec declare an intrabar path? The consumer walks
     // that path (driver_statistics_.intrabar_path_enabled below) for any host.
     engine.bar_magnifier_enabled_ = !spec.intrabar.is_none();
-    requests_.reset(spec.identity);
+    requests_ = native_order::WorkingRequestCore(spec.identity,
+        cache_policy_run_.successor_root_pages,
+        cache_policy_run_.receipt_tail_pages,
+        cache_policy_run_.chain_segment_pages);
     requests_.bind_scratch_slab(engine.scratch_table_run_.slab);
     host_cache_.reset();
     clear_cohort_target_cache();
@@ -3186,11 +3203,10 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         closed_row_prefix_.clear();
     }
     engine.trades_.set_scratch_directory(engine.report_sink_state_.scratch_dir);
-    // A sink run declares the same 65,536-row read-cache cap as the default:
-    // 20,447,232 entry bytes plus the fixed ledger/State base, independent of
-    // trade count. Allocation grows lazily up to that cap (the sink heap witness).
-    engine.trades_.set_cache_rows(engine.report_sink_state_.enabled
-        ? TradeLedger::kSinkCacheRows : TradeLedger::kDefaultCacheRows);
+    // Reset above closed the previous generation before its new allowance is
+    // applied. Sink and array runs share the same internal default.
+    engine.trades_.set_cache_rows(
+        CacheDefaults::ledger_cache_rows(cache_policy_run_.ledger_rows));
     precommit_digest_.reset();
     margin_liquidation_.reset();
     has_margin_path_ = false;
@@ -3675,7 +3691,7 @@ void NativeExecutionConsumer::read_target_into(
         const BacktestEngine& engine, const native_order::LiveRequest* live,
         native_order::TargetObservation& out,
         std::vector<native_order::RequestHandle>& handles) const {
-    out.current_position = read_position(engine);
+    PF_COHORT_WORK(Target); out.current_position = read_position(engine);
     out.opening.reset();
     out.openings.clear();
     if (!live) return;
@@ -3684,13 +3700,13 @@ void NativeExecutionConsumer::read_target_into(
     } else if (const auto* openings = std::get_if<native_order::OpeningsClose>(&live->authority)) {
         read_openings_into(engine, openings->openings, openings->cycle, out.openings);
     } else if (const auto* cohort = std::get_if<native_order::CohortClose>(&live->authority)) {
-        const auto* position = std::get_if<native_order::PositionNonflat>(&out.current_position);
-        if (!position) return;
+        const auto cohort_handle = cohort->cohort; const auto* position = std::get_if<native_order::PositionNonflat>(&out.current_position);
+        if (!position || read_indexed_cohort_target(engine, cohort_handle, *position, out.openings)) return;
         handles.clear();
         handles.reserve(engine.pyramid_entries_.size());
-        for (const auto& lot : engine.pyramid_entries_) {
+        for (const auto& lot : engine.pyramid_entries_) { PF_COHORT_WORK(TargetLot);
             native_order::RequestHandle handle{requests_.identity(), lot.entry_incarnation};
-            if (requests_.cohort_contains(cohort->cohort, handle)) {
+            if (requests_.cohort_contains(cohort_handle, handle)) {
                 handles.push_back(std::move(handle));
             }
         }
@@ -3759,7 +3775,7 @@ const native_order::TargetObservation* NativeExecutionConsumer::cached_cohort_ta
 }
 
 void NativeExecutionConsumer::clear_cohort_target_cache() noexcept {
-    cohort_target_cache_size_ = 0;
+    cohort_target_cache_size_ = 0; cohort_opening_index_valid_ = false; cohort_opening_index_attempted_ = false; cohort_opening_index_.clear();
 }
 
 void NativeExecutionConsumer::retarget_cohort_target_cache(
@@ -5526,13 +5542,13 @@ void NativeExecutionConsumer::read_openings_into(
 
 void NativeExecutionConsumer::refresh_openings(const BacktestEngine& engine,
         std::vector<native_order::OpeningObservation>& openings) const noexcept {
-    const auto position = read_position(engine);
+    PF_COHORT_WORK(Refresh); const auto position = read_position(engine);
     for (auto& row : openings) {
         row.current_position = position;
         row.has_live_matching_lot = false;
     }
     if (engine.position_side_ == PositionSide::FLAT || engine.position_cycle_seq_ <= 0) return;
-    for (const auto& lot : engine.pyramid_entries_) {
+    for (const auto& lot : engine.pyramid_entries_) { PF_COHORT_WORK(RefreshLot);
         auto it = std::lower_bound(openings.begin(), openings.end(), lot.entry_incarnation,
             [](const auto& row, uint64_t incarnation) {
                 return row.queried_opening.incarnation < incarnation;
@@ -6607,13 +6623,14 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             notification.point.price = resolved_price;
             notification.point.quote_origin_ordinal = applied_id.ordinal;
         }
+        const bool carry_current = staged && staged_generation == settlement_generation_;
+        ++settlement_generation_;
         std::optional<execution::Result> carried;
-        if (staged && staged_generation == settlement_generation_) {
+        if (carry_current) {
             carried = staged->settle_kept(engine, candidate.fill, ctx);
             if (carried) ++carried_settlements_;
         }
-        const auto settled = carried ? *carried
-            : std::get_if<execution::ReverseTo>(&candidate.physical)
+        const auto settled = carried ? *carried : std::get_if<execution::ReverseTo>(&candidate.physical)
             ? engine.settle_native_reversal_at_v1(*std::get_if<execution::ReverseTo>(
                   &candidate.physical), candidate.fill, ctx)
             : candidate.selected
@@ -6621,7 +6638,6 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
                     narrow_action(candidate.physical), candidate.fill, ctx, *candidate.selected)
                 : engine.settle_native_execution_scoped_at(
                     narrow_action(candidate.physical), candidate.fill, ctx, candidate.financial_scope);
-        ++settlement_generation_;
         if (settled.status != execution::Status::Applied) {
             fail(engine, NativeFailure{NativeFailureCode::SettlementFailure,
                 NativeFailureOperation::Settlement, P, static_cast<uint32_t>(settled.status)});
@@ -8305,7 +8321,7 @@ void NativeExecutionConsumer::finish_callback(BacktestEngine& engine, uint64_t o
 
 void NativeExecutionConsumer::invoke_applied_callback(
         BacktestEngine& engine, const AppliedNotification& notification) {
-    try {
+    CohortLotsWrite lots_write(*this); try {
         auto* host = native_host(engine);
         if (!host) throw std::logic_error("native notification requires native host");
         // Owning event and frame values survive submit/replace and further
@@ -12890,6 +12906,27 @@ NativeExecutionConsumer::~NativeExecutionConsumer() {
     drop_presentation();
 }
 
+int NativeExecutionConsumer::report_cache_stats(
+        const BacktestEngine& engine, std::uint64_t* resident_bytes,
+        std::uint64_t* allocation_bypass_count) noexcept {
+    if (!resident_bytes || !allocation_bypass_count || resident_bytes == allocation_bypass_count)
+        return -1;
+    const auto* consumer = static_cast<const NativeExecutionConsumer*>(
+        engine.execution_consumer_slot_.ptr.get());
+    const auto bytes = consumer ? consumer->run_cache_diagnostics_.resident_bytes() : 0;
+    const auto bypasses = consumer
+        ? consumer->run_cache_diagnostics_.allocation_bypass_count() : 0;
+    *resident_bytes = bytes;
+    *allocation_bypass_count = bypasses;
+    return 0;
+}
+
+int BacktestEngine::report_cache_stats(
+        std::uint64_t* resident_bytes, std::uint64_t* allocation_bypass_count) const noexcept {
+    return NativeExecutionConsumer::report_cache_stats(
+        *this, resident_bytes, allocation_bypass_count);
+}
+
 void NativeExecutionConsumer::retain_command_scratch_owner(
         CommandScratchBinding binding, std::shared_ptr<void> owner) noexcept {
     command_scratch_owners_[static_cast<std::size_t>(binding)] = std::move(owner);
@@ -13191,7 +13228,8 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
                     local.equity_curve, metric_equity_len, &local.metrics.equity);
             }
         } else if (engine.report_sink_state_.equity_scratch) {
-            engine.compute_report_sink_metrics(&local, metric_equity_len);
+            engine.compute_report_sink_metrics(&local, metric_equity_len,
+                engine.cache_policy_for_run().equity_curve_pages);
         } else {
             internal::compute_report_metrics(
                 local.metrics, local.trades, local.trades_len,
@@ -14605,10 +14643,16 @@ void NativeExecutionConsumer::provision_run_command_scratch_for_run() {
 // but open the production backing/cache only when a dormant row will use it.
 // All subsequent page traffic goes to the same production implementation.
 DormantBookScratchBacking::DormantBookScratchBacking(std::size_t page_size) noexcept
-    : ScratchBacking(detail::ScratchBackingKind::disk, page_size) {}
+    : DormantBookScratchBacking(page_size,
+        CacheDefaults::lines(page_size, page_size == 0 ? 0 : 64 * 1024 / page_size)) {}
+
+DormantBookScratchBacking::DormantBookScratchBacking(
+        std::size_t page_size, CacheCapacity capacity) noexcept
+    : ScratchBacking(detail::ScratchBackingKind::disk, page_size),
+      cache_capacity_(capacity) {}
 
 void DormantBookScratchBacking::prepare() {
-    if (!inner_) inner_ = detail::make_command_scratch_backing(page_size());
+    if (!inner_) inner_ = detail::make_command_scratch_backing(page_size(), cache_capacity_);
 }
 
 std::uint64_t DormantBookScratchBacking::page_count() const noexcept {
@@ -14644,8 +14688,9 @@ detail::ScratchStatus DormantBookScratchBacking::do_sync(
 
 namespace {
 
-std::unique_ptr<detail::ScratchBacking> make_book_scratch_backing(std::size_t page_size) {
-    return std::make_unique<DormantBookScratchBacking>(page_size);
+std::unique_ptr<detail::ScratchBacking> make_book_scratch_backing(
+        std::size_t page_size, CacheCapacity capacity) {
+    return std::make_unique<DormantBookScratchBacking>(page_size, capacity);
 }
 
 } // namespace
@@ -14656,6 +14701,92 @@ void NativeExecutionConsumer::prepare_match_book_scratch() {
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "native dormant scratch binding is not live");
     static_cast<DormantBookScratchBacking&>(*run->backing).prepare();
+}
+
+}  // namespace pineforge::engine_script_run_v19
+
+namespace pineforge::engine_script_run_v19 {
+
+bool NativeExecutionConsumer::cohort_opening_index_current() const noexcept {
+    // settlement_generation_ advances before EVERY settlement attempt,
+    // including a carried stage, before its status check and either install.
+    // Throws and failed settlements/installs cannot reuse the previous view.
+    return cohort_opening_index_valid_
+        && cohort_opening_index_settlement_ == settlement_generation_
+        && cohort_opening_index_lots_ == cohort_lots_generation_;
+}
+
+bool NativeExecutionConsumer::read_indexed_cohort_target(
+        const BacktestEngine& engine, native_order::CohortHandle cohort,
+        const native_order::PositionNonflat& position,
+        std::vector<native_order::OpeningObservation>& out) const {
+    const auto* spec = spec_ptr();
+    if (!spec || !spec->intrabar.is_none() || input_mode_ == InputMode::ObservedTicks
+        || callback_phase_ == CallbackPhase::Tick || callback_phase_ == CallbackPhase::Applied
+        || !std::holds_alternative<NativeRunning>(state_)) return false;
+    constexpr std::size_t max_rows = kCohortOpeningIndexBytes / sizeof(CohortOpeningIndexRow);
+    const auto row_budget = std::min(cohort_opening_index_bytes_, kCohortOpeningIndexBytes)
+        / sizeof(CohortOpeningIndexRow);
+    if (position.cycle <= 0 || engine.pyramid_entries_.size() > row_budget
+        || !requests_.cohort_exists(cohort)) return false;
+
+    if (!cohort_opening_index_current()) {
+        if (cohort_opening_index_settlement_ != settlement_generation_
+            || cohort_opening_index_lots_ != cohort_lots_generation_)
+            cohort_opening_index_attempted_ = false;
+        cohort_opening_index_valid_ = false;
+        cohort_opening_index_.clear();
+        if (cohort_opening_index_attempted_) return false;
+        cohort_opening_index_attempted_ = true;
+        cohort_opening_index_settlement_ = settlement_generation_;
+        cohort_opening_index_lots_ = cohort_lots_generation_;
+        // Reserve one fixed payload, once. Only this optional allocation may
+        // fall back on bad_alloc; root/backing errors remain authoritative.
+        try {
+            cohort_opening_index_.reserve(max_rows);
+        } catch (const std::bad_alloc&) {
+            return false;
+        }
+        cohort_opening_index_.clear();
+        native_order::RequestHandle opening{requests_.identity(), 0};
+        for (const auto& lot : engine.pyramid_entries_) {
+            opening.incarnation = lot.entry_incarnation;
+            const auto root = requests_.canonical_cohort_origin(opening);
+            if (!root) return false; // Unknown physical origin: complete reader.
+            cohort_opening_index_.emplace_back(root->incarnation, opening.incarnation);
+        }
+        std::sort(cohort_opening_index_.begin(), cohort_opening_index_.end());
+        cohort_opening_index_.erase(
+            std::unique(cohort_opening_index_.begin(), cohort_opening_index_.end()),
+            cohort_opening_index_.end());
+        cohort_opening_index_valid_ = true; // Publish only a complete generation.
+    }
+
+    // Roster membership is read anew for this cohort, never cached by request.
+    // The by-value cohort argument survives any spilled-row backing reads above.
+    const auto roster = requests_.cohorts_.find(cohort.value);
+    if (roster == requests_.cohorts_.end()) return true;
+    for (const auto& origin : roster->second.origins) {
+        auto it = std::lower_bound(cohort_opening_index_.begin(), cohort_opening_index_.end(),
+            origin.incarnation, [](const CohortOpeningIndexRow& row, std::uint64_t root) {
+                return row.first < root;
+            });
+        for (; it != cohort_opening_index_.end() && it->first == origin.incarnation; ++it) {
+            native_order::OpeningObservation observation;
+            observation.queried_opening = {requests_.identity(), it->second};
+            observation.queried_cycle = position.cycle;
+            observation.current_position = position;
+            observation.has_live_matching_lot = true;
+            out.push_back(std::move(observation));
+        }
+    }
+    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
+        return a.queried_opening.incarnation < b.queried_opening.incarnation;
+    });
+    out.erase(std::unique(out.begin(), out.end(), [](const auto& a, const auto& b) {
+        return a.queried_opening == b.queried_opening;
+    }), out.end());
+    return true;
 }
 
 }  // namespace pineforge::engine_script_run_v19

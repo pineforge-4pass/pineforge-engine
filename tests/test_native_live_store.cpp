@@ -1622,6 +1622,14 @@ void native_http() {
     CHECK(server.requests[3].find("GET /synthetic HTTP/") == 0);
     CHECK(server.requests[3].find("X-PineForge-") == std::string::npos);
     CHECK(server.requests[3].find("Idempotency-Key") == std::string::npos);
+    constexpr int snapshot_silence_stimulus_ms = 120;
+    const std::string delayed_snapshot = "{\"type\":\"time\",\"ts\":120000}\n";
+    Receiver unlimited_snapshot({{200, delayed_snapshot, "", snapshot_silence_stimulus_ms}});
+    auto unlimited = options;
+    unlimited.url = unlimited_snapshot.url();
+    unlimited.total_timeout_ms = 0;
+    CHECK(get_feed_snapshot(unlimited) == delayed_snapshot);
+    unlimited_snapshot.finish();
     auto invalid = options;
     invalid.url = "file:///etc/passwd";
     CHECK(throws([&] { get_feed_snapshot(invalid); }));
