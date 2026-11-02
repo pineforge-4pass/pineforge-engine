@@ -12,6 +12,7 @@ The current PR admission and post-merge trigger map is:
 | `ci-post.yml` proof jobs | Not triggered | Not triggered | Complete Release, Debug, native, kernel and parity profiles |
 | `corpus-parity.yml` | Not triggered | Not triggered | Full parity and its post-merge subset |
 | `docs.yml` | Documentation build except `.github/**`-only changes | Skipped by its path filter | Documentation build on its own trigger |
+| `gke-pr / build-arm` | GKE arm64 Debug build and tests when `arm_relevant=true` | Skipped | Not triggered |
 
 The admission workflow is defined on `main` and is selected by the protected
 GKE runner group. Its proof legs use the same fixed Release, Debug and parity
@@ -35,7 +36,18 @@ Empty, missing, malformed, truncated or unreadable lists are neither class; exac
 The classifier also emits `arm_relevant`: source/build inputs under `tests/`, `runner/`, `include/`, `src/` or `docker/` set it true,
 as do C/C++ and CMake sources (including third-party sources), `CMakeLists.txt` and `scripts/test_*`.
 Unknown paths and empty, unreadable or malformed lists set it true; established docs-only or `.github/`-only PRs and mixed docs/GitHub paths alone set it false.
-Both compare reads use the base classifier; the unchanged main workflow does not publish this output or schedule a PR arm leg.
+Both compare reads use the base classifier; the PR workflow publishes this output and schedules the PR arm leg.
+
+`arm_relevant` is fail-closed: changes under `tests/`, `runner/`, `include/`,
+`src/` or `docker/`, C/C++ and CMake sources (including third-party sources),
+and `scripts/test_*` require the PR arm64 leg. Unknown paths and empty,
+unreadable or malformed change lists also require it; established docs-only
+and `.github/`-only PRs set it false and skip the leg. The PR workflow now publishes this output. The base classifier
+computes it on both compare reads. When it is true, the existing `legs` and
+`result` gates require arm success and reject a skip, failure or cancellation.
+The job uses `gke-16cpu-32gb-arm64`, installs the post-arm dependencies and
+runs the complete `ci_verify.py debug` profile, building every Debug test
+target and running that profile's CTest selection before merge. An irrelevant arm leg may skip while the other proof legs still run.
 
 `--tier github-only` runs `shellcheck-version`, `actionlint-runner-labels`,
 `runner-allowlist`, `workflow-lint`, `ci-workflow-contract`, `docs-workflow-contract` and
@@ -1482,7 +1494,7 @@ result on `main` in an excluded row or class (the Release and kernel-only
 author or the release owner fixes or reverts the change within the hour; the
 red is not carried into a release.
 The GKE Linux arm64 Debug leg runs after merge; a red result there blocks
-the next release cut under the same fix-or-revert rule.
+the next release cut under the same fix-or-revert rule. The GKE Linux arm64 Debug leg also runs before merge when `arm_relevant=true`; a red post-merge result blocks the next release cut under the same rule.
 
 ### Documentation-only changes
 
@@ -1642,7 +1654,7 @@ Each leg aggregate retains its old check name and requires its own matrix's succ
 Shard jobs and leg aggregates skip together only on classified docs-only changes.
 Trusted post workflows and PR proof legs build cold; no trusted job restores an Actions cache.
 `HOSTED_JOB_RUNNERS` pins hosted jobs and exact bare GKE scalars; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. PR checks are
-`build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.
+`build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`. With the arm leg, the full set is `build`, `build-debug`, `build-arm`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.
 
 Release and promotion use the isolated release fleet:
 `release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use
@@ -1990,9 +2002,9 @@ The main branch rule table and parser grammar judge the fetched head workflows.
 A workflow change that needs a loosened rule must therefore use two changes.
 
 Rule and table changes land first while existing workflows pass; workflow changes follow, so one PR cannot change both sides of admission.
-`gke-pr.yml` admits exactly two variants: OLD keeps the current jobs, outputs and gate bodies; defining the `build-arm` job selects all NEW checks together.
+`gke-pr.yml` admits exactly two variants: OLD is the shape without the arm job, kept so earlier workflow files still pass; defining the `build-arm` job selects all NEW checks together.
 NEW requires the exact arm classifier output, fixed Debug job on bare `gke-16cpu-32gb-arm64`, arm-aware `legs` needs/check and independent `result` check.
-Hybrids and extra jobs, outputs, needs or arm steps are refused; OLD retains its original exact rules and templates while the workflow change waits for a separate PR.
+Hybrids and extra jobs, outputs, needs or arm steps are refused; OLD retains its original exact rules and templates for a workflow without the arm job.
 The github-only class still runs the full workflow policy preflight.
 The proof legs are the only jobs skipped for the two documentation classes.
 The hosted result requires admission and preflight success in every class.
@@ -2013,7 +2025,7 @@ Names remain opaque data through both classification reads.
 The head checkout is immutable for every GKE proof leg.
 The base checkout remains the source of admission policy.
 Result checks are based on job outcomes rather than job names alone.
-Skipped proof legs are accepted only for an agreed documentation class.
+Skipped proof legs are accepted only for an agreed documentation class, or for the arm leg when `arm_relevant` is false.
 Missing admission output is a failed result.
 The hosted result never treats an absent proof as green.
 Admission diagnostics preserve the observed class and outcome for review.
