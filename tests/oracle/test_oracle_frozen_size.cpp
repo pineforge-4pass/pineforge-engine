@@ -23,7 +23,7 @@
  *      equity / open(S+1) — pins the divisor with no position in play.
  *   C. Flat all-in (pct=100) zero-commission entry with a close→open gap UP
  *      whose frozen-qty notional exceeds the sizing equity by more than one
- *      lot is REJECTED at fill (the frozen-quantity gap probe): the frozen qty is
+ *      lot is REJECTED at fill (design-cntvxiao-gap-reject): the frozen qty is
  *      never re-sized, and the whole true-flat entry is silently dropped. The
  *      freeze itself still never RE-SIZES on a gap — pin B (gap DOWN) and the
  *      affordable cases keep filling the frozen equity_S / close(S) lot.
@@ -196,7 +196,7 @@ void test_flat_gap_down_divisor() {
 //    frozen qty 10000/100 = 100 stays frozen (no re-size), but the fill
 //    notional 100*102 = 10200 exceeds the 10000 sizing equity by more than
 //    one lot (qty_step 0), so TV silently drops the entry
-//    (the frozen-quantity gap probe) and the later close_all has nothing to
+//    (design-cntvxiao-gap-reject) and the later close_all has nothing to
 //    close. (Pre-gap-reject this filled 100 @ 102.)
 //   bar0  100/100/100/100   on_bar: long entry — frozen qty 10000/100 = 100
 //   bar1  102/103/101/102   fill 102 -> 100*102 = 10200 > 10000 -> DROP
@@ -385,16 +385,16 @@ void test_reversal_bracket_binding_survives_freeze() {
 // lot is worth 0.1 units of account (0.0001 x 1000), so the broker sizes it
 // on ten-digit money — sig10(6279.0000001) = 6279.0, and the RAW double
 // floor of 6.279 / 0.0001 = 62789.99999999999 is 6.2789, one lot below the
-// nudged result (famr-rev-everybar; synthetic cent-lot quotient
-// 100000.00999999998 -> 100000.00, not 100000.01). That binary floor was the
+// nudged 6.2790 (TradingView's own floor on famr-rev-everybar 2025-04-02
+// 20:00Z: 918062.29999999992 -> 918062.29, not .30). That 6.2789 was the
 // frozen quantity here until TradingView's tape of the same quotient moved
-// it to the shortest-decimal floor; the dispatch invariant — the frozen value
+// it to 6.279; the dispatch invariant this test pins — the frozen value
 // reaches the position, lot and ledger UNCHANGED — is unaffected. The
 // explicit-qty controls (I/K) are not default-sized and keep 6.2790. Tape:
 // tests/fixtures/margin_call_rules/sizing/sizing-decimal-floor-oracle-control
-// (synthetic shortest decimal 0.0003 at step 0.0001) keeps all three
-// lots rather than two from a binary quotient below 3. The cent-lot
-// input above still floors below its next grid point.
+// (E 15854.4750001, sig10 15854.475 / 2525.0 = 6.279 at step 0.0001, two
+// byte-identical exports) buys 6.279, the floor of the quotient's shortest
+// decimal, not the binary 6.2789; 918062.29999999992 above still floors to .29.
 class FrozenDispatchBoundaryProbe : public pineforge::source::PineStrategyHost {
 public:
     explicit FrozenDispatchBoundaryProbe(bool explicit_qty)

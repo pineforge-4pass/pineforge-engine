@@ -17,40 +17,40 @@
  * with a pending same-id entry under-reserved: two qty=1 brackets covered only
  * 2 units of a position that became 4.
  *
- * The paired-bracket probe's rule, illustrated synthetically,
- * pyramiding=2, ETH-USDT-USDT 15m. The three shapes below must
+ * Ground truth — thulashimohanr-prev-day-week-levels-or-vwap-strategy,
+ * pyramiding=2, ETH-USDT-USDT 15m (all times UTC). The three shapes below must
  * hold SIMULTANEOUSLY; each one falsifies a different naive rule.
  *
- * (i)  LEG MULTIPLICITY. A 2u long carried from a prior bar with both
- *      LongT1/LongT2 live; an OR bar re-issues both brackets (stop
- *      re-priced to orLow=1410.00) while a same-id 2u entry is pending.
- *      The stop closes FOUR units at 1410.00 later, tagged T1/T2/T1/T2 —
+ * (i)  2025-06-29 — LEG MULTIPLICITY. A 2u long carried from 06-28 with both
+ *      LongT1/LongT2 live; the 09:30 OR bar re-issues both brackets (stop
+ *      re-priced to orLow(06-29)=2441.78) while a same-id 2u entry is pending.
+ *      TV closes FOUR units at 2441.78 on the 14:30 stop, tagged T1/T2/T1/T2 —
  *      a full bracket pair PER ENTRY INSTANCE, carried pair first (FIFO):
- *          T1 1410.00 q1  carried entry @1400.00
- *          T2 1410.00 q1  carried entry @1400.00
- *          T1 1410.00 q1  added entry   @1420.00
- *          T2 1410.00 q1  added entry   @1420.00
+ *          #153 T1 2441.78 q1  entry 2025-06-28 09:45 @2424.68
+ *          #154 T2 2441.78 q1  entry 2025-06-28 09:45 @2424.68
+ *          #155 T1 2441.78 q1  entry 2025-06-29 09:45 @2452.56
+ *          #156 T2 2441.78 q1  entry 2025-06-29 09:45 @2452.56
  *      Engine pre-fix: only the carried pair closed; the added 2u collapsed
- *      into one unprotected trade that survived to a later reversal.
+ *      into one unprotected trade that survived to the 06-30 reversal.
  *
- * (ii) THE COUNTER-CASE that refutes a blanket multiply. Same
+ * (ii) 2026-03-27 — THE COUNTER-CASE that refutes a blanket multiply. Same
  *      shape (live carried Short bracket + pending same-id entry, both
  *      brackets re-issued in the same block) but ShortT1 had already been
- *      CONSUMED earlier, so it has no live leg and arms only the ONE
- *      pending-entry leg. A single T1 later closes exactly 1 unit
- *      (the carried remnant, FIFO). `reserved = qty * (open legs + pending
- *      entries)` would close 2 units at 1422.00 and desync later trades —
+ *      CONSUMED on 03-26 17:45, so it has no live leg and arms only the ONE
+ *      pending-entry leg. TV fires a single T1 at 10:30 closing exactly 1 unit
+ *      (the 03-26 remnant, FIFO). `reserved = qty * (open legs + pending
+ *      entries)` would close 2 units at 2003.30 and desync the rest of March —
  *      a regression on a locus the engine already matches. Green both pre- and
  *      post-fix by construction: it is the guard, not the repro.
  *
- * (iii) NO ADMISSIBLE PENDING ENTRY. The third short is over
+ * (iii) 2026-03-29 — NO ADMISSIBLE PENDING ENTRY. The third short is over
  *      pyramiding=2 and TV rejects it, so the re-issue binds to nothing new:
  *      ShortT1 (no live leg, no admissible pending entry) arms NOTHING because
  *      the two live ShortT2 legs already reserve the whole position, and
- *      ShortT2 re-arms BOTH its legs. A later stop @1426.00 closes 2 units
+ *      ShortT2 re-arms BOTH its legs. The 11:00 stop @2003.61 closes 2 units
  *      tagged "T2 Exit" / "T2 Exit" — the double-T2 label that only this model
  *      reproduces. Needs the pyramiding-count fix (an entry the cap will
- *      refuse at fill contributes no bracket leg). Assertions retain original inputs.
+ *      refuse at fill contributes no bracket leg).
  */
 
 #include <cmath>
@@ -122,7 +122,7 @@ public:
 
 protected:
     // The strategy's bracket pair: qty=1 T1/T2 legs sharing one stop, both
-    // attached to entry id "L" — the paired-bracket probe's shape.
+    // attached to entry id "L" — the thulashimohanr shape.
     void arm_brackets(double t1_limit, double t2_limit, double stop) {
         strategy_exit("T1", "L", t1_limit, stop, kNaN, kNaN, kNaN,
                       100.0, "", 1.0);
@@ -131,7 +131,7 @@ protected:
     }
 };
 
-// ── (i) A re-issue over a pending same-id entry arms both legs ─────────────
+// ── (i) 2025-06-29: a re-issue over a pending same-id entry arms both legs ──
 //
 //  bar 0  entry L(2u) + T1/T2 (stop 90)          [flat: one deferred leg each]
 //  bar 1  L fills @100                            pos 2u  [L:2]
@@ -231,7 +231,7 @@ static void test_reissue_over_pending_entry_arms_a_pair_per_instance() {
     auto bars = carried_pair_bars();
     eng.run(bars.data(), (int)bars.size());
 
-    // TV's row ordering: T1/T2 against the carried lot (FIFO first), then T1/T2
+    // TV's #153-#156: T1/T2 against the carried lot (FIFO first), then T1/T2
     // against the added lot. Pre-fix only the first two rows existed and 2
     // units survived unprotected.
     CHECK(eng.trade_count() == 4);
