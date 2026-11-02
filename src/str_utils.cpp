@@ -550,7 +550,7 @@ std::string time_format_chunk(const std::string& fmt, const std::tm& fields) {
     // limit: a larger width increases the ceiling without being capped.
     const size_t per_directive = largest_width > maximum - 64
         ? maximum : largest_width + 64;
-    if (marked.size() == maximum) throw time_format_storage_failure;
+    if (marked.size() == maximum) throw coded<std::length_error>(time_format_storage_failure);
     size_t ceiling = marked.size() + 1;
     ceiling = directives > (maximum - ceiling) / per_directive
         ? maximum : ceiling + directives * per_directive;
@@ -560,16 +560,16 @@ std::string time_format_chunk(const std::string& fmt, const std::tm& fields) {
             buffer.data(), buffer.size(), marked.c_str(), &fields);
         if (written != 0) return buffer.substr(1, written - 1);
         if (buffer.size() == ceiling) {
-            throw time_format_storage_failure;
+            throw coded<std::length_error>(time_format_storage_failure);
         }
         const size_t next = buffer.size() > ceiling / 2
             ? ceiling : buffer.size() * 2;
         try {
             buffer.resize(next);
         } catch (const std::bad_alloc&) {
-            throw time_format_storage_failure;
+            throw coded<std::length_error>(time_format_storage_failure);
         } catch (const std::length_error&) {
-            throw time_format_storage_failure;
+            throw coded<std::length_error>(time_format_storage_failure);
         }
     }
 }
@@ -662,9 +662,9 @@ std::string time_format_pattern(const std::string& format, const std::tm& fields
     }
     return result;
 } catch (const std::bad_alloc&) {
-    throw time_format_storage_failure;
+    throw coded<std::length_error>(time_format_storage_failure);
 } catch (const std::length_error&) {
-    throw time_format_storage_failure;
+    throw coded<std::length_error>(time_format_storage_failure);
 }
 
 } // namespace
