@@ -813,7 +813,7 @@ inline bool is_na(const GenericMatrix<T>& matrix) noexcept {
 }
 
 // Deprecated spelling, kept as an exact alias template so generated code and
-// the source adapter compile unchanged (R5 lane N14, the same treatment
+// the source adapter compile unchanged (the source-runtime extraction, the same treatment
 // session_time.hpp / str_utils.hpp received in lane L11). New code names
 // GenericMatrix<T>.
 template <typename T>

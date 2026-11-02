@@ -834,7 +834,7 @@ std::string tzdir_canonical() {
 #endif
 }
 
-// R5 lane E23. The content of the zone resources a descriptor names, as one
+// The timezone-content identity change. The content of the zone resources a descriptor names, as one
 // value: FNV-1a 64 over the resource count, then each file's byte length and
 // its bytes, in the descriptor's own order. Length-prefixed, so two files
 // cannot concatenate into a third's digest, and seeded with the same offset
@@ -1557,7 +1557,7 @@ std::optional<NativeInterval> interval_containing(const SessionCalendar& calenda
 }
 
 // ---------------------------------------------------------------------------
-// Caller-owned session-day memo (native_calendar_memo.hpp, R5 lane PERF-K1)
+// Caller-owned session-day memo (native_calendar_memo.hpp, the timezone lock profiling)
 // ---------------------------------------------------------------------------
 //
 // Every function below is its memo-free namesake above, statement for
@@ -1929,7 +1929,7 @@ std::optional<int64_t> memo_first_tradable_open(const SessionCalendar& cal,
 }
 
 // ---------------------------------------------------------------------------
-// Certified session-day cycles (R5 lane PERF-ZONED)
+// Certified session-day cycles (the certified zoned-calendar lookup)
 // ---------------------------------------------------------------------------
 //
 // cycle_certificate says of the session day holding an instant whether its

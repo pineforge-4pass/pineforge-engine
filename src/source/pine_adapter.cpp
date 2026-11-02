@@ -531,7 +531,7 @@ double source_trigger_threshold(double level, double tick,
 
 // A trailing exit's activation is reached on the tick-quantized path whatever
 // its trailing offset: the one-shot's (test_trail_activation_tick_bar) and a
-// trailing leg's arm alike. R5 lane E5, `lab tv` on NYSE:F 15m with
+// trailing leg's arm alike. A measured TradingView run on NYSE:F 15m with
 // trail_offset 1 (tests/fixtures/offset_trail_arm): lows 9.415 / 13.041 /
 // 12.641 and highs 11.899 / 13.049 / 13.419 arm the activations their ticks
 // equal, 6 of 6 exits on that bar. The generic Trail compares arm_price with
@@ -556,7 +556,7 @@ int legacy_volume_weighted_max_samples(int samples) noexcept {
 // rests as a generic Limit at that tick's half-tick boundary
 // (one_shot_trail_trigger, source_trigger_threshold), so the tick is the
 // resting level rounded AWAY from the position (a sell up, a buy down), a
-// price the limit admits by construction. R5 lane E9, `lab tv` on
+// price the limit admits by construction. A measured TradingView run on
 // BINANCE:ETHUSDT.P 15m (tests/fixtures/trail_activation_tick_reach): a long
 // filled 2550.85 with trail_price 2550.854 rests at 2550.855 and books 2550.86
 // (5 of 5 exits), a short filled 1791.83 with 1791.826 rests at 1791.825 and
@@ -568,7 +568,7 @@ double source_one_shot_reach_tick(double resting_level, double tick, bool exit_i
 
 // Whether a print has reached a trail's activation: on the tick-quantized
 // path, like every print the arm is tested on (source_trail_arm_level), the
-// placement print included. R5 lane E9, `lab tv` on NYSE:F 15m
+// placement print included. A measured TradingView run on NYSE:F 15m
 // (tests/fixtures/trail_activation_tick_reach): a placement close half a tick
 // short of the activation whose tick IS the activation (11.295 under 11.30,
 // 14.415 over a short's 14.41) has reached it; 8 of 8 trades exit on the next
@@ -896,7 +896,7 @@ PoocCloseFillViewSwitches& pooc_close_fill_view_switches() noexcept {
 }
 }  // namespace detail
 
-// R5 lane V19-E: the placement table's storage.
+// The retired-row compaction: the placement table's storage.
 void PlacementTable::place(std::uint64_t incarnation, std::unique_ptr<PlacementSnapshot> node) {
     if (window_rows_ == 0 && (old_.empty() || incarnation > old_.back().first)) {
         // An empty window restarts at the new row, above every older row.
@@ -1187,7 +1187,7 @@ void PineExecutionAdapter::bind(NativeStrategyHost& host) noexcept {
 
 // The bound host's PineStrategyHost view: dynamic_cast's answer, taken once
 // per host instead of at every call site (several a bar), and again at every
-// bind and run begin. R5 lane V19-D: an adapter member; it was a thread_local
+// bind and run begin. The handle-preserving reissue change: an adapter member; it was a thread_local
 // memo (keyed by the host, its object and its dynamic type), and a strategy
 // module is dlopen'd, where every thread_local read is a dynamic TLS lookup.
 // The adapter is its host's own member, bound to it at construction, and a
@@ -1225,7 +1225,7 @@ namespace {
 }  // namespace
 
 // The refusal is out of line so this check is a test and a load wherever it
-// inlines (R5 lane D2-C: the adapter reads its host through it at every read).
+// inlines (the per-pump state cache: the adapter reads its host through it at every read).
 NativeStrategyHost& PineExecutionAdapter::require_host() const {
     if (!host_) refuse_unbound_adapter();
     return *host_;
@@ -1461,7 +1461,7 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
     };
     // The candidates feed the reservation-growth selection alone, which only
     // a full global exit makes; otherwise nothing is selected, nothing is
-    // admitted, and the references are never visited (R5 lane PERF-L5).
+    // admitted, and the references are never visited (the trigger-band and scratch reuse).
     if (full_global) {
         for (auto& pending : pending_entries_) collect(pending.snapshot, 0);
         for (auto& pending : pending_same_bar_commands_) collect(pending.snapshot, 0);
@@ -1524,7 +1524,7 @@ void PineExecutionAdapter::update_l4c_priority() {
     // recalculation, and exactly two live handles carry a placement row
     // (src/compat/pine/order_priority.cpp). Those facts are the adapter's
     // own, so a call they rule out builds no candidates and reads nothing
-    // (R5 lane PERF-L5); its only effect, the reorder of live_handles_, needs
+    // (the trigger-band and scratch reuse); its only effect, the reorder of live_handles_, needs
     // a selection.
     if (!priority.attached() || !priority.retained_parent_first()
         || !config_.process_orders_on_close || config_.calc_on_order_fills
@@ -1672,13 +1672,13 @@ bool PineExecutionAdapter::follows_same_bar_declined_reversal(
     return false;
 }
 
-// R5 lane PERF-P7: the indexes the adapter reads its retained bookkeeping
+// The host bookkeeping index cache: the indexes the adapter reads its retained bookkeeping
 // through. The native consumer keeps them for the adapter (a by-value member
 // of PineStrategyHost, whose layout is the generated script's ABI, holds no
 // index itself), drops them at every run begin, and never reads them. They
 // are derived from state the adapter retains and hashes, folded into nothing,
 // and each lookup answers what the walk it replaces answers.
-// The kind of the cache below (pine_host_reads.hpp, R5 lane D2-C).
+// The kind of the cache below (pine_host_reads.hpp, the per-pump state cache).
 const char detail::kPineRunCacheKind = 0;
 
 namespace {
@@ -1720,7 +1720,7 @@ public:
     // handle that stops working never works again, so it is never bound).
     // Rows mostly arrive above every row folded so far; one that arrives
     // below (an anchored leg adopted at its parent's fill), and any erasure
-    // (R5 lane V19-E: the table keeps only what can still be read), refolds
+    // (the retired-row compaction: the table keeps only what can still be read), refolds
     // the index from the table's rows, which are the live few. Each lookup
     // verifies every row it reads.
     std::uint64_t erased_seen = 0;
@@ -1730,7 +1730,7 @@ public:
     std::array<std::unordered_map<std::uint64_t, std::vector<std::uint64_t>>, 3> legs_by_origin;
     std::unordered_map<std::int32_t, std::vector<std::uint64_t>> immediate_closes_by_bar;
 
-    // R5 lane D2-D: chart_day_key's last day on a UTC chart -- the whole
+    // The UTC chart-day memo: chart_day_key's last day on a UTC chart -- the whole
     // seconds [day_lo, day_hi) of one floor day inside the civil arithmetic's
     // span, and the key they answer. That key is a function of the floor day
     // alone, so every second of the range answers it. Empty until the first
@@ -1877,7 +1877,7 @@ AdapterLookupIndex* adapter_lookup_index(IExecutionConsumer* consumer, const voi
     }
 }
 
-// The same index, reached for a read made on every bar (R5 lane D2-D): the
+// The same index, reached for a read made on every bar (the UTC chart-day memo): the
 // consumer straight off the host's engine slot (NativeExecutionConsumer::
 // bound, which is what the host's own reads use) and the cache's exact type,
 // instead of the host's Pine view and a dynamic_cast, which cost about what
@@ -1903,7 +1903,7 @@ AdapterLookupIndex* parked_lookup_index(NativeStrategyHost* host, const void* ow
 
 } // namespace
 
-// R5 lane D2-C (pine_host_reads.hpp): the running spec's facts the host reads
+// The per-pump state cache (pine_host_reads.hpp): the running spec's facts the host reads
 // every bar, taken once per run into the adapter's cache -- the P7 index, which
 // the run's first lookup would otherwise create. Only a running spec is fixed
 // for the run the cache belongs to.
@@ -1926,8 +1926,8 @@ IExecutionConsumer* PineExecutionAdapter::bound_consumer() const noexcept {
 
 bool PineExecutionAdapter::cohort_opened_on_side(const CohortFacts& cohort,
                                                  bool is_long) const noexcept {
-    // The openings whose rows were erased left their side behind (R5 lane
-    // V19-E); the walk and the index read the retained rows beside it.
+    // The openings whose rows were erased left their side behind (the
+    // retired-row compaction); the walk and the index read the retained rows beside it.
     const bool erased = (cohort.erased_opening_sides & (is_long ? 1U : 2U)) != 0;
     const auto walk = [&] {
         if (erased) return true;
@@ -1972,7 +1972,7 @@ bool PineExecutionAdapter::origin_leg_consumed(
     const auto members = bracket_families_.find(family_key);
     if (members == bracket_families_.end()) return false;
     // A consumed member whose row was erased left the (leg kind, origin) it
-    // answers for in the family (R5 lane V19-E).
+    // answers for in the family (the retired-row compaction).
     const bool erased = members->second.consumed(static_cast<std::uint8_t>(family),
                                                  origin.incarnation);
     const auto consumed = [&](std::uint64_t incarnation) {
@@ -2258,7 +2258,7 @@ void PineExecutionAdapter::hold_reversal_pair_brackets(const SourceId& from_entr
 // strategy.cancel("X") on 05-01, while X is dormant: the margin call revives
 // the standing dormant X and closes the position through it; after the cancel
 // it does not, and a second margin call follows. The tapes
-// v19fix-cancel-before-pair and v19fix-cancel-at-1000 (R5 lane V19-FIX) cancel
+// v19fix-cancel-before-pair and v19fix-cancel-at-1000 (the cancelled-origin retirement) cancel
 // X while it is still live -- on 04-30 15:45 before the reversal pair, and on
 // 04-30 10:00 -- and book the same two margin-call slices, 836 left open: the
 // declined pair's suspension still makes the cancelled leg dormant on 05-01,
@@ -2474,7 +2474,7 @@ void PineExecutionAdapter::revive_brackets_after_margin(
         }
         // The script cancelled it, live or dormant (retire_cancelled_exits):
         // every leg is retired, and a cancelled exit is never revived
-        // (V19D-P1, R5 lane V19-FIX).
+        // (V19D-P1, the cancelled-origin retirement).
         if (withdrawn(candidate.legs)) continue;
         // A same-id exit re-issued after the slice REPLACED this bracket: the
         // successor carries the cycle's legs, and reviving the superseded parent
@@ -3108,7 +3108,7 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
         // margin_liquidation_price() reads this level: closed money alone.
         margin.level_base = NativeLiquidationLevelBase::RealizedOnly;
         // TradingView's own liquidation ticket. The adapter's host classifies
-        // a row as MARGIN_CALL from exactly this exit id (R5 lane L12, 2.ii l:
+        // a row as MARGIN_CALL from exactly this exit id (the kernel/source boundary extraction, 2.ii l:
         // PineStrategyHost::on_native_applied states execution::CloseCause,
         // which pineforge.h pins as `3`), so the ticket the kernel books has
         // to be this one.
@@ -3140,7 +3140,7 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
             // TradingView's magnifier walks its own intrabars at its table's
             // timeframe, not the feed: on a 15-minute chart 2-minute bars,
             // each owned by the chart bar holding its last minute, between
-            // the chart bar's own open and close (R5 lane MAG-INTRABAR,
+            // the chart bar's own open and close (the TradingView intrabar import,
             // tests/fixtures/magnifier_intrabars). The path is built from the
             // feed and stays on its grid, so its literal is the input's.
             IntrabarPath::lower_tf path;
@@ -3265,7 +3265,7 @@ PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
 // restores included -- and the fee the order itself pays is left out of the
 // money: the value per order, or the value per unit, so that the units' notional
 // and their fee together spend the money (units = pct * E / (price * pointvalue
-// + fee)).  R5 lane PAR-CASHFEE, `lab tv` tapes tests/fixtures/cash_fee_sizing:
+// + fee)).  The cash-sizing fee correction, `lab tv` tapes tests/fixtures/cash_fee_sizing:
 // every sized entry of the thirteen tapes there (percentages 50, 100 and 200,
 // long and short, flat, pyramided, after a partial close, reversing, priced
 // entries and strategy.order, point values 1 and 50) and all 366 trades of
@@ -3594,7 +3594,7 @@ bool PineExecutionAdapter::fixed_unmargined_market_batch_scope() const {
         && same_point_pair_scope();
 }
 
-// R5 lane W6B-ENG-PAIRS: where the flat-pair rules of W6-ENG-FILL-ORDER hold
+// The flat-entry pair handling: where the flat-pair rules of the entry/reversal fill ordering hold
 // -- the order at one fill point, the later call's transaction of its own
 // quantity plus the pending market's, and that transaction's admission. The
 // zero-cost batch above is its subset; TradingView books a commissioned pair
@@ -3743,7 +3743,7 @@ void set_retain_retired_rows(bool retain) noexcept {
 }
 bool retain_retired_rows() noexcept { return retain_rows.load(std::memory_order_relaxed); }
 namespace {
-// R5 lane V19-D: process-wide like retain_rows, and for the same reason.
+// The handle-preserving reissue change: process-wide like retain_rows, and for the same reason.
 std::atomic<bool> carry_bindings{true};
 } // namespace
 void set_carry_reissue_bindings(bool carry) noexcept {
@@ -3778,7 +3778,7 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
     return false;
 }
 
-// R5 lane V19-E: which placement rows can go.
+// The retired-row compaction: which placement rows can go.
 //
 // retire() takes a request out of the live collections when it stops
 // working; its row used to stay for the rest of the run. Here, at every bar
@@ -3843,7 +3843,7 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 // cycle that cancels and re-places its exits every bar at a moving level no
 // longer holds a row per bar.
 //
-// R5 lane V19-FIX: nor a leg the script withdrew (every leg retired, by
+// The cancelled-origin retirement: nor a leg the script withdrew (every leg retired, by
 // strategy.cancel or strategy.cancel_all whether it was live or dormant:
 // retire_cancelled_exits), whatever its cycle, unless it is bound to an
 // askable origin as its family's one representative. A withdrawn leg is no candidate
@@ -4390,7 +4390,7 @@ void PineExecutionAdapter::clear_bracket_families() noexcept {
     settled_bracket_digest_ = 0;
 }
 
-// R5 lane V19-FIX: the kernel's cohort rosters hold what can still be bound.
+// The cancelled-origin retirement: the kernel's cohort rosters hold what can still be bound.
 //
 // Every opening this adapter accepts joins its id's kernel roster
 // (cohort_add, submit_or_replace), and the kernel folds every member of every
@@ -4954,7 +4954,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
     }
     const auto key = replacement_key.empty() ? 0 : checked_live_key(replacement_key);
     std::optional<native_order::RequestHandle> accepted;
-    // The predecessor's placement row, read in place (R5 lane PERF-L5; this
+    // The predecessor's placement row, read in place (the trigger-band and scratch reuse; this
     // was a copy of the whole row). Nothing writes the row between here and
     // its last read below -- the replace runs no adapter code and the table
     // gains no row before remember() -- except the reset of its legs after
@@ -5106,7 +5106,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                 if (std::isfinite(snapshot.sizing.price))
                     snapshot.retained_trail_best = snapshot.sizing.price;
             }
-            // R5 lane V19-D: the re-issue carries a close's book binding
+            // The handle-preserving reissue change: the re-issue carries a close's book binding
             // (ReplaceOptions::keep_binding). A leg the kernel bound to the
             // position binds to it again at its next point with no
             // CloseBoundEvent when the position has not moved, and exactly
@@ -5221,7 +5221,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         member->cohort = static_cast<std::int64_t>(source_sequence_ + 1U);
     }
     if (!accepted && materializing_relative_ && !opening) {
-        // R5 lane R4d: the kernel already armed this leg at the parent's
+        // The anchored-leg integration: the kernel already armed this leg at the parent's
         // fill. When the request this fill point builds is that very trigger
         // on that very group, the armed child IS the accepted request and
         // nothing is submitted; every source fact of the snapshot stays the
@@ -5478,7 +5478,7 @@ double PineExecutionAdapter::percent_commission_live_equity(
     // cash-per-order/contract fees without changing generic accounting or
     // marked equity itself.  A percent-of-equity default QUANTITY does not
     // read this: TradingView sizes it from strategy.equity, cash fees charged
-    // (default_sizing_cash, R5 lane PAR-CASHFEE).  source_margin_money also
+    // (default_sizing_cash, the cash-sizing fee correction).  source_margin_money also
     // charges cash-per-contract fees for its tape-pinned margin policy.
     double restored = 0.0;
     for (const auto& fact : open_entry_fees_) {
@@ -6030,7 +6030,7 @@ double PineExecutionAdapter::active_staged_fx(std::int64_t timestamp_ms) const n
 // row; test_affordability_fx G, G2, NEW-S1): its money at the OPEN price, its
 // lot-floored 4x restore, executed at the open before any resting order sees
 // the bar -- exactly the open checkpoint submit_margin_call_slice takes, at the
-// position side's own margin (R5 lane F7: that formula was always per-side,
+// position side's own margin (the margin and cancellation comparison: that formula was always per-side,
 // ab9714be's leveraged cells were only switched off). A survivor that is not a
 // 1x long is then checked over the rest of the bar by the kernel's liquidation
 // (on_applied re-schedules the path). The kernel's own FxRoll point is not
@@ -6087,7 +6087,7 @@ void PineExecutionAdapter::apply_fx_opening_margin_slice(
 // opening's entry bar: the run shapes ab9714be took the entry-bar suffix on
 // (pine_fills.cpp:1014-1023), and process_orders_on_close and
 // calc_on_order_fills, where TradingView books the same call on the same bar
-// (R5 lane PAR-MARGIN-2: tests/fixtures/margin_entry_bar/pm2-m7-coof-* and
+// (the intrabar margin correction: tests/fixtures/margin_entry_bar/pm2-m7-coof-* and
 // pm2-m7-poocl-*). Not a timestamped-FX run, whose path checks on_bar_open
 // does not schedule either, nor a magnified one, whose later samples the
 // kernel's IntrabarSample point checks (intrabar_sample_checked).
@@ -6459,7 +6459,7 @@ void PineExecutionAdapter::cancel_bracket_siblings(native_order::RequestHandle h
             matches.push_back(candidate);
         }
     }
-    // R5 lane INT26: a terminal receipt is observed at the adapter's next
+    // The terminal-receipt integration: a terminal receipt is observed at the adapter's next
     // read, not when its leg executed. A bracket leg the pre-script drain
     // settles on its parent's touch bar is read at the next bar open, after
     // that bar's source body and its process_orders_on_close pass; by then a
@@ -6985,7 +6985,7 @@ void PineExecutionAdapter::observe_terminal_receipts() {
         }, command);
     };
     if (in_place) {
-        // R5 lane PERF-P4: visit the command events above the cursor in place
+        // The in-place command journal reads: visit the command events above the cursor in place
         // instead of copying out every row above it. The materialised rows
         // were in ordinal order, commands first at a tied ordinal, so the
         // cursor held each command's ordinal while that command was observed
@@ -7300,8 +7300,8 @@ bool PineExecutionAdapter::defer_coof_tail() const noexcept {
 // recalculation of the bar placed, which the adapter forced onto the extreme
 // it gap-fills at (coof_fill_forced_: forced_execution_price), fills at the
 // point itself: they advance to the close, as ab9714be's endpoint rule has
-// it (corpus bracket-rivet-calc-on-fill-01 trades 350 and 516; R5 lane
-// PAR-ORDERS-2).
+// it (corpus bracket-rivet-calc-on-fill-01 trades 350 and 516; the
+// recalculation fill-order correction).
 bool PineExecutionAdapter::coof_fill_at_second_extreme() const noexcept {
     if (!coof_recalc_active_ || coof_first_open_ || !coof_script_bar_valid_) return false;
     const bool high_first = source_path_uses_high_first(coof_script_bar_);
@@ -7451,7 +7451,7 @@ double PineExecutionAdapter::coof_next_waypoint(int* path_index) const noexcept 
         // close_all fills at it, a priced order is live at its own level from
         // it (lab tv pa3-f4-level-w1-*; the second extreme, H-MEASURE Finding
         // 6d, pa2-i2-exit-w2-*). A fill the adapter forced onto the point
-        // starts the next leg (pa3-f4-point-w1-mkt-*; R5 lane PAR-ORDERS-3).
+        // starts the next leg (pa3-f4-point-w1-mkt-*; the extreme-point fill correction).
         if (index > 0 && index < 3 && at_waypoint && !forced_waypoint
             && !coof_fill_forced_) {
             if (path_index) *path_index = index;
@@ -7607,7 +7607,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     native_order::Request request;
     // An infinite quantity trades the default quantity, as na does (lab tv
     // tailc-a-qty-nonfinite2: +-Infinity and na legs all enter at the
-    // strategy's default; R5 lane TAIL-C).
+    // strategy's default; the placement and recalculation correction).
     fold_source_money();
     const bool default_sized = !std::isfinite(qty);
     const bool priced = !std::isnan(limit_price) || !std::isnan(stop_price);
@@ -7793,7 +7793,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             // open, is costed at its signal close's tick plus the slippage
             // ticks its fill will carry; a sell at the close's tick, never
             // lowered by them (lab tv tailc-b-admission-a-slip2 against -b-fee
-            // and -c-control; R5 lane TAIL-C). Under process_orders_on_close
+            // and -c-control; the placement and recalculation correction). Under process_orders_on_close
             // it fills at that close, whose own fill-time check decides it
             // (the TV controls of test_pooc_money_admission_l4b, phase-b/-c).
             const double admission_mark = !priced && current == 0.0 && is_long
@@ -8002,7 +8002,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     // not in that pass, so the add is held to the lots open now. (Deferred
     // without that bound, every fill's recalculation under the magnifier and
     // calc_on_order_fills re-issued such an add past pyramiding=1: 85 lots on
-    // one bar where TradingView's tape books none -- R5 lane PAR-ORDERS.)
+    // one bar where TradingView's tape books none -- the order-schedule correction.)
     const bool opposite_opening_in_close_pass = std::any_of(
         live_handles_.begin(), live_handles_.end(),
         [&](const native_order::RequestHandle& handle) {
@@ -8303,8 +8303,8 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     // order, and filled the entry at the next open; TradingView books it on
     // the fill's own bar at the extreme (hm-chart-diff-v2 / -v6 bar 19: 11.72
     // / 11.74 at the high, and under process_orders_on_close -v3 / -v7 alike
-    // -- R5 lane PAR-ORDERS). A fill the adapter forced there still advances
-    // (coof_fill_at_second_extreme; R5 lane PAR-ORDERS-2).
+    // -- the order-schedule correction). A fill the adapter forced there still advances
+    // (coof_fill_at_second_extreme; the recalculation fill-order correction).
     bool coof_market_next_open = false;
     bool coof_market_at_second_extreme = false;
     double coof_second_extreme = kNaN;
@@ -8532,7 +8532,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         // TradingView, lab tv tapes tests/fixtures/coof_refill_waypoint
         // (w8d-coof2-a/b/d/e/f; resting-limit control -c): the level fill
         // this path booked at the placement point was never executable
-        // after it (R5 lane W8D-NOTRADES). An entry not executable at the
+        // after it (the entry-eligibility correction). An entry not executable at the
         // extreme keeps its level fill: TradingView rests it there (-d), but
         // a magnified script's next point is an intrabar one, and resting
         // it to the chart bar's extreme delayed the unmagnified
@@ -8540,7 +8540,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         // process_orders_on_close, on the close leg or on a leg-end fill --
         // but a fill the adapter FORCED onto the first extreme starts the
         // next leg the same way: its entry fills at the second extreme when
-        // executable there (lab tv tailc-w2r-c/d, 98 rows; R5 lane TAIL-C).
+        // executable there (lab tv tailc-w2r-c/d, 98 rows; the placement and recalculation correction).
         const bool pure_limit = finite_positive(limit_price) && !finite_positive(stop_price);
         const bool pure_stop = finite_positive(stop_price) && !finite_positive(limit_price);
         const double level = pure_limit ? limit_price : stop_price;
@@ -8572,8 +8572,8 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             // An entry executable at its birth but not at the extreme rests at
             // its own level from the extreme on (w8d-coof2-d/e/f, and after a
             // forced first-extreme fill tailc-w2r-a/b: every refill filled
-            // after the extreme or later, none on the leg before it; R5 lane
-            // TAIL-C). A limit arms at the extreme: StopLimit{extreme, level}.
+            // after the extreme or later, none on the leg before it; the
+            // placement and recalculation correction). A limit arms at the extreme: StopLimit{extreme, level}.
             // A stop becomes a trail armed at the extreme, riding its level's
             // distance behind the running best: no print beyond the extreme
             // follows on this bar, so it is the stop at its own level, booked
@@ -8595,7 +8595,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         // its own level later -- executable at the forced fill or not, and
         // even when the leg to the close crosses its level (lab tv tapes
         // tests/fixtures/coof_w2_refill, tailc-w2r-a..f: 1013 refills after
-        // such a fill, none on its bar; R5 lane TAIL-C). Released at the
+        // such a fill, none on its bar; the placement and recalculation correction). Released at the
         // recalculation, it would also trade on the part of the leg the
         // kernel walks after the forced fill's trigger, which TradingView has
         // already passed.
@@ -8610,8 +8610,8 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     // there, it fills at the point's print (a stop keeps its slippage); a
     // limit that is not rests at its own level from the point on. A stop that
     // is not keeps its level: a later intrabar can pass the point, so no
-    // trigger here rests it (lab tv tailc-mag-coof-refill-leg; R5 lane
-    // TAIL-C, the magnified twin of w8d-coof2-*).
+    // trigger here rests it (lab tv tailc-mag-coof-refill-leg; the
+    // placement and recalculation correction, the magnified twin of w8d-coof2-*).
     if (coof_recalc_active_ && coof_lower_path && priced && !config_.process_orders_on_close) {
         const bool lower_limit = finite_positive(limit_price) && !finite_positive(stop_price);
         const bool lower_stop = finite_positive(stop_price) && !finite_positive(limit_price);
@@ -8811,7 +8811,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         // which is a next-open market order and therefore freezes at the
         // source close. Neither path re-sizes at its later fill quote --
         // above 100 % too, where ab9714be sized at the fill: eight lab tv
-        // tapes of a 390-400 % stop on NYSE:F (R5 lane PAR-MARGIN,
+        // tapes of a 390-400 % stop on NYSE:F (the margin-schedule correction,
         // tests/fixtures/margin_entry_bar/pm-m10-*) open the snapped level's
         // quotient when the stop was not yet marketable and the signal
         // close's when it was, never the fill's.
@@ -8872,7 +8872,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     // (1010 x 9.91 = 10009.1); the commission's smaller quantity opens where
     // the floor left the tick's room, and at slippage 4 none does (lab tv
     // tapes tests/fixtures/slipped_short int28fix-adm-s-s and int28fix-ou-s4;
-    // lane INT28-FIX rule SS). A long, and a short without slippage, are
+    // The slipped-short admission rule). A long, and a short without slippage, are
     // sized at or beyond that close and keep their fill-time admission
     // (int28fix-adm-l-cs, -adm-s-0, -adm-s-c). A reversal, or a book with an
     // entry pending, is not measured.
@@ -10139,7 +10139,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         // declines it (declined_reversal_at_open) and the position is held;
         // the close_all fills in neither case (lab tv tapes
         // tests/fixtures/reversal_close_all int28fix-ca2-rev and -frosty;
-        // lane INT28-FIX rule CA, on a fractional lot grid; a whole-unit grid
+        // The reversal-close rule, on a fractional lot grid; a whole-unit grid
         // is not measured). A close_all placed before the entry flattens at
         // the open (-first).
         bool all_in_reversal = false;
@@ -10718,7 +10718,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     // advanced it to the close point, which admits no cascade order, and so to
     // the next open; TradingView books it on the fill's own bar at the extreme
     // (lab tv pa2-i4-close-w2-long / -pooc). A fill the adapter forced there
-    // still advances (coof_fill_at_second_extreme; R5 lane PAR-ORDERS-2).
+    // still advances (coof_fill_at_second_extreme; the recalculation fill-order correction).
     bool coof_close_next_open = false;
     bool coof_close_at_second_extreme = false;
     bool coof_close_next_sub_bar = false;
@@ -12222,7 +12222,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 // pa3-f4-level-w1-xstop-*); a fill the adapter forced onto it
                 // starts the next leg -- read from the extreme itself, whose
                 // booked tick an off-grid extreme (11.425 -> 11.43) does not
-                // equal (pa2-i2-point-w2-long*; R5 lane PAR-ORDERS-3).
+                // equal (pa2-i2-point-w2-long*; the extreme-point fill correction).
                 const double own_extreme = phase == NativePathPhase::High
                     ? coof_script_bar_.high
                     : (phase == NativePathPhase::Low ? coof_script_bar_.low : kNaN);
@@ -12334,7 +12334,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                         // at its own level from the extreme on (lab tv
                         // tailc-1856-open-newborn cells A/B/C; after the
                         // first open fill's recalculation it fills at the
-                        // open, cell D and lane W4's LA/SA; R5 lane TAIL-C).
+                        // open, cell D and the long-add/short-add comparison; the placement and recalculation correction).
                         const double tick = staged_.syminfo.mintick;
                         const bool through_at_extreme = closing_long
                             ? endpoint <= stop_price : endpoint >= stop_price;
@@ -13823,7 +13823,7 @@ void PineExecutionAdapter::materialize_pending_bracket_legs(
         bool foreign = false;
         if (representative) {
             // Every placement ever made: the retained rows, and the source
-            // ids the erased ones leave in the table (R5 lane V19-E).
+            // ids the erased ones leave in the table (the retired-row compaction).
             foreign = placement_.erased_non_margin_id_outside(
                 parent->source_id, representative->snapshot.source_id);
             // The record answers for every erased row the scan would accept.
@@ -14673,7 +14673,7 @@ bool PineExecutionAdapter::anchorable_relative_exit(
     // carry that seed -- the kernel's FromOwnerFill anchor installs the arm
     // level alone -- and adopted, it rode from the raw arm print and exited 1
     // to 24 bars late. So the definition is not anchorable, and the parent's
-    // fill point submits the seeded leg (R5 lane PAR-ORDERS).
+    // fill point submits the seeded leg (the order-schedule correction).
     for (const auto& shape : relative_leg_shapes(value, only_long))
         if (std::holds_alternative<native_order::Trail>(shape.trigger)) return false;
     parent = only;
@@ -15862,7 +15862,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         // MARKET execution at that print: the print's nearest tick, then the
         // exit side's slippage (source_margin_fill_price), not a stop level's
         // adverse tick -- 12.105 books 12.11 (lab tv tapes pm-m10-f-k4-1007
-        // and -gapup-0501, R5 lane PAR-MARGIN-2). A stop crossed at its own
+        // and -gapup-0501, the intrabar margin correction). A stop crossed at its own
         // off-grid LEVEL keeps the directional rule (pm2-round-f, -es).
         if (!open_gapped) {
             return source.family == PineOrderFamily::Margin
@@ -17893,8 +17893,8 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             // earlier does not count, so two default adds that each fit on
             // top of the held position both fill and the book is called at
             // the fill (lab tv tape tests/fixtures/int29_compositions
-            // int29-c1-open-pairs, cells D and E; lane INT29, composing lane
-            // W10-DIAG-UNKNOWN's COQ with lane W5B-ENG-MARGIN-RESIDUAL's PA).
+            // int29-c1-open-pairs, cells D and E; composing placement-time
+            // equity checks with the same-side add's residual-margin check).
             const auto placed_side = static_cast<PositionSide>(source.projection_position_side);
             const double placed_held = source.projection_tv_carry_qty;
             if (same_side_add && source.family == PineOrderFamily::Entry
@@ -18008,7 +18008,7 @@ std::int64_t PineExecutionAdapter::chart_day_key(std::int64_t timestamp_ms) cons
         if (secs > -kChartDayCivilSpan && secs < kChartDayCivilSpan) {
             // A second of the day last read here answers that day's key: the
             // day is kept with the consumer that keeps this adapter's lookup
-            // state for the run (R5 lane D2-D). An unbound adapter, or a
+            // state for the run (the UTC chart-day memo). An unbound adapter, or a
             // consumer that holds no cache, computes every read as it always did.
             AdapterLookupIndex* index = parked_lookup_index(host_, this, run_counter_);
             if (index != nullptr && index->day_lo <= secs && secs < index->day_hi)
@@ -18153,7 +18153,7 @@ bool PineExecutionAdapter::intraday_loss_breached(double mark_price) const {
 }
 
 // =========================================================== R5 margin policy
-// The kernel (src/native_execution_consumer.cpp, R5 lanes L4/L4b) owns the
+// The kernel (src/native_execution_consumer.cpp, the kernel execution sampler) owns the
 // margin MECHANISM: when the requirement is tested, the liquidation request it
 // originates, its Superseded re-pricing, its receipt and its MarginCallEvent.
 // The answers below are the only TradingView-specific things left in that
@@ -18276,7 +18276,7 @@ double PineExecutionAdapter::source_margin_units(
         // 382 filled at 10.43, 8.77 short at 10.46, takes none either (lab tv
         // tapes tests/fixtures/slipped_short int28fix-adm-s-s and
         // int28fix-ou-s3; the calls int28fix-adm-s-c and -adm-l-cs take;
-        // lane INT28-FIX rule OU).
+        // The slipped-short margin rule).
         const double slip = config_.slippage > 0
             ? config_.slippage * staged_.syminfo.mintick : 0.0;
         const bool short_book = detail::run_position(require_host()).signed_units < 0.0;
@@ -18386,7 +18386,7 @@ double PineExecutionAdapter::lagged_margin_follow_up_units(
 // (a half-cent low) books its nearest tick, as every TradingView market fill
 // at a print does -- 12.105 books 12.11, 9.815 books 9.81 (lab tv tapes
 // tests/fixtures/margin_entry_bar/pm-m10-f-k4-1007, -gapup-0501, -gapup-0424
-// and, beyond margin calls, pm2-round-f-print; R5 lane PAR-MARGIN-2). A print
+// and, beyond margin calls, pm2-round-f-print; the intrabar margin correction). A print
 // on the ladder is its own tick (source_bar_fill_tick is idempotent there).
 double PineExecutionAdapter::source_margin_fill_price(double fire, bool close_is_buy) const {
     if (config_.slippage == 0) return source_bar_fill_tick(fire, staged_.syminfo.mintick);
@@ -18453,7 +18453,7 @@ bool PineExecutionAdapter::margin_check_allowed(
     // open and executed there. The roll point measures at the remaining
     // path's adverse mark and rests the slice on it -- on a step bar O 100
     // L 97 a carried 1x long books 0.4116 @ 97 there against TradingView's
-    // pinned 0.3996 @ 100 (test_native_margin_hooks_twin MG-FX, R5 lane F7).
+    // pinned 0.3996 @ 100 (test_native_margin_hooks_twin MG-FX, the margin and cancellation comparison).
     // Refused by kind, ahead of the ordinal test, because a roll can share
     // its driver point with an armed BarOpen check.
     if (point.kind == NativeMarginCheckKind::FxRoll) return false;
@@ -18461,7 +18461,7 @@ bool PineExecutionAdapter::margin_check_allowed(
     // the book at every lower-timeframe bar and books the call at the first
     // sub-bar low that crosses, sized there, then again at each later one
     // that crosses the reduced book's line (lab tv tapes
-    // tests/fixtures/intrabar_margin/pm-i3-eth-mag-*, R5 lane PAR-MARGIN);
+    // tests/fixtures/intrabar_margin/pm-i3-eth-mag-*, the margin-schedule correction);
     // the kernel's IntrabarSample point is that check.
     if (point.kind == NativeMarginCheckKind::IntrabarSample) {
         return intrabar_sample_checked(point) && !source_margin_rounded_tie_veto();
@@ -18494,8 +18494,8 @@ bool PineExecutionAdapter::margin_check_allowed(
 // process_orders_on_close or under calc_on_order_fills, and a short at any
 // margin, plain or under calc_on_order_fills (lab tv tapes
 // tests/fixtures/intrabar_margin: pm-i3-eth-mag-* for the plain leveraged long,
-// R5 lane PAR-MARGIN; pm2-i3-pooc-mag-*, pm2-i3-coof-* and the full-margin
-// short pm2-i3-s1x-mag-*, R5 lane PAR-MARGIN-2). Not a full-margin long, whose
+// The margin-schedule correction; pm2-i3-pooc-mag-*, pm2-i3-coof-* and the full-margin
+// short pm2-i3-s1x-mag-*, the intrabar margin correction). Not a full-margin long, whose
 // one-contract money call owns the book (resolve_margin_call_units refuses
 // it), nor a short under process_orders_on_close, whose carried slice is the
 // post-script checkpoint's (schedule_margin_call_path), unmeasured here. A
@@ -19778,7 +19778,7 @@ bool PineExecutionAdapter::margin_follow_up_scope() const noexcept {
 // `fill` takes. The book the call left is re-marked at that fill: without a
 // commission the follow-up is one unit, due while that book is short by more
 // than two of the slippage steps -- the called book short by more than the
-// unit's margin and those steps (lane INT28-FIX rule OF; W13's close call,
+// unit's margin and those steps (the follow-up rule; a close's call,
 // followed so at the next open). Under a percent commission a call of any
 // size is followed while the book it left, re-marked there, is short by more
 // than two slippage steps for each unit called and the exit fees of those
@@ -19837,8 +19837,8 @@ double PineExecutionAdapter::margin_follow_up_units(
 // 0.001 inside its margin re-marked there, takes none; and one of 396 filled
 // at 9.97 and called at 9.99 meets the 9.995 high at that fill, where its own
 // check calls the next share, followed at the 9.94 low (lab tv tapes
-// tests/fixtures/slipped_short int28fix-ou-s1 and int28fix-adm-s-cs; lane
-// INT28-FIX rule OF). `called_units` is the call's size, `fill` its own fill,
+// tests/fixtures/slipped_short int28fix-ou-s1 and int28fix-adm-s-cs;
+// The follow-up rule). `called_units` is the call's size, `fill` its own fill,
 // `current` the print its check point fired at.
 void PineExecutionAdapter::follow_margin_call(
         double called_units, double fill, double current,
@@ -20886,8 +20886,8 @@ bool PineExecutionAdapter::schedule_margin_call_path(
     // fill matched at a waypoint was reached on the segment into it, so that
     // waypoint is still ahead of it (the kernel's post-fill point measures
     // from it too, NativeExecutionConsumer::margin_segment_origin): a limit
-    // filled on the way down to the low still faces the low (R5 lane
-    // PAR-MARGIN-2).
+    // filled on the way down to the low still faces the low (the
+    // intrabar margin correction).
     const bool high_first = source_path_uses_high_first(bar);
     struct Waypoint { NativePathPhase phase; double price; };
     const Waypoint path[] = {
@@ -20983,7 +20983,7 @@ double PineExecutionAdapter::source_margin_one_unit(const SourceMarginMoney& mon
 
 // Whether that one unit restores the book at `fill`, the call's own fill: the
 // whole position's requirement at the fill against the equity at the mark
-// (source_margin_units, lane INT28-FIX rule OU).
+// (source_margin_units, the slipped-short margin rule).
 bool PineExecutionAdapter::source_margin_unit_restores(
         const SourceMarginMoney& money, double fill) const {
     return money.valid && finite_positive(fill)
@@ -21114,7 +21114,7 @@ bool PineExecutionAdapter::rest_waypoint_margin_call(
         const Bar& bar, int from, int to, const NativeDecisionContext& context) {
     const auto position = detail::run_position(require_host());
     if (position.signed_units == 0.0) return false;
-    // Measured on shorts slipped on whole lots (lane INT28-FIX's
+    // Measured on shorts slipped on whole lots (TradingView exports
     // int28fix-ou-s1 and -ou-s2, NYSE:F shares at slippage 1 and 2). A
     // full-margin long's call is the one-contract money call
     // (submit_tv_money_long_margin_call), and neither a long nor a fractional
@@ -21234,7 +21234,7 @@ void PineExecutionAdapter::close_point_follow_up(
 // The next open of a close that owed a one-unit call (close_point_margin_call):
 // the book is the one that close checked, so its money is re-read at that
 // close's mark and the unit is tested at this open's fill. One the close left
-// standing executes here, ahead of the orders of that bar (lane INT28-FIX,
+// standing executes here, ahead of the orders of that bar (TradingView exports,
 // tests/fixtures/slipped_short int28fix-adm-s-cs 2025-06-26: a short of 810
 // shares 4.95 short at the 10.62 close mark gives one up at 10.62 off the
 // 10.61 open); one the script cancelled and placed again is withdrawn here
@@ -23596,10 +23596,10 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
     // close's tick, not the raw close (a sell limit at 11.76 over a raw 11.755
     // close fills at that close; a buy limit at 11.65 over 11.655, whose tick
     // is 11.66, rests), with or without calc_on_order_fills (lab tv
-    // pa3-f3-pooc-limit-{long,short}{,-coof}; R5 lane PAR-ORDERS-3). Scoped
+    // pa3-f3-pooc-limit-{long,short}{,-coof}; the extreme-point fill correction). Scoped
     // to the non-stream route and a flat book.
     // A pure STOP entry the close already reached fills there too, with or
-    // without calc_on_order_fills (R5 lane PAR-ORDERS): TradingView books it
+    // without calc_on_order_fills (the order-schedule correction): TradingView books it
     // at that bar's close, the close's tick slipped like any stop fill, on
     // every path -- the five such entries of each of H-MEASURE's
     // hm-{chart,mag}-diff-v1 / -v3 / -v5 / -v7 tapes, which the resting stop
@@ -23612,7 +23612,7 @@ void PineExecutionAdapter::flush_pooc_marketable_limit_entry_fills(
     // that close as well, sized as its row is: a plain reversal here, and one
     // a same-bar strategy.close or close_all of the held side precedes right
     // after that close fills (fill_pooc_close_entries from on_applied), as
-    // TradingView books both (R5 lane PAR-ORDERS-2: lab tv
+    // TradingView books both (the recalculation fill-order correction: lab tv
     // pa2-i3-rev-s-{chart,mag} and pa2-i3-flip-{s,l}-{chart,mag}, corpus probe
     // 96, which filled it at the next open; pa2-i3-flip-unreached-* keep an
     // unreached one resting). Only without calc_on_order_fills, the route the
@@ -23663,7 +23663,7 @@ void PineExecutionAdapter::fill_pooc_close_entries(
         // So does a limit placed against the held side, reversing it at this
         // close (lab tv w5r-pooc-add-close cell J), and a limit or stop ADD
         // placed while its own side is held (cells A, B, C, E, H; the
-        // unreached add D rests; R5 lanes W10 diag-w5r, TAIL-C).
+        // unreached add D rests; the recalculation scheduling diag-w5r, the placement and recalculation correction).
         const bool reversing_limit = placed_against && pure_limit
             && !config_.calc_on_order_fills && (after_close || !close_follows)
             && (book_before == 0.0 || (book_before > 0.0) != row.is_long);
@@ -23758,7 +23758,7 @@ void PineExecutionAdapter::flush_pooc_marketable_exit_fills(
 // not from a fill, with the close forced as its price) and that has not
 // filled yet. The close pass decides the calculation's exits after it, as
 // TradingView does (lab tv w5r-pooc-add-close cells A, B, E, H: the add's
-// exit at that same close; R5 lanes W10 diag-w5r, TAIL-C).
+// exit at that same close; the recalculation scheduling diag-w5r, the placement and recalculation correction).
 bool PineExecutionAdapter::pooc_close_entry_immediate_pending(
         const NativeDecisionContext& context,
         const native_order::RequestHandle* except) const {
@@ -24727,8 +24727,8 @@ void PineExecutionAdapter::on_bar_close_policy(
     // opening entry, or a limit or stop exit leg. "This bar" is the index
     // both passes test, projection_bar_index (the named input slot): on an
     // aggregated or magnified run it is not the script-bar interval_index,
-    // and a gate reading that one skipped both passes there (R5 lane
-    // PAR-ORDERS).
+    // and a gate reading that one skipped both passes there (the
+    // order-schedule correction).
     const bool close_fill_pass = config_.process_orders_on_close
         && modeled_input() && !coof_recalc_active_;
     const bool entry_close_fill_pass = config_.process_orders_on_close
@@ -26756,7 +26756,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             // opening-side fill is admitted on its own bar -- the position's
             // first, an add on the same bar, and an add to a book carried in
             // from an earlier bar, which TradingView checks over the rest of
-            // its bar on the combined book too (R5 lane PAR-MARGIN-2,
+            // its bar on the combined book too (the intrabar margin correction,
             // pm2-m7b-lim-* and pm2-m7b-mkt-*) -- so an add re-sizes a call
             // armed on the smaller book.
             // The open's own check runs after the market adds that fill at
@@ -26993,7 +26993,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     }
     // A same-bar strategy.close or close_all that fills at a
     // process_orders_on_close close is followed there by the reversing stop
-    // entries the close pass left for it (R5 lane PAR-ORDERS-2).
+    // entries the close pass left for it (the recalculation fill-order correction).
     if (placement_snapshot && event.closed_units > 0.0
         && (placement_snapshot->family == PineOrderFamily::Close
             || placement_snapshot->family == PineOrderFamily::CloseAll)
@@ -27086,7 +27086,7 @@ PineExecutionAdapter::fixture_pending_snapshots() const {
                  + pending_coof_requests_.size()
                  + source_shadow_pending_.size());
     // One above every incarnation a row was ever remembered under, erased
-    // rows included (R5 lane V19-E).
+    // rows included (the retired-row compaction).
     std::uint64_t next_incarnation = std::max<std::uint64_t>(1, placement_.high_water() + 1);
     struct StagedParentProjection {
         SourceId id;
@@ -28310,7 +28310,7 @@ double PendingIntentView::trail_best_price() const noexcept {
     return owner_ && owner_->host_ ? owner_->host_->trail_best_price() : kNaN;
 }
 
-// R5 lane W6-ENG-FILL-ORDER, family F10: the own units of the opposite MARKET
+// The entry/reversal fill ordering, family F10: the own units of the opposite MARKET
 // entries this source bar placed that are still pending (batched or live), or
 // NaN when one of them carries no explicit quantity. TradingView adds them to
 // the later call's transaction. A call of the caller's own id is the one the
@@ -28348,7 +28348,7 @@ double PineExecutionAdapter::pending_opposite_market_units(
     return unsized ? kNaN : units;
 }
 
-// R5 lane W6B-ENG-PAIRS: whether the opening fill of a flat entry is the
+// The flat-entry pair handling: whether the opening fill of a flat entry is the
 // first of a same-point pair whose opposite member, placed on the same bar,
 // fills at this same price next. TradingView checks the margin of such a pair
 // once both have filled: a commissioned pair whose one transaction the
@@ -28390,7 +28390,7 @@ bool PineExecutionAdapter::same_point_pair_fill_follows(
         });
 }
 
-// R5 lane W6B-ENG-PAIRS, item 3. Under process_orders_on_close a flat pair
+// The flat-entry pair handling, item 3. Under process_orders_on_close a flat pair
 // of one market call and one priced opposite call, both of this bar and the
 // priced one already marketable at the close, fills at that close in the
 // order and with the quantities of W6's rules: the rank of each leg (buy
@@ -28502,7 +28502,7 @@ bool PineExecutionAdapter::fill_pooc_close_pair(
     return filled;
 }
 
-// R5 lane W6B-ENG-PAIRS, item 2: under pyramiding above 1 the pending
+// The flat-entry pair handling, item 2: under pyramiding above 1 the queued
 // market's quantity joins the later call's transaction on the book the tapes
 // measure only (w6b-p2a, w6b-p2b): the call and one other entry-like order,
 // both of this script bar, nothing resting from an earlier one. A larger book
@@ -28529,7 +28529,7 @@ bool PineExecutionAdapter::same_point_two_leg_book(
     return !foreign && others == 1;
 }
 
-// R5 lane W6-ENG-FILL-ORDER, family F10. TradingView fills the entries that
+// The entry/reversal fill ordering, family F10. TradingView fills the entries that
 // reach one fill point in a fixed order of side and kind -- buy market, buy
 // stop, sell market, sell stop, buy limit, sell limit -- and entries of one
 // rank in the order they were placed (lab tv w6-f10a-open-pair,

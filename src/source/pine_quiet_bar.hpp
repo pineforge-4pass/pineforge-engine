@@ -1,6 +1,6 @@
 #pragma once
 
-// R5 lane PERF-L4: the Pine adapter's quiet-bar gates.
+// The quiet-bar gates: the Pine adapter's quiet-bar gates.
 //
 // Every TradingView policy hook the adapter runs at a bar boundary is first
 // asked whether its body has anything to act on -- a live handle of the

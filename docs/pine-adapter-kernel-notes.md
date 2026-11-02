@@ -1,6 +1,6 @@
 # Pine adapter rules that used to be documented in the kernel
 
-> **Provenance.** R5 lane L11 (`docs/design/native-feature-parity.md` §2.ii d)
+> **Provenance.** the adapter policy extraction (`docs/design/native-feature-parity.md` §2.ii d)
 > removed these comment blocks from `include/pineforge/engine.hpp` and
 > `src/engine_orders.cpp`. Every one of them documented a declaration that had
 > already been deleted from the kernel: the behaviour is implemented in the
@@ -13,7 +13,7 @@
 
 ## 1. TradingView's ten-significant-digit money rule
 
-Was `include/pineforge/engine.hpp`, historical lines 918-952 recorded by `06d4107c0`, deleted by R5 lane E6 (the span at lines 73-180 earlier
+Was `include/pineforge/engine.hpp`, historical lines 918-952 recorded by `06d4107c0`, deleted by the detached-comment and mask cleanup (the span at lines 73-180 earlier
 drafts named is and was live code: `ClosedLotExcursionFacts`, `PyramidEntry`, `Trade`). The
 arithmetic lives in the adapter
 (`tv_money_round` / `tv_money_floor_lot` in
@@ -890,12 +890,12 @@ The pair context exists only inside the ordinary atomic two-stop scan.
 No callback or stable-frame ABI read occurs between its two fills.
 ```
 
-Since R5 lane PAR-MARGIN the adapter keeps the placement quantity above
+Since the margin-schedule correction the adapter keeps the placement quantity above
 100 % as well: eight recorded reference tapes of a 390-400 % stop on NYSE:F
 (private tapes `pm-m10-*` of `margin_entry_bar`) open the placement quotient, never
 the fill's (the private test `test_adapter_margin_schedule_differential`, "M10 on
 tapes"). The margin call those tapes book at a half-cent low is TradingView's
-market execution at that print, so since R5 lane PAR-MARGIN-2 the pre-open
+market execution at that print, so since the intrabar margin correction the pre-open
 slice books the print's nearest tick (12.105 books 12.11), where a stop or
 limit crossed at its own off-grid level keeps the directional tick
 (the private fixture set `half_tick_rounding`).
@@ -1025,7 +1025,7 @@ engine_orders.cpp).
 ## 5. Dead kernel helpers removed with their evidence
 
 `include/pineforge/engine.hpp` carried two protected helpers with no caller
-anywhere in `src/` or `tests/` (R5 lane L11, §2.ii e). The arithmetic was
+anywhere in `src/` or `tests/` (the adapter policy extraction, §2.ii e). The arithmetic was
 one line each; the evidence attached to them is the part worth keeping.
 
 ### 5.1 `apply_limit_fill` — limit-or-better, favourable snap
@@ -1080,7 +1080,7 @@ double reserve_percent_commission(double cash) const {
 }
 ```
 
-> **Corrected by R5 lane PAR-CASHFEE.** The block's last claim -- that a
+> **Corrected by the cash-sizing fee correction.** The block's last claim -- that a
 > cash-per-order or cash-per-contract commission reserves nothing -- does not
 > hold on TradingView. A percent-of-equity default quantity under a cash
 > commission takes its percentage of `strategy.equity` (the open entries' cash

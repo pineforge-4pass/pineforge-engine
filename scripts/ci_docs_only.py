@@ -6,7 +6,7 @@ docs-only change the proof jobs -- the four ``build`` legs, ``sanitizers``,
 ``kernel-only``, ``native-live`` and ``corpus-parity-subset`` -- are skipped,
 and the ``build`` aggregate accepts exactly that skip. ``preflight`` still runs,
 and page checks outside PROOF_READS are among its stages
-(doc-anchors, doc-lint, doc-reverts, doc-pine-coverage, design-inventory,
+(doc-anchors, doc-lint, doc-reverts, public-role-words, doc-pine-coverage, design-inventory,
 kernel-seam-rows, the native C surface table), as are the workflow wiring
 guards. PROOF_READS lists documentation inputs with checks outside preflight,
 in a proof job's CTest row or the docs workflow. ``docs.yml``, the Doxygen

@@ -1517,7 +1517,7 @@ typedef enum pf_close_cause_e {
  *  a kernel margin model now reads `3` for its own liquidation rows (and `4`
  *  for a kernel risk flatten) where the retired string derivation, which only
  *  recognised the adapter's sentinels, answered `1`, and it reads `2` for a
- *  bracket leg its owner armed, where it read `1` before R5 lane F3.
+ *  bracket leg its parent request armed, where it read `1` before the host excursion and bracket-cause integration.
  *  `-1` when @p s is NULL, or when @p trade_index is out of range (final
  *  review F7: matches every sibling indexed live accessor's -1-on-bad-index
  *  convention -- #strategy_pending_order_fill_qty,
@@ -1579,7 +1579,7 @@ PF_API int64_t strategy_script_bars_processed(pf_strategy_t s);
  *  wall-clock for the chart's timezone — TV exports trade rows in chart
  *  TZ too. Engine bars are stored as Unix-ms (UTC), so without this
  *  override these builtins return UTC and silently diverge from TV by N
- *  hours when the chart is on a non-UTC zone (Asia/Taipei = UTC+8 is the
+ *  hours when the chart is on a non-UTC zone (Asia/Hong_Kong = UTC+8 is the
  *  validator default).
  *
  *  Pass `NULL`, `""`, `"UTC"` or `"Etc/UTC"` for the legacy UTC
@@ -2151,7 +2151,7 @@ PF_API int pf_output_series_limit_failure(int64_t* maximum);
 } /* extern "C" */
 #endif
 
-/* The C-level native host API (R5 lane L13). Included last, after the PODs
+/* The C-level native host API (the versioned C host API). Included last, after the PODs
  * it builds on (pf_bar_t, pf_report_t, pf_strategy_t) and outside this
  * header's `extern "C"` block, which it opens for itself. Both headers guard
  * their own include, so either include order resolves. Its PF_API symbols are

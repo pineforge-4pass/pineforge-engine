@@ -4,10 +4,10 @@
  *
  * The native settlement's stages, BacktestEngine's private nested types that
  * engine.hpp only declares: the staged chain (NativeSettlementStage) and the
- * one-lot pass (NativeSettlementStage::OneLot, R5 lane PERF-L2). Their
+ * one-lot pass (NativeSettlementStage::OneLot, the compact context reads). Their
  * definitions live here, not in engine_execution.cpp alone, so the consumer
  * can hold a one-lot stage from a fill's precommit preview to its settlement
- * (R5 lane D2-C); engine.hpp's layout is untouched.
+ * (the per-pump state cache); engine.hpp's layout is untouched.
  */
 
 #include <pineforge/engine.hpp>
@@ -53,7 +53,7 @@ struct BacktestEngine::NativeSettlementStage {
     struct OneLot;
 };
 
-// The fused settlement (R5 lane PERF-L2; PERF-D1 §8, lane L2): the stage of
+// The fused settlement (compact context reads): the stage of
 // the common case, in one pass and on the stack.
 //
 // A Flatten, Reduce or Transact on the Book or an opening's scope, with no
@@ -130,7 +130,7 @@ struct BacktestEngine::NativeSettlementStage::OneLot {
     execution::Result settle(BacktestEngine& engine, const execution::Fill& fill,
                              const execution::PhysicalExecutionContext& context) const;
 
-    // R5 lane D2-C: one stage per fill. A host with a precommit hook (and a
+    // The per-pump state cache: one stage per fill. A host with a precommit hook (and a
     // host that owns lot excursions) is shown the settlement's preview before
     // the fill settles, and the settlement then staged the same fill again:
     // the same action, fill, scope and empty lifecycle over the same book.

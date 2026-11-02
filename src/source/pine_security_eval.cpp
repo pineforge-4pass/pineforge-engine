@@ -36,7 +36,7 @@ namespace {
 // TradingView's request.security_lower_tf accepts only the default merge
 // flags: lookahead_on and gaps_on are refused at validation. This is a rule
 // of the source language, not of the kernel's sub-bar synthesis, so it lives
-// here beside the evaluator that applies it (R5 lane N14: it used to be
+// here beside the evaluator that applies it (the source-runtime extraction: it used to be
 // internal::ensure_supported_lower_tf_emulation_flags in engine_lower_tf.cpp;
 // the message and the refusal are unchanged).
 void ensure_supported_lower_tf_emulation_flags(bool lookahead_on, bool gaps_on) {
@@ -583,7 +583,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
     // No bar of the requested timeframe is loaded (no_loaded_bars): the
     // site is never evaluated, so it and its TA read na throughout.
     if (pine.no_loaded_bars) return;
-    // On the pump's runtime block when it has one (R5 lane D2-C).
+    // On the pump's runtime block when it has one (the per-pump state cache).
     internal::AmbientEmaSeedingScope _na_warmup_scope(
         NativeExecutionConsumer::bound(*this).pump_ambient(),
         security_range_start_na_warmup_);

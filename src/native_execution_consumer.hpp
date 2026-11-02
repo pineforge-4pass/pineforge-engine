@@ -33,7 +33,7 @@ inline namespace engine_script_run_v19 {
 class LiveReportAccumulator;
 // Lookup state a host derives from its own bookkeeping and cannot keep in its
 // own object -- a generated script's ABI fixes that object's layout -- parked
-// with the consumer that serves the host (R5 lane PERF-P7). The consumer owns
+// with the consumer that serves the host (the host bookkeeping index cache). The consumer owns
 // it for the host, drops it at every run begin, so it never outlives the run
 // it was built over, and never reads it: nothing in it is hashed, recorded or
 // otherwise observable, and the host verifies whatever it reads back.
@@ -41,7 +41,7 @@ class NativeHostCache {
 public:
     NativeHostCache() = default;
     // `kind` names the host's cache type, so the host recognizes its own
-    // cache with one comparison instead of a dynamic_cast (R5 lane D2-C: it
+    // cache with one comparison instead of a dynamic_cast (the per-pump state cache: it
     // reads one every bar). Any address the host owns will do; the consumer
     // never reads it.
     explicit NativeHostCache(const void* kind) noexcept : kind_(kind) {}
@@ -200,7 +200,7 @@ public:
         return v;
     }
     void probe_lifecycle(NativeStateView& v) const;
-    // view()'s kind, spec and phase, read in place (R5 lane D2-C): the
+    // view()'s kind, spec and phase, read in place (the per-pump state cache): the
     // running run's own fields, or the lifecycle probe's answer. A host that
     // needs one field reads it here instead of building the whole view
     // (NativeStrategyHost::native_state, out of line and by value). running()
@@ -258,8 +258,8 @@ public:
         if (const auto* point = current_point()) return *point;
         return std::nullopt;
     }
-    // The point current_execution_point() copies, read in place (R5 lane
-    // D2-C): the callback's frame, or null. It holds for the callback that
+    // The point current_execution_point() copies, read in place (the
+    // per-pump state cache): the callback's frame, or null. It holds for the callback that
     // asked -- a host's commands and current executions inside one callback
     // leave its frame as it is -- and a caller reads it there.
     const NativeCurrentPointView* current_point() const noexcept {
@@ -356,8 +356,8 @@ public:
     static bool rows_are_current(const BacktestEngine& engine) noexcept;
     static void fill_snapshot_report(const BacktestEngine& engine, ReportC* out);
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
-    // The command rows of events_after(after_ordinal), read in place (R5 lane
-    // PERF-P4). The history is in ordinal order, so those rows are exactly
+    // The command rows of events_after(after_ordinal), read in place (the
+    // in-place command journal reads). The history is in ordinal order, so those rows are exactly
     // the events from first_command_after(after_ordinal) on (the history's
     // size when there are none); events_after takes its own slice here too.
     // visit_commands_after visits them as the history stood when the call
@@ -371,7 +371,7 @@ public:
     // first test first_command_after makes, which answers the history's size
     // exactly when it fails. A reader that only asks whether anything lies
     // past its cursor asks this, in O(1), rather than comparing that search
-    // with a second one from the top (R5 lane D2-A).
+    // with a second one from its start (the optional-hook and quiet-point changes).
     bool has_command_after(uint64_t after_ordinal) const noexcept {
         const auto& history = requests_.history();
         return !history.empty()
@@ -401,7 +401,7 @@ public:
     void acknowledge_events(uint64_t through_ordinal) noexcept;
     uint64_t event_window_start() const noexcept { return requests_.retired_through() + 1; }
     // NativeStrategyHost::declare_native_bar_open_hook /
-    // declare_native_precommit_hook (R5 lane D2-A): which optional hooks the
+    // declare_native_precommit_hook (the optional-hook and quiet-point changes): which optional hooks the
     // host implements. A capability of the host, not of a run, so it is kept
     // across runs and folded into nothing: the kernel skips only work whose
     // one reader is the missing hook, and the run is the one the host would
@@ -538,7 +538,7 @@ public:
                                    std::vector<unsigned char>& boundary_completes) const;
 
     // match_path reuses the candidate rows it scanned instead of rescanning
-    // the whole working book after an allowance refresh (R5 lane PERF-K3).
+    // the whole working book after an allowance refresh (the retained request-candidate index).
     // The reuse is exact, so it is not a run-spec choice: it is on unless
     // this turns it off, which restores the full rescan after every winner
     // and the core's handle lookup for the winner. The switch exists so
@@ -547,7 +547,7 @@ public:
     void set_match_row_reuse(bool enabled) noexcept { match_row_reuse_ = enabled; }
 
     // match_path tests a priced trigger against the point's path before the
-    // rest of its row (R5 lane PERF-L5): a request whose trigger the path
+    // rest of its row (the trigger-band and scratch reuse): a request whose trigger the path
     // cannot reach is passed over without the eligibility read it would
     // otherwise take first. The pass-over is exact, so it is on unless this
     // turns it off, which restores the full evaluation of every row. The
@@ -556,7 +556,7 @@ public:
     void set_match_band_precheck(bool enabled) noexcept { match_band_precheck_ = enabled; }
 
     // The request core's mutations are applied in place by its direct forms
-    // (WorkingRequestCore::apply_*, R5 lane L3) wherever the consumer used to
+    // (WorkingRequestCore::apply_*, the direct request-core forms) wherever the consumer used to
     // install what it had just prepared. The direct forms are exact, so this
     // is not a run-spec choice: it is on unless this turns it off, which
     // restores every prepare/install pair. The switch exists so
@@ -568,14 +568,14 @@ public:
 
     // The per-point guards in front of drain_queued_notifications,
     // recalculate_at_modeled_point and the three margin check points skip
-    // each body exactly where it would return on its first test (R5 lane
-    // PERF-L1). Off, every guard calls its body, which makes that test itself:
+    // each body exactly where it would return on its first test (the
+    // reused per-pump storage). Off, every guard calls its body, which makes that test itself:
     // the pre-lane computation, kept so tests/test_native_lean_path.cpp can
     // hold the two equal bit for bit. No host reaches it.
     void set_point_guards(bool enabled) noexcept { point_guards_ = enabled; }
 
     // A driver point with no live request is matched in front of match_path
-    // (match_quiet_point, R5 lane D2-A), which would open its epoch, apply its
+    // (match_quiet_point, the optional-hook and quiet-point changes), which would open its epoch, apply its
     // excursion and return. The short-cut is exact, so it is on unless this
     // turns it off, which hands every point to match_path; quiet_points
     // counts the points it matched this run. Both exist so
@@ -585,7 +585,7 @@ public:
     uint64_t quiet_points() const noexcept { return quiet_points_; }
 
     // The library's per-thread runtime state (runtime_ambient.hpp) for the
-    // length of one pump (R5 lane D2-C). The first call inside a pump makes
+    // length of one pump (the per-pump state cache). The first call inside a pump makes
     // this consumer's block the calling thread's block in force, holding the
     // values that were in force, and the outermost pump's end hands it back
     // (PumpScope); outside a pump the answer is null. A host that sets the TA
@@ -612,7 +612,7 @@ public:
     void set_runtime_ambient(bool enabled) noexcept { runtime_ambient_enabled_ = enabled; }
     uint64_t runtime_ambient_installs() const noexcept { return ambient_installs_; }
     // consume_matched_request's one-lot stage, carried from a fill's preview
-    // to its settlement (R5 lane D2-C: BacktestEngine::NativeSettlementStage::
+    // to its settlement (the per-pump state cache: BacktestEngine::NativeSettlementStage::
     // OneLot::preview_keeping / settle_kept). Off, every settlement stages its
     // fill again, as before; the count is the settlements this run took from a
     // carried stage (reset at every begin). Both exist so
@@ -714,7 +714,7 @@ private:
         CurrentExecutionFrame(const NativeCurrentPointView& at, uint64_t cutoff)
             : point(at), acceptance_cutoff(cutoff) {}
         // A callback's frame from its parts, so the optional that holds it
-        // constructs it in place (R5 lane PERF-L1).
+        // constructs it in place (the reused per-pump storage).
         CurrentExecutionFrame(const NativeDecisionContext& decision, double price,
                               NativeCurrentQuoteKind quote_kind, uint64_t quote_origin_ordinal,
                               uint64_t cutoff)
@@ -802,7 +802,7 @@ private:
     // at least the whole scope's held total. The scope is the book for an
     // Independent request and the bound openings' lots for BindOpening /
     // BindOpenings; any other owner has none here. The quantity grid admits
-    // such a Reduce as it stands (R5 lane K-ULP4).
+    // such a Reduce as it stands (the representable-quantity refusal change).
     static bool scope_boundary_units(const BacktestEngine& engine,
                                      const native_order::Request& request,
                                      double units, bool or_whole_scope) noexcept;
@@ -810,7 +810,7 @@ private:
     // boundary of its scope) settles at this candidate still closes whole lots:
     // it is on the grid, a boundary of the scope as it stands, or at least the
     // scope's whole held total. Every other request, and any run without a
-    // quantity grid, answers true (R5 lane K-ULP4).
+    // quantity grid, answers true (the representable-quantity refusal change).
     bool grid_boundary_holds(const BacktestEngine& engine,
                              const native_order::LiveRequest& live,
                              const native_order::MatchCursor& cursor) const;
@@ -840,7 +840,7 @@ private:
     void enqueue_applied_notification(AppliedNotification notification);
     // With nothing queued a drain delivers, counts and re-arms nothing: the
     // queue is empty only after its own clear(), which also rewinds the head
-    // (R5 lane PERF-L1), so every caller's empty drain is a branch.
+    // (the reused per-pump storage), so every caller's empty drain is a branch.
     void drain_applied_notifications(BacktestEngine& engine) {
         if (!applied_notifications_.empty() || !point_guards_)
             drain_queued_notifications(engine);
@@ -1003,7 +1003,7 @@ private:
         bool at_level = false;
     };
     // The candidate rows match_path keeps at its cursor while allowance
-    // refreshes follow one another (R5 lane PERF-K3). The buffer keeps its
+    // refreshes follow one another (the retained request-candidate index). The buffer keeps its
     // capacity from call to call; once the rows are reused they form a heap
     // whose top is the row the scan's own comparison, `precedes`, picks.
     //
@@ -1011,7 +1011,7 @@ private:
     // queue order (native_order::WorkingRequestCore::live), and a book of
     // requests awaiting their allowance
     // gives every row the cursor's own t. While the kept rows stay an
-    // ascending run they are taken from its front instead (R5 lane PERF-L5):
+    // ascending run they are taken from its front instead (the trigger-band and scratch reuse):
     // `precedes` orders rows totally, so the front of an ascending run is the
     // row a heap would put on top, and the first row out of order turns the
     // rest into that heap.
@@ -1056,7 +1056,7 @@ private:
     // not per-thread state. Two engines sharing a thread have independent
     // calendars/timeframes, so a timestamp-keyed cache must not be shared.
     //
-    // R5 lane PERF-L1: each kind also keeps the answer its slot held before
+    // The reused per-pump storage: each kind also keeps the answer its slot held before
     // the slot's last replacement (`prior`). A bar asks for its own interval
     // around a lookahead to the next bar's (present_session_day), which used
     // to evict it, so canonical labels resolved the calendar six times a bar
@@ -1126,7 +1126,7 @@ private:
     }
     const NativeRunSpec* lifecycle_spec() const;
     // The run's declared price tick: the ladder a trailing stop spelled a
-    // whole number of ticks away names (R5 lane E16). Zero with no spec.
+    // whole number of ticks away names (the integer-tick trailing stop). Zero with no spec.
     double ladder_tick() const;
     bool commands_allowed() const;
     bool timeframe_args_ok(const std::string& input_tf, const std::string& script_tf) const;
@@ -1278,7 +1278,7 @@ private:
                                  const NativeCoordinate& base);
     void deliver_aggregate_calculation(BacktestEngine& engine, const Bar& bar,
                                        const NativeCoordinate& base);
-    // Session-day facts (NativeDecisionContext, R5 lane F5) of the script bar
+    // Session-day facts (NativeDecisionContext, the kernel session-day integration) of the script bar
     // opening at `label`. When the script_ bucket is that bar, its input
     // indices place it in the run, and inside pump_batch its held neighbours
     // are the pumped inputs around it; everything else reads its neighbours
@@ -1290,7 +1290,7 @@ private:
     };
     // Through the memo of the last two instants answered (session_points_):
     // a bar's label is asked again as the next bar's "before", and the label
-    // after it is the next bar's own (R5 lane PERF-L1).
+    // after it is the next bar's own (the reused per-pump storage).
     SessionPoint session_point(int64_t ms) const {
         for (const auto& entry : session_points_) {
             if (entry.held && entry.ms == ms) return entry.point;
@@ -1362,8 +1362,8 @@ private:
     void match_point(BacktestEngine& engine, const NativeDriverPoint& point);
     void match_discrete(BacktestEngine& engine, const NativeDriverPoint& point);
     void match_segment(BacktestEngine& engine, const NativeDriverPoint& dest, double from_price);
-    // match_path's no-live-request branch, taken in front of the call (R5 lane
-    // D2-A): a point with nothing live has no trigger, allowance, trail,
+    // match_path's no-live-request branch, taken in front of the call (the
+    // optional-hook and quiet-point changes): a point with nothing live has no trigger, allowance, trail,
     // receipt or callback work, so matching it is opening its epoch and, on a
     // segment, the one excursion the path applies to an open position. Every
     // test match_path makes before that branch is made here first -- a failed
@@ -1529,7 +1529,7 @@ private:
     void withdraw_margin_liquidation(BacktestEngine& engine);
     // The three check points below return on their first test for a run
     // with no margin model (and the FX roll, with no staged curve), so each
-    // one's guard makes that test before the call (R5 lane PERF-L1).
+    // one's guard makes that test before the call (the reused per-pump storage).
     void maintain_margin_liquidation(BacktestEngine& engine,
                                      const native_order::MatchCursor& cursor,
                                      NativePathPhase phase, double fallback_price,
@@ -1612,7 +1612,7 @@ private:
     void catch_up_timeline() noexcept;
     bool install_mutation(BacktestEngine& engine, native_order::PreparedMutation&& prepared,
                           NativeFailureOperation operation, uint64_t ordinal);
-    // One request-core mutation as a call site received it (R5 lane L3):
+    // One request-core mutation as a call site received it (the direct request-core forms):
     // applied by a direct form (Installed), or prepared to be installed here
     // (a token, with set_direct_mutation(false)), or neither. core_step
     // takes either answer; settle_step finishes it the way install_mutation
@@ -1630,7 +1630,7 @@ private:
     bool install_execution(BacktestEngine& engine, native_order::PreparedExecution&& prepared,
                            const native_order::CommittedExecutionFacts& facts,
                            uint64_t ordinal);
-    // install_execution for the core's direct form (R5 lane L3): the second
+    // install_execution for the core's direct form (the direct request-core forms): the second
     // half of check_execution, after the settlement, failing the run exactly
     // as an install that fails does. `open_activation_grant` is the one the
     // check was handed: the apply makes the same birth test.
@@ -1681,7 +1681,7 @@ private:
     // The cooperative abort alone: check_abort_or_projection's first half, for
     // a boundary no host code has run since the last full check. Both answer
     // a boundary that passes inline and leave the failure to latch_abort and
-    // latch_projection_mismatch (R5 lane PERF-L1).
+    // latch_projection_mismatch (the reused per-pump storage).
     bool check_abort(BacktestEngine& engine, NativeFailureOperation operation,
                      uint64_t ordinal = 0) {
         if (failed()) return false;
@@ -2047,7 +2047,7 @@ private:
     std::size_t cohort_target_cache_size_ = 0;
     // Derived calendar lookup cache, cleared at staged ingress (L10c).
     mutable IntervalCache interval_cache_{};
-    // R5 lane F3: the spec's bar-array digests, taken once per staged spec.
+    // The host excursion and bracket-cause integration: the spec's bar-array digests, taken once per staged spec.
     // A pure cache of values the continuation already folds -- configure and
     // the two run-begin declarations that rewrite an array clear it -- so a
     // continuation read at every report point is not linear in the feed.
@@ -2146,7 +2146,7 @@ private:
     // (set_match_row_reuse). A choice between two computations of the same
     // values, so it is not run state either.
     bool match_row_reuse_ = true;
-    // match_path's other per-call scratch (R5 lane PERF-L5): the provenance
+    // match_path's other per-call scratch (the trigger-band and scratch reuse): the provenance
     // of the rows it built, and the (priority, kind) keys it skips at the
     // current cursor, kept sorted. Each is emptied where the local it
     // replaces was born, so between calls it is capacity only and a warm
@@ -2168,7 +2168,7 @@ private:
     // rest of its row (set_match_band_precheck). A choice between two
     // computations of the same values, so it is not run state either.
     bool match_band_precheck_ = true;
-    // deliver_intrabar_script's sub-bars and samples (R5 lane PERF-L1).
+    // deliver_intrabar_script's sub-bars and samples (the reused per-pump storage).
     // Scratch like match_rows_: cleared at every script bar, capacity only
     // between bars, never read across one, folded into nothing.
     std::vector<const Bar*> intrabar_sub_bars_;
@@ -2226,7 +2226,7 @@ private:
     bool bar_open_hook_ = true;
     bool precommit_hook_ = true;
     // pump_ambient's block, the block it covers while it is installed, and
-    // the switch and count (R5 lane D2-C). Library state held for one pump,
+    // the switch and count (the per-pump state cache). Library state held for one pump,
     // never run state, folded into nothing.
     internal::RuntimeAmbient ambient_{};
     internal::RuntimeAmbient* ambient_covered_ = nullptr;

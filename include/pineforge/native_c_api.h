@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * native_c_api.h — versioned C-level native host API (R5 lane L13).
+ * native_c_api.h — versioned C-level native host API (the versioned C host API).
  *
  * A host that is not written in C++ drives the kernel through this header:
  * it hands the runtime a callback table, runs a batch of bars, and submits,
@@ -1456,7 +1456,7 @@ typedef enum pf_native_anchored_trigger_e {
  *  sizeof that earlier caller's header compiled — and nothing past it is
  *  filled. A caller reads a field only below the presented `struct_size`.
  *
- *  The four session-day bytes after `quote_kind` (R5 lane F5) sit in what
+ *  The four session-day bytes after `quote_kind` (the kernel session-day integration) sit in what
  *  was the base layout's tail padding: its size and every offset before them
  *  are the ones a caller compiled against the first layout reads, so that
  *  caller keeps working unchanged, and a table of either length is handed
@@ -1510,7 +1510,7 @@ typedef struct pf_native_decision_v1 {
     uint8_t  opens_session_day;  /**< It opens its session day. */
     uint8_t  closes_session_day; /**< It closes its session day. */
 
-    /* ── The additive session tail (R5 lane F4). Presented to a callback
+    /* ── The additive session tail (the C policy-hook integration). Presented to a callback
      * table with the policy-hook tail or its successor; see above. ── */
     int64_t  script_interval_open_ms;             /**< The script interval's nominal origin. */
     int64_t  script_interval_eligible_open_ms;    /**< Its first in-session instant. */
@@ -1609,7 +1609,7 @@ typedef struct pf_native_applied_v1 {
  *     `reason` its #pf_native_group_effect_t, `closed_units` the deduction
  *     (applied, or deferred); 0 when it was absorbed -- too small to move the
  *     recipient's remaining units, or its pending total, in binary64, which
- *     stay as they were (R5 lane K-ULP5).
+ *     stay as they were (the absorbed-deduction rule).
  *   - QUANTITY_BOUND: `incarnation`, `opened_units` = the source units.
  *   - TERMS_RESOLVED: `raw_price`, `resolved_price` (= `price`), cursor fields.
  *   - MARGIN_CALL: `reason` is the #pf_native_side_t of the liquidated
@@ -1719,7 +1719,7 @@ typedef struct pf_native_working_v1 {
                                    *   trigger. */
     uint32_t reserved1;           /**< Always 0. */
 
-    /* ── The additive relation tail (R5 lane F4). Written only when
+    /* ── The additive relation tail (the C policy-hook integration). Written only when
      * `struct_size` is the current sizeof; see the struct note. ── */
     uint32_t anchor;              /**< #pf_native_anchor_t as the request stands. */
     uint32_t anchor_rounding;     /**< #pf_native_anchor_rounding_t, FROM_OWNER_FILL only. */
@@ -2219,7 +2219,7 @@ typedef struct pf_native_request_v1 {
     uint8_t  reserved2[7];        /**< Must be 0. The seed layout's own padding,
                                    *   named so the tail below starts where
                                    *   that layout's sizeof ended. */
-    /* ── The additive arm-relation tail (R5 lane F4). Read only when
+    /* ── The additive arm-relation tail (the C policy-hook integration). Read only when
      * `struct_size` is the current sizeof; a caller sending any earlier
      * layout stops above and keeps both defaults (AT_ARM_PRINT, OWNER_LOT),
      * which is what every child accepted before this tail already armed as.
@@ -2595,7 +2595,7 @@ typedef struct pf_native_callbacks_v1 {
      *  other value to close @p units of
      *  #pf_native_close_view_v1::scope_exposure_units. */
     int (*on_close_units)(void* user, const pf_native_close_view_v1* view, double* units);
-    /* ── The additive policy-hook tail (R5 lane F4). Read only when
+    /* ── The additive policy-hook tail (the C policy-hook integration). Read only when
      * `struct_size` is the policy layout or the current sizeof; a caller
      * sending an earlier layout stops at `on_close_units` (or at
      * `on_margin_call`) and gets the kernel's own answers for all four,
