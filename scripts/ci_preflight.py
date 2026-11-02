@@ -115,6 +115,8 @@ GKE_JOB_LABELS = {
     'corpus-parity.yml': {'corpus-parity': GKE_16_LABEL, 'corpus-parity-subset': GKE_8_LABEL},
     'native-live.yml': {'native-live': GKE_16_LABEL, 'native-live-shards': GKE_8_LABEL},
 }
+# The arm admission variant has its own exact inventory; main keeps the old one.
+GKE_PR_ARM_JOB_LABELS = {**GKE_JOB_LABELS['gke-pr.yml'], 'build-arm': GKE_ARM_LABEL}
 GKE_LIGHT_JOB_RUNNERS = {
     'ci-post.yml': dict.fromkeys(
         ('authz', 'changes', 'build-release-gate', 'build-debug-gate',
@@ -301,6 +303,7 @@ JOB_COMMANDS = {
     'docs.yml': {'authz': None, 'build': None},
     'docs-post.yml': {'authz': None, 'build': None},
 }
+GKE_PR_ARM_JOB_COMMANDS = {**JOB_COMMANDS['gke-pr.yml'], 'build-arm': VERIFY}
 # Exact hosted pins and bare GKE scale-set names, checked per job.
 # Historical name: this table also holds the exact GKE pins.
 HOSTED_JOB_RUNNERS = {
@@ -345,6 +348,8 @@ PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-arm': 'ARM_BUILD_RESULT',
               'corpus-parity-subset': 'PARITY_RESULT', 'corpus-parity': 'FULL_PARITY_RESULT'}
 PR_PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-debug': 'DEBUG_RESULT',
                  'corpus-parity-subset': 'PARITY_RESULT'}
+PR_ARM_PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-debug': 'DEBUG_RESULT',
+                     'build-arm': 'ARM_RESULT', 'corpus-parity-subset': 'PARITY_RESULT'}
 HEAVY_JOBS = frozenset(('sanitizers', 'kernel-only', 'native-live', 'corpus-parity'))
 AUTHZ_SUCCESS = "${{ needs.authz.result == 'success' }}"
 AUTHZ_ALWAYS = "${{ always() && needs.authz.result == 'success' }}"
@@ -375,6 +380,8 @@ ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error \
 GKE_PROOF_IF = ("${{ needs.admit.outputs.allowed == 'true' && "
                 "needs.admit.outputs.docs_only != 'true' && "
                 "needs.admit.outputs.github_only != 'true' }}")
+GKE_ARM_PROOF_IF = GKE_PROOF_IF.replace(
+    ' }}', " && needs.admit.outputs.arm_relevant == 'true' }}")
 GKE_PREFLIGHT_TIER = ("${{ (needs.admit.outputs.docs_only == 'true' || "
                       "needs.admit.outputs.github_only == 'true') && 'github-only' || 'fast' }}")
 GKE_IDENTITY_RUN = ' '.join(r'''|
@@ -446,6 +453,64 @@ GKE_RESULT_STEP = '''      - name: Require an independently consistent successfu
           test "$PREFLIGHT_RESULT" = success || fail "preflight did not pass"
           test "$SECOND_DOCS_ONLY" = "$ADMIT_DOCS_ONLY" || fail "docs-only classification changed"
           test "$SECOND_GITHUB_ONLY" = "$ADMIT_GITHUB_ONLY" || fail "github-only classification changed"
+          test "$CODE_EXTENSION" != true || {
+            test "$ADMIT_DOCS_ONLY" != true || fail "code extension vetoed docs-only classification"
+            test "$ADMIT_GITHUB_ONLY" != true || fail "code extension vetoed github-only classification"
+          }
+          if test "$ADMIT_DOCS_ONLY" = true || test "$ADMIT_GITHUB_ONLY" = true; then
+            test "$LEGS_RESULT" = skipped || fail "proof legs were not skipped for a classified documentation class"
+          else
+            test "$LEGS_RESULT" = success || fail "proof legs did not pass"
+          fi
+'''
+# Verbatim #701 gate bodies. The old bodies above remain the OLD variant.
+GKE_ARM_LEGS_STEP = '''      - name: Require every proof leg
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          DEBUG_RESULT: ${{ needs.build-debug.result }}
+          ARM_RESULT: ${{ needs.build-arm.result }}
+          ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}
+          PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
+        run: |
+          set -euo pipefail
+          arm_passed() {
+            case "$1:$2" in
+              true:success|false:success|false:skipped) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          test "$BUILD_RESULT" = success
+          test "$DEBUG_RESULT" = success
+          arm_passed "$ARM_RELEVANT" "$ARM_RESULT"
+          test "$PARITY_RESULT" = success
+'''
+GKE_ARM_RESULT_STEP = '''      - name: Require an independently consistent successful result
+        if: always()
+        env:
+          ADMIT_RESULT: ${{ needs.admit.result }}
+          ALLOWED: ${{ needs.admit.outputs.allowed }}
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          LEGS_RESULT: ${{ needs.legs.result }}
+          ADMIT_DOCS_ONLY: ${{ needs.admit.outputs.docs_only }}
+          ADMIT_GITHUB_ONLY: ${{ needs.admit.outputs.github_only }}
+          ADMIT_ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}
+          SECOND_DOCS_ONLY: ${{ steps.second-classify.outputs.docs_only }}
+          SECOND_GITHUB_ONLY: ${{ steps.second-classify.outputs.github_only }}
+          SECOND_ARM_RELEVANT: ${{ steps.second-classify.outputs.arm_relevant }}
+          CODE_EXTENSION: ${{ steps.veto.outputs.code_extension }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=gke-pr result::$1"; exit 1; }
+          test "$ADMIT_RESULT" = success || fail "admission refused"
+          test "$ALLOWED" = true || fail "admission did not allow the head"
+          test "$PREFLIGHT_RESULT" = success || fail "preflight did not pass"
+          test "$SECOND_DOCS_ONLY" = "$ADMIT_DOCS_ONLY" || fail "docs-only classification changed"
+          test "$SECOND_GITHUB_ONLY" = "$ADMIT_GITHUB_ONLY" || fail "github-only classification changed"
+          test "$SECOND_ARM_RELEVANT" = "$ADMIT_ARM_RELEVANT" || fail "arm relevance classification changed"
+          case "$ADMIT_ARM_RELEVANT" in
+            true|false) ;;
+            *) fail "arm relevance classification is unanswered" ;;
+          esac
           test "$CODE_EXTENSION" != true || {
             test "$ADMIT_DOCS_ONLY" != true || fail "code extension vetoed docs-only classification"
             test "$ADMIT_GITHUB_ONLY" != true || fail "code extension vetoed github-only classification"
@@ -1620,6 +1685,11 @@ def trusted_cache_findings(sources: dict[str, str]) -> list[str]:
     return findings
 
 
+def _gke_pr_arm_variant(name: str, jobs: dict[str, str]) -> bool:
+    """Select all NEW rules together, only for the defined build-arm job."""
+    return name == 'gke-pr.yml' and 'build-arm' in jobs
+
+
 def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list[str]:
     """Rules that bind the hosted admission workflow to the reviewed shape."""
     findings = []
@@ -1640,8 +1710,11 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
     if not re.search(r'(?m)^permissions:\s*\{\s*\}\s*$', workflow):
         findings.append(f'{name}: top-level permissions must be empty')
     jobs = _jobs(workflow)
-    required = {'admit', 'preflight', 'build', 'build-debug',
-                'corpus-parity-subset', 'legs', 'result'}
+    arm_variant = _gke_pr_arm_variant(name, jobs)
+    proofs = PR_ARM_PROOF_JOBS if arm_variant else PR_PROOF_JOBS
+    legs_step = GKE_ARM_LEGS_STEP if arm_variant else GKE_LEGS_STEP
+    result_template = GKE_ARM_RESULT_STEP if arm_variant else GKE_RESULT_STEP
+    required = {'admit', 'preflight', *proofs, 'legs', 'result'}
     if not required <= set(jobs):
         findings.append(f'{name}: required jobs are missing')
     if set(jobs) != required:
@@ -1685,7 +1758,7 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
                     'github.event.' in value or 'github.head_ref' in value
                     for value in _step_values(step, 'script') + _step_block(step, 'script')):
                 findings.append(f'{name} job {job} github-script must pass PR values through env')
-    expected = GKE_JOB_RUNNERS.get(name, {})
+    expected = GKE_PR_ARM_JOB_LABELS if arm_variant else GKE_JOB_RUNNERS.get(name, {})
     for job, label in expected.items():
         actual = _job_values(jobs.get(job, ''), 'runs-on', unquote=False)
         if actual != [label]:
@@ -1697,12 +1770,15 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
                     for label, count in counts.items() if count > 8)
     admit_steps = steps.get('admit', [])
     admit = jobs.get('admit', '')
-    if _job_block(admit, 'outputs') != [
+    expected_outputs = [
             '    outputs:', '      allowed: ${{ steps.allowed.outputs.allowed }}',
             '      base_sha: ${{ steps.identity.outputs.base_sha }}',
             '      head_sha: ${{ steps.identity.outputs.head_sha }}',
             '      docs_only: ${{ steps.classify.outputs.docs_only }}',
-            '      github_only: ${{ steps.classify.outputs.github_only }}']:
+            '      github_only: ${{ steps.classify.outputs.github_only }}']
+    if arm_variant:
+        expected_outputs.append('      arm_relevant: ${{ steps.classify.outputs.arm_relevant }}')
+    if _job_block(admit, 'outputs') != expected_outputs:
         findings.append(f'{name} admit must publish only the base classifier outputs')
     classify = _step_named(admit_steps, '        id: classify')
     if (_step_values(classify, 'run') != [
@@ -1760,10 +1836,11 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
             or _job_values(identity_env, 'HEAD_IS_FORK') != [
                 '${{ toJSON(github.event.pull_request.head.repo.fork) }}']):
         findings.append(f'{name} admit must refuse drafts and stale or unauthorized identities')
-    for job in ('preflight', 'build', 'build-debug', 'corpus-parity-subset'):
+    for job in ('preflight', *proofs):
         body = jobs.get(job, '')
         condition = ("${{ needs.admit.outputs.allowed == 'true' }}"
-                     if job == 'preflight' else GKE_PROOF_IF)
+                     if job == 'preflight' else
+                     GKE_ARM_PROOF_IF if job == 'build-arm' else GKE_PROOF_IF)
         if (_needs(body) != ['admit'] or _job_values(body, 'if') != [condition]):
             findings.append(f'{name} {job} must follow admission and keep its path policy')
         if _job_block(body, 'strategy') or _job_values(body, 'strategy'):
@@ -1792,6 +1869,37 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
                 '| sudo apt-get update sudo DEBIAN_FRONTEND=noninteractive apt-get install -y '
                 'libeigen3-dev tzdata-legacy ccache']):
             findings.append(f'{name} {job} must install only its smoke dependencies')
+    if arm_variant:
+        arm_steps = steps.get('build-arm', [])
+        arm_names = ('Require the arm64 machine', 'Checkout the admitted head', 'Set up Python',
+                     'Install the CTest pytest runner', 'Install dependencies (Linux)', 'Verify Debug')
+        if [_step_values(step, 'name') for step in arm_steps] != [[name] for name in arm_names]:
+            findings.append(f'{name} build-arm must keep its full Debug setup')
+        arm_machine = _step_named(arm_steps, '      - name: Require the arm64 machine')
+        if (_step_values(arm_machine, 'run') != ['| test "$(uname -m)" = aarch64']
+                or _step_values(arm_machine, 'if')):
+            findings.append(f'{name} build-arm must fail unless the machine is aarch64')
+        arm_python = _step_named(arm_steps, '      - name: Set up Python')
+        debug_python = _step_named(steps.get('build-debug', []), '      - name: Set up Python')
+        if not arm_python or _code(arm_python) != _code(debug_python):
+            findings.append(f'{name} build-arm must use the same pinned Python setup as build-debug')
+        arm_pytest = _step_named(arm_steps, '      - name: Install the CTest pytest runner')
+        if (_step_values(arm_pytest, 'run') != [
+                '| python3 -m pip install --disable-pip-version-check --no-input \\ '
+                "--require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt"]
+                or _step_values(arm_pytest, 'if')):
+            findings.append(f'{name} build-arm must install the hash-pinned CTest pytest runner')
+        arm_install = _step_named(arm_steps, '      - name: Install dependencies (Linux)')
+        if (_step_values(arm_install, 'run') != [
+                '| sudo apt-get update sudo DEBIAN_FRONTEND=noninteractive apt-get install -y '
+                'libeigen3-dev tzdata-legacy ccache strace']
+                or _step_values(arm_install, 'if')):
+            findings.append(f'{name} build-arm must install its full Debug dependencies')
+        arm_verify = _step_named(arm_steps, '      - name: Verify Debug')
+        if (_step_values(arm_verify, 'run') != [
+                f'| python3 scripts/ci_verify.py debug --build-dir build --jobs {CORES} --ccache']
+                or _step_values(arm_verify, 'if')):
+            findings.append(f'{name} build-arm must run the complete Debug profile')
     subset = _step_named(steps.get('corpus-parity-subset', []),
                          '      - name: Check TradingView parity over the pull-request subset')
     if (_step_values(subset, 'run') != [f'{PARITY_COMMAND} --subset']
@@ -1799,14 +1907,14 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
         findings.append(f'{name} corpus-parity-subset must run its unconditional inline subset command')
     legs = jobs.get('legs', '')
     legs_if = GKE_PROOF_IF.replace('${{ ', '${{ always() && ', 1)
-    if (_needs(legs) != ['admit', 'build', 'build-debug', 'corpus-parity-subset']
+    if (_needs(legs) != ['admit', *proofs]
             or _job_values(legs, 'if') != [legs_if]
-            or [_code(step) for step in steps.get('legs', [])] != [_code(GKE_LEGS_STEP)]):
+            or [_code(step) for step in steps.get('legs', [])] != [_code(legs_step)]):
         findings.append(f'{name} legs must require every selected proof')
     result_step = _step_named(steps.get('result', []),
                               '      - name: Require an independently consistent successful result')
     if (_job_values(jobs.get('result', ''), 'if') != ['always()']
-            or _code(result_step) != _code(GKE_RESULT_STEP)):
+            or _code(result_step) != _code(result_template)):
         findings.append(f'{name} result must require admission, preflight and consistent proof results')
     if not admit_steps or 'id: allowed' not in admit_steps[-1] \
             or 'allowed=true' not in admit_steps[-1] \
@@ -1824,7 +1932,7 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
                 if (_job_values(inputs, 'repository') != ['${{ github.repository }}']
                         or _job_values(inputs, 'ref') != [ref]):
                     findings.append(f'{name} {job} checkout must use the base tree')
-    for job in ('preflight', 'build', 'build-debug', 'corpus-parity-subset'):
+    for job in ('preflight', *proofs):
         if job not in jobs:
             continue
         checkout_steps = [step for step in steps[job]
@@ -2567,8 +2675,14 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             findings.append(f'{name} is reachable from pull_request and must not contain GKE routing')
         if _LARGER_RUNNER_KEY.search(code):
             findings.append(f'{name} must not define a larger_runner key; use the GCP fleet or hosted exceptions')
-        timed = JOB_COMMANDS.get(name, {})
-        fixed_hosted = {job: label for job, label in HOSTED_JOB_RUNNERS.get(name, {}).items()
+        jobs = _jobs(workflow)
+        arm_variant = _gke_pr_arm_variant(name, jobs)
+        timed = GKE_PR_ARM_JOB_COMMANDS if arm_variant else JOB_COMMANDS.get(name, {})
+        gke_pins = GKE_PR_ARM_JOB_LABELS if arm_variant else GKE_JOB_RUNNERS.get(name, {})
+        hosted_pins = HOSTED_JOB_RUNNERS.get(name, {})
+        if arm_variant:
+            hosted_pins = {**hosted_pins, **gke_pins}
+        fixed_hosted = {job: label for job, label in hosted_pins.items()
                         if label == 'ubuntu-24.04' or name == 'gke-pr.yml'
                         or (routes[name] & POST_EVENTS and 'pull_request' not in routes[name])}
         if _LARGER_RUNNER_LABEL.search(code):
@@ -2595,11 +2709,11 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             findings.append(f'{name} must not admit untrusted caller events to isolated release jobs')
         if _unparsed(workflow):
             findings.append(f'{name} has jobs lines the runner contract cannot read')
-        jobs = _jobs(workflow)
-        findings += [f'{name} is missing job {job}' for job in pinned if job not in jobs]
+        findings += [f'{name} is missing job {job}' for job in pinned
+                     if job not in jobs]
         for job, body in jobs.items():
             runs_on, uses = _job_values(body, 'runs-on'), _job_values(body, 'uses')
-            gke_pin = GKE_JOB_RUNNERS.get(name, {}).get(job)
+            gke_pin = gke_pins.get(job)
             resolved_runners, _ = _resolved_runner_values(workflow, body)
             has_gke = bool(_GKE_ROUTE.search(' '.join(runs_on + resolved_runners)))
             raw_runners = _job_values(body, 'runs-on', unquote=False)

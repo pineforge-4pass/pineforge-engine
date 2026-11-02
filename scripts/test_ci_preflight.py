@@ -6329,6 +6329,8 @@ finally:
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
         step = root / 'classify.sh'
+        announce_compare_fixture_paths(
+            ROOT / '.github/workflows/ci-post.yml', ROOT / 'scripts/ci_docs_only.py', step)
         step.write_text(job_script(self.ci_sources()[6], 'changes', 'Classify the change'))
         git_env = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
                    'GIT_AUTHOR_NAME': 'ci', 'GIT_AUTHOR_EMAIL': 'ci@example.invalid',
@@ -6340,6 +6342,9 @@ finally:
 
         def classify(name, base_files, change):
             repo = root / name
+            announce_compare_fixture_paths(
+                repo, step, *(repo / path for path in {**base_files, **change}),
+                root / f'{name}-temp', root / f'{name}-output')
             repo.mkdir()
             run = lambda *args: subprocess.run(['git', '-C', str(repo), *args], check=True,
                                                capture_output=True, text=True,
@@ -6365,11 +6370,11 @@ finally:
 
         page = {'docs/ci.md': 'new\n'}
         answer, _ = classify('docs', {'scripts/ci_docs_only.py': rule, 'docs/ci.md': 'old\n'}, page)
-        self.assertEqual(answer, 'docs_only=true\ngithub_only=false\n')
+        self.assertEqual(answer, 'docs_only=true\ngithub_only=false\narm_relevant=false\n')
         # A change that breaks the rule is judged by the rule it breaks.
         answer, out = classify('rule', {'scripts/ci_docs_only.py': rule, 'docs/ci.md': 'old\n'},
                                {'scripts/ci_docs_only.py': broken, 'src/engine.cpp': 'int x;\n', **page})
-        self.assertEqual(answer, 'docs_only=false\ngithub_only=false\n', out)
+        self.assertEqual(answer, 'docs_only=false\ngithub_only=false\narm_relevant=true\n', out)
         self.assertIn('scripts/ci_docs_only.py', out)
         # A base without the rule runs every job.
         answer, out = classify('bare', {'docs/ci.md': 'old\n'}, {'scripts/ci_docs_only.py': rule, **page})
@@ -9182,6 +9187,397 @@ print(json.dumps(fixture["response"] if not requests else {"files": None}))
                     self.assertIn(
                         f'gke-pr.yml {job} must read the immutable compare list independently',
                         gke_admit_workflow_findings(self.workflow_with_reader(job, mutated)))
+
+
+class GkeArmAdmissionVariantTests(unittest.TestCase):
+    """Run real rules over main and the complete, independently built #701 hunk."""
+
+    WORKFLOW = ROOT / '.github/workflows/gke-pr.yml'
+    # Verbatim job from #701, commit 26b7e2e36d6e95268b956e54766521a7571ca3c4.
+    ARM_JOB = r'''  build-arm:
+    needs: [admit]
+    if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' && needs.admit.outputs.arm_relevant == 'true' }}
+    runs-on: gke-16cpu-32gb-arm64
+    permissions: {contents: read}
+    steps:
+      - name: Require the arm64 machine
+        run: |
+          test "$(uname -m)" = aarch64
+      - name: Checkout the admitted head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ needs.admit.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install the CTest pytest runner
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-input \
+            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
+      - name: Install dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache strace
+      - name: Verify Debug
+        run: |
+          python3 scripts/ci_verify.py debug --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
+
+'''
+
+    def setUp(self) -> None:
+        announce_compare_fixture_paths(self.WORKFLOW)
+        self.original = self.WORKFLOW.read_text(encoding='utf-8')
+        self.assertNotIn('build-arm', _jobs(self.original))
+        marker = '  corpus-parity-subset:\n'
+        self.assertEqual(self.original.count(marker), 1)
+        self.workflow = self.original.replace(marker, self.ARM_JOB + marker, 1)
+        self.assertEqual(set(_jobs(self.workflow)), set(_jobs(self.original)) | {'build-arm'})
+        self.assertEqual(self.workflow.replace(self.ARM_JOB, '', 1), self.original)
+        # The remaining verbatim #701 workflow hunks; never use checker templates
+        # to build this positive fixture.
+        self.workflow = in_job(
+            self.workflow, 'admit',
+            '      github_only: ${{ steps.classify.outputs.github_only }}\n',
+            '      github_only: ${{ steps.classify.outputs.github_only }}\n'
+            '      arm_relevant: ${{ steps.classify.outputs.arm_relevant }}\n')
+        self.workflow = in_job(
+            self.workflow, 'legs',
+            '    needs: [admit, build, build-debug, corpus-parity-subset]\n',
+            '    needs: [admit, build, build-debug, build-arm, corpus-parity-subset]\n')
+        self.workflow = in_step(
+            self.workflow, 'legs', 'Require every proof leg',
+            '          DEBUG_RESULT: ${{ needs.build-debug.result }}\n',
+            '          DEBUG_RESULT: ${{ needs.build-debug.result }}\n'
+            '          ARM_RESULT: ${{ needs.build-arm.result }}\n'
+            '          ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}\n')
+        self.workflow = in_step(
+            self.workflow, 'legs', 'Require every proof leg',
+            '          set -euo pipefail\n',
+            '          set -euo pipefail\n'
+            '          arm_passed() {\n'
+            '            case "$1:$2" in\n'
+            '              true:success|false:success|false:skipped) return 0 ;;\n'
+            '              *) return 1 ;;\n'
+            '            esac\n'
+            '          }\n')
+        self.workflow = in_step(
+            self.workflow, 'legs', 'Require every proof leg',
+            '          test "$DEBUG_RESULT" = success\n',
+            '          test "$DEBUG_RESULT" = success\n'
+            '          arm_passed "$ARM_RELEVANT" "$ARM_RESULT"\n')
+        self.workflow = in_job(
+            self.workflow, 'result',
+            '          ADMIT_GITHUB_ONLY: ${{ needs.admit.outputs.github_only }}\n',
+            '          ADMIT_GITHUB_ONLY: ${{ needs.admit.outputs.github_only }}\n'
+            '          ADMIT_ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}\n')
+        self.workflow = in_job(
+            self.workflow, 'result',
+            '          SECOND_GITHUB_ONLY: ${{ steps.second-classify.outputs.github_only }}\n',
+            '          SECOND_GITHUB_ONLY: ${{ steps.second-classify.outputs.github_only }}\n'
+            '          SECOND_ARM_RELEVANT: ${{ steps.second-classify.outputs.arm_relevant }}\n')
+        self.workflow = in_step(
+            self.workflow, 'result', 'Require an independently consistent successful result',
+            '          test "$SECOND_GITHUB_ONLY" = "$ADMIT_GITHUB_ONLY" || fail "github-only classification changed"\n',
+            '          test "$SECOND_GITHUB_ONLY" = "$ADMIT_GITHUB_ONLY" || fail "github-only classification changed"\n'
+            '          test "$SECOND_ARM_RELEVANT" = "$ADMIT_ARM_RELEVANT" || fail "arm relevance classification changed"\n'
+            '          case "$ADMIT_ARM_RELEVANT" in\n'
+            '            true|false) ;;\n'
+            '            *) fail "arm relevance classification is unanswered" ;;\n'
+            '          esac\n')
+
+    def admission_findings(self, workflow: str, *, whole_tree: bool = False,
+                           others: dict[str, str] | None = None) -> list[str]:
+        with tempfile.TemporaryDirectory() as fetched:
+            directory = Path(fetched)
+            copies = ('.github/actionlint.yaml', '.github/actions/setup-live-curl/action.yml')
+            workflows = {}
+            if whole_tree:
+                paths = sorted(path for path in (ROOT / '.github/workflows').iterdir()
+                               if path.suffix in ('.yml', '.yaml'))
+                announce_compare_fixture_paths(*paths)
+                workflows = {path.name: path.read_text(encoding='utf-8') for path in paths}
+            workflows.update({'gke-pr.yml': workflow, **(others or {})})
+            targets = [directory / relative for relative in copies]
+            targets += [directory / '.github/workflows' / name for name in workflows]
+            announce_compare_fixture_paths(
+                directory, *(ROOT / relative for relative in copies), *targets)
+            for target in targets:
+                target.parent.mkdir(parents=True, exist_ok=True)
+            for relative in copies:
+                shutil.copyfile(ROOT / relative, directory / relative)
+            for name, text in workflows.items():
+                (directory / '.github/workflows' / name).write_text(text, encoding='utf-8')
+            return admit_rule_findings(directory, run_actionlint=False)
+
+    def assert_arm_refused(self, changed: str, runner: list[str], *,
+                           shape: tuple[str, ...] = (), baseline: str | None = None) -> None:
+        original = self.workflow if baseline is None else baseline
+        self.assertNotEqual(changed, original)
+        self.assertEqual(gke_admit_workflow_findings(changed), list(shape))
+        self.assertEqual(ci_preflight.runner_findings({'gke-pr.yml': changed}), runner)
+        self.assertEqual(self.admission_findings(changed), [*shape, *runner])
+
+    def test_complete_701_workflow_hunk_is_admitted(self) -> None:
+        # Against 2cbf75ba this reports all seven actual admission findings.
+        self.assertEqual(self.admission_findings(self.workflow), [])
+        self.assertEqual(gke_admit_workflow_findings(self.workflow), [])
+        self.assertEqual(ci_preflight.runner_findings({'gke-pr.yml': self.workflow}), [])
+
+    def test_main_without_arm_job_is_still_admitted(self) -> None:
+        self.assertEqual(gke_admit_workflow_findings(self.original), [])
+        self.assertEqual(ci_preflight.runner_findings({'gke-pr.yml': self.original}), [])
+        self.assertEqual(self.admission_findings(self.original), [])
+
+    def test_both_variants_pass_rules_over_all_real_workflows(self) -> None:
+        # Include the real post call graph, reusable edges and per-label cap.
+        for variant, workflow in (('OLD', self.original), ('NEW', self.workflow)):
+            with self.subTest(variant=variant):
+                self.assertEqual(self.admission_findings(workflow, whole_tree=True), [])
+
+    def test_extra_unnamed_job_is_refused_in_each_variant(self) -> None:
+        extra = ('\n  extra-proof:\n'
+                 '    runs-on: ["self-hosted","pf-gcp-pr"]\n'
+                 '    permissions: {contents: read}\n'
+                 '    steps:\n      - run: "true"\n')
+        for variant, original in (('OLD', self.original), ('NEW', self.workflow)):
+            with self.subTest(variant=variant):
+                self.assert_arm_refused(original + extra, [
+                    'gke-pr.yml job extra-proof needs a pinned runner and time limit',
+                ], shape=('gke-pr.yml must keep only its admitted PR jobs',), baseline=original)
+
+    def test_arm_output_without_job_is_refused(self) -> None:
+        changed = in_job(
+            self.original, 'admit',
+            '      github_only: ${{ steps.classify.outputs.github_only }}\n',
+            '      github_only: ${{ steps.classify.outputs.github_only }}\n'
+            '      arm_relevant: ${{ steps.classify.outputs.arm_relevant }}\n')
+        self.assert_arm_refused(changed, [], baseline=self.original, shape=(
+            'gke-pr.yml admit must publish only the base classifier outputs',))
+
+    def test_arm_job_without_new_outputs_and_gates_is_refused(self) -> None:
+        marker = '  corpus-parity-subset:\n'
+        changed = self.original.replace(marker, self.ARM_JOB + marker, 1)
+        self.assert_arm_refused(changed, [], baseline=self.original, shape=(
+            'gke-pr.yml admit must publish only the base classifier outputs',
+            'gke-pr.yml legs must require every selected proof',
+            'gke-pr.yml result must require admission, preflight and consistent proof results'))
+
+    def test_arm_job_removed_without_reverting_new_gates_is_refused(self) -> None:
+        changed = self.workflow.replace(self.ARM_JOB, '', 1)
+        self.assert_arm_refused(changed, [], shape=(
+            'gke-pr.yml admit must publish only the base classifier outputs',
+            'gke-pr.yml legs must require every selected proof',
+            'gke-pr.yml result must require admission, preflight and consistent proof results'))
+
+    def test_new_variant_requires_exact_classifier_outputs(self) -> None:
+        for replacement in (
+                '',
+                '      arm_relevant: true\n',
+                '      arm_relevant: ${{ steps.classify.outputs.arm_relevant }}\n'
+                '      arm_extra: ${{ steps.classify.outputs.arm_extra }}\n'):
+            with self.subTest(output=replacement):
+                changed = in_job(
+                    self.workflow, 'admit',
+                    '      arm_relevant: ${{ steps.classify.outputs.arm_relevant }}\n',
+                    replacement)
+                self.assert_arm_refused(changed, [], shape=(
+                    'gke-pr.yml admit must publish only the base classifier outputs',))
+
+    def test_arm_job_without_legs_need_is_refused(self) -> None:
+        changed = in_job(self.workflow, 'legs', 'build-debug, build-arm,', 'build-debug,')
+        self.assert_arm_refused(changed, [], shape=(
+            'gke-pr.yml legs must require every selected proof',))
+
+    def test_arm_job_without_arm_passed_check_is_refused(self) -> None:
+        changed = in_step(self.workflow, 'legs', 'Require every proof leg',
+                          '          arm_passed "$ARM_RELEVANT" "$ARM_RESULT"\n', '')
+        self.assert_arm_refused(changed, [], shape=(
+            'gke-pr.yml legs must require every selected proof',))
+
+    def test_old_result_with_new_legs_is_refused(self) -> None:
+        marker = '      - name: Require an independently consistent successful result'
+        old_step = ci_preflight._step_named(
+            ci_preflight._steps(_jobs(self.original)['result']), marker)
+        new_step = ci_preflight._step_named(
+            ci_preflight._steps(_jobs(self.workflow)['result']), marker)
+        self.assertTrue(old_step)
+        self.assertTrue(new_step)
+        changed = self.workflow.replace(new_step, old_step, 1)
+        self.assert_arm_refused(changed, [], shape=(
+            'gke-pr.yml result must require admission, preflight and consistent proof results',))
+
+    def test_old_legs_with_new_result_is_refused(self) -> None:
+        old_body = _jobs(self.original)['legs']
+        new_body = _jobs(self.workflow)['legs']
+        changed = self.workflow.replace('  legs:' + new_body, '  legs:' + old_body, 1)
+        self.assert_arm_refused(changed, [], shape=(
+            'gke-pr.yml legs must require every selected proof',))
+
+    def test_arm_steps_and_needs_cannot_be_extended(self) -> None:
+        for before, after, finding in (
+                ('    needs: [admit]\n', '    needs: [admit, preflight]\n',
+                 'gke-pr.yml build-arm must follow admission and keep its path policy'),
+                ('    steps:\n',
+                 '    strategy:\n      matrix:\n        replica: [1]\n    steps:\n',
+                 'gke-pr.yml build-arm must remain one fixed proof job'),
+                ('    steps:\n', '    steps:\n      - name: Extra proof\n        run: "true"\n',
+                 'gke-pr.yml build-arm must keep its full Debug setup')):
+            with self.subTest(change=after):
+                changed = in_job(self.workflow, 'build-arm', before, after)
+                self.assert_arm_refused(changed, [], shape=(finding,))
+
+    def test_arm_setup_and_gate_bypasses_are_refused(self) -> None:
+        for job, before, after, finding in (
+                ('build-arm', "arm_relevant == 'true'", "arm_relevant != 'true'",
+                 'gke-pr.yml build-arm must follow admission and keep its path policy'),
+                ('build-arm', 'scripts/ci_verify.py debug', 'scripts/ci_verify.py release',
+                 'gke-pr.yml build-arm must run the complete Debug profile'),
+                ('build-arm', 'test "$(uname -m)" = aarch64', 'test "$(uname -m)" = x86_64',
+                 'gke-pr.yml build-arm must fail unless the machine is aarch64'),
+                ('build-arm', '--require-hashes', '--no-deps',
+                 'gke-pr.yml build-arm must install the hash-pinned CTest pytest runner'),
+                ('build-arm', 'ccache strace', 'ccache',
+                 'gke-pr.yml build-arm must install its full Debug dependencies'),
+                ('build-arm', "python-version: '3.12'", "python-version: '3.11'",
+                 'gke-pr.yml build-arm must use the same pinned Python setup as build-debug'),
+                ('build-arm', 'ref: ${{ needs.admit.outputs.head_sha }}', 'ref: ${{ github.sha }}',
+                 'gke-pr.yml build-arm checkout must use the admitted immutable head'),
+                ('legs', 'true:success|false:success|false:skipped',
+                 'true:success|true:skipped|false:success|false:skipped',
+                 'gke-pr.yml legs must require every selected proof'),
+                ('result', 'steps.second-classify.outputs.arm_relevant',
+                 'needs.admit.outputs.arm_relevant',
+                 'gke-pr.yml result must require admission, preflight and consistent proof results')):
+            with self.subTest(job=job, change=after):
+                changed = in_job(self.workflow, job, before, after)
+                self.assert_arm_refused(changed, [], shape=(finding,))
+
+    def test_existing_required_jobs_stay_required(self) -> None:
+        for job, body in _jobs(self.original).items():
+            with self.subTest(job=job):
+                changed = self.original.replace(f'  {job}:' + body, '', 1)
+                self.assertNotEqual(changed, self.original)
+                self.assertIn(f'gke-pr.yml is missing job {job}',
+                              ci_preflight.runner_findings({'gke-pr.yml': changed}))
+
+    def test_unknown_second_arm_job_is_refused(self) -> None:
+        extra = self.ARM_JOB.replace('  build-arm:\n', '  build-arm-extra:\n', 1)
+        self.assert_arm_refused(self.workflow + extra, [
+            'gke-pr.yml job build-arm-extra may use GKE routing only at its exact pinned job and label',
+            'gke-pr.yml job build-arm-extra needs a pinned runner and time limit',
+            'gke-pr.yml job build-arm-extra must run on ["self-hosted","pf-gcp-pr"]',
+        ], shape=('gke-pr.yml must keep only its admitted PR jobs',))
+
+    def test_wrong_architecture_or_arm_size_is_refused(self) -> None:
+        for label in ('gke-16cpu-32gb-amd64', 'gke-8cpu-16gb-arm64'):
+            with self.subTest(label=label):
+                changed = in_job(self.workflow, 'build-arm', runner_declaration(GKE_ARM),
+                                 runner_declaration(label))
+                self.assert_arm_refused(changed, [
+                    'gke-pr.yml job build-arm may use GKE routing only at its exact pinned job and label',
+                    'gke-pr.yml job build-arm must run on gke-16cpu-32gb-arm64',
+                ], shape=('gke-pr.yml job build-arm must use gke-16cpu-32gb-arm64',))
+
+    def test_job_container_and_services_are_refused(self) -> None:
+        for declaration, finding in (
+                ('    container: ubuntu:24.04\n',
+                 'gke-pr.yml job build-arm must not declare a job container on GKE'),
+                ('    services:\n      redis:\n        image: redis:7\n',
+                 'gke-pr.yml job build-arm must not declare job services on GKE')):
+            with self.subTest(declaration=declaration):
+                changed = in_job(self.workflow, 'build-arm', '    steps:\n',
+                                 declaration + '    steps:\n')
+                self.assert_arm_refused(changed, [finding])
+
+    def test_credential_permissions_are_refused(self) -> None:
+        for permissions, credentials in (
+                ('{contents: read, id-token: write}', True),
+                ('{contents: read, id-token: read}', False),
+                ('write-all', True)):
+            with self.subTest(permissions=permissions):
+                changed = in_job(self.workflow, 'build-arm',
+                                 '    permissions: {contents: read}\n',
+                                 f'    permissions: {permissions}\n')
+                runner = ['gke-pr.yml job build-arm must not expose credentials on GKE']
+                if credentials:
+                    runner.append('gke-pr.yml job build-arm must keep production credentials '
+                                  'on a hosted standard runner')
+                shape = []
+                if 'id-token' in permissions:
+                    shape.append('gke-pr.yml: secrets, id-token and environment are refused')
+                shape.append('gke-pr.yml job build-arm must keep its read-only permissions')
+                self.assert_arm_refused(changed, runner, shape=tuple(shape))
+
+    def test_arm_secret_and_environment_are_refused(self) -> None:
+        for declaration in (
+                '    env:\n      ARM_TOKEN: ${{ secrets.ARM_TOKEN }}\n',
+                '    environment: production\n'):
+            with self.subTest(declaration=declaration):
+                changed = in_job(self.workflow, 'build-arm', '    steps:\n',
+                                 declaration + '    steps:\n')
+                self.assert_arm_refused(changed, [
+                    'gke-pr.yml job build-arm must not expose credentials on GKE',
+                    'gke-pr.yml job build-arm must keep production credentials on a hosted standard runner',
+                ], shape=('gke-pr.yml: secrets, id-token and environment are refused',))
+
+    def test_absent_timeouts_are_required_and_added_timeouts_are_refused(self) -> None:
+        arm = _jobs(self.workflow)['build-arm']
+        self.assertEqual(ci_preflight._job_values(arm, 'timeout-minutes'), [])
+        self.assertTrue(all(not ci_preflight._step_values(step, 'timeout-minutes')
+                            for step in ci_preflight._steps(arm)))
+        for minutes in (0, 1, 360):
+            for level in ('job', 'step'):
+                with self.subTest(minutes=minutes, level=level):
+                    if level == 'job':
+                        changed = in_job(self.workflow, 'build-arm', '    steps:\n',
+                                         f'    timeout-minutes: {minutes}\n    steps:\n')
+                    else:
+                        changed = in_step(self.workflow, 'build-arm', 'Verify Debug',
+                                          '        run: |\n',
+                                          f'        timeout-minutes: {minutes}\n        run: |\n')
+                    self.assert_arm_refused(changed, [
+                        'gke-pr.yml job build-arm must declare no timeout-minutes (owner #827)'])
+
+    def test_arm_job_in_another_workflow_is_refused(self) -> None:
+        other = ('on: workflow_dispatch\npermissions: {}\njobs:\n  admit:\n'
+                 '    runs-on: ["self-hosted","pf-gcp-post"]\n'
+                 '    permissions: {}\n    steps:\n      - run: true\n\n' + self.ARM_JOB)
+        expected = [
+            'other-gke.yml job build-arm must run on ["self-hosted","pf-gcp-post"] for post-merge events',
+            'other-gke.yml job build-arm may use GKE routing only at its exact pinned job and label',
+            'other-gke.yml job build-arm must run on ["self-hosted","pf-gcp-post"]',
+        ]
+        self.assertEqual(ci_preflight.runner_findings({'other-gke.yml': other}), expected)
+        self.assertEqual(self.admission_findings(
+            self.original, others={'other-gke.yml': other}), expected)
+
+    def test_non_bare_scalar_runner_forms_are_refused(self) -> None:
+        for runner in (f"'{GKE_ARM}'", f'[{GKE_ARM}]',
+                       f'["self-hosted","{GKE_ARM}"]',
+                       f'{{group: gke-runners, labels: {GKE_ARM}}}',
+                       f"${{{{ '{GKE_ARM}' }}}}"):
+            with self.subTest(runner=runner):
+                changed = in_job(self.workflow, 'build-arm', runner_declaration(GKE_ARM),
+                                 runner_declaration(runner))
+                findings = ['gke-pr.yml job build-arm must use a bare scalar GKE scale-set name']
+                if runner != f"'{GKE_ARM}'":
+                    findings.append('gke-pr.yml job build-arm may use GKE routing '
+                                    'only at its exact pinned job and label')
+                findings.append('gke-pr.yml job build-arm must run on gke-16cpu-32gb-arm64')
+                # Expressions and group mappings have their own YAML whitelist
+                # refusal; direct runner results isolate the scalar/pin contract.
+                self.assertNotEqual(changed, self.workflow)
+                self.assertEqual(ci_preflight.runner_findings({'gke-pr.yml': changed}), findings)
+                self.assertEqual(gke_admit_workflow_findings(changed), [
+                    'gke-pr.yml job build-arm must use gke-16cpu-32gb-arm64'])
+                if runner in (f"'{GKE_ARM}'", f'[{GKE_ARM}]',
+                              f'["self-hosted","{GKE_ARM}"]'):
+                    self.assertEqual(self.admission_findings(changed), [
+                        'gke-pr.yml job build-arm must use gke-16cpu-32gb-arm64', *findings])
 
 
 class GkeAdmissionRuleTests(unittest.TestCase):
