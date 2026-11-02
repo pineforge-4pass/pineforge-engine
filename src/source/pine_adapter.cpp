@@ -23667,7 +23667,9 @@ void PineExecutionAdapter::fill_pooc_close_entries(
             && !std::isfinite(row.exit_levels.stop);
         const bool pure_stop = finite_positive(row.exit_levels.stop)
             && !std::isfinite(row.exit_levels.limit);
-        if (!pure_limit && !pure_stop) continue;
+        const bool stop_limit = finite_positive(row.exit_levels.stop)
+            && finite_positive(row.exit_levels.limit);
+        if (!pure_limit && !pure_stop && !stop_limit) continue;
         const bool placed_flat = row.projection_position_side
             == static_cast<std::int32_t>(PositionSide::FLAT);
         const bool placed_against = row.projection_position_side
@@ -23699,6 +23701,11 @@ void PineExecutionAdapter::fill_pooc_close_entries(
                            : close_tick >= row.exit_levels.limit)
             : (row.is_long ? close_tick >= row.exit_levels.stop
                            : close_tick <= row.exit_levels.stop));
+        if (stop_limit && !(row.is_long ? close_tick <= row.exit_levels.limit
+                                       : close_tick >= row.exit_levels.limit)) {
+            if (at_close) (void)require_host().activate_current_stop_limit(handle);
+            continue;
+        }
         if (at_close) marketable.emplace_back(handle, row);
     }
     if (marketable.size() > 1) {
@@ -23735,7 +23742,8 @@ void PineExecutionAdapter::fill_pooc_close_entries(
         // bar_fill_price(bar.close): the raw close, nearest-tick rounded
         // (pine_fills.cpp:8038-8041); a limit fill is never slipped, a stop
         // fill is, after the rounding.
-        const bool stop_entry = finite_positive(row.exit_levels.stop);
+        const bool stop_entry = finite_positive(row.exit_levels.stop)
+            && !std::isfinite(row.exit_levels.limit);
         immediate.forced_execution_price = stop_entry && config_.slippage != 0
             ? nearest_tick(close_tick + (row.is_long ? 1.0 : -1.0)
                                * config_.slippage * tick, tick)

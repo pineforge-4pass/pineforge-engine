@@ -770,6 +770,10 @@ private:
     };
     std::optional<NativeCurrentRefusal> validate_current_execution(
         const BacktestEngine& engine, const NativeCurrentExecution& command) const;
+public:
+    std::optional<NativeCurrentRefusal> activate_current_stop_limit(
+        BacktestEngine& engine, const native_order::RequestHandle& target);
+private:
     NativeCoordinate current_execution_coordinate(uint64_t ordinal) const;
     double current_price(const BacktestEngine& engine, const native_order::LiveRequest& live,
                          NativeCurrentPriceRule rule) const;

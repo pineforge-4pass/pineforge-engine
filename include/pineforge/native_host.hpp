@@ -1123,6 +1123,12 @@ public:
     /// C spelling: strategy_native_execute_current_v1.
     NativeCurrentExecutionResult execute_current(const NativeCurrentExecution&);
 
+    /// Activate only the named pending stop-limit when its stop is reached by
+    /// the current quote. nullopt means activated or already live; a refusal
+    /// changes nothing. Does not execute the limit or evaluate other requests.
+    std::optional<NativeCurrentRefusal> activate_current_stop_limit(
+        const native_order::RequestHandle& target);
+
     /// Append one kernel-owned equity point at this host's report mark.
     /// Returns true only in a running KernelRecordedAtHostMarks run; false
     /// changes nothing. Call at the desired mark inside a native callback.
