@@ -1709,6 +1709,7 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
         findings.append(f'{name}: run-name must bind the PR number and head SHA')
     if not re.search(r'(?m)^permissions:\s*\{\s*\}\s*$', workflow):
         findings.append(f'{name}: top-level permissions must be empty')
+    # Admission also runs runner_findings, whose _unparsed check refuses quoted job keys.
     jobs = _jobs(workflow)
     arm_variant = _gke_pr_arm_variant(name, jobs)
     proofs = PR_ARM_PROOF_JOBS if arm_variant else PR_PROOF_JOBS
@@ -1871,6 +1872,11 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
             findings.append(f'{name} {job} must install only its smoke dependencies')
     if arm_variant:
         arm_steps = steps.get('build-arm', [])
+        if any(_CONTINUE_ON_ERROR.match(line) for line in _code(jobs['build-arm'])):
+            findings.append(f'{name} build-arm must not continue on error')
+        if any(_step_values(step, key) for step in arm_steps
+               for key in ('env', 'shell', 'working-directory')):
+            findings.append(f'{name} build-arm steps must not set env, shell or working-directory')
         arm_names = ('Require the arm64 machine', 'Checkout the admitted head', 'Set up Python',
                      'Install the CTest pytest runner', 'Install dependencies (Linux)', 'Verify Debug')
         if [_step_values(step, 'name') for step in arm_steps] != [[name] for name in arm_names]:

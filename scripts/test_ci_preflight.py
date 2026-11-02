@@ -9430,6 +9430,62 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
                 changed = in_job(self.workflow, 'build-arm', before, after)
                 self.assert_arm_refused(changed, [], shape=(finding,))
 
+    def test_arm_verify_must_not_continue_on_error(self) -> None:
+        changed = in_step(self.workflow, 'build-arm', 'Verify Debug', '        run: |\n',
+                          '        continue-on-error: true\n        run: |\n')
+        self.assert_arm_refused(changed, [], shape=(
+            'gke-pr.yml build-arm must not continue on error',))
+
+    def test_arm_job_must_not_continue_on_error(self) -> None:
+        changed = in_job(self.workflow, 'build-arm', '    steps:\n',
+                         '    continue-on-error: true\n    steps:\n')
+        self.assert_arm_refused(changed, [], shape=(
+            'gke-pr.yml build-arm must not continue on error',))
+
+    def test_arm_step_execution_overrides_are_refused(self) -> None:
+        for declaration in (
+                '        env:\n          CXX: clang++\n',
+                '        shell: bash\n',
+                '        working-directory: scripts\n'):
+            with self.subTest(declaration=declaration):
+                changed = in_step(self.workflow, 'build-arm', 'Verify Debug', '        run: |\n',
+                                  declaration + '        run: |\n')
+                self.assert_arm_refused(changed, [], shape=(
+                    'gke-pr.yml build-arm steps must not set env, shell or working-directory',))
+
+    def test_quoted_arm_job_key_keeps_exact_existing_refusals(self) -> None:
+        quoted = '  "build-arm":'
+        self.assertEqual(self.workflow.count('  build-arm:\n'), 1)
+        changed = self.workflow.replace('  build-arm:\n', quoted + '\n', 1)
+        self.assertNotEqual(changed, self.workflow)
+        self.assertNotIn('build-arm', _jobs(changed))
+        # The plain-key job reader folds this job into build-debug and selects OLD.
+        shape = [
+            'gke-pr.yml job build-debug must keep its read-only permissions',
+            'gke-pr.yml job build-debug must use gke-16cpu-32gb-amd64',
+            'gke-pr.yml admit must publish only the base classifier outputs',
+            'gke-pr.yml build-debug must follow admission and keep its path policy',
+            'gke-pr.yml build-debug must run its complete fast Debug smoke',
+            'gke-pr.yml build-debug must install only its smoke dependencies',
+            'gke-pr.yml legs must require every selected proof',
+            'gke-pr.yml result must require admission, preflight and consistent proof results',
+            'gke-pr.yml build-debug must have one head checkout',
+        ]
+        runner = [
+            'gke-pr.yml has jobs lines the runner contract cannot read',
+            'gke-pr.yml job build-debug must use a bare scalar GKE scale-set name',
+            'gke-pr.yml job build-debug may use GKE routing only at its exact pinned job and label',
+            'gke-pr.yml job build-debug must run on gke-16cpu-32gb-amd64',
+        ]
+        number = changed.splitlines().index(quoted) + 1
+        self.assertEqual(gke_admit_workflow_findings(changed), shape)
+        self.assertEqual(ci_preflight.runner_findings({'gke-pr.yml': changed}), runner)
+        self.assertEqual(self.admission_findings(changed), [
+            f'.github/workflows/gke-pr.yml:{number}: unsupported YAML construct in a workflow '
+            f'(quoted keys): rewrite it in plain block style; {quoted.strip()!r}',
+            *shape, *runner,
+        ])
+
     def test_arm_setup_and_gate_bypasses_are_refused(self) -> None:
         for job, before, after, finding in (
                 ('build-arm', "arm_relevant == 'true'", "arm_relevant != 'true'",
