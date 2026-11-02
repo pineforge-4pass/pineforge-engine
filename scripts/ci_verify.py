@@ -2596,11 +2596,21 @@ class Driver:
                 argv=['reuse-matching-receipt', str(output / 'receipt.json')])
             return 'reused'
         if not pinned_object_present(self.cfg.source, self.cfg.runner, commit):
-            fetch = ['git', '-C', str(self.cfg.source), 'fetch', '--no-tags', '--depth=1',
-                     'origin', commit]
-            fetched = self.invoke(fetch_stage, fetch)
-            if fetched.returncode != 0:
-                return 'failed'
+            import fcntl
+
+            git_dir = Path(subprocess.check_output(
+                ['git', '-C', str(self.cfg.source), 'rev-parse',
+                 '--path-format=absolute', '--git-common-dir'], text=True).strip())
+            # All pins share Git's shallow file, including linked worktrees.
+            # Keep this inode: unlinking it can split waiters across two locks.
+            with (git_dir / 'pineforge-provider-fetch.lock').open('a') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                if not pinned_object_present(self.cfg.source, self.cfg.runner, commit):
+                    fetch = ['git', '-C', str(self.cfg.source), 'fetch', '--no-tags', '--depth=1',
+                             'origin', commit]
+                    fetched = self.invoke(fetch_stage, fetch)
+                    if fetched.returncode != 0:
+                        return 'failed'
         # The preparer answers a missing private-fixture manifest with the
         # pinned SKIP literal and exit 77 -- the absent-overlay contract. That
         # is a skip only while the overlay is ABSENT: with

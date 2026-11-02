@@ -3371,7 +3371,7 @@ struct MarginScheduleSwitches {
     // its bar's path before the script: the open, both extremes, the close.
     // Ablate it together with close_call_follow_up_at_open: each corrects its
     // own bars, and with one off the other's equity error can flip a later
-    // one-lot boundary (NYSE:F 15 axealgo: 144 exact rows with this on and
+    // one-lot boundary (a third-party NYSE:F 15 strategy: 144 exact rows with this on and
     // the follow-up off, 169 with both off, 177 with both on).
     bool short_path_points = true;
     // After a short's call TradingView checks the book again at the call's

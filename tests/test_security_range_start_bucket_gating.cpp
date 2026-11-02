@@ -15,7 +15,7 @@
 //      opened Sun Mar 30 17:00 EDT straddles the range start and is dropped);
 //   M  first bar = April (opens Mon Mar 31 17:00 EDT); the March remainder is
 //      dropped.
-// heneralmomo25-selda-97ma's weekly EMA26 re-simulation reproduces TV 29/29
+// The weekly EMA probe's EMA26 re-simulation reproduces TV 29/29
 // only under exactly that weekly series (SMA-seeded from the Apr-6 week).
 //
 // With a range start on the bucket grid — 24x7 UTC midnight for intraday TFs
@@ -558,8 +558,8 @@ static void test_default_cut_oanda_1d_weekly() {
 // under the flag's epoch 04-01 00:00Z, the 1m feed from Sun 03-30: "W" and
 // "M" on a daily chart are the chart dailies aggregated (the implicit native
 // feed), whose in-progress week is labelled by its first in-range stamp
-// (04-01) -- the flag's bucket-open cut kept it as weekly bar 0 (hungpixi-
-// macd-enhanced-mtf, lab tv famp-sense-hp-btc1d: TradingView's weekly EMA26
+// (04-01) -- the flag's bucket-open cut kept it as weekly bar 0 (the
+// weekly MACD probe, lab tv famp-sense-hp-btc1d: TradingView's weekly EMA26
 // first reads on the 09-29 week, i.e. bar 0 is the 04-07 week). The week
 // that traded before the epoch is absent; April (opening exactly at the
 // epoch) and "D" (the chart's own timeframe) keep their first bar. The NSE

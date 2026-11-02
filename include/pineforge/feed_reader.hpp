@@ -31,7 +31,7 @@ public:
     }
 };
 
-struct FeedBar {
+struct FeedBarRow {
     Bar bar{};
     std::int64_t close_ms = 0;
 };
@@ -40,7 +40,7 @@ struct FeedBar {
 // copies nor takes ownership; the caller retains both arrays, unchanged, for
 // the reader's lifetime. Existing raw-array engine entry points keep their
 // existing ownership contracts.
-class BorrowedBarFeedReader final : public FeedReader<FeedBar> {
+class BorrowedBarFeedReader final : public FeedReader<FeedBarRow> {
 public:
     BorrowedBarFeedReader(const Bar* bars, const std::int64_t* close_ms,
                           std::size_t count)
@@ -49,14 +49,14 @@ public:
             throw std::invalid_argument("feed reader arrays");
     }
     std::size_t size() const noexcept override { return count_; }
-    void read(std::size_t first, FeedBar* destination,
+    void read(std::size_t first, FeedBarRow* destination,
               std::size_t count) const override {
         if (first > count_ || count > count_ - first)
             throw std::out_of_range("feed reader range");
         if (count && !destination)
             throw std::invalid_argument("feed reader destination");
         for (std::size_t i = 0; i < count; ++i)
-            destination[i] = FeedBar{bars_[first + i], close_ms_[first + i]};
+            destination[i] = FeedBarRow{bars_[first + i], close_ms_[first + i]};
     }
 private:
     const Bar* bars_;

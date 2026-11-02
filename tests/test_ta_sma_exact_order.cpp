@@ -4,7 +4,7 @@
 // Round 6 pinned the opposite: "ta.sma is a function of its window", an
 // exact-order re-sum so that chained SMA(3) rotation ties stayed exact and
 // ta.crossover could never fire on them. The round-7 family-D diagnosis
-// (jayentriken bbwp+stochRSI, BTC/EURUSD/F@15) showed that TradingView DOES
+// (the stochRSI probe, BTC/EURUSD/F@15) showed that TradingView DOES
 // fire ta.crossover on exactly those algebraic ties -- on ~half of the flat
 // descending ones, never on ascending ones -- decided by the sign of its own
 // k - d residue, and the synthetic tapes (scratchpad r7/pins/sma-pulse-*,

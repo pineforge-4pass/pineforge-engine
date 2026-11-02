@@ -745,7 +745,7 @@ public:
 // = qty_step*fill = 120), so TV REJECTS the entry at fill and it is silently
 // dropped — the account stays FLAT, no trade row. (Pre-gap-reject the engine
 // HELD the 10-lot fill exempt from the affordability trim; the rejection is
-// design-cntvxiao-gap-reject.)
+// the frozen-quantity gap probe.)
 static void test_zero_cost_frozen_all_in_true_flat_gap_is_rejected() {
     std::printf("test_zero_cost_frozen_all_in_true_flat_gap_is_rejected\n");
     std::vector<Bar> bars = {
@@ -2703,7 +2703,7 @@ static void test_flat_clears_and_raw_fresh_reuses_state() {
 // affordability): the 10-lot long is admitted at placement (10 * 100 = 1,000
 // == MTM 1,000) but the fill gaps to 120 (1,200 > 1,000), so TV drops the
 // ENTRY leg and executes only the reversal's closing leg (pin-afford-gapup;
-// rampatel BTC 2025-05-12 07:15Z). No long opens, so no opening-affordability
+// a BTC probe's later bar). No long opens, so no opening-affordability
 // nibble fires and the opening state stays clear. (This fixture used to
 // assert admit-then-nibble 4 of 10 at 120; that shape was never TV-pinned.)
 class ReversalOpeningProbe : public MCEngine {

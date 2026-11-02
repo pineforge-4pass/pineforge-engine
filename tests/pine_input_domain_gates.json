@@ -272,7 +272,7 @@
     "predicate": "Actual fill/mark/fee/grid and last-call receipt, no mode",
     "old": "    if (stream_mode_ || !(config_.slippage > 0) || !staged_.quantity_grid",
     "new": "    if (!(config_.slippage > 0) || !staged_.quantity_grid",
-    "window": "// at the 1.15584 close (lab tv tape tests/fixtures/margin_open_print\n// taili-mop-eur, 2025-04-21 08:45 UTC; lane TAIL-I).\nbool PineExecutionAdapter::margin_follow_up_scope() const noexcept {\n    if (!(config_.slippage > 0) || !staged_.quantity_grid\n        || !(*staged_.quantity_grid > 0.0)) {\n        return false;\n    }"
+    "window": "// fill, the next-point follow-up is 4 x 0.14 = 0.56 units on that lot grid\n// (the margin_open_print fixtures establish the follow-up rule).\nbool PineExecutionAdapter::margin_follow_up_scope() const noexcept {\n    if (!(config_.slippage > 0) || !staged_.quantity_grid\n        || !(*staged_.quantity_grid > 0.0)) {\n        return false;\n    }"
   },
   {
     "file": "src/source/pine_adapter.cpp",

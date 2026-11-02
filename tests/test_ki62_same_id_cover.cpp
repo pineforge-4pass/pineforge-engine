@@ -10,7 +10,7 @@
  * only behind the leg's reduction of an older lot of the id: an entry of
  * another id that fills while a position is open, with its own qty=1 exit
  * filling on that bar, closes one unit and leaves the rest of its lot to its
- * second exit (thulashimohanr's T1/T2 pair on a lot added beside a reversal
+ * second exit (the paired-bracket probe's T1/T2 pair on a lot added beside a reversal
  * lot). The engine closed the whole add at the first exit's price. Nor does
  * a leg cover when its FIFO fill reduced only another id's older lot: B's
  * qty=1 exit, filling on B's entry bar, closes one unit of A's lot and leaves
@@ -69,8 +69,8 @@ struct FeedBar {
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr double kLot = 0.0001;
 constexpr double kTick = 0.01;
-// The bar before every tape's first entry (2025-04-01 11:45 UTC).
-constexpr std::int64_t kTradeStartMs = 1743507000000LL;  // 2025-04-01 11:30 UTC
+// The bar before every tape's first entry.
+constexpr std::int64_t kTradeStartMs = 1743507000000LL;  // Immediately preceding bar.
 
 using Row = std::tuple<std::int64_t, bool, long long, long long, std::int64_t, long long>;
 

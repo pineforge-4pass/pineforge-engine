@@ -529,7 +529,7 @@ static int64_t compute_tf_close_ms(int64_t open_ms,
         // Intraday time_close is the EXACT bar-close boundary (== next bar's
         // open = open_ms + duration), NOT the last millisecond of the bar. TV's
         // time_close for a 15:15 15m bar is 15:30:00.000, so minute(time_close)
-        // == 30 (verified against vasudevshenoy-manoj-betrayed-me, whose
+        // == 30 (verified against the session-close probe, whose
         // `minute(time_close) >= 30` intraday session-close flatten fires 222
         // times in TV; the prior `- 1` gave 15:29:59.999 -> minute 29 -> the
         // flatten never fired). The calendar DAY/WEEK/MONTH branches below are
@@ -1871,7 +1871,7 @@ int64_t symbol_session_time_close(int64_t bar_ms, const std::string& tf,
 // floor. A VALID session argument defines the bar itself: the session's own
 // D/W/M bar in its timezone (session_argument_bar) -- `time("D",
 // "0000-2359", "America/New_York")` on a UTC crypto symbol rolls at New York
-// midnight (lukeborgerding-orb-avwap-retest anchors a manual VWAP on
+// midnight (the anchored-VWAP probe anchors a manual VWAP on
 // ta.change() of exactly that and only matches TV's tape 100% with the NY
 // roll, 18% with the symbol's UTC roll), and `time("D", "1700-2400")` on
 // OANDA:XAUUSD opens at 17:00 New York (w12-tfd-xau15). A timezone-looking

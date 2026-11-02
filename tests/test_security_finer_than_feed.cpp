@@ -201,7 +201,7 @@ void test_single_minute_input_aggregated_chart() {
 // claims the NEXT regular session's key, the key of the native bar after it.
 // The native bars are the partition (each routes [its timestamp, the next
 // one's)), so both keep their own slices; the split feed used to stop on the
-// duplicate identity -- where karmasantosh773-growwithcare-final-5s-master-
+// duplicate identity -- where the 5-second security-request
 // strategy on nifty-1d stopped once its "5S" sites stopped refusing.
 void test_after_close_muhurat_keeps_its_own_slice() {
     const int before = g_failures;

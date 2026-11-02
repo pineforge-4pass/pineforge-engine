@@ -19,30 +19,30 @@
  * path already drew FIFO across buckets; only the eligibility gate was
  * bucket-scoped, which is what makes the fix surgical.
  *
- * Ground truth — thulashimohanr-prev-day-week-levels-or-vwap-strategy,
- * ETH-USDT-USDT 15m (UTC). 2025-06-17 09:45 fills BOTH entry ids on one bar
- * (`Short` 2u + `ShortAdd` 2u = 4 units, 4 bracket legs priced off the same
- * 09:30 close). TV's CROSS-ASSIGNED exit labels are the direct proof:
+ * Ground truth — the paired-bracket probe,
+ * ETH-USDT-USDT 15m; synthetic book: BOTH entry ids fill on one bar
+ * (`Short` 2u + `ShortAdd` 2u = 4 units, 4 bracket legs priced off the
+ * prior close). CROSS-ASSIGNED exit labels illustrate the rule:
  *
- *   #127 06-17 14:45  T1 Exit   2525.91 q1   entry ▼ SHORT     (Short's leg,    Short unit)
- *   #128 06-17 14:45  Add T1    2525.91 q1   entry ▼ SHORT     <- ShortAdd's leg took a Short unit
- *   #129 06-17 16:45  T2 Exit   2465.91 q1   entry ▼+ ADD      <- Short's leg took a ShortAdd unit
- *   #130 06-17 16:45  Add T2    2465.91 q1   entry ▼+ ADD
- *                                            ==> 4 in, 4 out: TV is FLAT 16:45
+ *   first exit bar  T1 Exit   1500.00 q1   entry ▼ SHORT     (Short's leg,    Short unit)
+ *   first exit bar  Add T1    1500.00 q1   entry ▼ SHORT     <- ShortAdd's leg took a Short unit
+ *   later exit bar  T2 Exit   1450.00 q1   entry ▼+ ADD      <- Short's leg took a ShortAdd unit
+ *   later exit bar  Add T2    1450.00 q1   entry ▼+ ADD
+ *                                       ==> 4 in, 4 out: flat after the later exit bar
  *
  * The T1 pair drains BOTH `Short` units (engine agrees), orphaning `ShortT2`.
- * TV still fires it at 16:45; the engine Removed it and fired only `ShortAddT2`
- * — one unit instead of two. Identical at 2025-10-14 and 2026-01-14. Exactly 3
+ * TV still fires it later; the engine Removed it and fired only `ShortAddT2`
+ * — one unit instead of two. Assertions retain original tape inputs. Exactly 3
  * of the window's 12 two-id bars diverge: the 9 that exit all four legs on ONE
  * bar match, because no eligibility pass runs inside the orphaning window.
  *
  * Fix: replace bucket residency with position-cycle provenance
  * (cycle_filled_entry_ids_, cleared on flat / fresh open).
  *
- *   A. the 06-17 shape — all FOUR units exit, 2 at the T1 price and 2 at the
+ *   A. the two-exit-bar shape — all FOUR units exit, 2 at the T1 price and 2 at the
  *      T2 price, including the ORPHANED bucket's leg; engine flat afterwards.
  *      (RED pre-fix: 3 rows, 1 phantom unit left open.)
- *   B. the 06-18 shape — because A now reaches flat, the next day's same-id
+ *   B. the next-day shape — because A now reaches flat, the next day's same-id
  *      entry is ADMITTED. This is the p1 (monotone pyramiding counter)
  *      interaction pin: p1 asks the right question, and only D3 gives it the
  *      right position to ask it about.

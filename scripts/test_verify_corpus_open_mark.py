@@ -10,18 +10,18 @@ the trim window, the schedule aggregate and every percentile, and the P&L
 agreement is reported at TradingView's precision (cents) instead.
 
 Why the P&L must stay out of the aggregates: TV's Net PnL is rounded to
-cents and the engine's is exact (3commas-xlm #615: qty 0.0912, entry
-2189.13, mark 2261.44 -> TV 6.35, engine 6.351137). On the three 3commas
-grid bots (22/22/28 open lots) pnlP90 is scored by the fragmented-FIFO
+cents and the engine's is exact (synthetic XLM qty 0.1, entry 102.61, mark
+166.39, commission 0.1% per leg: 6.378 - 0.0269 = 6.3511 -> 6.35).
+For grid-bot probes with open lots, pnlP90 is scored by the fragmented-FIFO
 schedule path as ONE aggregate |sum(tv) - sum(eng)| / |sum(tv)|, and the
 marks' rounding summed into it moved the metric by itself (round 3,
-2026-09-02: 0.5536 -> 0.6675 on xlm with 21 of 22 marks exact to the cent).
+2026-09-02: 0.5536 -> 0.6675 on XLM despite the cent agreement of most marks).
 
 Why the exit must stay out: a reference Open row can carry the quote
-at recording time, not a bar's print — all 12 sampled OANDA:EURUSD registry
-tapes end with Open rows at 2026-05-01 08:00 (+8) @ 1.17256 while the
-feed's last bar is o 1.17289 h 1.17299 l 1.17282 c 1.1729; the engine's
-row is priced at that close, and the 0.029% is not parity information.
+at recording time, not a bar's print — a synthetic OANDA:EURUSD example:
+an Open row quotes 2.00000 while the final bar is
+o 2.00030 h 2.00050 l 1.99990 c 2.00040; the engine's
+row uses that close, and the 0.02% difference is not parity information.
 
 Unpaired marks are ordinary rows. A TV Open row the engine closed for real
 on an earlier bar keeps its exit/pnl deltas (TV held to the end, the
@@ -236,7 +236,7 @@ class OpenMarkPairTests(unittest.TestCase):
 
 # --- the grid-bot shape: the schedule aggregate ---------------------------
 #
-# A fragmented FIFO grid (the 3commas shape): entry E1 drains through two
+# A fragmented FIFO grid (the grid-bot probes' shape): entry E1 drains through two
 # exits and exit X2 closes quantity owned by E1 and E2, which is what sends
 # pnlP90 to the schedule path's one aggregate. E3 is half closed at X3 and
 # half still open at the range end (mark M). The interior carries one real

@@ -378,14 +378,14 @@ public:
     /// (set_early_close_completes(false)): TradingView surfaces a D/W/M
     /// value on the chart bar whose time_close reaches the period's
     /// nominal close, and the daily bar of an early-close day keeps its
-    /// nominal time_close -- on the OANDA:XAUUSD 1D chart the Fri
-    /// 2025-07-04 bar (data to 12:45 ET) still closes at 17:00 ET, so
-    /// request.security(tickerid, "W", x) advances on it (cW 3336.61, the
+    /// nominal time_close -- on the OANDA:XAUUSD 1D chart a Friday
+    /// daily bar whose feed ends early still closes at 17:00 ET, so
+    /// request.security(tickerid, "W", x) advances on it (synthetic cW 2500.00, the
     /// early close) exactly as on every regular Friday, and "D" is the
-    /// chart bar itself there and on Mon 2026-02-16 (14:15 early close);
-    /// on the 15m chart the 12:45 / 14:15 bar's own time_close falls short
+    /// chart bar itself there and on an early-closing Monday;
+    /// on the 15m chart the last intraday bar's own time_close falls short
     /// and the value waits for the next session's first bar (lab tv
-    /// oanda1d-{jul,feb,novm,decm} beside the oanda 15m pin, 2026-09-05).
+    /// daily-chart probes beside their intraday controls).
     /// So on an OTC stream a bucket the next input bar leaves completes on
     /// this input bar iff calling_close_ms reaches the period's nominal
     /// close (session_period_last_traded_close_ms); with 0 it waits, as

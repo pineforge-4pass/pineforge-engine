@@ -9,7 +9,7 @@
  * (gap-through, intrabar touch, delayed touch); it is never re-sized while
  * resting. Non-default sizing, limit and stop-limit shapes carry no snapshot.
  *
- * Rule, tapes (scratchpad/r7/pins/f15-stopsize-*) and the ahtisham decode:
+ * Rule, tapes (scratchpad/r7/pins/f15-stopsize-*) and the volatility-expansion stop probe:
  * PendingOrder::default_stop_placement_qty (engine.hpp) and
  * tests/test_default_pct_stop_sizing.cpp. Before this round the snapshot
  * was a next-open-only, all-in, margin-100 special case sized at the CLOSE;
@@ -309,10 +309,10 @@ void test_accepted_gap_dispatches_placement_quantity() {
 void test_one_step_favorable_gap_keeps_signal_close_lot() {
     std::printf("-- one-step favorable gap keeps signal-close lot --\n");
 
-    // Beyond-level short stop (4000 > 3988.94): market-sized at the close.
-    // Placement equity 13118.817086 and signal close 3988.94 floor to 3.2887
-    // contracts, while re-dividing at the next open 3988.93 produces 3.2888.
-    // TV exports 3.2887.
+    // Synthetic beyond-level short stop (126 > 125): market-sized at the close.
+    // Equity 125.005 / signal close 125.00 floors to 1.0000 contracts;
+    // re-dividing at 124.99 gives 1.0001. The frozen lot stays 1.0000.
+    // The assertions below keep the original inputs and quantity.
     Probe probe(QtyType::PERCENT_OF_EQUITY, 100.0, 100.0,
                 13118.817086);
     probe.is_long = false;
@@ -532,8 +532,8 @@ void test_scope_controls_remain_ordinary() {
 
     // Beyond-level short at pct 50: market-sized at the close, 50 =
     // floor(5000 / 100), fills the 110 open with 50 (5500 <= 10000) — not the
-    // 45.4545 a fill-time re-size at the open would open (the ahtisham 04-04
-    // 13:45Z 1,043 = floor(eq / tick(close)) shape).
+    // 45.4545 a fill-time re-size at the open would open (the stop probe's
+    // placement-sizing rule, illustrated synthetically by 50 = floor(5000 / 100)).
     Probe fractional(QtyType::PERCENT_OF_EQUITY, 50.0, 100.0);
     fractional.is_long = false;
     fractional.stop = 120.0;

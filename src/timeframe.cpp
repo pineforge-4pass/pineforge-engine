@@ -260,7 +260,7 @@ static int first_window_length_minutes(const std::string& session);
 /// EDT, the 17:00-21:00 bucket holding only the 18:00-20:45 bars -- and "45"
 /// buckets 21:00Z / 21:45Z / 22:30Z / 23:15Z; the 18:00 ET session-open
 /// anchor put them at 22:00Z / 02:00Z / ... and 22:00Z / 22:45Z / 23:30Z.
-/// Every 3commas-* XAUUSD DCA probe (request.security "240" RSI gate) shows
+/// Every third-party XAUUSD DCA probe (request.security "240" RSI gate) shows
 /// the same 17:00-ET grid on TV against the engine's 18:00-ET one, the DCA
 /// legs agreeing to 1e-6 once the grid does. The stamp is also where the
 /// symbol's D bar OPENS -- time("D") on OANDA:XAUUSD 15 reads 17:00 ET on
@@ -1373,7 +1373,7 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
             // feed: the 04-17 18:00Z bar ends 18:13Z), so neither the count
             // nor the real-end rule fires and the bucket waited for the
             // next chart bar's first auxiliary bar -- one chart bar late
-            // (masayanfx multi-time-score F@15: 20 '15', 6 '60' and 5 '240'
+            // (a third-party F@15 strategy: 20 '15', 6 '60' and 5 '240'
             // bars; lab tv famp-sense-f15full vs the engine trace,
             // 2026-09-05). The caller names the calling chart bar's nominal
             // close and the next input bar: when that next bar lies beyond
@@ -1611,8 +1611,8 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         // open after the 12:45 bar and a holiday Friday leaves the week open
         // after Thursday 15:45, so both completed lazily on Monday 09:30 --
         // one chart bar after TradingView, which finalizes a D/W/M bar on
-        // the period's LAST chart bar (lab tv wm-w-f15-nov, 2026-09-05: W
-        // close 13.28 on the 12:45 bar). A historical run holds its whole
+        // the period's LAST chart bar (synthetic example: W
+        // close 25.00 on the last intraday bar). A historical run holds its whole
         // feed, so the caller tells us where the next input bar lies: when
         // it opens a new period, this bar was the period's last. Declared
         // sessions only -- a data hole before a 24x7 midnight is a hole,
@@ -1630,10 +1630,10 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         // bar's time_close against the period's nominal close, and the
         // daily bar of that same early-close day keeps its nominal 17:00
         // ET time_close: on the OANDA:XAUUSD 1D chart "W" advances on the
-        // 07-04 daily bar (cW 3336.61, tW Sun 06-29 17:00) as on every
-        // regular Friday, "D" is the chart bar itself on 07-04 and on Mon
-        // 2026-02-16, and "M" completes on the month's last daily bar (lab
-        // tv oanda1d-{jul,feb,novm,decm}, 2026-09-05). So when the caller
+        // early-close daily bar (synthetic cW 2500.00) as on every
+        // regular Friday, "D" is the chart bar itself even on an
+        // early-closing Monday, and "M" completes on the month's last daily bar
+        // (the daily-chart probes establish the rule). So when the caller
         // names that close (the split-feed path: a finer auxiliary slice
         // under a native D/W/M chart bar), an OTC bucket the next input
         // bar leaves completes on this input bar iff the calling bar's
