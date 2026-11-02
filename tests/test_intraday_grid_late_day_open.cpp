@@ -3,9 +3,9 @@
 //
 // The intraday higher-timeframe grid is anchored at the symbol's day stamp:
 // 09:15 IST on NSE, so a "60" series buckets at 09:15, 10:15, ... 15:15.
-// NSE's Muhurat session of Tue 2025-10-21 traded 13:45 .. 14:45 IST only, and
+// A late-opening NSE session can trade 13:45 .. 14:45 IST only, and
 // TradingView laid that day's grid from the session's own open: one "60" bar
-// stamped 13:45 (o 25904, h 25934.35, l 25826.3, c 25833.3), completed on the
+// stamped 13:45 (synthetic o 25000, h 25020, l 24980, c 24990), completed on the
 // 14:30 chart bar, and its daily bar is stamped 13:45 too (lab tv
 // w14-htf-60-nifty15, w14-htf-d-nifty15; NSE:NIFTY 15, 2025-04-01 ..
 // 2026-05-01). The day-stamp grid made two bars there (13:15, 14:15), so the

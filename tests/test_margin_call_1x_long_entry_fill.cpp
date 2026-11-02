@@ -7,10 +7,10 @@
  * #149 hook (margin_call_slice_before_priced_exit) deliberately excluded 1x
  * longs — compute_liquidation_price() is na there — so a same-bar full exit
  * hid the deficit (the end-of-bar event found the position already gone) and
- * the engine filled the exit on the FULL position. The rhyme17 exemplar
- * (2026-01-09 14:30, long reversal 3.5168 @3094.06, sub-lot deficit 0.0302
- * USD): TV books a 1.0-contract pnl-0 "Margin call" row at the raw entry
- * fill price FIRST, then the stop closes only the 2.5168 remainder.
+ * the engine filled the exit on the FULL position. Synthetic entry-fill example
+ * (long reversal 4.25 @2500.00, sub-lot deficit 0.025 in quote currency):
+ * the one-contract fallback books a pnl-0 "Margin call" at the raw entry
+ * fill FIRST, then the stop closes only 3.25; assertions retain original inputs.
  *
  * The deficit class this reproduces: an omitted-qty percent-of-equity=100
  * reversal is frozen against the SIGNAL close C (lot-floored, leaving a
@@ -40,8 +40,8 @@
  *      before the stop above the open, which closes 99.7504 @105.
  *      TradingView trims a short there too (lab tv tapes
  *      tests/fixtures/margin_open_rules exit-order/short-fee-stop-on-path
- *      and -open-at-low: E's settings and bar shape, 0.008 ETH called at
- *      the open before the stop closes 3.492; on the pinned tape).
+ *      and -open-at-low: synthetic ETH quantities illustrate the ordering,
+ *      0.012 called at the open before the stop closes the remaining 3.988).
  *   F. POOC: the opening check waits for the next open (lane
  *      W5-ENG-MARGIN-V6, C2).
  *   G. Emulator off -> nothing fires (full stop close).

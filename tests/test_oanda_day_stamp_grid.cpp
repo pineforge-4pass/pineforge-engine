@@ -17,7 +17,7 @@
 //          would put them at 01:00Z / 01:45Z / 02:30Z);
 //   "D":   the day's first bar is 22:00Z (18:00 ET), the daily bucket starts
 //          at the 17:00 ET stamp and trading begins an hour later.
-// Family evidence: every 3commas-* XAUUSD DCA probe (request.security "240"
+// Family evidence: every XAUUSD DCA probe (request.security "240"
 // RSI gate) enters on the 17:00-ET grid on TV and on the 18:00-ET grid in the
 // engine, the DCA legs agreeing to 1e-6 once the grid does.
 //

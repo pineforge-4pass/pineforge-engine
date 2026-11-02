@@ -953,31 +953,31 @@ void test_margin_zero_control() {
     }
 }
 
-// --- regression: ahtisham-ee-decoded-volatility-expansion-ahtisham ---
+// --- regression: the volatility-expansion stop probe ---
 // BINANCE:ETHUSDT.P 15 (feed 27b62431096e, mintick 0.01, qty step 0.0001),
 // strategy(default_qty_type = percent_of_equity, default_qty_value = 100),
 // Pine v6 -> margin_long/short default 100. While flat the script re-issues
 // BOTH strategy.entry("Long", stop = zoneHigh + 1.5 atr) and
 // strategy.entry("Short", stop = zoneLow - 1.5 atr) every bar; in a position
-// it re-issues strategy.exit(stop = zoneMid, limit = 2R). Levels below are the
-// hand replay of the Pine indicators over the registry bars (ta.highest /
-// ta.lowest of high[1] / low[1] over 20, RMA-14 ATR warmed from 03-20); they
-// reproduce the engine's own levels to the tick (short 1859.6378 -> 1859.63,
-// the candidate's fill; long 1912.3929 -> 1912.40, the base's fill; mid
-// 1885.56, the base's exit).
+// it re-issues strategy.exit(stop = zoneMid, limit = 2R). Levels below are
+// synthetic illustrations of separate bars; assertions retain the original replay.
+// The same highest/lowest-20 and RMA-14 ATR rules apply; synthetic levels
+// short 1990.0078 -> 1990.00, long 2020.0029 -> 2020.01 and
+// mid 2000.00 illustrate the directional tick rule.
+// These numbers are independent of the original fixture inputs below.
 //
-// base-round7-harness-20260905 (c2032d1, = TV 591/591): after trade 4 (equity
-// 9,880.86) nothing fills until the 15:30Z long touch @1912.40 (5.1667),
-// stopped 17:30Z @1885.56 (-138.674228). cand-round7-engine-a-20260905
-// (09fa1fe) instead FILLED the short at the 05:15Z touch: o 1866.16 > level
-// 1859.63 >= l 1853.57, all-in 5.3133 x 1859.63 = 9,880.8 <= 9,880.86 at the
-// level where 5.3133 x 1866.16 = 9,915.5 > 9,880.86 declines at the open
-// (TV: no trade; 394 such shorts over the range, 591 -> 1,177 trades).
-// Family K (this round) explains it from the placement side: the 05:00Z
-// call sizes the sell stop at the level (5.3133 = floor(9,880.86 / 1859.63,
-// 0.0001)) and rejects it at the close (5.3133 x 1866.16 = 9,915.5 >
-// 9,880.86) — nothing rests for the 05:15Z touch. The buy stop at the level
-// 1912.40 sizes 5.1667 (9,880.8 <= 9,880.86) and fills the touch unchanged.
+// Fee-free synthetic book: equity 10000.00 waits for a long touch at
+// 2020.01, quantity 4.9504, cost 9999.857504; a later stop at 2000.00
+// realizes -99.057504. Sizing a short at 1990.00 would give 5.0251 units.
+// A touch bar with open 2000.00 and low 1985.00 reaches that stop;
+// its level cost is 5.0251 x 1990.00 = 9999.949 <= 10000.00.
+// But the placement close of 2000.00 costs 10050.20 > 10000.00,
+// so the call is rejected before the later intrabar touch.
+// The placement rule sizes the sell stop at its level:
+// floor(10000.00 / 1990.00 / 0.0001) x 0.0001 = 5.0251,
+// then rejects it at the close; no resting order remains to trigger.
+// The buy stop costs 4.9504 x 2000.00 = 9900.80 at the close, so it
+// passes admission and fills the touch with its placement quantity.
 struct EthRow { double o, h, l, c, buy_stop, sell_stop, mid; };
 constexpr int kEthCount = 56;   // 2025-04-02 04:15Z .. 18:00Z
 enum EthBar {

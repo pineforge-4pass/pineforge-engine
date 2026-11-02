@@ -1,6 +1,6 @@
 // request.security intraday HTF buckets complete on the calling CHART bar
 // whose close reaches the bucket end, and on an exchange session's last chart
-// bar at an early close (round 8, family P: masayanfx multi-time-score
+// bar at an early close (round 8, family P: the multi-timeframe scoring
 // strategy on the NYSE:F / CME_MINI:ES1! / NQ1! 15m lanes; lab tv
 // famp-sense-f15full / es15full / nq15full vs the engine's @pf-trace,
 // 2026-09-05).

@@ -10,13 +10,13 @@
  * order-market-reversal-resting-bracket-gap-01 (A-F).
  *
  * The LIMIT-leg cells below pin finding 278 seed (b)
- * (rhyme17-trendline-and-horizontal-breakout, six tape events): on a
+ * (the stale-exit probe, six tape events): on a
  * reversal fill bar TV still honors the STANDING prior-bar strategy.exit
  * whose levels were computed from the OLD (reversed-away) position's avg
  * price. A limit already marketable at the fill bar's open fills AT THE
  * OPEN — a duration-0 PnL-0 trade for the new position — and the re-priced
  * bracket issued at that bar's close governs afterwards. Equality with the
- * open is marketable (2025-04-07 14:00 UTC: entry and exit both 1549.51).
+ * open is marketable (synthetic entry and exit both 25.00 on a later bar).
  *
  * Scope: these cells exercise exit ORDER lifecycle only (when a standing
  * strategy.exit may fill on its parent's fill bar). They do not touch the
@@ -213,14 +213,14 @@ static void check_partial_qty_does_not_scratch_parent_open(double exit_qty) {
     CHECK(near(probe.live_qty(), 1.0));
 }
 
-// ── LIMIT-leg cells (finding 278 seed (b), rhyme17 stale-exit family) ──
+// ── LIMIT-leg cells (finding 278 seed (b), the stale-exit probe) ──
 
 enum class LimitCell {
     FlatLongLimit,        // flat parent, TP limit below the fill open
     FlatShortLimit,       // flat parent, TP limit above the fill open
     ReversalLongLimit,    // short→long reversal, stale old-avg TP below open
     ReversalShortLimit,   // long→short reversal, stale old-avg TP above open
-    ReversalLongLimitEq,  // rhyme17 2025-04-07 shape: limit == open exactly
+    ReversalLongLimitEq,  // the stale-exit probe's equality shape: limit == open exactly
     ReversalLongLimitPostOpen,   // correctly-sided limit, fills later at level
     ReversalShortLimitPostOpen,  // correctly-sided limit, fills later at level
     ReversalDualMarketable,      // stop AND limit marketable: open scratch
@@ -265,7 +265,7 @@ public:
                 stop_px = 110.0;
                 break;
             case LimitCell::ReversalLongLimitEq:
-                // Equality is marketable (rhyme17 event 1: open == limit).
+                // Equality is marketable (the stale-exit probe: open == limit).
                 limit_px = 100.0;
                 stop_px = 90.0;
                 break;
@@ -367,8 +367,8 @@ static void check_reversal_limit(LimitCell cell, bool new_is_long,
 
 // Dual-marketable bracket (stop gapped AND limit marketable at the open):
 // scratches at the open like the single-leg cells. Pinned by
-// bprakaash-new-era-strategy-1-0 (OANDA:EURUSD 15m, 2025-07-03 / 07-24 /
-// 08-07 / 09-09 13:30Z): TV books entry and exit at the same open,
+// a third-party strategy (OANDA:EURUSD 15m); a synthetic example is an
+// entry and exit both at 2.00000 on the same opening point:
 // duration 0, PnL 0. (Before that exemplar the cell held the entry bar and
 // fired on the NEXT bar's open; see test_prearmed_bracket_fill_bar.cpp for
 // the tape-shaped cells.)
@@ -525,7 +525,7 @@ int main() {
     check_partial_qty_does_not_scratch_parent_open(0.9999999995);
     check_multiple_market_parents_do_not_share_scratch();
 
-    // LIMIT-leg cells (finding 278 seed (b), rhyme17 stale-exit family).
+    // LIMIT-leg cells (finding 278 seed (b), the stale-exit probe).
     check_flat_limit_gap(LimitCell::FlatLongLimit, true);
     check_flat_limit_gap(LimitCell::FlatShortLimit, false);
     check_reversal_limit(LimitCell::ReversalLongLimit, true, false);

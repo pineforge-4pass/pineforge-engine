@@ -171,9 +171,9 @@ typedef struct pf_trade_s {
     double  pnl;            /**< Net realized PnL in account currency (commission-inclusive). */
     double  pnl_pct;        /**< Net return-on-cost in percent: pnl (NET of commission) /
                              *   entry cost (entry_price * qty * pointvalue) * 100. This is
-                             *   TradingView's "Net P&L %" convention, arbitrated 2026-06-12
-                             *   against a real TV export (trade #258 short: 102.44 USD on a
-                             *   2276.66 entry => 4.50%). Degenerates to the old gross
+                             *   TradingView's "Net P&L %" convention (synthetic one-unit
+                             *   short: 90.00 net PnL on a 2000.00 entry cost =>
+                             *   4.50%). Degenerates to the old gross
                              *   (exit/entry-1)*100 form for longs with zero commission;
                              *   the previous short form (entry/exit-1)*100 was wrong on
                              *   large moves. Sign always matches pnl. */
@@ -192,8 +192,8 @@ typedef struct pf_trade_s {
                              *   open: it reports it as a closed trade whose exit leg is
                              *   the range's last bar at that bar's CLOSE, with an
                              *   empty exit Signal, and counts it in closedTrades
-                             *   (orb-lite on NYSE:F 1D: Entry short 2026-03-16 @ 11.82,
-                             *   Exit 2026-04-30 @ 12.08 = the last close,
+                             *   (synthetic NYSE:F daily example: Entry short @ 25.00,
+                             *   Exit @ 26.00 on the final daily bar = the last close,
                              *   closedTrades:1). The engine emulates that row
                              *   (operator decision 2026-09-02): exit_time is the last
                              *   script bar's label, exit_price its mintick-rounded

@@ -299,8 +299,8 @@ class EmitWindowRuleTests(unittest.TestCase):
             "2025-10-05 13:30 UTC to 2025-10-09 13:30 UTC")
 
     def test_overnight_gap_on_a_15m_feed(self) -> None:
-        # ayusattv: the 04-09 19:45 UTC signal (the session's last bar) fills
-        # on 04-10 13:30 UTC, the next session's first bar.
+        # The overnight-gap probe's signal on a session's last bar fills
+        # on the next session's first bar; the original fixture stamps stay below.
         feed = _rth_15m_stamps([(2025, 4, 9), (2025, 4, 10)])
         first = _utc_ms(2025, 4, 10, 13, 30)
         w = _tv_entry_emit_window(feed, first, first, MIN15)
@@ -460,11 +460,11 @@ class TapeSpanTests(unittest.TestCase):
 
 # --- a run that starts on TradingView's first computed bar ---------------
 
-# BINANCE:ETHUSDT.P 15 over 2025-04-01 .. 2025-04-08, as lab tv exported
+# BINANCE:ETHUSDT.P 15 over successive sessions, as lab tv exported
 # rh-inrange-preplaced (tests/fixtures/run_harness_window): TradingView
-# computed from 2025-04-01 00:00 UTC (its returnedRange.from; bar_index 0
-# there, rh-diag-firstbar) and filled S1 at 06:30 UTC from a stop the script
-# placed at 01:00 UTC.
+# computed from returnedRange.from (bar_index 0
+# there, rh-diag-firstbar) and filled S1 on a later bar from a stop the script
+# placed earlier in that session.
 ETH_FIRST_BAR = _utc_ms(2025, 4, 1)
 ETH_METRICS = {
     "symbol": "BINANCE:ETHUSDT.P", "interval": "15",
@@ -724,8 +724,8 @@ class MainEmitWindowTests(unittest.TestCase):
             self.assertNotIn("emit-window:", printed)
 
     def test_overnight_gap_15m_feed(self) -> None:
-        # ayusattv AAPL@15: the short placed on the 04-09 19:45 UTC bar fills
-        # on 04-10 13:30 UTC.
+        # The overnight-gap probe on AAPL@15 places a short on a session's last bar;
+        # it fills on the next session's first bar, using the fixture stamps below.
         stamps = _rth_15m_stamps([(2025, 4, 8), (2025, 4, 9), (2025, 4, 10), (2025, 4, 11)])
         signal, fill = _utc_ms(2025, 4, 9, 19, 45), _utc_ms(2025, 4, 10, 13, 30)
         exit_ = _utc_ms(2025, 4, 11, 13, 30)

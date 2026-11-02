@@ -326,13 +326,13 @@ DMIResult DMI::compute(double high, double low, double close) {
 
     // `up > down and up > 0` — the TOLERANT relational (|a - b| <=
     // 1e-10 is equal, ta_compare_band.hpp), not IEEE strict: on the
-    // NYSE:F 15m 2025-07-15 19:30Z bar up = 11.58 - 11.565 and down = 11.54
-    // - 11.525 are both 0.015 in decimal, 1.78e-15 apart in doubles, and
+    // synthetic NYSE:F 15m bar up = 25.08 - 25.065 and down = 25.04
+    // - 25.025 are both 0.015 in decimal, 3.55e-15 apart in doubles, and
     // TradingView's ta.dmi books plusDM = minusDM = 0 (`lab tv`
-    // f15-plusdm-perbar-0714 / f15-dmi-internals-0718: TV rma(plusDM)
-    // 0.006907 vs the strict model's 0.006939, +DI 16.92562 vs 17.00417,
-    // ADX 24.22 vs 23.57 at the 07-18 14:15Z signal — round 7 family K,
-    // boztilkiserhan wma-adx-trailing). One bar's plusDM moves +DI for
+    // probes confirm the tie rule). A strict model instead credits one
+    // side with the whole 0.015 move, changing the smoothed +DM and +DI,
+    // and therefore ADX at later signals of a third-party strategy.
+    // These are synthetic prices illustrating that tie. One bar's plusDM moves +DI for
     // weeks, so the strict compare fired a whole ADX > 24 short late.
     double plus_dm = (float_band_gt(up_move, down_move)
                       && float_band_gt(up_move, 0.0)) ? up_move : 0.0;

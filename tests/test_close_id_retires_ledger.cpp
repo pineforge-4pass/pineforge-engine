@@ -18,12 +18,12 @@
  * retires every entry under the id on a close(id) ("all entries with the ID
  * are exited at once"): a capped fill still retires the id.
  *
- * Evidence (3commas grid bots on BINANCE:ETHUSDT.P-family tapes, round 4b):
- * xlm-grid 2025-05-08 10:45 TP_L35 closes 0.0987 of an L35 lot of 0.1043 on
- * BOTH engine and TV; on 2026-02-06 14:30 the engine then closed
- * 0.1099 = 0.1043 + 0.0056 carried while TV closed 0.1043 (nvdax: engine
- * 0.0972 vs TV 0.0926). A Python port of the two ledger rules reproduced the
- * engine's closed qty byte-for-byte on 3/3 bots.
+ * Evidence: grid-bot probes on BINANCE:ETHUSDT.P-family tapes, round 4b.
+ * Synthetic XLM ledger: TP_L35 closes 0.1100 of an L35 lot of 0.1200;
+ * the 0.0100 remainder must retire. A later 0.1200 entry must close 0.1200,
+ * not 0.1300 = 0.1200 + 0.0100 carried. Another synthetic nvdax lot
+ * of 0.0800 must not become 0.0850 after a 0.0050 carry. A Python port reproduced the
+ * original closed quantities byte-for-byte on 3/3 bots.
  *
  * The cap in these pins comes from the same mechanism the bots hit: a
  * standing close reservation on another id, written when two close(id)
@@ -33,11 +33,11 @@
  * separate open item (round-4b F2, TV rule unpinned); the pins only need it
  * as the source of a capped avail. If F2 changes, re-source the cap.
  *
- * Pins:
- *   A. POOC, sole close(L35) capped 0.1043 -> 0.0987: the L35 ledger is
- *      retired (absent), the fill is still 0.0987, the position stays open.
- *      Re-entry L35 0.1043, then close(L35) closes exactly 0.1043 (pre-fix
- *      0.1099 = 0.1043 + 0.0056 carried).
+ * Pins retain original inputs; synthetic quantities illustrate them:
+ *   A. POOC, sole close(L35) capped 0.1200 -> 0.1100: the L35 ledger is
+ *      retired (absent), the fill is still 0.1100, the position stays open.
+ *      Re-entry L35 0.1200, then close(L35) closes exactly 0.1200 (pre-fix
+ *      0.1300 = 0.1200 + 0.0100 carried).
  *   B. A DELIBERATE partial (explicit qty) keeps its remainder: it never
  *      touches the ledger, so the id stays closable and a later default
  *      close(L35) still resolves the ledger, not the partial's remainder

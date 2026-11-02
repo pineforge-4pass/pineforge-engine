@@ -6,7 +6,7 @@
  * test_bracket_lifecycle_declined_reversal.cpp — finding-311: exit-bracket
  * LIFECYCLE across declined in-position reversal signals.
  *
- * TV rule set (stevenygabbyperez derivation, 162/162 episodes):
+ * TV rule set (the bracket-lifecycle probe's derivation, 162/162 episodes):
  *   KILL     — a declined in-position opposite MARKET reversal (the margin
  *              decline arms, the "tradeless reversal") cancels the live
  *              position's standing PRICED strategy.exit brackets. Not the

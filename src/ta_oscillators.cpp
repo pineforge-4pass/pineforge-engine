@@ -105,7 +105,7 @@ bool Crossover::compute(double a, double b) {
     // crossover(v, 0) nor crossunder(v, 100) on na -> 53.24 at the range
     // start), nor is a bar whose own value is na (vwap-cross-na-current
     // 7423ad14). Storing the na here (bcf4436) made every na -> value edge
-    // dead: van007trader-vwap-deviation-score-dyna resets its z-score to na
+    // dead: the VWAP-deviation probe resets its z-score to na
     // at each session start and crosses +/-2 on the first valid bar of the
     // session on 58 of its 148 ETH trades (vwap-cross-var-na-edge fa60d948).
     if (is_na(a) || is_na(b)) {

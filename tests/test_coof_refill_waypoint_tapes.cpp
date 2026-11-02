@@ -7,7 +7,7 @@
  * the next extreme: an entry already executable at the recalculating fill's
  * price fills AT that extreme, at its print, when it is still executable
  * there. The engine filled such an entry at once, at its own level -- a price
- * the path never offered after the order existed (the bystry1991-ema200
+ * the path never offered after the order existed (the EMA200 probe's
  * refills after a same-bar exit on CME_MINI:ES1! and ETHUSDT.P 15m).
  *
  * The lane's own synthetic script (tests/fixtures/coof_refill_waypoint, one

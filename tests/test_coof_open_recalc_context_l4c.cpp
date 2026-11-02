@@ -5,7 +5,7 @@
 /*
  * test_coof_open_recalc_context.cpp — what a calc_on_order_fills FILL RECALC
  * sees, and how a default-sized market order it places is sized (round 7
- * family M, officialjackofalltrades aureate BTC@1D; campaign note
+ * family M, the fill-recalculation probe on BTC@1D; campaign note
  * log-20260905t121513z-50167cb8, which CORRECTS the m1d-coof-ctx pin).
  *
  * Rule 1 — script context (unchanged engine behaviour, pinned here as a
@@ -26,14 +26,14 @@
  * Rule 2 — sizing (the engine change): a DEFAULT-sized percent_of_equity / cash
  * MARKET order born in a fill recalc is sized by TradingView at ITS OWN FILL,
  * not at the signal bar's close (the ordinary freeze) and not at the recalc's
- * cursor. Evidence: scratchpad/pins/m1d-coof-size-btc (tv_trades sha256
- * 7ee8712b…): "B", born in the second recalc at the 10-02 open and filled at
- * W1 = the low 118279.31, has qty 845.4564 = 10% x 1e9 / 118279.31 (cursor O
- * 118594.99 -> 843.2, the bar's close 120529.35 -> 829.7); thirteen entries
- * born in a first-O recalc and filled at O size at O. The probe: TV 4 0.09245
- * = 9802.56 / (106011.13 x 1.0001) at the 11-11 open fill (the engine froze
- * 0.0951 at the 11-11 close 103058.99); TV 10 0.14674 at its W2 fill 69988.83
- * (cursor W1 63913.27 -> 0.16069, close 67988.04 -> 0.15106).
+ * cursor. Synthetic example: a 10%-of-equity order with equity 1000,
+ * born in an open-fill recalc and filled at the low
+ * W1 = 25.00, has qty 4 = 10% x 1000 / 25.00 (cursor O
+ * 20.00 would give 5; a close of 40.00 would give 2.5). Entries
+ * born in a first-O recalc and filled at O size at O. With a 0.01 % fee,
+ * a synthetic budget of 100.01 buys 4 at 25.00 because
+ * 4 x 25.00 x 1.0001 = 100.01; freezing at 20.00 would give 5 instead.
+ * If the order fills at 40.00, its own fill instead sizes 2.5.
  *
  * Both tapes are replayed on the registry bars (BINANCE:BTCUSDT 1D, feed
  * 14b8e066225c; test_coof_open_recalc_context_data.hpp). Context: (a) the tape
@@ -45,19 +45,19 @@
  * TradingView's price. Sizing: (a) the tape's recalc-born rows fit the fill
  * and its ordinary rows fit the signal close (both discriminated by BTC's
  * one-cent open/close offsets), (b) the engine reproduces the first cycle
- * (A at O, B sized at W1) and the JOAT rows TV 3/4 and TV 8/9/10 (entry and
+ * (A at O, B sized at W1) and the fill-recalculation probe's cascade rows (entry and
  * exit bar/price, quantity, net PnL). Controls: COOF off is byte-identical
  * (the ordinary signal-close freeze), a close-calc placement inside a COOF
  * run still freezes, and an intrabar fill recalc sees the finals and sizes
  * its cascade entry at the W1 fill. On the pre-change engine the sizing
- * assertions fail (0.0951 / 0.15103 / 0.15106 / 829.67 / 817.05) and every
+ * assertions fail because they freeze at the wrong price, while every
  * context assertion passes.
  *
  * Known, deliberately NOT asserted (cascade machinery, out of this change's
  * scope, recorded in the campaign notes): TradingView fills EVERY market order
- * born in the first-O recalc at O (S1..S4 and the close_all on 10-02), fills
+ * born in the first-O recalc at O (S1..S4 and the close_all), fills
  * every sibling born in one mid-bar recalc at the same waypoint (S1..S4 at W1
- * on 10-04), and rolls the close_alls born in the recalcs after those W1
+ * on a later bar), and rolls the close_alls born in the recalcs after those W1
  * fills to the next open; the engine's scheduler admits one more
  * fill at O and one fill per waypoint. That is why the sensor tapes are not
  * replayed row-for-row here.
@@ -543,7 +543,7 @@ void test_engine_recalc_born_entry_sized_at_w1_fill() {
 }
 
 // ---------------------------------------------------------------------------
-// The probe's own decisions (JOAT BTC@1D tape rows TV 3/4 and TV 9/10).
+// The probe's own decisions (BTC@1D close and on-fill re-entry rows).
 // ---------------------------------------------------------------------------
 class JoatProbe : public BtcProbe {
 public:
@@ -559,9 +559,9 @@ public:
     }
 };
 
-// TV 3 (short 11-05 -> Dynamic Exit at the 11-11 open) and TV 4, the Short
-// the on-fill recalc places at that open: qty 0.09245 sized at the fill
-// 106011.13 with equity 98025.606, NOT 0.0951 at the 11-11 close 103058.99.
+// A short closes at a later open and its on-fill recalc places another short:
+// synthetic equity 1000.10, 10% sizing and a 0.01% fee give 4 at a 25.00 fill,
+// from 100.01/(1.0001*25), versus 5 at a 20.00 close; assertions keep original inputs.
 class Joat1111Probe final : public JoatProbe {
 public:
     using JoatProbe::JoatProbe;

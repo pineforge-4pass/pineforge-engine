@@ -8,7 +8,7 @@
 
 /*
  * test_same_tick_multi_entry_race.cpp — TradingView same-tick multi-entry
- * fill semantics (audit rule R*, jevondijefferson-big-breakout-strategy).
+ * fill semantics (audit rule R*, the multi-entry breakout probe).
  *
  * Shape under test: TWO strategy.entry blocks with DISTINCT ids sharing one
  * gate (3 BOS blocks entering "Long"/"Short" + a Wyckoff block entering
@@ -18,7 +18,7 @@
  * SAME bar, both market entries fill at the SAME tick (next bar's open).
  *
  * TV's behaviour — validated 26/26 against every in-window race in the
- * jevondijefferson tv_trades.csv export (qty arithmetic to 1e-4, operative
+ * multi-entry breakout probe's tv_trades.csv export (qty arithmetic to 1e-4, operative
  * bracket prices to the cent; audit artifacts scorecard.py / qtytest.py /
  * reversals.py, 2026-07-02 tv-ceiling audit):
  *
@@ -51,8 +51,8 @@
  * took flip_market_position_to — closing the whole opposite position and
  * opening a FULL q_plain lot under the FIRST id. Class B then bound the
  * WRONG bracket (first id instead of last id); class C opened q_plain
- * instead of the remainder (TV: 0.2262 / engine: 7.915 at the 2025-06-17
- * 15:15 race), seeding multi-day tiny-qty stale-remainder chains.
+ * instead of the remainder (synthetic q_plain 200 - held 195 = 5,
+ * where the old path opens 200), seeding tiny-qty stale-remainder chains.
  */
 
 #include <cmath>

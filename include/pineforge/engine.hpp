@@ -1034,8 +1034,8 @@ protected:
     // exactly this function of it: 24,582 /
     // 24,582 half-cent AAPL closes (22,122 rounded up, 2,460 rounded DOWN
     // because the binary quotient lands just under the midpoint —
-    // 228.765 / 0.01 = 22876.499999999996 -> 228.76, while
-    // 214.385 / 0.01 = 21438.5 -> 214.39) and 142,938 / 142,938 EURUSD
+    // synthetic 35.035 / 0.01 = 3503.4999999999995 -> 35.03, while
+    // 25.005 / 0.01 = 2500.5 -> 25.01) and 142,938 / 142,938 EURUSD
     // fills at tick 1e-5. Any epsilon nudge (floor(r + 0.5 + 1e-6)) or a
     // decimal half-up rule forces every binary midpoint up and breaks the
     // 2,460 down cases. For r >= 1 the form below is bit-identical to
@@ -1080,12 +1080,12 @@ protected:
     // ruling), while a native host declares its ladder through the run
     // spec's price grid. It stays because the twin-parity-frozen
     // test_stop_tick_rounding_l4d pins it. Calibration record
-    // (design-stop-tick-rounding, round 6; NYSE:F 1D `lab tv` tapes
-    // stopround-*, 2026-09-04): sell-stops 13.74624 / 13.7451 / 13.7449 /
-    // 13.745 skip 02-02 (low 13.745 -> 13.75) and fill 02-03 @13.74 while
-    // 13.3449 fills 01-26 (low 13.3448 -> 13.34); buy-stops fill on the high
-    // rounded to NEAREST (14.0351 -> 14.04; 13.225 skips a 13.2202 high); the
-    // open is quantized too (13.776 over a 13.775 open fills at 13.77); the
+    // (NYSE:F 1D tapes; synthetic prices here): sell-stops
+    // 25.04624 / 25.0451 / 25.0449 /
+    // 25.045 skip a bar (low 25.045 -> 25.05) and fill later at 25.04 while
+    // 25.3449 fills at a low of 25.3448 -> 25.34; buy-stops fill on the high
+    // rounded to NEAREST (26.0351 -> 26.04; 25.225 skips a 25.2202 high); the
+    // open is quantized too (synthetic 35.036 over a 35.035 open fills at 35.03); the
     // exit-limit, entry-stop / -limit and order-stop tapes reproduce, and
     // stopround-ohlc-0/1 show the prints themselves are raw, so the
     // quantization is the broker's. Trail legs, stop-limit entries and the
@@ -1118,8 +1118,8 @@ protected:
     // twin-parity-frozen test_level_grid_snap_l4d pins it. Calibration
     // record (round 8 family T, 40 `lab tv` sensor tapes on NYSE:F /
     // CME_MINI:ES1! / OANDA:EURUSD 15m, 2026-09-05): the band is 1e-6 on a
-    // 2-decimal symbol (10.040001 IS 10.04; a sell limit at 10.0400012 is not
-    // and fills at 10.05), the same on ES1! (tick 0.25, pricescale 100) and
+    // 2-decimal symbol (tick 0.01; synthetic 25.040001 IS 25.04, inclusive;
+    // 25.0400011 is not and fills at 25.05), same on ES1! (tick 0.25, pricescale 100) and
     // 1e-12 on EURUSD (pricescale 1e5); comparing the raw level against the
     // tick-quantized bar instead cost 148 of the 179 exit-time mismatches of
     // the F@15 lane.
@@ -1143,8 +1143,8 @@ protected:
         // Points as level / pointsize (pointsize = 1 / pricescale as a
         // double): of the candidate arithmetics this is the one that
         // reproduces every tape at the band's FP boundary (EURUSD
-        // 1.13556 + 1e-12 snaps, + 2e-12 does not; ES 5513.75 + 5e-7
-        // snaps, + 1e-6 does not; F 10.04 + 1e-6 snaps, + 1.2e-6 does not).
+        // synthetic levels near 2.00000 and ES 5000.00 illustrate the bands;
+        // F 25.04 + 8e-7 snaps, while + 1.2e-6 does not).
         const double pointsize = 1.0 / pricescale;
         const double p = level / pointsize;
         const double k = std::floor(p + 0.5);
@@ -1239,10 +1239,10 @@ protected:
     // reconstructing it as floor(...)*step lands one ulp away (0.3 ->
     // 0.30000000000000004), jitter that would leak into printed P&L.
     // Calibration record: TradingView's BINANCE:ETHUSDT.P (qty_step 0.0001)
-    // fills a qty_percent=50/50 short bracket over 5.4103 as 2.7051 + 2.7051
-    // and leaves a 0.0001 dust short open (39 of
-    // stockhunter2025-btcusd-4h-ema-swing-strategy's 56 unmatched trades were
-    // such rows); officialjackofalltrades' exact 30%-of-1 legs pin the no-op.
+    // splits a qty_percent=50/50 short bracket; synthetic 7.0003 becomes
+    // 3.5001 + 3.5001, leaving 0.0001 dust short open (39 of
+    // the EMA swing probe's 56 unmatched trades were
+    // such rows); the exact-fraction bracket probe's 30%-of-1 legs pin the no-op.
     double apply_exit_qty_step(double qty) const {
         if (qty_step_ <= 0.0 || !std::isfinite(qty) || qty <= 0.0) return qty;
         double floored = std::floor(qty / qty_step_ + 1e-6) * qty_step_;

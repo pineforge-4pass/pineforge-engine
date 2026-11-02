@@ -232,7 +232,7 @@ static void test_change_cross_family() {
     // TradingView bridges the gap whatever its length and whichever side
     // (or both) went na (lab tv vwap-cross-gap-shapes 4b4fba1f and
     // vwap-cross-var-na-edge fa60d948, BINANCE:ETHUSDT.P 15m 2025-04-08..11,
-    // 2026-09-05: the van007trader-vwap-deviation-score-dyna shape, a var
+    // 2026-09-05: the VWAP-deviation probe's shape, a var
     // z-score reset to na at every session start and crossing +/-2 on the
     // session's first valid bar). It is the pair from that bar, not each
     // side's own last value (vwap-cross-pair-vs-series 8c674996), and a bar
