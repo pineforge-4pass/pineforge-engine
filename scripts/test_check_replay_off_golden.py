@@ -74,11 +74,12 @@ def trailer_line(before, digest=None):
 
 
 class ReplayOffGoldenTests(unittest.TestCase):
-    def repository_release_versions(self):
-        root = Path(__file__).resolve().parent.parent
-        version = (root / "VERSION").read_text(encoding="utf-8").strip()
-        self.assertRegex(version, r"\A[0-9]+\.[0-9]+\.[0-9]+\Z")
-        major, minor, patch = map(int, version.split("."))
+    def repository_release_versions(self, text=None):
+        if text is None:
+            root = Path(__file__).resolve().parent.parent
+            text = (root / "VERSION").read_text(encoding="utf-8").strip()
+        self.assertRegex(text, r"\A([0-9]+)\.([0-9]+)\.([0-9]+)(?:-rc\.[0-9]+)?\Z")
+        major, minor, patch = map(int, text.split("-", 1)[0].split("."))
         return (major, minor, patch), (
             ("patch", (major, minor, patch + 1)),
             ("minor", (major, minor + 1, 0)),
@@ -101,6 +102,28 @@ class ReplayOffGoldenTests(unittest.TestCase):
                 return measure(Path("runner.py"), Path("strategy.so"), "fifo",
                                directory)["primary_sink"]
 
+    def test_repository_release_version_accepts_a_release_candidate(self):
+        for text, current, bumps in (
+                ("1.9.1-rc.1", (1, 9, 1), (
+                    ("patch", (1, 9, 2)),
+                    ("minor", (1, 10, 0)),
+                    ("major", (2, 0, 0)),
+                )),
+                ("10.20.30-rc.12", (10, 20, 30), (
+                    ("patch", (10, 20, 31)),
+                    ("minor", (10, 21, 0)),
+                    ("major", (11, 0, 0)),
+                ))):
+            with self.subTest(version=text):
+                self.assertEqual(self.repository_release_versions(text=text), (current, bumps))
+
+    def test_repository_release_version_refuses_malformed_versions(self):
+        for text in ("1.9", "v1.9.1", "1.9.1-garbage", "1.9.1-rc",
+                     "1.9.1-rc.", "1.9.1-rc.1-extra", ""):
+            with self.subTest(version=text):
+                with self.assertRaises(AssertionError):
+                    self.repository_release_versions(text=text)
+
     def test_repository_release_bumps_preserve_default_report_bytes(self):
         current, bumps = self.repository_release_versions()
         for shape in ("fifo", "any", "ordinary"):
@@ -118,15 +141,15 @@ class ReplayOffGoldenTests(unittest.TestCase):
                     self.assertEqual(baseline_digest, hashlib.sha256(masked).hexdigest())
                     self.assertEqual(len(baseline), len(masked))
 
-    def test_repository_release_bumps_preserve_sink_bytes_and_goldens(self):
+    # Golden digests are checked for structure only; they are not compared
+    # with the synthetic streams used for the sink-byte assertions below.
+    def test_repository_release_bumps_preserve_sink_bytes_and_golden_records_are_well_formed(self):
         root = Path(__file__).resolve().parent.parent
         golden = json.loads((root / "docker" / "replay_off_golden.json").read_text(
             encoding="utf-8"))
         scenarios = golden["scenarios"]
         self.assertIsInstance(scenarios, dict)
         self.assertEqual(set(scenarios), {"fifo", "any", "ordinary"})
-        # Recorded digests describe real runner output, not these synthetic
-        # streams. Check their structure without pinning their current values.
         for shape in ("fifo", "any", "ordinary"):
             self.assertEqual(set(scenarios[shape]), {"default_json", "primary_sink"})
             for label in ("default_json", "primary_sink"):
