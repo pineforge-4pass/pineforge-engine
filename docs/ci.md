@@ -27,15 +27,15 @@ every profile. `ci.yml` retains authorization and draft event handling;
 and GitHub-only changes still run preflight, while only the proof legs skip.
 Failed, cancelled or unclassified work is red in the hosted result.
 
-A GitHub-only PR changes at least one path, with every changed path under
-`.github/`, including both sides of a rename. `scripts/ci_*.py` changes,
-alone or mixed with `.github/`, follow the ordinary proof plan. `gke-pr`
-reads the SHA-bound three-dot compare API twice, writes names to a
-NUL-separated file and gives that file to the base tree's
-`scripts/ci_docs_only.py --paths` classifier. Renames contribute both names;
-empty, missing, malformed, truncated or unreadable lists are neither class.
-The classifier uses exact `.github/` and `docs/` prefixes, so lookalike
-directories and the classifier itself cannot create a skip.
+A GitHub-only PR changes at least one path, all under `.github/`, including both sides of a rename.
+`scripts/ci_*.py` changes, alone or mixed with `.github/`, follow the ordinary proof plan.
+`gke-pr` reads the SHA-bound three-dot compare API twice, writes a NUL-separated path file and gives it to the base tree's `scripts/ci_docs_only.py --paths`.
+Empty, missing, malformed, truncated or unreadable lists are neither class; exact `.github/` and `docs/` prefixes prevent lookalikes or the classifier itself from creating a skip.
+
+The classifier also emits `arm_relevant`: source/build inputs under `tests/`, `runner/`, `include/`, `src/` or `docker/` set it true,
+as do C/C++ and CMake sources (including third-party sources), `CMakeLists.txt` and `scripts/test_*`.
+Unknown paths and empty, unreadable or malformed lists set it true; established docs-only or `.github/`-only PRs and mixed docs/GitHub paths alone set it false.
+Both compare reads use the base classifier; the unchanged main workflow does not publish this output or schedule a PR arm leg.
 
 `--tier github-only` runs `shellcheck-version`, `actionlint-runner-labels`,
 `runner-allowlist`, `workflow-lint`, `ci-workflow-contract`, `docs-workflow-contract` and
@@ -1989,10 +1989,10 @@ The scanner runs actionlint before its structural text rules.
 The main branch rule table and parser grammar judge the fetched head workflows.
 A workflow change that needs a loosened rule must therefore use two changes.
 
-Rule and table changes land in two steps.
-First merge the checker or allow-table change while the existing workflows pass.
-Then merge the workflow change that uses the newly admitted rule or label.
-This order prevents one pull request from changing both sides of admission.
+Rule and table changes land first while existing workflows pass; workflow changes follow, so one PR cannot change both sides of admission.
+`gke-pr.yml` admits exactly two variants: OLD keeps the current jobs, outputs and gate bodies; defining the `build-arm` job selects all NEW checks together.
+NEW requires the exact arm classifier output, fixed Debug job on bare `gke-16cpu-32gb-arm64`, arm-aware `legs` needs/check and independent `result` check.
+Hybrids and extra jobs, outputs, needs or arm steps are refused; OLD retains its original exact rules and templates while the workflow change waits for a separate PR.
 The github-only class still runs the full workflow policy preflight.
 The proof legs are the only jobs skipped for the two documentation classes.
 The hosted result requires admission and preflight success in every class.
