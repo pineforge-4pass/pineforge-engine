@@ -11,7 +11,7 @@
 // event population.
 //
 // ReportMode::LegacyArrays is the default and the byte-identical historical
-// behaviour. ReportMode::SummaryOnly is the placeholder the lane brief names
+// behaviour. ReportMode::SummaryOnly is the placeholder the implementation contract names
 // (the final summary/full flag is owned by lane o1w-contract); in it,
 // set_optional_report_mode returns 0, the ReportC optional arrays stay null,
 // the output readers answer empty, and optional_sequence_summary() returns the

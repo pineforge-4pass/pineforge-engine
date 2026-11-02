@@ -18,7 +18,7 @@ namespace pineforge {
 
 // ---- authoritative higher-timeframe feeds ---------------------------------
 //
-// The generic contract (R5 lane N14 ruling, design §2.iv item 6 / ADR-0001):
+// The generic contract (the source-runtime extraction ruling, design §2.iv item 6 / ADR-0001):
 // a feed installed here is the venue's own bars of one timeframe. Four
 // rules follow from that and from nothing else:
 //   (a) a completed bucket of that timeframe takes its OHLCV from the bar

@@ -4197,11 +4197,11 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/test_check_doc_reverts.py')]),
         ('doc-reverts',
          [sys.executable, str(source / 'scripts/check_doc_reverts.py')]),
-        ('doc-reverts-net',
-         [sys.executable, str(source / 'scripts/check_doc_reverts.py'), '--head', 'HEAD']),
-        # R5 lane H-DOCGATES (AUDIT4-opus X10): every kernel `source_*` seam and
-        # every kernel member or row field the source layer writes is named by
-        # an ADR-0001 row, which states who writes it and its ruling.
+        ('doc-reverts-net', [sys.executable, str(source / 'scripts/check_doc_reverts.py'), '--head', 'HEAD']),
+        ('public-role-words-tests', [sys.executable, str(source / 'scripts/test_check_public_role_words.py')]),
+        ('public-role-words', [sys.executable, str(source / 'scripts/check_public_role_words.py')]),
+        # Every kernel `source_*` seam and every kernel member or row field the
+        # source layer writes has an ADR-0001 row stating its writer and rule.
         CheckCommand('kernel-seam-rows-tests',
                      [sys.executable, str(source / 'scripts/test_check_kernel_seam_rows.py')],
                      parallel=True),

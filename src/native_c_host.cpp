@@ -1,5 +1,5 @@
 /*
- * native_c_host.cpp — runtime side of <pineforge/native_c_api.h> (R5 lane L13).
+ * native_c_host.cpp — runtime side of <pineforge/native_c_api.h> (the versioned C host API).
  *
  * One kernel translation unit. It holds:
  *   - CCallbackHost, a `final` NativeStrategyHost that forwards each existing
@@ -1478,7 +1478,7 @@ public:
         /* The table is this host's for its whole life, so what it leaves
          * out is declared once: a missing on_bar_open is a bar-open hook
          * that does nothing, a missing on_precommit the default admission
-         * (R5 lane D2-A). */
+         * (the optional-hook and quiet-point changes). */
         declare_native_bar_open_hook(table_.on_bar_open != nullptr);
         declare_native_precommit_hook(table_.on_precommit != nullptr);
     }

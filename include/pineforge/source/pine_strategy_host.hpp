@@ -335,7 +335,7 @@ public:
         const NativeMarginRequirementView&) const final;
     std::optional<double> resolve_margin_call_units(
         const NativeMarginCallView&) const final;
-    // R5 lane R4d: the kernel arms a relative strategy.exit leg at its
+    // The anchored-leg integration: the kernel arms a relative strategy.exit leg at its
     // parent's fill; TradingView's projection of that level is the adapter's.
     std::optional<double> resolve_anchored_level(
         const NativeAnchoredLevelView&) const final;
@@ -531,7 +531,7 @@ public:
     // can never be liquidated — the formula denominator ``margin/100 -
     // direction`` is 0 — and no corpus short is sized at full equity).
     //
-    // R5 lane L12 (2.ii k): this used to be BacktestEngine state.  The kernel
+    // The kernel/source boundary extraction (2.ii k): this used to be BacktestEngine state.  The kernel
     // toggle is the presence of `spec.margin` since L4/L4b, so the TV emulator
     // switch belongs to the adapter that implements that emulator.  The value
     // reaches `PineExecutionAdapter::source_margin_call_enabled_` at the
@@ -553,7 +553,7 @@ public:
     // range-end close row/trade. Default off: every historical run is
     // byte-identical to before this flag existed.
     //
-    // R5 lane N14: this and probe tail suppression used to be BacktestEngine
+    // The source-runtime extraction: this and probe tail suppression used to be BacktestEngine
     // state. Both are the live runner's probe / settle protocol expressed in
     // Pine language state (barstate, session flags, the range-end row), so
     // they belong to the host that implements that protocol; the frozen C
@@ -592,7 +592,7 @@ public:
     bool probe_suppress_tail_logic() const { return probe_suppress_tail_logic_; }
 
     // Keep every event of the following runs readable after they end
-    // (NativeEventRetention::Full as a readback, R5 lane V19-B). The adapter
+    // (NativeEventRetention::Full as a readback, the bounded event journal). The adapter
     // declares Window and acknowledges what it reads, so a fixture that reads
     // a whole run's native_events() asks for this before the run. The spec,
     // its digest and every decision stay the adapter's.
@@ -944,7 +944,7 @@ private:
     void scheduler_configure_security_evaluators();
     bool scheduler_uses_aux_security_feed() const noexcept;
     void scheduler_prepare_security_sequence(PineScheduler::InputView);
-    // R5 lane R3b: the plain request.security sites of a batch run whose
+    // The source/kernel separation: the plain request.security sites of a batch run whose
     // input and script timeframes coincide are declared to the kernel as
     // NativeTimeframeSubscription series instances at the L6c begin-time hook
     // -- one per site, sec_id by index, barmerge.gaps_on as the kernel's
@@ -1163,7 +1163,7 @@ protected:
     std::string aux_security_input_tf_;
     std::vector<std::size_t> aux_security_chart_begin_;
     std::vector<std::size_t> aux_security_chart_end_;
-    // R5 lane V19-E: the four above as the v4 extension folds them, digested
+    // The retired-row compaction: the four above as the v4 extension folds them, digested
     // whenever they are set (never during a run): the fold reads one word
     // instead of every auxiliary bar.
     std::uint64_t aux_security_digest_ = 1469598103934665603ULL;

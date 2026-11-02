@@ -1,7 +1,7 @@
 #pragma once
 
 // Internal: a caller-owned memo of one SessionCalendar's resolved session
-// days (R5 lane PERF-K1). Not a public native API: it lives in src/, and the
+// days (the timezone lock profiling). Not a public native API: it lives in src/, and the
 // public native_calendar.hpp is unchanged.
 //
 // Resolving the session day an instant falls in costs a civil conversion of
@@ -38,7 +38,7 @@
 // what was asked before (America/Sitka 1867-10-18, Pacific/Kwajalein
 // 1969-09-30), and a memo keeps the first.
 //
-// A memo serves one calendar value. The owner calls reset() whenever the
+// A memo serves one calendar value. The caller invokes reset() whenever the
 // calendar it passes is rebuilt or reassigned; a memo handed a calendar at
 // another address forgets everything first (the address is identity only,
 // never dereferenced). It holds a bounded number of days (kDayCapacity),

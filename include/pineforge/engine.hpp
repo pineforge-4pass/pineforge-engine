@@ -2296,7 +2296,7 @@ public:
     // which the codegen reads as the default tz argument of the 1-arg
     // ``hour(time)`` / ``minute(time)`` / ``dayofweek(time)`` form. That
     // conflated two distinct TV concepts and silently shifted the result
-    // by the chart-vs-exchange offset (e.g. Asia/Taipei vs UTC = +8h)
+    // by the chart-vs-exchange offset (e.g. Asia/Hong_Kong vs UTC = +8h)
     // for crypto symbols. The shift cascaded into ``hour``-bucketed
     // accumulators — see
     // ``validation_typed_matrix/typed-matrix-probe-01-bool-regime-mask``,
@@ -2413,7 +2413,7 @@ public:
     // had on a bare host -- accepted before begin, guarded like every other
     // setter, and inert (no kernel path ever read the flags on a native
     // host) -- so it stores nothing, leaves last_error() untouched and
-    // answers false, meaning "no such mode here". R5 lane N14: the flags
+    // answers false, meaning "no such mode here". The source-runtime extraction: the flags
     // were BacktestEngine members until then.
     virtual bool set_realtime_tail(bool on, int horizon_bars);
     virtual bool set_probe_suppress_tail_logic(bool on);
@@ -2697,7 +2697,7 @@ private:
     // close walk and the opening beside a surviving book read it
     // (src/engine_execution.cpp); the execution consumer, a friend, projects
     // it from the spec at every begin, and the spec digest folds the spec's
-    // value. Private, so no host writes it (R5 lane K-ULP4).
+    // value. Private, so no host writes it (the representable-quantity refusal change).
     double native_quantity_tolerance_ = 0.0;
 
     // Physical scratch policy and run ownership, independent of the report

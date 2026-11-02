@@ -54,7 +54,7 @@ void BacktestEngine::register_security_eval(int sec_id, const std::string& reque
 // SymInfo::type -- the vocabulary the frozen C ABI's strategy_set_syminfo_type
 // fixes ("stock" / "futures" / "index" / "fund" vs the continuous-session
 // OTC classes "forex" / "cfd" / "crypto"), so the rule is the kernel's own
-// market-structure classification, not a source-language one (R5 lane N14
+// market-structure classification, not a source-language one (the source-runtime extraction
 // ruling, ADR-0001). OTC classes never close a day early: their session
 // template has no holiday knowledge, so the period completes on the next
 // session's first bar instead (the OANDA pins in timeframe.hpp).
@@ -73,7 +73,7 @@ void BacktestEngine::dispatch_security_eval(SecurityEvalState& state,
     state.ta_bar_index = bar_index;
     // The requested context starts at its own bar 0 (origin 0): its TA members
     // warm up over the first `length` evaluated bars, exactly as before. On the
-    // pump's runtime block when it has one (R5 lane D2-C).
+    // pump's runtime block when it has one (the per-pump state cache).
     AmbientBarContextScope bar_scope(NativeExecutionConsumer::bound(*this).pump_ambient(),
                                      static_cast<long long>(bar_index), 0);
     evaluate_security(state.sec_id, bar, publish);

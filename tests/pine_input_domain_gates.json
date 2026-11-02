@@ -404,7 +404,7 @@
     "predicate": "Mirror 18646 modeled close-pass scope",
     "old": "        && !stream_mode_ && !coof_recalc_active_;",
     "new": "        && modeled_input() && !coof_recalc_active_;",
-    "window": "    // and a gate reading that one skipped both passes there (R5 lane\n    // PAR-ORDERS).\n    const bool close_fill_pass = config_.process_orders_on_close\n        && modeled_input() && !coof_recalc_active_;\n    const bool entry_close_fill_pass = config_.process_orders_on_close\n        && modeled_input() && !coof_recalc_active_;\n    const int bar_index = projection_bar_index(context);"
+    "window": "    // and a gate reading that one skipped both passes there (the\n    // order-schedule correction).\n    const bool close_fill_pass = config_.process_orders_on_close\n        && modeled_input() && !coof_recalc_active_;\n    const bool entry_close_fill_pass = config_.process_orders_on_close\n        && modeled_input() && !coof_recalc_active_;\n    const int bar_index = projection_bar_index(context);"
   },
   {
     "file": "src/source/pine_adapter.cpp",

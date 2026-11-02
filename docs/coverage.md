@@ -483,8 +483,8 @@ period's open that Woodie's pivot weights (it weights the close) nor the
 period's open that DM compares with the close (it branches on the close
 meeting the high or the low). The overload
 `pivot_point_levels(method, open, high, low, close, next_open)` takes both
-and computes every type exactly as `PivotPointLevels` does (R5 lane
-B-ENGINE).
+and computes every type exactly as `PivotPointLevels` does (the
+source arithmetic correction).
 
 ### `PivotPointLevels` — pivot levels of an anchored period
 

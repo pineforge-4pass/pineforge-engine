@@ -265,8 +265,8 @@ inline double protect_limit(double slipped, double limit, bool buy) noexcept {
 }
 
 // A trailing stop that stands a whole number of ticks from a best that is
-// itself a ladder point IS the ladder point that many ticks away (R5 lane
-// E16). The subtraction cannot name it: 11.44 - 5 * 0.01 is
+// itself a ladder point IS the ladder point that many ticks away (the
+// integer-tick trailing stop). The subtraction cannot name it: 11.44 - 5 * 0.01 is
 // 11.389999999999998792, one binary64 ULP under 11.390000000000000568, so a
 // print that IS 11.39 never reaches a stop the run put five ticks under
 // 11.44. Both ends are decimal numbers the host measured on its own ladder,

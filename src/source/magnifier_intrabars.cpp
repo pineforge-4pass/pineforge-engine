@@ -1,4 +1,4 @@
-// TradingView's bar-magnifier intrabars (R5 lane MAG-INTRABAR): the table
+// TradingView's bar-magnifier intrabars (the TradingView intrabar import): the table
 // that picks the intrabar timeframe for a chart, and the lower-timeframe path
 // the Pine adapter hands the kernel's intrabar path for a magnified run.
 #include <pineforge/source/magnifier_intrabars.hpp>
