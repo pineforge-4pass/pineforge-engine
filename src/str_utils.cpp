@@ -4,14 +4,17 @@
 #include <charconv>
 #include <cmath>
 #include <ctime>
+#include <new>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <iomanip>
 #include <algorithm>
 #include <array>
 #include <cstring>
 #include <system_error>
+#include <type_traits>
 
 namespace pineforge {
 
@@ -494,6 +497,178 @@ ScriptString str_tostring(detail::o1::Store& store, double value,
 
 // ---------- str.format_time ----------
 
+namespace {
+
+// Built before main so formatting allocation failures can copy the message.
+const coded<std::length_error> time_format_storage_failure{
+    RunFailureValue{RunFailureCode::out_of_memory, nullptr},
+    "time format output exceeds available string storage"};
+static_assert(std::is_nothrow_copy_constructible_v<decltype(time_format_storage_failure)>,
+              "time format storage failure must not allocate when copied");
+
+std::string time_format_tokens(std::string fmt) {
+    // Preserve the mapping order, including interactions with raw % directives.
+    constexpr struct {
+        const char* token;
+        const char* specifier;
+    } mappings[] = {
+        {"yyyy", "%Y"}, {"MM", "%m"}, {"dd", "%d"},
+        {"HH", "%H"}, {"mm", "%M"}, {"ss", "%S"}
+    };
+    for (const auto& mapping : mappings) {
+        size_t pos = 0;
+        while ((pos = fmt.find(mapping.token, pos)) != std::string::npos) {
+            fmt.replace(pos, std::strlen(mapping.token), mapping.specifier);
+            pos += std::strlen(mapping.specifier);
+        }
+    }
+    return fmt;
+}
+
+std::string time_format_chunk(const std::string& fmt, const std::tm& fields) {
+    // A marker distinguishes an empty expansion from insufficient storage.
+    const std::string marked = " " + fmt;
+    const size_t maximum = marked.max_size();
+    size_t directives = 0;
+    size_t largest_width = 0;
+    for (size_t pos = 0; pos < fmt.size();) {
+        if (fmt[pos++] != '%') continue;
+        ++directives;
+        while (pos < fmt.size() && std::strchr("_-0^#", fmt[pos])) ++pos;
+        size_t width = 0;
+        while (pos < fmt.size() && fmt[pos] >= '0' && fmt[pos] <= '9') {
+            const size_t digit = static_cast<size_t>(fmt[pos++] - '0');
+            width = width > (maximum - digit) / 10
+                ? maximum : width * 10 + digit;
+        }
+        largest_width = std::max(largest_width, width);
+        if (pos < fmt.size() && (fmt[pos] == 'E' || fmt[pos] == 'O')) ++pos;
+        if (pos < fmt.size()) ++pos;
+    }
+    // Derive storage from every written width and directive, plus space for
+    // ordinary fields, literals, the marker and NUL. This is not a fixed output
+    // limit: a larger width increases the ceiling without being capped.
+    const size_t per_directive = largest_width > maximum - 64
+        ? maximum : largest_width + 64;
+    if (marked.size() == maximum) throw time_format_storage_failure;
+    size_t ceiling = marked.size() + 1;
+    ceiling = directives > (maximum - ceiling) / per_directive
+        ? maximum : ceiling + directives * per_directive;
+    std::string buffer(marked.size(), '\0');
+    for (;;) {
+        const size_t written = std::strftime(
+            buffer.data(), buffer.size(), marked.c_str(), &fields);
+        if (written != 0) return buffer.substr(1, written - 1);
+        if (buffer.size() == ceiling) {
+            throw time_format_storage_failure;
+        }
+        const size_t next = buffer.size() > ceiling / 2
+            ? ceiling : buffer.size() * 2;
+        try {
+            buffer.resize(next);
+        } catch (const std::bad_alloc&) {
+            throw time_format_storage_failure;
+        } catch (const std::length_error&) {
+            throw time_format_storage_failure;
+        }
+    }
+}
+
+size_t time_format_directive_end(const std::string& fmt, size_t first) {
+    size_t pos = first + 1;
+    while (pos < fmt.size() && std::strchr("_-0^#", fmt[pos])) ++pos;
+    while (pos < fmt.size() && fmt[pos] >= '0' && fmt[pos] <= '9') ++pos;
+    if (pos < fmt.size() && (fmt[pos] == 'E' || fmt[pos] == 'O')) ++pos;
+    if (pos < fmt.size()) ++pos;
+    return pos;
+}
+
+std::string time_format_unquoted(const std::string& pattern, const std::tm& fields) {
+    const std::string fmt = time_format_tokens(pattern);
+    std::string expanded;
+    for (size_t pos = 0; pos < fmt.size();) {
+        if (fmt[pos] == '%') {
+            const size_t first = pos;
+            pos = time_format_directive_end(fmt, first);
+            expanded.append(fmt, first, pos - first);
+        } else if (fmt[pos] == 'Z' && (pos == 0 || fmt[pos - 1] != 'Z')
+                   && (pos + 1 == fmt.size() || fmt[pos + 1] != 'Z')) {
+            const long minutes = fields.tm_gmtoff / 60;
+            const long magnitude = minutes < 0 ? -minutes : minutes;
+            expanded += fields.tm_gmtoff < 0 ? '-' : '+';
+            const std::string hours = std::to_string(magnitude / 60);
+            if (hours.size() < 2) expanded += '0';
+            expanded += hours;
+            expanded += static_cast<char>('0' + magnitude % 60 / 10);
+            expanded += static_cast<char>('0' + magnitude % 10);
+            ++pos;
+        } else {
+            expanded += fmt[pos++];
+        }
+    }
+    return time_format_chunk(expanded, fields);
+}
+
+bool time_format_has_unmatched_quote(const std::string& pattern) {
+    // Unmatched quotes remain unmeasured. Keep the whole pattern's previous
+    // behavior until measured values decide their meaning.
+    bool quoted = false;
+    for (size_t pos = 0; pos < pattern.size(); ++pos) {
+        if (pattern[pos] == '\'') {
+            if (quoted && pos + 1 < pattern.size() && pattern[pos + 1] == '\'') {
+                ++pos;
+            } else {
+                quoted = !quoted;
+            }
+        } else if (!quoted && pattern[pos] == '%') {
+            pos = time_format_directive_end(pattern, pos) - 1;
+        }
+    }
+    return quoted;
+}
+
+std::string time_format_pattern(const std::string& format, const std::tm& fields) try {
+    const std::string pattern = format.substr(0, format.find('\0'));
+    if (time_format_has_unmatched_quote(pattern)) {
+        return time_format_chunk(time_format_tokens(pattern), fields);
+    }
+
+    std::string result;
+    size_t pos = 0;
+    while (pos < pattern.size()) {
+        size_t first_quote = pos;
+        while (first_quote < pattern.size() && pattern[first_quote] != '\'') {
+            if (pattern[first_quote] == '%') {
+                first_quote = time_format_directive_end(pattern, first_quote);
+            } else {
+                ++first_quote;
+            }
+        }
+        if (first_quote == pattern.size()) {
+            result += time_format_unquoted(pattern.substr(pos), fields);
+            break;
+        }
+        result += time_format_unquoted(pattern.substr(pos, first_quote - pos), fields);
+        pos = first_quote + 1;
+        // Append quoted bytes directly so even a percent stays literal.
+        while (pos < pattern.size()) {
+            const char ch = pattern[pos++];
+            if (ch == '\'') {
+                if (pos == pattern.size() || pattern[pos] != '\'') break;
+                ++pos;
+            }
+            result += ch;
+        }
+    }
+    return result;
+} catch (const std::bad_alloc&) {
+    throw time_format_storage_failure;
+} catch (const std::length_error&) {
+    throw time_format_storage_failure;
+}
+
+} // namespace
+
 std::string str_format_time(long long timestamp_ms,
                                  const std::string& format,
                                  const std::string& timezone) {
@@ -504,28 +679,9 @@ std::string str_format_time(long long timestamp_ms,
         localtime_r(&secs, &tm_buf);
     } else {
         gmtime_r(&secs, &tm_buf);
+        tm_buf.tm_gmtoff = 0;
     }
-
-    // Map Pine tokens to strftime specifiers
-    std::string fmt = format;
-    // Order matters: longer tokens first to avoid partial replacement
-    auto replace_all = [&](const std::string& from, const std::string& to) {
-        size_t pos = 0;
-        while ((pos = fmt.find(from, pos)) != std::string::npos) {
-            fmt.replace(pos, from.size(), to);
-            pos += to.size();
-        }
-    };
-    replace_all("yyyy", "%Y");
-    replace_all("MM", "%m");
-    replace_all("dd", "%d");
-    replace_all("HH", "%H");
-    replace_all("mm", "%M");
-    replace_all("ss", "%S");
-
-    char buf[256];
-    strftime(buf, sizeof(buf), fmt.c_str(), &tm_buf);
-    return std::string(buf);
+    return time_format_pattern(format, tm_buf);
 }
 
 // ---------- str.match ----------
