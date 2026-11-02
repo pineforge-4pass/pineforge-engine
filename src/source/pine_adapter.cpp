@@ -7602,10 +7602,31 @@ std::size_t PineExecutionAdapter::accepted_entries_in_cycle(
         // TradingView counts a pending same-side MARKET entry against the
         // cap and never a pending LIMIT entry (lane W8A-SIGSTATE-1 R-B,
         // tests/fixtures/pyramiding_open_order).
-        if (placement != placement_.end() && placement->second.opening
-            && placement->second.source_id != id
-            && placement->second.is_long == is_long
-            && !pure_limit_entry(placement->second)) ++accepted_in_cycle;
+        if (placement == placement_.end() || !placement->second.opening
+            || placement->second.is_long != is_long) continue;
+        if (placement->second.source_id != id && !pure_limit_entry(placement->second)) {
+            ++accepted_in_cycle;
+            continue;
+        }
+        // A synchronous fill can leave its applied notification queued.
+        // Such an opening already occupies a slot, even for the same id or
+        // a limit order. An unfilled replacement has no physical origin.
+        const auto cohort = cohorts_by_id_.find_resident(placement->second.source_id);
+        if (cohort != cohorts_by_id_.end()
+            && std::find(cohort->second.opened.begin(), cohort->second.opened.end(), handle)
+                != cohort->second.opened.end()) continue;
+        struct Opening {
+            std::uint64_t incarnation;
+            bool settled = false;
+        } opening{handle.incarnation};
+        (void)require_host().visit_native_open_lot_values(
+            &opening, [](void* context, std::uint64_t origin, double, double units) {
+                auto& opening = *static_cast<Opening*>(context);
+                if (origin != opening.incarnation || units == 0.0) return true;
+                opening.settled = true;
+                return false;
+            });
+        if (opening.settled) ++accepted_in_cycle;
     }
     return accepted_in_cycle;
 }
@@ -8140,7 +8161,8 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     }
     if (!same_bar_market_candidate && config_.pyramiding > 0 && current != 0.0
         && ((current > 0.0) == is_long)
-        && !(priced && config_.process_orders_on_close)) {
+        && !(priced && config_.process_orders_on_close
+             && !coof_recalc_active_)) {
         auto accepted_in_cycle = accepted_entries_in_cycle(is_long, id);
         // The pyramiding cap: the open close-ledger records and the same-side market
         // entries the bar placed before this one, in place of the cycle's
