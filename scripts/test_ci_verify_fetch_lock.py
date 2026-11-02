@@ -8,15 +8,23 @@ unchanged. No network, fabricated shallow.lock, or deadline is involved.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from repro_ci_verify_fetch_race import git, run_repetitions
 
 
 class ProviderFetchLock(unittest.TestCase):
     def setUp(self):
+        # The fixture is fetch-only: the overlay-present CI profile sets this
+        # variable, and the workers inherit the parent's environment at spawn.
+        environment = mock.patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        os.environ.pop('PINEFORGE_PRIVATE_FIXTURES', None)
         self.temporary = tempfile.TemporaryDirectory(prefix='ci-verify-fetch-')
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
