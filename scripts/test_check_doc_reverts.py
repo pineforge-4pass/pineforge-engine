@@ -27,6 +27,7 @@ import unittest
 from unittest import mock
 
 import check_doc_reverts as guard
+from ci_preflight import check_commands
 
 GATE = Path(guard.__file__).resolve()
 
@@ -90,6 +91,15 @@ class Repo:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = guard.main(['--root', str(self.root), *args])
         return code, out.getvalue() + err.getvalue()
+
+    def run_ci(self) -> tuple[int, str]:
+        """Run the checker arguments CI really selects, only changing its root."""
+        plan = check_commands(GATE.parent.parent, env={}, tier='fast')
+        results = [self.run(*entry[1][2:]) for entry in plan
+                   if len(entry[1]) > 1 and Path(entry[1][1]) == GATE]
+        if not results:
+            raise AssertionError('fast preflight has no doc-reverts checker invocation')
+        return max(code for code, _ in results), ''.join(out for _, out in results)
 
     def close(self) -> None:
         self.dir.cleanup()
@@ -313,6 +323,182 @@ class MustPass(unittest.TestCase):
             code, out = r.run()                                      # no base: walk to the gate
             self.assertEqual(code, 0, out)
             self.assertIn('1 commits since this gate landed', out)
+
+
+class MergeCommits(unittest.TestCase):
+    PAGE = 'docs/pages/guide.md'
+    OLD = 'The ambient default is thread-local, and each scope restores it on exit.'
+    NEW = "The ambient default is the running pump's block, and each scope restores it on exit."
+    NOTE = 'The lane adds a separate sentence about its review notes.'
+    TOP_NOTE = 'The upper lane adds another sentence about its review notes.'
+    MAIN_NOTE = 'Only the later main successor carries this additional sentence.'
+
+    def assert_page(self, r: Repo, text: str, ref: str = 'HEAD') -> None:
+        self.assertEqual(r.page.read_text(), text)
+        self.assertEqual(r.git('show', f'{ref}:{self.PAGE}'), text.strip())
+
+    def commit_page(self, r: Repo, text: str, message: str,
+                    parents: tuple[str, ...] = ()) -> str:
+        commit = r.commit(text, message)
+        self.assert_page(r, text, commit)
+        self.assertEqual(r.git('rev-list', '--parents', '-n', '1', commit).split(),
+                         [commit, *parents])
+        return commit
+
+    def conflict_with_main(self, r: Repo, lane: str, main: str) -> None:
+        result = subprocess.run(
+            ['git', '-C', str(r.root), 'merge', '--no-ff', '--no-commit', 'main'],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('CONFLICT (content)', result.stdout + result.stderr)
+        self.assertEqual(r.git('rev-parse', 'HEAD'), lane)
+        self.assertEqual(r.git('rev-parse', 'MERGE_HEAD'), main)
+        self.assertEqual(r.git('diff', '--name-only', '--diff-filter=U'), self.PAGE)
+
+    def wording_page(self, wording: str, *, note: bool = False) -> str:
+        line = wording + (' ' + self.NOTE if note else '')
+        return with_keep_handle(BASE_PAGE + '\n' + line + '\n')
+
+    def wording_merge(self, r: Repo, *, keep_older: bool = True,
+                      named: bool = False) -> tuple[str, str, str]:
+        old_page = self.wording_page(self.OLD)
+        main_page = self.wording_page(self.NEW)
+        lane_page = self.wording_page(self.OLD, note=True)
+        common = self.commit_page(
+            r, old_page, 'Docs: ambient default and keep_handle (R5 lane V19-D)')
+        r.git('checkout', '-q', '-b', 'main')
+        main = self.commit_page(r, main_page, 'Docs: the pump block (R5 lane D2-C)',
+                                (common,))
+        r.git('checkout', '-q', 'lane')
+        lane_message = ("docs: keep the older default instead of D2-C's wording"
+                        if named else 'docs: add the lane note')
+        lane = self.commit_page(r, lane_page, lane_message, (common,))
+        self.assertEqual(r.git('merge-base', 'HEAD', 'main'), common)
+        self.conflict_with_main(r, lane, main)
+        resolved = self.wording_page(self.OLD if keep_older else self.NEW, note=True)
+        merged = self.commit_page(r, resolved, 'Merge main into lane', (lane, main))
+        self.assertEqual(r.git('show', f'{merged}^1:{self.PAGE}'), lane_page.strip())
+        self.assertEqual(r.git('show', f'{merged}^2:{self.PAGE}'), main_page.strip())
+        self.assertEqual(r.git('merge-base', 'HEAD', 'main'), main)
+        self.assertIn(self.OLD if keep_older else self.NEW, r.page.read_text())
+        self.assertNotIn(self.NEW if keep_older else self.OLD, r.page.read_text())
+        return main, lane, merged
+
+    def assert_unnamed_revert(self, code: int, out: str, main: str) -> None:
+        self.assertEqual(code, 1, out)
+        self.assertIn(self.PAGE + ': unnamed revert', out)
+        self.assertIn(self.NEW, out)
+        self.assertIn('older text restored:', out)
+        self.assertIn(self.OLD, out)
+        self.assertIn('D2-C', out)
+        self.assertIn(main[:7], out)
+
+    def test_ci_rejects_a_merge_that_keeps_older_wording_over_main(self) -> None:
+        """Row 1: RED until CI judges the net main-to-HEAD change as well."""
+        with repo() as r:
+            main, lane, merged = self.wording_merge(r)
+            self.assertEqual(r.git('log', '-1', '--format=%B', lane),
+                             'docs: add the lane note')
+            self.assertEqual(r.git('log', '-1', '--format=%B', merged),
+                             'Merge main into lane')
+            code, out = r.run('--base', main, '--head', merged)
+            self.assert_unnamed_revert(code, out, main)  # Existing replay control.
+            code, out = r.run_ci()
+            self.assert_unnamed_revert(code, out, main)  # Sole intended RED.
+
+    def test_ci_accepts_a_merge_revert_named_by_a_branch_commit(self) -> None:
+        """Row 2: a non-merge branch message may name main's replaced sentence."""
+        with repo() as r:
+            main, lane, merged = self.wording_merge(r, named=True)
+            self.assertIn('D2-C', r.git('log', '-1', '--format=%B', lane))
+            self.assertEqual(r.git('log', '-1', '--format=%B', merged),
+                             'Merge main into lane')
+            code, out = r.run_ci()
+            self.assertEqual(code, 0, out)
+            code, out = r.run('--base', main, '--head', merged)
+            self.assertEqual(code, 0, out)
+
+    def test_ci_accepts_a_merge_that_takes_main_wording(self) -> None:
+        """Row 3: resolving the same real conflict to main's text is allowed."""
+        with repo() as r:
+            main, lane, merged = self.wording_merge(r, keep_older=False)
+            code, out = r.run_ci()
+            self.assertEqual(code, 0, out)
+            code, out = r.run('--base', main, '--head', merged)
+            self.assertEqual(code, 0, out)
+
+    def test_ci_still_rejects_an_unnamed_non_merge_deletion(self) -> None:
+        """Row 4: the existing per-commit judgment must remain binding."""
+        with repo() as r:
+            main, lane, merged = self.wording_merge(r, keep_older=False)
+            deleted_page = self.wording_page(self.NEW, note=True).replace(KEEP_HANDLE + '\n', '')
+            deleted = self.commit_page(r, deleted_page, 'docs: tidy the guide', (merged,))
+            self.assertEqual(set(guard.judged_commits(r.root, main)), {lane, deleted})
+            code, out = r.run_ci()
+            self.assertEqual(code, 1, out)
+            self.assertIn(self.PAGE + ': unnamed deletion', out)
+            self.assertIn(KEEP_HANDLE, out)
+            self.assertIn('V19-D', out)
+
+    def test_ci_keeps_inherited_main_out_when_a_stack_base_moves(self) -> None:
+        """Row 5: moving the base and then advancing only main preserve the verdict."""
+        with repo() as r:
+            common_page = with_keep_handle()
+            lane_page = BASE_PAGE + '\n' + KEEP_HANDLE + ' ' + self.NOTE + '\n'
+            lower_page = BASE_PAGE + '\n' + self.NOTE + '\n'
+            top_page = lower_page + '\n' + self.TOP_NOTE + '\n'
+            common = self.commit_page(
+                r, common_page, 'Docs: keep_handle on the guide (R5 lane V19-D) (#12)')
+            lane = self.commit_page(r, lane_page, 'docs: add the lower lane note', (common,))
+            r.git('checkout', '-q', '-b', 'main', common)
+            main = self.commit_page(r, BASE_PAGE, 'docs: tidy the main guide (#13)', (common,))
+            r.git('checkout', '-q', 'lane')
+            self.assert_page(r, lane_page)
+            self.conflict_with_main(r, lane, main)
+            lower = self.commit_page(r, lower_page, 'Merge main into the lower lane', (lane, main))
+            self.assertEqual(r.git('show', f'{lower}^1:{self.PAGE}'), lane_page.strip())
+            self.assertEqual(r.git('show', f'{lower}^2:{self.PAGE}'), BASE_PAGE.strip())
+            r.git('checkout', '-q', '-b', 'stack')
+            top = self.commit_page(r, top_page, 'docs: add the upper lane note', (lower,))
+
+            # Main's inherited deletion really would fail if it were judged.
+            code, out = r.run('--base', common, '--head', main)
+            self.assertEqual(code, 1, out)
+            self.assertIn(self.PAGE + ': unnamed deletion', out)
+            self.assertIn(KEEP_HANDLE, out)
+            self.assertIn('V19-D', out)
+            self.assertEqual(r.git('merge-base', 'HEAD', 'main'), main)
+            self.assertEqual(guard.default_base(r.root), main)
+            self.assertEqual(set(guard.judged_commits(r.root, main)), {lane, top})
+            before_code, before_out = r.run_ci()
+            self.assertEqual(before_code, 0, before_out)
+
+            # Absorbing the lower layer causes a genuine merge-base shift.
+            r.git('checkout', '-q', 'main')
+            r.git('merge', '--ff-only', 'lane')
+            self.assertEqual(r.git('rev-parse', 'HEAD'), lower)
+            self.assert_page(r, lower_page)
+            r.git('checkout', '-q', 'stack')
+            self.assert_page(r, top_page)
+            self.assertEqual(r.git('merge-base', 'HEAD', 'main'), lower)
+            self.assertEqual(guard.default_base(r.root), lower)
+            self.assertEqual(set(guard.judged_commits(r.root, lower)), {top})
+            shifted_code, shifted_out = r.run_ci()
+            self.assertEqual(shifted_code, before_code, shifted_out)
+
+            # A later main-only successor leaves that shared base unchanged.
+            r.git('checkout', '-q', 'main')
+            successor_page = lower_page + '\n' + self.MAIN_NOTE + '\n'
+            successor = self.commit_page(r, successor_page, 'docs: main advances alone', (lower,))
+            r.git('checkout', '-q', 'stack')
+            self.assert_page(r, top_page)
+            self.assertNotEqual(successor, lower)
+            self.assertEqual(r.git('merge-base', 'HEAD', 'main'), lower)
+            self.assertEqual(guard.default_base(r.root), lower)
+            self.assertEqual(set(guard.judged_commits(r.root, lower)), {top})
+            code, out = r.run_ci()
+            self.assertEqual(code, shifted_code, out)
+            self.assertEqual(out, shifted_out)
 
 
 if __name__ == '__main__':

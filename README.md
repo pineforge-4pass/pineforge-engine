@@ -281,7 +281,7 @@ workaround for those versions.
 
 ## Validation scoreboard
 
-**Measured <!-- pf:scoreboard.date -->2026-10-07<!-- /pf -->** on main engine <!-- pf:scoreboard.engineCommit|short-code -->`b3192bfc`<!-- /pf --> with codegen-oss <!-- pf:scoreboard.codegenCommit|short-code -->`bfc4ddce`<!-- /pf --> (baseline <!-- pf:scoreboard.id|code -->`pineforge-parity-baseline-20261007-engine-b3192bfc`<!-- /pf -->, snapshot <!-- pf:scoreboard.snapshotSha256|short-code -->`28ba8dbd`<!-- /pf -->): **<!-- pf:scoreboard.graded|int -->7,989<!-- /pf --> graded probes, <!-- pf:scoreboard.excellent|int -->7,983<!-- /pf --> excellent + <!-- pf:scoreboard.strong|int -->6<!-- /pf --> strong**, <!-- pf:scoreboard.belowStrong|int -->0<!-- /pf --> below strong and <!-- pf:scoreboard.engineErrors|int -->0<!-- /pf --> engine errors across <!-- pf:scoreboard.lanes|int -->18<!-- /pf --> market/timeframe lanes. The historical release 1.0.1 inventory holds <!-- pf:inventory.tvTrades|int -->4,776,328<!-- /pf --> trades.
+**Measured <!-- pf:scoreboard.date -->2026-11-01<!-- /pf -->** on main engine <!-- pf:scoreboard.engineCommit|short-code -->`a3e7822e`<!-- /pf --> with codegen-oss <!-- pf:scoreboard.codegenCommit|short-code -->`c1cc532b`<!-- /pf --> (baseline <!-- pf:scoreboard.id|code -->`pineforge-parity-baseline-20261101-engine-a3e7822e`<!-- /pf -->, snapshot <!-- pf:scoreboard.snapshotSha256|short-code -->`bdda9ac6`<!-- /pf -->): **<!-- pf:scoreboard.graded|int -->7,989<!-- /pf --> graded probes, <!-- pf:scoreboard.excellent|int -->7,983<!-- /pf --> excellent + <!-- pf:scoreboard.strong|int -->6<!-- /pf --> strong**, <!-- pf:scoreboard.belowStrong|int -->0<!-- /pf --> below strong and <!-- pf:scoreboard.engineErrors|int -->0<!-- /pf --> engine errors across <!-- pf:scoreboard.lanes|int -->18<!-- /pf --> market/timeframe lanes. The historical release 1.0.1 inventory holds <!-- pf:inventory.tvTrades|int -->4,776,328<!-- /pf --> trades.
 
 Release **1.4.0 (2026-10-08)** maps to **<!-- pf:releases[1.4.0].scoreboard.excellent|int -->7,983<!-- /pf --> excellent / <!-- pf:releases[1.4.0].scoreboard.strong|int -->6<!-- /pf --> strong** on <!-- pf:releases[1.4.0].scoreboard.graded|int -->7,989<!-- /pf --> graded probes (baseline <!-- pf:releases[1.4.0].scoreboard.id|code -->`pineforge-parity-baseline-20261007-engine-b3192bfc`<!-- /pf -->, promoted <!-- pf:releases[1.4.0].scoreboard.date -->2026-10-07<!-- /pf --> UTC), with <!-- pf:releases[1.4.0].scoreboard.belowStrong|int -->0<!-- /pf --> below strong and <!-- pf:releases[1.4.0].scoreboard.engineErrors|int -->0<!-- /pf --> engine errors. These are recorded grading outcomes for that pair and population.
 
@@ -296,7 +296,7 @@ The quantities above render from the public [facts tokens](https://github.com/pi
 
 ### Lane by lane
 
-<!-- pf:scoreboard.pairs|lanes -->
+<!-- pf:scoreboard|lanes-all -->
 
 | Market · timeframe | Probes graded | Excellent | Strong | Below strong |
 |---|---:|---:|---:|---:|
@@ -304,20 +304,7 @@ The quantities above render from the public [facts tokens](https://github.com/pi
 | BINANCE:BTCUSDT · 15m | 668 | 666 | 2 | 0 |
 | BINANCE:BTCUSDT · 1D | 516 | 516 | 0 | 0 |
 | BINANCE:ETHUSDT.P · 1D | 540 | 540 | 0 | 0 |
-| CME_MINI:ES1! · 15m | 76 | 76 | 0 | 0 |
-| CME_MINI:ES1! · 1D | 35 | 35 | 0 | 0 |
-| CME_MINI:NQ1! · 15m | 74 | 74 | 0 | 0 |
-| CME_MINI:NQ1! · 1D | 37 | 37 | 0 | 0 |
-| NASDAQ:AAPL · 15m | 632 | 631 | 1 | 0 |
-| NASDAQ:AAPL · 1D | 464 | 464 | 0 | 0 |
-| NSE:NIFTY · 15m | 314 | 314 | 0 | 0 |
-| NSE:NIFTY · 1D | 225 | 225 | 0 | 0 |
-| NYSE:F · 15m | 637 | 636 | 1 | 0 |
-| NYSE:F · 1D | 505 | 505 | 0 | 0 |
-| OANDA:EURUSD · 15m | 653 | 652 | 1 | 0 |
-| OANDA:EURUSD · 1D | 453 | 453 | 0 | 0 |
-| OANDA:XAUUSD · 15m | 695 | 694 | 1 | 0 |
-| OANDA:XAUUSD · 1D | 456 | 456 | 0 | 0 |
+| All other markets (7 markets, 14 lanes) | 5,256 | 5,252 | 4 | 0 |
 | **Total** | **7,989** | **7,983** | **6** | **0** |
 
 <!-- /pf -->
