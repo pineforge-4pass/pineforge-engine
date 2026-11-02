@@ -259,6 +259,8 @@ set(TEST_SOURCES
     test_math_sum
     test_recompute
     test_str_utils
+    test_str_format_time_patterns
+    test_str_format_time_preservation
     test_ta
     test_mfi_source_direction
     test_ta_indicators_extras

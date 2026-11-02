@@ -693,7 +693,7 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 | `str.contains()` | fn | 🔧 Transpiler | `std::string::find` | |
 | `str.endswith()` | fn | 🔧 Transpiler | `std::string::ends_with` or substr compare | |
 | `str.format()` | fn | ✅ Runtime | `pine_str_format()` in `str_utils.hpp` | |
-| `str.format_time()` | fn | ✅ Runtime | `pine_str_format_time()` in `str_utils.hpp` | |
+| `str.format_time()` | fn | ✅ Runtime | `pine_str_format_time()` in `str_utils.hpp` | A single-quoted span is literal, including a `%` inside it; a single `Z` outside quotes is the numeric UTC offset (`+hhmm`); an unmatched quote keeps the previous behaviour. |
 | `str.length()` | fn | 🔧 Transpiler | `std::string::size()` | |
 | `str.lower()` | fn | 🔧 Transpiler | `std::tolower` transform | |
 | `str.match()` | fn | ✅ Runtime | `pine_str_match()` — regex match | |
