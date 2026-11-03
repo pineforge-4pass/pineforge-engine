@@ -20,14 +20,19 @@
 //    cd650d6c915c97e77aa820274538ecc49ee4a11b88126ff3ec2dc0ab28462e5f
 //    for process_orders_on_close = false and
 //    9b1c1c3227292f3f0318e8b59198370055b4f0978d5f6ff689018fd2065ae4ed
-//    for process_orders_on_close = true. TradingView shows two short
-//    "reused" trades, quantity 1 and then quantity 2, the second entering at
-//    the bar-21 open (at the bar-20 close when orders process on close). The
-//    Pine script's bar-20 limit is close * 10, which its chart never reaches;
-//    the quantity-7 limit at 191 in this probe stands for that never-reached
-//    limit. The Pine script ends with strategy.close_all(); the probe's
-//    empty-id strategy_close is the same full-position close. The prices
-//    checked here are the constructed feed's, derived by hand below.
+//    for process_orders_on_close = true. Each capture shows two short
+//    "reused" trades, quantity 1 and then quantity 2. With
+//    process_orders_on_close = false the second enters at the bar-21 open
+//    and exits at the bar-31 open. With process_orders_on_close = true it
+//    fills at the bar-20 close and exits at the bar-30 close, and
+//    TradingView lists each of those fills on the bar whose close it fills
+//    at (the second trade on bars 20 and 30, the first on bars 10 and 14),
+//    as the expected bar indexes below do. The Pine script's bar-20 limit is
+//    close * 10, which its chart never reaches; the quantity-7 limit at 191
+//    in this probe stands for that never-reached limit. The Pine script ends
+//    with strategy.close_all(); the probe's empty-id strategy_close is the
+//    same full-position close. The prices checked here are the constructed
+//    feed's, derived by hand below.
 //    That no order is pending at bar 25 is derived, not read from the
 //    captures: Pine keeps one order per id, so the bar-20 market call
 //    replaced the limit, and that market order filled at the bar-21 open
@@ -37,6 +42,19 @@
 //    and true: hand-derived controls with no TradingView capture. The bar-10
 //    short holds the only pyramiding slot, so neither bar-20 entry adds to
 //    it: one trade, the short of 1 held from bar 10 to the bar-30 close.
+//    What is pending at bar 25 is derived from the engine's cap rule; no
+//    capture shows TradingView's pending orders for these rows. The market
+//    call is refused at the cap when it is made, in both rows, and a refused
+//    market call leaves an earlier order of its id in place. With
+//    process_orders_on_close = false the priced call is refused at the call
+//    too, so nothing is pending at bar 25. With process_orders_on_close =
+//    true a priced add is not judged at the call: it is placed over the cap,
+//    since a close later in its bar could free the slot. Nothing withdraws
+//    it while calc_on_order_fills is on, and the feed never reaches 191, so
+//    at bar 25 it is the one pending order, a limit at 191.
+//    These rows can fail: a change that let either bar-20 call add to the
+//    open short would show a second lot or a second trade, and one that
+//    dropped the resting limit would show no pending order.
 //
 // 3. Metamorphic controls that need no TradingView claim. Each changes row 1
 //    in a way that must leave its trades as they are:
@@ -51,6 +69,21 @@
 //        a market "B" of 2. Orders with different ids never replace each
 //        other: "B" fills where row 1's successor fills, and "A" is never
 //        reached, so at bar 25 it is the one pending order, a limit at 191.
+//    (a) and (b) are premise checks: they pass with and without the change
+//    by construction. (a) issues no priced call, so nothing is held for the
+//    change to drop. In (b) the change does not act, because it needs
+//    calc_on_order_fills. (c) can fail: a cleanup wider than the one id
+//    would drop the held limit "A", and the row checks that "A" is pending.
+//
+// The cleanup keeps a held entry that was issued after the entry the core
+// accepts. That guard is defensive and unexercised: in every row the held
+// entry is older than the accepted one, and reading the code found no call
+// sequence in which it is newer. With calc_on_order_fills on, an entry the
+// core accepts while an evaluation holds rows is a later call of that same
+// evaluation, newer than every held row. The queues released ahead of the
+// held rows hold no entry in such a run: the delayed market orders hold
+// exits and strategy.order calls, which the cleanup leaves alone, and the
+// same-bar batch needs calc_on_order_fills off.
 //
 // Hand derivation from the constructed feed. Bar i (0 to 39) opens at
 // 100 + 2i, has high = open + 3, low = open - 2 and closes at open + 1; bar
@@ -351,6 +384,13 @@ void check_closed_incarnation(bool on_close, bool close_old) {
         CHECK(p.bar25_pending == 0);
     } else {
         check_trade(p, 0, held_short(on_close));
+        // Refused at the cap with next-open fills; with close fills the
+        // priced add rests over the cap, the one pending order at 191.
+        CHECK(p.bar25_pending == (on_close ? 1 : 0));
+        if (on_close) {
+            CHECK(p.bar25_pending_limit == 191.0);
+            CHECK(std::isnan(p.bar25_pending_stop));
+        }
     }
     print_book(p);
 }
