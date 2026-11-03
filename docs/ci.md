@@ -45,7 +45,7 @@ unreadable or malformed change lists also require it; established docs-only
 and `.github/`-only PRs set it false and skip the leg. The PR workflow now publishes this output. The base classifier
 computes it on both compare reads. When it is true, the existing `legs` and
 `result` gates require arm success and reject a skip, failure or cancellation.
-The job uses `gke-16cpu-32gb-arm64`, installs the post-arm dependencies and
+The job uses `gke-16cpu-32gb-arm64-128gb`, installs the post-arm dependencies and
 runs the complete `ci_verify.py debug` profile, building every Debug test
 target and running that profile's CTest selection before merge. An irrelevant arm leg may skip while the other proof legs still run.
 
@@ -71,14 +71,14 @@ or `slow` rows. The target rebuilds those executables with their library.
 PR proof legs build cold; trusted post workflows also build cold and contain
 no Actions cache restore or save.
 
-Verification jobs keep literal runner pins at the workflow boundary: GKE PR
+Verification jobs keep exact runner pins at the workflow boundary: GKE PR
 admit is hosted, while PR preflight, proof legs and parity use bare GKE scale-set names;
 credentialed post work keeps its protected `["self-hosted","pf-gcp-post"]` fleet.
-Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer
-profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
+Post Release/Debug/kernel and native shards and post sanitizers use fixed bare GKE scale-set
+names; both native-live sanitizer profiles use an exact runner matrix. Jobs run directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
 Hosted `ubuntu-24.04` runs PR `authz`, admission, `legs` and `result` jobs, and `docs.yml`'s `build`; secret-free post guards and aggregates use bare scalar GKE names. These light, secret-free jobs need no VM-only tools, mounts or caches.
 The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use `gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.
-Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 36 GKE job instances: amd64 32/16/8/4/2 CPU labels carry 8/7/7/5/7 jobs and arm64 16 CPU carries 2; each label's static cap is 8.
+Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 36 GKE job instances: amd64 32 CPU default/256 GB labels carry 4/4 jobs, amd64 16 CPU default/128/256 GB labels carry 3/3/1, amd64 8/4/2 CPU labels carry 7/5/7, and arm64 16 CPU 128 GB carries 2; each label's static cap is 8.
 
 The manual `release-ruleset-probe.yml` workflow runs `authz` on
 bare scalar `gke-2cpu-4gb-amd64` and `probe` on `["self-hosted","pf-gcp-post"]`.
@@ -624,7 +624,7 @@ The runner's curl version floor still applies at configure time.
 `live-tsan` runs the same inventory in a separate ThreadSanitizer build,
 checks every runner compile unit for instrumentation, and stops on a race.
 `native-live.yml` runs four `native` shards on `gke-8cpu-16gb-amd64`;
-`live-sanitizers` and `live-tsan` each build once on `gke-16cpu-32gb-amd64`.
+`live-sanitizers` builds once on `gke-16cpu-32gb-amd64-256gb` and `live-tsan` once on `gke-16cpu-32gb-amd64-128gb`, selected by the exact `matrix.runner` include rows.
 Both matrices keep `fail-fast: false` and build pinned WebSocket curl cold. A failed cell does not cancel its peers.
 Native diagnostic artifacts carry the shard index; compiler and curl installations have no Actions cache.
 The `native-live (native)` aggregate requires all four successful summary proofs;
@@ -1623,24 +1623,24 @@ runs, and this page does not claim either target as met.
 ## Runners and time limits
 
 Credentialed work retains its VM pins; secret-free post Linux jobs run directly in GKE runner pods carrying the engine toolchain image and sudo.
-The four amd64 post legs, arm64 cells, preflight, parity and native verification use bare GKE scale-set names; their aggregates use the light image. Promotion's `promote-guard` and docs-post/probe `authz` each use one `gke-2cpu-4gb-amd64` instance in separate roots; their image must include `gh` for permission lookups.
-The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job:
+The four amd64 post legs, arm64 cells, preflight, parity and native verification use fixed GKE scale-set names; their aggregates use the light image. Promotion's `promote-guard` and docs-post/probe `authz` each use one `gke-2cpu-4gb-amd64` instance in separate roots; their image must include `gh` for permission lookups.
+The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job or pinned native profile row:
 
 | Workflow | Events/callers | Inline jobs' `runs-on` |
 | --- | --- | --- |
 | `ci.yml` | Unfiltered `pull_request` | `authz`: hosted `ubuntu-24.04`; no proof legs |
-| `gke-pr.yml` | `pull_request_target` to `main` | Hosted admission/result; GKE preflight and proof legs with fixed labels |
+| `gke-pr.yml` | `pull_request_target` to `main` | Hosted admission/result; GKE preflight and proof legs; Debug `gke-16cpu-32gb-amd64-128gb`, arm64 `gke-16cpu-32gb-arm64-128gb` |
 | `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: hosted `ubuntu-24.04` |
-| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Seven light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: Release/sanitizers `gke-32cpu-64gb-amd64`, Debug/kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64` |
+| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Seven light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: Release `gke-32cpu-64gb-amd64`, sanitizers `gke-32cpu-64gb-amd64-256gb`, Debug `gke-16cpu-32gb-amd64-128gb`, kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64-128gb` |
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
-| `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: native shards `gke-8cpu-16gb-amd64`, sanitizer profiles `gke-16cpu-32gb-amd64` |
+| `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; native shards: bare `gke-8cpu-16gb-amd64`; `matrix.runner`: live-sanitizers `gke-16cpu-32gb-amd64-256gb`, live-tsan `gke-16cpu-32gb-amd64-128gb` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz`: scalar `gke-2cpu-4gb-amd64`; credentialed `build`: `["self-hosted","pf-gcp-post"]` |
 
 Post CI starts on push to `main`, schedule and dispatch; its GKE routing checker
 refuses all PR events. Reusable workflows inherit their caller's event.
 `workflow_event_routes` and `workflow_fleet_findings` in `scripts/ci_preflight.py`
 follow local calls to a fixed point, refuse mixed event classes and require
-literal VM arrays or exact bare scalar GKE scale-set names outside hosted pins; job conditions cannot excuse routing.
+literal VM arrays, exact bare scalar GKE scale-set names or the exact native profile runner matrix outside hosted pins; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
 GKE jobs carry no deployment secrets, effective id-token permissions or environment; pull_request workflows cannot name GKE routing. Runner-group workflow/ref allowlists must admit the post-only workflows at refs/heads/main before they can acquire pods. GKE jobs start only from gke-pr.yml, ci-post.yml, corpus-parity.yml, native-live.yml, docs-post.yml, release-ruleset-probe.yml and promote-baseline.yml at refs/heads/main (the runner group lists those workflow refs); a dispatch from another ref queues without a runner.
 Rollback may restore an earlier GCP fleet pin; paid larger-runner labels remain refused.
@@ -1650,10 +1650,10 @@ The four full build checks are `build (ubuntu-24.04, Release)`,
 `build (ubuntu-24.04-arm, Debug)`. Release uses four `build` shards, Debug two
 `build-debug` shards, and kernel two shards; sanitizers uses four, all on their fixed GKE sizes.
 Every shard builds the full tree and runs `--ctest-shard I/N` at the runner's core count. Each build refuses an OS mismatch before checkout.
-Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on `gke-16cpu-32gb-arm64`. All three build jobs use the same verification steps and profiles.
+Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on `gke-16cpu-32gb-arm64-128gb`. All three build jobs use the same verification steps and profiles.
 Shard jobs and leg aggregates skip together only on classified docs-only changes.
 Trusted post workflows and PR proof legs build cold; no trusted job restores an Actions cache.
-`HOSTED_JOB_RUNNERS` pins hosted jobs and exact bare GKE scalars; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. PR checks are
+`HOSTED_JOB_RUNNERS` pins hosted jobs, exact bare GKE scalars and the native profile runner matrix; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. PR checks are
 `build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`. With the arm leg, the full set is `build`, `build-debug`, `build-arm`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.
 
 Release and promotion use the isolated release fleet:
@@ -2003,7 +2003,7 @@ A workflow change that needs a loosened rule must therefore use two changes.
 
 Rule and table changes land first while existing workflows pass; workflow changes follow, so one PR cannot change both sides of admission.
 `gke-pr.yml` admits exactly two variants: OLD is the shape without the arm job, kept so earlier workflow files still pass; defining the `build-arm` job selects all NEW checks together.
-NEW requires the exact arm classifier output, fixed Debug job on bare `gke-16cpu-32gb-arm64`, arm-aware `legs` needs/check and independent `result` check.
+NEW requires the exact arm classifier output, fixed Debug job on bare `gke-16cpu-32gb-arm64-128gb`, arm-aware `legs` needs/check and independent `result` check.
 Hybrids and extra jobs, outputs, needs or arm steps are refused; OLD retains its original exact rules and templates for a workflow without the arm job.
 The github-only class still runs the full workflow policy preflight.
 The proof legs are the only jobs skipped for the two documentation classes.

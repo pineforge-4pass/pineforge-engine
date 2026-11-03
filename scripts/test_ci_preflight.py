@@ -58,13 +58,17 @@ class ParallelCommand(tuple):
 
 GKE_32 = 'gke-32cpu-64gb-amd64'
 GKE_16 = 'gke-16cpu-32gb-amd64'
+GKE_32_256 = 'gke-32cpu-64gb-amd64-256gb'
+GKE_16_128 = 'gke-16cpu-32gb-amd64-128gb'
+GKE_16_256 = 'gke-16cpu-32gb-amd64-256gb'
 GKE_8 = 'gke-8cpu-16gb-amd64'
-GKE_ARM = 'gke-16cpu-32gb-arm64'
+GKE_ARM = 'gke-16cpu-32gb-arm64-128gb'
 GKE_PR_32 = 'gke-32cpu-64gb-amd64'
-GKE_PR_16 = 'gke-16cpu-32gb-amd64'
+GKE_PR_16 = 'gke-16cpu-32gb-amd64-128gb'
 GKE_PR_8 = 'gke-8cpu-16gb-amd64'
 GKE_2 = 'gke-2cpu-4gb-amd64'
 GKE_4 = 'gke-4cpu-8gb-amd64'
+NATIVE_RUNNER = '${{ matrix.runner }}'
 EXPECTED_LIGHT_GKE_JOBS = {
     'ci-post.yml': dict.fromkeys(
         ('authz', 'changes', 'build-release-gate', 'build-debug-gate',
@@ -81,10 +85,10 @@ EXPECTED_GKE_JOBS = {
                    'build-arm': GKE_ARM,
                    'corpus-parity-subset': GKE_PR_8},
     'ci-post.yml': {'preflight': GKE_8, 'preflight-slow': GKE_8,
-                    'build': GKE_32, 'build-debug': GKE_16,
-                    'sanitizers': GKE_32, 'kernel-only': GKE_16, 'build-arm': GKE_ARM},
+                    'build': GKE_32, 'build-debug': GKE_16_128,
+                    'sanitizers': GKE_32_256, 'kernel-only': GKE_16, 'build-arm': GKE_ARM},
     'corpus-parity.yml': {'corpus-parity': GKE_16, 'corpus-parity-subset': GKE_8},
-    'native-live.yml': {'native-live': GKE_16, 'native-live-shards': GKE_8},
+    'native-live.yml': {'native-live': NATIVE_RUNNER, 'native-live-shards': GKE_8},
 }
 PR_SLOW_FLAG = "${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}"
 EXPECTED_PR_SLOW_ROWS = (
@@ -175,7 +179,7 @@ POST_CI_JOB_IDS = ('authz', 'changes', 'preflight', 'preflight-slow', 'build',
                   'sanitizers-gate', 'kernel-only-gate',
                   'build-arm', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity-subset',
                   'corpus-parity', 'build-gate')
-NATIVE_HOSTED_RUNNERS = {'authz': GKE_4, 'native-live': GKE_16,
+NATIVE_HOSTED_RUNNERS = {'authz': GKE_4, 'native-live': NATIVE_RUNNER,
                          'native-live-shards': GKE_8,
                          'native-live-native': GKE_4, 'native-live-gate': GKE_4}
 FLEET_JOB_IDS = {
@@ -204,8 +208,8 @@ LIGHT_JOB_IDS = {
     'release-ruleset-probe.yml': ('authz',),
 }
 HOSTED_SHARD_JOB_LABELS = {
-    'build': GKE_32, 'build-debug': GKE_16,
-    'sanitizers': GKE_32, 'kernel-only': GKE_16,
+    'build': GKE_32, 'build-debug': GKE_16_128,
+    'sanitizers': GKE_32_256, 'kernel-only': GKE_16,
 }
 HEAVY_CI_JOBS = ('preflight-slow', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity')
 PREFLIGHT_RUN = 'python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier fast'
@@ -1277,10 +1281,30 @@ class GkeRunnerPolicy(unittest.TestCase):
         self.assertIn('ci-post.yml job preflight must run on gke-8cpu-16gb-amd64',
                       findings)
 
+    def test_disk_sized_jobs_refuse_the_default_disk_labels(self):
+        for name, job, old in (
+                ('gke-pr.yml', 'build-debug', GKE_16),
+                ('gke-pr.yml', 'build-arm', 'gke-16cpu-32gb-arm64'),
+                ('ci-post.yml', 'build-debug', GKE_16),
+                ('ci-post.yml', 'build-arm', 'gke-16cpu-32gb-arm64'),
+                ('ci-post.yml', 'sanitizers', GKE_32)):
+            with self.subTest(workflow=name, job=job):
+                workflow = (ROOT / '.github/workflows' / name).read_text()
+                pinned = EXPECTED_GKE_JOBS[name][job]
+                changed = in_job(workflow, job, runner_declaration(pinned), runner_declaration(old))
+                self.assertNotEqual(changed, workflow)
+                self.assertIn(f'{name} job {job} must run on {pinned}',
+                              ci_preflight.runner_findings({name: changed}))
+                if name == 'gke-pr.yml':
+                    self.assertIn(f'{name} job {job} must use {pinned}',
+                                  gke_admit_workflow_findings(changed))
+
     def test_every_pinned_gke_job_requires_bare_scalar_runner(self):
         for name, pins in EXPECTED_GKE_JOBS.items():
             workflow = (ROOT / '.github/workflows' / name).read_text()
             for job, label in pins.items():
+                if label == NATIVE_RUNNER:
+                    continue  # The native matrix has its own exact-row controls.
                 marker = re.search(
                     r'(?m)^    runs-on:[^\n]*(?:\n      (?:group|labels):[^\n]*)*\n',
                     _jobs(workflow)[job])
@@ -1292,7 +1316,7 @@ class GkeRunnerPolicy(unittest.TestCase):
                         finding for finding in ci_preflight.runner_findings({name: bare})
                         if finding.startswith(prefix)
                     ], [])
-                arch = label.rsplit('-', 1)[1]
+                arch = label.split('-')[3]
                 wrong_size = (f'gke-16cpu-32gb-{arch}' if label.startswith('gke-32cpu-')
                               else f'gke-32cpu-64gb-{arch}')
                 for runner in (
@@ -1768,31 +1792,31 @@ class PostFleetRunnerPolicy(unittest.TestCase):
         docs = (ROOT / 'docs/ci.md').read_text()
         self.assertEqual(len(docs.splitlines()), 2031)
         requirements = (
-            'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
-            'profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
+            'Post Release/Debug/kernel and native shards and post sanitizers use fixed bare GKE scale-set\n'
+            'names; both native-live sanitizer profiles use an exact runner matrix. Jobs run directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
             "Hosted `ubuntu-24.04` runs PR `authz`, admission, `legs` and `result` jobs, and `docs.yml`'s `build`; "
             'secret-free post guards and aggregates use bare scalar GKE names. '
             'These light, secret-free jobs need no VM-only tools, mounts or caches.',
             'The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use '
             '`gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.',
             'Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 36 GKE job instances: '
-            "amd64 32/16/8/4/2 CPU labels carry 8/7/7/5/7 jobs and arm64 16 CPU carries 2; each label's static cap is 8.",
+            "amd64 32 CPU default/256 GB labels carry 4/4 jobs, amd64 16 CPU default/128/256 GB labels carry 3/3/1, amd64 8/4/2 CPU labels carry 7/5/7, and arm64 16 CPU 128 GB carries 2; each label's static cap is 8.",
             'The amd64 post build shards and the two arm64 post cells use bare scalar',
             'Hosted exceptions cover PR light jobs and the existing hosted release cells; post light jobs use bare scalar GKE names.',
             '`native-live.yml` runs four `native` shards on `gke-8cpu-16gb-amd64`;\n'
-            '`live-sanitizers` and `live-tsan` each build once on `gke-16cpu-32gb-amd64`.',
+            '`live-sanitizers` builds once on `gke-16cpu-32gb-amd64-256gb` and `live-tsan` once on `gke-16cpu-32gb-amd64-128gb`, selected by the exact `matrix.runner` include rows.',
             "paid 16-core runners' medians over five runs were 1815, 1812, 1770, 2050",
-            'The four amd64 post legs, arm64 cells, preflight, parity and native verification use bare GKE scale-set names; '
+            'The four amd64 post legs, arm64 cells, preflight, parity and native verification use fixed GKE scale-set names; '
             'their aggregates use the light image. '
             "Promotion's `promote-guard` and docs-post/probe `authz` each use one "
             '`gke-2cpu-4gb-amd64` instance in separate roots; their image must include `gh` for permission lookups.',
             '| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | '
             'Seven light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: '
-            'Release/sanitizers `gke-32cpu-64gb-amd64`, Debug/kernel `gke-16cpu-32gb-amd64`, '
-            'preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64` |',
+            'Release `gke-32cpu-64gb-amd64`, sanitizers `gke-32cpu-64gb-amd64-256gb`, Debug `gke-16cpu-32gb-amd64-128gb`, kernel `gke-16cpu-32gb-amd64`, '
+            'preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64-128gb` |',
             '| `native-live.yml` | Dispatch and post CI callers on `main` | '
-            '`authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: '
-            'native shards `gke-8cpu-16gb-amd64`, sanitizer profiles `gke-16cpu-32gb-amd64` |',
+            '`authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; '
+            'native shards: bare `gke-8cpu-16gb-amd64`; `matrix.runner`: live-sanitizers `gke-16cpu-32gb-amd64-256gb`, live-tsan `gke-16cpu-32gb-amd64-128gb` |',
             'GKE jobs carry no deployment secrets, effective id-token permissions or environment; '
             'pull_request workflows cannot name GKE routing. '
             'Runner-group workflow/ref allowlists must admit the post-only workflows '
@@ -1804,7 +1828,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             'Rollback may restore an earlier GCP fleet pin; paid larger-runner labels remain refused.',
             '`build-debug` shards, and kernel two shards; sanitizers uses four, '
             'all on their fixed GKE sizes.',
-            '`HOSTED_JOB_RUNNERS` pins hosted jobs and exact bare GKE scalars; every GKE job runs directly '
+            '`HOSTED_JOB_RUNNERS` pins hosted jobs, exact bare GKE scalars and the native profile runner matrix; every GKE job runs directly '
             'in a runner pod carrying the engine toolchain image and sudo. PR checks are',
             '`build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.',
             '`build`, `build-debug`, `build-arm`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.',
@@ -1820,9 +1844,9 @@ class PostFleetRunnerPolicy(unittest.TestCase):
 POST_SHARD_CASES = (
     ('build', 'release', 4, GKE_32, 'build-release-gate',
      'build (ubuntu-24.04, Release)'),
-    ('build-debug', 'debug', 2, GKE_16, 'build-debug-gate',
+    ('build-debug', 'debug', 2, GKE_16_128, 'build-debug-gate',
      'build (ubuntu-24.04, Debug)'),
-    ('sanitizers', 'sanitizers', 4, GKE_32, 'sanitizers-gate', 'sanitizers'),
+    ('sanitizers', 'sanitizers', 4, GKE_32_256, 'sanitizers-gate', 'sanitizers'),
     ('kernel-only', 'kernel', 2, GKE_16, 'kernel-only-gate', 'kernel-only'),
 )
 
@@ -3096,7 +3120,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
         code, lines = self.run_stage()
         self.assertCountEqual(self.failures(lines),
                               [self.missing('native-live.yml', label)
-                               for label in (GKE_4, GKE_16, GKE_8)])
+                               for label in (GKE_4, GKE_16_128, GKE_16_256, GKE_8)])
         self.assertEqual(code, 1, lines)
 
     def test_matrix_include_and_axis_resolve_the_runner_in_a_real_workflow(self):
@@ -3348,7 +3372,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
                 code, lines = self.run_stage()
                 self.assertCountEqual(self.failures(lines),
                                       [self.missing('native-live.yml', label)
-                                       for label in (GKE_4, GKE_16, GKE_8)])
+                                       for label in (GKE_4, GKE_16_128, GKE_16_256, GKE_8)])
                 self.assertEqual(code, 1, lines)
 
     def test_stage_is_binding_fast_parallel_and_its_real_result_is_in_the_summary(self):
@@ -3596,8 +3620,6 @@ class PreflightFailures(unittest.TestCase):
                 marker = runner_declaration(actual)
                 pinned_runner = EXPECTED_GKE_JOBS.get(name, {}).get(job, runner)
                 finding = f'{name} job {job} must run on {pinned_runner}'
-                if name == 'native-live.yml' and not pinned_runner.startswith('gke-'):
-                    finding += ' (hosted)'
                 for replacement in ('ubuntu-24.04', 'ubuntu-latest',
                                     'pf-linux-x64-64' if actual == 'pf-linux-x64-16' else 'pf-linux-x64-16',
                                     "'" + (PR_RUNNER if job == 'build' else runner) + "'",
@@ -5061,6 +5083,9 @@ exit "$lookup_exit"
                                    ('live-sanitizers', 'build-live-sanitizers'),
                                    ('live-tsan', 'build-live-tsan')):
             block = f'          - profile: {profile}\n            build_dir: {build_dir}\n'
+            if profile != 'native':
+                label = GKE_16_256 if profile == 'live-sanitizers' else GKE_16_128
+                block += f'            runner: {label}\n'
             job = 'native-live-shards' if profile == 'native' else 'native-live'
             findings = self.mutated_file_findings(1, job, block, '')
             finding = ('native-live-shards must run exactly native shards 1..4 with fail-fast false'
@@ -5371,8 +5396,8 @@ exit "$lookup_exit"
             # Each scoped pool job must keep its canon array without a hosted fallback.
             (6, 'preflight', runner_declaration(GKE_8), runner_declaration('pf-linux-x64-16'),
              f'ci-post.yml job preflight must run on {GKE_8}'),
-            (6, 'sanitizers', runner_declaration(GKE_32), runner_declaration('macos-26-xlarge'),
-             f'ci-post.yml job sanitizers must run on {GKE_32}'),
+            (6, 'sanitizers', runner_declaration(GKE_32_256), runner_declaration('macos-26-xlarge'),
+             f'ci-post.yml job sanitizers must run on {GKE_32_256}'),
             (6, 'kernel-only', runner_declaration(GKE_16), runner_declaration('ubuntu-latest'),
              f'ci-post.yml job kernel-only must run on {GKE_16}'),
             # Target runs-on exactly, never an earlier matrix reference or name.
@@ -5380,8 +5405,8 @@ exit "$lookup_exit"
              '    runs-on: macos-26-large\n', f'ci-post.yml job build must run on {GKE_32}'),
             (6, 'build', runner_declaration(GKE_32),
              '    runs-on: ${{ matrix.larger_runner }}\n', f'ci-post.yml job build must run on {GKE_32}'),
-            (1, 'native-live', runner_declaration(GKE_16), runner_declaration('pf-linux-x64-16'),
-             f'native-live.yml job native-live must run on {GKE_16}'),
+            (1, 'native-live', runner_declaration(NATIVE_RUNNER), runner_declaration('pf-linux-x64-16'),
+             f'native-live.yml job native-live must run on {NATIVE_RUNNER}'),
             (4, 'corpus-parity', runner_declaration(GKE_16), runner_declaration('pf-linux-x64-16'),
              f'corpus-parity.yml job corpus-parity must run on {GKE_16}'),
             (4, 'corpus-parity-subset', runner_declaration(GKE_8), runner_declaration('pf-linux-x64-16'),
@@ -5390,16 +5415,16 @@ exit "$lookup_exit"
             (6, 'preflight', runner_declaration(GKE_8),
              runner_declaration("${{ github.event_name == 'push' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}"),
              f'ci-post.yml job preflight must run on {GKE_8}'),
-            (1, 'native-live', runner_declaration(GKE_16),
+            (1, 'native-live', runner_declaration(NATIVE_RUNNER),
              runner_declaration("${{ github.event_name == 'workflow_dispatch' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}"),
-             f'native-live.yml job native-live must run on {GKE_16}'),
+             f'native-live.yml job native-live must run on {NATIVE_RUNNER}'),
             (4, 'corpus-parity', runner_declaration(GKE_16),
              runner_declaration("${{ github.event_name == 'schedule' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}"),
              f'corpus-parity.yml job corpus-parity must run on {GKE_16}'),
-            (6, 'sanitizers', runner_declaration(GKE_32),
+            (6, 'sanitizers', runner_declaration(GKE_32_256),
              runner_declaration("${{ github.event.pull_request.head.repo.full_name == github.repository "
                                 "&& 'pf-linux-x64-16' || 'ubuntu-24.04' }}"),
-             f'ci-post.yml job sanitizers must run on {GKE_32}'),
+             f'ci-post.yml job sanitizers must run on {GKE_32_256}'),
             (6, 'native-live', 'uses: ./.github/workflows/native-live.yml',
              'uses: someone/else/.github/workflows/native-live.yml@main',
              'ci-post.yml job native-live calls a workflow the runner contract cannot see; '
@@ -7003,12 +7028,12 @@ finally:
                 ('gke-pr.yml', ('preflight', runner_declaration(GKE_PR_8),
                                 runner_declaration('["self-hosted","pf-gcp-pr","pf-gcp-main"]')),
                  f'gke-pr.yml job preflight must run on {GKE_PR_8}'),
-                ('ci-post.yml', ('sanitizers', runner_declaration(GKE_32),
+                ('ci-post.yml', ('sanitizers', runner_declaration(GKE_32_256),
                                 runner_declaration('["self-hosted","pf-gcp-small"]')),
-                 f'ci-post.yml job sanitizers must run on {GKE_32}'),
-                ('ci-post.yml', ('sanitizers', runner_declaration(GKE_32),
+                 f'ci-post.yml job sanitizers must run on {GKE_32_256}'),
+                ('ci-post.yml', ('sanitizers', runner_declaration(GKE_32_256),
                                 runner_declaration('pf-linux-x64-16')),
-                 f'ci-post.yml job sanitizers must run on {GKE_32}'),
+                 f'ci-post.yml job sanitizers must run on {GKE_32_256}'),
                 ('ci-post.yml', ('build-arm', runner_declaration(GKE_ARM),
                                 '    runs-on: macos-26-xlarge\n'),
                  'ci-post.yml must not use larger-runner labels; use the GCP fleet or hosted exceptions'),
@@ -8491,14 +8516,16 @@ class ActionlintRunnerLabels(unittest.TestCase):
         for label, sites in (
                 ('pf-gcp-post', (('docs-post.yml', 'build'), ('release-ruleset-probe.yml', 'probe'))),
                 ('gke-32cpu-64gb-amd64', (('gke-pr.yml', 'build'),
-                                         ('ci-post.yml', 'build'), ('ci-post.yml', 'sanitizers'))),
-                ('gke-16cpu-32gb-amd64', (('gke-pr.yml', 'build-debug'),
-                                         ('ci-post.yml', 'build-debug'), ('ci-post.yml', 'kernel-only'),
-                                         ('native-live.yml', 'native-live'), ('corpus-parity.yml', 'corpus-parity'))),
+                                         ('ci-post.yml', 'build'))),
+                ('gke-32cpu-64gb-amd64-256gb', (('ci-post.yml', 'sanitizers'),)),
+                ('gke-16cpu-32gb-amd64', (('ci-post.yml', 'kernel-only'), ('corpus-parity.yml', 'corpus-parity'))),
+                ('gke-16cpu-32gb-amd64-128gb', (('gke-pr.yml', 'build-debug'),
+                                               ('ci-post.yml', 'build-debug'), ('native-live.yml', 'native-live'))),
+                ('gke-16cpu-32gb-amd64-256gb', (('native-live.yml', 'native-live'),)),
                 ('gke-8cpu-16gb-amd64', (('gke-pr.yml', 'preflight'), ('gke-pr.yml', 'corpus-parity-subset'),
                                         ('ci-post.yml', 'preflight'), ('ci-post.yml', 'preflight-slow'),
                                         ('native-live.yml', 'native-live-shards'), ('corpus-parity.yml', 'corpus-parity-subset'))),
-                ('gke-16cpu-32gb-arm64', (('gke-pr.yml', 'build-arm'), ('ci-post.yml', 'build-arm'))),
+                ('gke-16cpu-32gb-arm64-128gb', (('gke-pr.yml', 'build-arm'), ('ci-post.yml', 'build-arm'))),
                 ('pf-gcp-main', (('release.yml', 'release'), ('promote-baseline.yml', 'promote')))):
             with self.subTest(label=label):
                 changed = original.replace(f'    - {label}\n', '', 1)
@@ -8625,6 +8652,99 @@ class HostedNativeProfiles(unittest.TestCase):
     def workflow(self):
         return (ROOT / '.github/workflows/native-live.yml').read_text()
 
+    def test_native_profile_runner_matrix_requires_both_exact_rows(self):
+        native = self.workflow()
+        job = _jobs(native)['native-live']
+        rows = [
+            {'profile': 'live-sanitizers', 'build_dir': 'build-live-sanitizers',
+             'runner': 'gke-16cpu-32gb-amd64-256gb'},
+            {'profile': 'live-tsan', 'build_dir': 'build-live-tsan',
+             'runner': 'gke-16cpu-32gb-amd64-128gb'},
+        ]
+        self.assertEqual(ci_preflight._job_values(job, 'runs-on', unquote=False), [NATIVE_RUNNER])
+        self.assertEqual(ci_preflight._matrix_rows(job), rows)
+        self.assertEqual(ci_preflight.runner_findings({'native-live.yml': native}), [])
+        self.assertEqual(native_workflow_findings(native), [])
+        for name in ('native-live.yml', '.github/workflows/native-live.yml'):
+            self.assertEqual(admit_yaml_findings({name: native}), [])
+
+        mutations = []
+        for row in rows:
+            runner = f"            runner: {row['runner']}\n"
+            block = (f"          - profile: {row['profile']}\n"
+                     f"            build_dir: {row['build_dir']}\n" + runner)
+            mutations.extend(((block, ''), (block, block * 2), (runner, '')))
+            for wrong in (GKE_16, GKE_ARM, 'ubuntu-24.04',
+                          GKE_16_128 if row['profile'] == 'live-sanitizers' else GKE_16_256,
+                          'gke-16cpu-32gb-amd64-512gb', '${{ inputs.runner }}',
+                          f"'{row['runner']}'", f"[{row['runner']}]"):
+                mutations.append((runner, f'            runner: {wrong}\n'))
+        mutations.extend((
+            ('      matrix:\n', '      matrix:\n        replica: [1, 2]\n'),
+            ('build_dir: build-live-tsan', 'build_dir: build-live-sanitizers'),
+            ('fail-fast: false', 'fail-fast: true'),
+        ))
+        strategy = '\n'.join(ci_preflight._job_block(job, 'strategy')) + '\n'
+        mutations.append((strategy, strategy * 2))
+        for runner in (GKE_16, GKE_16_128, GKE_16_256, f"'{NATIVE_RUNNER}'",
+                       '["self-hosted", "${{ matrix.runner }}"]',
+                       '${{ fromJSON(matrix.runner) }}'):
+            mutations.append((runner_declaration(NATIVE_RUNNER), runner_declaration(runner)))
+        for before, after in mutations:
+            with self.subTest(before=before, after=after):
+                changed = in_job(native, 'native-live', before, after)
+                self.assertNotEqual(changed, native)
+                self.assertIn('native-live.yml job native-live must keep exactly '
+                              'the pinned native profile runner matrix',
+                              ci_preflight.runner_findings({'native-live.yml': changed}))
+                self.assertIn('native-live must run both independent sanitizer profiles with fail-fast false, '
+                              'the platform job maximum and no per-run budget',
+                              native_workflow_findings(changed))
+                if before != runner_declaration(NATIVE_RUNNER):
+                    for name in ('native-live.yml', '.github/workflows/native-live.yml'):
+                        findings = admit_yaml_findings({name: changed})
+                        self.assertTrue(any('every runs-on must be a literal value' in finding
+                                            for finding in findings), findings)
+
+    def test_native_runner_matrix_exception_is_scoped_to_its_job_and_workflow(self):
+        native = self.workflow()
+        copied = native + '\n  extra:' + _jobs(native)['native-live']
+        for name, workflow in (('native-live.yml', copied),
+                               ('.github/workflows/native-live.yml', copied),
+                               ('other.yml', native), ('.github/workflows/other.yml', native)):
+            with self.subTest(workflow=name):
+                findings = admit_yaml_findings({name: workflow})
+                self.assertTrue(any('every runs-on must be a literal value' in finding
+                                    for finding in findings), findings)
+                self.assertTrue(ci_preflight.runner_findings({Path(name).name: workflow}))
+
+    def test_native_matrix_disk_labels_count_separately_and_multiply_through_calls(self):
+        leaf = 'on: workflow_call\njobs:\n  native-live:' + _jobs(self.workflow())['native-live']
+        for count in (8, 9):
+            caller = ('on: workflow_dispatch\njobs:\n  native-live:\n'
+                      '    strategy:\n      matrix:\n        replica: ['
+                      + ', '.join(str(i) for i in range(count)) + ']\n'
+                      '    uses: ./.github/workflows/native-live.yml\n')
+            expected = ([] if count == 8 else [
+                f'ci-post.yml GKE label {label} expands to 9 jobs; cap is 8'
+                for label in (GKE_16_128, GKE_16_256)])
+            with self.subTest(replicas=count):
+                self.assertEqual(ci_preflight._gke_cap_findings(
+                    {'ci-post.yml': caller, 'native-live.yml': leaf}), expected)
+        for label in (GKE_16_128, GKE_16_256):
+            for count in (7, 8):
+                caller = ('on: workflow_dispatch\njobs:\n  direct:\n'
+                          + runner_declaration(label)
+                          + '    strategy:\n      matrix:\n        replica: ['
+                          + ', '.join(str(i) for i in range(count)) + ']\n'
+                          '    steps:\n      - run: "true"\n  native-live:\n'
+                          '    uses: ./.github/workflows/native-live.yml\n')
+                with self.subTest(label=label, direct=count):
+                    self.assertEqual(ci_preflight._gke_cap_findings(
+                        {'ci-post.yml': caller, 'native-live.yml': leaf}),
+                        [] if count == 7 else [
+                            f'ci-post.yml GKE label {label} expands to 9 jobs; cap is 8'])
+
     def test_native_jobs_have_exact_hosted_pins_without_fleet_metadata(self):
         native = self.workflow()
         jobs = _jobs(native)
@@ -8635,15 +8755,13 @@ class HostedNativeProfiles(unittest.TestCase):
             with self.subTest(job=job):
                 self.assertEqual(ci_preflight._job_values(jobs.get(job, ''), 'runs-on'), [label])
                 self.assertNotIn('PF_CI_LABELS', jobs.get(job, ''))
-                suffix = '' if label.startswith('gke-') else ' (hosted)'
-                metadata_class = 'GKE' if label.startswith('gke-') else 'hosted'
                 for replacement in (PR_RUNNER, RELEASE_RUNNER, 'pf-linux-x64-16',
                                     'pf-linux-x64-32', 'pf-linux-x64-64',
-                                    'ubuntu-24.04' if label.startswith('gke-') else POST_RUNNER):
+                                    'ubuntu-24.04'):
                     changed = in_job(native, job, runner_declaration(label),
                                      f'    runs-on: {replacement}\n')
                     self.assertNotEqual(changed, native)
-                    self.assertIn(f'native-live.yml job {job} must run on {label}{suffix}',
+                    self.assertIn(f'native-live.yml job {job} must run on {label}',
                                   ci_preflight.runner_findings({'native-live.yml': changed}))
                 for scope in (None, job):
                     before = '\nenv:\n' if scope is None else '\n    env:\n'
@@ -8658,7 +8776,7 @@ class HostedNativeProfiles(unittest.TestCase):
                                          f"    env:\n      PF_CI_LABELS: '{POST_RUNNER}'\n    steps:\n")
                     self.assertNotEqual(changed, native)
                     self.assertIn(f'native-live.yml job {job} must not set PF_CI_LABELS '
-                                  f'on a {metadata_class} job',
+                                  'on a GKE job',
                                   ci_preflight.runner_findings({'native-live.yml': changed}))
 
     def test_native_shard_matrix_matches_the_command_denominator(self):
@@ -8699,7 +8817,7 @@ class HostedNativeProfiles(unittest.TestCase):
                 self.assertIn(finding, ci_preflight.runner_findings({'native-live.yml': changed}))
                 changed = native.replace('\nenv:\n', f'\nenv:\n  UNPINNED_RUNNER: {label}\n', 1)
                 self.assertIn(finding, ci_preflight.runner_findings({'native-live.yml': changed}))
-        swapped = in_job(native, 'native-live', runner_declaration(GKE_16),
+        swapped = in_job(native, 'native-live', runner_declaration(NATIVE_RUNNER),
                          '    runs-on: pf-linux-x64-16\n')
         self.assertNotEqual(swapped, native)
         self.assertIn(finding, ci_preflight.runner_findings({'native-live.yml': swapped}))
@@ -9310,7 +9428,7 @@ class GkePrArmProofTests(unittest.TestCase):
         arm = jobs['build-arm']
         self.assertEqual(ci_preflight._needs(arm), ['admit'])
         self.assertEqual(ci_preflight._job_values(arm, 'runs-on', unquote=False),
-                         ['gke-16cpu-32gb-arm64'])
+                         ['gke-16cpu-32gb-arm64-128gb'])
         self.assertEqual(ci_preflight._job_values(arm, 'if'), [
             "${{ needs.admit.outputs.allowed == 'true' && "
             "needs.admit.outputs.docs_only != 'true' && "
@@ -9443,11 +9561,11 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
     """Run real rules over main and the complete, independently built #701 hunk."""
 
     WORKFLOW = ROOT / '.github/workflows/gke-pr.yml'
-    # Verbatim job from #701, commit 26b7e2e36d6e95268b956e54766521a7571ca3c4.
+    # Job from #701, commit 26b7e2e36d6e95268b956e54766521a7571ca3c4, with the 128 GB disk pin.
     ARM_JOB = r'''  build-arm:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' && needs.admit.outputs.arm_relevant == 'true' }}
-    runs-on: gke-16cpu-32gb-arm64
+    runs-on: gke-16cpu-32gb-arm64-128gb
     permissions: {contents: read}
     steps:
       - name: Require the arm64 machine
@@ -9746,7 +9864,7 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
         # The plain-key job reader folds this job into build-debug and selects OLD.
         shape = [
             'gke-pr.yml job build-debug must keep its read-only permissions',
-            'gke-pr.yml job build-debug must use gke-16cpu-32gb-amd64',
+            'gke-pr.yml job build-debug must use gke-16cpu-32gb-amd64-128gb',
             'gke-pr.yml admit must publish only the base classifier outputs',
             'gke-pr.yml build-debug must follow admission and keep its path policy',
             'gke-pr.yml build-debug must run its complete fast Debug smoke',
@@ -9759,7 +9877,7 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
             'gke-pr.yml has jobs lines the runner contract cannot read',
             'gke-pr.yml job build-debug must use a bare scalar GKE scale-set name',
             'gke-pr.yml job build-debug may use GKE routing only at its exact pinned job and label',
-            'gke-pr.yml job build-debug must run on gke-16cpu-32gb-amd64',
+            'gke-pr.yml job build-debug must run on gke-16cpu-32gb-amd64-128gb',
         ]
         number = changed.splitlines().index(quoted) + 1
         self.assertEqual(gke_admit_workflow_findings(changed), shape)
@@ -9819,8 +9937,8 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
                                  runner_declaration(label))
                 self.assert_arm_refused(changed, [
                     'gke-pr.yml job build-arm may use GKE routing only at its exact pinned job and label',
-                    'gke-pr.yml job build-arm must run on gke-16cpu-32gb-arm64',
-                ], shape=('gke-pr.yml job build-arm must use gke-16cpu-32gb-arm64',))
+                    'gke-pr.yml job build-arm must run on gke-16cpu-32gb-arm64-128gb',
+                ], shape=('gke-pr.yml job build-arm must use gke-16cpu-32gb-arm64-128gb',))
 
     def test_job_container_and_services_are_refused(self) -> None:
         for declaration, finding in (
@@ -9907,17 +10025,17 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
                 if runner != f"'{GKE_ARM}'":
                     findings.append('gke-pr.yml job build-arm may use GKE routing '
                                     'only at its exact pinned job and label')
-                findings.append('gke-pr.yml job build-arm must run on gke-16cpu-32gb-arm64')
+                findings.append('gke-pr.yml job build-arm must run on gke-16cpu-32gb-arm64-128gb')
                 # Expressions and group mappings have their own YAML whitelist
                 # refusal; direct runner results isolate the scalar/pin contract.
                 self.assertNotEqual(changed, self.workflow)
                 self.assertEqual(ci_preflight.runner_findings({'gke-pr.yml': changed}), findings)
                 self.assertEqual(gke_admit_workflow_findings(changed), [
-                    'gke-pr.yml job build-arm must use gke-16cpu-32gb-arm64'])
+                    'gke-pr.yml job build-arm must use gke-16cpu-32gb-arm64-128gb'])
                 if runner in (f"'{GKE_ARM}'", f'[{GKE_ARM}]',
                               f'["self-hosted","{GKE_ARM}"]'):
                     self.assertEqual(self.admission_findings(changed), [
-                        'gke-pr.yml job build-arm must use gke-16cpu-32gb-arm64', *findings])
+                        'gke-pr.yml job build-arm must use gke-16cpu-32gb-arm64-128gb', *findings])
 
 
 class GkeAdmissionRuleTests(unittest.TestCase):

@@ -104,19 +104,24 @@ GKE_8_LABEL = 'gke-8cpu-16gb-amd64'
 GKE_ARM_LABEL = 'gke-16cpu-32gb-arm64'
 GKE_2_LABEL = 'gke-2cpu-4gb-amd64'
 GKE_4_LABEL = 'gke-4cpu-8gb-amd64'
+GKE_32_256_LABEL = 'gke-32cpu-64gb-amd64-256gb'
+GKE_16_128_LABEL = 'gke-16cpu-32gb-amd64-128gb'
+GKE_16_256_LABEL = 'gke-16cpu-32gb-amd64-256gb'
+GKE_ARM_128_LABEL = 'gke-16cpu-32gb-arm64-128gb'
+GKE_MATRIX_RUNNER = '${{ matrix.runner }}'
 GKE_JOB_LABELS = {
     'gke-pr.yml': {'preflight': GKE_8_LABEL, 'build': GKE_32_LABEL,
-                   'build-debug': GKE_16_LABEL,
+                   'build-debug': GKE_16_128_LABEL,
                    'corpus-parity-subset': GKE_8_LABEL},
     'ci-post.yml': {'preflight': GKE_8_LABEL, 'preflight-slow': GKE_8_LABEL,
-                    'build': GKE_32_LABEL, 'build-debug': GKE_16_LABEL,
-                    'sanitizers': GKE_32_LABEL, 'kernel-only': GKE_16_LABEL,
-                    'build-arm': GKE_ARM_LABEL},
+                    'build': GKE_32_LABEL, 'build-debug': GKE_16_128_LABEL,
+                    'sanitizers': GKE_32_256_LABEL, 'kernel-only': GKE_16_LABEL,
+                    'build-arm': GKE_ARM_128_LABEL},
     'corpus-parity.yml': {'corpus-parity': GKE_16_LABEL, 'corpus-parity-subset': GKE_8_LABEL},
-    'native-live.yml': {'native-live': GKE_16_LABEL, 'native-live-shards': GKE_8_LABEL},
+    'native-live.yml': {'native-live': GKE_MATRIX_RUNNER, 'native-live-shards': GKE_8_LABEL},
 }
 # The arm admission variant has its own exact inventory; main keeps the old one.
-GKE_PR_ARM_JOB_LABELS = {**GKE_JOB_LABELS['gke-pr.yml'], 'build-arm': GKE_ARM_LABEL}
+GKE_PR_ARM_JOB_LABELS = {**GKE_JOB_LABELS['gke-pr.yml'], 'build-arm': GKE_ARM_128_LABEL}
 GKE_LIGHT_JOB_RUNNERS = {
     'ci-post.yml': dict.fromkeys(
         ('authz', 'changes', 'build-release-gate', 'build-debug-gate',
@@ -129,7 +134,7 @@ GKE_LIGHT_JOB_RUNNERS = {
     'release-ruleset-probe.yml': {'authz': GKE_2_LABEL},
     'promote-baseline.yml': {'promote-guard': GKE_2_LABEL},
 }
-# Admitted PR and post jobs use bare GKE scale-set names.
+# Admitted PR and post jobs use bare GKE names or the exact native profile matrix.
 GKE_JOB_RUNNERS = {
     name: {**GKE_JOB_LABELS.get(name, {}),
            **GKE_LIGHT_JOB_RUNNERS.get(name, {})}
@@ -205,14 +210,16 @@ RELEASE_STRATEGY = ('    strategy:\n'
                     f'            runner: {RELEASE_RUNNER}\n'
                     '          - triple: linux-aarch64\n'
                     '            runner: ubuntu-22.04-arm\n')
-NATIVE_STRATEGY = '''    strategy:
+NATIVE_STRATEGY = f'''    strategy:
       fail-fast: false
       matrix:
         include:
           - profile: live-sanitizers
             build_dir: build-live-sanitizers
+            runner: {GKE_16_256_LABEL}
           - profile: live-tsan
             build_dir: build-live-tsan
+            runner: {GKE_16_128_LABEL}
 '''
 NATIVE_SHARD_STRATEGY = '''    strategy:
       fail-fast: false
@@ -304,7 +311,7 @@ JOB_COMMANDS = {
     'docs-post.yml': {'authz': None, 'build': None},
 }
 GKE_PR_ARM_JOB_COMMANDS = {**JOB_COMMANDS['gke-pr.yml'], 'build-arm': VERIFY}
-# Exact hosted pins and bare GKE scale-set names, checked per job.
+# Exact hosted pins and GKE scalar or native matrix pins, checked per job.
 # Historical name: this table also holds the exact GKE pins.
 HOSTED_JOB_RUNNERS = {
     'ci.yml': {'authz': 'ubuntu-24.04'},
@@ -1483,12 +1490,14 @@ def _admit_scalar(value: str) -> bool:
     return False
 
 
-def _admit_flow_findings(name: str, key: str, value: str, line: int) -> list[str]:
+def _admit_flow_findings(name: str, key: str, value: str, line: int, *,
+                         native_matrix: bool = False) -> list[str]:
     """Apply the deliberately small flow grammar to routing and capability keys."""
     value = _admit_strip_comment(value).strip()
     if not value or value.startswith('${{'):
         if key == 'runs-on' and value.startswith('${{') and not (
-                Path(name).name == 'release.yml' and value == '${{ matrix.runner }}'):
+                Path(name).name == 'release.yml' and value == '${{ matrix.runner }}'
+                or native_matrix and value == GKE_MATRIX_RUNNER):
             return [f'{name}:{line}: every runs-on must be a literal value']
         return []
     if key == 'permissions':
@@ -1522,6 +1531,9 @@ def admit_yaml_findings(sources: dict[str, str]) -> list[str]:
     """Refuse parser differentials in structural YAML positions."""
     findings = []
     for name, text in sources.items():
+        native_matrix = (Path(name).name == 'native-live.yml'
+                         and _native_runner_matrix('native-live.yml', 'native-live',
+                                                   _jobs(text).get('native-live', '')))
         stack: list[tuple[int, str]] = []
         seen: set[tuple[tuple[str, ...], str]] = set()
         block_indent: int | None = None
@@ -1582,7 +1594,9 @@ def admit_yaml_findings(sources: dict[str, str]) -> list[str]:
                 stack.append((indent, key))
                 if key == '<<':
                     findings.append(f'{name}:{number}: merge keys are refused')
-                findings.extend(_admit_flow_findings(name, key, value, number))
+                findings.extend(_admit_flow_findings(
+                    name, key, value, number,
+                    native_matrix=native_matrix and scope == ('jobs', 'native-live')))
                 visible = _admit_strip_comment(value).lstrip()
                 if visible.startswith(('&', '*', '!')):
                     findings.append(f'{name}:{number}: anchors, aliases and tags are refused')
@@ -2317,7 +2331,16 @@ def _authz_header(name: str) -> str:
 
 
 _GKE_ROUTE = re.compile(r'(?<![\w.-])gke-[\w.-]+', re.IGNORECASE)
-_GKE_SCALE_LABEL = re.compile(r'(?<![\w.-])gke-\d+cpu-\d+gb-(?:amd64|arm64)(?![\w.-])')
+_GKE_SCALE_LABEL = re.compile(
+    r'(?<![\w.-])gke-\d+cpu-\d+gb-(?:amd64|arm64)(?:-(?:128|256)gb)?(?![\w.-])')
+
+
+def _native_runner_matrix(name: str, job: str, body: str) -> bool:
+    """Only the two pinned native sanitizer rows may select a GKE runner by matrix."""
+    return (name == 'native-live.yml' and job == 'native-live'
+            and _job_values(body, 'runs-on', unquote=False) == [GKE_MATRIX_RUNNER]
+            and len(_job_values(body, 'strategy')) == 1
+            and _job_block(body, 'strategy') == _code(NATIVE_STRATEGY))
 
 
 def _matrix_rows(body: str) -> list[dict[str, str]] | None:
@@ -2620,7 +2643,8 @@ def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
              for name, jobs in workflow_jobs.items() for job, body in jobs.items()}
     gke_workflows = {name for name, jobs in workflow_jobs.items()
                      if any(_GKE_ROUTE.search(' '.join(_job_values(body, 'runs-on')))
-                            for body in jobs.values())}
+                            or _native_runner_matrix(name, job, body)
+                            for job, body in jobs.items())}
     # Credentials follow all calls, independent of input conditions or matrix rows.
     while True:
         callers = {name for (name, _), callees in calls.items()
@@ -2646,16 +2670,22 @@ def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
             runners = ' '.join(_job_values(body, 'runs-on'))
             labels = [label.lower() for label in _GKE_ROUTE.findall(runners)
                       if label.lower() != 'gke-runners']
+            native_matrix = _native_runner_matrix(name, job, body)
             callees = calls[(name, job)]
-            if not labels and not callees:
+            if not labels and not callees and not native_matrix:
                 continue
             rows = _matrix_rows(body)
             if rows is None:
                 findings.append(f'{name} job {job} must use a readable static matrix for the GKE cap')
                 continue
             instances = multiplier * len(rows)
-            for label in set(labels):
-                counts[label] = counts.get(label, 0) + instances
+            if native_matrix:
+                for row in rows:
+                    label = row['runner']
+                    counts[label] = counts.get(label, 0) + multiplier
+            else:
+                for label in set(labels):
+                    counts[label] = counts.get(label, 0) + instances
             arguments = '\n'.join(_job_block(body, 'with')[1:])
             keys = re.findall(r'^\s+([A-Za-z_]\w*):', arguments, re.MULTILINE)
             passed = {key: values[0] for key in keys
@@ -2723,8 +2753,12 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             resolved_runners, _ = _resolved_runner_values(workflow, body)
             has_gke = bool(_GKE_ROUTE.search(' '.join(runs_on + resolved_runners)))
             raw_runners = _job_values(body, 'runs-on', unquote=False)
-            if has_gke and (len(raw_runners) != 1
-                            or not _GKE_SCALE_LABEL.fullmatch(raw_runners[0])):
+            native_matrix = _native_runner_matrix(name, job, body)
+            if gke_pin == GKE_MATRIX_RUNNER and not native_matrix:
+                findings.append(f'{name} job {job} must keep exactly '
+                                'the pinned native profile runner matrix')
+            if has_gke and not native_matrix and (
+                    len(raw_runners) != 1 or not _GKE_SCALE_LABEL.fullmatch(raw_runners[0])):
                 findings.append(f'{name} job {job} must use a bare scalar GKE scale-set name')
             if has_gke and runs_on != [gke_pin]:
                 findings.append(f'{name} job {job} may use GKE routing only at its exact pinned job and label')
@@ -3330,7 +3364,7 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
     jobs = _jobs(native)
     job, gate = jobs.get('native-live', ''), jobs.get('native-live-gate', '')
     shards, aggregate = jobs.get('native-live-shards', ''), jobs.get('native-live-native', '')
-    if (_job_block(job, 'strategy') != _code(NATIVE_STRATEGY)
+    if (not _native_runner_matrix('native-live.yml', 'native-live', job)
             or _needs(job) != ['authz'] or _job_values(job, 'if')
             or _job_values(job, 'continue-on-error')
             or _job_values(job, 'name') != ['native-live (${{ matrix.profile }})']):
@@ -3992,6 +4026,8 @@ def actionlint_runner_label_findings(source: Path) -> list[str]:
         for job, body in _jobs(workflow).items():
             mapping = '\n'.join(_job_block(body, 'runs-on')[1:])
             values = _job_values(mapping, 'labels') if mapping else _job_values(body, 'runs-on')
+            if _native_runner_matrix(path.name, job, body):
+                values = [row['runner'] for row in _matrix_rows(body)]
             for value in values:
                 if not value.startswith('['):
                     if value.startswith(('pf-', 'gke-')) and re.fullmatch(_LITERAL_RUNNER_LABEL, value):
