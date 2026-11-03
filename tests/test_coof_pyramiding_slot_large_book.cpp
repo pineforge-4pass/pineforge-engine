@@ -81,7 +81,8 @@ constexpr std::int64_t kStart = 1'704'067'200'000LL;
 constexpr std::int64_t kHour = 3'600'000;
 constexpr int kRests = 150;
 constexpr double kRestLimit = 1000.0;
-constexpr double kRestLevelTolerance = 0.01;  // one mintick of the probe's syminfo
+constexpr double kMintick = 0.01;               // the probe's syminfo mintick
+constexpr double kRestLevelTolerance = 1e-9;    // the threshold is grid +- 0.5 tick: exact to rounding
 int checks = 0;
 int failures = 0;
 
@@ -122,7 +123,7 @@ public:
         configure_pine_strategy(cfg);
         set_syminfo_session("24x7");
         set_syminfo_timezone("UTC");
-        set_syminfo_mintick(0.01);
+        set_syminfo_mintick(kMintick);
         set_syminfo_pointvalue(1.0);
         set_syminfo_metadata("qty_step", 0.001);
     }
@@ -133,18 +134,21 @@ public:
             && point->decision.coordinate.provenance == NativePriceProvenance::Calculation;
     }
 
-    // Working requests labelled rest<k> that are limits at the rest level.
-    // The host stores the sell limit one half tick below the level the call
-    // gave (measured: 999.995 for a call at 1000 with a mintick of 0.01; the
-    // reason is not established here), so the level is matched within one
-    // mintick, not by equality. Identity is the label and the limit kind.
+    // Working requests labelled rest<k> that are sell limits at the rest level.
+    // The adapter hands the core a limit trigger at its trigger threshold, and
+    // for a sell limit that threshold sits half a tick below the grid level the
+    // call gave (source_trigger_threshold in src/source/pine_adapter.cpp: the
+    // grid plus (upward ? -0.5 : 0.5) times the tick, upward for a sell limit).
+    // Measured: 999.995 for a call at 1000 with a mintick of 0.01. The rest
+    // level is therefore matched at that threshold, not at the call's level.
+    // Identity is the label and the limit kind; the probe places only sells.
     int working_rests() const {
         int count = 0;
         for (const auto& row : native_working_requests()) {
             if (!row.definition) continue;
             const auto& request = row.definition->request;
             const auto* level = std::get_if<native_order::Limit>(&request.trigger);
-            if (level && std::fabs(level->price - kRestLimit) < kRestLevelTolerance
+            if (level && std::fabs(level->price - (kRestLimit - 0.5 * kMintick)) < kRestLevelTolerance
                 && request.label.rfind("rest", 0) == 0)
                 ++count;
         }
