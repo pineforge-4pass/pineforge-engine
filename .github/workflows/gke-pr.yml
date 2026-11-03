@@ -319,7 +319,7 @@ jobs:
   build-debug:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' }}
-    runs-on: gke-16cpu-32gb-amd64
+    runs-on: gke-16cpu-32gb-amd64-128gb
     permissions: {contents: read}
     steps:
       - name: Checkout the admitted head
@@ -353,7 +353,7 @@ jobs:
   build-arm:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' && needs.admit.outputs.arm_relevant == 'true' }}
-    runs-on: gke-16cpu-32gb-arm64
+    runs-on: gke-16cpu-32gb-arm64-128gb
     permissions: {contents: read}
     steps:
       - name: Require the arm64 machine

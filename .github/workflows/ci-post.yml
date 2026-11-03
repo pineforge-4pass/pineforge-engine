@@ -341,7 +341,7 @@ jobs:
           - os: ubuntu-24.04
         build_type: [Debug]
         shard: [1, 2]
-    runs-on: gke-16cpu-32gb-amd64
+    runs-on: gke-16cpu-32gb-amd64-128gb
 
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -450,7 +450,7 @@ jobs:
       fail-fast: false
       matrix:
         build_type: [Release, Debug]
-    runs-on: gke-16cpu-32gb-arm64
+    runs-on: gke-16cpu-32gb-arm64-128gb
 
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -536,7 +536,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
-    runs-on: gke-32cpu-64gb-amd64
+    runs-on: gke-32cpu-64gb-amd64-256gb
     env:
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
