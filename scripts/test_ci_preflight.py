@@ -1281,7 +1281,7 @@ class GkeRunnerPolicy(unittest.TestCase):
         self.assertIn('ci-post.yml job preflight must run on gke-8cpu-16gb-amd64',
                       findings)
 
-    def test_disk_sized_jobs_refuse_the_default_disk_labels(self):
+    def test_sized_jobs_refuse_default_labels(self):
         for name, job, old in (
                 ('gke-pr.yml', 'build-debug', GKE_16),
                 ('gke-pr.yml', 'build-arm', 'gke-16cpu-32gb-arm64'),
@@ -3124,7 +3124,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
                                for label in (GKE_4, GKE_16_128, GKE_16_256, GKE_8)])
         self.assertEqual(code, 1, lines)
 
-    def test_post_disk_labels_require_the_same_exact_workflow_reference(self):
+    def test_post_sized_labels_need_exact_ref(self):
         code, lines = self.run_stage()
         self.assertEqual(self.failures(lines), [], lines)
         self.assertEqual(code, 0, lines)
@@ -8665,7 +8665,7 @@ class HostedNativeProfiles(unittest.TestCase):
     def workflow(self):
         return (ROOT / '.github/workflows/native-live.yml').read_text()
 
-    def test_native_profile_runner_matrix_requires_both_exact_rows(self):
+    def test_native_matrix_needs_both_rows(self):
         native = self.workflow()
         job = _jobs(native)['native-live']
         rows = [
@@ -8719,7 +8719,7 @@ class HostedNativeProfiles(unittest.TestCase):
                         self.assertTrue(any('every runs-on must be a literal value' in finding
                                             for finding in findings), findings)
 
-    def test_native_runner_matrix_exception_is_scoped_to_its_job_and_workflow(self):
+    def test_native_matrix_scoped_to_job(self):
         native = self.workflow()
         copied = native + '\n  extra:' + _jobs(native)['native-live']
         for name, workflow in (('native-live.yml', copied),
@@ -8731,7 +8731,7 @@ class HostedNativeProfiles(unittest.TestCase):
                                     for finding in findings), findings)
                 self.assertTrue(ci_preflight.runner_findings({Path(name).name: workflow}))
 
-    def test_native_matrix_disk_labels_count_separately_and_multiply_through_calls(self):
+    def test_native_sized_labels_counted(self):
         leaf = 'on: workflow_call\njobs:\n  native-live:' + _jobs(self.workflow())['native-live']
         for count in (8, 9):
             caller = ('on: workflow_dispatch\njobs:\n  native-live:\n'
@@ -9574,7 +9574,7 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
     """Run real rules over main and the complete, independently built #701 hunk."""
 
     WORKFLOW = ROOT / '.github/workflows/gke-pr.yml'
-    # Job from #701, commit 26b7e2e36d6e95268b956e54766521a7571ca3c4, with the 128 GB disk pin.
+    # Job from #701, with the 128 GB disk pin.
     ARM_JOB = r'''  build-arm:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' && needs.admit.outputs.arm_relevant == 'true' }}
