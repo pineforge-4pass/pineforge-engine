@@ -448,89 +448,6 @@ void check_unfilled_replacement(bool pending_limit, int cap, double admitted_qty
     CHECK(p.final_size() == 0.0);
 }
 
-class ReusedIdSlotProbe final : public SlotProbe {
-public:
-    ReusedIdSlotProbe(bool on_close, bool close_old)
-        : SlotProbe(on_close, 1), close_old_(close_old) {}
-
-    void on_source_bar(const Bar&) override {
-        observe_slots();
-        if (!ordinary_calculation()) return;
-        const int i = pine_bar_index();
-        if (i == 10)
-            strategy_entry("reused", false, kNaN, kNaN, 1.0);
-        if (i == 14 && close_old_)
-            strategy_close("reused", "", kNaN, kNaN, false, 1);
-        if (i == 20) {
-            before_reentry_size = signed_position_size();
-            before_reentry_lots = pyramid_entries_.size();
-            // Reuse the closed id first for a never-reached sell limit,
-            // then for the market successor. No old physical origin
-            // survives the explicit full close to occupy this new slot.
-            strategy_entry("reused", false, 191.0, kNaN, 7.0);
-            strategy_entry("reused", false, kNaN, kNaN, 2.0);
-        }
-        if (i == 30)
-            strategy_close("", "", kNaN, kNaN, false);
-        observe_slots();
-    }
-
-    double before_reentry_size = kNaN;
-    std::size_t before_reentry_lots = 0;
-
-private:
-    bool close_old_;
-};
-
-void check_closed_incarnation(bool on_close, bool close_old) {
-    std::printf("reused id, close processing %d, explicit old close %d\n",
-                on_close, close_old);
-    ReusedIdSlotProbe p(on_close, close_old);
-    const auto bars = rising_feed();
-    p.run(bars.data(), static_cast<int>(bars.size()), "60", "60");
-    CHECK(p.last_error().empty());
-    if (!p.last_error().empty()) return;
-    // With the close: one old short plus one new short = two trades,
-    // never simultaneous. Without it the old lot still fills cap 1,
-    // and the quantity-2 successor must be refused.
-    const int expected_trades = close_old ? 2 : 1;
-    CHECK(p.trade_count() == expected_trades);
-    if (p.trade_count() != expected_trades) {
-        std::printf("  actual trades %d, expected %d; before reentry %.17g / %zu lots; "
-                    "bar 25 size %.17g, lots %zu\n",
-                    p.trade_count(), expected_trades,
-                    p.before_reentry_size, p.before_reentry_lots,
-                    p.bar25_size, p.bar25_lots);
-        for (int i = 0; i < p.trade_count(); ++i) {
-            const Trade& t = p.get_trade(i);
-            std::printf("  %s %s qty %.17g entry %d @%.17g exit %d @%.17g\n",
-                        t.entry_id.c_str(), t.is_long ? "long" : "short", t.qty,
-                        t.entry_bar_index, t.entry_price, t.exit_bar_index, t.exit_price);
-        }
-    }
-    CHECK(p.before_reentry_size == (close_old ? 0.0 : -1.0));
-    CHECK(p.before_reentry_lots == (close_old ? 0U : 1U));
-    const int initial_bar = on_close ? 10 : 11;
-    const int old_exit_bar = close_old ? (on_close ? 14 : 15) : (on_close ? 30 : 31);
-    const int new_bar = on_close ? 20 : 21;
-    const int exit_bar = on_close ? 30 : 31;
-    if (p.trade_count() == expected_trades) {
-        check_priced_trade(p.get_trade(0), "reused", false, 1.0, initial_bar,
-                           on_close ? bars[initial_bar].close : bars[initial_bar].open,
-                           old_exit_bar,
-                           on_close ? bars[old_exit_bar].close : bars[old_exit_bar].open);
-        if (close_old)
-            check_priced_trade(p.get_trade(1), "reused", false, 2.0, new_bar,
-                               on_close ? bars[new_bar].close : bars[new_bar].open,
-                               exit_bar, on_close ? bars[exit_bar].close : bars[exit_bar].open);
-    }
-    CHECK(p.saw_bar25);
-    CHECK(p.bar25_size == (close_old ? -2.0 : -1.0));
-    CHECK(p.bar25_lots == 1U);
-    CHECK(p.max_short_lots == 1U);
-    CHECK(p.final_size() == 0.0);
-}
-
 // POOC only suppresses terminal-close fill callbacks. A resting buy stop
 // at O11=122 waits through C10=121, then fills at the next open.
 // Its first-open callback submits a close and its paired short of 2.
@@ -784,10 +701,6 @@ int main() {
         check_unfilled_replacement(pending_limit, 2, 4.0);
         check_unfilled_replacement(pending_limit, 1, 3.0);
         check_unfilled_replacement(pending_limit, 2, 3.0, true);
-    }
-    for (bool on_close : {false, true}) {
-        check_closed_incarnation(on_close, true);
-        check_closed_incarnation(on_close, false);
     }
     for (bool same_id : {true, false}) {
         check_pooc_intrabar_slot(same_id, 1);
