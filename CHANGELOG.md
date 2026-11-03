@@ -1411,13 +1411,13 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   effect. The release image's `docker/run_json.py` default (unjailed)
   profile installs a temporary report sink on every handle, so there the
   cache holds 128 rows and a script that loops over its closed trades reads
-  them from scratch files on every pass: hungpixi (24,238 closed trades),
+  them from scratch files on every pass: one measured example,
   one run each started together on one 16 vCPU machine, took 74.18 s on
   1.6.3 and did not finish within 1800 s on 1.7.0, where the run was
   stopped at that limit. The trigger is a report sink installed together
   with a loop over more than 128 closed trades. Not affected:
   `scripts/run_strategy.py` without a sink, which the hosted case runner,
-  the verifier and the sweep run (hungpixi takes 107.2 s there, mean of
+  the verifier and the sweep run (the same example takes 107.2 s there, mean of
   three runs; the corpus-parity canary pass sets
   `PINEFORGE_REPORT_SINK=1`), and the HPO native adapter, which installs no
   sink.
