@@ -487,13 +487,13 @@ struct SymInfo {
     std::string description = "";
     double mintick = 0.01;
     double pointvalue = 1.0;
-    // Per-instrument quantity step (syminfo.* "qty_step" — the smallest
-    // tradable lot increment, e.g. 0.0004 for BINANCE:ETHUSDT.P). 0 = disabled
-    // (the engine default), so no quantity quantization is applied — corpus
-    // instruments leave this 0 and are byte-identical. A host that sizes in
-    // lots declares it as the run spec's quantity_grid, where admission
-    // requires on-grid units and the kernel's own liquidation floors an
-    // off-grid slice onto it (kernel_submit_liquidation).
+    // Per-instrument quantity step (syminfo.* "qty_step", the smallest tradable
+    // lot increment, e.g. 0.0004 for BINANCE:ETHUSDT.P). A declared qty_step, or
+    // a finite mincontract > 0 while no qty_step is declared, sets the grid.
+    // 0 = disabled (the engine default): no quantization, corpus instruments
+    // stay byte-identical. A host that sizes in lots declares it as the run
+    // spec's quantity_grid, where admission requires on-grid units and the
+    // kernel's liquidation floors an off-grid slice onto it.
     double qty_step = 0.0;
 };
 
@@ -615,11 +615,11 @@ protected:
     int slippage_ = 0;              // slippage in ticks
     double syminfo_mintick_ = 0.01; // tick size for slippage calculation
     // Per-instrument lot-size step (the instrument's quantity increment).
-    // 0 = disabled (default; corpus no-op). Fed via the syminfo_metadata
-    // channel ("qty_step") or the SymInfo struct on the explicit run() path.
-    // The kernel's own readers are the apply_*qty_step floors below; a host
-    // that sizes in lots declares the step as the run spec's quantity_grid
-    // (the source host projects this field there).
+    // 0 = disabled (default; corpus no-op). Fed via the syminfo_metadata channel
+    // ("qty_step", or a finite "mincontract" > 0 while no qty_step is declared)
+    // or the SymInfo struct on the explicit run() path. The kernel's own readers
+    // are the apply_*qty_step floors below; a host that sizes in lots declares
+    // the step as the run spec's quantity_grid (the source host projects it).
     double qty_step_ = 0.0;
     // Account-currency FX multiplier for every quote->account money path:
     // equity is denominated in the account currency and a position's notional

@@ -5933,7 +5933,7 @@ class NativeLiveEquivalenceCTest(unittest.TestCase):
         probes = driver_probes((ROOT / 'tests' / 'native_live_equivalence_e2e.py').read_text())
         pinned = ci_verify.private_fixture_rows(ROOT)
         self.assertNotIn('native_live_equivalence_e2e', pinned)
-        self.assertEqual(len(pinned), 376 - 1 + len(probes))
+        self.assertEqual(len(pinned), 379 - 1 + len(probes))
         for probe in probes:
             self.assertIn('native_live_equivalence_e2e_' + probe, pinned)
 

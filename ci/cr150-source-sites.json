@@ -26939,7 +26939,7 @@
    "scope": [
     "namespace pineforge #1",
     "namespace #2",
-    "static int64_t compute_tf_close_ms ( int64_t open_ms , const std :: string & tf , const std :: string & tz ) #1",
+    "static int64_t compute_tf_close_ms ( int64_t bar_ms , const std :: string & tf , const std :: string & tz , const std :: string & sym_tz , const std :: string & sym_session ) #1",
     "if ( cp ! = CalendarPeriod :: NONE && utc_zone ( tz ) && in_civil_span ( static_cast < int64_t > ( osec ) ) ) #1"
    ],
    "cls": "assign",
@@ -31839,7 +31839,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
-    "if ( ! same_bar_market_candidate && config_ . pyramiding > 0 && current ! = 0 . 0 && ( ( current > 0 . 0 ) = = is_long ) && ! ( priced && config_ . process_orders_on_close ) ) #1",
+    "if ( ! same_bar_market_candidate && config_ . pyramiding > 0 && current ! = 0 . 0 && ( ( current > 0 . 0 ) = = is_long ) && ! ( priced && config_ . process_orders_on_close && ! coof_recalc_active_ ) ) #1",
     "PF_RARE ( records . has_value ( ) ) ) #1"
    ],
    "cls": "assign",
@@ -31852,7 +31852,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
-    "if ( ! same_bar_market_candidate && config_ . pyramiding > 0 && current ! = 0 . 0 && ( ( current > 0 . 0 ) = = is_long ) && ! ( priced && config_ . process_orders_on_close ) ) #1",
+    "if ( ! same_bar_market_candidate && config_ . pyramiding > 0 && current ! = 0 . 0 && ( ( current > 0 . 0 ) = = is_long ) && ! ( priced && config_ . process_orders_on_close && ! coof_recalc_active_ ) ) #1",
     "if ( ! ( config_ . process_orders_on_close && close_precedes_entry ) && accepted_in_cycle > = static_cast < std :: size_t > ( config_ . pyramiding ) && ! short_seed_final_candidate && ! paired_all_in_reentry && ! default_gross_over_cap_candidate && ! ( config_ . process_orders_on_close && opposite_opening_pending && ( opposite_opening_in_close_pass || detail :: run_position ( require_host ( ) ) . lot_count < static_cast < std :: size_t > ( config_ . pyramiding ) ) ) ) #1",
     "if ( priced ) #1",
     "if ( prior ! = live_by_source_key_ . end ( ) ) #1"

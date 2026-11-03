@@ -3057,7 +3057,7 @@ each feed's key, sha256 and bar count in the run provenance.
 
 A host that wants only the running aggregate — no series instance, no
 `gaps`/`lookahead` rule, nothing folded into the continuation identity —
-aggregates the input itself. `TimeframeAggregator` (`timeframe.hpp:329`) is
+aggregates the input itself. `TimeframeAggregator` (`timeframe.hpp:347`) is
 public and engine-free; feed it from `on_native_input`, which runs once per
 accepted confirmed input bar before that bar is aggregated or matched
 (`on_native_input` `native_host.hpp:895`). Include

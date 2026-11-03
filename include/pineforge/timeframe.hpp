@@ -94,16 +94,14 @@ inline bool tf_is_daily_or_higher(const std::string& tf) {
 bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period);
 
 /// Timezone/session-aware variants. The tz-less forms above evaluate the
-/// calendar in UTC and intraday buckets on the epoch grid — exactly TV's
-/// behavior for 24x7 symbols (the corpus regime). Session symbols
+/// calendar in UTC and intraday buckets from each UTC midnight. Session symbols
 /// (equities RTH, forex) anchor HTF buckets on the exchange clock instead:
 /// daily boundaries at symbol-local midnight, intraday buckets offset by the
 /// symbol's day stamp -- the session open, except OANDA's 1800-1700 metals
 /// session whose day (and TradingView's "45"/"240" grid) rolls at the 17:00
 /// ET forex roll one hour before it opens (session_day_stamp_offset_minutes
 /// in timeframe.cpp cites the pin). With tz="UTC" and session ""/"24x7"
-/// these are bit-identical to the UTC forms, so existing callers are
-/// unaffected.
+/// these use the same UTC daily grid as the tz-less forms.
 bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period,
                       const std::string& tz, const std::string& session);
 bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf,
@@ -155,21 +153,41 @@ int64_t session_period_open_ms(int64_t ms, const std::string& tz,
                                CalendarPeriod period);
 
 /// Open (Unix ms) of the `bucket_sec`-wide intraday bucket that contains
-/// `ms` on the symbol's day-stamp-anchored grid: exchange-tz time since
-/// local midnight + day stamp, floored to the bucket width. This is THE
+/// `ms` on the symbol's day-stamp-anchored grid: time WITHIN the session
+/// day, floored to the bucket width. This is THE
 /// intraday HTF grid — request.security's ratio buckets
 /// (TimeframeAggregator::bucket_open_ms), tf_change and
 /// time("<intraday tf>") / time_close all read it (pin-time-hours:
 /// time("60") on NYSE:F is 09:30 / 10:30 / .. / 15:30 ET, time("240") on
 /// NSE:NIFTY 09:15 / 13:15 IST, on OANDA:XAUUSD 17:00 ET + 4h*k). With
-/// tz="UTC" and session ""/"24x7" it is the epoch grid, bit-identical to
-/// the tz-less forms. bucket_sec <= 0 returns `ms`. Under the calling
+/// tz="UTC" and session ""/"24x7" the declared origin is UTC midnight;
+/// widths dividing 24h also equal the continuous epoch grid.
+/// bucket_sec <= 0 returns `ms`. Under the calling
 /// thread's native daily partition for this clock (below), a session-day
 /// that opened late -- NativeDayPartition::late_opens -- starts its grid at
 /// its own open instead of the day stamp, as tf_change's intraday form does.
+/// Inputs before a declared late open fold into its first bucket. This
+/// stamp-only seam has no aggregate observation history: a prefix query
+/// uses `ms` as its point context and opens there; a post-open query opens
+/// at the declared origin. `ms` may itself be a grid label and is not
+/// asserted to be a raw first input. Aggregators retain their actual first
+/// input separately and supply it to the shared writer for a stable prefix
+/// label. Neither a grid label nor first printed data defines a session origin.
+/// Legacy per-UTC-day timezone offsets remain in force; session-less DST
+/// transition edges can share a key with differing bounds across queries,
+/// and remain unmeasured against TradingView.
 int64_t session_intraday_bucket_open_ms(int64_t ms, int64_t bucket_sec,
                                         const std::string& tz,
                                         const std::string& session);
+
+/// Exclusive end from the SAME intraday boundary writer as the open seam.
+/// Normal end = origin + (ordinal + 1) * width, capped at the session-day
+/// close (next midnight for 24x7). A late-open prefix shares the first
+/// bucket's origin + width end; this needs no observation history.
+/// bucket_sec <= 0 returns `ms`.
+int64_t session_intraday_bucket_end_ms(int64_t ms, int64_t bucket_sec,
+                                       const std::string& tz,
+                                       const std::string& session);
 
 /// The session instant a native CALENDAR chart stamp covers. A stamp inside
 /// its session (open to exclusive close) returns unchanged. A stamp in the
@@ -553,7 +571,7 @@ public:
     /// of this aggregator -- different native periods / W-M groups when
     /// native periods are installed, crosses_boundary on the nominal
     /// session calendar otherwise. RATIO with late day opens installed:
-    /// whether they lie in different buckets (bucket_open_ms). Any other
+    /// whether they have different (session-day, bucket-ordinal) keys. Any other
     /// RATIO, and PASSTHROUGH: false.
     bool period_changes(int64_t prev_ms, int64_t curr_ms) const;
 
@@ -565,9 +583,11 @@ public:
     /// the day-stamp-anchored grid bucket (the same key feed() splits on
     /// and time("<intraday tf>") reads), from its own late day opens
     /// (set_native_day_opens) rather than a thread's partition; PASSTHROUGH, or a
-    /// count-only ratio with no wall-clock width, -> `ms` itself. Pure
-    /// function of the configuration: it neither reads nor advances the
-    /// aggregation state, so callers may query it before feeding the bar.
+    /// count-only ratio with no wall-clock width, -> `ms` itself.
+    /// A late-open first bucket uses the retained first actual prefix input
+    /// while that bucket is held; without that observation, `ms` is point
+    /// context, as in session_intraday_bucket_open_ms. Queries never
+    /// advance aggregation state and may be made before feeding a bar.
     int64_t bucket_open_ms(int64_t ms) const;
 
     /// Timestamp of the target-TF bar OPENED by an input bar stamped `ms`
@@ -580,6 +600,8 @@ public:
     /// so a holiday-Monday week stays Tuesday's bar, but never by a
     /// thin-open sub-bar inside that day; on OANDA 1800-1700 the stamp is
     /// 17:00 ET, an hour before the day trades); PASSTHROUGH -> `ms`.
+    /// The declared late-open prefix exception uses the retained actual
+    /// first input instead of a grid label.
     /// Gap-free feeds whose open is the stamp are bit-identical: there the
     /// first sub-bar IS the bucket open.
     int64_t bar_label_ms(int64_t ms) const;
@@ -610,6 +632,10 @@ private:
     bool early_close_completes_ = true;
 
     Bar current_bar_{};
+    // RAW first input stamp, captured before current_bar_ is grid-labeled.
+    // Fixed size; merges/completion preserve it, new buckets replace it,
+    // and ordinary value copies of the aggregator carry it with the bar.
+    int64_t observed_first_ms_ = 0;
     Bar last_completed_bar_{};
     int sub_bar_count_ = 0;
     bool has_completed_ = false;

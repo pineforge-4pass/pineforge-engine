@@ -145,6 +145,12 @@ if(PINEFORGE_BUILD_TESTS)
     target_compile_definitions(live_contract_unknown PRIVATE PF_LIVE_CONTRACT_UNKNOWN=1)
     target_compile_definitions(live_contract_native_no_export PRIVATE PF_LIVE_CONTRACT_NATIVE_NO_EXPORT=1)
     target_compile_definitions(live_contract_native_stub PRIVATE PF_LIVE_CONTRACT_NATIVE_STUB=1)
+    add_library(live_contract_old_layout MODULE
+        ${PROJECT_SOURCE_DIR}/tests/test_live_contract_old_layout_plugin.cpp)
+    target_include_directories(live_contract_old_layout PRIVATE
+        ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+    target_compile_options(live_contract_old_layout PRIVATE -fvisibility=hidden)
+    set_target_properties(live_contract_old_layout PROPERTIES PREFIX "")
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME native_live_startup_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_startup_e2e.py $<TARGET_FILE:pineforge-live>
@@ -696,4 +702,11 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
     set_tests_properties(native_live_engine_layout_e2e native_live_opaque_report_e2e
         PROPERTIES TIMEOUT 180)
     add_dependencies(test_native_live_report_cli live_contract_native_stub)
+    add_test(NAME native_live_old_layout_report_e2e COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/native_live_startup_e2e.py $<TARGET_FILE:pineforge-live>
+        $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_market_example>
+        $<TARGET_FILE:live_contract_absent> $<TARGET_FILE:live_contract_unknown>
+        $<TARGET_FILE:live_contract_native_no_export> $<TARGET_FILE:live_contract_old_layout>
+        $<TARGET_FILE:test_native_live_report_cli> old-layout-report)
+    add_dependencies(test_native_live_report_cli live_contract_old_layout)
 endif()

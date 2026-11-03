@@ -519,15 +519,17 @@ static int64_t compute_tf_open_ms(int64_t bar_ms,
     return bar_ms;
 }
 
-static int64_t compute_tf_close_ms(int64_t open_ms,
+static int64_t compute_tf_close_ms(int64_t bar_ms,
                                    const std::string& tf,
-                                   const std::string& tz) {
+                                   const std::string& tz,
+                                   const std::string& sym_tz,
+                                   const std::string& sym_session) {
     CalendarPeriod cp = calendar_period_for(tf);
     int sec = tf_to_seconds(tf);
 
     if (sec > 0 && sec < kSecPerDay) {
-        // Intraday time_close is the EXACT bar-close boundary (== next bar's
-        // open = open_ms + duration), NOT the last millisecond of the bar. TV's
+        // Intraday time_close is the EXACT exclusive bar-close boundary,
+        // capped at the symbol's session-day end, NOT its last millisecond. TV's
         // time_close for a 15:15 15m bar is 15:30:00.000, so minute(time_close)
         // == 30 (verified against the session-close probe, whose
         // `minute(time_close) >= 30` intraday session-close flatten fires 222
@@ -536,9 +538,13 @@ static int64_t compute_tf_close_ms(int64_t open_ms,
         // exact boundaries too: TradingView's time_close("D") - time("D") on
         // BINANCE:BTCUSDT is 86400000, not 86399999 (lab tv w12-tclose-*,
         // tests/fixtures/time_close_function).
-        return open_ms + static_cast<int64_t>(sec) * 1000;
+        // Query the shared writer with the input stamp, not a grid label:
+        // a short final bucket or late-open prefix cannot use open + width.
+        // The valid nonempty session-argument path returns before this helper.
+        return session_intraday_bucket_end_ms(bar_ms, sec, sym_tz, sym_session);
     }
 
+    const int64_t open_ms = compute_tf_open_ms(bar_ms, tf, tz, sym_tz, sym_session);
     time_t osec = static_cast<time_t>(open_ms / 1000);
     if (cp != CalendarPeriod::NONE && utc_zone(tz) && in_civil_span(static_cast<int64_t>(osec))) {
         // What mktime answers below under TZ=UTC, where it is civil arithmetic:
@@ -1842,8 +1848,7 @@ static int64_t session_time_close_reading(int64_t bar_ms,
     if (!sess.empty() && !passes_session_filter(sess, session_tz, bar_ms))
         return na<int64_t>();
 
-    int64_t t_open = compute_tf_open_ms(bar_ms, tf, tf_tz, "UTC", "");
-    return compute_tf_close_ms(t_open, tf, tf_tz);
+    return compute_tf_close_ms(bar_ms, tf, tf_tz, "UTC", "");
 }
 
 int64_t timeframe_time_close(int64_t bar_ms,
@@ -2124,8 +2129,7 @@ int64_t timeframe_time_close(int64_t bar_ms,
         return cp == CalendarPeriod::MONTH ? first_traded_day_stamp_ms(close, sym_tz, sym_session)
                                            : close;
     }
-    int64_t t_open = compute_tf_open_ms(bar_ms, tf, tf_tz, sym_tz, sym_session);
-    return compute_tf_close_ms(t_open, tf, tf_tz);
+    return compute_tf_close_ms(bar_ms, tf, tf_tz, sym_tz, sym_session);
 }
 
 int64_t session_trading_day_open_ms(int64_t bar_ms,

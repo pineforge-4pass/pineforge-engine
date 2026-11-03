@@ -1631,10 +1631,10 @@ PF_API void strategy_set_syminfo_mintick(pf_strategy_t s, double mintick);
  *  (e.g. 50 for ES). Non-positive ignored. Call before #run_backtest / #run_backtest_full. */
 PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue);
 
-/** Inject a fundamental/exchange metadata value by Pine member name
- *  (e.g. "shares_outstanding_total", "target_price_average"). These have
- *  no OHLCV source; reads of un-injected members return na. Call before
- *  #run_backtest / #run_backtest_full. */
+/** Inject a fundamental/exchange metadata value by Pine member name (e.g.
+ *  "shares_outstanding_total"); un-injected reads return na. Quantity step: a
+ *  declared "qty_step", or a finite "mincontract" > 0 while no "qty_step" is
+ *  declared, sets the order quantity grid. Call before #run_backtest[_full]. */
 PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
                                           double value);
 
@@ -2115,7 +2115,7 @@ PF_API int strategy_set_symbol_feed_borrowed_v1(
 
 /** Exact C++ engine layout accepted by the live report accumulator.
  *  Bump whenever that layout changes, independently of #PF_ABI_VERSION. */
-#define PF_STREAM_ENGINE_LAYOUT_VERSION 2u
+#define PF_STREAM_ENGINE_LAYOUT_VERSION 3u
 
 /** Optional module declaration that its strategy handles point directly to
  *  a BacktestEngine with the returned #PF_STREAM_ENGINE_LAYOUT_VERSION.
