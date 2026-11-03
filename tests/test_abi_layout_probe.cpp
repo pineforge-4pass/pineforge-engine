@@ -56,7 +56,7 @@ using Scratch = std::remove_reference_t<
 // The ABI pins apply to Linux x86_64 builds that use GNU libstdc++.
 static_assert(sizeof(Scratch) == 672, "RetiredRowScratch size changed");
 static_assert(sizeof(Adapter) == 89488, "PineExecutionAdapter size changed");
-static_assert(sizeof(Host) == 107944, "PineStrategyHost size changed");
+static_assert(sizeof(Host) == 107952, "PineStrategyHost size changed");
 static_assert(!HasRosterRoots<Scratch>::value,
               "RetiredRowScratch::roster_roots must be absent");
 #endif
@@ -122,7 +122,7 @@ int main() {
     bool pins_hold = true;
     pins_hold &= pin("sizeof RetiredRowScratch", sizeof(Scratch), 672);
     pins_hold &= pin("sizeof PineExecutionAdapter", sizeof(Adapter), 89488);
-    pins_hold &= pin("sizeof PineStrategyHost", sizeof(Host), 107944);
+    pins_hold &= pin("sizeof PineStrategyHost", sizeof(Host), 107952);
     pins_hold &= pin("RetiredRowScratch::roots",
                      member_offset(adapter.*access(RetiredScratch{}), &Scratch::roots), 0);
     pins_hold &= pin("RetiredRowScratch::askable_origins",
