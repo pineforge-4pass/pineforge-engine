@@ -15924,8 +15924,24 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         const bool armed_pure_limit_entry = source.family == PineOrderFamily::Entry
             && !finite_positive(source.exit_levels.stop);
         if (std::holds_alternative<native_order::StopLimit>(trigger) && !armed_pure_limit_entry) {
-            return directional_tick(facts.raw_price, staged_.syminfo.mintick,
-                                    !facts.is_buy);
+            const double projected = directional_tick(facts.raw_price, staged_.syminfo.mintick,
+                                                      !facts.is_buy);
+            // The repair the limit below makes: this projection can sit one
+            // binary64 ULP past the immutable limit (a buy limit at 99.99 on
+            // a 0.01 grid projects to 9999 * 0.01 = 99.990000000000009),
+            // which the generic kernel refuses.  Only there, and only for a
+            // print on the chart grid, the fill books that print's grid
+            // spelling; an admitted projection is kept bit for bit.
+            const double limit = std::get<native_order::StopLimit>(trigger).limit;
+            if (facts.is_buy ? projected > limit : projected < limit) {
+                const double print_on_grid = source_level_on_price_grid(
+                    facts.raw_price, staged_.syminfo.mintick);
+                if (source_bar_fill_tick(print_on_grid, staged_.syminfo.mintick)
+                        == print_on_grid) {
+                    return print_on_grid;
+                }
+            }
+            return projected;
         }
         const double level = finite_positive(source.exit_levels.limit)
             ? source.exit_levels.limit
