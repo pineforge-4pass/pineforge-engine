@@ -337,6 +337,7 @@ set(TEST_SOURCES
     test_calendar_wm_open_utc_fastpath
     test_calendar_bucket_closes_once
     test_intraday_grid_late_day_open
+    test_intraday_bucket_dst_characterization
     test_native_day_labels
     test_daily_magnifier_tapes
     test_htf_session_close_completion
@@ -3912,6 +3913,11 @@ endif()
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
+
+# Each order runs in its own process, before that process has seeded the
+# timezone-offset cache. These pin native legacy expectations, not TV rows.
+add_test(NAME test_intraday_bucket_dst_characterization_reverse
+    COMMAND test_intraday_bucket_dst_characterization --reverse)
 
 # Lab measurements for the next release require externally supplied inputs.
 # Opting in makes absent inputs a failure; there is no placeholder or skip.
