@@ -7,8 +7,8 @@
 // manifest: l44/pr1-manifest.tsv sha256 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62
 // manifest: l50/pr1b-inventory.tsv sha256 4c59bcf9e5ec145df37c23f9ac5c63fdd0fc3d97e69ab81b283fc0fb2a90cdec
 // dirs: 2704
-// files: 10221
-// paths: 12925
+// files: 10222
+// paths: 12926
 D tests/fixtures/add_sibling_margin
 D tests/fixtures/add_sibling_margin/tailb-adds-mkt-c0s0
 D tests/fixtures/add_sibling_margin/tailb-adds-mkt-c10s2
@@ -11015,6 +11015,7 @@ F tests/fixtures/qty_step_lot_grid/strategy.pine
 F tests/fixtures/qty_step_lot_grid/syminfo-mincontract-absent.json
 F tests/fixtures/qty_step_lot_grid/syminfo-with-mincontract.json
 F tests/fixtures/qty_step_lot_grid/syminfo-without-mincontract.json
+F tests/fixtures/qty_step_mincontract/btc60/reporter/tv_trades.csv
 F tests/fixtures/reservation_expansion/ff54-fields.inc
 F tests/fixtures/reservation_expansion/ff54_pending_order_mirror.hpp
 F tests/fixtures/reversal_close_all/README.md

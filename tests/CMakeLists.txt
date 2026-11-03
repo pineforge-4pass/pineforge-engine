@@ -1761,6 +1761,8 @@ list(APPEND TEST_SOURCES test_symbol_calendar_tapes)
 list(APPEND TEST_SOURCES test_session_break_open_bar_tape)
 #   F1(e) an aggregated process_orders_on_close script reading entry_bar_index.
 list(APPEND TEST_SOURCES test_aggregated_entry_bar_index_tape)
+# Quantity-step metadata against TradingView quantities for the next release.
+list(APPEND TEST_SOURCES test_qty_step_mincontract_tapes)
 #   F1's magnified residual on the aggregated chart.
 list(APPEND TEST_SOURCES test_magnified_aggregated_tape)
 #   G2-23 every condition that keeps request.security on the source evaluator.
@@ -2115,6 +2117,7 @@ set(_pf_source_bound_private_rows
     test_publication_witness
     test_pyramiding_count_differential
     test_pyramiding_open_order_tape
+    test_qty_step_mincontract_tapes
     test_reversal_admission_float_guard_l4c
     test_reversal_close_all_tapes
     test_risk_max_intraday_loss_tv_l4a
@@ -3819,6 +3822,7 @@ list(APPEND _pf_private_fixture_rows
     test_pooc_same_pass_close_tape
     test_pooc_short_slip_admission_tapes
     test_pyramiding_open_order_tape
+    test_qty_step_mincontract_tapes
     test_same_bar_reissue_tapes
     test_same_point_entries_tapes
     test_samebar_pyramiding_entries_tapes
@@ -5938,6 +5942,13 @@ elseif(NOT test_aggregated_entry_bar_index_tape IN_LIST _pf_kernel_absent_rows)
     set_tests_properties(test_aggregated_entry_bar_index_tape PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
+if(NOT test_qty_step_mincontract_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/qty_step_mincontract/btc60/reporter/tv_trades.csv")
+    pineforge_add_unit_test(test_qty_step_mincontract_tapes)
+elseif(NOT test_qty_step_mincontract_tapes IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_qty_step_mincontract_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/qty_step_mincontract/btc60/reporter/tv_trades.csv")
+    set_tests_properties(test_qty_step_mincontract_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
 if(NOT test_color_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/color_tv/w11-color-alpha-eth15/meta.json")
     pineforge_add_unit_test(test_color_tapes)
 elseif(NOT test_color_tapes IN_LIST _pf_kernel_absent_rows)
@@ -6786,6 +6797,7 @@ foreach(_pf_hm_row IN ITEMS
         "test_pine_dust_sweep_paired|PINEFORGE_G232_FIXTURE_DIR|g232_decimal_dust"
         "test_session_ismarket_tape|PINEFORGE_G236_FIXTURE_DIR|session_ismarket"
         "test_aggregated_entry_bar_index_tape|PINEFORGE_HM_F1E_FIXTURE_DIR|aggregated_entry_bar_index"
+        "test_qty_step_mincontract_tapes|PINEFORGE_QTY_STEP_FIXTURE_DIR|qty_step_mincontract"
         "test_magnified_aggregated_tape|PINEFORGE_HM_MAG_FIXTURE_DIR|magnified_aggregated"
         "test_adapter_margin_schedule_differential|PINEFORGE_HM_M7A_FIXTURE_DIR|margin_entry_bar"
         # R5 lane PAR-ORDERS-2's tape rows.
