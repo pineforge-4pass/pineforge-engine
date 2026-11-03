@@ -1628,6 +1628,15 @@ private:
     static CoreStep core_step(native_order::Preparation<native_order::Installed>&& applied);
     bool settle_step(BacktestEngine& engine, CoreStep&& step, NativeFailureOperation operation,
                      uint64_t ordinal);
+    // One trigger transition handed to the request core with the run's
+    // activation grid (R5 L8b), in the mutation mode above: the path matcher's
+    // trigger step and the current stop-limit activation both take it, so the
+    // core judges the reached price on the matcher's ladder at either one.
+    // `spec` is the caller's running spec, never null.
+    CoreStep trigger_step(const NativeRunSpec* spec, const native_order::RequestHandle& target,
+                          const native_order::TriggerTransition& transition,
+                          native_order::DriverEligibilityClass driver_class,
+                          std::optional<native_order::Side> side, bool open_grant);
     // What every install does once the core has committed: the committed
     // events noted, the cohort target cache cleared, the timeline caught up.
     void note_install(const native_order::EventRange& events) noexcept;
