@@ -5295,8 +5295,9 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         event.admitted_incarnation = accepted->incarnation;
         admission_journal.append(std::move(event));
     }
-    // remember() consumes the snapshot; the same-id cleanup below compares
-    // queued rows with this request's place in the source command order.
+    // remember() consumes the snapshot; the same-id cleanup below reads the
+    // accepted request's family and its place in the source command order.
+    const PineOrderFamily accepted_family = snapshot.family;
     const std::uint64_t accepted_command_sequence = snapshot.command_sequence;
     remember(*accepted, std::move(snapshot));
     // ab9714be pine_strategy_commands.cpp:445-446 (entry/order) and
@@ -5316,14 +5317,16 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                 [&](const DelayedMarketOrder& row) { return row.replacement_key == replacement_key; }),
             delayed_market_orders_.end());
         // A flat calc_on_order_fills evaluation holds its priced entries
-        // until the evaluation ends (submit_entry_with_policy). A later
-        // same-id opening the core has accepted replaces an earlier one still
-        // held for the end of this evaluation; flushed afterwards, the held
-        // row would replace the later instruction instead. Only a row issued
-        // before the accepted request goes, and never one waiting for a
-        // close (paired_reversal_parent) or a recreated parent
+        // back until the evaluation ends (submit_entry_with_policy). An
+        // accepted entry replaces a held earlier entry of the same id, so
+        // the held row is dropped here: flushed when the evaluation ends, it
+        // would replace the later entry instead. The rule is entry to entry:
+        // an accepted strategy.order call leaves the held row alone. A row
+        // issued after the accepted entry stays, and so does one waiting for
+        // a close (paired_reversal_parent) or a recreated parent
         // (retained_parent_topology): those keep their own submission rules.
-        if (opening && config_.calc_on_order_fills && !coof_recalc_active_) {
+        if (opening && accepted_family == PineOrderFamily::Entry
+            && config_.calc_on_order_fills && !coof_recalc_active_) {
             pending_write(pending_entries_).erase(
                 std::remove_if(pending_entries_.begin(), pending_entries_.end(),
                     [&](const PendingEntry& row) {
