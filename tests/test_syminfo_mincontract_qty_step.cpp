@@ -111,9 +111,12 @@ bool has_raw_quantity(const EntryProbe& probe) {
 
 int explicit_entries() {
     Group group{"(i) mincontract-only explicit entry"};
-    // Independent TV receipts specified in the brief:
+    // Documented floor rule (the quantity is floored to the declared step):
     // BTCUSDT 0.00001: literal 1.234567 -> 1.23456.
     // NYSE:F 1:       literal 1.234567 -> 1.
+    // Limit: the engine floor adds a +1e-6-step epsilon; quantities near a
+    // step boundary beyond the 29 trades and 59 rows of the private tests are
+    // not covered.
     EntryProbe btc;
     btc.set_syminfo_metadata("mincontract", 0.00001);
     btc.run_entry();
