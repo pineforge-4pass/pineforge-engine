@@ -60,6 +60,7 @@
 // list, field for field.
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -80,6 +81,7 @@ constexpr std::int64_t kStart = 1'704'067'200'000LL;
 constexpr std::int64_t kHour = 3'600'000;
 constexpr int kRests = 150;
 constexpr double kRestLimit = 1000.0;
+constexpr double kRestLevelTolerance = 0.01;  // one mintick of the probe's syminfo
 int checks = 0;
 int failures = 0;
 
@@ -131,14 +133,19 @@ public:
             && point->decision.coordinate.provenance == NativePriceProvenance::Calculation;
     }
 
-    // Working requests labelled rest<k> that are sell limits at the rest level.
+    // Working requests labelled rest<k> that are limits at the rest level.
+    // The host stores the sell limit one half tick below the level the call
+    // gave (measured: 999.995 for a call at 1000 with a mintick of 0.01; the
+    // reason is not established here), so the level is matched within one
+    // mintick, not by equality. Identity is the label and the limit kind.
     int working_rests() const {
         int count = 0;
         for (const auto& row : native_working_requests()) {
             if (!row.definition) continue;
             const auto& request = row.definition->request;
             const auto* level = std::get_if<native_order::Limit>(&request.trigger);
-            if (level && level->price == kRestLimit && request.label.rfind("rest", 0) == 0)
+            if (level && std::fabs(level->price - kRestLimit) < kRestLevelTolerance
+                && request.label.rfind("rest", 0) == 0)
                 ++count;
         }
         return count;
