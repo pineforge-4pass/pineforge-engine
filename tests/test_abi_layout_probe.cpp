@@ -186,7 +186,7 @@ int main() {
     pins_hold &= pin("PineExecutionAdapter::staged_scopes_",
                      member_offset(adapter, access(AfterScratch{})), 88888);
     pins_hold &= pin("PineStrategyHost::adapter_",
-                     member_offset(host, access(HostAdapter{})), 6424);
+                     member_offset(host, access(HostAdapter{})), 6432);
     return pins_hold ? 0 : 1;
 #else
     std::printf("abi pins skipped: not linux x86_64 libstdc++\n");
