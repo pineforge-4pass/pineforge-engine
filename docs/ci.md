@@ -73,7 +73,7 @@ no Actions cache restore or save.
 
 Verification jobs keep literal runner pins at the workflow boundary: GKE PR
 admit is hosted, while PR preflight, proof legs and parity use bare GKE scale-set names;
-credentialed post work keeps its protected `["self-hosted","pf-gcp-post"]` fleet.
+credentialed post work uses exact protected `gkp-*` scale sets in runner group 15.
 Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer
 profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
 Hosted `ubuntu-24.04` runs PR `authz`, admission, `legs` and `result` jobs, and `docs.yml`'s `build`; secret-free post guards and aggregates use bare scalar GKE names. These light, secret-free jobs need no VM-only tools, mounts or caches.
@@ -81,12 +81,12 @@ The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/nativ
 Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 36 GKE job instances: amd64 32/16/8/4/2 CPU labels carry 8/7/7/5/7 jobs and arm64 16 CPU carries 2; each label's static cap is 8.
 
 The manual `release-ruleset-probe.yml` workflow runs `authz` on
-bare scalar `gke-2cpu-4gb-amd64` and `probe` on `["self-hosted","pf-gcp-post"]`.
+bare scalar `gke-2cpu-4gb-amd64` and `probe` on `gkp-2cpu-4gb-amd64`.
 
 `docs.yml` retains the PR build name and `.github/**` exclusion.
 `docs-post.yml` builds and deploys on main pushes and manual dispatch.
 Tag pushes no longer trigger docs: the post fleet admits only engine `main`.
-Release and baseline promotion retain their separate `pf-gcp-main` policy.
+Release and baseline promotion use exact protected GKE pins in runner group 15.
 
 Human-dispatched App-token jobs (`release.yml`'s `release` and `notify-hub`, and `release-ruleset-probe.yml`'s `probe`) are bound to `release` (main only). Automatic `promote-baseline.yml`'s `promote` uses `release-bot` (main only, no reviewer), including manual re-fires. Preflight requires a literal, non-empty environment for visible App minting or private-key secret handoffs. Same-named environment secrets shadow repository secrets. Rollback reverts this preflight guard and its probe pin and removes the `environment:` lines; repository secret copies remain until the owner deletes them after dry runs.
 
@@ -106,7 +106,7 @@ Python refuse a system-wide install (PEP 668), and `.venv/` is ignored. The
 and fails, never skips, without it.
 
 Actionlint only accepts declared custom self-hosted runner labels; preflight
-checks the declarations in `.github/actionlint.yaml`. Before a workflow file moves onto a gke- or gkp- label, add its line to `.github/runner-group-allowlist.txt` and ask for the org runner-group entry; the merge waits for both.
+checks the declarations in `.github/actionlint.yaml`, including the x86_64 release matrix cell. Before a workflow moves onto a `gke-*` label, add its ref to `.github/runner-group-allowlist.txt` (group 14); protected `gkp-*` refs belong in `.github/runner-group-15-allowlist.txt` (group 15). The original mirror models group 14 only. Both mirrors are binding; the supervisor must confirm the corresponding live org workflow/ref entries before enabling the routes.
 
 ORG-ACTIONPINS is enforced by preflight's `ci-workflow-contract`: every
 third-party `uses:` in `.github/workflows/*.yml` (also `.yaml`) and nested
@@ -115,7 +115,7 @@ third-party `uses:` in `.github/workflows/*.yml` (also `.yaml`) and nested
 comment on the same line; prerelease and build suffixes are allowed. Local
 `./` actions and reusable workflows, and `docker://` images, are exempt.
 The lint accepts plain block-style YAML only, with scalar flow sequences
-(for example `runs-on: ["self-hosted", "pf-gcp-post"]` and `branches: [main]`)
+(for example `runs-on: ["self-hosted", "pf-ci"]` and `branches: [main]`)
 and empty `{}` / `[]` on one line as a whole plain `key:` value as exceptions
 (ASCII spaces and tabs inside an empty collection are allowed). In flow
 sequences, quotes may start a quoted scalar only at the start of an element,
@@ -1622,7 +1622,7 @@ runs, and this page does not claim either target as met.
 
 ## Runners and time limits
 
-Credentialed work retains its VM pins; secret-free post Linux jobs run directly in GKE runner pods carrying the engine toolchain image and sudo.
+Credentialed work uses protected GKE runner group 15; secret-free post Linux jobs run directly in group 14 GKE runner pods carrying the engine toolchain image and sudo.
 The four amd64 post legs, arm64 cells, preflight, parity and native verification use bare GKE scale-set names; their aggregates use the light image. Promotion's `promote-guard` and docs-post/probe `authz` each use one `gke-2cpu-4gb-amd64` instance in separate roots; their image must include `gh` for permission lookups.
 The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job:
 
@@ -1634,16 +1634,19 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Seven light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: Release/sanitizers `gke-32cpu-64gb-amd64`, Debug/kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64` |
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
 | `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: native shards `gke-8cpu-16gb-amd64`, sanitizer profiles `gke-16cpu-32gb-amd64` |
-| `docs-post.yml` | Push to `main`, dispatch | `authz`: scalar `gke-2cpu-4gb-amd64`; credentialed `build`: `["self-hosted","pf-gcp-post"]` |
+| `docs-post.yml` | Push to `main`, dispatch | `authz`: scalar `gke-2cpu-4gb-amd64`; credentialed `build`: `gkp-4cpu-8gb-amd64` |
+| `release.yml` | Dispatch from `main` | `release` and `notify-hub`: `gkp-2cpu-4gb-amd64`; x86_64 `prebuilt`: `gkp-16cpu-32gb-amd64-128gb`; arm64 `prebuilt`: hosted `ubuntu-22.04-arm` |
+| `promote-baseline.yml` | Push to `main`, dispatch from `main` | `promote-guard`: `gke-2cpu-4gb-amd64`; `promote`: `gkp-2cpu-4gb-amd64` |
+| `release-ruleset-probe.yml` | Dispatch from `main` | `authz`: `gke-2cpu-4gb-amd64`; `probe`: `gkp-2cpu-4gb-amd64` |
 
 Post CI starts on push to `main`, schedule and dispatch; its GKE routing checker
 refuses all PR events. Reusable workflows inherit their caller's event.
 `workflow_event_routes` and `workflow_fleet_findings` in `scripts/ci_preflight.py`
 follow local calls to a fixed point, refuse mixed event classes and require
-literal VM arrays or exact bare scalar GKE scale-set names outside hosted pins; job conditions cannot excuse routing.
+exact bare scalar GKE scale-set names outside hosted pins; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
-GKE jobs carry no deployment secrets, effective id-token permissions or environment; pull_request workflows cannot name GKE routing. Runner-group workflow/ref allowlists must admit the post-only workflows at refs/heads/main before they can acquire pods. GKE jobs start only from gke-pr.yml, ci-post.yml, corpus-parity.yml, native-live.yml, docs-post.yml, release-ruleset-probe.yml and promote-baseline.yml at refs/heads/main (the runner group lists those workflow refs); a dispatch from another ref queues without a runner.
-Rollback may restore an earlier GCP fleet pin; paid larger-runner labels remain refused.
+Unprotected GKE jobs carry no deployment secrets, effective id-token permissions or environment; pull_request workflows cannot name GKE routing. Runner-group workflow/ref allowlists must admit the post-only workflows at refs/heads/main before they can acquire pods. GKE jobs start only from gke-pr.yml, ci-post.yml, corpus-parity.yml, native-live.yml, docs-post.yml, release-ruleset-probe.yml and promote-baseline.yml at refs/heads/main (the runner group lists those workflow refs); a dispatch from another ref queues without a runner.
+Retired GCP main/post labels and paid larger-runner labels remain refused.
 
 The four full build checks are `build (ubuntu-24.04, Release)`,
 `build (ubuntu-24.04, Debug)`, `build (ubuntu-24.04-arm, Release)` and
@@ -1653,17 +1656,35 @@ Every shard builds the full tree and runs `--ctest-shard I/N` at the runner's co
 Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on `gke-16cpu-32gb-arm64`. All three build jobs use the same verification steps and profiles.
 Shard jobs and leg aggregates skip together only on classified docs-only changes.
 Trusted post workflows and PR proof legs build cold; no trusted job restores an Actions cache.
-`HOSTED_JOB_RUNNERS` pins hosted jobs and exact bare GKE scalars; every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. PR checks are
+`HOSTED_JOB_RUNNERS` pins hosted jobs and exact bare GKE scalars; `GKP_JOB_RUNNERS` separately pins protected jobs and sizes. Every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. PR checks are
 `build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`. With the arm leg, the full set is `build`, `build-debug`, `build-arm`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.
 
-Release and promotion use the isolated release fleet:
-`release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use
-`["self-hosted","pf-gcp-main"]`.
+Release and promotion use protected GKE runner group 15:
+`release`, `notify-hub` and baseline `promote` use `gkp-2cpu-4gb-amd64`;
+Linux x64 `prebuilt` uses `gkp-16cpu-32gb-amd64-128gb`.
 The release ruleset probe runs secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64` and
-`probe` on `["self-hosted","pf-gcp-post"]`.
+`probe` on `gkp-2cpu-4gb-amd64`.
 Release's Linux arm64 artifact cell keeps its hosted `ubuntu-22.04-arm` pin;
 1.8.0 has no macOS test or artifact cells, and
 promotion runs on a push to `main` plus manual dispatch from `main`.
+
+The protected 2 CPU/4 GB set fits each orchestration job: release computes versions,
+stamps JSON catalogs and publishes with git/gh; notify-hub only mints an App token
+and dispatches an API request; promotion runs API/tree checks, Node campaign tooling
+and a Cloud SQL proxy; the probe reads rulesets with Python/gh. Docs uses the
+4 CPU/8 GB set for Doxygen and Graphviz over the full public header set before
+uploading the site to Pages. The x86_64 prebuilt set reserves 16 CPU/32 GB and
+128 GB disk for compiling, staging and packing the static library.
+Both Linux artifact cells install `libeigen3-dev` with `sudo apt-get update` and
+`sudo apt-get install -y libeigen3-dev`; Eigen is not baked into the protected image.
+Before CMake, x86_64 must read `Eigen/src/Core/util/Macros.h` and match exactly
+`EIGEN_WORLD_VERSION=3`, `EIGEN_MAJOR_VERSION=4`, `EIGEN_MINOR_VERSION=0` (3.4.0).
+Missing headers or any other version fail the job. Preflight pins these steps and
+their order, the exact protected job/label inventory, and the App environments.
+Protected routing cannot be used by another job, PR caller, container or service.
+The group 15 mirror lists only docs-post, promote-baseline, release-ruleset-probe
+and release at `refs/heads/main`; live membership and a release dry run remain
+supervisor checks. The secret-free `gke-*` credential ban stays binding.
 
 Every split workflow retains the canon authz step and its digest. All other
 jobs need authz; CI/native aggregates always run and refuse failed authz
@@ -1678,8 +1699,8 @@ default excludes `slow` from Debug and sanitizer runs on every event,
 including non-PR events; Release, kernel and native retain every row.
 PR CI keeps the Release smoke selected by CTest label `fast`.
 
-Baseline promotion uses `["self-hosted","pf-gcp-main"]` for its GitHub App
-secrets and inherited `id-token: write` permission. The release class admits
+Baseline promotion uses `gkp-2cpu-4gb-amd64` for its GitHub App
+secrets and inherited `id-token: write` permission. Protected runner group 15 admits
 this allowlisted workflow at `refs/heads/main`; WIF pins its
 `job_workflow_ref` and run ref to main without restricting the event.
 The pushed SHA must resolve to exactly one merged PR before authorization,
@@ -1708,7 +1729,7 @@ Every paid larger-runner label is refused in every workflow, including pinned jo
 `larger_runner` keys stay refused. GitHub's platform maximum remains the only time bound.
 
 The read-only `promote-guard` uses bare scalar `gke-2cpu-4gb-amd64`; the credential
-job keeps main's isolated release runner. Preflight pins the complete guard
+job uses main's protected `gkp-2cpu-4gb-amd64` runner. Preflight pins the complete guard
 block, including its sole `pull-requests: read` scope, API resolution, identity bindings,
 refusal script, authorization output and separator. It also pins the
 credential job's dependency and successful-authorization condition.
@@ -1889,10 +1910,10 @@ Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from
 `main` to check actual ruleset visibility with the same App token mint as
 `release.yml`. The workflow file must be on the default branch, and the run
 must use `main`'s copy.
-The credentialed probe job runs on `["self-hosted","pf-gcp-post"]`, with
+The credentialed probe job runs on `gkp-2cpu-4gb-amd64`, with
 secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64`.
-`pf-gcp-main` admits only allowlisted workflows (an org runner-group restriction),
-so the one-time probe uses `pf-gcp-post`.
+Protected runner group 15 admits only allowlisted workflow refs at `refs/heads/main`;
+the probe keeps its `release` environment and main-ref refusal before App minting.
 The dispatch must run from `main`; the workflow itself refuses any other ref
 before minting the App token or checking out repository code.
 It runs `python3 scripts/ci_release_gate.py rulesets-probe --repo OWNER/REPO`,

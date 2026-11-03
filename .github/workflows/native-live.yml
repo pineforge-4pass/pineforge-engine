@@ -39,7 +39,7 @@ env:
 jobs:
   authz:
     name: authz
-    # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
+    # Fleet routing is fixed per job; credentials use protected GKE runners.
     runs-on: gke-4cpu-8gb-amd64
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
