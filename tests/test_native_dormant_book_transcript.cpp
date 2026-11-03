@@ -1258,9 +1258,10 @@ using DriverCounts = std::array<std::array<std::uint64_t, 2>, 7>;
 // Independent oracle for trigger_permits_driver, separate from the derived
 // dormant guard: limits only on carried opens; all priced triggers on
 // observed prints, ticks, confirmed opens and excursion points; none after
-// a confirmed calculation or at target-only current execution. StopLimitLive
-// remains an other-trigger case, even though its stop has already activated.
-inline bool base_priced_permission(no::DriverEligibilityClass driver, bool limit) {
+// a confirmed calculation; current activation alone admits a pending stop-limit.
+// Ordinary current evaluation still excludes it; StopLimitLive stays excluded.
+inline bool base_priced_permission(no::DriverEligibilityClass driver, bool limit,
+                                  bool current_pending_stop_limit = false) {
     switch (driver) {
     case no::DriverEligibilityClass::ObservedPrint:
     case no::DriverEligibilityClass::TickAfterCalculation:
@@ -1270,8 +1271,9 @@ inline bool base_priced_permission(no::DriverEligibilityClass driver, bool limit
     case no::DriverEligibilityClass::CarriedOpen:
         return limit;
     case no::DriverEligibilityClass::ConfirmedAfterCalculationClose:
-    case no::DriverEligibilityClass::CurrentExecution:
         return false;
+    case no::DriverEligibilityClass::CurrentExecution:
+        return current_pending_stop_limit;
     }
     throw std::runtime_error("driver policy oracle: unknown eligibility class");
 }
@@ -1391,6 +1393,14 @@ public:
                 const auto cls = static_cast<std::size_t>(driver);
                 const auto kind = limit ? 0U : 1U;
                 const auto facts = core.eligibility_facts(*row, context);
+                // Raw permission admits a guarded pending activation; ordinary
+                // current evaluation still requires its existing market shape.
+                const bool pending = std::holds_alternative<no::StopLimit>(row->request().trigger)
+                    && std::holds_alternative<no::StopLimitPending>(row->trigger_state);
+                require(core.trigger_permits_driver(row->request().trigger, row->trigger_state,
+                            driver, point.matching)
+                            == base_priced_permission(driver, limit, pending && point.matching),
+                        "driver permissions: raw activation permission disagrees with the trigger table");
                 const bool expected = base_priced_permission(driver, limit);
                 require(facts.driver_ok == expected,
                         "driver permissions: eager eligibility disagrees with the independent trigger table");

@@ -1286,18 +1286,6 @@
    "ordinal": 1
   },
   {
-   "file": "include/pineforge/detail/id_pair_ordered_fold.hpp",
-   "symbol": "reader",
-   "scope": [
-    "namespace pineforge :: detail #1",
-    "class IdPairOrderedFold #1",
-    "template < class Reader > static void leaf_fold ( const Leaf & leaf , Reader & reader , BrokerStateByteFold & fold ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "reader . append ( . . . )",
-   "ordinal": 1
-  },
-  {
    "file": "include/pineforge/detail/feed_projection.hpp",
    "symbol": "cache_",
    "scope": [
@@ -1323,11 +1311,12 @@
   },
   {
    "file": "include/pineforge/detail/feed_projection.hpp",
-   "symbol": "reader_",
+   "symbol": "provider",
    "scope": [
     "namespace pineforge :: detail #1",
     "template < class Row > class FeedProjectionBuilder #1",
-    "private : void spill_to_scratch ( ) #1"
+    "FeedProjection < Row > finish ( std :: size_t capacity_bytes = kFeedProjectionCacheBytes ) #1",
+    "else #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
@@ -1335,12 +1324,11 @@
   },
   {
    "file": "include/pineforge/detail/feed_projection.hpp",
-   "symbol": "provider",
+   "symbol": "reader_",
    "scope": [
     "namespace pineforge :: detail #1",
     "template < class Row > class FeedProjectionBuilder #1",
-    "FeedProjection < Row > finish ( std :: size_t capacity_bytes = kFeedProjectionCacheBytes ) #1",
-    "else #1"
+    "private : void spill_to_scratch ( ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
@@ -1366,6 +1354,18 @@
    ],
    "cls": "grow",
    "spelling": "builder . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/id_pair_ordered_fold.hpp",
+   "symbol": "reader",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class IdPairOrderedFold #1",
+    "template < class Reader > static void leaf_fold ( const Leaf & leaf , Reader & reader , BrokerStateByteFold & fold ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "reader . append ( . . . )",
    "ordinal": 1
   },
   {
@@ -1713,6 +1713,18 @@
   },
   {
    "file": "include/pineforge/detail/id_table_read_cache.hpp",
+   "symbol": "operator new",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class IdTableReadCache #1",
+    "bool prepare ( ) const noexcept #1"
+   ],
+   "cls": "alloc",
+   "spelling": "operator new",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/id_table_read_cache.hpp",
    "symbol": "reset",
    "scope": [
     "namespace pineforge :: detail #1",
@@ -1722,18 +1734,6 @@
    ],
    "cls": "alloc",
    "spelling": "new",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/detail/id_table_read_cache.hpp",
-   "symbol": "operator new",
-   "scope": [
-    "namespace pineforge :: detail #1",
-    "class IdTableReadCache #1",
-    "bool prepare ( ) const noexcept #1"
-   ],
-   "cls": "alloc",
-   "spelling": "operator new",
    "ordinal": 1
   },
   {
@@ -19000,6 +19000,19 @@
   },
   {
    "file": "src/native_execution_consumer.cpp",
+   "symbol": "held",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "std :: optional < NativeCurrentRefusal > NativeExecutionConsumer :: activate_current_stop_limit ( BacktestEngine & engine , const native_order :: RequestHandle & target ) #1",
+    "try #1"
+   ],
+   "cls": "assign",
+   "spelling": "held = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
    "symbol": "applied_notifications_",
    "scope": [
     "namespace pineforge #1",
@@ -30526,118 +30539,6 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "positions",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
-    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
-    "for ( const auto & unit : live_units_by_origin ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "positions = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "remaining",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
-    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
-    "if ( ! abandoned ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "remaining = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "next",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
-    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
-    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
-    ") #1"
-   ],
-   "cls": "assign",
-   "spelling": "next = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "positions",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
-    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
-    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
-    ") #1",
-    "for ( const auto & unit : live_units_by_origin ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "positions = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "next",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
-    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
-    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
-    ") #1",
-    "for ( const auto & unit : live_units_by_origin ) #1",
-    "for ( const auto position : * positions ) #1",
-    "if ( ! have_next || position < next ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "next = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "next",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
-    ") #1"
-   ],
-   "cls": "assign",
-   "spelling": "next = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "positions",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
-    ") #1",
-    "for ( const auto & unit : live_units_by_origin ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "positions = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "next",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
-    ") #1",
-    "for ( const auto & unit : live_units_by_origin ) #1",
-    "for ( const auto position : * positions ) #1",
-    "if ( ! have_next || position < next ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "next = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
    "symbol": "open_entry_fees_",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -39601,6 +39502,118 @@
    ],
    "cls": "assign",
    "spelling": "cohorts = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "positions",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "for ( const auto & unit : live_units_by_origin ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "positions = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "remaining",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "if ( ! abandoned ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "remaining = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
+    ") #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "positions",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
+    ") #1",
+    "for ( const auto & unit : live_units_by_origin ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "positions = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
+    ") #1",
+    "for ( const auto & unit : live_units_by_origin ) #1",
+    "for ( const auto position : * positions ) #1",
+    "if ( ! have_next || position < next ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
+    ") #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "positions",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
+    ") #1",
+    "for ( const auto & unit : live_units_by_origin ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "positions = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
+    ") #1",
+    "for ( const auto & unit : live_units_by_origin ) #1",
+    "for ( const auto position : * positions ) #1",
+    "if ( ! have_next || position < next ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
    "ordinal": 1
   },
   {

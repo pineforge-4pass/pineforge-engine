@@ -4924,6 +4924,21 @@ bool NativeExecutionConsumer::settle_step(BacktestEngine& engine, CoreStep&& ste
     return token && install_mutation(engine, std::move(*token), operation, ordinal);
 }
 
+NativeExecutionConsumer::CoreStep NativeExecutionConsumer::trigger_step(
+        const NativeRunSpec* spec, const native_order::RequestHandle& target,
+        const native_order::TriggerTransition& transition,
+        native_order::DriverEligibilityClass driver_class,
+        std::optional<native_order::Side> side, bool open_grant) {
+    const native_order::ActivationGrid trigger_grid = activation_grid(*spec);
+    return direct_mutation_
+        ? core_step(requests_.apply_trigger(target, transition, driver_class,
+                                            next_timeline_ordinal_, side, trigger_grid,
+                                            open_grant))
+        : core_step(requests_.prepare_trigger(target, transition, driver_class,
+                                              next_timeline_ordinal_, side, trigger_grid,
+                                              open_grant));
+}
+
 bool NativeExecutionConsumer::install_execution(
         BacktestEngine& engine, native_order::PreparedExecution&& prepared,
         const native_order::CommittedExecutionFacts& facts, uint64_t ordinal) {
@@ -7555,15 +7570,8 @@ void NativeExecutionConsumer::match_path(
             }
             CoreStep step;
             try {
-                const native_order::ActivationGrid trigger_grid = activation_grid(*spec);
-                step = direct_mutation_
-                    ? core_step(requests_.apply_trigger(winner->handle, transition, driver_class,
-                                                        next_timeline_ordinal_, eval.cohort_side,
-                                                        trigger_grid, open_grant))
-                    : core_step(requests_.prepare_trigger(winner->handle, transition,
-                                                          driver_class, next_timeline_ordinal_,
-                                                          eval.cohort_side, trigger_grid,
-                                                          open_grant));
+                step = trigger_step(spec, winner->handle, transition, driver_class,
+                                    eval.cohort_side, open_grant);
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                            NativeFailureOperation::Settlement, P});
@@ -8117,6 +8125,99 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Settlement});
         if (!recoverable_abort() && failure_value_of(engine).code == RunFailureCode::none)
             render_unclassified(engine, "native current execution exception");
+        throw;
+    }
+}
+
+std::optional<NativeCurrentRefusal> NativeExecutionConsumer::activate_current_stop_limit(
+        BacktestEngine& engine, const native_order::RequestHandle& target) {
+    using Refusal = NativeCurrentRefusal;
+    if (!std::holds_alternative<NativeRunning>(state_)) return Refusal::NoExecutionContext;
+    if (consuming_request_ || open_activation_scope_) return Refusal::Reentrant;
+    if (!current_execution_point()) return Refusal::NoExecutionContext;
+    if (callback_phase_ != CallbackPhase::PreOpen && callback_phase_ != CallbackPhase::Bar
+        && callback_phase_ != CallbackPhase::Applied && callback_phase_ != CallbackPhase::Tick)
+        return Refusal::NoExecutionContext;
+    const auto recorded_cause = [this, &engine]() {
+        auto cause = run_failure_value_of(engine);
+        if (cause.code == RunFailureCode::none)
+            cause = RunFailureValue{recoverable_abort() ? RunFailureCode::run_aborted
+                                                       : RunFailureCode::engine_invariant, nullptr};
+        return cause;
+    };
+    if (!check_abort(engine, NativeFailureOperation::Command)
+        || !check_projection(engine, NativeFailureOperation::Command))
+        throw coded<std::runtime_error>(recorded_cause(),
+                                        "native current activation projection/abort failure");
+    try {
+        if (target.incarnation == 0 || target.run != requests_.identity())
+            return Refusal::InvalidHandle;
+        // Held while cohort-side observation may read other spilled requests.
+        const auto held = requests_.hold_live(target);
+        if (!held) return Refusal::NotWorking;
+        const auto* stop_limit = std::get_if<native_order::StopLimit>(&held->request().trigger);
+        if (!stop_limit) return Refusal::UnsupportedRequest;
+        if (std::holds_alternative<native_order::StopLimitLive>(held->trigger_state))
+            return std::nullopt;
+        if (!std::holds_alternative<native_order::StopLimitPending>(held->trigger_state))
+            return Refusal::UnsupportedRequest;
+        if (std::holds_alternative<native_order::Wait>(held->authority)
+            || std::holds_alternative<native_order::UnboundBookClose>(held->authority))
+            return Refusal::UnreadyOwner;
+        const auto* spec = spec_ptr();
+        if (!spec) return Refusal::NoExecutionContext;
+        const auto side = cohort_side(engine, *held);
+        const bool buy = requests_.working_is_buy(*held, side);
+        const double price = current_frame_->point.price;
+        // Same predicate as the core's stop_price_reached: pre-check before
+        // taking an ordinal, since a core PreparationError fails the run.
+        const auto stop_price_reached = [](bool is_buy, double level, double reached,
+                                          const native_matching::GridThreshold& grid) {
+            if (!std::isfinite(reached) || !std::isfinite(level) || level < 0.0) return false;
+            return native_matching::region_reached(reached, level, /*le=*/!is_buy, grid);
+        };
+        if (!stop_price_reached(buy, stop_limit->stop, price, grid_threshold(*spec)))
+            return Refusal::UnsupportedRequest;
+        consuming_request_ = true;
+        const auto ordinal = take_ordinal(engine);
+        if (failed())
+            throw coded<std::runtime_error>(recorded_cause(), "native current activation point failed");
+        NativeDriverPoint point;
+        point.coordinate = current_execution_coordinate(ordinal);
+        point.raw_price = price;
+        point.matching = true;
+        record_driver(point);
+        const native_order::ActivateStopLimit transition{make_cursor(point, 0.0), price};
+        const auto driver = native_order::DriverEligibilityClass::CurrentExecution;
+        CoreStep step = trigger_step(spec, target, transition, driver, side,
+                                     /*open_grant=*/false);
+        if (const auto* error = std::get_if<native_order::PreparationError>(&step)) {
+            fail_preparation(engine, *error, NativeFailureOperation::Settlement);
+            throw coded<std::runtime_error>(recorded_cause(), "native current activation failed");
+        }
+        // All ordinary refusals were checked before recording the point.
+        // A missing transition here is an internal sequencing failure.
+        if (std::holds_alternative<native_order::NoChange>(step)
+            || !settle_step(engine, std::move(step), NativeFailureOperation::Settlement, ordinal))
+            throw coded<std::runtime_error>(recorded_cause(), "native current activation install failed");
+        consuming_request_ = false;
+        return std::nullopt;
+    } catch (const std::bad_alloc& e) {
+        consuming_request_ = false;
+        fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Settlement});
+        render_exception(engine, e);
+        throw;
+    } catch (const std::exception& e) {
+        consuming_request_ = false;
+        if (!failed()) fail(engine, NativeFailure{NativeFailureCode::SettlementFailure,
+                                                NativeFailureOperation::Settlement});
+        render_exception(engine, e);
+        throw;
+    } catch (...) {
+        consuming_request_ = false;
+        fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Settlement});
+        if (!recoverable_abort() && failure_value_of(engine).code == RunFailureCode::none)
+            render_unclassified(engine, "native current activation exception");
         throw;
     }
 }
@@ -12651,6 +12752,11 @@ NativeCurrentExecutionPreview NativeStrategyHost::inspect_current_execution(
 
 NativeCurrentExecutionResult NativeStrategyHost::execute_current(const NativeCurrentExecution& command) {
     return NativeExecutionConsumer::bound(*this).execute_current(*this, command);
+}
+
+std::optional<NativeCurrentRefusal> NativeStrategyHost::activate_current_stop_limit(
+        const native_order::RequestHandle& target) {
+    return NativeExecutionConsumer::bound(*this).activate_current_stop_limit(*this, target);
 }
 
 bool NativeStrategyHost::mark_native_report_point(int64_t report_ts) {

@@ -4151,6 +4151,9 @@ bool WorkingRequestCore::trigger_permits_driver(const Trigger& trigger,
             return market ? existing_matching_bit : false;
         case DriverEligibilityClass::CurrentExecution:
             // Only the consumer's guarded target command supplies this bit.
+            if (std::holds_alternative<StopLimit>(trigger)
+                && std::holds_alternative<StopLimitPending>(state))
+                return existing_matching_bit;
             return std::holds_alternative<Market>(trigger)
                 && std::holds_alternative<MarketReady>(state) && existing_matching_bit;
     }
@@ -5474,7 +5477,9 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
     }
     if (!driver_class_matches_cursor(driver_class, cursor)
         || !trigger_permits_driver(updated.request().trigger, updated.trigger_state,
-                                    driver_class, false)) {
+                                    driver_class,
+                                    driver_class == DriverEligibilityClass::CurrentExecution
+                                        && std::holds_alternative<ActivateStopLimit>(transition))) {
         return NoChange{NoChangeReason::NotEligible};
     }
     const bool is_buy = working_is_buy(updated, cohort_side);
@@ -5678,7 +5683,9 @@ Preparation<Installed> WorkingRequestCore::apply_trigger(
     }
     if (!driver_class_matches_cursor(driver_class, cursor)
         || !trigger_permits_driver(live.request().trigger, live.trigger_state,
-                                    driver_class, false)) {
+                                    driver_class,
+                                    driver_class == DriverEligibilityClass::CurrentExecution
+                                        && std::holds_alternative<ActivateStopLimit>(transition))) {
         return NoChange{NoChangeReason::NotEligible};
     }
     const bool is_buy = working_is_buy(live, cohort_side);

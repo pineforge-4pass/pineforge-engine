@@ -103,6 +103,12 @@
  *                                          it is no preview; the preview's refusal, readiness, account
  *                                          projection and closed-row P&L have no size-prefixed POD in 1.0
  *   [C]  execute_current                   strategy_native_execute_current_v1
+ *   [--] activate_current_stop_limit       its one caller is the Pine host: at the confirmed close of a
+ *                                          process_orders_on_close run it activates a stop-limit entry
+ *                                          whose stop that close reaches and whose limit it does not
+ *                                          (#707); a C host's stop-limit activates where the kernel's
+ *                                          matcher reaches its stop, and
+ *                                          strategy_native_execute_current_v1 takes a market request only
  *   [--] mark_native_report_point          the C spec does not name KernelRecordedAtHostMarks,
  *                                          so a C host cannot select its mark cadence
  *   [C]  native_series_bar                 strategy_native_series_bar_v1

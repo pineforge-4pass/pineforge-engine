@@ -347,7 +347,7 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2834`; joined key at `src/source/pine_adapter.cpp:25493` |
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:642` |
 | Ordered consumed-cycle fold | 136*leaves + 2088*branches + 2096*savedPath | `include/pineforge/detail/id_pair_ordered_fold.hpp:161`, `:165`, `:172`, size assertion for `Leaf`, `Branch` and `Snapshot` at `:183` |
-| Successor-root rows | 16*R | `src/native_order.cpp:8220`, row assertion for `Row` at `:8141`, 64-row tail bound `kTailRows` at `:8146` |
+| Successor-root rows | 16*R | `src/native_order.cpp:8220`, row assertion for `Row` at `:8148`, 64-row tail bound `kTailRows` at `:8153` |
 | Frozen external openings | **0 in this certified profile** | Stock source builds owned `BindOpenings` vectors at `src/source/pine_adapter.cpp:7058`, `:7051`, `:9745-9761`; generic external owners are excluded below |
 
 The AVL node is seven uint64 words = 56 bytes, then its value and exact key
@@ -558,7 +558,7 @@ non-command certificates exactly.
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
 writer (`equity_scratch` append at `src/engine_report.cpp:1563`), and capture transfers that writer as `metric_curve`
-instead of copying its prefix (`src/native_execution_consumer.cpp:13172`).
+instead of copying its prefix (`src/native_execution_consumer.cpp:13278`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
 rounding region.
