@@ -201,6 +201,7 @@ FLEET_JOB_IDS = {
     'native-live.yml': ('authz', 'native-live', 'native-live-shards', 'native-live-native', 'native-live-gate'),
     'corpus-parity.yml': ('authz', 'corpus-parity', 'corpus-parity-subset'),
     'docs.yml': ('authz', 'build'),
+    'rerun-preempted.yml': ('rerun',),
     'docs-post.yml': ('authz', 'build'),
     'release.yml': ('release', 'prebuilt', 'notify-hub'),
     'release-ruleset-probe.yml': ('authz', 'probe'),
@@ -213,6 +214,7 @@ LIGHT_JOB_IDS = {
                     'build-debug-gate', 'sanitizers-gate', 'kernel-only-gate'),
     'corpus-parity.yml': ('authz',),
     'docs.yml': ('authz', 'build'),
+    'rerun-preempted.yml': ('rerun',),
     'docs-post.yml': ('authz',),
     'native-live.yml': ('authz', 'native-live-native', 'native-live-gate'),
     'release-ruleset-probe.yml': ('authz',),
@@ -1974,7 +1976,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
 
     def test_post_fleet_docs_match_runner_policy(self):
         docs = (ROOT / 'docs/ci.md').read_text()
-        self.assertEqual(len(docs.splitlines()), 2052)
+        self.assertEqual(len(docs.splitlines()), 2063)
         requirements = (
             'Post Release/Debug/kernel, native shards and post sanitizers use fixed bare GKE scale-set names.\n'
             'The two native-live sanitizer profiles use an exact runner matrix. All GKE jobs run directly '
@@ -3691,8 +3693,8 @@ class PreflightFailures(unittest.TestCase):
 
     def test_light_jobs_accept_exactly_the_requested_routing(self):
         workflows = self.light_workflows()
-        # CI 1 + admission 3 + post 7 + parity 1 + docs 3 + native 3 + probe 1.
-        self.assertEqual(sum(map(len, LIGHT_JOB_IDS.values())), 19)
+        # CI 1 + admission 3 + post 7 + parity 1 + docs 3 + rerun 1 + native 3 + probe 1.
+        self.assertEqual(sum(map(len, LIGHT_JOB_IDS.values())), 20)
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
         self.assertEqual(ci_preflight.workflow_fleet_findings(workflows), [])
         for name in ('corpus-parity.yml', 'docs.yml', 'docs-post.yml'):
@@ -4196,7 +4198,7 @@ class PreflightFailures(unittest.TestCase):
 
     def test_documented_slow_row_counts_match_literal_population(self):
         text = (ROOT / 'docs/ci.md').read_text()
-        self.assertEqual(len(text.splitlines()), 2052)
+        self.assertEqual(len(text.splitlines()), 2063)
         counts = re.findall(
             r'^the (\d+) CTest rows labelled `slow` in `tests/CMakeLists.txt`$'
             r'|^The label `slow` (?:is|includes) `PINEFORGE_PR_SLOW_TESTS` '
@@ -5572,6 +5574,7 @@ exit "$lookup_exit"
                           'corpus-parity.yml': {'authz': GKE_4,
                                                  **EXPECTED_GKE_JOBS['corpus-parity.yml']},
                           'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
+                          'rerun-preempted.yml': {'rerun': 'ubuntu-24.04'},
                           'docs-post.yml': {'authz': GKE_2, 'build': GKP_4},
                           'native-live.yml': {'authz': GKE_4,
                                               **EXPECTED_GKE_JOBS['native-live.yml'],

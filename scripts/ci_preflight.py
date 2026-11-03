@@ -337,6 +337,7 @@ HOSTED_JOB_RUNNERS = {
     'native-live.yml': GKE_JOB_RUNNERS['native-live.yml'],
     'corpus-parity.yml': GKE_JOB_RUNNERS['corpus-parity.yml'],
     'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
+    'rerun-preempted.yml': {'rerun': 'ubuntu-24.04'},
     'promote-baseline.yml': GKE_JOB_RUNNERS['promote-baseline.yml'],
     'release-ruleset-probe.yml': GKE_JOB_RUNNERS['release-ruleset-probe.yml'],
 }

@@ -1,0 +1,7 @@
+2026-11-03T06:17:42.1290045Z [36;1mpython3 -m pip install --disable-pip-version-check --no-input \[0m
+2026-11-03T06:17:42.1290763Z [36;1m  --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt[0m
+2026-11-03T06:17:44.4077827Z [36;1msudo apt-get update[0m
+2026-11-03T06:17:44.4078408Z [36;1msudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache[0m
+2026-11-03T06:17:50.0756396Z [36;1mpython3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard 4/4[0m
+2026-11-03T06:29:00.0326985Z ##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.
+2026-11-03T06:29:01.0112153Z ##[error]The operation was canceled.

@@ -28,6 +28,15 @@ every profile. `ci.yml` retains authorization and draft event handling;
 and GitHub-only changes still run preflight, while only the proof legs skip.
 Failed, cancelled or unclassified work is red in the hosted result.
 
+`rerun-preempted.yml` retries only failed jobs of completed, failed `CI post-merge`
+push/schedule runs on `main`, including called native jobs. Every failed job must
+have an amd64 `gke-*` label and runner-loss evidence without an independent error.
+Missing logs, mixed failures, arm64/`gkp-*` jobs, stale attempts and changed runs
+refuse the retry; three total attempts are allowed. PRs, manual dispatches and
+release/publish/deploy/promotion workflows are excluded. The controller runs on
+hosted `ubuntu-24.04`, uses its trusted default-branch workflow commit, and never
+prints log bodies. Missing `gh`, `python3` or the log escape flag fails the job.
+
 A GitHub-only PR changes at least one path, all under `.github/`, including both sides of a rename.
 `scripts/ci_*.py` changes, alone or mixed with `.github/`, follow the ordinary proof plan.
 `gke-pr` reads the SHA-bound three-dot compare API twice, writes a NUL-separated path file and gives it to the base tree's `scripts/ci_docs_only.py --paths`.
@@ -192,6 +201,7 @@ CI uses Ubuntu 24.04 amd64 and arm64 cells and selects Python 3.12 explicitly.
 The amd64 post build shards and the two arm64 post cells use bare scalar
 architecture/size scale-set names and run directly in runner pods carrying the engine toolchain image and sudo. All three build jobs refuse an OS mismatch.
 Hosted exceptions cover PR light jobs and the existing hosted release cells; post light jobs use bare scalar GKE names.
+The runner-loss controller has its own exact hosted `ubuntu-24.04` pin.
 CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
 Python. CTest must discover tests; an empty suite is a failure. Which runner
@@ -1631,6 +1641,7 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `ci.yml` | Unfiltered `pull_request` | `authz`: hosted `ubuntu-24.04`; no proof legs |
 | `gke-pr.yml` | `pull_request_target` to `main` | Hosted admission/result; GKE preflight and proof legs; Debug `gke-16cpu-32gb-amd64-128gb`, arm64 `gke-16cpu-32gb-arm64-128gb` |
 | `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: hosted `ubuntu-24.04` |
+| `rerun-preempted.yml` | `workflow_run`: completed `CI post-merge` push/schedule runs on `main` | `rerun`: hosted `ubuntu-24.04` |
 | `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Seven light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: Release `gke-32cpu-64gb-amd64`, sanitizers `gke-32cpu-64gb-amd64-256gb`, Debug `gke-16cpu-32gb-amd64-128gb`, kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64-128gb` |
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
 | `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; native shards: bare `gke-8cpu-16gb-amd64`; `matrix.runner`: live-sanitizers `gke-16cpu-32gb-amd64-256gb`, live-tsan `gke-16cpu-32gb-amd64-128gb` |
