@@ -413,16 +413,26 @@ public:
         for (auto at = index_.first_sorted(); at != 0; at = index_.next_sorted(at))
             visit(index_.key(at));
     }
-    // Keys-only membership: reads the index alone, restores no row and does
-    // not run the implicit spill pass.
-    bool contains(const std::string& key) const { return index_.find(key).has_value(); }
+    // Keys-only membership restores no row and runs no implicit spill pass.
+    // The resident directory already proves membership by the full key. Disk
+    // remains authoritative for all other keys, including retired history.
+    bool contains(const std::string& key) const {
+        return find_resident(key) != end() || index_.find(key).has_value();
+    }
     iterator find(const std::string& key) {
         spill_implicitly();
+        // Spill first, as before: a dirty eligible row may just have left
+        // residency. Otherwise use its existing directory rather than walking
+        // the disk tree again for a row whose current value is already here.
+        auto resident = find_resident(key);
+        if (resident != end()) return resident;
         const auto at = index_.find(key);
         return at ? iterator{this, *at, load(*at)} : end();
     }
     const_iterator find(const std::string& key) const {
         spill_implicitly();
+        auto resident = find_resident(key);
+        if (resident != end()) return resident;
         const auto at = index_.find(key);
         return at ? const_iterator{this, *at, load(*at)} : end();
     }

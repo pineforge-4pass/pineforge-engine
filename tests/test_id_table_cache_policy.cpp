@@ -275,6 +275,281 @@ void capacity_sweep() {
     identical(direct, workload(GeometryCapacity{{17, 3}, {17, 3}}));
     identical(direct, workload(GeometryCapacity{{4096, 32}, {4096, 32}}));
 }
+
+std::string ordered_key(std::uint64_t value) {
+    // The native book uses byte-ordered numeric keys. Keep embedded NULs and
+    // exercise the whole key, rather than relying on a decimal id prefix.
+    std::string key(8, '\0');
+    for (std::size_t i = 0; i < key.size(); ++i)
+        key[i] = static_cast<char>(value >> (56 - 8 * i));
+    return key;
+}
+
+void ordered_insert_growth(bool descending, bool textual = false) {
+    sc412::reset_files();
+    Tree tree; // Exercise the native book's actual default, uncached backend.
+    tree.set_directory(".");
+    constexpr std::array<std::size_t, 3> counts{{512, 2048, 8192}};
+    std::array<sc412::Traffic, counts.size()> traffic{};
+    std::map<std::string, std::uint64_t> expected;
+    std::vector<std::string> insertion_order;
+    std::size_t inserted = 0;
+    const auto make_key = [&](std::uint64_t ordinal) {
+        return textual ? std::string("label\0/", 7) + std::to_string(ordinal)
+                       : ordered_key(ordinal);
+    };
+    for (std::size_t leg = 0; leg < counts.size(); ++leg) {
+        sc412::Measure measure;
+        while (inserted < counts[leg]) {
+            const auto ordinal = descending ? counts.back() - inserted : inserted;
+            const auto key = make_key(ordinal);
+            const auto value = 7 * ordinal + 11;
+            // Admission can ask several independent read-only questions
+            // before the same key is inserted. Decimal carries cross old
+            // prefix keys, so the latest insertion's empty gap alone cannot
+            // keep these searches local as the tree population grows.
+            if (textual)
+                for (int check = 0; check < 16; ++check)
+                    require(!tree.find(key), "prospective textual key is absent before insertion");
+            require(tree.insert(key, value).second, "ordered append inserts every distinct key");
+            expected.emplace(key, value);
+            insertion_order.push_back(key);
+            ++inserted;
+        }
+        traffic[leg] = measure.finish()[sc412::ids];
+        const auto rows = counts[leg] - (leg ? counts[leg - 1] : 0);
+        std::printf("ID_TABLE_APPEND descending=%d N=%zu rows=%zu reads=%llu "
+                    "reads_per_row=%.3f read_bytes=%llu writes=%llu textual=%d\n",
+                    descending, counts[leg], rows,
+                    static_cast<unsigned long long>(traffic[leg].reads),
+                    static_cast<double>(traffic[leg].reads) / rows,
+                    static_cast<unsigned long long>(traffic[leg].read_bytes),
+                    static_cast<unsigned long long>(traffic[leg].writes), textual);
+        require(traffic[leg].reads > rows && traffic[leg].writes > rows
+                && traffic[leg].read_bytes == traffic[leg].read_requests
+                && traffic[leg].past_end == 0,
+                "append observer sees actual, complete backing reads and writes");
+    }
+
+    // Independent map and insertion transcript cover every row, not just the
+    // newest key or a sampled count. Duplicate/update paths must also survive.
+    auto sorted = expected.begin();
+    tree.for_each_sorted([&](const auto& key, auto value) {
+        require(sorted != expected.end() && sorted->first == key && sorted->second == value,
+                "ordered append preserves the complete sorted key/value witness");
+        ++sorted;
+    });
+    require(sorted == expected.end(), "ordered append sorted witness is complete");
+    std::size_t ordinal = 0;
+    tree.for_each_inserted([&](const auto& key, auto value) {
+        require(ordinal < insertion_order.size() && key == insertion_order[ordinal++]
+                && value == expected.at(key), "ordered append preserves first-insertion order");
+    });
+    require(ordinal == counts.back(), "ordered append insertion witness is complete");
+    for (const auto& key : {insertion_order.front(), insertion_order[counts[0]],
+                            insertion_order.back()}) {
+        const auto at = tree.find(key);
+        require(at && !tree.insert(key, 0).second && tree.get(*at) == expected.at(key),
+                "duplicate ordered key preserves its original value");
+        tree.set(*at, 99);
+        require(tree.get(*at) == 99, "ordered key remains updateable");
+    }
+    std::fflush(stdout);
+    // Compare equal units of real insertion work at increasing populations.
+    // As in the standing-order cohort budget, allow 4/3 overhead, never time.
+    // Root-to-leaf work repeated for every append violates this growth check.
+    for (std::size_t leg = 1; leg < counts.size(); ++leg) {
+        const auto rows = counts[leg] - counts[leg - 1];
+        require(static_cast<long double>(traffic[leg].reads) * counts[0] * 3
+                    <= static_cast<long double>(traffic[0].reads) * rows * 4,
+                "ordered append backing reads per row grow with table population");
+    }
+}
+
+struct LiveFacts {
+    using Record = std::uint64_t;
+    std::uint64_t value = 0;
+    bool live = true;
+    Record retired_record() const noexcept { return value; }
+    static LiveFacts restore_record(Record record) { return {record, false}; }
+    bool spillable() const noexcept { return !live; }
+};
+using LiveCohorts = DiskResidentIdTable<LiveFacts>;
+
+void resident_lookup_growth() {
+    // Pending origins retain their facts. The existing resident key directory
+    // is sufficient even when reads jump far from the last inserted disk key.
+    // Zero cache lines ensure a disk search cannot masquerade as a RAM lookup.
+    sc412::reset_files();
+    LiveCohorts table;
+    table.set_directory(".");
+    constexpr std::array<std::size_t, 3> counts{{512, 2048, 8192}};
+    std::size_t inserted = 0;
+    for (const auto count : counts) {
+        while (inserted < count) {
+            const auto placed = table.emplace(ordered_key(inserted), LiveFacts{inserted + 17});
+            require(placed.second, "every live cohort has a distinct key");
+            // Deliberately dirty the resident value without changing backing.
+            placed.first->second.value += 100003;
+            ++inserted;
+        }
+        const auto probes = table.work_counters().find_resident_probes;
+        const auto allocations = global_allocation::allocations;
+        sc412::Measure measure;
+        const auto& read_only = table;
+        for (std::size_t i = 0; i < count; ++i) {
+            // Odd multiplier permutes every power-of-two population.
+            const auto n = (i * 197) % count;
+            const auto key = ordered_key(n);
+            const auto found = table.find(key);
+            const auto constant = read_only.find(key);
+            require(found != table.end() && constant != read_only.end()
+                    && read_only.contains(key)
+                    && found->second.value == n + 100020
+                    && constant->second.value == n + 100020,
+                    "const/nonconst membership returns every dirty resident value");
+        }
+        const auto io = measure.finish()[sc412::ids];
+        std::printf("ID_TABLE_RESIDENT N=%zu reads=%llu bytes=%llu probes=%llu\n",
+                    count, static_cast<unsigned long long>(io.reads),
+                    static_cast<unsigned long long>(io.read_bytes),
+                    static_cast<unsigned long long>(
+                        table.work_counters().find_resident_probes - probes));
+        std::fflush(stdout);
+        require(io.reads == 0 && io.writes == 0
+                && global_allocation::allocations == allocations,
+                "resident membership must not search backing as population grows");
+        require(table.work_counters().find_resident_probes > probes,
+                "resident lookup observes actual full-key directory comparisons");
+    }
+
+    const auto prefix = ordered_key(197);
+    require(!table.contains(prefix + '\0') && table.find(prefix + '\0') == table.end(),
+            "a proper binary-key extension cannot borrow a resident prefix match");
+    LiveCohorts moved(std::move(table));
+    require(table.size() == 0 && moved.size() == counts.back(),
+            "move transfers the complete resident directory");
+    require(table.emplace("reused-source", LiveFacts{31}).second
+            && !table.contains(prefix), "moved-from directory is independent");
+    for (auto& row : moved) row.second.live = false;
+    moved.spill();
+    require(moved.resident_size() == 0, "retired controls really leave residency");
+    {
+        sc412::Measure measure;
+        for (std::size_t n = 0; n < counts.back(); ++n) {
+            const auto key = ordered_key(n);
+            const auto found = std::as_const(moved).find(key);
+            require(found != std::as_const(moved).end()
+                    && found->second.value == n + 100020 && !found->second.live,
+                    "every spilled dirty value restores from its original offset");
+        }
+        const auto io = measure.finish()[sc412::ids];
+        require(io.reads > counts.back() && io.past_end == 0
+                && io.read_requests == io.read_bytes,
+                "retired control still performs complete physical backing reads");
+    }
+    moved.spill();
+    // File zero belongs to the original table; move keeps that file identity.
+    require(sc412::file_count >= 1, "observer captured the actual cohort index");
+    require(::ftruncate(sc412::files[0].fd, 0) == 0, "inject retired index EOF");
+    bool failed = false;
+    {
+        sc412::Measure measure;
+        try { (void)moved.find(prefix); }
+        catch (const AuxiliaryScratchIoError& error) {
+            failed = error.code().value() == EIO
+                && pineforge::classify_run_failure(error).code
+                    == pineforge::RunFailureCode::scratch_io_failed;
+        }
+        require(failed && measure.finish()[sc412::ids].reads > 0,
+                "a retired miss cannot hide backing EIO as resident success or absence");
+    }
+    moved.clear();
+    require(!moved.contains(prefix) && moved.emplace(prefix, LiveFacts{73}).second
+            && moved.find(prefix)->second.value == 73,
+            "clear discards the old borrowed directory before reusing its keys");
+}
+
+void mixed_insertion_controls() {
+    std::vector<unsigned char> direct_image;
+    for (const auto policy : {Policy{4096, 0}, Policy{17, 3}, Policy{4096, 16}}) {
+        Tree tree(policy);
+        tree.set_directory(".");
+        std::map<std::string, std::uint64_t> expected;
+        std::vector<std::string> insertion_order;
+        const std::string prefix = std::string(257, 'p') + std::string("\0gap/", 5);
+        const auto insert = [&](const std::string& key) {
+            const auto reference = expected.emplace(key, 7 * expected.size() + 11);
+            const auto placed = tree.insert(key, 7 * insertion_order.size() + 11);
+            require(placed.second == reference.second
+                    && tree.get(placed.first) == reference.first->second,
+                    "mixed insertion and duplicates match the independent map");
+            if (reference.second) insertion_order.push_back(key);
+            // A proper extension can fall between existing keys. Membership
+            // must use every byte and cannot infer it from a nearby row.
+            const auto extension = key + '\0';
+            const auto wanted = expected.find(extension);
+            const auto found = tree.find(extension);
+            require((wanted == expected.end()) == !found.has_value(),
+                    "mixed binary-key membership matches the independent map");
+            if (found) require(tree.get(*found) == wanted->second, "extension value is preserved");
+        };
+        const auto verify = [&] {
+            auto next = expected.begin();
+            tree.for_each_sorted([&](const auto& key, auto value) {
+                require(next != expected.end() && key == next->first && value == next->second,
+                        "mixed insertion preserves every sorted key and value");
+                ++next;
+            });
+            require(next == expected.end() && tree.size() == expected.size(),
+                    "mixed sorted witness covers the complete population");
+            std::size_t at = 0;
+            tree.for_each_inserted([&](const auto& key, auto value) {
+                require(at < insertion_order.size() && key == insertion_order[at++]
+                        && value == expected.at(key), "mixed insertion order is complete");
+            });
+            require(at == insertion_order.size(), "mixed insertion walk has no missing rows");
+            for (const auto& row : expected) {
+                const auto found = tree.find(row.first);
+                require(found && tree.get(*found) == row.second, "every mixed key remains findable");
+            }
+        };
+
+        // Seed both sides, then grow inside occupied intervals in each
+        // direction. Unrelated jumps and prefix keys force general searches;
+        // duplicates must preserve the original value and insertion order.
+        for (const auto n : {0, 8192, 4096, 2048, 6144, 1024, 7168})
+            insert(prefix + ordered_key(n));
+        for (std::uint64_t n = 1; n <= 64; ++n) insert(prefix + ordered_key(2048 + n));
+        verify();
+        Tree moved(std::move(tree));
+        require(tree.size() == 0, "move construction empties the old mixed table");
+        require(tree.insert("moved-from", 19).second, "moved-from table can be reused independently");
+        tree = std::move(moved); // Replace an already populated destination.
+        require(moved.size() == 0, "move assignment empties the old mixed table");
+        for (std::uint64_t n = 1; n <= 64; ++n) insert(prefix + ordered_key(6144 - n));
+        for (std::uint64_t n = 0; n < 257; ++n)
+            insert(prefix + ordered_key(128 + ((n * 197) % 257) * 24));
+        for (const auto& key : {std::string{}, std::string("\0", 1), prefix,
+                                prefix + '\0', std::string(513, '\xff')})
+            insert(key);
+        for (const auto& key : {insertion_order.front(), insertion_order[3], insertion_order.back()})
+            insert(key);
+        verify();
+        const auto image = sc412::image(descriptor(tree));
+        if (direct_image.empty()) direct_image = image;
+        else require(image == direct_image, "mixed table bytes do not depend on cache geometry");
+        std::printf("ID_TABLE_MIXED lines=%zu rows=%zu\n", policy.lines, expected.size());
+
+        tree.clear();
+        expected.clear();
+        insertion_order.clear();
+        for (std::uint64_t n = 0; n < 32; ++n)
+            insert(ordered_key(n % 2 ? 64 - n : n));
+        verify();
+    }
+}
+
 void malformed_policy() {
     for (const auto policy : {Policy{0, 1},
                               Policy{2, std::numeric_limits<std::size_t>::max()},
@@ -300,6 +575,12 @@ int main() {
         slab_bypass(); arena_bypass(false); arena_bypass(true);
         capacity_sweep();
         malformed_policy();
+        ordered_insert_growth(false);
+        ordered_insert_growth(true);
+        ordered_insert_growth(false, true);
+        ordered_insert_growth(true, true);
+        resident_lookup_growth();
+        mixed_insertion_controls();
         std::puts("id table cache geometry, bypass, and complete-output sweep: OK");
     } catch (const std::exception& error) {
         global_allocation::recording = false;
