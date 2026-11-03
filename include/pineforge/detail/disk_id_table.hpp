@@ -4,6 +4,7 @@
 #include <pineforge/detail/id_table_read_cache.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -29,6 +30,26 @@ class DiskIdTable {
         std::uint64_t key_size = 0, height = 1, reserved = 0;
     };
     static_assert(sizeof(Links) == 56, "scratch id node layout");
+    // Bounded routing hints only. A conclusive prefix comparison can select
+    // a local interval without speculative backing reads. An inconclusive
+    // comparison selects root descent. Neither case answers a lookup: the
+    // selected path still reads and compares current complete stored keys.
+    struct KeyHint {
+        std::array<char, 64> bytes{};
+        std::size_t size = 0;
+        KeyHint() = default;
+        explicit KeyHint(const std::string& key) noexcept : size(key.size()) {
+            std::copy_n(key.data(), std::min(size, bytes.size()), bytes.data());
+        }
+        std::optional<int> compare(const std::string& key) const noexcept {
+            const auto length = std::min({key.size(), size, bytes.size()});
+            const int order = std::char_traits<char>::compare(key.data(), bytes.data(), length);
+            if (order != 0) return order;
+            if (key.size() < size && key.size() <= bytes.size()) return -1;
+            if (size <= bytes.size()) return key.size() == size ? 0 : 1;
+            return std::nullopt;
+        }
+    };
 
 public:
     using Offset = std::uint64_t;
@@ -52,6 +73,9 @@ public:
             last_ = std::exchange(other.last_, 0);
             last_lower_ = std::exchange(other.last_lower_, 0);
             last_upper_ = std::exchange(other.last_upper_, 0);
+            last_key_ = std::exchange(other.last_key_, {});
+            last_lower_key_ = std::exchange(other.last_lower_key_, {});
+            last_upper_key_ = std::exchange(other.last_upper_key_, {});
             end_ = std::exchange(other.end_, 1);
             size_ = std::exchange(other.size_, 0);
             gap_ = {};
@@ -81,6 +105,7 @@ public:
         file_.clear();
         root_ = first_ = last_ = size_ = 0;
         last_lower_ = last_upper_ = 0;
+        last_key_ = last_lower_key_ = last_upper_key_ = {};
         gap_ = {};
         end_ = 1; // offset zero is the null link
     }
@@ -194,6 +219,9 @@ public:
         last_ = at;
         last_lower_ = position.lower;
         last_upper_ = position.upper;
+        last_key_ = KeyHint(key);
+        last_lower_key_ = position.lower_key;
+        last_upper_key_ = position.upper_key;
         ++size_;
         rebalance(parent);
         return {at, true};
@@ -214,9 +242,15 @@ private:
     struct Search {
         Offset found = 0, parent = 0, lower = 0, upper = 0;
         bool left = false;
+        KeyHint lower_key{}, upper_key{};
+        bool covers(const std::string& key) const noexcept {
+            const auto lo = lower == 0 ? std::optional<int>(1) : lower_key.compare(key);
+            const auto hi = upper == 0 ? std::optional<int>(-1) : upper_key.compare(key);
+            return lo && hi && *lo >= 0 && *hi <= 0;
+        }
     };
     Search search(const std::string& key) const {
-        if (gap_.parent != 0) {
+        if (gap_.parent != 0 && gap_.covers(key)) {
             // A completed miss found two adjacent sorted rows. Until an
             // insertion changes the tree, their open interval still names
             // the same empty child. Re-read both complete keys: this is a
@@ -235,15 +269,36 @@ private:
         if (result.found == 0) gap_ = result;
         return result;
     }
+    bool near_last(const std::string& key) const noexcept {
+        const auto order = last_key_.compare(key);
+        if (!order) return false;
+        if (*order == 0) return true;
+        const bool left = *order < 0;
+        const auto bound = left ? last_lower_ : last_upper_;
+        if (bound == 0) return true;
+        const auto edge = (left ? last_lower_key_ : last_upper_key_).compare(key);
+        return edge && (left ? *edge >= 0 : *edge <= 0);
+    }
     Search search_from_last(const std::string& key) const {
-        Offset start = root_;
-        if (last_ != 0) {
+        if (last_ != 0 && near_last(key)) {
             const auto row = links(last_);
-            const int order = key.compare(read_key(last_, row));
+            int order = 0;
+            KeyHint last_hint;
+            {
+                const auto stored_key = read_key(last_, row);
+                order = key.compare(stored_key);
+                last_hint = KeyHint(stored_key);
+            }
             if (order == 0) return {last_, 0, 0, 0, false};
             const bool left = order < 0;
             const auto bound = left ? last_lower_ : last_upper_;
-            const int edge = bound == 0 ? 0 : key.compare(this->key(bound));
+            int edge = 0;
+            KeyHint bound_hint;
+            if (bound != 0) {
+                const auto stored_key = this->key(bound);
+                edge = key.compare(stored_key);
+                bound_hint = KeyHint(stored_key);
+            }
             if (bound != 0 && edge == 0) return {bound, 0, 0, 0, false};
             if (bound == 0 || (left ? edge > 0 : edge < 0)) {
                 // The key is strictly between the last inserted row and its
@@ -252,31 +307,24 @@ private:
                 // last_ unless a rotation gave it a subtree on this side;
                 // then it belongs to the neighbour, on the opposite side.
                 const bool empty = (left ? row.left : row.right) == 0;
-                if (empty || bound != 0)
+                if (empty || bound != 0) {
                     return {0, empty ? last_ : bound,
                             left ? bound : last_, left ? last_ : bound,
-                            empty ? left : !left};
-            }
-            // A nearby key can cross the immediate gap (for example a
-            // proper prefix already in the tree). Climb from the insertion
-            // finger until an ancestor brackets key with last_, then search
-            // that subtree. Both sorted bounds are inside it. If no ancestor
-            // brackets them, reaching the root restores the general search.
-            // Parent links, keys and comparisons all come from real backing
-            // reads; this adds neither a key directory nor a cached answer.
-            for (Offset at = row.parent; at != 0;) {
-                const auto ancestor = links(at);
-                const int edge = key.compare(read_key(at, ancestor));
-                if (edge == 0) return {at, 0, 0, 0, false};
-                start = at;
-                if (left ? edge > 0 : edge < 0) break;
-                at = ancestor.parent;
+                            empty ? left : !left,
+                            left ? bound_hint : last_hint,
+                            left ? last_hint : bound_hint};
+                }
             }
         }
+        // A key outside the known adjacent interval (including a prefix we
+        // cannot classify in bounded memory) takes ordinary root descent
+        // immediately. Do not climb a finger and then repeat that work from
+        // the root. No I/O/comparison exception is caught or retried here.
         Search result;
-        for (Offset at = start; at != 0;) {
+        for (Offset at = root_; at != 0;) {
             const auto row = links(at);
-            const int order = key.compare(read_key(at, row));
+            const auto stored_key = read_key(at, row);
+            const int order = key.compare(stored_key);
             if (order == 0) {
                 result.found = at;
                 return result;
@@ -284,6 +332,7 @@ private:
             result.parent = at;
             result.left = order < 0;
             (result.left ? result.upper : result.lower) = at;
+            (result.left ? result.upper_key : result.lower_key) = KeyHint(stored_key);
             at = result.left ? row.left : row.right;
         }
         return result;
@@ -429,9 +478,10 @@ private:
     IdTableReadCache read_cache_;
     Offset root_ = 0, first_ = 0, last_ = 0, end_ = 1;
     // Immediate sorted neighbours of last_, independent of AVL rotations.
-    // Only offsets are retained: no key copies or population-sized directory.
+    // Fixed prefixes select routes; complete keys always come from backing.
     Offset last_lower_ = 0, last_upper_ = 0;
-    // Disposable offsets from the latest absent search. Value writes preserve
+    KeyHint last_key_{}, last_lower_key_{}, last_upper_key_{};
+    // Disposable interval from the latest absent search. Value writes preserve
     // the interval; insertion, clear, backend binding and move discard it.
     mutable Search gap_{};
     std::uint64_t size_ = 0;

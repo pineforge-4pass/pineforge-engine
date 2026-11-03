@@ -11,6 +11,15 @@
 #include <limits>
 #include <sys/mman.h>
 
+namespace id_table_cache_test {
+struct TreeRoot { friend auto member(TreeRoot); };
+struct TreeLinks { friend auto member(TreeLinks); };
+struct TreeReadKey { friend auto member(TreeReadKey); };
+template struct Access<TreeRoot, &Tree::root_>;
+template struct Access<TreeLinks, &Tree::links>;
+template struct Access<TreeReadKey, &Tree::read_key>;
+}
+
 namespace {
 using namespace id_table_cache_test;
 using Cache = IdTableReadCache;
@@ -20,6 +29,61 @@ struct GeometryCapacity {
     Policy tree, pair;
     template<class Table> Table make(bool paired) const { return Table(paired ? pair : tree); }
 };
+// The ordinary root descent on the same physical tree, using the same
+// validated node/key readers and cache geometry. This reference executes real
+// backing reads; it neither predicts a read count nor disables a product path.
+std::optional<Tree::Offset> root_find(const Tree& tree, const std::string& key) {
+    for (auto at = tree.*member(TreeRoot{}); at != 0;) {
+        const auto row = (tree.*member(TreeLinks{}))(at);
+        const int order = key.compare((tree.*member(TreeReadKey{}))(at, row));
+        if (order == 0) return at;
+        at = order < 0 ? row.left : row.right;
+    }
+    return std::nullopt;
+}
+
+template<class Capacity>
+bool cold_workload_bound(Capacity capacity, Policy policy, const Result& actual) {
+    auto tree = capacity.template make<Tree>(false);
+    auto cohorts = capacity.template make<Tree>(false);
+    tree.set_directory("."); cohorts.set_directory(".");
+    // Reproduce the unchanged workload's two AVL images. Equality with its
+    // complete images binds this reference to the actual input and tree shape,
+    // including every link, key, value and insertion-order edge.
+    constexpr std::size_t count = 320;
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto n = (i * 197) % count;
+        tree.insert(key_for(n), 3 * n + 7);
+        cohorts.insert(key_for(n), 5 * n + 11);
+    }
+    require(actual.images.size() >= 2
+            && sc412::image(descriptor(tree)) == actual.images[0]
+            && sc412::image(descriptor(cohorts)) == actual.images[1],
+            "cold reference uses the workload's exact tree and cohort images");
+    (tree.*member(TreeCache{})).invalidate();
+    (cohorts.*member(TreeCache{})).invalidate();
+    sc412::Measure measure;
+    const auto key = key_for(0);
+    const auto at = root_find(tree, key), cohort = root_find(cohorts, key);
+    require(at && tree.get(*at) == 7, "cold reference finds the original tree value");
+    // Restoring a spilled cohort reads its value and then its owned full key.
+    require(cohort && cohorts.get(*cohort) == 11 && cohorts.key(*cohort) == key,
+            "cold reference restores the original cohort value and full key");
+    const auto reference = measure.finish()[sc412::ids];
+    require(reference.reads > 0 && reference.read_bytes == reference.read_requests
+            && reference.past_end == 0, "cold reference performs complete physical reads");
+    std::printf("ID_CACHE_COLD_REFERENCE line_bytes=%zu lines=%zu "
+                "actual_reads=%llu root_reads=%llu actual_bytes=%llu root_bytes=%llu\n",
+                policy.line_bytes, policy.lines,
+                static_cast<unsigned long long>(actual.cold_ids.reads),
+                static_cast<unsigned long long>(reference.reads),
+                static_cast<unsigned long long>(actual.cold_ids.read_bytes),
+                static_cast<unsigned long long>(reference.read_bytes));
+    std::fflush(stdout);
+    return actual.cold_ids.reads <= reference.reads
+        && actual.cold_ids.read_bytes <= reference.read_bytes;
+}
+
 struct Path {
     ScratchFile file{ScratchFile::IoRaiser::auxiliary};
     Cache cache;
@@ -268,12 +332,18 @@ void arena_bypass(bool sealed) {
 }
 void capacity_sweep() {
     const auto direct = workload(ByteCapacity{0, 0});
-    identical(direct, workload(GeometryCapacity{{4096, 0}, {4096, 0}}));
-    identical(direct, workload(GeometryCapacity{{4096, 1}, {4096, 1}}));
-    identical(direct, workload(GeometryCapacity{{4096, 16}, {4096, 8}}));
-    identical(direct, workload(GeometryCapacity{{512, 2}, {512, 2}}));
-    identical(direct, workload(GeometryCapacity{{17, 3}, {17, 3}}));
-    identical(direct, workload(GeometryCapacity{{4096, 32}, {4096, 32}}));
+    bool bounded = cold_workload_bound(ByteCapacity{0, 0}, Policy{4096, 0}, direct);
+    for (const auto capacity : {GeometryCapacity{{4096, 0}, {4096, 0}},
+                                GeometryCapacity{{4096, 1}, {4096, 1}},
+                                GeometryCapacity{{4096, 16}, {4096, 8}},
+                                GeometryCapacity{{512, 2}, {512, 2}},
+                                GeometryCapacity{{17, 3}, {17, 3}},
+                                GeometryCapacity{{4096, 32}, {4096, 32}}}) {
+        const auto actual = workload(capacity);
+        identical(direct, actual);
+        bounded = cold_workload_bound(capacity, capacity.tree, actual) && bounded;
+    }
+    require(bounded, "nonlocal cold workload must not cost more than its measured root descent");
 }
 
 std::string ordered_key(std::uint64_t value) {
@@ -283,6 +353,177 @@ std::string ordered_key(std::uint64_t value) {
     for (std::size_t i = 0; i < key.size(); ++i)
         key[i] = static_cast<char>(value >> (56 - 8 * i));
     return key;
+}
+
+std::uint64_t cold_model_witness(const Tree& tree,
+                               const std::map<std::string, std::uint64_t>& expected,
+                               const std::vector<std::string>& inserted) {
+    Bytes actual, reference;
+    auto next = expected.begin();
+    for (const auto& row : expected) { reference.text(row.first); reference.word(row.second); }
+    tree.for_each_sorted([&](const auto& key, auto value) {
+        require(next != expected.end() && key == next->first && value == next->second,
+                "cold probes preserve every independently modelled key and value");
+        actual.text(key); actual.word(value);
+        ++next;
+    });
+    require(next == expected.end() && actual.value == reference.value
+            && tree.size() == expected.size(), "cold sorted transcript is complete");
+    std::size_t ordinal = 0;
+    tree.for_each_inserted([&](const auto& key, auto value) {
+        require(ordinal < inserted.size() && key == inserted[ordinal++]
+                && value == expected.at(key), "cold insertion-order witness is complete");
+    });
+    require(ordinal == inserted.size(), "cold insertion walk reaches every row");
+    return sc412::hash(sc412::basis, actual.value.data(), actual.value.size());
+}
+
+void nonlocal_cold_probes() {
+    // Different populations, byte orders and shared-prefix lengths exercise
+    // root selection independently of the original fixture and its first id.
+    for (const auto policy : {Policy{4096, 0}, Policy{4096, 1}, Policy{4096, 16},
+                              Policy{512, 2}, Policy{17, 3}, Policy{4096, 32}}) {
+        for (const auto count : {std::size_t{127}, std::size_t{513}, std::size_t{1024}}) {
+            for (unsigned shape = 0; shape < 3; ++shape) {
+                sc412::reset_files();
+                Tree tree(policy);
+                tree.set_directory(".");
+                std::map<std::string, std::uint64_t> expected;
+                std::vector<std::string> inserted;
+                for (std::size_t i = 0; i < count; ++i) {
+                    const auto n = (i * 197) % count;
+                    const auto key = shape == 0 ? key_for(n)
+                        : shape == 1 ? std::string(1210, 'p') + std::string("\0/", 2) + ordered_key(n)
+                        : std::string(n % 3 == 0 ? 63 : n % 3 == 1 ? 64 : 65, '\xff')
+                            + std::string("\0", 1) + ordered_key(count - n);
+                    const auto value = 11 + 7 * n;
+                    require(expected.emplace(key, value).second && tree.insert(key, value).second,
+                            "varied cold input contains distinct binary keys");
+                    inserted.push_back(key);
+                }
+                const auto digest = cold_model_witness(tree, expected, inserted);
+                const auto image = sc412::image(descriptor(tree));
+                const std::vector<std::string> sorted = [&] {
+                    std::vector<std::string> keys;
+                    for (const auto& row : expected) keys.push_back(row.first);
+                    return keys;
+                }();
+                const auto last = std::lower_bound(sorted.begin(), sorted.end(), inserted.back());
+                const auto last_rank = static_cast<std::size_t>(last - sorted.begin());
+                std::vector<std::string> probes;
+                for (std::size_t i = 0; i < sorted.size(); i += std::max<std::size_t>(1, count / 11)) {
+                    // Select jumps outside the last insertion's adjacent
+                    // interval using the independent ordered population.
+                    if (i + 2 >= last_rank && i <= last_rank + 2) continue;
+                    probes.push_back(sorted[i]);
+                    probes.push_back(sorted[i] + '\0'); // A full-key absent extension.
+                }
+                require(!probes.empty(), "varied cold input has nonlocal hits and misses");
+                sc412::Traffic actual_total{}, root_total{};
+                Bytes answers, reference_answers;
+                for (const auto& key : probes) {
+                    const auto wanted = expected.find(key);
+                    const auto measure_probe = [&](bool root, Bytes& out) {
+                        (tree.*member(TreeCache{})).invalidate();
+                        sc412::Measure measure;
+                        const auto found = root ? root_find(tree, key) : tree.find(key);
+                        require(found.has_value() == (wanted != expected.end()),
+                                "every cold hit and miss matches the independent map");
+                        out.text(key); out.word(found.has_value());
+                        if (found) {
+                            const auto value = tree.get(*found);
+                            require(value == wanted->second, "cold lookup preserves its complete value");
+                            out.word(*found); out.word(value);
+                        }
+                        return measure.finish()[sc412::ids];
+                    };
+                    const auto root = measure_probe(true, reference_answers);
+                    const auto actual = measure_probe(false, answers);
+                    require(actual.reads > 0 && root.reads > 0
+                            && actual.read_bytes == actual.read_requests
+                            && root.read_bytes == root.read_requests
+                            && actual.past_end == 0 && root.past_end == 0
+                            && actual.writes == 0 && root.writes == 0,
+                            "both cold paths perform complete real reads without writes");
+                    require(actual.reads <= root.reads && actual.read_bytes <= root.read_bytes,
+                            "a nonlocal cold probe exceeds its measured root-search cost");
+                    actual_total.reads += actual.reads; actual_total.read_bytes += actual.read_bytes;
+                    root_total.reads += root.reads; root_total.read_bytes += root.read_bytes;
+                }
+                require(answers.value == reference_answers.value
+                        && sc412::image(descriptor(tree)) == image
+                        && cold_model_witness(tree, expected, inserted) == digest,
+                        "all cold answers, complete state and backing bytes survive the probe sequence");
+                std::printf("ID_TABLE_NONLOCAL N=%zu shape=%u line_bytes=%zu lines=%zu probes=%zu "
+                            "reads=%llu root_reads=%llu bytes=%llu root_bytes=%llu digest=%llu "
+                            "owner_bytes=%zu\n",
+                            count, shape, policy.line_bytes, policy.lines, probes.size(),
+                            static_cast<unsigned long long>(actual_total.reads),
+                            static_cast<unsigned long long>(root_total.reads),
+                            static_cast<unsigned long long>(actual_total.read_bytes),
+                            static_cast<unsigned long long>(root_total.read_bytes),
+                            static_cast<unsigned long long>(digest), sizeof(Tree));
+                std::fflush(stdout);
+            }
+        }
+    }
+}
+
+void cold_route_errors() {
+    // Fault the actual key read after establishing a local miss cursor, the
+    // last-inserted route, or a nonlocal/root route. Hints never supply answers
+    // or turn a backing failure into successful absence/admission.
+    for (unsigned route = 0; route < 4; ++route) {
+        for (const bool inserting : {false, true}) {
+            sc412::reset_files();
+            Tree tree(Policy{257, 0});
+            tree.set_directory(".");
+            std::map<std::string, std::uint64_t> expected;
+            std::vector<std::string> inserted;
+            const auto make_key = [&](std::uint64_t n) {
+                return (route == 3 ? std::string(1210, 'p') + std::string("\0/", 2) : std::string{})
+                    + ordered_key(n);
+            };
+            for (std::uint64_t n = 0; n < 128; ++n) {
+                const auto key = make_key(2 * n);
+                tree.insert(key, n + 11);
+                expected.emplace(key, n + 11);
+                inserted.push_back(key);
+            }
+            const auto digest = cold_model_witness(tree, expected, inserted);
+            const auto probe = make_key(route >= 2 ? 1 : 255);
+            const auto last = root_find(tree, inserted.back());
+            require(last.has_value(), "fault control locates the actual last inserted row");
+            const auto target = route >= 2 ? tree.*member(TreeRoot{}) : *last;
+            const auto row = (tree.*member(TreeLinks{}))(target);
+            require(row.key_size > 0, "fault target has an actual stored key");
+            if (route != 1)
+                require(!tree.find(make_key(255)), "establish an actual absent-key search");
+            // Leave the target header intact but cut its complete key short.
+            const auto cut = target + sizeof(row) + sizeof(std::uint64_t) + row.key_size / 2;
+            require(::ftruncate(descriptor(tree), static_cast<off_t>(cut)) == 0,
+                    "inject a real short backing key read");
+            bool failed = false;
+            sc412::Measure measure;
+            try {
+                if (inserting) (void)tree.insert(probe, 99);
+                else (void)tree.find(probe);
+            } catch (const AuxiliaryScratchIoError& error) {
+                failed = error.code().value() == EIO
+                    && pineforge::classify_run_failure(error).code
+                        == pineforge::RunFailureCode::scratch_io_failed;
+            }
+            const auto io = measure.finish()[sc412::ids];
+            require(failed && io.reads > 0 && io.writes == 0 && tree.size() == expected.size(),
+                    "local and root routes propagate backing EIO before publishing a row");
+            std::printf("ID_TABLE_COLD_ERROR route=%u inserting=%d reads=%llu bytes=%llu "
+                        "digest=%llu\n", route, inserting,
+                        static_cast<unsigned long long>(io.reads),
+                        static_cast<unsigned long long>(io.read_bytes),
+                        static_cast<unsigned long long>(digest));
+        }
+    }
+    std::fflush(stdout);
 }
 
 void ordered_insert_growth(bool descending, bool textual = false) {
@@ -574,6 +815,8 @@ int main() {
         bypass_ignores_tags();
         slab_bypass(); arena_bypass(false); arena_bypass(true);
         capacity_sweep();
+        nonlocal_cold_probes();
+        cold_route_errors();
         malformed_policy();
         ordered_insert_growth(false);
         ordered_insert_growth(true);
