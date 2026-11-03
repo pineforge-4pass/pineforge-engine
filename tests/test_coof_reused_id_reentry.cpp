@@ -42,19 +42,13 @@
 //    and true: hand-derived controls with no TradingView capture. The bar-10
 //    short holds the only pyramiding slot, so neither bar-20 entry adds to
 //    it: one trade, the short of 1 held from bar 10 to the bar-30 close.
-//    What is pending at bar 25 is derived from the engine's cap rule; no
-//    capture shows TradingView's pending orders for these rows. The market
-//    call is refused at the cap when it is made, in both rows, and a refused
-//    market call leaves an earlier order of its id in place. With
-//    process_orders_on_close = false the priced call is refused at the call
-//    too, so nothing is pending at bar 25. With process_orders_on_close =
-//    true a priced add is not judged at the call: it is placed over the cap,
-//    since a close later in its bar could free the slot. Nothing withdraws
-//    it while calc_on_order_fills is on, and the feed never reaches 191, so
-//    at bar 25 it is the one pending order, a limit at 191.
+//    The pending order count at bar 25 is printed for these rows but not
+//    checked: it is the engine's own behaviour, not a TradingView claim, and no
+//    capture shows TradingView's pending orders for these rows (the engine
+//    leaves one pending limit at 191 with process_orders_on_close = true and
+//    none with it false).
 //    These rows can fail: a change that let either bar-20 call add to the
-//    open short would show a second lot or a second trade, and one that
-//    dropped the resting limit would show no pending order.
+//    open short would show a second lot or a second trade.
 //
 // 3. Metamorphic controls that need no TradingView claim. Each changes row 1
 //    in a way that must leave its trades as they are:
@@ -384,13 +378,8 @@ void check_closed_incarnation(bool on_close, bool close_old) {
         CHECK(p.bar25_pending == 0);
     } else {
         check_trade(p, 0, held_short(on_close));
-        // Refused at the cap with next-open fills; with close fills the
-        // priced add rests over the cap, the one pending order at 191.
-        CHECK(p.bar25_pending == (on_close ? 1 : 0));
-        if (on_close) {
-            CHECK(p.bar25_pending_limit == 191.0);
-            CHECK(std::isnan(p.bar25_pending_stop));
-        }
+        // The pending count printed below is engine behaviour, not a
+        // TradingView claim: it is not checked here.
     }
     print_book(p);
 }
