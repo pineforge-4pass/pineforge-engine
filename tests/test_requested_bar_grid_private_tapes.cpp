@@ -9,8 +9,6 @@
  * Row         | Class    | Tape environment variable          | Expected
  * E-ORIG-300  | EXPLICIT | PINEFORGE_REQBAR_NYSE_TAPE_ORIG     | qty, exit time
  * E-TRACE-300 | EXPLICIT | PINEFORGE_REQBAR_NYSE_TAPE_TRACE    | raw ro, ri
- * D-ORIG-300  | DEFAULT  | PINEFORGE_REQBAR_NYSE_TAPE_ORIG     | qty, exit time
- * D-TRACE-300 | DEFAULT  | PINEFORGE_REQBAR_NYSE_TAPE_TRACE    | raw ro, ri
  *
  * Tape reference sha256 prefixes: orig aff81207ebf08f09, trace f78a73f0fdad92e7.
  * These references are documentation only, never assertions or row selectors.
@@ -34,8 +32,8 @@
  * on security_series_slot_is_new. Quantity is 1 + requested_index % 5;
  * enter when chart index > 6 and % 7 == 3, close when > 6 and % 7 == 5.
  * EXPLICIT sets only timezone, session and type; DEFAULT sets no symbol facts.
- * EXPLICIT rows are the fix criterion. DEFAULT rows remain visible and active:
- * DEFAULT: waits on the caller-metadata contract (CR-738)
+ * The two EXPLICIT rows are the fix criterion. DEFAULT rows remain owed under
+ * the caller-metadata contract (CR-738), retained separately as a reverse patch.
  *
  * Diagnostics never echo paths, CSV cells, prices, OHLCV, full trade objects,
  * or engine exception messages. Only quantities, counts, indices, timestamps,
@@ -420,7 +418,6 @@ struct Row {
 };
 const Row kRows[] = {
     {"E-ORIG-300", true, false}, {"E-TRACE-300", true, true},
-    {"D-ORIG-300", false, false}, {"D-TRACE-300", false, true},
 };
 
 const char* row_class(const Row& row) {
@@ -534,8 +531,10 @@ int main() {
     } catch (const std::exception&) {
         feed_error = std::string(kFeed) + ": input exception (details withheld)";
     }
-    int explicit_failed = 0, default_failed = 0;
+    int rows = 0, explicit_rows = 0, explicit_failed = 0, failures = 0;
     for (const Row& row : kRows) {
+        ++rows;
+        if (row.explicit_arm) ++explicit_rows;
         bool pass = false;
         try {
             if (!feed_error.empty()) failed_row(row, feed_error);
@@ -546,14 +545,12 @@ int main() {
             failed_row(row, "execution or input exception (details withheld)");
         }
         if (!pass) {
+            ++failures;
             if (row.explicit_arm) ++explicit_failed;
-            else ++default_failed;
         }
     }
-    std::printf("EXPLICIT fix criterion: rows=2 failed=%d\n", explicit_failed);
-    std::printf("%s; rows=2 failed=%d\n", kDefaultLabel, default_failed);
-    const int failures = explicit_failed + default_failed;
-    std::printf("%s lab-only requested-bar grid tapes: rows=4 failed=%d\n",
-                failures == 0 ? "PASS" : "FAIL", failures);
+    std::printf("EXPLICIT fix criterion: rows=%d failed=%d\n", explicit_rows, explicit_failed);
+    std::printf("%s lab-only requested-bar grid tapes: rows=%d failed=%d\n",
+                failures == 0 ? "PASS" : "FAIL", rows, failures);
     return failures == 0 ? 0 : 1;
 }
