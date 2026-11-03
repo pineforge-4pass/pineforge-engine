@@ -822,6 +822,38 @@ class ProtectedGkeRunners(unittest.TestCase):
                                   'on protected GKE',
                                   ci_preflight.runner_findings({**workflows, name: changed}))
 
+    def test_credential_exemption_requires_the_exact_protected_runner(self):
+        workflows = self.workflows()
+        baseline = ci_preflight.runner_findings(workflows)
+        for name, jobs in EXPECTED_GKP_JOBS.items():
+            for job, label in jobs.items():
+                if job == 'prebuilt':
+                    continue  # The artifact matrix has no production-credential exemption.
+                finding = (f'{name} job {job} must keep production credentials '
+                           'on a hosted standard runner')
+                self.assertNotIn(finding, baseline)
+                wrong_size = GKP_4 if label == GKP_2 else GKP_2
+                for runner in (GKE_2, wrong_size, f'"{label}"', f'["self-hosted","{label}"]'):
+                    with self.subTest(workflow=name, job=job, runner=runner):
+                        changed = in_job(workflows[name], job, runner_declaration(label),
+                                         runner_declaration(runner))
+                        self.assertNotEqual(changed, workflows[name])
+                        self.assertIn(finding, ci_preflight.runner_findings({**workflows, name: changed}))
+                renamed = workflows[name].replace(f'\n  {job}:\n', f'\n  {job}-unlisted:\n', 1)
+                self.assertNotEqual(renamed, workflows[name])
+                self.assertIn(f'{name} job {job}-unlisted must keep production credentials '
+                              'on a hosted standard runner',
+                              ci_preflight.runner_findings({**workflows, name: renamed}))
+        changed = in_job(workflows['release.yml'], 'prebuilt', '    steps:\n',
+                         '    env:\n      DEPLOY_TOKEN: ${{ secrets.DEPLOY_KEY }}\n    steps:\n')
+        for runner in (HOSTED_MATRIX_RUNNER, GKP_PREBUILT):
+            with self.subTest(prebuilt_runner=runner):
+                literal = in_job(changed, 'prebuilt', runner_declaration(HOSTED_MATRIX_RUNNER),
+                                 runner_declaration(runner))
+                self.assertIn('release.yml job prebuilt must keep production credentials '
+                              'on a hosted standard runner',
+                              ci_preflight.runner_findings({**workflows, 'release.yml': literal}))
+
     def test_retired_vm_labels_are_refused_even_in_workflow_metadata(self):
         workflows = self.workflows()
         for name, workflow in workflows.items():
@@ -7767,8 +7799,9 @@ finally:
                 ('permissions', '  contents: read', '  contents: write'),
                 ('extra scope', '  contents: read', '  contents: read\n  actions: read'),
                 ('job permissions', '  probe:\n', '  probe:\n    permissions:\n      contents: write\n'),
-                ('runner', RELEASE_RUNNER, GKP_4),
-                ('PR runner', RELEASE_RUNNER, PR_RUNNER),
+                # Full runner lines exclude the routing comment's label mention.
+                ('runner', f'    runs-on: {RELEASE_RUNNER}\n', f'    runs-on: {GKP_4}\n'),
+                ('PR runner', f'    runs-on: {RELEASE_RUNNER}\n', f'    runs-on: {PR_RUNNER}\n'),
                 ('app action', 'actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547',
                  'actions/create-github-app-token@v2'),
                 ('app output', '        id: app', '        id: other'),

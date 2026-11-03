@@ -2790,7 +2790,10 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             if any(not value.startswith('./.github/workflows/') for value in uses):
                 findings.append(f'{name} job {job} calls a workflow the runner contract '
                                 'cannot see; call one under ./.github/workflows/')
-            credentials = _holds_credentials(workflow, body, effective_permissions=has_gke)
+            # Only an exact admitted GKE pin may use effective token scopes.
+            # Other jobs retain the conservative workflow-plus-job credential check.
+            exact_gke_runner = bool(gke_pin and job in fixed_hosted and raw_runners == [gke_pin])
+            credentials = _holds_credentials(workflow, body, effective_permissions=exact_gke_runner)
             if job not in pinned:
                 if pinned and runs_on:
                     findings.append(f'{name} job {job} needs a pinned runner and time limit')
@@ -2888,6 +2891,17 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                                         'on a gated docs job')
                 # Legacy PF_CI_LABELS metadata never selects the GCP fleet.
                 # Event reachability and literal runs-on arrays bind routing.
+            # A release/docs job name alone cannot exempt a different runner.
+            # The artifact matrix is not a literal protected-runner exemption.
+            exact_protected_runner = bool(gkp_pin and pinned.get(job) == gkp_pin
+                                          and raw_runners == [gkp_pin])
+            standard_hosted = (len(runs_on) == 1
+                               and (runs_on[0] in STANDARD_RUNNERS or hosted_platform))
+            if credentials and not exact_protected_runner and not standard_hosted:
+                finding = (f'{name} job {job} must keep production credentials '
+                           'on a hosted standard runner')
+                if finding not in findings:
+                    findings.append(finding)
             if job not in timed:
                 continue
             command = timed[job]
