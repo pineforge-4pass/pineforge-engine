@@ -1994,8 +1994,9 @@ class RulesetsProbeTests(unittest.TestCase):
         requirements = (
             'admit is hosted, while PR preflight, proof legs and parity use bare GKE scale-set names;\n'
             'credentialed post work uses exact protected `gkp-*` scale sets in runner group 15.\n'
-            'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
-            'profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
+            'Post Release/Debug/kernel, native shards and post sanitizers use fixed bare GKE scale-set names.\n'
+            'The two native-live sanitizer profiles use an exact runner matrix. All GKE jobs run directly '
+            'in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
             "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
             'bare scalar `gke-2cpu-4gb-amd64` and `probe` on `gkp-2cpu-4gb-amd64`.',
             "Release and promotion use protected GKE runner group 15:\n"
@@ -2329,7 +2330,7 @@ class WorkflowPinTests(unittest.TestCase):
             platforms = re.findall(r"(?m)^          - os: (\S+)$", matrix[1])
             self.assertEqual(platforms, ["ubuntu-24.04"])
             self.assert_gke_build(body, {"build": "gke-32cpu-64gb-amd64",
-                                         "build-debug": "gke-16cpu-32gb-amd64"}[job_id])
+                                         "build-debug": "gke-16cpu-32gb-amd64-128gb"}[job_id])
             shards = re.findall(r"(?m)^        shard: \[([0-9, ]+)\]$", matrix[1])
             self.assertEqual(len(shards), 1)
             self.assertEqual([int(value.strip()) for value in shards[0].split(",")],
@@ -2356,7 +2357,7 @@ class WorkflowPinTests(unittest.TestCase):
         self.assertIsNotNone(types)
         build_types = [value.strip() for value in types[1].split(",")]
         self.assertCountEqual(build_types, ["Release", "Debug"])
-        self.assert_gke_build(body, "gke-16cpu-32gb-arm64")
+        self.assert_gke_build(body, "gke-16cpu-32gb-arm64-128gb")
         name = re.search(r"(?m)^    name: (.+)$", body)
         self.assertIsNotNone(name)
         for build_type in build_types:
@@ -2388,8 +2389,8 @@ class WorkflowPinTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci-post.yml").read_text()
         self.ci_post_build_names(_jobs(workflow))
         for job, label in (("build", "gke-32cpu-64gb-amd64"),
-                           ("build-debug", "gke-16cpu-32gb-amd64"),
-                           ("build-arm", "gke-16cpu-32gb-arm64")):
+                           ("build-debug", "gke-16cpu-32gb-amd64-128gb"),
+                           ("build-arm", "gke-16cpu-32gb-arm64-128gb")):
             for before, after, finding in (
                     ("    runs-on: " + label, "    runs-on: pf-linux-x64-16",
                      "required build jobs must keep GKE routing"),
