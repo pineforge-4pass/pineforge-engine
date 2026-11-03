@@ -370,8 +370,11 @@ IntradayBucket intraday_bucket(int64_t ms, int64_t bucket_sec,
     const bool observed_prefix = ordinal == 0 && origin > day_start
         && prefix_open_ms >= day_start && prefix_open_ms < origin
         && prefix_open_ms <= ms;
-    return {{day, ordinal}, observed_prefix ? prefix_open_ms : std::min(ms, grid_open),
-            std::min(grid_open + bucket_ms, day_end)};
+    const int64_t actual_open = observed_prefix ? prefix_open_ms : std::min(ms, grid_open);
+    const int64_t capped_end = std::min(grid_open + bucket_ms, day_end);
+    // The session-end cap applies to valid session members. An out-of-session
+    // point whose open is past that cap is clamped to empty, not negative length.
+    return {{day, ordinal}, actual_open, std::max(actual_open, capped_end)};
 }
 
 /// Open of the `bucket_sec`-wide bucket holding `ms` on that grid clock.

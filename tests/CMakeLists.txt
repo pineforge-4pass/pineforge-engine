@@ -338,6 +338,7 @@ set(TEST_SOURCES
     test_calendar_bucket_closes_once
     test_intraday_grid_late_day_open
     test_intraday_bucket_dst_characterization
+    test_intraday_bucket_end_contract
     test_native_day_labels
     test_daily_magnifier_tapes
     test_htf_session_close_completion
