@@ -74,8 +74,8 @@ no Actions cache restore or save.
 Verification jobs keep exact runner pins at the workflow boundary: GKE PR
 admit is hosted, while PR preflight, proof legs and parity use bare GKE scale-set names;
 credentialed post work keeps its protected `["self-hosted","pf-gcp-post"]` fleet.
-Post Release/Debug/kernel and native shards and post sanitizers use fixed bare GKE scale-set
-names; both native-live sanitizer profiles use an exact runner matrix. Jobs run directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
+Post Release/Debug/kernel, native shards and post sanitizers use fixed bare GKE scale-set names.
+The two native-live sanitizer profiles use an exact runner matrix. All GKE jobs run directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
 Hosted `ubuntu-24.04` runs PR `authz`, admission, `legs` and `result` jobs, and `docs.yml`'s `build`; secret-free post guards and aggregates use bare scalar GKE names. These light, secret-free jobs need no VM-only tools, mounts or caches.
 The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use `gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.
 Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 36 GKE job instances: amd64 32 CPU default/256 GB labels carry 4/4 jobs, amd64 16 CPU default/128/256 GB labels carry 3/3/1, amd64 8/4/2 CPU labels carry 7/5/7, and arm64 16 CPU 128 GB carries 2; each label's static cap is 8.

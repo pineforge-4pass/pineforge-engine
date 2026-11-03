@@ -1994,8 +1994,9 @@ class RulesetsProbeTests(unittest.TestCase):
         requirements = (
             'admit is hosted, while PR preflight, proof legs and parity use bare GKE scale-set names;\n'
             'credentialed post work keeps its protected `["self-hosted","pf-gcp-post"]` fleet.\n'
-            'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
-            'profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
+            'Post Release/Debug/kernel, native shards and post sanitizers use fixed bare GKE scale-set names.\n'
+            'The two native-live sanitizer profiles use an exact runner matrix. All GKE jobs run directly '
+            'in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
             "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
             'bare scalar `gke-2cpu-4gb-amd64` and `probe` on `["self-hosted","pf-gcp-post"]`.',
             "Release and promotion use the isolated release fleet:\n"

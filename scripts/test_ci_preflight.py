@@ -1792,8 +1792,9 @@ class PostFleetRunnerPolicy(unittest.TestCase):
         docs = (ROOT / 'docs/ci.md').read_text()
         self.assertEqual(len(docs.splitlines()), 2031)
         requirements = (
-            'Post Release/Debug/kernel and native shards and post sanitizers use fixed bare GKE scale-set\n'
-            'names; both native-live sanitizer profiles use an exact runner matrix. Jobs run directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
+            'Post Release/Debug/kernel, native shards and post sanitizers use fixed bare GKE scale-set names.\n'
+            'The two native-live sanitizer profiles use an exact runner matrix. All GKE jobs run directly '
+            'in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
             "Hosted `ubuntu-24.04` runs PR `authz`, admission, `legs` and `result` jobs, and `docs.yml`'s `build`; "
             'secret-free post guards and aggregates use bare scalar GKE names. '
             'These light, secret-free jobs need no VM-only tools, mounts or caches.',
@@ -3122,6 +3123,18 @@ class RunnerGroupAllowlist(unittest.TestCase):
                               [self.missing('native-live.yml', label)
                                for label in (GKE_4, GKE_16_128, GKE_16_256, GKE_8)])
         self.assertEqual(code, 1, lines)
+
+    def test_post_disk_labels_require_the_same_exact_workflow_reference(self):
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines), [], lines)
+        self.assertEqual(code, 0, lines)
+        self.omit('ci-post.yml')
+        code, lines = self.run_stage()
+        self.assertEqual(code, 1, lines)
+        self.assertCountEqual(self.failures(lines), [
+            self.missing('ci-post.yml', label)
+            for label in (GKE_2, GKE_8, GKE_16, GKE_16_128,
+                          GKE_32, GKE_32_256, GKE_ARM)])
 
     def test_matrix_include_and_axis_resolve_the_runner_in_a_real_workflow(self):
         self.omit('docs-post.yml')

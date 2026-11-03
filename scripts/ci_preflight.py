@@ -2550,8 +2550,10 @@ def _resolved_runner_values(workflow: str, body: str) -> tuple[list[str], bool]:
     return list(dict.fromkeys((resolved or []) + visible)), resolved is not None
 
 
+# Disk suffixes still require group membership; admitted sizes are pinned separately.
 _RUNNER_GROUP_LABEL = re.compile(
-    r'(?<![\w.-])(?:gke|gkp)-\d+cpu-\d+gb-[A-Za-z0-9_]+(?![\w.-])', re.IGNORECASE)
+    r'(?<![\w.-])(?:gke|gkp)-\d+cpu-\d+gb-[A-Za-z0-9_]+(?:-\d+gb)?(?![\w.-])',
+    re.IGNORECASE)
 _REPOSITORY_ID = r'[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*'
 _RUNNER_GROUP_REFERENCE = re.compile(
     r'(' + _REPOSITORY_ID + r')/\.github/workflows/([A-Za-z0-9_][A-Za-z0-9_.-]*\.yml)@([^\s@]+)')
