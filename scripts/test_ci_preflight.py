@@ -742,7 +742,7 @@ class ProtectedGkeRunners(unittest.TestCase):
         return {path.name: path.read_text()
                 for path in (ROOT / '.github/workflows').glob('*.yml')}
 
-    def test_protected_inventory_and_release_matrix_are_exact(self):
+    def test_gkp_inventory_and_matrix(self):
         self.assertEqual(ci_preflight.GKP_JOB_RUNNERS, EXPECTED_GKP_JOBS)
         workflows = self.workflows()
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
@@ -758,7 +758,7 @@ class ProtectedGkeRunners(unittest.TestCase):
                     self.assertEqual(ci_preflight._job_values(body, 'runs-on', unquote=False),
                                      [label])
 
-    def test_protected_workflows_require_their_own_group_15_mirror(self):
+    def test_gkp_needs_group15_mirror(self):
         workflows = self.workflows()
         mirror_file = '.github/runner-group-15-allowlist.txt'
         mirror = (ROOT / mirror_file).read_text()
@@ -780,7 +780,7 @@ class ProtectedGkeRunners(unittest.TestCase):
             workflows, None, repository, mirror_file=mirror_file, label_prefix='gkp-'),
             [f'{mirror_file}: mirror file is missing'])
 
-    def test_protected_jobs_refuse_wrong_sizes_shapes_and_unprotected_runners(self):
+    def test_gkp_refuses_wrong_runners(self):
         workflows = self.workflows()
         for name, jobs in EXPECTED_GKP_JOBS.items():
             for job, label in jobs.items():
@@ -796,7 +796,7 @@ class ProtectedGkeRunners(unittest.TestCase):
                         self.assertNotEqual(changed, workflows[name])
                         self.assertTrue(ci_preflight.runner_findings({**workflows, name: changed}))
 
-    def test_protected_labels_cannot_grant_an_unpinned_job_or_pr_access(self):
+    def test_gkp_labels_no_unpinned(self):
         for event in ('workflow_dispatch', 'push', 'pull_request', 'workflow_call'):
             for label in (GKP_2, GKP_4, GKP_PREBUILT):
                 workflow = (f'on: {event}\njobs:\n  inspect:\n'
@@ -806,7 +806,7 @@ class ProtectedGkeRunners(unittest.TestCase):
                                   'only at its exact pinned job and label',
                                   ci_preflight.runner_findings({'unknown.yml': workflow}))
 
-    def test_protected_app_jobs_keep_their_exact_environment(self):
+    def test_gkp_jobs_keep_environment(self):
         workflows = self.workflows()
         for name, job, environment in (
                 ('release.yml', 'release', 'release'),
@@ -822,7 +822,7 @@ class ProtectedGkeRunners(unittest.TestCase):
                                   'on protected GKE',
                                   ci_preflight.runner_findings({**workflows, name: changed}))
 
-    def test_credential_exemption_requires_the_exact_protected_runner(self):
+    def test_cred_exempt_needs_exact_gkp(self):
         workflows = self.workflows()
         baseline = ci_preflight.runner_findings(workflows)
         for name, jobs in EXPECTED_GKP_JOBS.items():
@@ -854,7 +854,7 @@ class ProtectedGkeRunners(unittest.TestCase):
                               'on a hosted standard runner',
                               ci_preflight.runner_findings({**workflows, 'release.yml': literal}))
 
-    def test_retired_vm_labels_are_refused_even_in_workflow_metadata(self):
+    def test_retired_vm_labels_refused(self):
         workflows = self.workflows()
         for name, workflow in workflows.items():
             for label in RETIRED_VM_LABELS:
@@ -863,7 +863,7 @@ class ProtectedGkeRunners(unittest.TestCase):
                 self.assertIn(f'{name} must not name retired GCP main/post runner labels',
                               ci_preflight.runner_findings({**workflows, name: changed}))
 
-    def test_protected_jobs_refuse_containers_services_and_pr_callers(self):
+    def test_gkp_refuses_containers(self):
         workflows = self.workflows()
         for name, jobs in EXPECTED_GKP_JOBS.items():
             caller = ('on: pull_request\njobs:\n  call:\n'
@@ -879,7 +879,7 @@ class ProtectedGkeRunners(unittest.TestCase):
                     self.assertIn(f'{name} job {job} must not declare {finding} on protected GKE',
                                   ci_preflight.runner_findings({**workflows, name: changed}))
 
-    def test_release_installs_eigen_and_pins_all_three_version_macros(self):
+    def test_release_eigen_exact(self):
         workflow = self.workflows()['release.yml']
         prebuilt = _jobs(workflow)['prebuilt']
         install = ci_preflight._step_named(ci_preflight._steps(prebuilt),
@@ -7602,7 +7602,7 @@ finally:
         self.assertEqual(ci_preflight.release_rulesets_probe_workflow_findings(
             RULESETS_PROBE_WORKFLOW, self.other_sources()['release.yml']), [])
 
-    def test_release_ruleset_probe_refuses_unprotected_wrong_size_and_pr_runners(self):
+    def test_probe_refuses_bad_runners(self):
         original, others = self.ci_sources(), self.other_sources()
         finding = (f'release-ruleset-probe.yml job probe must run on {RELEASE_RUNNER} '
                    '(isolated release)')
