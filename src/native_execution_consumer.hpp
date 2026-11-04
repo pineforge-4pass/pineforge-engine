@@ -2622,12 +2622,12 @@ private:
     // the closed generation never reports success.
     void close_open_epoch_at_exit(BacktestEngine& engine, bool unwinding,
                                   bool allow_live) noexcept;
-    // The tracked catch arms of the nine entries. A tracked handle restores
-    // processing_input_ (false at every try's entry) and keeps a failure that is
-    // already latched -- its code and text stay -- where an untracked handle runs
-    // the two statements it always ran. fail_unclassified is the catch (...) arm
-    // for a tracked handle: engine_unclassified_error. An untracked handle's
-    // catch (...) rethrows.
+    // The std::exception catch arms of the nine entries restore processing_input_
+    // (false at every try's entry) for tracked and untracked handles. A tracked
+    // handle keeps an already latched failure's code and text; an untracked
+    // handle runs the existing fail/render statements. fail_unclassified is the
+    // catch (...) arm for a tracked handle: engine_unclassified_error. An
+    // untracked handle's catch (...) rethrows.
     void fail_from_exception(BacktestEngine& engine, NativeFailureOperation operation,
                              const std::exception& error);
     void fail_unclassified(BacktestEngine& engine, NativeFailureOperation operation);

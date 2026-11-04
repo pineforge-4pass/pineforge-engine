@@ -1741,11 +1741,11 @@ bool NativeExecutionConsumer::call_execution_observer(BacktestEngine& engine,
 void NativeExecutionConsumer::fail_from_exception(BacktestEngine& engine,
                                                   NativeFailureOperation operation,
                                                   const std::exception& error) {
+    // Every public try enters with no input in flight. History acceptance can
+    // throw on untracked handles too; restore the next entry's nesting state
+    // before applying the selected epoch's existing first-failure policy.
+    processing_input_ = false;
     if (selected_epoch_tracked()) {
-        // processing_input_ is false at every try's entry (admission refuses
-        // otherwise), so a throw that left it set is put back, and the
-        // nesting predicate of the next entry reads true again.
-        processing_input_ = false;
         // The first latched cause stays: its code and text are not overwritten.
         if (failed()) {
             engine.last_run_status_ = 1;

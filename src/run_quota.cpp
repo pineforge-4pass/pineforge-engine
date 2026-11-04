@@ -585,7 +585,7 @@ struct RunQuotaEndpoint {
     int fd = -1;
     std::uint64_t process = 0;
     QuotaRole role = QuotaRole::worker;
-    std::mutex mutex;
+    mutable std::mutex mutex;
     std::uint64_t sequence = 0;
     std::uint64_t nonce_hi = 0, nonce_lo = 0;
     bool finished = false;
@@ -594,30 +594,37 @@ struct RunQuotaEndpoint {
     explicit RunQuotaEndpoint(const OwnedAllocator<RunQuotaEndpoint>& owner)
         : allocation(owner) {}
 
-    // The owner serializes observation with mutation, as for OwnedAllocator.
-    // No protocol lock, attachment, snapshot request or descriptor query.
+    // Serialize the retained graph with protocol mutation, including allocation
+    // records and the refusal latch. No attachment, RPC or descriptor query.
     void observe_owned_storage(OwnedStorage& out) const noexcept {
         struct PreserveErrno {
             int value;
             ~PreserveErrno() { errno = value; }
         } preserve_errno{errno};
-        if (!out.visit(*this)) return;
-        allocation.observe_owned_storage(out);
-        if (!allocation.contains(this, sizeof(*this))) {
-            out.incomplete(OwnedStorageUnsupported::allocator);
+        try {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (!out.visit(*this)) return;
+            allocation.observe_owned_storage(out);
+            if (!allocation.contains(this, sizeof(*this))) {
+                out.incomplete(OwnedStorageUnsupported::allocator);
+                out.incomplete(OwnedStorageUnsupported::scratch_quota_endpoint);
+            }
+            if (!refusal) return;
+            if (!allocation.contains(refusal.get(), sizeof(*refusal))) {
+                out.incomplete(OwnedStorageUnsupported::allocator);
+                out.incomplete(OwnedStorageUnsupported::scratch_quota_endpoint);
+            }
+            if (!out.visit(*refusal)) return;
+            // The snapshot's inline RunFailureValue is inside its tracked request.
+            // The failure's public hook adds only the external JSON ownership: a
+            // factory-minted domain is counted once; an unknown control or foreign
+            // pointee stays explicitly incomplete. No other flag is cleared here.
+            refusal->failure.observe_owned_storage(out);
+        } catch (...) {
+            // A failed mutex acquisition establishes no safe graph observation.
+            // Keep noexcept and known lower bounds, without inventing a total.
             out.incomplete(OwnedStorageUnsupported::scratch_quota_endpoint);
         }
-        if (!refusal) return;
-        if (!allocation.contains(refusal.get(), sizeof(*refusal))) {
-            out.incomplete(OwnedStorageUnsupported::allocator);
-            out.incomplete(OwnedStorageUnsupported::scratch_quota_endpoint);
-        }
-        if (!out.visit(*refusal)) return;
-        // The snapshot's inline RunFailureValue is inside its tracked request.
-        // The failure's public hook adds only the external JSON ownership: a
-        // factory-minted domain is counted once; an unknown control or foreign
-        // pointee stays explicitly incomplete. No other flag is cleared here.
-        refusal->failure.observe_owned_storage(out);
     }
 
     ~RunQuotaEndpoint() {
