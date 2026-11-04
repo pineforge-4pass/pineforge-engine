@@ -734,7 +734,6 @@ class AppTokenEnvironments(unittest.TestCase):
     def test_real_minting_jobs_have_exactly_the_inventoried_environments(self):
         expected = {
             ('release.yml', 'release'): ['release'],
-            ('release.yml', 'prebuilt'): ['release'],
             ('release.yml', 'notify-hub'): ['release'],
             ('release-ruleset-probe.yml', 'probe'): ['release'],
             ('promote-baseline.yml', 'promote'): ['release-bot'],
@@ -789,12 +788,34 @@ class ProtectedGkeRunners(unittest.TestCase):
                     self.assertEqual(ci_preflight.runner_findings(
                         {**workflows, name: changed}), [])
             for reference in ('secrets.DEPLOY_TOKEN', "secrets['DEPLOY_TOKEN']",
-                              'secrets[inputs.secret_name]', 'toJSON(secrets)'):
+                              'secrets[inputs.secret_name]'):
                 with self.subTest(workflow=name, reference=reference):
-                    changed = '# ${{ ' + reference + ' }}\n' + workflow
+                    changed = in_job(
+                        workflow, job, '    steps:\n',
+                        '    env:\n      TOKEN: ${{ ' + reference + ' }}\n'
+                        '    steps:\n')
                     self.assertNotEqual(changed, workflow)
+                    changed_body = _jobs(changed)[job]
+                    self.assertTrue(ci_preflight._holds_credentials(
+                        changed, changed_body, effective_permissions=True))
                     self.assertIn(f'{name} job {job} must not expose credentials on GKE',
                                   ci_preflight.runner_findings({**workflows, name: changed}))
+
+        for reference in ('secrets.DEPLOY_TOKEN', "secrets['DEPLOY_TOKEN']",
+                          'secrets[inputs.secret_name]', 'toJSON(secrets)'):
+            with self.subTest(workflow='release.yml', reference=reference):
+                changed = '# ${{ ' + reference + ' }}\n' + workflows['release.yml']
+                self.assertNotEqual(changed, workflows['release.yml'])
+                changed_body = _jobs(changed)['prebuilt']
+                self.assertFalse(ci_preflight._holds_credentials(
+                    changed, changed_body, effective_permissions=True))
+                self.assertTrue(ci_preflight._holds_credentials(
+                    changed, changed_body, effective_permissions=True, strict=True))
+                self.assertIn(
+                    'release.yml job prebuilt must keep production credentials '
+                    'on a hosted standard runner',
+                    ci_preflight.runner_findings(
+                        {**workflows, 'release.yml': changed}))
 
     def test_gkp_needs_group15_mirror(self):
         workflows = self.workflows()
@@ -3742,6 +3763,7 @@ class CiFileLoading(unittest.TestCase):
     CONFIG = '.github/actionlint.yaml'
     CMAKE = 'tests/CMakeLists.txt'
     HELPER = 'scripts/build_prebuilt_bookworm.sh'
+    CONSUMER = 'scripts/check_shipped_archive_runtime.sh'
 
     @staticmethod
     def action_sources():
@@ -3764,9 +3786,11 @@ class CiFileLoading(unittest.TestCase):
         shutil.copyfile(ROOT / self.CONFIG, tree / self.CONFIG)
         (tree / 'tests').mkdir()
         shutil.copyfile(ROOT / self.CMAKE, tree / self.CMAKE)
+        (tree / 'scripts').mkdir(exist_ok=True)
+        shutil.copyfile(ROOT / CiFileLoading.CONSUMER, tree / CiFileLoading.CONSUMER)
         if include_helper:
-            (tree / 'scripts').mkdir()
-            shutil.copyfile(ROOT / self.HELPER, tree / self.HELPER)
+            helper = CiFileLoading.HELPER
+            shutil.copyfile(ROOT / helper, tree / helper)
         return tree
 
     def crlf_tree(self, names):
@@ -3880,6 +3904,14 @@ class CiFileLoading(unittest.TestCase):
         code, output = self.run_stage(tree, '--check-ci-workflow')
         self.assertEqual(code, 0, output)
 
+    def test_required_bookworm_consumer_is_copied_from_the_genuine_source(self):
+        consumer = CiFileLoading.CONSUMER
+        tree = self.make_tree()
+        self.assertEqual((tree / consumer).read_bytes(), (ROOT / consumer).read_bytes())
+        self.assertFalse((tree / consumer).is_symlink())
+        code, output = self.run_stage(tree, '--check-ci-workflow')
+        self.assertEqual(code, 0, output)
+
     def test_missing_or_symlink_bookworm_helper_is_refused(self):
         finding = 'release prebuilt Bookworm helper must be a regular source file'
         for kind in ('missing', 'file-symlink', 'parent-symlink'):
@@ -3890,13 +3922,35 @@ class CiFileLoading(unittest.TestCase):
                     genuine.mkdir()
                     shutil.copyfile(ROOT / self.HELPER, genuine / 'build_prebuilt_bookworm.sh')
                     if kind == 'parent-symlink':
+                        shutil.rmtree(tree / 'scripts')
                         (tree / 'scripts').symlink_to(genuine, target_is_directory=True)
                     else:
-                        (tree / 'scripts').mkdir()
+                        (tree / 'scripts').mkdir(exist_ok=True)
                         (tree / self.HELPER).symlink_to(genuine / 'build_prebuilt_bookworm.sh')
                 code, output = self.run_stage(tree, '--check-ci-workflow')
                 self.assertEqual(code, 1, output)
                 self.assertIn(finding, output)
+
+    def test_missing_bookworm_consumer_is_refused_by_its_source_pin(self):
+        consumer = CiFileLoading.CONSUMER
+        tree = self.make_tree()
+        (tree / consumer).unlink()
+        code, output = self.run_stage(tree, '--check-ci-workflow')
+        finding = 'release prebuilt archive consumer must be a regular source file'
+        self.assertEqual(code, 1, output)
+        self.assertEqual(output.splitlines(), [finding], output)
+
+    def test_changed_bookworm_consumer_is_refused_by_its_source_pin(self):
+        consumer = CiFileLoading.CONSUMER
+        original = (ROOT / consumer).read_bytes()
+        self.assertTrue(original.endswith(b'\n') and b'\r' not in original)
+        tree = self.make_tree()
+        (tree / consumer).write_bytes(original + b'# changed source\n')
+        code, output = self.run_stage(tree, '--check-ci-workflow')
+        finding = ('release prebuilt archive consumer differs from the reviewed full-library '
+                   'native consumer source contract')
+        self.assertEqual(code, 1, output)
+        self.assertEqual(output.splitlines(), [finding], output)
 
     def test_changed_bookworm_helper_and_line_endings_are_refused_by_the_source_pin(self):
         original = (ROOT / self.HELPER).read_bytes()

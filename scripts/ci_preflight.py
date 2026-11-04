@@ -2265,12 +2265,15 @@ def _private_key_inputs(text: str) -> bool:
     return False
 
 
-def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool = False) -> bool:
+def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool = False,
+                       strict: bool = False) -> bool:
     """L6: non-GITHUB_TOKEN secrets, OIDC writes or a deployment environment.
 
     Existing VM checks conservatively include workflow permissions. GKE checks
     use the job's effective scopes. Bracket/dynamic secret access and inherited
-    reusable-workflow secrets must not bypass either rule.
+    reusable-workflow secrets must not bypass either rule. ``strict`` is
+    reserved for the token-only prebuilt artifact job; other callers retain
+    the main workflow's comment-stripped credential scan.
     """
     if (_job_values(body, 'environment')
             or _job_values(body, 'secrets') == ['inherit']):
@@ -2282,38 +2285,42 @@ def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool 
            for value in permissions):
         return True
 
-    # Expressions expand even in script comments; retain every raw byte.
-    # Other jobs' App credentials are not inherited by the artifact job.
-    header = _JOBS_KEY.split(workflow, maxsplit=1)[0]
-    inherited_env = []
-    in_env = False
-    for line in workflow.split('\n'):
-        if line.strip() and _indent(line) == 0 and not line.startswith('#'):
-            in_env = _key_value(line, 'env') is not None
-        if in_env:
-            inherited_env.append(line)
-    text = header + '\n' + body + '\n' + '\n'.join(inherited_env)
-    if (_uses_app_token(workflow, body)
-            or _private_key_inputs(body + '\n' + '\n'.join(inherited_env))):
-        return True
-    # A whole/dynamic secrets context cannot prove GITHUB_TOKEN-only use.
-    # Prose may mention secrets; inspect expressions without cutting hashes
-    # or treating a quoted }} (including doubled quotes) as their end.
-    for expression in re.finditer(r'\$\{\{', text):
-        end, in_string = expression.end(), False
-        while end < len(text):
-            if text[end] == "'":
-                if in_string and text.startswith("''", end):
-                    end += 2
-                    continue
-                in_string = not in_string
-            elif not in_string and text.startswith('}}', end):
-                break
-            end += 1
-        value = text[expression.end():end]
-        if any(_SECRET_REFERENCE.match(value, context.start()) is None
-               for context in re.finditer(r'\bsecrets\b', value, re.IGNORECASE)):
+    if strict:
+        # Expressions expand even in script comments; retain every raw byte.
+        # Other jobs' App credentials are not inherited by the artifact job.
+        header = _JOBS_KEY.split(workflow, maxsplit=1)[0]
+        inherited_env = []
+        in_env = False
+        for line in workflow.split('\n'):
+            if line.strip() and _indent(line) == 0 and not line.startswith('#'):
+                in_env = _key_value(line, 'env') is not None
+            if in_env:
+                inherited_env.append(line)
+        text = header + '\n' + body + '\n' + '\n'.join(inherited_env)
+        if (_uses_app_token(workflow, body)
+                or _private_key_inputs(body + '\n' + '\n'.join(inherited_env))):
             return True
+        # A whole/dynamic secrets context cannot prove GITHUB_TOKEN-only use.
+        # Prose may mention secrets; inspect expressions without cutting hashes
+        # or treating a quoted }} (including doubled quotes) as their end.
+        for expression in re.finditer(r'\$\{\{', text):
+            end, in_string = expression.end(), False
+            while end < len(text):
+                if text[end] == "'":
+                    if in_string and text.startswith("''", end):
+                        end += 2
+                        continue
+                    in_string = not in_string
+                elif not in_string and text.startswith('}}', end):
+                    break
+                end += 1
+            value = text[expression.end():end]
+            if any(_SECRET_REFERENCE.match(value, context.start()) is None
+                   for context in re.finditer(r'\bsecrets\b', value, re.IGNORECASE)):
+                return True
+    else:
+        text = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(body))
+        text += '\n' + '\n'.join(_job_values(workflow, 'env'))
     for match in _SECRET_REFERENCE.finditer(text):
         if match.group(1) is not None:
             if match.group(1).upper() != 'GITHUB_TOKEN':
@@ -2836,6 +2843,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                      if job not in jobs]
         for job, body in jobs.items():
             runs_on, uses = _job_values(body, 'runs-on'), _job_values(body, 'uses')
+            strict_prebuilt = (name, job) == ('release.yml', 'prebuilt')
             gke_pin = gke_pins.get(job)
             resolved_runners, _ = _resolved_runner_values(workflow, body)
             has_gke = bool(_GKE_ROUTE.search(' '.join(runs_on + resolved_runners)))
@@ -2876,7 +2884,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 findings.append(f'{name} job {job} must not declare job services on GKE')
             if has_gke:
                 permissions = _effective_permissions(workflow, body)
-                if (_holds_credentials(workflow, body, effective_permissions=True)
+                if (_holds_credentials(workflow, body, effective_permissions=True,
+                                       strict=strict_prebuilt)
                         or any(re.search(r'\bid-token\b', value) for value in permissions)):
                     findings.append(f'{name} job {job} must not expose credentials on GKE')
             runner_text = ' '.join(runs_on + _job_block(body, 'strategy'))
@@ -2892,7 +2901,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             # Other jobs retain the conservative workflow-plus-job credential check.
             exact_gke_runner = bool(gke_pin and job in fixed_hosted and raw_runners == [gke_pin])
             credentials = _holds_credentials(
-                workflow, body, effective_permissions=exact_gke_runner)
+                workflow, body, effective_permissions=exact_gke_runner,
+                strict=strict_prebuilt)
             if job not in pinned:
                 if pinned and runs_on:
                     findings.append(f'{name} job {job} needs a pinned runner and time limit')
@@ -3365,6 +3375,9 @@ RELEASE_PREBUILT_STEPS = r'''
 # A changed helper requires reviewing its source and controls before repinning.
 # This is a source contract, never an engine/build/glibc verdict.
 RELEASE_BOOKWORM_HELPER_BLOB = 'daaf2fe0541b5d0f8aab0746b35dcf069862afa3'
+# The helper delegates the shipped-archive execution to this exact consumer.
+# This is a source contract, never a native-runtime verdict.
+RELEASE_BOOKWORM_CONSUMER_BLOB = 'd066968913c0d4ff7358e6fd4dde2a794e1be600'
 
 
 def release_prebuilt_helper_findings(source: str) -> list[str]:
@@ -3373,6 +3386,15 @@ def release_prebuilt_helper_findings(source: str) -> list[str]:
     if actual != RELEASE_BOOKWORM_HELPER_BLOB:
         return ['release prebuilt Bookworm helper differs from the reviewed immutable-image, '
                 'bounded-mount, inside-build and no-fallback source contract']
+    return []
+
+
+def release_prebuilt_consumer_findings(source: str) -> list[str]:
+    payload = source.encode('utf-8')
+    actual = hashlib.sha1(b'blob ' + str(len(payload)).encode('ascii') + b'\0' + payload).hexdigest()
+    if actual != RELEASE_BOOKWORM_CONSUMER_BLOB:
+        return ['release prebuilt archive consumer differs from the reviewed full-library '
+                'native consumer source contract']
     return []
 
 
@@ -4890,6 +4912,17 @@ def main() -> int:
             findings.append('release prebuilt Bookworm helper must be a regular source file')
         else:
             checked += release_prebuilt_helper_findings(read_ci_text(helper_path, findings))
+        consumer_path = ROOT / 'scripts/check_shipped_archive_runtime.sh'
+        if (consumer_path.parent.is_symlink() or consumer_path.is_symlink()
+                or not consumer_path.is_file()):
+            findings.append('release prebuilt archive consumer must be a regular source file')
+        else:
+            try:
+                consumer = read_ci_text(consumer_path, findings, ROOT)
+            except OSError as error:
+                findings.append(f'release prebuilt archive consumer cannot be read: {error}')
+            else:
+                checked += release_prebuilt_consumer_findings(consumer)
         findings = list(dict.fromkeys(findings + checked))
         for finding in findings:
             print(finding)
