@@ -1,4 +1,4 @@
-"""Real C descriptor/consumer projection and exact ctypes layout; author UNRUN."""
+"""Real C descriptor/consumer projection and exact ctypes layout."""
 import ctypes
 import importlib.util
 import os
