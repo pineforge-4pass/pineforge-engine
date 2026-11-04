@@ -1,7 +1,11 @@
-// N6 cursor source rows. WRITTEN / UNRUN; classifications follow CORE18:37/L618:39.
-// TV CONTRACT: scalar lookaheadON prefixes/complete flag; OFF completed bars;
-// lower-timeframe arrays contain completed elements even with lookaheadON.
+// Runtime security cursor source rows.
+// Contract-row expectations are hand-computed from the stated contract;
+// no TradingView capture is currently bound to any row in this file.
+// TV CONTRACT: scalar lookahead ON prefixes/complete flag; OFF completed bars;
+// lower-timeframe arrays contain completed elements even with lookahead ON.
 // IMPLEMENTATION DETAIL: chart_open is first-observed/crossing input time;
+// the crossings tested here are boundary-aligned, so only first-observed
+// chart_open has an off-boundary case. Crossing-time discrimination is untested.
 // one TLS (host,cursor) slot, peer hiding/root fallback and unwind restoration.
 // METADATA ONLY: gaps_on has no tested NA/result-envelope rule in these rows.
 // Expected bars below are hand-computed literals, never product aggregation.
@@ -204,6 +208,7 @@ void factory_error(F&& body, RunFailureCode code, const std::string& args,
     require(caught, "factory unexpectedly accepted invalid request");
 }
 
+// IMPLEMENTATION DETAIL: native factory failure codes, arguments and text.
 void factory_validation() {
     Host unknown;
     factory_error([&] { unknown.make_runtime_security_cursor("3", false, false, false); },
@@ -268,7 +273,7 @@ void factory_validation() {
 
 struct Unwind {};
 
-// IMPLEMENTATION DETAIL, source control / UNRUN. The scopes overlap across
+// IMPLEMENTATION DETAIL: scope isolation control. The scopes overlap across
 // threads, but every scope access (including destruction) holds this mutex.
 // Removing TLS therefore produces an ordered wrong observation, not a race.
 struct ScopeTurns {
@@ -478,7 +483,7 @@ void inherited_scopes_and_identity() {
 }
 
 // TV CONTRACT: scalar partial/completed delivery and complete flags.
-// chart_open assertions below remain IMPLEMENTATION DETAIL characterization.
+// IMPLEMENTATION DETAIL: chart_open; tested crossings are boundary-aligned.
 void chart_boundaries_and_publication() {
     Host host;
     host.prepare("1", "6");
@@ -525,7 +530,7 @@ void chart_boundaries_and_publication() {
 void lower_arrays_every_element() {
     Host host;
     host.prepare("1", "6");
-    // TV CONTRACT: lower arrays contain completed bars even with lookaheadON.
+    // TV CONTRACT: lower arrays contain completed bars even with lookahead ON.
     auto cursor = host.make_runtime_security_cursor("2", true, false, true);
     Capture out;
     const std::array<double, 9> latest{{
@@ -563,7 +568,8 @@ void lower_arrays_every_element() {
             "lower incomplete tail did not advance published slot");
 }
 
-// Completed lower elements are contract; synthetic path/order values are characterization.
+// TV CONTRACT: completed lower elements.
+// IMPLEMENTATION DETAIL: synthetic subdivision path and order values.
 void subdivision_every_element_and_order() {
     Host host;
     host.prepare("3", "6", 180000);
@@ -609,7 +615,7 @@ void subdivision_every_element_and_order() {
     require(cursor.requested_index == 8, "subdivision terminal requested index");
 }
 
-// Empty-route/NA state is characterization, not a gaps_on result-envelope rule.
+// IMPLEMENTATION DETAIL: empty-route/NA state; gaps_on is metadata only.
 void no_loaded_bars_has_no_publication() {
     Host host;
     host.prepare("3", "6", 180000);
@@ -634,7 +640,8 @@ void no_loaded_bars_has_no_publication() {
     }
 }
 
-// Scalar delivery/complete flags are contract; chart_open remains implementation detail.
+// TV CONTRACT: scalar delivery and complete flags.
+// IMPLEMENTATION DETAIL: hand-computed Heikin Ashi values, seeds and chart_open.
 void heikin_ashi_complete_and_partial() {
     Host host;
     host.prepare("1", "6");
