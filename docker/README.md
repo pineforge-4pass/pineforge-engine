@@ -467,6 +467,7 @@ An invalid value is refused like `--report-sink-fd` (entrypoint exit 4), and the
 instrument's metadata, either a flat object or `{"syminfo": {...}}`; an object
 with extra keys (for example a full instrument record) can be passed as is, keys
 the harness does not use are ignored. It applies `mincontract` first, then
+`series_origin_ms` when declared, then
 `mintick`, `pointvalue`, `timezone` and `session`, each through the strategy
 library's `strategy_set_syminfo_*` setters.
 
@@ -492,13 +493,42 @@ library's `strategy_set_syminfo_*` setters.
 - An applied grid is recorded as `applied_runtime.syminfo`
   (`{"qty_step": <v>, "mincontract": <v>}`) and so in
   `fingerprint.provenance.runtime`: its fingerprint digest differs from the
-  gridless run's. Without a grid the key is absent and the report, fingerprint
-  included, is what it was before this key was supported, apart from
+  gridless run's. Without a grid or a declared series origin the key is absent
+  and the report, fingerprint included, is what it was before these keys were
+  supported, apart from
   `elapsed_seconds` (and, with `--bench`, the timing samples). `mintick`,
   `pointvalue`, `timezone` and `session` are not recorded.
 
+- In the next release, `series_origin_ms` declares the open time in epoch
+  milliseconds of the **first bar of the series the reference ran on**,
+  which may differ from the feed start or the report window. It must be a
+  positive JSON integer; `0`, negative values, floats, strings, booleans,
+  `NaN` and `Infinity` fail with `syminfo_unreadable`, `args.reason`
+  `value_type`, and a message naming `series_origin_ms`. Absent or `null`
+  applies nothing: existing behaviour, report and fingerprint are unchanged.
+  A library without `strategy_set_syminfo_metadata` fails with
+  `strategy_library_incompatible`, as for `mincontract`.
+- Declaring this origin enables both chart EMA warmup (`ta.ema`, and the
+  embedded EMAs in `ta.macd`, `ta.kc` and `ta.tsi`: `na` for the first
+  `length - 1` inputs, then an SMA seed) and
+  `security_range_start_na_warmup`. `request.security` starts at the first
+  whole bucket opening at or after the origin; plain security expressions
+  stay `na` until the first completed higher-timeframe bar. The low-level
+  raw keys remain available; a raw key set afterwards wins for its context.
+- Applied metadata echoes `{"series_origin_ms": <v>}` in
+  `applied_runtime.syminfo` and `fingerprint.provenance.runtime`. Once the
+  first fed chart bar is known, it also carries `series_origin_first_bar_ms`
+  and `series_origin_offset_ms` (first bar minus origin). Origins equal to
+  or earlier than the first fed bar are accepted, including fractional-bar
+  offsets. A later origin is also accepted and adds the typed warning
+  field `"series_origin_warning": "origin_after_first_bar"`.
+  A wrong declared origin gives wrong values; the declaration does not
+  recover missing history. This option has no defined meaning in live runs
+  and must not be set there.
+
 `docker/run_json.py` is vendored: pineforge-release copies it from the engine tag
-at every release, so the lot-grid handling (`mincontract`) lives in this file.
+at every release, so the metadata handling (`mincontract`, `series_origin_ms`)
+lives in this file.
 
 ### Other symbols' bars (`PINEFORGE_SYMBOL_FEEDS`)
 

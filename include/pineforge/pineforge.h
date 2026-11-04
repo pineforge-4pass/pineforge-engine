@@ -1634,7 +1634,10 @@ PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue);
 /** Inject a fundamental/exchange metadata value by Pine member name (e.g.
  *  "shares_outstanding_total"); un-injected reads return na. Quantity step: a
  *  declared "qty_step", or a finite "mincontract" > 0 while no "qty_step" is
- *  declared, sets the order quantity grid. Call before #run_backtest[_full]. */
+ *  declared, sets the order quantity grid. Call before #run_backtest[_full].
+ *  series_origin_ms declares the reference series' first bar open
+ *  in epoch ms and enables chart EMA SMA seeding plus request.security warmup
+ *  from the first whole bucket opening at/after that origin. */
 PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
                                           double value);
 

@@ -1273,6 +1273,7 @@ protected:
     //            only).
     void apply_realtime_tail_horizon(const Bar* bars, int n, bool script_bar_geometry);
 
+    // series_origin_ms sets both warmup contexts below; later raw keys win.
     // Opt-in chart warmup parity (see set_syminfo_metadata,
     // "chart_ema_na_warmup"). When enabled, chart-timeframe ta.ema instances
     // first used by on_bar na-warm per TV built-in semantics. This selector is

@@ -1520,6 +1520,9 @@ void source::PineStrategyHost::set_syminfo_metadata(
             ? value : std::numeric_limits<double>::quiet_NaN();
         return;
     }
+    // Malformed origins are a no-op even for the generic metadata store.
+    if (key == "series_origin_ms" && (!std::isfinite(value) || value <= 0.0))
+        return;
     BacktestEngine::set_syminfo_metadata(key, value);
     // TradingView's symbol calendar (set_symbol_calendar) over the C ABI:
     // "symbol_calendar_days" = N, then "symbol_calendar_open:<i>" and
@@ -1558,6 +1561,13 @@ void source::PineStrategyHost::set_syminfo_metadata(
     if (key == "bar_index_offset") {
         scheduler_.set_bar_index_offset(std::isfinite(value)
             ? static_cast<int>(std::llround(value)) : 0);
+    }
+    // One declared reference-series origin enables both warmup contexts.
+    // Raw keys written afterwards win for their own context (last writer).
+    if (key == "series_origin_ms" && std::isfinite(value) && value > 0.0) {
+        chart_ema_na_warmup_ = true;
+        security_range_start_na_warmup_ = true;
+        security_range_start_ms_ = static_cast<int64_t>(std::llround(value));
     }
     if (key == "security_range_start_na_warmup") {
         if (std::isfinite(value) && value > 0.0) {
