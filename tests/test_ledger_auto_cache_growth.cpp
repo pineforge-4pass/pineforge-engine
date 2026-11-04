@@ -1,6 +1,5 @@
-// Behavioral RED control: this entire unit uses the 12148f96 public API.
-// Compile/link it against that tree before applying the repair. A missing
-// new declaration is not its RED. All executions are UNRUN in the author lane.
+// Cache allocation behavior uses the public cache-policy interface.
+// Allocation failure preserves bounded cache geometry and ledger values.
 #include "p2cx_tledger_fixture.hpp"
 #include "trade_ledger_cache_io_fixture.hpp"
 #define PINEFORGE_TEST_ALLOCATION_BYTES

@@ -7,9 +7,9 @@ import sys
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-sys.path.insert(0, str(ROOT / "docker"))
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_DIR / "scripts"))
+sys.path.insert(0, str(PROJECT_DIR / "docker"))
 
 
 def load(name, path):
@@ -23,7 +23,7 @@ def load(name, path):
 
 @pytest.fixture(params=["docker/run_json.py", "scripts/run_strategy.py"])
 def wrapper(request):
-    return load("ledger_policy_" + Path(request.param).stem, ROOT / request.param)
+    return load("ledger_policy_" + Path(request.param).stem, PROJECT_DIR / request.param)
 
 
 def test_exact_existing_c_layout(wrapper):

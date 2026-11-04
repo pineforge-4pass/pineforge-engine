@@ -1,5 +1,5 @@
-// SOURCE PROPOSAL ONLY. Expected compile RED on the current v19 SIDE source.
-// CR150 must compose ONE epoch change for all paired 1.11 public layout moves.
+// The 1.11 public layout change updates the shared engine epoch once.
+// A changed layout must reject the previous engine epoch.
 #include <pineforge/cache_policy.hpp>
 #include <pineforge/engine.hpp>
 #include <pineforge/native_host.hpp>
@@ -15,13 +15,13 @@
 // fail to link for the old engine epoch; a successful link is the skew RED.
 // This branch deliberately uses no new cache symbol as a substitute for the
 // actual existing set_cache_policy(CacheDefaults const&) skew.
-extern "C" void cr548_old_layout_call(pineforge::BacktestEngine& engine) {
+extern "C" void old_layout_cache_policy_call(pineforge::BacktestEngine& engine) {
     pineforge::CacheDefaults policy;
     engine.set_cache_policy(policy);
 }
 int main() {
     using Call = void (*)(pineforge::BacktestEngine&);
-    Call volatile required = &cr548_old_layout_call;
+    Call volatile required = &old_layout_cache_policy_call;
     return required == nullptr;
 }
 #else
@@ -36,7 +36,7 @@ namespace {
 using pineforge::CacheCapacity;
 using pineforge::CacheDefaults;
 
-// Literal layout of the public pre-1.11 v19 header described by REV P1-1.
+// Literal layout of the public pre-1.11 v19 header.
 // Actual sizeof/alignof/offsetof compile on the target architecture; there
 // is no copied compiler output or hardcoded "160 bytes means pass" result.
 struct FrozenV19CacheDefaults {
@@ -81,9 +81,9 @@ constexpr bool host_is_v19 =
 constexpr bool changed = !equal(layout<CacheDefaults>(), layout<FrozenV19CacheDefaults>());
 
 static_assert(!changed || !current_is_v19,
-    "CR548 P1-1: CacheDefaults layout moved with the old engine epoch; CR150 must compose the shared bump");
+    "CacheDefaults layout changed without updating the shared engine epoch");
 static_assert(!changed || (!ledger_is_v19 && !host_is_v19),
-    "CR548 P1-1: paired engine/ledger/host epoch composition is incomplete");
+    "Engine, ledger and host epochs must match the changed public layout");
 
 constexpr std::uint64_t fingerprint() {
     std::uint64_t hash = UINT64_C(14695981039346656037);

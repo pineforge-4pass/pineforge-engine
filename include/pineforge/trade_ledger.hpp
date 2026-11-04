@@ -17,7 +17,7 @@ struct Trade;
 namespace detail { struct TradeLedgerStorageProbe; }
 namespace report { class TradeSourceV1; }
 
-// CR150 composes the one shared engine epoch change on the final paired head.
+// The 1.11 public layout change updates the shared engine epoch once.
 // This SIDE source deliberately does not perform a separate local bump.
 inline namespace engine_script_run_v19 {
 

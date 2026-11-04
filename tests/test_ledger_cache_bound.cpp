@@ -1,4 +1,4 @@
-// SOURCE PROPOSAL ONLY: never built/run in the source lane.
+// Bounded ledger reads preserve values beyond the decoded cache capacity.
 // Linux registration and the native admission dependency are in REGISTRATION.patch.
 // Red-first: previous headers lack set_ledger_cache_max_bytes and its diagnostics.
 #include "p2cx_tledger_fixture.hpp"
