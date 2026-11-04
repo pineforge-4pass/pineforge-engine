@@ -1796,6 +1796,106 @@
    "retryable": false,
    "since": "1.4.0"
   },
+  "selected_auxiliary_rows_limit_exceeded": {
+   "args": {
+    "limit": {
+     "kind": "string"
+    },
+    "requested": {
+     "kind": "string"
+    },
+    "used": {
+     "kind": "string"
+    }
+   },
+   "class": "resource",
+   "description": "Selected auxiliary-row capacity was exceeded by an actual reservation. limit is the actual limit, used is the actual used-before value, and requested is the actual delta; all are canonical unsigned decimal uint64_t values in domain 0..18446744073709551615. Equality passes. An absent bound imposes no logical limit; explicit 0 is finite 0.",
+   "english": [
+    "Selected auxiliary-row capacity exceeded."
+   ],
+   "retryable": false,
+   "since": "1.11.0"
+  },
+  "selected_bytes_limit_exceeded": {
+   "args": {
+    "limit": {
+     "kind": "string"
+    },
+    "requested": {
+     "kind": "string"
+    },
+    "used": {
+     "kind": "string"
+    }
+   },
+   "class": "resource",
+   "description": "Selected source-and-retained CSV byte capacity was exceeded by an actual reservation. limit is the actual limit, used is the actual used-before value, and requested is the actual delta; all are canonical unsigned decimal uint64_t values in domain 0..18446744073709551615. Equality passes. An absent bound imposes no logical limit; explicit 0 is finite 0.",
+   "english": [
+    "Selected source-and-retained CSV byte capacity exceeded."
+   ],
+   "retryable": false,
+   "since": "1.11.0"
+  },
+  "selected_primary_rows_limit_exceeded": {
+   "args": {
+    "limit": {
+     "kind": "string"
+    },
+    "requested": {
+     "kind": "string"
+    },
+    "used": {
+     "kind": "string"
+    }
+   },
+   "class": "resource",
+   "description": "Selected primary-row capacity was exceeded by an actual reservation. limit is the actual limit, used is the actual used-before value, and requested is the actual delta; all are canonical unsigned decimal uint64_t values in domain 0..18446744073709551615. Equality passes. An absent bound imposes no logical limit; explicit 0 is finite 0.",
+   "english": [
+    "Selected primary-row capacity exceeded."
+   ],
+   "retryable": false,
+   "since": "1.11.0"
+  },
+  "selected_script_bars_limit_exceeded": {
+   "args": {
+    "limit": {
+     "kind": "string"
+    },
+    "requested": {
+     "kind": "string"
+    },
+    "used": {
+     "kind": "string"
+    }
+   },
+   "class": "resource",
+   "description": "Selected script-bar capacity was exceeded by an actual reservation. limit is the actual limit, used is the actual used-before value, and requested is the actual delta; all are canonical unsigned decimal uint64_t values in domain 0..18446744073709551615. Equality passes. An absent bound imposes no logical limit; explicit 0 is finite 0.",
+   "english": [
+    "Selected script-bar capacity exceeded."
+   ],
+   "retryable": false,
+   "since": "1.11.0"
+  },
+  "selected_source_rows_limit_exceeded": {
+   "args": {
+    "limit": {
+     "kind": "string"
+    },
+    "requested": {
+     "kind": "string"
+    },
+    "used": {
+     "kind": "string"
+    }
+   },
+   "class": "resource",
+   "description": "Selected source-row capacity was exceeded by an actual reservation. limit is the actual limit, used is the actual used-before value, and requested is the actual delta; all are canonical unsigned decimal uint64_t values in domain 0..18446744073709551615. Equality passes. An absent bound imposes no logical limit; explicit 0 is finite 0.",
+   "english": [
+    "Selected source-row capacity exceeded."
+   ],
+   "retryable": false,
+   "since": "1.11.0"
+  },
   "setting_rejected": {
    "args": {
     "entrypoint": {
