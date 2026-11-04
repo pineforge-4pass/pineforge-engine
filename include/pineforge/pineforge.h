@@ -1626,7 +1626,7 @@ PF_API int64_t strategy_script_bars_processed(pf_strategy_t s);
  *  the system tzdata; uncached decomposition uses the engine image's mutex
  *  and checks the process's actual TZ. Sequential switches between engine
  *  images are coherent. Independent images do not share that mutex;
- *  parallel timezone conversions across images remain unsupported.
+ *  concurrent conversions across images are not serialized by it.
  *
  *  Should be called before #run_backtest / #run_backtest_full. Persists
  *  across runs on the same strategy handle until overridden. */
