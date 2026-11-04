@@ -1,0 +1,784 @@
+{
+  "run.json": {
+    "id": 41712833348,
+    "status": "completed",
+    "conclusion": "failure",
+    "run_attempt": 1,
+    "path": ".github/workflows/ci-post.yml",
+    "event": "push",
+    "head_branch": "main",
+    "head_sha": "59f98ba80e69a624f97ada1\u0031935e1bc973fd0e19",
+    "repository": {
+      "full_name": "pineforge-4pass/pineforge-engine"
+    }
+  },
+  "annotations-126187307286.json": [
+    {
+      "annotation_level": "failure",
+      "message": "The operation was canceled."
+    }
+  ],
+  "job-126187307286.log": "build-shard (ubuntu-24.04, Release, 1/4)\tUNKNOWN STEP\t2026-11-03T20:49:50.9530013Z ##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.\nbuild-shard (ubuntu-24.04, Release, 1/4)\tUNKNOWN STEP\t2026-11-03T20:49:50.9743922Z ##[error]The operation was canceled.\n",
+  "annotations-126187307389.json": [
+    {
+      "annotation_level": "failure",
+      "message": "The operation was canceled."
+    }
+  ],
+  "job-126187307389.log": "build-shard (ubuntu-24.04, Debug, 1/2)\tUNKNOWN STEP\t2026-11-03T20:45:32.5116219Z ##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.\nbuild-shard (ubuntu-24.04, Debug, 1/2)\tUNKNOWN STEP\t2026-11-03T20:45:32.9992178Z ##[error]The operation was canceled.\n",
+  "annotations-126187307495.json": [
+    {
+      "annotation_level": "failure",
+      "message": "Process completed with exit code 130."
+    }
+  ],
+  "job-126187307495.log": "kernel-only-shard (1/2)\tUNKNOWN STEP\t2026-11-03T21:00:48.1826345Z ##[error]Process completed with exit code 130.\nkernel-only-shard (1/2)\tUNKNOWN STEP\t2026-11-03T21:00:48.1827176Z ##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.\n",
+  "annotations-126187307801.json": [
+    {
+      "annotation_level": "failure",
+      "message": "The operation was canceled."
+    }
+  ],
+  "job-126187307801.log": "sanitizers-shard (4/4)\tUNKNOWN STEP\t2026-11-03T21:00:44.9722543Z ##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.\nsanitizers-shard (4/4)\tUNKNOWN STEP\t2026-11-03T21:00:44.9866970Z ##[error]The operation was canceled.\n",
+  "annotations-126188542428.json": [
+    {
+      "annotation_level": "failure",
+      "message": "The operation was canceled."
+    }
+  ],
+  "job-126188542428.log": "native-live / native-live (live-sanitizers)\tUNKNOWN STEP\t2026-11-03T21:05:24.7680106Z ##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.\nnative-live / native-live (live-sanitizers)\tUNKNOWN STEP\t2026-11-03T21:05:24.7961544Z ##[error]The operation was canceled.\n",
+  "annotations-126202548075.json": [
+    {
+      "annotation_level": "failure",
+      "message": "Process completed with exit code 1."
+    }
+  ],
+  "job-126202548075.log": "kernel-only\tUNKNOWN STEP\t2026-11-03T21:02:56.8004346Z ##[error]Process completed with exit code 1.\n",
+  "annotations-126203523633.json": [
+    {
+      "annotation_level": "failure",
+      "message": "Process completed with exit code 1."
+    }
+  ],
+  "job-126203523633.log": "build (ubuntu-24.04, Release)\tUNKNOWN STEP\t2026-11-03T21:03:43.6752683Z ##[error]Process completed with exit code 1.\n",
+  "annotations-126204346774.json": [
+    {
+      "annotation_level": "failure",
+      "message": "Process completed with exit code 1."
+    }
+  ],
+  "job-126204346774.log": "build (ubuntu-24.04, Debug)\tUNKNOWN STEP\t2026-11-03T21:05:03.9458055Z ##[error]Process completed with exit code 1.\n",
+  "annotations-126219522021.json": [
+    {
+      "annotation_level": "failure",
+      "message": "Process completed with exit code 1."
+    }
+  ],
+  "job-126219522021.log": "sanitizers\tUNKNOWN STEP\t2026-11-03T21:33:47.3936933Z ##[error]Process completed with exit code 1.\n",
+  "annotations-126229121477.json": [
+    {
+      "annotation_level": "failure",
+      "message": "Process completed with exit code 1."
+    }
+  ],
+  "job-126229121477.log": "native-live / native-live-gate\tUNKNOWN STEP\t2026-11-03T21:52:47.0469090Z ##[error]Process completed with exit code 1.\n",
+  "annotations-126229967614.json": [
+    {
+      "annotation_level": "failure",
+      "message": "Process completed with exit code 1."
+    }
+  ],
+  "job-126229967614.log": "build\tUNKNOWN STEP\t2026-11-03T21:53:30.5545218Z ##[error]Process completed with exit code 1.\n",
+  "jobs-attempt1.json": {
+    "jobs": [
+      {
+        "id": 126185068479,
+        "name": "authz",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126186036101,
+        "name": "changes",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126187307261,
+        "name": "build (ubuntu-24.04-arm, Debug)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126187307266,
+        "name": "build-shard (ubuntu-24.04, Debug, 2/2)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126187307271,
+        "name": "build (ubuntu-24.04-arm, Release)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126187307281,
+        "name": "preflight",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126187307286,
+        "name": "build-shard (ubuntu-24.04, Release, 1/4)",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "gke-32cpu-64gb-amd64"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pa\u0073s/pineforge-engine/chec\u006b-runs/126187307286",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Refuse an unauthorised run before anything else",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Require the requested platform",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@11d5960a326750d5838078e\u00336cf38b85af677262",
+            "conclusion": "success"
+          },
+          {
+            "name": "Set up Python",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install the CTest pytest runner",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install dependencies (Linux)",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify (Release)",
+            "conclusion": "cancelled"
+          },
+          {
+            "name": "Stage and summarize diagnostics",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Retain CI diagnostics",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Set up Python",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Run actions/checkout@11d5960a326750d5838078e\u00336cf38b85af677262",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 126187307290,
+        "name": "kernel-only-shard (2/2)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126187307328,
+        "name": "sanitizers-shard (2/4)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126187307338,
+        "name": "preflight-slow",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126187307389,
+        "name": "build-shard (ubuntu-24.04, Debug, 1/2)",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "gke-16cpu-32gb-amd64-128gb"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pa\u0073s/pineforge-engine/chec\u006b-runs/126187307389",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Refuse an unauthorised run before anything else",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Require the requested platform",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@11d5960a326750d5838078e\u00336cf38b85af677262",
+            "conclusion": "success"
+          },
+          {
+            "name": "Set up Python",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install the CTest pytest runner",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install dependencies (Linux)",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify (Debug)",
+            "conclusion": "cancelled"
+          },
+          {
+            "name": "Stage and summarize diagnostics",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Retain CI diagnostics",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Set up Python",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Run actions/checkout@11d5960a326750d5838078e\u00336cf38b85af677262",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 126187307391,
+        "name": "sanitizers-shard (3/4)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126187307430,
+        "name": "build-shard (ubuntu-24.04, Release, 2/4)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126187307457,
+        "name": "build-shard (ubuntu-24.04, Release, 4/4)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126187307495,
+        "name": "kernel-only-shard (1/2)",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "gke-16cpu-32gb-amd64"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pa\u0073s/pineforge-engine/chec\u006b-runs/126187307495",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Refuse an unauthorised run before anything else",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run actions/checkout@11d5960a326750d5838078e\u00336cf38b85af677262",
+            "conclusion": "success"
+          },
+          {
+            "name": "Set up Python",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install the CTest pytest runner",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install dependencies",
+            "conclusion": "success"
+          },
+          {
+            "name": "Set up pinned WebSocket-enabled libcurl",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify (kernel)",
+            "conclusion": "failure"
+          },
+          {
+            "name": "Stage and summarize diagnostics",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Retain CI diagnostics",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Set up Python",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Run actions/checkout@11d5960a326750d5838078e\u00336cf38b85af677262",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 126187307532,
+        "name": "sanitizers-shard (1/4)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126187307630,
+        "name": "build-shard (ubuntu-24.04, Release, 3/4)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126187307801,
+        "name": "sanitizers-shard (4/4)",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "gke-32cpu-64gb-amd64-256gb"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pa\u0073s/pineforge-engine/chec\u006b-runs/126187307801",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Refuse an unauthorised run before anything else",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run actions/checkout@11d5960a326750d5838078e\u00336cf38b85af677262",
+            "conclusion": "success"
+          },
+          {
+            "name": "Set up Python",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install the CTest pytest runner",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install dependencies",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify (sanitizers)",
+            "conclusion": "cancelled"
+          },
+          {
+            "name": "Stage and summarize diagnostics",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Retain CI diagnostics",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Set up Python",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Run actions/checkout@11d5960a326750d5838078e\u00336cf38b85af677262",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 126187308174,
+        "name": "corpus-parity-subset / authz",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126187308286,
+        "name": "native-live / authz",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126187309549,
+        "name": "corpus-parity / authz",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126188099193,
+        "name": "corpus-parity-subset / corpus-parity-subset",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126188102172,
+        "name": "corpus-parity-subset / corpus-parity",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 126188542261,
+        "name": "native-live / native-live (live-tsan)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126188542428,
+        "name": "native-live / native-live (live-sanitizers)",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "gke-16cpu-32gb-amd64-256gb"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pa\u0073s/pineforge-engine/chec\u006b-runs/126188542428",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@11d5960a326750d5838078e\u00336cf38b85af677262",
+            "conclusion": "success"
+          },
+          {
+            "name": "Set up Python",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install the CTest pytest runner",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install native build dependencies",
+            "conclusion": "success"
+          },
+          {
+            "name": "Set up pinned WebSocket-enabled libcurl",
+            "conclusion": "success"
+          },
+          {
+            "name": "Record compiler cache before verification",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify (live-sanitizers)",
+            "conclusion": "cancelled"
+          },
+          {
+            "name": "Stage and summarize diagnostics",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Retain CI diagnostics",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Set up Python",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Run actions/checkout@11d5960a326750d5838078e\u00336cf38b85af677262",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 126188542493,
+        "name": "native-live / native-live-shard (native, 3/4)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126188542501,
+        "name": "native-live / native-live-shard (native, 1/4)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126188542621,
+        "name": "native-live / native-live-shard (native, 4/4)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126188542662,
+        "name": "native-live / native-live-shard (native, 2/4)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126197307353,
+        "name": "corpus-parity / corpus-parity",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126197309881,
+        "name": "corpus-parity / corpus-parity-subset",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 126202548075,
+        "name": "kernel-only",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "gke-2cpu-4gb-amd64"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pa\u0073s/pineforge-engine/chec\u006b-runs/126202548075",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Refuse an unauthorised run before anything else",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Require every shard to have passed",
+            "conclusion": "failure"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 126203523633,
+        "name": "build (ubuntu-24.04, Release)",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "gke-2cpu-4gb-amd64"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pa\u0073s/pineforge-engine/chec\u006b-runs/126203523633",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Refuse an unauthorised run before anything else",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Require every shard to have passed",
+            "conclusion": "failure"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 126204346774,
+        "name": "build (ubuntu-24.04, Debug)",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "gke-2cpu-4gb-amd64"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pa\u0073s/pineforge-engine/chec\u006b-runs/126204346774",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Refuse an unauthorised run before anything else",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Require every shard to have passed",
+            "conclusion": "failure"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 126219522021,
+        "name": "sanitizers",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "gke-2cpu-4gb-amd64"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pa\u0073s/pineforge-engine/chec\u006b-runs/126219522021",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Refuse an unauthorised run before anything else",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Require every shard to have passed",
+            "conclusion": "failure"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 126227920803,
+        "name": "native-live / native-live (native)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126229121477,
+        "name": "native-live / native-live-gate",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "gke-4cpu-8gb-amd64"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pa\u0073s/pineforge-engine/chec\u006b-runs/126229121477",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Refuse an unauthorised run before anything else",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Require every native profile to have passed",
+            "conclusion": "failure"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 126229967614,
+        "name": "build",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "gke-2cpu-4gb-amd64"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pa\u0073s/pineforge-engine/chec\u006b-runs/126229967614",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Refuse an unauthorised run before anything else",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Require every verification lane to have passed",
+            "conclusion": "failure"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      }
+    ]
+  },
+  "workflow-at-head.yml": "jobs:\n  authz:\n    name: authz\n  changes:\n    needs: [authz]\n  preflight:\n    needs: [authz, changes]\n  preflight-slow:\n    needs: [authz, changes]\n  build:\n    name: build-shard (${{ matrix.platform.os }}, ${{ matrix.build_type }}, ${{ matrix.shard }}/4)\n    needs: [authz, changes]\n    strategy:\n      fail-fast: false\n      matrix:\n        platform:\n          - os: ubuntu-24.04\n        build_type: [Release]\n        shard: [1, 2, 3, 4]\n  build-debug:\n    name: build-shard (${{ matrix.platform.os }}, ${{ matrix.build_type }}, ${{ matrix.shard }}/2)\n    needs: [authz, changes]\n    strategy:\n      fail-fast: false\n      matrix:\n        platform:\n          - os: ubuntu-24.04\n        build_type: [Debug]\n        shard: [1, 2]\n  build-release-gate:\n    name: build (ubuntu-24.04, Release)\n    needs: [authz, changes, build]\n  build-debug-gate:\n    name: build (ubuntu-24.04, Debug)\n    needs: [authz, changes, build-debug]\n  build-arm:\n    name: build (ubuntu-24.04-arm, ${{ matrix.build_type }})\n    needs: [authz, changes]\n    strategy:\n      fail-fast: false\n      matrix:\n        build_type: [Release, Debug]\n  sanitizers:\n    name: sanitizers-shard (${{ matrix.shard }}/4)\n    needs: [authz, changes]\n    strategy:\n      fail-fast: false\n      matrix:\n        shard: [1, 2, 3, 4]\n  sanitizers-gate:\n    name: sanitizers\n    needs: [authz, changes, sanitizers]\n  kernel-only:\n    name: kernel-only-shard (${{ matrix.shard }}/2)\n    needs: [authz, changes]\n    strategy:\n      fail-fast: false\n      matrix:\n        shard: [1, 2]\n  kernel-only-gate:\n    name: kernel-only\n    needs: [authz, changes, kernel-only]\n  native-live:\n    needs: [authz, changes]\n    uses: ./.github/workflows/native-live.yml\n  corpus-parity-subset:\n    needs: [authz, changes]\n    uses: ./.github/workflows/corpus-parity.yml\n  corpus-parity:\n    needs: [authz, changes]\n    uses: ./.github/workflows/corpus-parity.yml\n  build-gate:\n    name: build\n    needs: [authz, changes, preflight, build, build-debug, build-release-gate, build-debug-gate, build-arm, sanitizers, sanitizers-gate, native-live, kernel-only, kernel-only-gate, corpus-parity-subset, preflight-slow, corpus-parity]\n",
+  "failed-ids.txt": "126187307286\n126187307389\n126187307495\n126187307801\n126188542428\n126202548075\n126203523633\n126204346774\n126219522021\n126229121477\n126229967614\n",
+  "capture": {
+    "job-126187307286.log": [
+      "build-shard (ubuntu-24.04, Release, 1/4)\tUNKNOWN STEP\t2026-11-03T20:49:50.9530013Z ##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.\n",
+      "build-shard (ubuntu-24.04, Release, 1/4)\tUNKNOWN STEP\t2026-11-03T20:49:50.9743922Z ##[error]The operation was canceled.\n"
+    ],
+    "job-126187307389.log": [
+      "build-shard (ubuntu-24.04, Debug, 1/2)\tUNKNOWN STEP\t2026-11-03T20:45:32.5116219Z ##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.\n",
+      "build-shard (ubuntu-24.04, Debug, 1/2)\tUNKNOWN STEP\t2026-11-03T20:45:32.9992178Z ##[error]The operation was canceled.\n"
+    ],
+    "job-126187307495.log": [
+      "kernel-only-shard (1/2)\tUNKNOWN STEP\t2026-11-03T21:00:48.1826345Z ##[error]Process completed with exit code 130.\n",
+      "kernel-only-shard (1/2)\tUNKNOWN STEP\t2026-11-03T21:00:48.1827176Z ##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.\n"
+    ],
+    "job-126187307801.log": [
+      "sanitizers-shard (4/4)\tUNKNOWN STEP\t2026-11-03T21:00:44.9722543Z ##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.\n",
+      "sanitizers-shard (4/4)\tUNKNOWN STEP\t2026-11-03T21:00:44.9866970Z ##[error]The operation was canceled.\n"
+    ],
+    "job-126188542428.log": [
+      "native-live / native-live (live-sanitizers)\tUNKNOWN STEP\t2026-11-03T21:05:24.7680106Z ##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.\n",
+      "native-live / native-live (live-sanitizers)\tUNKNOWN STEP\t2026-11-03T21:05:24.7961544Z ##[error]The operation was canceled.\n"
+    ],
+    "job-126202548075.log": [
+      "kernel-only\tUNKNOWN STEP\t2026-11-03T21:02:56.8004346Z ##[error]Process completed with exit code 1.\n"
+    ],
+    "job-126203523633.log": [
+      "build (ubuntu-24.04, Release)\tUNKNOWN STEP\t2026-11-03T21:03:43.6752683Z ##[error]Process completed with exit code 1.\n"
+    ],
+    "job-126204346774.log": [
+      "build (ubuntu-24.04, Debug)\tUNKNOWN STEP\t2026-11-03T21:05:03.9458055Z ##[error]Process completed with exit code 1.\n"
+    ],
+    "job-126219522021.log": [
+      "sanitizers\tUNKNOWN STEP\t2026-11-03T21:33:47.3936933Z ##[error]Process completed with exit code 1.\n"
+    ],
+    "job-126229121477.log": [
+      "native-live / native-live-gate\tUNKNOWN STEP\t2026-11-03T21:52:47.0469090Z ##[error]Process completed with exit code 1.\n"
+    ],
+    "job-126229967614.log": [
+      "build\tUNKNOWN STEP\t2026-11-03T21:53:30.5545218Z ##[error]Process completed with exit code 1.\n"
+    ]
+  }
+}
