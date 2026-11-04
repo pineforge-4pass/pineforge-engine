@@ -992,11 +992,39 @@ this runtime delivers the surface listed above. Run
 against `libpineforge.a` and diff each probe's `engine_trades.csv`
 against the TradingView export shipped beside it;
 `python3 scripts/verify_corpus.py --all` grades the shipped trade lists by
-the canonical rubric. Its strict profile gates count + entry-price +
+the canonical rubric. Its strict profile declares limits for count + entry-price +
 exit-price + P&L within `1.0% / 0.01% / 0.01% / 1.0%`; a strategy whose
 `strategy.exit` uses a `trail_*` parameter gets the production profile, with
 the same count and entry limits, exit within 0.02%, and P&L within 1%.
 The exit and P&L gates are graded per strategy at the 90th percentile, not every trade.
+
+### Grading profiles and sweep limits
+
+The declared profile limits in
+[`scripts/verify_corpus.py`](../scripts/verify_corpus.py) are:
+
+| Profile | Count delta (declared) | Entry-price p90 | Exit-price p90 | P&L p90 |
+| ------- | ---------------------- | --------------- | -------------- | ------- |
+| Strict | 1.0% | < 0.01% | < 0.01% | < 1.0% |
+| Trail / production | 1.0% | < 0.01% | < 0.02% | < 1.0% |
+
+For both profiles, an `excellent` grade requires exact gated trade-count
+parity; the declared 1.0% count limit does not permit missing or extra
+trades for that grade. The entry, exit and P&L gates require each strategy's
+90th-percentile (p90) delta to be strictly below the corresponding limit.
+The verifier computes p90 by sorting the deltas and linearly interpolating
+at index `(n - 1) * 0.90`. Exit and P&L are per-strategy gates, not
+requirements that every trade pass; P&L deltas include the verifier's
+near-zero, rounding, quantity-normalization and exit-drift adjustments.
+
+For the sweep, each probe's profile is selected automatically from its
+strategy source by `detect_parity_profile`: after comments are removed,
+a `trail_points`, `trail_offset` or `trail_price` assignment selects
+production; otherwise it selects strict. The standalone verifier also
+supports an explicit `parity_profile` override in `inputs.json`.
+The sweep applies trail / production limits to 341 of its 7,989 probes
+(7 corpus, 334 scrapper, 58 distinct strategies) and strict limits to
+the other 7,648 probes.
 
 One probe, `corpus/validation/anomaly-equity-mirror-strategy-equity-01`,
 declares `expected_tier: anomaly` in its `inputs.json`: it pins the 1× equity
