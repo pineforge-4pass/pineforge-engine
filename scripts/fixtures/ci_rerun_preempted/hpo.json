@@ -1,0 +1,305 @@
+{
+  "run.json": {
+    "id": 41749596952,
+    "status": "completed",
+    "conclusion": "success",
+    "run_attempt": 2,
+    "path": ".github/workflows/ci-post.yml",
+    "event": "push",
+    "head_branch": "main",
+    "head_sha": "bef4c2bfe6d1c8b66ca14e4\u0036c618181b58862495",
+    "repository": {
+      "full_name": "pineforge-4pass/pineforge-hpo"
+    }
+  },
+  "annotations-126311146314.json": [
+    {
+      "annotation_level": "failure",
+      "message": "The operation was canceled."
+    },
+    {
+      "annotation_level": "failure",
+      "message": "Process completed with exit code 130."
+    }
+  ],
+  "job-126311146314.log": "",
+  "annotations-126311146425.json": [
+    {
+      "annotation_level": "failure",
+      "message": "Process completed with exit code 1."
+    }
+  ],
+  "job-126311146425.log": "",
+  "annotations-126318507787.json": [
+    {
+      "annotation_level": "failure",
+      "message": "Process completed with exit code 1."
+    },
+    {
+      "annotation_level": "failure",
+      "message": "a needed job did not succeed"
+    }
+  ],
+  "job-126318507787.log": "",
+  "jobs-attempt1.json": {
+    "jobs": [
+      {
+        "id": 126311102653,
+        "name": "authz",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126311146218,
+        "name": "Native (macos-latest)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126311146227,
+        "name": "Light",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126311146314,
+        "name": "Native (ubuntu-latest)",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "gke-16cpu-32gb-amd64-64gb"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pa\u0073s/pineforge-hpo/check-r\u0075ns/126311146314",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check out PineForge HPO",
+            "conclusion": "success"
+          },
+          {
+            "name": "Create a private run root for the planner tests",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install native dependencies (Linux)",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install native dependencies (macOS)",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Configure PineForge Engine headers",
+            "conclusion": "success"
+          },
+          {
+            "name": "Configure PineForge HPO",
+            "conclusion": "success"
+          },
+          {
+            "name": "Build PineForge window planner helper",
+            "conclusion": "success"
+          },
+          {
+            "name": "Configure PR native core",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Build PR native core",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Build",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check failure catalog diff",
+            "conclusion": "success"
+          },
+          {
+            "name": "Test PR native core",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Test",
+            "conclusion": "failure"
+          },
+          {
+            "name": "Report patience capability and skips",
+            "conclusion": "cancelled"
+          },
+          {
+            "name": "Cross-vendor reproducibility and Intel checkpoint restore",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Upload cross-vendor evidence",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run public C++ API example",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Set up Python for end-to-end test",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Build PineForge Engine runtime",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Install end-to-end Python packages",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run README Quick Start study",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Real symbol-feed and D7 equality gate",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "v0.8.0 no-feed and canonical harness contract gate",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "v0.9.0 valid-study and silent-failure contract gate",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Check out PineForge HPO",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 126311146339,
+        "name": "Release notification contract",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126311146394,
+        "name": "workflow-lint",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126311146401,
+        "name": "Python 3.14",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126311146425,
+        "name": "HPO memory growth gate",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "gke-16cpu-32gb-amd64-64gb"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pa\u0073s/pineforge-hpo/check-r\u0075ns/126311146425",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check out the exact head and pinned submodules",
+            "conclusion": "success"
+          },
+          {
+            "name": "Set up Python",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install native dependencies",
+            "conclusion": "success"
+          },
+          {
+            "name": "Configure PineForge Engine headers",
+            "conclusion": "success"
+          },
+          {
+            "name": "Configure PineForge HPO",
+            "conclusion": "success"
+          },
+          {
+            "name": "Build",
+            "conclusion": "success"
+          },
+          {
+            "name": "Build PineForge Engine runtime",
+            "conclusion": "success"
+          },
+          {
+            "name": "Gate child peak RSS growth",
+            "conclusion": "failure"
+          },
+          {
+            "name": "Post Set up Python",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Check out the exact head and pinned submodules",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 126311146482,
+        "name": "Python 3.11",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 126318507787,
+        "name": "build-gate",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "ubuntu-24.04"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pa\u0073s/pineforge-hpo/check-r\u0075ns/126318507787",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Refuse an unauthorised run before anything else",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Every needed job succeeded",
+            "conclusion": "failure"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      }
+    ]
+  },
+  "workflow-at-head.yml": "jobs:\n  authz:\n    name: authz\n  workflow-lint:\n    name: workflow-lint\n    needs: [authz]\n  light:\n    name: Light\n    needs: [authz]\n  release-notification:\n    name: Release notification contract\n    needs: [authz]\n  native:\n    name: Native (${{ matrix.os }})\n    needs: [authz]\n    strategy:\n      fail-fast: false\n      matrix:\n        os: [ubuntu-latest]\n  native-macos:\n    name: Native (${{ matrix.os }})\n    needs: [authz]\n    strategy:\n      fail-fast: false\n      matrix:\n        os: [macos-latest]\n  python:\n    name: Python ${{ matrix.python }}\n    needs: [authz]\n    strategy:\n      fail-fast: false\n      matrix:\n        python: ['3.11', '3.14']\n  memory-gate:\n    name: HPO memory growth gate\n    needs: [authz]\n  build-gate:\n    needs: [authz, workflow-lint, light, release-notification, native, native-macos, python, memory-gate]\n",
+  "failed-ids.txt": "126311146314\n126311146425\n126318507787\n",
+  "capture": {
+    "job-126311146314.log": [],
+    "job-126311146425.log": [],
+    "job-126318507787.log": []
+  }
+}

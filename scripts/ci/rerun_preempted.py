@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-"""Retry only failed CI jobs when all failures are runner loss; never execute logs.
+"""Retry runner loss and proven dependent gates; never execute logs or workflows.
 
 Requires gh and GH_TOKEN (actions:write for execution, actions:read for --dry-run;
-checks:read permits supplemental annotations).
+checks:read is required for gates and supplemental for shards;
+contents:read reads workflow data).
 The controller must load this file from its own trusted default-branch commit.
 Adapted from the peer backend controller supplied for LB-1012.
 """
 from __future__ import annotations
 
 import argparse
+import base64
+from graphlib import TopologicalSorter
+import itertools
 import json
 import os
 import re
 import subprocess
 import sys
+import textwrap
 
 PRIMARY_BRANCH = 'main'
 MAX_ATTEMPTS = 3
@@ -30,7 +35,12 @@ LOSS_PATTERNS = (
     re.compile(r'The self-hosted runner\b.*\blost\b.*', re.I),
 )
 LOSS_FALLOUT = re.compile(r'(?:The operation was cancel(?:ed|led)\.|Process completed with exit code (?:130|137|143)\.)', re.I)
+GATE_EXIT = re.compile(r'Process completed with exit code [0-9]+\.')
 TIMESTAMP = re.compile(r'^\d{4}-\d{2}-\d{2}T\S+\s+')
+
+
+class LogUnavailable(RuntimeError):
+    """The job log endpoint reports that its log is missing or expired."""
 
 
 class GitHubAPI:
@@ -55,6 +65,8 @@ class GitHubAPI:
             if re.fullmatch(r'repos/[^/]+/[^/]+/' + suffix, route):
                 safe_path = 'repos/{repo}/' + re.sub(r'[0-9]+', '{id}', route.split('/', 3)[3])
                 break
+        if re.fullmatch(r'repos/[^/]+/[^/]+/contents/\.github/workflows/[\w.-]+\.ya?ml', route):
+            safe_path = 'repos/{repo}/contents/{workflow}'
         safe_method = method if method in {'GET', 'POST'} else 'unknown'
         print(f'GitHub API failure: method={safe_method} path={safe_path} '
               f'http_status={status} gh_exit_code={exit_code} reason={reason}', file=sys.stderr)
@@ -95,6 +107,9 @@ class GitHubAPI:
             )
             if status == '403' or (optional_annotations and status == '404'):
                 raise PermissionError('GitHub API scope refused')
+            if (method == 'GET' and status in {'404', '410'} and re.fullmatch(
+                    r'repos/[^/]+/[^/]+/actions/jobs/[0-9]+/logs(?:\?.*)?', path)):
+                raise LogUnavailable('GitHub job log unavailable')
             raise RuntimeError('GitHub API request failed')
         return result.stdout
 
@@ -139,7 +154,383 @@ def _loss(message):
     return any(pattern.fullmatch(message) for pattern in LOSS_PATTERNS)
 
 
-def _job_evidence(api, repo, job):
+class MappingError(ValueError):
+    def __init__(self, job_id=None):
+        super().__init__('workflow mapping unavailable')
+        self.job_id = job_id
+
+
+class BlockScalar(str):
+    """Inert script/condition text, never a job or matrix identity."""
+
+
+def _flow_parts(source):
+    """Split flow collections without treating quoted commas as separators."""
+    parts, start, stack, quote = [], 0, [], None
+    i = 0
+    while i < len(source):
+        char = source[i]
+        if quote:
+            if char == '\\' and quote == '"':
+                i += 2
+                continue
+            if char == quote:
+                if quote == "'" and source[i:i + 2] == "''":
+                    i += 2
+                    continue
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char in '[{':
+            stack.append(char)
+        elif char in ']}':
+            if not stack or stack.pop() != {']': '[', '}': '{'}[char]:
+                raise MappingError()
+        elif char == ',' and not stack:
+            parts.append(source[start:i].strip())
+            start = i + 1
+        i += 1
+    if quote or stack:
+        raise MappingError()
+    tail = source[start:].strip()
+    if tail:
+        parts.append(tail)
+    if any(not part for part in parts):
+        raise MappingError()
+    return parts
+
+
+def _pair(source):
+    match = re.fullmatch(r'([A-Za-z_][A-Za-z0-9_-]*):(?:\s+(.*))?', source)
+    if not match:
+        raise MappingError()
+    return match[1], match[2] or ''
+
+
+def _scalar(source):
+    if not source or source[0] in '&*!|>@`%':
+        raise MappingError()
+    if source[0] in '[{':
+        close = ']' if source[0] == '[' else '}'
+        if not source.endswith(close):
+            raise MappingError()
+        parts = _flow_parts(source[1:-1])
+        if close == ']':
+            return [_scalar(part) for part in parts]
+        result = {}
+        for part in parts:
+            key, value = _pair(part)
+            if key in result:
+                raise MappingError()
+            result[key] = _scalar(value)
+        return result
+    if source.startswith('"'):
+        value = json.loads(source)
+        if not isinstance(value, str):
+            raise MappingError()
+        return value
+    if source.startswith("'"):
+        if not re.fullmatch(r"'(?:[^']|'')*'", source):
+            raise MappingError()
+        return source[1:-1].replace("''", "'")
+    if re.search(r':(?:\s|$)', source):
+        raise MappingError()
+    # Keep numeric/boolean matrix values in their display spelling.
+    return None if source in ('null', '~') else source
+
+
+def _uncomment(source):
+    quote = None
+    i = 0
+    while i < len(source):
+        char = source[i]
+        if quote:
+            if char == '\\' and quote == '"':
+                i += 2
+                continue
+            if char == quote:
+                if quote == "'" and source[i:i + 2] == "''":
+                    i += 2
+                    continue
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char == '#' and (i == 0 or source[i - 1].isspace()):
+            return source[:i].rstrip()
+        i += 1
+    return source.rstrip()
+
+
+class WorkflowYAML:
+    """Strict, bounded YAML subset; unsupported syntax refuses classification.
+
+    Block/flow maps and lists, quoted scalars and literal/folded blocks cover
+    these workflows. No aliases, merges, tags, multiline flow values or
+    expression evaluation. Scripts stay inert strings, never Python/shell.
+    """
+
+    def __init__(self, source):
+        self.rows, self.pos = [], 0
+        lines = source.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            i += 1
+            if not line.strip() or line.lstrip().startswith('#'):
+                continue
+            prefix = line[:len(line) - len(line.lstrip())]
+            if '\t' in prefix:
+                raise MappingError()
+            indent = len(prefix)
+            value = _uncomment(line[indent:])
+            block = None
+            if re.search(r': [|>][+-]?$', value):
+                limit = indent + (2 if value.startswith('- ') else 0)
+                content = []
+                while i < len(lines):
+                    next_line = lines[i]
+                    if next_line.strip() and len(next_line) - len(next_line.lstrip()) <= limit:
+                        break
+                    content.append(next_line)
+                    i += 1
+                nonempty = [row for row in content if row.strip()]
+                if nonempty:
+                    margin = len(nonempty[0]) - len(nonempty[0].lstrip(' '))
+                    if any(row[:margin] != ' ' * margin for row in nonempty):
+                        raise MappingError()
+                block = textwrap.dedent('\n'.join(content))
+                if value.rsplit(' ', 1)[1].startswith('>'):
+                    block = ' '.join(block.splitlines())
+                block = BlockScalar(block)
+            self.rows.append((indent, value, block))
+        if len(self.rows) > 20000:
+            raise MappingError()
+
+    def _value(self, value, block, indent):
+        if block is not None:
+            return block
+        if value:
+            return _scalar(value)
+        if self.pos < len(self.rows) and self.rows[self.pos][0] > indent:
+            return self._node(self.rows[self.pos][0])
+        return None
+
+    def _node(self, indent):
+        is_list = self.rows[self.pos][1].startswith('- ')
+        result = [] if is_list else {}
+        while self.pos < len(self.rows):
+            level, value, block = self.rows[self.pos]
+            if level < indent:
+                break
+            if level != indent or value.startswith('- ') != is_list:
+                raise MappingError()
+            self.pos += 1
+            if is_list:
+                value = value[2:]
+                if re.match(r'[A-Za-z_][A-Za-z0-9_-]*:', value):
+                    self.pos -= 1
+                    self.rows[self.pos] = (indent + 2, value, block)
+                    result.append(self._node(indent + 2))
+                else:
+                    result.append(self._value(value, block, indent))
+            else:
+                key, value = _pair(value)
+                if key in result:
+                    raise MappingError()
+                result[key] = self._value(value, block, indent)
+        return result
+
+    def read(self):
+        if not self.rows or self.rows[0][0] != 0:
+            raise MappingError()
+        result = self._node(0)
+        if self.pos != len(self.rows) or not isinstance(result, dict):
+            raise MappingError()
+        return result
+
+
+def _matrix_rows(spec):
+    matrix = spec.get('strategy', {}).get('matrix', {})
+    if not isinstance(matrix, dict):
+        raise MappingError()
+    axes = {key: value for key, value in matrix.items() if key not in ('include', 'exclude')}
+    count = 1
+    for values in axes.values():
+        if not isinstance(values, list) or not values:
+            raise MappingError()
+        count *= len(values)
+        if count > 256:
+            raise MappingError()
+    excluded, included = matrix.get('exclude', []), matrix.get('include', [])
+    if any(not isinstance(items, list) or any(not isinstance(x, dict) for x in items)
+           for items in (excluded, included)):
+        raise MappingError()
+    originals = [dict(zip(axes, values)) for values in itertools.product(*axes.values())]
+    originals = [row for row in originals
+                 if not any(all(row.get(k) == v for k, v in ex.items()) for ex in excluded)]
+    if not axes and included:
+        originals = []
+    rows = [dict(row) for row in originals]
+    for extra in included:
+        matches = [i for i, row in enumerate(originals)
+                   if all(k not in row or row[k] == v for k, v in extra.items())]
+        for i in matches:
+            rows[i].update(extra)
+        if not matches:
+            rows.append(dict(extra))
+    if not rows or len(rows) > 256:
+        raise MappingError()
+    return rows
+
+
+def _job_names(job_id, spec):
+    names = []
+    for row in _matrix_rows(spec):
+        name = spec.get('name', job_id)
+        if type(name) is not str:
+            raise MappingError()
+
+        def substitute(match):
+            value = row
+            for key in match[1].split('.'):
+                value = value[key]
+            if type(value) is not str:
+                raise MappingError()
+            return value
+
+        name = re.sub(r'\$\{\{\s*matrix\.([A-Za-z0-9_.-]+)\s*\}\}', substitute, name)
+        if 'name' not in spec and row:
+            if any(type(value) is not str for value in row.values()):
+                raise MappingError()
+            name += ' (' + ', '.join(row.values()) + ')'
+        if not name or '${{' in name:
+            raise MappingError()
+        names.append(name)
+    return names
+
+
+def _read_workflow(api, repo, sha, path):
+    # Same-repository workflow files only, pinned to the admitted run's SHA.
+    # Reusable references never become a checkout, command, or arbitrary URL.
+    if not re.fullmatch(r'\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml', path):
+        raise MappingError()
+    data = api.get(f'repos/{repo}/contents/{path}?ref={sha}')
+    if (data['type'] != 'file' or data['path'] != path or data['encoding'] != 'base64'
+            or len(data['content']) > 2 * 1024 * 1024):
+        raise MappingError()
+    source = base64.b64decode(data['content'].replace('\n', ''), validate=True).decode('utf-8')
+    specs = WorkflowYAML(source).read()['jobs']
+    if not isinstance(specs, dict) or not specs:
+        raise MappingError()
+    for job_id, spec in specs.items():
+        if not isinstance(spec, dict):
+            raise MappingError()
+        needs = spec.get('needs', [])
+        needs = [needs] if type(needs) is str else needs
+        if not isinstance(needs, list) or any(type(n) is not str or n not in specs or n == job_id
+                                              for n in needs):
+            raise MappingError()
+        if 'uses' in spec and (type(spec['uses']) is not str or not re.fullmatch(
+                r'\./\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml', spec['uses'])):
+            raise MappingError()
+        spec['needs'] = needs
+        spec['names'] = _job_names(job_id, spec)
+    visiting, visited = set(), set()
+
+    def visit(job_id):
+        if job_id in visiting:
+            raise MappingError()
+        if job_id not in visited:
+            visiting.add(job_id)
+            for need in specs[job_id]['needs']:
+                visit(need)
+            visiting.remove(job_id)
+            visited.add(job_id)
+
+    for job_id in specs:
+        visit(job_id)
+    return specs
+
+
+def _workflow_jobs(api, repo, run):
+    sha = run['head_sha']
+    if not re.fullmatch(r'[0-9a-fA-F]{40}', sha):
+        raise MappingError()
+    cache, expanded = {}, {}
+
+    def expand(path, scope='', display='', stack=()):
+        if path in stack or len(stack) >= 10:
+            raise MappingError()
+        if path not in cache:
+            if len(cache) >= 32:
+                raise MappingError()
+            cache[path] = _read_workflow(api, repo, sha, path)
+        members = set()
+        for job_id, spec in cache[path].items():
+            key = scope + job_id
+            if key in expanded or len(expanded) >= 20000:
+                raise MappingError()
+            node = dict(spec, needs=[scope + need for need in spec['needs']],
+                        names=[display + name for name in spec['names']], members={key})
+            expanded[key] = node
+            if 'uses' in spec:
+                # Caller needs stay on this node. Child needs resolve only
+                # inside this invocation, including matrix caller instances.
+                if len(set(node['names'])) != len(node['names']):
+                    raise MappingError()
+                for index, name in enumerate(node['names']):
+                    instance = key if len(node['names']) == 1 else f'{key}[{index}]'
+                    node['members'].update(expand(
+                        spec['uses'][2:], instance + '/', name + ' / ', stack + (path,)))
+            members.update(node['members'])
+        return members
+
+    expand(run['path'])  # Already admitted by _gate's exact workflow allowlist.
+    return expanded
+
+
+def _map_jobs(specs, jobs):
+    mapped = {}
+    for job in jobs:
+        matches = set()
+        for job_id, spec in specs.items():
+            for name in spec['names']:
+                if job['name'] == name:
+                    matches.add(job_id)
+        if len(matches) != 1:
+            raise MappingError(int(job['id']))
+        mapped[int(job['id'])] = matches.pop()
+    return mapped
+
+
+def _gate_step(job):
+    steps = job.get('steps', [])
+    failed = [step for step in steps if step.get('conclusion') == 'failure']
+    if len(failed) != 1 or any(step.get('conclusion') not in ('success', 'skipped', 'failure', 'neutral')
+                               for step in steps):
+        return False
+    name = failed[0].get('name', '')
+    return isinstance(name, str) and name.startswith('Require every')
+
+
+def _gate_kind(job, reason, messages):
+    # Runner loss is classified first. Only ordinary gate exits may remain;
+    # independent diagnostics from either logs or annotations still refuse.
+    if (reason not in ('independent_failure_diagnostic', 'no_runner_loss_evidence') or not messages
+            or any(not GATE_EXIT.fullmatch(message) for message in messages)):
+        return None
+    return 'step' if _gate_step(job) else None
+
+
+def _loss_reason(messages):
+    if any(not _loss(message) and not LOSS_FALLOUT.fullmatch(message) for message in messages):
+        return 'independent_failure_diagnostic'
+    if not any(_loss(message) for message in messages):
+        return 'no_runner_loss_evidence'
+    return None
+
+
+def _job_evidence(api, repo, job, *, diagnostics=None):
     if not any(FLEET_LABEL.fullmatch(label) for label in job['labels']):
         return 'not_a_fleet_amd64_job'
     if sum(step.get('conclusion') == 'failure' for step in job.get('steps', [])) > 1:
@@ -148,36 +539,51 @@ def _job_evidence(api, repo, job):
     prefix = f'https://api.github.com/repos/{repo}/check-runs/'
     if not check_url.startswith(prefix) or not check_url[len(prefix):].isdigit():
         return 'invalid_check_run_identity'
+    gate = _gate_step(job)
     messages = []
     try:
         annotations = api.pages(check_url.removeprefix('https://api.github.com/') + '/annotations?per_page=100')
     except PermissionError:
-        # A token can lack Checks read, or GitHub can hide annotations with 404.
-        # Actions logs remain mandatory and are inspected for independent errors.
+        if gate:
+            raise
+        # Shards retain optional annotations and mandatory log inspection.
         annotations = []
     for page in annotations:
         for annotation in page:
             if annotation['annotation_level'] == 'failure':
                 messages.extend(line.strip() for line in annotation['message'].splitlines() if line.strip())
-    logs = api.text(f'repos/{repo}/actions/jobs/{int(job["id"])}/logs')
-    if len(logs) > 32 * 1024 * 1024:
-        return 'log_too_large_to_classify'
-    for line in logs.splitlines():
-        line = TIMESTAMP.sub('', line).strip()
-        if line.startswith('##[error]'):
-            messages.append(line.removeprefix('##[error]').strip())
-        elif _loss(line):
-            messages.append(line)
-    if any(not _loss(message) and not LOSS_FALLOUT.fullmatch(message) for message in messages):
-        return 'independent_failure_diagnostic'
-    if not any(_loss(message) for message in messages):
-        return 'no_runner_loss_evidence'
-    return None
+    has_annotations = bool(messages)
+    try:
+        logs = api.text(f'repos/{repo}/actions/jobs/{int(job["id"])}/logs')
+    except LogUnavailable:
+        if not gate:
+            raise
+        # Only a missing/expired gate log permits annotation fallback.
+        # Permission, rate-limit and transport failures still refuse.
+        logs = None
+    if logs is not None:
+        if len(logs) > 32 * 1024 * 1024:
+            return 'log_too_large_to_classify'
+        for line in logs.splitlines():
+            line = TIMESTAMP.sub('', line).strip()
+            if line.startswith('##[error]'):
+                messages.append(line.removeprefix('##[error]').strip())
+            elif _loss(line):
+                messages.append(line)
+    if diagnostics is not None:
+        diagnostics.extend(messages)
+    reason = _loss_reason(messages)
+    if reason is None:
+        return None
+    if gate and not has_annotations:
+        return 'no_gate_annotation_evidence'
+    return reason
 
 
 def process(api, repo, run_id, *, dry_run=False, expected_attempt=None):
     """Return a bounded decision; lookup ambiguity always refuses the POST."""
-    result = {'run_id': run_id, 'dry_run': dry_run, 'rerun': False, 'failed_job_ids': []}
+    result = {'run_id': run_id, 'dry_run': dry_run, 'rerun': False,
+              'failed_job_ids': [], 'dependent_job_ids': []}
     try:
         if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo) or int(run_id) <= 0:
             raise ValueError('invalid repository or run id')
@@ -201,12 +607,55 @@ def process(api, repo, run_id, *, dry_run=False, expected_attempt=None):
         if not failed:
             result['reason'] = 'no_failed_jobs'
             return result
+        try:
+            specs = _workflow_jobs(api, repo, run)
+            # Map failures first so an unresolvable failure names its blocker.
+            mapped = _map_jobs(specs, failed)
+            mapped.update(_map_jobs(specs, [j for j in jobs if j not in failed]))
+            failed_needs = {
+                int(job['id']): {int(other['id']) for other in failed
+                                if any(mapped[int(other['id'])] in specs[need]['members']
+                                       for need in specs[mapped[int(job['id'])]]['needs'])}
+                for job in failed
+            }
+            # Unknown needs or a cycle are mapping failures, before any job
+            # can be excused. Matrix/caller dependencies come from the DAG.
+            order = tuple(TopologicalSorter(failed_needs).static_order())
+        except Exception as error:
+            blocker = getattr(error, 'job_id', None) or int(failed[0]['id'])
+            result.update(reason='aggregate_mapping_unavailable', blocked_job_id=blocker)
+            return result
+        reasons, kinds, lost = {}, {}, set()
         for job in failed:
-            reason = _job_evidence(api, repo, job)
-            if reason:
-                result['reason'] = reason
-                result['blocked_job_id'] = int(job['id'])
-                return result
+            job_id = int(job['id'])
+            messages = []
+            reason = _job_evidence(api, repo, job, diagnostics=messages)
+            reasons[job_id] = reason
+            if reason is None:
+                lost.add(job_id)
+            else:
+                kinds[job_id] = _gate_kind(job, reason, messages)
+        # On this DAG, one topological pass reaches the fixed point: every
+        # failed need has already been proved lost/dependent or left blocked.
+        dependent = set()
+        for job_id in order:
+            if kinds.get(job_id) == 'step' and failed_needs[job_id] <= lost | dependent:
+                dependent.add(job_id)
+        result['dependent_job_ids'] = [int(j['id']) for j in failed if int(j['id']) in dependent]
+        blocked = [int(j['id']) for j in failed if int(j['id']) not in lost | dependent]
+        if blocked:
+            # Report an own failure before a gate blocked by that failure,
+            # independently of the API's pagination or completion order.
+            own = [j for j in blocked if not kinds.get(j)]
+            # Positive independent-error proof is more informative than a
+            # missing runner-loss marker. Both still refuse the whole run.
+            blocker = next((j for j in own if reasons[j] == 'independent_failure_diagnostic'),
+                           (own or blocked)[0])
+            result.update(reason=reasons[blocker], blocked_job_id=blocker)
+            return result
+        if not lost:
+            result.update(reason='no_runner_loss_jobs', blocked_job_id=int(failed[0]['id']))
+            return result
         # Re-read just before mutation; concurrency serializes controller runs too.
         current = api.get(endpoint)
         identity = ('id', 'run_attempt', 'head_sha', 'path', 'event', 'head_branch')
@@ -215,7 +664,8 @@ def process(api, repo, run_id, *, dry_run=False, expected_attempt=None):
             return result
         if not dry_run:
             api.post(f'{endpoint}/rerun-failed-jobs')
-        result.update(rerun=True, reason='all_failed_jobs_are_runner_loss')
+        result.update(rerun=True, reason=('runner_loss_with_dependents' if dependent
+                                         else 'all_failed_jobs_are_runner_loss'))
     except Exception as error:
         result.update(rerun=False, reason='lookup_or_request_failed', error_type=type(error).__name__)
     return result
