@@ -534,7 +534,8 @@ struct DrawingBoundConfig {
 inline DrawingBoundConfig drawing_bound(std::int32_t slot_bound,
                                         std::uint32_t pending_creation_slots = 1) {
     if (slot_bound < 0)
-        throw std::invalid_argument("drawing slot bound must be nonnegative");
+        throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                           "drawing slot bound must be nonnegative");
     return {slot_bound, pending_creation_slots};
 }
 
@@ -584,12 +585,14 @@ struct BoundDrawingState {
 
     static std::size_t storage_slots(DrawingBoundConfig config) {
         if (config.slot_bound < 0)
-            throw std::invalid_argument("drawing slot bound must be nonnegative");
+            throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                               "drawing slot bound must be nonnegative");
         const std::uint64_t total = std::min(
             static_cast<std::uint64_t>(config.slot_bound) + config.pending_creation_slots,
             static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()));
         if (total > std::numeric_limits<std::size_t>::max())
-            throw std::length_error("drawing slot storage size overflow");
+            throw coded<std::length_error>(RunFailureCode::engine_invariant, {},
+                                           "drawing slot storage size overflow");
         return static_cast<std::size_t>(total);
     }
 
@@ -711,7 +714,8 @@ public:
         static_assert(!std::is_same_v<Rec, LinefillRec>,
                       "bounded linefill deletion lifetime is not yet specified");
         if (config.slot_bound < 0)
-            throw std::invalid_argument("drawing slot bound must be nonnegative");
+            throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                               "drawing slot bound must be nonnegative");
         bound_ = std::make_shared<detail::BoundDrawingState<Rec>>(config);
     }
 
@@ -778,7 +782,8 @@ public:
         static_assert(detail::is_builtin_drawing_record_v<Rec>,
                       "slot allocation requires a builtin drawing record");
         if (!bound_config_)
-            throw std::logic_error("typed drawing allocation requires a slot arena");
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                          "typed drawing allocation requires a slot arena");
         DrawingAllocationDiagnostic diagnostic{};
         diagnostic.kind = detail::drawing_kind_of<Rec>();
         diagnostic.configured_bound = bound_config_->slot_bound;
@@ -821,7 +826,8 @@ public:
         // new path requires its typed creation lowering first; do not convert
         // a slot invariant into an NA handle or a script drawing error.
         if (bound_config_)
-            throw std::logic_error("slot drawing creation requires try_alloc");
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                          "slot drawing creation requires try_alloc");
         if (static_cast<std::int64_t>(recs_.size()) >= kIdExclusive) {
             if constexpr (detail::is_builtin_drawing_record_v<Rec>)
                 throw pine_drawing_id_exhausted(detail::drawing_object_name<Rec>());
