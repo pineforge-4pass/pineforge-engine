@@ -1,143 +1,127 @@
 # CLAUDE.md — pineforge-engine
 
-> Project memory for AI coding agents. Keep terse and concrete.
+> Project memory for AI coding agents. Keep terse and concrete. Twin of `AGENTS.md`: same body, change both together.
 
-## REQUIRED before claiming any change is done
+## What this repo is
 
-Both C++ unit tests and full corpus verification must pass.
+- PineForge engine: a C++17 backtest and forward-execution engine with a C ABI. The same inputs give the same bytes, and a strategy's trades are graded trade for trade against TradingView.
+- It is the runtime every compiled strategy links against. The PineScript → C++ transpiler is the separate repo `pineforge-codegen-oss`.
+- Pairing ([`docs/pages/public-contract.md`](docs/pages/public-contract.md), "Pairing with codegen"): engine and codegen share one version number, the only supported pair is the same `X.Y.Z` (prerelease included), and the C++ is regenerated and relinked on every pair change.
+- The kernel must not know what TradingView is: TradingView rules go in the adapter (`src/source/`, `src/compat/pine/`) or in codegen ([ADR 0001](docs/adr/0001-kernel-adapter-boundary.md)).
+
+## Build
 
 ```bash
-# 1. Build and run unit tests (ctest)
 cmake -B build -S . \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
     -DPINEFORGE_BUILD_TESTS=ON \
     -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON
 cmake --build build -j$(nproc 2>/dev/null || echo 4)
-python3 scripts/check_abi_receipt_skips.py --build-dir build --prepare
-ctest --test-dir build --output-on-failure
-python3 scripts/check_abi_receipt_skips.py --build-dir build   # must exit 0
-
-# 2. Run full validation corpus sweep (against TV exported trades)
-./scripts/run_corpus.sh
+python3 scripts/check_abi_receipt_skips.py --build-dir build --prepare   # once per build dir; needed only by the receipt-gated rows
 ```
 
-> **Receipt-gated rows skip silently:** `test_script_cpp_abi`,
-> `test_settlement_cpp_abi`, `test_aggregate_cpp_versions_runtime` and
-> `test_l4g_runtime_budget` read seven historical ABI providers prepared inside
-> the build dir. Without them each row SKIPS (exit 77) and ctest still prints
-> `100% tests passed`. `--prepare` builds the seven (15-45 s each, once per
-> build dir, same argv as `ci_verify.py`; fetches a missing pinned commit;
-> reuses a matching provider, refuses a mismatched one without deleting it —
-> use a fresh build dir after changing compiler or flags). The call after
-> ctest exits 1 naming every receipt-gated row that did not run.
-> `test_l4g_runtime_budget` also needs `CMAKE_EXPORT_COMPILE_COMMANDS=ON` once
-> its receipt exists.
+Clean: `rm -rf build`. There are no CMake presets. Submodules: `git submodule update --init corpus benchmarks/assets` (`git lfs install` first: the corpus feed is Git LFS). Needs CMake ≥ 3.16 (3.20 for `ctest --test-dir`), a C++17 compiler with floating-point `std::to_chars`, Python 3, Eigen 3.3+, `tzdata-legacy` on Debian/Ubuntu (`CONTRIBUTING.md`, "Development setup").
 
-> **Stale-test-binary trap:** `cmake --build build --target pineforge` rebuilds
-> ONLY the static lib. Test executables are separate targets that statically
-> link it, and `ctest` does not rebuild anything — after a lib-only build,
-> ctest runs STALE test binaries and can falsely pass. Always run a full
-> `cmake --build build` (all targets) before `ctest` when runtime values
-> changed. Before trusting any result, `build/lib/libpineforge.a` must be
-> newer than every working-tree file in `src/`, `include/`, and
-> `CMakeLists.txt` (uncommitted edits count) — else the conclusion is a
-> stale-build artifact.
+## Layout
 
-If `scripts/run_corpus.sh` reports any parity drift or failures, investigate the underlying cause. No regressions are allowed unless a resolved bug was previously masking a divergence.
+| Path | What it holds |
+| --- | --- |
+| `include/pineforge/` | kernel and native headers, the C headers (`pineforge.h`, `native_c_api.h` and the additive v1 headers such as `execution_observer.h`, `report_sink.h`, `selected_window.h`); adapter headers in `source/` and `compat/pine/` |
+| `src/engine_*.cpp`, `src/native_*.cpp`, `src/ta_*.cpp`, `src/market_*.cpp`, and the rest of `PINEFORGE_KERNEL_SOURCES` in `CMakeLists.txt` | the kernel (knows nothing about Pine) |
+| `src/source/`, `src/compat/pine/` | the Pine adapter: TradingView parity lives here |
+| `src/c_abi.cpp`, `src/native_c_host.cpp` | the two main C surfaces (a few additive `PF_API` exports also sit in `src/engine_report.cpp` and `src/selected_window_plan_c.cpp`) |
+| `tests/` | C++ unit, replay and pure-C tests and Python drivers; ctest registration in `tests/CMakeLists.txt` and `tests/cr150.d/*.cmake` |
+| `examples/native/`, `runner/` | Pine-free native hosts (ctest rows only with `-DPINEFORGE_BUILD_EXAMPLES=ON`, which `ci_verify.py` sets for `release` and `kernel`); the optional `pineforge-live` executable |
+| `scripts/` | CI drivers `ci_preflight.py` and `ci_verify.py`, checkers, corpus drivers, and their self-tests `test_*.py` |
+| `corpus/` (submodule) | public TradingView parity corpus; `scripts/corpus_parity_baseline.txt` is its byte oracle |
+| `.github/workflows/` | the CI workflows listed under Testing |
+| `docs/` | `ci.md` (full CI reference), `pages/`, `design/`, `adr/`, `reference/` (text moved out of this file) |
+| `benchmarks/`, `tutorial/`, `docker/` | benchmark harnesses, worked end-to-end paths, the `run_json` harness |
 
-## Concurrency
+## Testing
 
-- `scripts/derive_corpus_feeds.py` (`ensure_derived()`) is a cheap no-op when
-  `corpus/data/derived/` is fresh, but a REBUILD is not concurrent-safe: it
-  writes through a fixed `*.csv.new` tmp then renames, so two processes
-  materializing simultaneously race and can corrupt the derived feeds. Run it
-  once to freshness BEFORE fanning out parallel consumers.
-- Never run `scripts/run_corpus.sh` while any external harness that links
-  `build/lib/libpineforge.a` or reads `corpus/data/derived/` is running:
-  run_corpus.sh re-materializes the derived feeds and rebuilds the lib
-  (`--target corpus_strategies` links `pineforge`), clobbering both under the
-  concurrent run. External sweeps may run in parallel with each other over
-  disjoint work sets, but never overlapped with run_corpus.sh.
+While developing, run only the tests that touch your change. The whole suite runs once, on the final candidate. No extra verification layers or reruns on top of the repo's gates. One target per test. Full CI reference: `docs/ci.md`.
 
-## Build Commands
+### What CI runs, per trigger
 
-- Configure CMake: `cmake -B build -S . -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DPINEFORGE_BUILD_TESTS=ON -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON`
-- Prepare the ABI providers (once per build dir): `python3 scripts/check_abi_receipt_skips.py --build-dir build --prepare`
-- Compile: `cmake --build build -j4`
-- Clean: `rm -rf build`
+**Required to merge:** the commit statuses `pineforge/verify` (full `ci_verify.py` profiles on the PR head's exact tree) and `pineforge/parity` (no parity regression, or no engine behaviour change), ruleset `PineForge strict CI base`. No workflow in this repo posts them: the maintainers' private verification tooling does, and an outside contributor cannot; `release.yml` and `promote-baseline.yml` only read them. Every GitHub Actions job below is advisory for merging; `release.yml` also needs a fully green `CI post-merge` run on the release commit (`scripts/ci_release_gate.py`).
+GitHub Actions PR jobs give faster advisory feedback (a documentation-only change runs `admit`, `preflight` and the docs build, no proof legs); push-to-main and manual
+dispatch run the full CI profiles. A campaign PASS verdict still binds the
+exact engine and codegen HEADs for baseline promotion.
 
-## Test Commands
+| Trigger | Workflow: jobs | What they check |
+| --- | --- | --- |
+| Pull request | `ci.yml`: `authz` | admission only: our own non-fork PRs |
+| Pull request | `gke-pr.yml` (`pull_request_target`): `admit` | refuses forks, drafts and non-`main` bases; classifies the diff (docs-only, `.github/`-only, `arm_relevant`); `ci_preflight.py --rules-only` |
+| Pull request | `gke-pr.yml`: `preflight` | `python3 scripts/ci_preflight.py --tier fast`; `--tier github-only` (workflow checks only) when the diff is docs-only or `.github/`-only |
+| Pull request | `gke-pr.yml`: `build`, `build-debug` | Release / Debug: build target `pineforge_pr_smoke`, then `ctest -L '^fast$'` = the 11 executables of `PINEFORGE_PR_FAST_TESTS` in `tests/CMakeLists.txt` |
+| Pull request | `gke-pr.yml`: `build-arm`, `corpus-parity-subset`, `legs`, `result` | `build-arm`: `ci_verify.py debug` on arm64, only when `arm_relevant` (at least one changed path is neither documentation nor under `.github/`; `scripts/ci_docs_only.py`); `corpus-parity-subset`: `./scripts/check_corpus_parity.sh --subset` (54 probes); `legs`, `result` aggregate. Docs-only and `.github/`-only diffs skip `build`, `build-debug`, `build-arm`, `corpus-parity-subset` |
+| Pull request | `docs.yml`: `authz`, `build` | Doxygen site build (`docs/build.sh`); not triggered by `.github/**`-only PRs |
+| Push to `main` | `ci-post.yml` ("CI post-merge"): `preflight`, `preflight-slow` | `ci_preflight.py --tier fast` and `--tier slow`; both also run on docs-only pushes |
+| Push to `main` | `ci-post.yml`: `build-shard (ubuntu-24.04, Release, N/4)`, `build-shard (ubuntu-24.04, Debug, N/2)`, `build (ubuntu-24.04-arm, Release)`, `build (ubuntu-24.04-arm, Debug)` | `ci_verify.py release --ctest-shard N/4`, `ci_verify.py debug --ctest-shard N/2`, and both profiles on arm64; gates `build (ubuntu-24.04, Release)`, `build (ubuntu-24.04, Debug)` |
+| Push to `main` | `ci-post.yml`: `sanitizers-shard (N/8)`, `kernel-only-shard (N/2)` | `ci_verify.py sanitizers --ctest-shard N/8` (ASan + UBSan, **eight** shards, gate `sanitizers`); `ci_verify.py kernel --ctest-shard N/2` (Pine source layer OFF, gate `kernel-only`) |
+| Push to `main` | `ci-post.yml` calls `native-live.yml` and `corpus-parity.yml`; `build-gate` (check `build`) | `ci_verify.py native` in 4 shards, `live-sanitizers`, `live-tsan`; parity subset and the full 312-probe sweep (`corpus-parity-subset`, `corpus-parity`); `build-gate` aggregates every job above |
+| Push to `main` | `docs-post.yml`, `promote-baseline.yml`, `rerun-preempted.yml` | docs build and deploy; baseline promotion (runs no tests); retry (attempt < 3) of runner-loss failures of a failed push or nightly `CI post-merge` run |
+| Nightly 01:30 UTC | `ci-post.yml`, `corpus-parity.yml` (cron `30 1 * * *`) | every `ci-post.yml` job, plus the `corpus-parity.yml` full sweep; the full sweep never runs on a PR |
+| Manual dispatch | `ci-post.yml` (`cold_native_cache`), `native-live.yml`, `corpus-parity.yml`, `docs-post.yml`, `promote-baseline.yml`, `release-ruleset-probe.yml` | the same jobs as push / nightly; `promote-baseline.yml` re-fires one promotion (five required inputs); the probe reads the branch rulesets |
+| Release | `release.yml` (dispatch only, no tag trigger): `release`, `prebuilt`, `notify-hub` | `release` refuses unless both required statuses are green and the release commit's `CI post-merge` run is fully green (`scripts/ci_release_gate.py`), bumps `VERSION`, tags; `prebuilt` builds, installs, packs and checks the staged version (no ctest) |
 
-- Run all unit tests: `ctest --test-dir build --output-on-failure`
-- Name receipt-gated rows that skip: `python3 scripts/check_abi_receipt_skips.py --build-dir build`
-- Run single test executable: `./build/bin/test_integration`
+### Local-only tests (no CI job runs them)
 
-## SOP: adding a runtime `PF_API` export (CI gate — recurring failure)
+| Command | Run it when the change touches | Why CI skips it |
+| --- | --- | --- |
+| `python3 scripts/test_ci_rerun_preempted.py` | `scripts/ci/rerun_preempted.py`, `scripts/fixtures/ci_rerun_preempted/`, `.github/workflows/rerun-preempted.yml` | no workflow, ctest row or preflight stage names it |
+| `python3 scripts/test_run_strategy_native_feed.py` | the native higher-timeframe feed path (`native_security_feeds`) of `scripts/run_strategy.py` | same |
+| `python3 scripts/verify_self_test.py` | the grading in `scripts/verify_corpus.py` (without the `corpus/` submodule it prints SKIP and exits 0) | same |
+| `python3 -I -m pytest -q tests/ownership/test_driver_selftest.py` | `tests/ownership/driver.py` (the self-tests need no codegen or engine, a real probe run does: `tests/ownership/README.md`) | CI runs only `tests/ownership/test_manifest_checker.py` (stage `selected-window-ownership-tests`) |
+| `bash tests/test_entrypoint_indir.sh` | `docker/entrypoint.sh` (the `PINEFORGE_IN_DIR` input dir and the per-run work dir) | no workflow, ctest row or preflight stage names it |
+| `ctest --test-dir build-ci-sanitizers -L '^slow$' --output-on-failure` after `python3 scripts/ci_verify.py sanitizers --jobs 4`, with the `ASAN_OPTIONS`/`UBSAN_OPTIONS` of `ci-post.yml` | code the `slow` rows exercise, when an ASan/UBSan-only defect is possible | `ci_verify.py` drops the `slow` label from the `debug` and `sanitizers` profiles on every event |
+| `benchmarks/run_all.sh` | a hot path whose speed you will state (`benchmarks/README.md`) | CI runs only a stubbed copy of it (ctest row `test_benchmark_harness`) and `test_benchmark_provenance` |
+| `bash scripts/coverage.sh` | a file under 80 % line coverage (a PR touching it must not lower it; `CONTRIBUTING.md`, "Coverage") | opt-in instrumented build |
 
-CI runs `python3 scripts/check_c_abi_runtime.py` as the `source-guard-c-abi`
-stage of `scripts/ci_preflight.py` and of every `scripts/ci_verify.py` profile,
-before anything is built. It pins the exact set of `PF_API` symbols implemented
-in `src/c_abi.cpp` against the hardcoded `EXPECTED_RUNTIME` frozenset in that
-script. Adding (or removing) a runtime export WITHOUT updating that list fails
-the `source-guard-c-abi` stage, and with it preflight and every profile, even
-though the build and ctest would be green.
+### While developing: run only what touches your change
 
-Checklist when touching runtime exports — update ALL of these together:
+- One C++ test: `cmake --build build --target test_ta`, then `ctest --test-dir build -R '^test_ta$' --output-on-failure` (or run `./build/bin/test_integration` directly). Rows by pattern: `-R <regex>`; by label: `ctest --test-dir build -L '^fast$' --output-on-failure` after `cmake --build build --target pineforge_pr_smoke`.
+- One Python script test: `python3 scripts/test_<name>.py`. A big module in parallel shards: `python3 scripts/run_unittest_shards.py scripts/test_ci_preflight.py --shards 8 --log-dir <dir>` (`--class-tier fast` defers the slow classes of `scripts/test_ci_verify.py`).
+- Workflow, source-guard or docs edits: the guard you touched (`python3 scripts/check_c_abi_runtime.py`; likewise `scripts/check_doc_anchors.py`, `scripts/check_doc_lint.py`, `scripts/check_public_role_words.py`) or `python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier fast` (needs actionlint 1.7.12 and ShellCheck). A docs-only PR gets only `--tier github-only` before merge, so its doc guards first run on the push to `main`: run them yourself.
+- A change that can move a trade, fill, size, margin or TA value (`src/`, `include/`): `./scripts/check_corpus_parity.sh --subset`.
+- Final candidate, once: the PR's CI is that run, with the maintainers' full verification behind the required statuses; never rerun a green suite. Without a PR, run it locally in the same split: C++ rows with `ctest --test-dir build --output-on-failure` after a full `cmake --build build`, Python script tests with `python3 scripts/run_unittest_shards.py scripts/test_<name>.py`, or the repo's own gate in one go, `python3 scripts/ci_preflight.py` (the full tier also needs pytest: `scripts/requirements-preflight.txt`) then `python3 scripts/ci_verify.py release --build-dir build-ci-release --jobs 4` (a separate build dir: it reconfigures the tree it is given; other profiles, `debug` `sanitizers` `native` `kernel`, only when the change needs them: `docs/ci.md`, "Profiles"), and, if the change can move a trade, `./scripts/check_corpus_parity.sh` (it runs `./scripts/run_corpus.sh`, then checks byte identity against `scripts/corpus_parity_baseline.txt`; about 32 min per `CONTRIBUTING.md`, 16-26 min on the CI runner per `corpus-parity.yml`; push-to-main and nightly CI run it, a PR does not).
 
-1. `src/c_abi.cpp` — the implementation (and its file-header symbol comment).
-2. `include/pineforge/pineforge.h` — the `PF_API` declaration (+ doxygen).
-3. `scripts/check_c_abi_runtime.py` — add the symbol to `EXPECTED_RUNTIME` and
-   bump `EXPECTED_PUBLIC_DECLARATIONS` / `EXPECTED_RUNTIME_IMPLEMENTATIONS`.
-4. Python ctypes harnesses if consumers must call it
-   (`scripts/run_strategy.py`, `tutorial/run*.py`, `docker/run_json.py`,
-   `benchmarks/throughput/grid_search_repro.py`).
-5. README symbol table if it enumerates exports.
+### Rules for tests
 
-Before pushing: `python3 scripts/check_c_abi_runtime.py` (must exit 0).
-Per-strategy symbols (strategy_create, run_backtest, …) are NOT in this list —
-they are codegen-emitted; the checker enforces exactly that split.
+- One test, one target (one behaviour or defect). No duplicates: tests with the same target are merged in a separate reviewed change. Add a new test only for a target no existing test covers. Never delete or skip a test whose target is unique.
+- Mechanical guards (they see names and vanished rows; review sees same-target duplicates): preflight stage `duplicate-test-names` (`scripts/check_duplicate_test_names.py`), the ctest row floors (`PRIVATE_FIXTURE_PROFILE_FLOORS` in `scripts/ci_verify.py`: a vanished or silently skipped row fails; re-measure the floor in the same commit when rows really change), `scripts/check_twin_parity.py` (frozen assertions).
+- A new test is written first and seen to fail for the right reason (compile it against the previous header closure and record the first diagnostic). A test whose body is a seed row only, a `return 0` main, a disabled row or a TODO placeholder is a blocker to report, never evidence.
+- No extra verification layers on top of the repo's gates: no home-made kits, receipt packs, second reads of the same suite, reruns. (The ABI providers of `check_abi_receipt_skips.py --prepare` belong to the repo's own gate.)
+- Rows labelled `private_fixtures` skip without the private overlay, and the receipt-gated rows skip without their ABI providers: neither can fail in public CI (list the first kind with `ctest --test-dir build -N -L private_fixtures`).
 
-## Code Style & Invariants
+### The probe rule
+
+> What a Pine script computes is a parity probe, not a CI test. A check of what a Pine script computes (script plus data gives expected values or trades) is a probe in the parity campaign's population: crypto data goes to the public corpus, any other data to the private set; the campaign's parity sweep measures it against TradingView. The evidence for a behaviour fix is a probe in that population, measured by a sweep, not a new CI test. A new test in CI is a real unit test with one target, no duplicates. Migration: an existing test leaves CI only after its probe is admitted and measured in a parity sweep; nothing is removed before that. Tests that skip in CI (no runtime / no corpus) can never fail there: say so in the PR and propose their probe. The engine's own KERNEL ctests are a separate class: they stay in the engine's CI, one target each, and are never probe candidates.
+
+## Conventions
 
 - Modern C++17. Use of `<cstdint>` fixed-width types.
 - Follow existing patterns for trade accessors and order management.
 - Keep helper functions inline or in clean namespaces.
 - Do not add external dependencies without explicit user request.
+- C++17 only (`rg 'bit_cast|<bit>' src include tests scripts` = 0); no `std::filesystem` or `<format>` in `src/` and `include/`.
+- Every kernel capability is opt-in (a new spec field, request kind or virtual with an empty default), so a run that does not ask for it is byte-identical to the run before. Every added durable state is hashed (`scripts/check_broker_state_hash_coverage.py`).
+- **No debug output in a merged change.** No `printf` left behind, no commented-out experiment, no `test.skip`.
+- A pinned number changes only with a note: `expectation corrected: <old> -> <new>, because <what actually changed>`.
+- Docs cite the tree as `path:line`; `scripts/check_doc_anchors.py` checks the line still holds the symbol.
+- A runtime `PF_API` export changes `src/c_abi.cpp`, `include/pineforge/pineforge.h`, `scripts/check_c_abi_runtime.py` (`EXPECTED_RUNTIME` and both counts), the ctypes harnesses and the README table together, or preflight stage `source-guard-c-abi` fails ([checklist](docs/reference/c-abi-export-sop.md)).
+- More: [`CONTRIBUTING.md`](CONTRIBUTING.md), [`docs/pages/contributing-llm.md`](docs/pages/contributing-llm.md) (rules for agents, each with its guard), [`docs/ci.md`](docs/ci.md), and [`docs/reference/`](docs/reference/README.md) (text moved out of this file: C ABI export checklist, native-refactor rules, runner routing, merge gate and promotion).
 
-## Refactor workers (native-engine programme, R4 and later)
+## Safety rules
 
-Applies to any agent — Claude, Codex, OpenCode — implementing a slice of the
-native-engine refactor in this repository. The maintainers' campaign
-repository (`pineforge-workflow`, private; its `AGENTS.md`, "Roles and dispatch")
-governs who dispatches, reviews and measures; this section is what binds you here.
+> **Stale-test-binary trap:** `cmake --build build --target pineforge` rebuilds ONLY the static lib. Test executables are separate targets that statically link it, and `ctest` does not rebuild anything — after a lib-only build, ctest runs STALE test binaries and can falsely pass. Always run a full `cmake --build build` (all targets) before `ctest` when runtime values changed. Before trusting any result, `build/lib/libpineforge.a` must be newer than every working-tree file in `src/`, `include/`, and `CMakeLists.txt` (uncommitted edits count) — else the conclusion is a stale-build artifact.
 
-- You work in the worktree and branch your brief names, on the files it
-  lists as yours, and nowhere else. A need in another file is reported to the
-  supervisor, never edited quietly. You never push; the supervisor opens the
-  PR after the one campaign sweep.
-- A neutral refactor never opens the measured sources
-  (`src/native_execution_consumer.cpp`, `src/native_order.cpp`,
-  `src/engine_execution.cpp`, `src/engine_orders.cpp`, `src/engine_run.cpp`,
-  `src/engine_path_resolve.cpp`, and the source-layer `src/source/*` units) and
-  never edits the frozen native headers the settlement ABI checker names; the
-  fixed parity population must stay byte-identical by construction, which the
-  supervisor proves with the sweep, not you.
-- C++17 only (`rg 'bit_cast|<bit>' src include tests scripts` = 0). Every
-  added durable state is hashed. Existing numeric assertions and fixture
-  outputs stay unchanged unless the contract lists the extension.
-- Every new test unit is compiled first against the frozen previous-epoch
-  header closure and its first diagnostic is recorded (fail-before). A test
-  whose body is a seed row only, a `return 0` main, a disabled row or a TODO
-  placeholder is a blocker to report, never evidence.
-- Verification is local: `python3 scripts/ci_preflight.py`, then
-  `python3 scripts/ci_verify.py release --build-dir <your dir> --jobs N` (all
-  suites, the settlement ABI matrix, the checker self-tests); debug,
-  sanitizers and native profiles when the brief asks. No campaign sweep from
-  a worker.
-- Your handoff is a report: HEAD sha, `git diff --stat <base>..HEAD`, the
-  verification summary lines and log paths, every deviation from the
-  contract with its reason, and every open question. The supervisor judges
-  the slice by its executed result: no regression in the campaign sweep, the
-  engine closer to an independent backtest + forward-execution state
-  machine, and Pine-parity behaviour kept in codegen with this kernel clean.
+> **Receipt-gated rows skip silently:** `test_script_cpp_abi`, `test_settlement_cpp_abi`, `test_aggregate_cpp_versions_runtime` and `test_l4g_runtime_budget` read seven historical ABI providers prepared inside the build dir. Without them each row SKIPS (exit 77) and ctest still prints `100% tests passed`. `--prepare` builds the seven (15-45 s each, once per build dir, same argv as `ci_verify.py`; fetches a missing pinned commit; reuses a matching provider, refuses a mismatched one without deleting it — use a fresh build dir after changing compiler or flags). The call after ctest (`python3 scripts/check_abi_receipt_skips.py --build-dir build`) exits 1 naming every receipt-gated row that did not run. `test_l4g_runtime_budget` also needs `CMAKE_EXPORT_COMPILE_COMMANDS=ON` once its receipt exists.
+
+- `scripts/derive_corpus_feeds.py` (`ensure_derived()`) is a cheap no-op when `corpus/data/derived/` is fresh, but a REBUILD is not concurrent-safe: it writes through a fixed `*.csv.new` tmp then renames, so two processes materializing simultaneously race and can corrupt the derived feeds. Run it once to freshness BEFORE fanning out parallel consumers.
+- Never run `scripts/run_corpus.sh` while any external harness that links `build/lib/libpineforge.a` or reads `corpus/data/derived/` is running: run_corpus.sh re-materializes the derived feeds and rebuilds the lib (`--target corpus_strategies` links `pineforge`), clobbering both under the concurrent run. External sweeps may run in parallel with each other over disjoint work sets, but never overlapped with run_corpus.sh.
+- If `scripts/run_corpus.sh` reports any parity drift or failures, investigate the underlying cause. No regressions are allowed unless a resolved bug was previously masking a divergence.
+- A neutral refactor never opens the measured sources (`src/native_execution_consumer.cpp`, `src/native_order.cpp`, `src/engine_execution.cpp`, `src/engine_orders.cpp`, `src/engine_run.cpp`, `src/engine_path_resolve.cpp`, and the source-layer `src/source/*` units) and never edits the frozen native headers the settlement ABI checker names; the fixed parity population must stay byte-identical by construction. Existing numeric assertions and fixture outputs stay unchanged unless your brief lists the extension. Full rules: [native-refactor rules](docs/reference/refactor-workers.md).
+- Work only on the files your brief lists; a need in another file is reported, never edited quietly. Do not push or open a PR unless your brief says so.
