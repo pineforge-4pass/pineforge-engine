@@ -205,7 +205,7 @@ POST_ARM_BUILD_STRATEGY = ('    strategy:\n'
                           '        build_type: [Release, Debug]\n')
 BUILD_NAME = 'build (${{ matrix.platform.os }}, ${{ matrix.build_type }})'
 POST_ARM_BUILD_NAME = 'build (ubuntu-24.04-arm, ${{ matrix.build_type }})'
-POST_SHARDS = {'build': 4, 'build-debug': 2, 'sanitizers': 4, 'kernel-only': 2}
+POST_SHARDS = {'build': 4, 'build-debug': 2, 'sanitizers': 8, 'kernel-only': 2}
 POST_LEG_GATES = {
     'build-release-gate': ('build', 'build (ubuntu-24.04, Release)'),
     'build-debug-gate': ('build-debug', 'build (ubuntu-24.04, Debug)'),
