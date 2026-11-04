@@ -994,9 +994,10 @@ against the TradingView export shipped beside it;
 `python3 scripts/verify_corpus.py --all` grades the shipped trade lists by
 the canonical rubric. Its strict profile declares limits for count + entry-price +
 exit-price + P&L within `1.0% / 0.01% / 0.01% / 1.0%`; a strategy whose
-`strategy.exit` uses a `trail_*` parameter gets the production profile, with
+source assigns `trail_points`, `trail_offset` or `trail_price` (outside
+comments) gets the production profile, with
 the same count and entry limits, exit within 0.02%, and P&L within 1%.
-The exit and P&L gates are graded per strategy at the 90th percentile, not every trade.
+The entry, exit and P&L gates are graded per strategy at the 90th percentile, not every trade.
 
 ### Grading profiles and sweep limits
 
