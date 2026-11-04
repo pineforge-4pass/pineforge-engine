@@ -1,48 +1,10 @@
-// test_ta_sma_window_residual -- ta.sma / math.sum reproduce TradingView's
-// sliding-window arithmetic to the last bit, pinned on the round-7 synthetic
-// tapes (2026-09-05, pineforge-workflow scratchpad r7/pins, OANDA:EURUSD 15,
-// 2025-04-01..2025-07-01, bar_index 0 = the range-start bar):
-//
-//   sma-pulse-n3-even / -odd     ta.sma(x, 3)  on a pulse series (below)
-//   sma-pulse-n20-even           ta.sma(x, 20) on the same pulse series, P = 60
-//   sma-ident-n3 / -n20          five identities per bar (A..E) against
-//                                user-level references
-//
-// x is a pure function of bar_index -- products only, so every value is the
-// same double on TradingView and here -- with a 3-bar pulse (a, b, c) at the
-// start of every P-bar block and zeros elsewhere:
-//     ph = bar_index % P, B = bar_index / P
-//     a = 0.1 * (1 + B % 9)
-//     b = 0.3 * (1 + (B / 9) % 7)
-//     c = (B / 63) % 2 == 0 ? 0 : 0.7 * (1 + (B / 126) % 5)
-//     x = ph == 0 ? a : ph == 1 ? b : ph == 2 ? c : 0
-//
-// The pulse tapes encode TradingView's value in the order qty:
-//     ph >= Z : 10000000 + round(s * 1e18)  (1e19 for n = 20)     -- the raw
-//               residue of an ALL-ZERO window (Z = 5 for n = 3, 22 for n = 20)
-//     else    : 50000000 + round((s - e) * 1e17), e = ((x + x[1]) + ...) / n
-//               the user-level newest-first re-sum
-// The ident tapes encode round((s - manual / n) * 1e19) where manual is the
-// user-level plain running sum S := (S + x) - nz(x[n]).
-//
-// What the tapes pin (every one of the 14,194 pulse decisions and 31,140
-// identity checks is reproduced by the arithmetic in window_sum.hpp; this
-// test replays a sample of them plus every event that identified a piece of
-// the rule):
-//   * an all-zero window does NOT read 0: the residue of the values that left
-//     persists over 34 zero bars (bars 6..39: 9e-18, i.e. S = 2^-55);
-//   * the residue changes n and 2n bars after a pulse (bars 5 and 6 of
-//     block 0): the ring subtracts the COMPENSATED addend y = x - c that each
-//     value entered with;
-//   * a zero addend still folds the compensation (bar 2: S = 0.4 - 2^-54);
-//   * bar 2522 (n = 3) / 3782 (n = 20): the 18-unit / 182-unit residue is
-//     dropped to exactly 1.1 -- the incoming 0.7 swallows the carried
-//     compensation (c = 2^-54 = half an ulp of 0.7), so the window is
-//     re-summed newest-first and c reset; bar 2762 reads
-//     (0.7 + 0.3) + 0.7000000000000001 = 1.7000000000000002, not 1.7;
-//   * S is divided by n (S * (1/n) misses ~3% of the decisions);
-//   * math.sum(x, n) / n == ta.sma(x, n) bit-for-bit (ident signal B: 0 at
-//     every one of 6,228 bars).
+// Separate contracts: SMA uses the rounded exact window sum; math.sum keeps
+// its original Kahan-residue expectations. All four numeric tables below are
+// unchanged historical observations, used ONLY to check math.sum / n.
+// The original SMA contracts and full original source are preserved in
+// data/sma-oracles/history/pin-2026-09-05-capture-unconfirmed/.
+// 2026-09-05 is the source pin-date; actual original export dates are NEEDS.
+// the earlier pins disagree with TradingView's current values in the last binary digit; whether TradingView changed since 2026-09-05 is not known; the earlier pins are kept as history
 
 #include <pineforge/ta.hpp>
 #include <pineforge/math.hpp>
@@ -51,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <vector>
+#include "sma_window_reference.hpp"
 
 using namespace pineforge;
 
@@ -64,7 +27,7 @@ static int tests_failed = 0;
 
 struct Obs { int bar; long long qty; };
 
-// 361 observations from sma-pulse-n3-even/odd-from-20250401 (bar_index, TradingView qty)
+// the earlier pins disagree with TradingView's current values in the last binary digit; whether TradingView changed since 2026-09-05 is not known; the earlier pins are kept as history
 static const Obs kPulseN3[] = {
     {2, 50000000}, {3, 49999999}, {4, 50000000}, {5, 10000019}, {6, 10000009}, {7, 10000009},
     {8, 10000009}, {9, 10000009}, {10, 10000009}, {11, 10000009}, {12, 10000009}, {13, 10000009},
@@ -303,7 +266,7 @@ static long long pine_round(double v) {
     return (long long)(v < 0 ? -r : r);
 }
 
-// The pulse pins' qty encoding of an sma value at `bar`.
+// Original quantity encoding, now used to retain the unchanged Sum contract.
 static long long encode_pulse(double s, const std::vector<double>& xs, int bar, int n, int zero_ph, int P) {
     if (bar % P >= zero_ph) {
         return 10000000 + pine_round(s * (n == 3 ? 1e18 : 1e19));
@@ -326,18 +289,22 @@ static void replay_pulse(const char* tag, int n, int P, int zero_ph, const Obs* 
     for (int t = 0; t <= last; ++t) {
         const double s = sma.compute(xs[(std::size_t)t]);
         const double ms = sum.compute(xs[(std::size_t)t]);
-        // math.sum(x, n) / n == ta.sma(x, n) bit-for-bit (ident signal B).
+        // No cross-function identity: derive SMA from the actual input
+        // window using bounded integer arithmetic independent of either SUT.
         if (t >= n - 1) {
-            CHECK_TRUE(ms / n == s, "math.sum / n == ta.sma bit-for-bit");
+            CHECK_TRUE(s == sma_test::dyadic_mean(xs, t, n, 56),
+                       "SMA equals independently derived current window");
+        } else {
+            CHECK_TRUE(is_na(s) && is_na(ms), "SMA and Sum retain warmup");
         }
         if (next < count && obs[next].bar == t) {
-            const long long got = encode_pulse(s, xs, t, n, zero_ph, P);
+            const long long got = encode_pulse(ms / n, xs, t, n, zero_ph, P);
             checked++;
             if (got != obs[next].qty) {
                 mismatches++;
                 if (mismatches <= 5) {
                     std::printf("  %s bar %d: got qty %lld, TradingView %lld (s = %.17g)\n",
-                                tag, t, got, obs[next].qty, s);
+                                tag, t, got, obs[next].qty, ms / n);
                 }
             }
             next++;
@@ -350,6 +317,7 @@ static void replay_pulse(const char* tag, int n, int P, int zero_ph, const Obs* 
 static void replay_ident_c(const char* tag, int n, int P, const Obs* obs, std::size_t count) {
     const int last = obs[count - 1].bar;
     ta::SMA sma(n);
+    math::Sum sum(n);
     double manual = 0.0;
     std::vector<double> xs((std::size_t)last + 1);
     std::size_t next = 0;
@@ -358,10 +326,16 @@ static void replay_ident_c(const char* tag, int n, int P, const Obs* obs, std::s
         xs[(std::size_t)t] = pulse_x(t, P);
         const double x = xs[(std::size_t)t];
         const double s = sma.compute(x);
+        const double ms = sum.compute(x);
+        if (t >= n - 1)
+            CHECK_TRUE(s == sma_test::dyadic_mean(xs, t, n, 56),
+                       "identity replay: independent current SMA");
+        else
+            CHECK_TRUE(is_na(s) && is_na(ms), "identity replay: warmup");
         // user-level `S := S + x - nz(x[n])`
         manual = (manual + x) - (t >= n ? xs[(std::size_t)(t - n)] : 0.0);
         if (next < count && obs[next].bar == t) {
-            const long long got = pine_round((s - manual / n) * 1e19);
+            const long long got = pine_round((ms / n - manual / n) * 1e19);
             checked++;
             if (got != obs[next].qty) {
                 mismatches++;
@@ -376,12 +350,12 @@ static void replay_ident_c(const char* tag, int n, int P, const Obs* obs, std::s
     CHECK_TRUE(mismatches == 0, tag);
 }
 
-// The events that identified the rule, spelled out.
-static void test_named_events() {
+// Original Sum events: every old expected numeric value remains unchanged.
+static void test_original_sum_events() {
     // n = 3, block 0: pulse (0.1, 0.3, 0), then zeros.
-    ta::SMA sma(3);
+    math::Sum sma(3);
     std::vector<double> v;
-    for (int t = 0; t < 45; ++t) v.push_back(sma.compute(pulse_x(t, 40)));
+    for (int t = 0; t < 45; ++t) v.push_back(sma.compute(pulse_x(t, 40)) / 3);
     // bar 3: the fold of a zero addend -> S = 0.4 - 2^-54 -> (S - 0.1) / 3
     CHECK_TRUE(v[3] == 0.09999999999999998, "bar 3: 0.29999999999999993 / 3 (zero addend folds c)");
     // bar 4: exact 0; bar 5: the residue 2^-54 (the compensated addend of bar 2 leaves);
@@ -398,23 +372,24 @@ static void test_named_events() {
 
     // The block-63 re-sum (n = 3): S carries +18 * 2^-54 into the pulse (0.1, 0.3, 0.7);
     // the 0.7 swallows c = 2^-54, so the window is re-summed: exactly 1.1 / 3.
-    ta::SMA s3(3);
+    math::Sum s3(3);
     double last = na<double>();
-    for (int t = 0; t <= 2522; ++t) last = s3.compute(pulse_x(t, 40));
+    for (int t = 0; t <= 2522; ++t) last = s3.compute(pulse_x(t, 40)) / 3;
     CHECK_TRUE(last == 1.1 / 3, "bar 2522: re-sum drops the 18-unit residue -> 1.1 / 3");
     // Without the re-sum the running sum would read 1.1 + 4 ulp.
     CHECK_TRUE(last != 1.100000000000001 / 3, "bar 2522: not the running-sum value");
     // bar 2762: the re-sum is NEWEST-FIRST: (0.7 + 0.3) + 0.7000000000000001.
-    for (int t = 2523; t <= 2762; ++t) last = s3.compute(pulse_x(t, 40));
+    for (int t = 2523; t <= 2762; ++t) last = s3.compute(pulse_x(t, 40)) / 3;
     CHECK_TRUE(last == 1.7000000000000002 / 3, "bar 2762: newest-first re-sum (0.7 + 0.3) + 0.7000000000000001");
 
     // n = 20: the same rule, the same events (bar 3782 = block 63 ph 2).
-    ta::SMA s20(20);
-    for (int t = 0; t <= 3782; ++t) last = s20.compute(pulse_x(t, 60));
+    math::Sum s20(20);
+    for (int t = 0; t <= 3782; ++t) last = s20.compute(pulse_x(t, 60)) / 20;
     CHECK_TRUE(last == 1.1 / 20, "bar 3782 (n = 20): re-sum drops the 182-unit residue -> 1.1 / 20");
 }
 
-// recompute() replays the bar bit-for-bit, including across the re-sum event.
+// recompute() replaces the current bar and preserves continuation. The
+// independent numeric reference also catches two equally wrong SMA instances.
 static void test_recompute_matches_fresh() {
     const int bars[] = {5, 6, 41, 2521, 2522, 2523, 2762, 3000};
     for (int target : bars) {
@@ -424,20 +399,27 @@ static void test_recompute_matches_fresh() {
         a.compute(12345.678);                      // a provisional value ...
         va = a.recompute(pulse_x(target, 40));     // ... replaced intrabar
         vb = b.compute(pulse_x(target, 40));
-        CHECK_TRUE(va == vb, "SMA recompute == fresh compute (pulse series)");
+        std::vector<double> inputs;
+        for (int t = 0; t <= target; ++t) inputs.push_back(pulse_x(t, 40));
+        const double want = sma_test::dyadic_mean(inputs, target, 3, 56);
+        CHECK_TRUE(va == want && vb == want, "SMA recompute and fresh compute match derived value");
         // and the state after the replay continues identically
         for (int t = target + 1; t < target + 50; ++t) {
-            CHECK_TRUE(a.compute(pulse_x(t, 40)) == b.compute(pulse_x(t, 40)), "state after recompute continues identically");
+            inputs.push_back(pulse_x(t, 40));
+            const double next = sma_test::dyadic_mean(inputs, t, 3, 56);
+            CHECK_TRUE(a.compute(pulse_x(t, 40)) == next &&
+                       b.compute(pulse_x(t, 40)) == next,
+                       "continuation matches independently derived window");
         }
     }
 }
 
 int main() {
-    replay_pulse("sma-pulse-n3 (even+odd)", 3, 40, 5, kPulseN3, sizeof(kPulseN3) / sizeof(kPulseN3[0]));
-    replay_pulse("sma-pulse-n20", 20, 60, 22, kPulseN20, sizeof(kPulseN20) / sizeof(kPulseN20[0]));
-    replay_ident_c("sma-ident-n3 signal C", 3, 40, kIdentC3, sizeof(kIdentC3) / sizeof(kIdentC3[0]));
-    replay_ident_c("sma-ident-n20 signal C", 20, 60, kIdentC20, sizeof(kIdentC20) / sizeof(kIdentC20[0]));
-    test_named_events();
+    replay_pulse("Sum original pulse-n3 (even+odd)", 3, 40, 5, kPulseN3, sizeof(kPulseN3) / sizeof(kPulseN3[0]));
+    replay_pulse("Sum original pulse-n20", 20, 60, 22, kPulseN20, sizeof(kPulseN20) / sizeof(kPulseN20[0]));
+    replay_ident_c("Sum original identity-n3 signal C", 3, 40, kIdentC3, sizeof(kIdentC3) / sizeof(kIdentC3[0]));
+    replay_ident_c("Sum original identity-n20 signal C", 20, 60, kIdentC20, sizeof(kIdentC20) / sizeof(kIdentC20[0]));
+    test_original_sum_events();
     test_recompute_matches_fresh();
     std::printf("test_ta_sma_window_residual: passed=%d failed=%d\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;

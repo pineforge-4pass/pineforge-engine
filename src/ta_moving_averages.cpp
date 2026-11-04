@@ -13,15 +13,22 @@
 #include "runtime_ambient.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <limits>
 #include <numeric>
 #include <string>
 #include <vector>
 
 namespace pineforge {
 
-// --- KahanWindowSum (window_sum.hpp): ta.sma / math.sum arithmetic ---
-// TradingView's sliding-window sum (ta.sma, math.sum), fitted 2026-09-05 on
+// --- KahanWindowSum (window_sum.hpp): legacy compensated arithmetic ---
+// Historical ta.sma / math.sum model, fitted 2026-09-05 and retained for
+// math.sum and biased StdDev. SMA uses correctly_rounded_sum() below. The
+// historical fit was based on
 // the round-7 synthetic pins (scratchpad r7/pins/sma-pulse-*, sma-ident-*:
 // OANDA:EURUSD 15, pulse series of known doubles, lengths 3 and 20, three
 // range starts; 14,194 pulse decisions and 31,140 identity checks reproduced
@@ -75,7 +82,7 @@ namespace pineforge {
 // resolves each tie by this arithmetic's residue and ta.crossover fires on its
 // exact sign. The previous exact-order window re-sum (round 6) kept every such
 // tie exact and could never fire; a plain running sum fires on the wrong
-// half. Any other arithmetic is a guess; this one is the pinned rule.
+// half. These statements describe the historical 2026-09-05 model.
 //
 // Reference (Python, r7/sma/sma-model.py):
 //   c_pre = c
@@ -197,6 +204,175 @@ double KahanWindowSum::repush(double src) {
     return sum_;
 }
 
+namespace {
+
+// Units are 2^-1074. A finite binary64 magnitude uses at most 2098 bits;
+// an int-sized window needs at most 31 additional bits on 32-bit-int hosts.
+constexpr std::size_t window_sum_limb_count = 34;
+using WindowSumMagnitude = std::array<std::uint64_t, window_sum_limb_count>;
+constexpr std::uint64_t window_sum_sign = std::uint64_t{1} << 63;
+constexpr std::uint64_t window_sum_fraction = (std::uint64_t{1} << 52) - 1;
+constexpr std::uint64_t window_sum_infinity = std::uint64_t{0x7ff} << 52;
+constexpr std::uint64_t window_sum_nan =
+    window_sum_infinity | (std::uint64_t{1} << 51);
+
+static_assert(sizeof(double) == sizeof(std::uint64_t) &&
+              std::numeric_limits<double>::is_iec559 &&
+              std::numeric_limits<double>::radix == 2 &&
+              std::numeric_limits<double>::digits == 53 &&
+              std::numeric_limits<double>::min_exponent == -1021 &&
+              std::numeric_limits<double>::max_exponent == 1024 &&
+              std::numeric_limits<double>::has_denorm == std::denorm_present,
+              "Raw-window summation requires IEEE 754 binary64");
+static_assert(std::numeric_limits<int>::digits <=
+                  static_cast<int>(window_sum_limb_count * 64) - 2098,
+              "The accumulator must cover every positive int window length");
+
+double window_sum_from_bits(std::uint64_t bits) {
+    double result;
+    std::memcpy(&result, &bits, sizeof(result));
+    return result;
+}
+
+void window_sum_add_word(WindowSumMagnitude& magnitude, std::size_t word,
+                         std::uint64_t addend) {
+    // The full-window bound above guarantees that carry cannot leave the
+    // array. All arithmetic is unsigned, including a wrapping limb addition.
+    while (addend != 0) {
+        const std::uint64_t before = magnitude[word];
+        magnitude[word] = before + addend;
+        addend = magnitude[word] < before ? 1 : 0;
+        ++word;
+    }
+}
+
+} // namespace
+
+double KahanWindowSum::correctly_rounded_sum() const {
+    WindowSumMagnitude positive{};
+    WindowSumMagnitude negative{};
+    bool positive_infinity = false;
+    bool negative_infinity = false;
+    bool all_negative_zero = !values_.empty();
+
+    for (const double& value : values_) {
+        std::uint64_t bits;
+        std::memcpy(&bits, &value, sizeof(bits));
+        all_negative_zero = all_negative_zero && bits == window_sum_sign;
+        const unsigned exponent = static_cast<unsigned>((bits >> 52) & 0x7ffu);
+        const std::uint64_t fraction = bits & window_sum_fraction;
+        if (exponent == 0x7ffu) {
+            if (fraction != 0) return window_sum_from_bits(window_sum_nan);
+            if ((bits & window_sum_sign) != 0) {
+                negative_infinity = true;
+            } else {
+                positive_infinity = true;
+            }
+            continue;
+        }
+
+        // Subnormal: fraction * 2^-1074.
+        // Normal: (2^52 + fraction) * 2^(exponent-1) * 2^-1074.
+        std::uint64_t significand = fraction;
+        if (exponent != 0) significand |= std::uint64_t{1} << 52;
+        const unsigned shift = exponent == 0 ? 0 : exponent - 1;
+        const std::size_t word = shift / 64;
+        const unsigned offset = shift % 64;
+        WindowSumMagnitude& destination =
+            (bits & window_sum_sign) != 0 ? negative : positive;
+        window_sum_add_word(destination, word, significand << offset);
+        if (offset != 0) {
+            window_sum_add_word(destination, word + 1,
+                                significand >> (64 - offset));
+        }
+    }
+
+    if (positive_infinity && negative_infinity) {
+        return window_sum_from_bits(window_sum_nan);
+    }
+    if (positive_infinity) return window_sum_from_bits(window_sum_infinity);
+    if (negative_infinity) {
+        return window_sum_from_bits(window_sum_sign | window_sum_infinity);
+    }
+
+    int ordering = 0;
+    for (std::size_t i = window_sum_limb_count; i != 0; --i) {
+        if (positive[i - 1] != negative[i - 1]) {
+            ordering = positive[i - 1] > negative[i - 1] ? 1 : -1;
+            break;
+        }
+    }
+    if (ordering == 0) {
+        // Empty, mixed zero signs and exact cancellation produce +0.
+        // A nonempty window consisting entirely of -0 preserves -0.
+        return window_sum_from_bits(all_negative_zero ? window_sum_sign : 0);
+    }
+
+    const std::uint64_t sign = ordering < 0 ? window_sum_sign : 0;
+    WindowSumMagnitude& magnitude = ordering < 0 ? negative : positive;
+    const WindowSumMagnitude& smaller = ordering < 0 ? positive : negative;
+    std::uint64_t borrow = 0;
+    for (std::size_t i = 0; i < window_sum_limb_count; ++i) {
+        const std::uint64_t before = magnitude[i];
+        const std::uint64_t difference = before - smaller[i];
+        magnitude[i] = difference - borrow;
+        borrow = (before < smaller[i] || difference < borrow) ? 1 : 0;
+    }
+
+    std::size_t top = window_sum_limb_count - 1;
+    while (magnitude[top] == 0) --top; // ordering != 0 proves nonzero
+    unsigned highest_bit = static_cast<unsigned>(top * 64);
+    for (std::uint64_t leading = magnitude[top]; leading > 1; leading >>= 1) {
+        ++highest_bit;
+    }
+    if (highest_bit < 52) {
+        // Every nonzero subnormal sum is already an exact integer number
+        // of minimum subnormals. No floating arithmetic or rounding here.
+        return window_sum_from_bits(sign | magnitude[0]);
+    }
+    if (highest_bit > 2097) {
+        return window_sum_from_bits(sign | window_sum_infinity);
+    }
+
+    // Keep 53 bits. There are no set bits above highest_bit, so two limbs
+    // suffice even when the retained significand crosses a limb boundary.
+    const unsigned shift = highest_bit - 52;
+    const std::size_t word = shift / 64;
+    const unsigned offset = shift % 64;
+    std::uint64_t significand = magnitude[word] >> offset;
+    if (offset != 0) {
+        significand |= magnitude[word + 1] << (64 - offset);
+    }
+    if (shift != 0) {
+        const unsigned guard_index = shift - 1;
+        const std::size_t guard_word = guard_index / 64;
+        const unsigned guard_offset = guard_index % 64;
+        const bool guard = ((magnitude[guard_word] >> guard_offset) & 1u) != 0;
+        const std::uint64_t sticky_mask =
+            (std::uint64_t{1} << guard_offset) - 1;
+        bool sticky = (magnitude[guard_word] & sticky_mask) != 0;
+        for (std::size_t i = 0; i < guard_word; ++i) {
+            sticky = sticky || magnitude[i] != 0;
+        }
+        if (guard && (sticky || (significand & 1u) != 0)) {
+            ++significand;
+            if (significand == (std::uint64_t{1} << 53)) {
+                significand >>= 1;
+                ++highest_bit;
+            }
+        }
+    }
+    // A carry at the largest finite binade implements round-to-nearest
+    // overflow, including the midpoint tie whose even neighbor is 2^1024.
+    if (highest_bit > 2097) {
+        return window_sum_from_bits(sign | window_sum_infinity);
+    }
+    const std::uint64_t exponent =
+        static_cast<std::uint64_t>(highest_bit - 51) << 52;
+    return window_sum_from_bits(sign | exponent |
+                                (significand & window_sum_fraction));
+}
+
 } // namespace pineforge
 
 namespace pineforge {
@@ -267,18 +443,18 @@ double SMA::compute(double src) {
         // before seeding an na input is still na. State is left untouched.
         window_.note_no_push();
         if (bar_count >= length) {
-            return window_.sum() / length;
+            return window_.correctly_rounded_sum() / length;
         }
         return na<double>();
     }
 
-    double sum = window_.push(src);
+    window_.push(src);
     bar_count++;
 
     if (bar_count < length) {
         return na<double>();
     }
-    return sum / length;
+    return window_.correctly_rounded_sum() / length;
 }
 
 // --- EMA ---
@@ -536,14 +712,14 @@ double SMA::recompute(double src) {
     }
 
     // Replay the bar with the new source: the same evicted addend, the same
-    // pre-bar (sum, compensation), so a recompute()d bar and a freshly
-    // computed one with an identical window agree bit-for-bit.
-    double sum = window_.repush(src);
+    // pre-bar state and the same raw window. The readback depends only on
+    // that window, even if the legacy compensated sum overflowed earlier.
+    window_.repush(src);
 
     if (bar_count < length) {
         return na<double>();
     }
-    return sum / length;
+    return window_.correctly_rounded_sum() / length;
 }
 
 // --- WMA ---
