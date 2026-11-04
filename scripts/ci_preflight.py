@@ -202,10 +202,14 @@ POST_DEBUG_BUILD_STRATEGY = POST_BUILD_STRATEGY.replace(
 POST_ARM_BUILD_STRATEGY = ('    strategy:\n'
                           '      fail-fast: false\n'
                           '      matrix:\n'
-                          '        build_type: [Release, Debug]\n')
+                          '        build_type: [Release, Debug]\n'
+                          '        shard: [1, 2, 3, 4]\n')
 BUILD_NAME = 'build (${{ matrix.platform.os }}, ${{ matrix.build_type }})'
-POST_ARM_BUILD_NAME = 'build (ubuntu-24.04-arm, ${{ matrix.build_type }})'
-POST_SHARDS = {'build': 4, 'build-debug': 2, 'sanitizers': 8, 'kernel-only': 2}
+POST_ARM_BUILD_NAME = ('build-shard (ubuntu-24.04-arm, ${{ matrix.build_type }}, '
+                       '${{ matrix.shard }}/4)')
+POST_ARM_CTEST_EXCLUSION = (
+    " ${{ matrix.build_type == 'Release' && '--exclude-label ci-script' || '' }}")
+POST_SHARDS = {'build': 4, 'build-debug': 2, 'build-arm': 4, 'sanitizers': 8, 'kernel-only': 2}
 POST_LEG_GATES = {
     'build-release-gate': ('build', 'build (ubuntu-24.04, Release)'),
     'build-debug-gate': ('build-debug', 'build (ubuntu-24.04, Debug)'),
@@ -3029,7 +3033,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             ('ci-post.yml', 'build-debug', POST_DEBUG_BUILD_STRATEGY, post_build_name(2),
              'only Ubuntu Debug shards on full events'),
             ('ci-post.yml', 'build-arm', POST_ARM_BUILD_STRATEGY, POST_ARM_BUILD_NAME,
-             'only Linux arm64 Release/Debug cells on full events')):
+             'only Linux arm64 Release/Debug shards on full events')):
         if name not in workflows:
             continue
         build = _jobs(workflows[name]).get(job, '')
@@ -3043,6 +3047,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             body = jobs.get(job, '')
             strategy = (POST_BUILD_STRATEGY if job == 'build' else
                         POST_DEBUG_BUILD_STRATEGY if job == 'build-debug' else
+                        POST_ARM_BUILD_STRATEGY if job == 'build-arm' else
                         '    strategy:\n      fail-fast: false\n      matrix:\n'
                         '        shard: [' + ', '.join(str(i) for i in range(1, count + 1)) + ']\n')
             if _job_block(body, 'strategy') != _code(strategy):
@@ -3896,6 +3901,7 @@ def post_shard_workflow_findings(jobs: dict[str, str]) -> list[str]:
         upload = _step_named(steps, '      - name: Retain CI diagnostics')
         diagnostic = ('${{ matrix.platform.os }}-${{ matrix.build_type }}'
                       if job in ('build', 'build-debug') else
+                      'ubuntu-24.04-arm-${{ matrix.build_type }}' if job == 'build-arm' else
                       'kernel' if job == 'kernel-only' else 'sanitizers')
         if ('          name: ci-diagnostics-' + diagnostic
                 + '-shard-${{ matrix.shard }}-of-' + str(count) not in _code(upload)
@@ -4049,8 +4055,9 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
         build_step = _step_named(_steps(build), '      - name: Verify (${{ matrix.build_type }})')
         shard_flag = (' --ctest-shard ${{ matrix.shard }}/' + str(POST_SHARDS[job])
                       if not pr and job in POST_SHARDS else '')
+        exclusion = POST_ARM_CTEST_EXCLUSION if not pr and job == 'build-arm' else ''
         if (_step_values(build_step, 'run') != [
-                BUILD_VERIFY_RUN if pr else POST_BUILD_VERIFY_RUN + shard_flag]
+                BUILD_VERIFY_RUN if pr else POST_BUILD_VERIFY_RUN + shard_flag + exclusion]
                 or _step_values(build_step, 'if') != [AUTHZ_SUCCESS]
                 or _counted_text(build).count('scripts/ci_verify.py') != (0 if pr else 1)
                 or _counted_text(build).count('ctest --test-dir') != (1 if pr else 0)):
@@ -4074,8 +4081,11 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
                 if _step_values(step, 'name') == ['Require the requested platform']
                 else _code(step.replace('ci-diagnostics-${{ matrix.platform.os }}-',
                                         'ci-diagnostics-ubuntu-24.04-arm-')
-                               .replace(' --ctest-shard ${{ matrix.shard }}/' + str(count), '')
-                               .replace('-shard-${{ matrix.shard }}-of-' + str(count), '')
+                               .replace(' --ctest-shard ${{ matrix.shard }}/' + str(count),
+                                        ' --ctest-shard ${{ matrix.shard }}/4'
+                                        + POST_ARM_CTEST_EXCLUSION)
+                               .replace('-shard-${{ matrix.shard }}-of-' + str(count),
+                                        '-shard-${{ matrix.shard }}-of-4')
                                .replace(SHARD_CACHE_SAVE, BUILD_CACHE_SAVE))
                 for step in _steps(jobs.get(job, ''))]
             if [_code(step) for step in _steps(jobs.get('build-arm', ''))] != expected_steps:
@@ -4095,7 +4105,11 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
                     or _step_values(step, 'if') != [AUTHZ_SUCCESS]):
                 findings.append(f'{job} must run its full profile on every shard')
     for job, body in jobs.items():
-        if any(flag in body for flag in ('--exclude-label', '--include-label', '--class-tier')):
+        # The exact arm Verify command and mirrored steps bind this Release-only
+        # exception. Remove it once; every other population filter still fails.
+        population = (body.replace(POST_ARM_CTEST_EXCLUSION, '', 1)
+                      if not pr and job == 'build-arm' else body)
+        if any(flag in population for flag in ('--exclude-label', '--include-label', '--class-tier')):
             findings.append(f'{job} must keep its full population')
     if not pr:
         if ('      exclude_slow: false' not in _code(jobs.get('native-live', ''))

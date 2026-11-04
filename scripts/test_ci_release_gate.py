@@ -126,13 +126,14 @@ def ci_post_jobs():
 
 def linux_ci_post_jobs():
     # Keep these regression inputs Linux-only even against the previous gate.
-    # Derive arm64 rows from amd64, without copying the required-name tuple.
+    # Derive all arm64 shards from amd64, without copying the required-name tuple.
     amd64 = [job for job in ci_post_jobs()
              if job["name"].startswith("build (ubuntu-24.04, ")]
     return amd64 + [
-        {**job, "id": job["id"] + len(amd64),
-         "name": job["name"].replace("ubuntu-24.04,", "ubuntu-24.04-arm,")}
-        for job in amd64]
+        {**job, "id": len(amd64) + 4 * index + shard,
+         "name": job["name"].replace("build (ubuntu-24.04,", "build-shard (ubuntu-24.04-arm,")[:-1]
+                 + f", {shard}/4)"}
+        for index, job in enumerate(amd64) for shard in range(1, 5)]
 
 
 def jobs_page(rows, *, total=None):
@@ -2469,20 +2470,28 @@ class WorkflowPinTests(unittest.TestCase):
         body = _without_comments(jobs["build-arm"])
         matrix = re.search(r"(?ms)^      matrix:\n(.*?)(?=^ {0,6}\S|\Z)", body)
         self.assertIsNotNone(matrix)
-        self.assertEqual(re.findall(r"(?m)^        (\w+):", matrix[1]), ["build_type"],
+        self.assertEqual(re.findall(r"(?m)^        (\w+):", matrix[1]), ["build_type", "shard"],
                          "new axes/include/exclude need a gate review")
         types = re.search(r"(?m)^        build_type: \[([^\n]+)\]$", matrix[1])
         self.assertIsNotNone(types)
         build_types = [value.strip() for value in types[1].split(",")]
         self.assertCountEqual(build_types, ["Release", "Debug"])
         self.assert_gke_build(body, "gke-16cpu-32gb-arm64-128gb")
+        shards = re.findall(r"(?m)^        shard: \[([0-9, ]+)\]$", matrix[1])
+        self.assertEqual(len(shards), 1)
+        indices = [int(value.strip()) for value in shards[0].split(",")]
+        self.assertEqual(indices, [1, 2, 3, 4], "no required shard may be dropped")
+        denominators = re.findall(r"--ctest-shard \$\{\{ matrix.shard \}\}/(\d+)", body)
+        self.assertEqual(denominators, ["4"])
         name = re.search(r"(?m)^    name: (.+)$", body)
         self.assertIsNotNone(name)
         for build_type in build_types:
-            displayed = name[1].replace("${{ matrix.build_type }}", build_type)
-            self.assertNotIn("${{", displayed, "every name axis must be expanded")
-            self.assertEqual(displayed, f"build (ubuntu-24.04-arm, {build_type})")
-            expanded.append(displayed)
+            for shard in indices:
+                displayed = (name[1].replace("${{ matrix.build_type }}", build_type)
+                             .replace("${{ matrix.shard }}", str(shard)))
+                self.assertNotIn("${{", displayed, "every name axis must be expanded")
+                self.assertEqual(displayed, f"build-shard (ubuntu-24.04-arm, {build_type}, {shard}/4)")
+                expanded.append(displayed)
         return expanded
 
     def test_ci_post_required_build_jobs_match_workflow_matrices(self):
@@ -2494,7 +2503,7 @@ class WorkflowPinTests(unittest.TestCase):
     def test_ci_post_required_build_jobs_reject_dropped_shard(self):
         workflow = (ROOT / ".github/workflows/ci-post.yml").read_text()
         self.ci_post_build_names(_jobs(workflow))
-        for job_id, count in (("build", 4), ("build-debug", 2)):
+        for job_id, count in (("build", 4), ("build-debug", 2), ("build-arm", 4)):
             with self.subTest(job=job_id):
                 jobs = _jobs(workflow)
                 before = "        shard: [" + ", ".join(str(i) for i in range(1, count + 1)) + "]"
@@ -3169,19 +3178,19 @@ class CiPostGateTests(unittest.TestCase):
 
     def test_four_green_linux_legs_without_macos_prove_the_release(self):
         jobs = linux_ci_post_jobs()
-        self.assertEqual(len(jobs), 4)
+        self.assertEqual(len(jobs), 10)
         self.api.ci_post(self.post_run, jobs)
         self.assert_green(self.post_run)
         self.assertEqual(self.history.calls, [self.post_run["head_sha"]])
 
     def test_each_missing_linux_leg_is_the_only_missing_job_reported(self):
         complete = linux_ci_post_jobs()
-        self.assertEqual(len(complete), 4)
+        self.assertEqual(len(complete), 10)
         for original in complete:
             with self.subTest(job=original["name"]):
                 self.reset_ci_post()
                 jobs = [job for job in complete if job["name"] != original["name"]]
-                self.assertEqual(len(jobs), 3)
+                self.assertEqual(len(jobs), 9)
                 self.api.ci_post(self.post_run, jobs)
                 stderr = self.assert_no_full_run(
                     [self.post_run], f"missing job {original['name']}")

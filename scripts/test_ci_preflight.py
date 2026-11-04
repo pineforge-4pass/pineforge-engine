@@ -160,9 +160,12 @@ POST_BUILD_VERIFY = (
     'run: |\n          python3 scripts/ci_verify.py '
     "${{ matrix.build_type == 'Release' && 'release' || 'debug' }} "
     '--build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache')
+POST_ARM_CTEST_EXCLUSION = (
+    " ${{ matrix.build_type == 'Release' && '--exclude-label ci-script' || '' }}")
 SHARDED_VERIFY_RUNS = (
     (6, 'build', POST_BUILD_VERIFY + ' --ctest-shard ${{ matrix.shard }}/4'),
     (6, 'build-debug', POST_BUILD_VERIFY + ' --ctest-shard ${{ matrix.shard }}/2'),
+    (6, 'build-arm', POST_BUILD_VERIFY + ' --ctest-shard ${{ matrix.shard }}/4' + POST_ARM_CTEST_EXCLUSION),
     (6, 'sanitizers', 'run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan '
      '--jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/8'),
     (6, 'kernel-only', KERNEL_VERIFY),
@@ -180,7 +183,7 @@ CI_SOURCES = ('.github/workflows/ci.yml', '.github/workflows/native-live.yml',
 POST_BUILD_RUNNER_FINDING = 'ci-post.yml build must select only Ubuntu Release shards on full events'
 POST_DEBUG_BUILD_RUNNER_FINDING = 'ci-post.yml build-debug must select only Ubuntu Debug shards on full events'
 POST_ARM_BUILD_RUNNER_FINDING = ('ci-post.yml build-arm must select '
-                                'only Linux arm64 Release/Debug cells on full events')
+                                'only Linux arm64 Release/Debug shards on full events')
 RELEASE_MATRIX_FINDING = ('release.yml prebuilt must use exactly the isolated Linux x64 '
                           'and hosted ARM matrix')
 CI_JOB_IDS = ('authz',)
@@ -1847,7 +1850,7 @@ class WorkflowEventFleets(unittest.TestCase):
                 self.assertIn('ci-post.yml job build-arm must not set PF_CI_LABELS on a GKE job',
                               ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed}))
 
-    def test_post_split_preserves_all_four_matrix_check_names(self):
+    def test_post_split_preserves_all_matrix_check_names(self):
         # Expand the actual matrix and name expressions so a missing cell or
         # a changed display name cannot silently change the required checks.
         def names(body):
@@ -1861,14 +1864,17 @@ class WorkflowEventFleets(unittest.TestCase):
             if types is None:
                 self.assertNotIn('${{', template)
                 return [template]
+            shards = re.search(r'^        shard: \[([^\]]+)\]$', body, re.MULTILINE)
+            indices = [value.strip() for value in shards.group(1).split(',')] if shards else ['']
             rendered = []
             for platform in platforms:
                 for build_type in (value.strip() for value in types.group(1).split(',')):
-                    values = {'platform.os': platform, 'build_type': build_type}
-                    name = re.sub(r'\$\{\{\s*matrix\.(platform\.os|build_type)\s*\}\}',
-                                  lambda match: values[match.group(1)], template)
-                    self.assertNotIn('${{', name)
-                    rendered.append(name)
+                    for shard in indices:
+                        values = {'platform.os': platform, 'build_type': build_type, 'shard': shard}
+                        name = re.sub(r'\$\{\{\s*matrix\.(platform\.os|build_type|shard)\s*\}\}',
+                                      lambda match: values[match.group(1)], template)
+                        self.assertNotIn('${{', name)
+                        rendered.append(name)
             return rendered
 
         workflows = self.workflows()
@@ -1877,12 +1883,13 @@ class WorkflowEventFleets(unittest.TestCase):
         self.assertIn('build-arm', jobs)
         self.assertNotIn('build-macos', jobs)
         expected = ['build (ubuntu-24.04, Release)', 'build (ubuntu-24.04, Debug)',
-                    'build (ubuntu-24.04-arm, Release)', 'build (ubuntu-24.04-arm, Debug)']
-        self.assertEqual(len(expected), 4)
+                    *(f'build-shard (ubuntu-24.04-arm, {build_type}, {shard}/4)'
+                      for build_type in ('Release', 'Debug') for shard in range(1, 5))]
+        self.assertEqual(len(expected), 10)
         self.assertCountEqual(names(jobs['build-release-gate']) + names(jobs['build-debug-gate'])
                               + names(jobs['build-arm']), expected)
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
-        changed = in_job(post, 'build-arm', '    name: build (',
+        changed = in_job(post, 'build-arm', '    name: build-shard (',
                          '    name: build arm64 (')
         self.assertNotEqual(changed, post)
         mutated = _jobs(changed)
@@ -1890,7 +1897,7 @@ class WorkflowEventFleets(unittest.TestCase):
                                    + names(mutated['build-debug-gate']) + names(mutated['build-arm'])),
                             sorted(expected))
         self.assertIn('ci-post.yml build-arm legs must keep their names: '
-                      'build (ubuntu-24.04-arm, ${{ matrix.build_type }})',
+                      'build-shard (ubuntu-24.04-arm, ${{ matrix.build_type }}, ${{ matrix.shard }}/4)',
                       ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed}))
 
     def test_post_hosted_exception_refuses_jobs_outside_the_fixed_allowlist(self):
@@ -3002,16 +3009,19 @@ class PostLinuxBuildPolicy(unittest.TestCase):
         # This keeps the negative rows red at their policy assertion, rather
         # than failing to find a job that main did not yet have.
         arm = _jobs(post)['build']
-        arm = arm.replace('name: build (${{ matrix.platform.os }},',
-                          'name: build (ubuntu-24.04-arm,', 1)
+        arm = arm.replace('name: build-shard (${{ matrix.platform.os }},',
+                          'name: build-shard (ubuntu-24.04-arm,', 1)
         arm = arm.replace('        platform:\n          - os: ubuntu-24.04\n', '', 1)
-        arm = arm.replace(f'    runs-on: {POST_RUNNER}\n',
-                          '    runs-on: ubuntu-24.04-arm\n', 1)
+        arm = arm.replace('        build_type: [Release]\n',
+                          '        build_type: [Release, Debug]\n', 1)
+        arm = arm.replace(f'    runs-on: {GKE_32}\n', f'    runs-on: {GKE_ARM}\n', 1)
+        arm = arm.replace(' --ctest-shard ${{ matrix.shard }}/4\n',
+                          ' --ctest-shard ${{ matrix.shard }}/4' + POST_ARM_CTEST_EXCLUSION + '\n', 1)
         arm = arm.replace("    env:\n      PF_CI_LABELS: "
                           "'[\"self-hosted\",\"pf-ci\",\"pf-ci-x64-16\"]'\n", '', 1)
         arm = arm.replace('REQUESTED_PLATFORM: ${{ matrix.platform.os }}',
                           'REQUESTED_PLATFORM: ubuntu-24.04-arm', 1)
-        arm = arm.replace('ubuntu-24.04:Linux|macos-26:macOS',
+        arm = arm.replace('ubuntu-24.04:Linux',
                           'ubuntu-24.04-arm:Linux', 1)
         arm = arm.replace('post fleet runner OS', 'runner OS', 1)
         arm = arm.replace('ci-diagnostics-${{ matrix.platform.os }}-',
@@ -3050,7 +3060,7 @@ class PostLinuxBuildPolicy(unittest.TestCase):
                                  f'        build_type: [{build_type}]\n')
                 self.assertNotEqual(changed, post)
                 self.assertIn('ci-post.yml build-arm must select only Linux arm64 '
-                              'Release/Debug cells on full events',
+                              'Release/Debug shards on full events',
                               ci_preflight.runner_findings({'ci-post.yml': changed}))
 
     def test_post_arm_keeps_the_amd64_steps(self):
@@ -4994,10 +5004,10 @@ class PreflightFailures(unittest.TestCase):
             (6, '        id: classify\n', '        id: classify\n        continue-on-error: true\n'),
             (6, '  changes:\n', '  classify:\n'),
             (6, '  sanitizers:\n', '  sanitizers:\n    needs: preflight\n'),
-            (6, '--ccache\n',
-                "--ccache ${{ github.event_name == 'pull_request' && matrix.build_type == 'Debug' "
+            (6, POST_ARM_CTEST_EXCLUSION + '\n',
+                POST_ARM_CTEST_EXCLUSION + " ${{ github.event_name == 'pull_request' && matrix.build_type == 'Debug' "
                 "&& '--exclude-label slow' || '' }}\n"),
-            (6, '--ccache\n', '--ccache --exclude-label slow\n'),
+            (6, POST_ARM_CTEST_EXCLUSION + '\n', POST_ARM_CTEST_EXCLUSION + ' --exclude-label slow\n'),
             (6, 'exclude_slow: false', 'exclude_slow: true'),
             (1, '        default: false', '        default: true'),
             (1, NATIVE_EXCLUSION, ''),
@@ -6381,11 +6391,17 @@ exit "$lookup_exit"
 
     def assert_release_kernel_native_full_debug_sanitizers_exclude_slow(self, ci, release):
         jobs = _jobs(ci)
-        # Full verification no longer carries a label exclusion on any event.
+        # Only arm Release excludes the CI-script rows that amd64 Release already runs.
         self.assertEqual({job for job, body in jobs.items() if '--exclude-label' in body},
-                         set())
-        for body in jobs.values():
-            self.assertNotIn('--exclude-label', body)
+                         {'build-arm'})
+        arm_verify = ci_preflight._step_named(ci_preflight._steps(jobs['build-arm']),
+                                              '      - name: Verify (${{ matrix.build_type }})')
+        self.assertEqual(ci_preflight._step_values(arm_verify, 'run'), [
+            POST_BUILD_VERIFY.replace('run: |\n          ', '| ')
+            + ' --ctest-shard ${{ matrix.shard }}/4' + POST_ARM_CTEST_EXCLUSION])
+        for job, body in jobs.items():
+            population = body.replace(POST_ARM_CTEST_EXCLUSION, '', 1) if job == 'build-arm' else body
+            self.assertNotIn('--exclude-label', population)
         self.assertNotIn('--exclude-label', release)
         self.assertNotIn('--class-tier', release)
         # Read the real workflow and CMake registration, rather than deriving
