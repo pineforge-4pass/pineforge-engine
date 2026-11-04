@@ -195,8 +195,62 @@ class ControllerTests(unittest.TestCase):
                          'independent_failure_diagnostic')
         self.assert_no_post(api)
         api = FakeAPI(run=CAPTURED['run-41515706477.json'])
-        self.assert_refused(api, 'workflow_or_event_not_allowlisted')
+        # The PR workflow is now allowlisted; this old capture lacks PR identity fields.
+        self.assert_refused(api, 'pull_request_metadata_unavailable')
         self.assertEqual(api.calls, [('GET', api.endpoint)])
+
+    def test_pr_superseded_head_refused_without_post(self):
+        class PRAPI(FakeAPI):
+            def __init__(self, run, pull_request, history):
+                super().__init__(run=run)
+                self.pull_request = deepcopy(pull_request)
+                self.history = deepcopy(history)
+
+            def get(self, path):
+                if path == f'{self.endpoint.rsplit("/actions", 1)[0]}/pulls/{self.pull_request["number"]}':
+                    self.calls.append(('GET', path))
+                    return deepcopy(self.pull_request)
+                return super().get(path)
+
+            def pages(self, path):
+                if path == (f'{self.endpoint.rsplit("/actions", 1)[0]}/actions/workflows/'
+                            f'gke-pr.yml/runs?event={controller.PR_EVENT}&branch=feature&per_page=100'):
+                    self.calls.append(('PAGES', path))
+                    return deepcopy(self.history)
+                return super().pages(path)
+
+        old_sha, new_sha = '1' * 40, '2' * 40
+        run = completed_wave_run()
+        run.update(path=controller.PR_WORKFLOW, event=controller.PR_EVENT,
+                   head_branch='feature', head_repository={'full_name': REPO},
+                   pull_requests=[{'number': 736}], head_sha=old_sha,
+                   run_number=10, created_at='2026-11-05T00:00:00Z')
+        current = deepcopy(run)
+        newer = deepcopy(run)
+        newer.update(id=run['id'] + 1, run_number=11, head_sha=new_sha,
+                     created_at='2026-11-05T00:01:00Z')
+
+        def pull_request(state, sha):
+            return {'number': 736, 'state': state,
+                    'head': {'sha': sha, 'repo': {'full_name': REPO, 'fork': False}}}
+
+        cases = (
+            ('closed', pull_request('closed', old_sha),
+             [{'total_count': 1, 'workflow_runs': [current]}]),
+            ('head_changed', pull_request('open', new_sha),
+             [{'total_count': 1, 'workflow_runs': [current]}]),
+            ('newer_run_head_match', pull_request('open', old_sha),
+             [{'total_count': 2, 'workflow_runs': [newer, current]}]),
+            ('newer_run_head_new', pull_request('open', new_sha),
+             [{'total_count': 2, 'workflow_runs': [newer, current]}]),
+        )
+        for name, pr, history in cases:
+            with self.subTest(case=name):
+                api = PRAPI(run, pr, history)
+                result = self.decide(api)
+                self.assertFalse(result['rerun'], result)
+                self.assertEqual(result['reason'], 'superseded_pull_request_head', result)
+                self.assert_no_post(api)
 
     def test_mixed_failure_later_page_refused(self):
         for pages in ([{'jobs': [CUT_JOB, ORDINARY_JOB]}],
@@ -509,11 +563,13 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(controller.PRIMARY_BRANCH, 'main')
         self.assertEqual(controller.ALLOWED_WORKFLOWS, {
             '.github/workflows/ci-post.yml': frozenset({'push', 'schedule'}),
+            '.github/workflows/gke-pr.yml': frozenset({'pull_request_target'}),
         })
         workflow = (ROOT / '.github/workflows/rerun-preempted.yml').read_text()
         trigger = workflow.split('\npermissions:', 1)[0]
         self.assertEqual(re.findall(r'^  (\w+):', trigger, re.M), ['workflow_run'])
-        self.assertEqual(re.findall(r'^      - (.+)$', trigger, re.M), ['CI post-merge'])
+        self.assertEqual(re.findall(r'^      - (.+)$', trigger, re.M),
+                         ['CI post-merge', 'GKE PR'])
         self.assertIn('types: [completed]', trigger)
         self.assertIn('runs-on: ubuntu-24.04', workflow)
         self.assertNotIn('pf-gcp-pr', workflow)

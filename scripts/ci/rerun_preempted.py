@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from datetime import datetime
 from graphlib import TopologicalSorter
 import itertools
 import json
@@ -20,15 +21,19 @@ import subprocess
 import sys
 import textwrap
 import time
+from urllib.parse import quote
 
 PRIMARY_BRANCH = 'main'
 MAX_ATTEMPTS = 3
+PR_WORKFLOW = '.github/workflows/gke-pr.yml'
+PR_EVENT = 'pull_request_target'
 # Let the jobs API converge after the workflow_run completion event.
 JOB_POLL_INTERVAL = 30
 JOB_POLL_BOUND = 10 * 60
 # Exact entrypoints/events, independently checked in addition to workflow_run names.
 ALLOWED_WORKFLOWS = {
     '.github/workflows/ci-post.yml': frozenset({'push', 'schedule'}),
+    PR_WORKFLOW: frozenset({PR_EVENT}),
 }
 # Bare amd64 GKE scale sets, optionally with the fleet's disk-size suffix.
 # No arm64, gkp pools or operator-dispatched entrypoints are admitted.
@@ -145,19 +150,21 @@ def _sleep(seconds):
     time.sleep(seconds)
 
 
-def _gate(run, repo, expected_attempt):
+def _gate(run, repo, expected_attempt, max_attempts=MAX_ATTEMPTS):
+    if type(max_attempts) is not int or max_attempts < 1:
+        return 'invalid_max_attempts'
     if run['repository']['full_name'] != repo:
         return 'repository_mismatch'
     if run['status'] != 'completed' or run['conclusion'] != 'failure':
         return 'not_a_completed_failed_run'
     attempt = int(run['run_attempt'])
-    if not 1 <= attempt < MAX_ATTEMPTS:
+    if not 1 <= attempt < max_attempts:
         return 'attempt_limit'
     if expected_attempt is not None and attempt != expected_attempt:
         return 'stale_completion_event'
     if run['event'] not in ALLOWED_WORKFLOWS.get(run['path'], ()):
         return 'workflow_or_event_not_allowlisted'
-    if run['head_branch'] != PRIMARY_BRANCH:
+    if run['path'] == '.github/workflows/ci-post.yml' and run['head_branch'] != PRIMARY_BRANCH:
         return 'not_the_primary_branch'
     return None
 
@@ -597,12 +604,156 @@ def _jobs(api, endpoint, attempt):
             for job in page['jobs']]
 
 
-def _run_changed(current, initial, repo, attempt):
+def _run_changed(current, initial, repo, attempt, max_attempts=MAX_ATTEMPTS):
     identity = ('id', 'run_attempt', 'head_sha', 'path', 'event', 'head_branch')
-    return _gate(current, repo, attempt) or any(current[key] != initial[key] for key in identity)
+    return _gate(current, repo, attempt, max_attempts=max_attempts) or any(
+        current[key] != initial[key] for key in identity)
 
 
-def _completed_jobs(api, endpoint, attempt, initial_run, repo):
+def _pr_identity(run, repo):
+    repository = run.get('repository')
+    head_repository = run.get('head_repository')
+    if not isinstance(repository, dict) or not isinstance(head_repository, dict):
+        return None, 'pull_request_metadata_unavailable'
+    repository_name = repository.get('full_name')
+    head_repository_name = head_repository.get('full_name')
+    if not isinstance(repository_name, str) or not isinstance(head_repository_name, str):
+        return None, 'pull_request_metadata_unavailable'
+    if repository_name != repo or head_repository_name != repository_name:
+        return None, 'pull_request_head_repository_mismatch'
+    pull_requests = run.get('pull_requests')
+    if (not isinstance(pull_requests, list) or len(pull_requests) != 1
+            or not isinstance(pull_requests[0], dict)):
+        return None, 'pull_request_metadata_unavailable'
+    number = pull_requests[0].get('number')
+    if type(number) is not int or number <= 0:
+        return None, 'pull_request_metadata_unavailable'
+    return number, None
+
+
+def _same_run(left, right):
+    left_id, right_id = left.get('id'), right.get('id')
+    if left_id is None or right_id is None:
+        return False
+    if left_id == right_id:
+        return True
+    return (type(left_id) is int and type(right_id) is int
+            and left_id > 0 and left_id == right_id)
+
+
+def _created_at(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        timestamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    return timestamp if timestamp.tzinfo is not None else None
+
+
+def _newer_run(candidate, run):
+    if _same_run(candidate, run):
+        return False
+    compared = False
+    candidate_number, run_number = candidate.get('run_number'), run.get('run_number')
+    if (type(candidate_number) is int and candidate_number > 0
+            and type(run_number) is int and run_number > 0):
+        compared = True
+        if candidate_number > run_number:
+            return True
+    candidate_created, run_created = (_created_at(candidate.get('created_at')),
+                                      _created_at(run.get('created_at')))
+    if candidate_created is not None and run_created is not None:
+        compared = True
+        if candidate_created > run_created:
+            return True
+    return False if compared else None
+
+
+def _pr_run_history(api, repo, run, number):
+    head_branch = run.get('head_branch')
+    if not isinstance(head_branch, str):
+        return 'pull_request_metadata_unavailable'
+    endpoint = (f'repos/{repo}/actions/workflows/gke-pr.yml/runs'
+                f'?event={PR_EVENT}&branch={quote(head_branch, safe="")}&per_page=100')
+    pages = api.pages(endpoint)
+    if not isinstance(pages, list) or not pages:
+        return 'pull_request_runs_unavailable'
+    runs, total_count = [], None
+    for page in pages:
+        if not isinstance(page, dict) or not isinstance(page.get('workflow_runs'), list):
+            return 'pull_request_runs_unavailable'
+        page_total = page.get('total_count')
+        if page_total is not None:
+            if type(page_total) is not int or page_total < 0:
+                return 'pull_request_runs_unavailable'
+            total_count = page_total if total_count is None else max(total_count, page_total)
+        runs.extend(page['workflow_runs'])
+    if total_count is not None and len(runs) < total_count:
+        return 'pull_request_runs_unavailable'
+    found_current = False
+    for candidate in runs:
+        if not isinstance(candidate, dict):
+            return 'pull_request_runs_unavailable'
+        if _same_run(candidate, run):
+            found_current = True
+            continue
+        pull_requests = candidate.get('pull_requests')
+        if not isinstance(pull_requests, list):
+            return 'pull_request_runs_unavailable'
+        numbers = []
+        for pull_request in pull_requests:
+            if not isinstance(pull_request, dict):
+                return 'pull_request_runs_unavailable'
+            candidate_number = pull_request.get('number')
+            if type(candidate_number) is not int or candidate_number <= 0:
+                return 'pull_request_runs_unavailable'
+            numbers.append(candidate_number)
+        if number not in numbers:
+            continue
+        newer = _newer_run(candidate, run)
+        if newer is None:
+            return 'pull_request_runs_unavailable'
+        if newer:
+            return 'superseded_pull_request_head'
+    return None if found_current else 'pull_request_runs_unavailable'
+
+
+def _pr_guard(api, repo, run):
+    number, reason = _pr_identity(run, repo)
+    if reason:
+        return reason
+    head_sha = run.get('head_sha')
+    if not isinstance(head_sha, str):
+        return 'pull_request_metadata_unavailable'
+    pull_request = api.get(f'repos/{repo}/pulls/{number}')
+    if not isinstance(pull_request, dict) or pull_request.get('number') != number:
+        return 'pull_request_metadata_unavailable'
+    head = pull_request.get('head')
+    head_repository = head.get('repo') if isinstance(head, dict) else None
+    if not isinstance(head, dict) or not isinstance(head_repository, dict):
+        return 'pull_request_metadata_unavailable'
+    fork = head_repository.get('fork')
+    if type(fork) is not bool:
+        return 'pull_request_metadata_unavailable'
+    if fork:
+        return 'pull_request_is_fork'
+    head_repository_name = head_repository.get('full_name')
+    if not isinstance(head_repository_name, str):
+        return 'pull_request_metadata_unavailable'
+    if head_repository_name != repo:
+        return 'pull_request_head_repository_mismatch'
+    if pull_request.get('state') != 'open':
+        return 'superseded_pull_request_head'
+    current_head_sha = head.get('sha')
+    if not isinstance(current_head_sha, str):
+        return 'pull_request_metadata_unavailable'
+    if current_head_sha != head_sha:
+        return 'superseded_pull_request_head'
+    return _pr_run_history(api, repo, run, number)
+
+
+def _completed_jobs(api, endpoint, attempt, initial_run, repo, max_attempts=MAX_ATTEMPTS):
     jobs = _jobs(api, endpoint, attempt)
     if jobs and all(job['status'] == 'completed' for job in jobs):
         return jobs, None, None
@@ -617,29 +768,40 @@ def _completed_jobs(api, endpoint, attempt, initial_run, repo):
         _sleep(min(JOB_POLL_INTERVAL, remaining))
         waited = round(max(0.0, _clock() - started), 3)
         current = api.get(endpoint)
-        if _run_changed(current, initial_run, repo, attempt):
+        if _run_changed(current, initial_run, repo, attempt, max_attempts=max_attempts):
             return jobs, waited, 'run_changed_during_classification'
         jobs = _jobs(api, endpoint, attempt)
         if jobs and all(job['status'] == 'completed' for job in jobs):
             return jobs, waited, None
 
 
-def process(api, repo, run_id, *, dry_run=False, expected_attempt=None):
+def process(api, repo, run_id, *, dry_run=False, expected_attempt=None,
+            max_attempts=MAX_ATTEMPTS):
     """Return a bounded decision; lookup ambiguity always refuses the POST."""
     result = {'run_id': run_id, 'dry_run': dry_run, 'rerun': False,
               'failed_job_ids': [], 'dependent_job_ids': []}
     try:
         if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo) or int(run_id) <= 0:
             raise ValueError('invalid repository or run id')
+        if type(max_attempts) is not int or max_attempts < 1:
+            result['reason'] = 'invalid_max_attempts'
+            return result
         endpoint = f'repos/{repo}/actions/runs/{int(run_id)}'
         run = api.get(endpoint)
-        reason = _gate(run, repo, expected_attempt)
+        reason = _gate(run, repo, expected_attempt, max_attempts=max_attempts)
         result['run_attempt'] = run['run_attempt']
         if reason:
             result['reason'] = reason
             return result
+        is_pr = run['path'] == PR_WORKFLOW
+        if is_pr:
+            reason = _pr_guard(api, repo, run)
+            if reason:
+                result['reason'] = reason
+                return result
         attempt = int(run['run_attempt'])
-        jobs, waited, reason = _completed_jobs(api, endpoint, attempt, run, repo)
+        jobs, waited, reason = _completed_jobs(
+            api, endpoint, attempt, run, repo, max_attempts=max_attempts)
         if waited is not None:
             result['waited_seconds'] = waited
         if reason:
@@ -708,9 +870,14 @@ def process(api, repo, run_id, *, dry_run=False, expected_attempt=None):
             return result
         # Re-read just before mutation; concurrency serializes controller runs too.
         current = api.get(endpoint)
-        if _run_changed(current, run, repo, attempt):
+        if _run_changed(current, run, repo, attempt, max_attempts=max_attempts):
             result['reason'] = 'run_changed_during_classification'
             return result
+        if is_pr:
+            reason = _pr_guard(api, repo, current)
+            if reason:
+                result['reason'] = reason
+                return result
         if not dry_run:
             api.post(f'{endpoint}/rerun-failed-jobs')
         result.update(rerun=True, reason=('runner_loss_with_dependents' if dependent
@@ -725,9 +892,12 @@ def main():
     parser.add_argument('--repo', default=os.environ.get('GITHUB_REPOSITORY'), required=not os.environ.get('GITHUB_REPOSITORY'))
     parser.add_argument('--run-id', required=True, type=int)
     parser.add_argument('--expected-attempt', type=int)
+    parser.add_argument('--max-attempts', type=int, default=MAX_ATTEMPTS)
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
-    decision = process(GitHubAPI(), args.repo, args.run_id, dry_run=args.dry_run, expected_attempt=args.expected_attempt)
+    decision = process(GitHubAPI(), args.repo, args.run_id, dry_run=args.dry_run,
+                       expected_attempt=args.expected_attempt,
+                       max_attempts=args.max_attempts)
     print(json.dumps(decision, sort_keys=True))
     # Refusals, including lookup failures, are successful controller decisions.
     # Their JSON diagnostics remain visible; missing proof never permits a POST.
