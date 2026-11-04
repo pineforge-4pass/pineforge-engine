@@ -43,7 +43,9 @@ void forwarding_control() {
 }
 
 void first_cache_allocation_failure_reads_through() {
-    TradeLedger ledger;
+    // Sticky bypass is the explicit finite contract, including the former
+    // default-sized value. DEFAULT AUTO retry has its own growth-unit rows.
+    TradeLedger ledger(TradeLedger::kDefaultCacheRows);
     ledger.set_scratch_directory(".");
     constexpr Size population = 4 * TradeLedger::kResidentRows + 1;
     append(ledger, population);
@@ -102,7 +104,7 @@ void first_cache_allocation_failure_reads_through() {
 }
 
 void growth_allocation_failure_keeps_the_append() {
-    TradeLedger ledger;
+    TradeLedger ledger(TradeLedger::kDefaultCacheRows);
     ledger.set_scratch_directory(".");
     append(ledger, page_slots);
     const auto fixed = ledger.cache_resident_bytes();
@@ -179,7 +181,7 @@ void zero_capacity_never_allocates_a_cache() {
 }
 
 void backing_failure_is_not_an_allocation_bypass() {
-    TradeLedger ledger;
+    TradeLedger ledger(TradeLedger::kDefaultCacheRows);
     ledger.set_scratch_directory(".");
     append(ledger, 4 * TradeLedger::kResidentRows + 1);
     const auto expected = row(0);
@@ -211,7 +213,7 @@ void backing_failure_is_not_an_allocation_bypass() {
 }
 
 void owning_value_allocation_failure_still_fails() {
-    TradeLedger ledger;
+    TradeLedger ledger(TradeLedger::kDefaultCacheRows);
     ledger.set_scratch_directory(".");
     const auto expected = row(0);
     ledger.push_back(expected);
@@ -269,14 +271,14 @@ void failed_shared_fill_preserves_the_typed_error_and_retry() {
 
 int main() {
     test("backing counter forwards exact bytes", forwarding_control);
-    test("first decoded cache allocation failure reads through",
+    test("first decoded cache allocation failure reads through [explicit finite old-default]",
          first_cache_allocation_failure_reads_through);
-    test("decoded cache growth failure keeps the append",
+    test("decoded cache growth failure keeps the append [explicit finite old-default]",
          growth_allocation_failure_keeps_the_append);
     test("zero decoded cache capacity reads through", zero_capacity_never_allocates_a_cache);
-    test("backing I/O failures survive allocation bypass",
+    test("backing I/O failures survive allocation bypass [explicit finite old-default]",
          backing_failure_is_not_an_allocation_bypass);
-    test("owning value allocation failure is preserved",
+    test("owning value allocation failure is preserved [explicit finite old-default]",
          owning_value_allocation_failure_still_fails);
     test("failed shared fill preserves typed backing error and healthy retry",
          failed_shared_fill_preserves_the_typed_error_and_retry);

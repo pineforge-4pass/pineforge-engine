@@ -1,5 +1,6 @@
 #include <pineforge/detail/script_store.hpp>
 #include <pineforge/detail/scratch_file.hpp>
+#include <pineforge/series.hpp>
 
 #include <cerrno>
 #include <limits>
@@ -15,8 +16,10 @@ namespace {
 // or a logical capacity policy. Explicit run owners supply their own backing.
 class ScriptScratchBacking final : public ScratchBacking {
 public:
-    ScriptScratchBacking() : ScratchBacking(selected_kind(), 4096) {
+    explicit ScriptScratchBacking(const ScratchIoPolicy& policy)
+        : ScratchBacking(selected_kind(), 4096) {
         file_.bound_cache();
+        file_.set_scratch_io_policy(policy);
         file_.open("pineforge-script-state");
     }
     std::uint64_t page_count() const noexcept override { return extent_; }
@@ -75,7 +78,9 @@ private:
 } // namespace
 
 std::unique_ptr<ScratchBacking> make_script_scratch_backing() {
-    return std::make_unique<ScriptScratchBacking>();
+    // map.new() fallback owners are created inside the same evaluation scope
+    // as numeric windows. Capture once, before opening this backing.
+    return std::make_unique<ScriptScratchBacking>(window_cache_capacity().scratch_io_policy);
 }
 
 } // namespace pineforge::detail

@@ -15,6 +15,8 @@
 #include <pineforge/run_failure.hpp>
 #include <pineforge/detail/scratch_file.hpp>
 #include <pineforge/detail/cache_capacity.hpp>
+#include <pineforge/cache_policy.hpp>
+#include <pineforge/report_pages.hpp>
 #include "retired_trade_history_read.hpp"
 #include "run_cache_diagnostics.hpp"
 #include <algorithm>
@@ -22,6 +24,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <exception>
 #include <map>
 #include <new>
 #include <stdexcept>
@@ -375,12 +378,158 @@ struct TradeLedger::State {
     static_assert(std::is_trivially_copyable_v<Record>);
     static_assert(TradeLedger::kRecordBytes == sizeof(Record));
     static_assert(sizeof(int) == sizeof(std::int32_t));
+    // A supplied run-lifetime capability, separate from the optional decoded
+    // cache. Descriptors grow from its start; byte-reversed payload grows from
+    // its end. Thus no population-sized heap directory or fixed row partition
+    // is needed. Physical byte E-1-n contains logical payload byte n.
+    struct HistoryBacking {
+        int fd = -1;
+        std::uint64_t extent = 0, index_end = 0, text_end = 0, high_water = 0;
+        dev_t device{};
+        ino_t inode{};
+        HistoryFactory factory;
+        ~HistoryBacking() { if (fd >= 0) ::close(fd); }
+        bool bound() const noexcept { return fd >= 0; }
+        void bind(HistoryFactory supplied, std::uint64_t bytes,
+                  const HistoryBacking* previous = nullptr) {
+            if (!supplied || bytes == 0)
+                throw detail::ScratchIoError(EINVAL, "trade history capability extent");
+            detail::ScratchFile::check_extent(bytes, 0);
+            const int candidate = supplied(bytes);
+            if (candidate < 0)
+                throw detail::ScratchIoError(errno ? errno : EBADF, "trade history capability");
+            // A broken supplier cannot transfer the source's very descriptor
+            // to a copy/reset and then have its rejection close that source.
+            if (previous && candidate == previous->fd)
+                throw detail::ScratchIoError(EINVAL, "trade history capability aliases source");
+            // Take ownership immediately, including every validation failure.
+            struct Owner {
+                int fd;
+                ~Owner() { if (fd >= 0) ::close(fd); }
+            } owner{candidate};
+            struct stat info{};
+            if (::fstat(candidate, &info) != 0)
+                throw detail::ScratchIoError(errno, "trade history capability stat");
+            if (previous && info.st_dev == previous->device && info.st_ino == previous->inode)
+                throw detail::ScratchIoError(EINVAL, "trade history capability aliases source");
+            const int flags = ::fcntl(candidate, F_GETFL);
+            if (flags < 0)
+                throw detail::ScratchIoError(errno, "trade history capability access");
+            const int descriptor_flags = ::fcntl(candidate, F_GETFD);
+            if (descriptor_flags < 0)
+                throw detail::ScratchIoError(errno, "trade history capability flags");
+            if (!S_ISREG(info.st_mode) || info.st_size < 0
+                || static_cast<std::uint64_t>(info.st_size) != bytes
+                || (flags & O_ACCMODE) != O_RDWR || (flags & O_APPEND) != 0
+                || (descriptor_flags & FD_CLOEXEC) == 0)
+                throw detail::ScratchIoError(EINVAL, "trade history capability geometry");
+            factory = std::move(supplied);
+            extent = bytes;
+            device = info.st_dev;
+            inode = info.st_ino;
+            fd = std::exchange(owner.fd, -1);
+        }
+        void reserve(std::uint64_t descriptors, std::uint64_t text) {
+            if (descriptors > extent || text > extent - descriptors)
+                throw detail::ScratchIoError(ENOSPC, "trade history capability exhausted");
+            index_end = descriptors;
+            text_end = text;
+            high_water = std::max(high_water, descriptors + text);
+        }
+        void transfer(bool write, std::uint64_t offset, void* data, size_type length) const {
+            if (offset > extent || length > extent - offset)
+                throw detail::ScratchIoError(EIO, "trade history capability range");
+            auto* cursor = static_cast<unsigned char*>(data);
+            for (size_type done = 0; done < length;) {
+                const auto count = std::min(length - done,
+                    static_cast<size_type>(std::numeric_limits<ssize_t>::max()));
+                const auto result = write
+                    ? ::pwrite(fd, cursor + done, count, static_cast<off_t>(offset + done))
+                    : ::pread(fd, cursor + done, count, static_cast<off_t>(offset + done));
+                if (result < 0 && errno == EINTR) continue;
+                if (result <= 0)
+                    throw detail::ScratchIoError(result < 0 ? errno : EIO,
+                        write ? "trade history write" : "trade history read");
+                done += static_cast<size_type>(result);
+            }
+        }
+        void read(bool text, std::uint64_t offset, void* data, size_type length) const {
+            const auto end = text ? text_end : index_end;
+            if (offset > end || length > end - offset)
+                throw detail::ScratchIoError(EIO, "trade history read extent");
+            if (!text) { transfer(false, offset, data, length); return; }
+            std::array<unsigned char, 4096> window{};
+            auto* output = static_cast<unsigned char*>(data);
+            for (size_type done = 0; done < length;) {
+                const auto count = std::min(window.size(), length - done);
+                transfer(false, extent - offset - done - count, window.data(), count);
+                std::reverse_copy(window.data(), window.data() + count, output + done);
+                done += count;
+            }
+        }
+        void write(bool text, std::uint64_t offset, const void* data, size_type length) {
+            const auto stop = offset + length; // caller checked the positional extent
+            reserve(text ? index_end : std::max(index_end, stop),
+                    text ? std::max(text_end, stop) : text_end);
+            if (!text) {
+                transfer(true, offset, const_cast<void*>(data), length);
+                return;
+            }
+            std::array<unsigned char, 4096> window{};
+            const auto* input = static_cast<const unsigned char*>(data);
+            for (size_type done = 0; done < length;) {
+                const auto count = std::min(window.size(), length - done);
+                std::reverse_copy(input + done, input + done + count, window.data());
+                transfer(true, extent - offset - done - count, window.data(), count);
+                done += count;
+            }
+        }
+    } history;
+    // Preserve legacy ScratchFile behavior when no capability was supplied.
+    // The supplied path never opens a file, attaches an arena or resizes E.
+    struct File {
+        HistoryBacking& history;
+        bool text;
+        detail::ScratchFile legacy;
+        File(HistoryBacking& owner, bool payload) : history(owner), text(payload) {}
+        void bound_cache() { legacy.bound_cache(); }
+        void set_directory(const std::string& value) { legacy.set_directory(value); }
+        bool opened() const {
+            return history.bound() ? history.index_end != 0 || history.text_end != 0
+                                   : legacy.opened();
+        }
+        void open(const char* prefix) { if (!history.bound()) legacy.open(prefix); }
+        void read(std::uint64_t offset, void* data, size_type length) const {
+            if (history.bound()) history.read(text, offset, data, length);
+            else legacy.read(offset, data, length);
+        }
+        void write(std::uint64_t offset, const void* data, size_type length) {
+            detail::ScratchFile::check_extent(offset, length);
+            if (history.bound()) history.write(text, offset, data, length);
+            else legacy.write(offset, data, length);
+        }
+        std::uint64_t storage_bytes() const {
+            return history.bound() ? (text ? history.text_end : history.index_end)
+                                   : legacy.storage_bytes();
+        }
+        void truncate(std::uint64_t bytes) {
+            if (history.bound()) {
+                if (text) history.text_end = bytes;
+                else history.index_end = bytes;
+            } else legacy.truncate(bytes);
+        }
+        void release_prefix(std::uint64_t bytes) {
+            if (history.bound())
+                throw detail::ScratchIoError(EINVAL, "retained trade history prefix release");
+            legacy.release_prefix(bytes);
+        }
+    };
     // The row window holds fixed descriptors; even the newest row's four
     // payloads already live in scratch. Cache only a fixed byte tail below.
     static constexpr size_type kPayloadTailBytes = kResidentRows * sizeof(Record);
     std::array<Record, kResidentRows> rows{};
     size_type first = 0, end = 0, resident_first = 0, count = 0, head = 0;
-    detail::ScratchFile index, payload;
+    File index{history, false}, payload{history, true};
     std::uint64_t payload_end = 0;
     // Physical origins only. Record keys, text extents, size/base, all money
     // folds and every hash remain in the original global coordinate space.
@@ -389,6 +538,7 @@ struct TradeLedger::State {
     // and never claim a block until its write has completed.
     std::uint64_t index_zeroed_end = 0, payload_zeroed_end = 0;
     bool retiring = false;
+    std::exception_ptr rollback_failure;
     std::array<char, kPayloadTailBytes> payload_tail{};
     std::string directory;
     mutable std::map<size_type, Trade> materialized;
@@ -399,20 +549,30 @@ struct TradeLedger::State {
         Record record{};
         size_type global = 0, generation = 0;
         std::array<char, kCacheStringBytes> strings{};
-        // Bits 0..7 hold strings_valid and min(entry_id.length,127) << 1;
-        // generations step by 256, without padding the 312-byte entry.
+        // Bits 0..7: strings_valid and min(entry_id.length,127) << 1.
+        // Bits 8..9: bounded replacement rank. Generations step by 1024.
         [[gnu::always_inline]] bool strings_valid() const { return (generation & size_type{1}) != 0; }
     };
     static_assert(sizeof(CacheEntry) == kLedgerEntryBytes);
     static_assert(std::is_trivially_copyable_v<CacheEntry>);
-    using CachePage = std::unique_ptr<CacheEntry[]>;
+    static_assert(std::is_trivially_destructible_v<CacheEntry>);
+    static_assert(alignof(CacheEntry) <= alignof(std::max_align_t));
+    // Scalar raw allocations plus placement construction have no array
+    // cookie. Directory ownership and every page release live in this State.
+    using CachePage = CacheEntry*;
     static_assert(sizeof(CachePage) == sizeof(void*));
-    size_type cache_rows = kDefaultCacheRows;
-    mutable std::unique_ptr<CachePage[]> cache;
+    static_assert(kCachePageSlots % kCacheWays == 0);
+    bool cache_auto = true;
+    size_type cache_max_bytes = kDefaultLedgerCacheMaxBytes;
+    size_type cache_rows = TradeLedger::cache_rows_for_capacity(
+        CacheCapacity{kDefaultLedgerCacheMaxBytes});
+    mutable CachePage* cache = nullptr;
     mutable size_type cache_count = 0, cache_allocated_slots = 0;
-    mutable size_type cache_generation = 256;
+    static constexpr size_type kCacheGenerationStep = 1024;
+    mutable size_type cache_generation = kCacheGenerationStep;
     mutable bool cache_allocation_failed = false;
-    mutable std::uint64_t allocation_bypass_count = 0;
+    mutable size_type cache_failed_population = 0;
+    mutable CacheStats cache_stats;
     // Zero-row policy reads use fixed owner storage without allocating pages.
     mutable CacheEntry uncached;
     detail::RunCacheSource cache_diagnostics{this, [](const void* owner) noexcept {
@@ -423,6 +583,11 @@ struct TradeLedger::State {
     State() {
         index.bound_cache();
         payload.bound_cache();
+    }
+    ~State() { reset_cache(); }
+    static void add_counter(std::uint64_t& value, std::uint64_t amount = 1) noexcept {
+        const auto maximum = std::numeric_limits<std::uint64_t>::max();
+        value += std::min(amount, maximum - value);
     }
     size_type cache_resident_bytes() const noexcept {
         return sizeof(TradeLedger) + sizeof(State)
@@ -437,29 +602,48 @@ struct TradeLedger::State {
                                                "trade ledger: cache rows outside [0,1048576]");
     }
     [[gnu::always_inline]] size_type cache_slot(size_type global) const {
-        // The configured cap fixes the mapping for the cache's whole life.
-        // Non-power-of-two caps use the ordinary modulo fallback.
-        const auto mask = cache_rows - 1;
-        return (cache_rows & mask) == 0 ? global & mask : global % cache_rows;
+        // A global ordinal chooses a bounded set, never a history directory.
+        const auto sets = cache_rows / kCacheWays + (cache_rows % kCacheWays != 0);
+        return (global % sets) * kCacheWays;
     }
     size_type cache_table_size() const {
-        return (cache_rows + kCachePageSlots - 1) / kCachePageSlots;
+        return cache_rows / kCachePageSlots + (cache_rows % kCachePageSlots != 0);
     }
     size_type cache_page_slots(size_type page_index) const {
         return std::min(kCachePageSlots, cache_rows - page_index * kCachePageSlots);
     }
     [[gnu::always_inline]] CacheEntry* cache_entry(size_type global) const {
-        if (!cache) return nullptr;
+        if (!cache || cache_rows == 0) return nullptr;
         const auto slot = cache_slot(global);
         const auto& page = cache[slot >> 8];
         return page ? &page[slot & (kCachePageSlots - 1)] : nullptr;
     }
     [[gnu::always_inline]] bool current(const CacheEntry& entry) const {
-        return (entry.generation & ~size_type{255}) == cache_generation;
+        return (entry.generation & ~(kCacheGenerationStep - 1)) == cache_generation;
+    }
+    void touch_cache_entry(CacheEntry* entries, size_type ways, CacheEntry* selected) const noexcept {
+        constexpr size_type rank_mask = size_type{3} << 8;
+        for (size_type i = 0; i < ways; ++i) {
+            auto& entry = entries[i];
+            if (!current(entry)) continue;
+            const auto rank = &entry == selected ? size_type{0}
+                : std::min(size_type{3}, ((entry.generation >> 8) & size_type{3}) + 1);
+            entry.generation = (entry.generation & ~rank_mask) | (rank << 8);
+        }
     }
     [[gnu::always_inline]] CacheEntry* cached(size_type global) const {
-        auto* entry = cache_entry(global);
-        return entry && current(*entry) && entry->global == global ? entry : nullptr;
+        auto* entries = cache_entry(global);
+        if (!entries) return nullptr;
+        const auto ways = std::min(kCacheWays, cache_rows - cache_slot(global));
+        for (size_type i = 0; i < ways; ++i) {
+            add_counter(cache_stats.lookup_probe_count);
+            auto* entry = entries + i;
+            if (current(*entry) && entry->global == global) {
+                touch_cache_entry(entries, ways, entry);
+                return entry;
+            }
+        }
+        return nullptr;
     }
     void invalidate(size_type global) {
         if (auto* entry = cached(global)) {
@@ -469,36 +653,59 @@ struct TradeLedger::State {
     }
     void invalidate_cache() const {
         cache_count = 0;
-        // Generations make publication/rewind/move invalidation O(1).
+        // Generations make publication/rewind invalidation O(1).
         // Even the wraparound fallback touches at most the configured budget.
-        if (cache_generation > std::numeric_limits<size_type>::max() - 256) {
+        if (cache_generation > std::numeric_limits<size_type>::max() - kCacheGenerationStep) {
             if (cache)
                 for (size_type page = 0; page < cache_table_size(); ++page)
                     if (cache[page])
                         for (size_type i = 0; i < cache_page_slots(page); ++i)
                             cache[page][i].generation = 0;
-            cache_generation = 256;
+            cache_generation = kCacheGenerationStep;
         } else {
-            cache_generation += 256;
+            cache_generation += kCacheGenerationStep;
         }
+    }
+    size_type retained_population() const noexcept {
+        return end - (retiring ? first : 0);
+    }
+    bool allocation_blocked() const noexcept {
+        return cache_allocation_failed
+            && (!cache_auto || !TradeLedger::cache_retry_population_reached(
+                cache_failed_population, retained_population()));
     }
     void fail_cache_allocation() const noexcept {
-        if (!cache_allocation_failed) {
-            cache_allocation_failed = true;
-            ++allocation_bypass_count;
-            cache_diagnostics.allocation_bypassed();
-        }
+        cache_failed_population = retained_population();
+        cache_allocation_failed = true;
+        add_counter(cache_stats.allocation_bypass_count);
+        cache_diagnostics.allocation_bypassed();
+    }
+    static bool cache_geometry_representable(size_type rows) noexcept {
+        const auto pages = rows / kCachePageSlots + (rows % kCachePageSlots != 0);
+        // This is not an allocation attempt. No failure is fabricated here.
+        // Scalar allocations have no array cookie; each page is <= 256 slots.
+        const auto maximum = static_cast<size_type>(std::numeric_limits<std::ptrdiff_t>::max());
+        return pages <= maximum / sizeof(CachePage)
+            && std::min(rows, kCachePageSlots) <= maximum / sizeof(CacheEntry);
+    }
+    void* allocate_cache_storage(size_type bytes) const noexcept {
+        add_counter(cache_stats.allocation_attempt_count);
+        void* result = ::operator new(bytes, std::nothrow);
+        if (!result) fail_cache_allocation();
+        return result;
     }
     bool ensure_cache() const noexcept {
-        // Only a reader creates the table. An allocation failure is sticky;
-        // existing pages remain usable, but no missing page is retried.
-        if (cache_rows == 0 || cache_allocation_failed) return false;
+        // Fixed geometry, including its entire directory, is derived once
+        // from the allowance. A miss never rebuilds/reindexes retained rows.
+        if (cache_rows == 0 || allocation_blocked()
+            || !cache_geometry_representable(cache_rows)) return false;
         if (!cache) {
-            cache.reset(new (std::nothrow) CachePage[cache_table_size()]);
-            if (!cache) {
-                fail_cache_allocation();
-                return false;
-            }
+            auto* storage = static_cast<CachePage*>(
+                allocate_cache_storage(cache_table_size() * sizeof(CachePage)));
+            if (!storage) return false;
+            for (size_type i = 0; i < cache_table_size(); ++i)
+                ::new (static_cast<void*>(storage + i)) CachePage(nullptr);
+            cache = storage;
         }
         return true;
     }
@@ -508,39 +715,41 @@ struct TradeLedger::State {
         auto& page = cache[slot >> 8];
         if (!page) {
             const auto slots = cache_page_slots(slot >> 8);
-            page.reset(new (std::nothrow) CacheEntry[slots]);
-            if (!page) {
-                fail_cache_allocation();
-                return nullptr;
-            }
+            auto* storage = static_cast<CacheEntry*>(
+                allocate_cache_storage(slots * sizeof(CacheEntry)));
+            if (!storage) return nullptr;
+            for (size_type i = 0; i < slots; ++i)
+                ::new (static_cast<void*>(storage + i)) CacheEntry{};
+            page = storage;
             cache_allocated_slots += slots;
         }
-        return &page[slot & (kCachePageSlots - 1)];
-    }
-    // Call after invalidation: freed pages contain no counted entries.
-    // Visit only pages crossed by removed globals, at most one ring lap.
-    void release_cache_pages(size_type removed_first, size_type removed_end,
-                             size_type live_first, size_type live_end) const {
-        if (!cache || live_end - live_first >= cache_rows) return;
-        const auto live_slot = cache_slot(live_first);
-        const auto live_stop = live_slot + (live_end - live_first);
-        const auto stop = removed_first + std::min(removed_end - removed_first, cache_rows);
-        for (auto global = removed_first; global < stop;) {
-            const auto slot = cache_slot(global);
-            const auto page_index = slot >> 8;
-            const auto page_first = page_index * kCachePageSlots;
-            const auto page_end = page_first + cache_page_slots(page_index);
-            // A retained window shorter than the cap is at most two slot
-            // intervals. Keep every page intersecting either interval.
-            const bool live = live_first != live_end
-                && ((live_slot < page_end && page_first < std::min(live_stop, cache_rows))
-                    || (live_stop > cache_rows && page_first < live_stop - cache_rows));
-            if (!live && cache[page_index]) {
-                cache[page_index].reset();
-                cache_allocated_slots -= page_end - page_first;
-            }
-            global += std::min(page_end - slot, stop - global);
+        auto* entries = page + (slot & (kCachePageSlots - 1));
+        const auto ways = std::min(kCacheWays, cache_rows - slot);
+        CacheEntry* victim = entries;
+        for (size_type i = 0; i < ways; ++i) {
+            auto* entry = entries + i;
+            if (!current(*entry) || entry->global == global) return entry;
+            if (((entry->generation >> 8) & size_type{3})
+                > ((victim->generation >> 8) & size_type{3})) victim = entry;
         }
+        return victim;
+    }
+    // Only after invalidation. Associative placement has no contiguous ring
+    // correspondence to retired globals; release all optional pages instead.
+    // This bounded directory walk is never part of a cold lookup.
+    void release_cache_pages(size_type, size_type, size_type, size_type) const noexcept {
+        if (!cache) return;
+        for (size_type page = 0; page < cache_table_size(); ++page) {
+            ::operator delete(static_cast<void*>(cache[page]));
+            cache[page] = nullptr;
+        }
+        cache_allocated_slots = 0;
+    }
+    void reset_cache() const noexcept {
+        release_cache_pages(0, 0, 0, 0);
+        ::operator delete(static_cast<void*>(cache));
+        cache = nullptr;
+        cache_count = 0;
     }
     const CacheEntry& remember(size_type global, const Record& record,
                                const Trade* row = nullptr) const {
@@ -586,12 +795,18 @@ struct TradeLedger::State {
         }
         entry.generation = cache_generation | static_cast<size_type>(strings_valid)
             | (static_cast<size_type>(std::min<std::uint64_t>(record.entry_id.length, 127)) << 1);
+        touch_cache_entry(cache_entry(global),
+            std::min(kCacheWays, cache_rows - cache_slot(global)), &entry);
         ++cache_count;
         return entry;
     }
     const CacheEntry& load(size_type global) const {
-        if (const auto* entry = cached(global)) return *entry;
-        if (cache_rows == 0 || cache_allocation_failed) {
+        if (const auto* entry = cached(global)) {
+            add_counter(cache_stats.hot_hit_count);
+            return *entry;
+        }
+        add_counter(cache_stats.cold_miss_count);
+        if (cache_rows == 0 || allocation_blocked()) {
             uncached.record = uncached_descriptor(global);
             uncached.global = global;
             uncached.generation = 0;
@@ -700,6 +915,7 @@ struct TradeLedger::State {
     }
     [[gnu::always_inline]]
     void check(size_type global, bool mutable_row = false) const {
+        if (rollback_failure) std::rethrow_exception(rollback_failure);
         if (retiring && global < first) throw_check_failure(true);
         if (global >= end || (mutable_row && global < first)) throw_check_failure(false);
     }
@@ -723,7 +939,6 @@ struct TradeLedger::State {
         const StringExtent result{payload_end, static_cast<std::uint64_t>(text.size())};
         if (!text.empty()) {
             payload.write(payload_end - payload_origin, text.data(), text.size());
-            remember_payload(payload_end, text);
         }
         payload_end += text.size();
         return result;
@@ -733,6 +948,11 @@ struct TradeLedger::State {
             || text.offset > payload_end || text.length > payload_end - text.offset
             || (text.length != 0 && text.offset < payload_retired))
             throw detail::ScratchIoError(EIO, "trade ledger string extent");
+    }
+    void read_payload(std::uint64_t offset, void* result, size_type length) const {
+        add_counter(cache_stats.string_read_count);
+        payload.read(offset, result, length);
+        add_counter(cache_stats.string_read_bytes, length);
     }
     void read_string(StringExtent text, char* result) const {
         validate_string(text);
@@ -746,7 +966,7 @@ struct TradeLedger::State {
                 std::copy_n(payload_tail.data() + span.slot, span.first, result);
                 std::copy_n(payload_tail.data(), length - span.first, result + span.first);
             } else {
-                payload.read(text.offset - payload_origin, result, length);
+                read_payload(text.offset - payload_origin, result, length);
             }
         }
     }
@@ -763,7 +983,7 @@ struct TradeLedger::State {
             if (payload_end - text.offset <= kPayloadTailBytes)
                 read_string({text.offset + offset, count}, chunk.data());
             else
-                payload.read(text.offset + offset - payload_origin, chunk.data(), count);
+            read_payload(text.offset + offset - payload_origin, chunk.data(), count);
             // Never skip a read after a length/content mismatch: the owning
             // read would still surface an I/O failure later in the extent.
             if (equal && std::string_view(chunk.data(), count)
@@ -780,7 +1000,7 @@ struct TradeLedger::State {
         return result;
     }
     StringExtent reuse_string(const std::string& text, StringExtent old) {
-        if (text.size() == old.length && text == get_string(old)) return old;
+        if (text.size() == old.length && string_equals_chunks(old, text)) return old;
         return put_string(text);
     }
     bool put_append_strings(Record& record, const Trade& row) {
@@ -829,46 +1049,97 @@ struct TradeLedger::State {
         // A failed write leaves end/tail unchanged. The row's descriptor is
         // published only after all payload bytes succeed, as with put_string.
         payload.write(payload_end - payload_origin, buffer, bytes);
-        if (!entry_id.empty()) remember_payload(record.entry_id.offset, entry_id);
-        if (!entry_comment.empty()) remember_payload(record.entry_comment.offset, entry_comment);
-        if (!exit_comment.empty()) remember_payload(record.exit_comment.offset, exit_comment);
-        if (!exit_id.empty()) remember_payload(record.exit_id.offset, exit_id);
         payload_end = offset;
         return true;
     }
     Record store(size_type global, const Trade& row, const Record* previous = nullptr) {
+        if (rollback_failure) std::rethrow_exception(rollback_failure);
         index.open("pineforge-trade-index");
         payload.open("pineforge-trade-payload");
-        Record record{};
-        record.entry_time = row.entry_time; record.exit_time = row.exit_time;
-        record.entry_price = row.entry_price; record.exit_price = row.exit_price;
-        record.qty = row.qty; record.pnl = row.pnl; record.pnl_pct = row.pnl_pct;
-        record.entry_bar_index = row.entry_bar_index; record.exit_bar_index = row.exit_bar_index;
-        // Replacements retain equal extents, including embedded NULs. Payload
-        // growth follows actual string changes, not numeric-update/bar count.
-        if (previous || !put_append_strings(record, row)) {
-            record.entry_id = previous ? reuse_string(row.entry_id, previous->entry_id)
-                                       : put_string(row.entry_id);
-            record.entry_comment = previous ? reuse_string(row.entry_comment, previous->entry_comment)
-                                            : put_string(row.entry_comment);
-            record.exit_comment = previous ? reuse_string(row.exit_comment, previous->exit_comment)
-                                           : put_string(row.exit_comment);
-            record.exit_id = previous ? reuse_string(row.exit_id, previous->exit_id)
-                                      : put_string(row.exit_id);
+        const auto saved_payload_end = payload_end;
+        const auto saved_index_bytes = index.storage_bytes();
+        const auto saved_payload_bytes = payload.storage_bytes();
+        const auto offset = record_offset(global);
+        detail::ScratchFile::check_extent(offset, sizeof(Record));
+        if (history.bound()) {
+            // Reserve the complete transaction before the first write,
+            // including changed text while its old extents remain live.
+            auto pending = payload_end;
+            const std::array<const std::string*, 4> values{{
+                &row.entry_id, &row.entry_comment, &row.exit_comment, &row.exit_id}};
+            const std::array<StringExtent, 4> old = previous
+                ? std::array<StringExtent, 4>{{previous->entry_id, previous->entry_comment,
+                                               previous->exit_comment, previous->exit_id}}
+                : std::array<StringExtent, 4>{};
+            for (size_type i = 0; i < values.size(); ++i) {
+                if (previous && values[i]->size() == old[i].length
+                    && string_equals_chunks(old[i], *values[i])) continue;
+                detail::ScratchFile::check_extent(pending, values[i]->size());
+                pending += values[i]->size();
+            }
+            history.reserve(std::max(saved_index_bytes, offset + sizeof(Record)), pending);
         }
-        record.max_runup = row.max_runup; record.max_drawdown = row.max_drawdown;
-        record.commission = row.commission; record.entry_incarnation = row.entry_incarnation;
-        record.close_cause = row.close_cause; record.is_long = row.is_long;
-        record.exit_from_bracket = row.exit_from_bracket; record.open_at_end = row.open_at_end;
-        // Retain all payload/extent validation above; skip only a descriptor
-        // whose entire object representation already matches its backing.
-        if (!previous || std::memcmp(previous, &record, sizeof(record)) != 0)
-            index.write(record_offset(global), &record, sizeof(record));
+        bool descriptor_attempted = false;
+        Record record{};
+        try {
+            record.entry_time = row.entry_time; record.exit_time = row.exit_time;
+            record.entry_price = row.entry_price; record.exit_price = row.exit_price;
+            record.qty = row.qty; record.pnl = row.pnl; record.pnl_pct = row.pnl_pct;
+            record.entry_bar_index = row.entry_bar_index; record.exit_bar_index = row.exit_bar_index;
+            // Replacements retain equal extents, including embedded NULs.
+            // Payload growth follows actual string changes, not numeric updates.
+            if (previous || !put_append_strings(record, row)) {
+                record.entry_id = previous ? reuse_string(row.entry_id, previous->entry_id)
+                                           : put_string(row.entry_id);
+                record.entry_comment = previous ? reuse_string(row.entry_comment, previous->entry_comment)
+                                                : put_string(row.entry_comment);
+                record.exit_comment = previous ? reuse_string(row.exit_comment, previous->exit_comment)
+                                               : put_string(row.exit_comment);
+                record.exit_id = previous ? reuse_string(row.exit_id, previous->exit_id)
+                                          : put_string(row.exit_id);
+            }
+            record.max_runup = row.max_runup; record.max_drawdown = row.max_drawdown;
+            record.commission = row.commission; record.entry_incarnation = row.entry_incarnation;
+            record.close_cause = row.close_cause; record.is_long = row.is_long;
+            record.exit_from_bracket = row.exit_from_bracket; record.open_at_end = row.open_at_end;
+            // Skip only a descriptor whose whole representation already matches.
+            if (!previous || std::memcmp(previous, &record, sizeof(record)) != 0) {
+                descriptor_attempted = true;
+                index.write(offset, &record, sizeof(record));
+            }
+        } catch (...) {
+            const auto first_failure = std::current_exception();
+            try {
+                // A short pwrite may already have damaged a live descriptor.
+                // Restore it before exposing the old logical generation.
+                if (previous && descriptor_attempted)
+                    index.write(offset, previous, sizeof(*previous));
+                index.truncate(saved_index_bytes);
+                payload.truncate(saved_payload_bytes);
+            } catch (...) {
+                // An unrepairable owner cannot serve cached/resident bytes as
+                // if the transaction had succeeded. Keep the first typed cause.
+                rollback_failure = first_failure;
+                invalidate_cache();
+            }
+            payload_end = saved_payload_end;
+            std::rethrow_exception(first_failure);
+        }
+        // Publish the fixed payload tail only after the descriptor commits.
+        // Reused extents must not overwrite slots belonging to newer bytes.
+        if (record.entry_id.offset >= saved_payload_end)
+            remember_payload(record.entry_id.offset, row.entry_id);
+        if (record.entry_comment.offset >= saved_payload_end)
+            remember_payload(record.entry_comment.offset, row.entry_comment);
+        if (record.exit_comment.offset >= saved_payload_end)
+            remember_payload(record.exit_comment.offset, row.exit_comment);
+        if (record.exit_id.offset >= saved_payload_end)
+            remember_payload(record.exit_id.offset, row.exit_id);
         return record;
     }
     static constexpr std::uint64_t kZeroBlock = 4096;
     static_assert(detail::ScratchArena::kChunkBytes % kZeroBlock == 0);
-    static void erase_bytes(detail::ScratchFile& file, std::uint64_t first,
+    static void erase_bytes(File& file, std::uint64_t first,
                             std::uint64_t stop) {
         const std::array<unsigned char, kZeroBlock> zeros{};
         while (first < stop) {
@@ -897,7 +1168,7 @@ struct TradeLedger::State {
             std::fill_n(payload_tail.data(), count - span.first, '\0');
         }
     }
-    static void release_head(detail::ScratchFile& file, std::uint64_t& origin,
+    static void release_head(File& file, std::uint64_t& origin,
                              std::uint64_t& zeroed_end, std::uint64_t new_end,
                              bool empty) {
         if (new_end == origin && !empty) return;
@@ -938,7 +1209,7 @@ struct TradeLedger::State {
         // while the newest dead bytes below one zero-fill block remain pending.
     }
     void retire(size_type global_end) {
-        if (!retiring || global_end == first) return;
+        if (!retiring || history.bound() || global_end == first) return;
         // Mutable rows may have been replaced out of order. The first live
         // row's text is not necessarily the first live text extent: examine
         // every surviving descriptor before selecting a payload watermark.
@@ -1017,7 +1288,9 @@ struct TradeLedger::State {
     Record uncached_descriptor(size_type global) const {
         if (global >= resident_first) return rows[slot(global)];
         Record record{};
+        add_counter(cache_stats.descriptor_read_count);
         index.read(record_offset(global), &record, sizeof(record));
+        add_counter(cache_stats.descriptor_read_bytes, sizeof(record));
         return record;
     }
     Record descriptor(size_type global) const {
@@ -1040,10 +1313,18 @@ TradeLedger::~TradeLedger() = default;
 
 TradeLedger::TradeLedger(const TradeLedger& other)
     : TradeLedger() {
+    if (other.state_->rollback_failure)
+        std::rethrow_exception(other.state_->rollback_failure);
     // The byte-policy path may exceed the legacy row setter's ceiling.
     // This fresh State copies an already validated physical allowance.
     state_->cache_rows = other.state_->cache_rows;
+    state_->cache_max_bytes = other.state_->cache_max_bytes;
+    state_->cache_auto = other.state_->cache_auto;
     set_scratch_directory(other.state_->directory);
+    if (other.state_->history.bound()) {
+        state_->history.bind(other.state_->history.factory, other.state_->history.extent,
+                             &other.state_->history);
+    }
     // A cold source remains unallocated. Reuse already cached source rows;
     // neither the source nor its copy allocates pages just for copying.
     if (other.state_->retiring) {
@@ -1061,6 +1342,8 @@ TradeLedger::TradeLedger(const TradeLedger& other)
                                                    : other.state_->descriptor(i)));
     }
     seal(other.base());
+    // Fresh owner: a source's optional allocation failure is not a failure
+    // of this copy. Its data/backing failures above still propagate exactly.
 }
 
 TradeLedger& TradeLedger::operator=(const TradeLedger& other) {
@@ -1072,8 +1355,11 @@ TradeLedger& TradeLedger::operator=(const TradeLedger& other) {
 }
 
 TradeLedger::TradeLedger(TradeLedger&& other) : TradeLedger() {
+    // Leave an empty, usable owner with the same declared physical policy.
+    state_->cache_auto = other.state_->cache_auto;
+    state_->cache_rows = other.state_->cache_rows;
+    state_->cache_max_bytes = other.state_->cache_max_bytes;
     state_.swap(other.state_);
-    state_->invalidate_cache();
 }
 
 TradeLedger& TradeLedger::operator=(TradeLedger&& other) {
@@ -1086,10 +1372,15 @@ TradeLedger& TradeLedger::operator=(TradeLedger&& other) {
 
 void TradeLedger::clear() {
     auto next = std::make_unique<State>();
+    next->cache_auto = state_->cache_auto;
     next->cache_rows = state_->cache_rows;
+    next->cache_max_bytes = state_->cache_max_bytes;
     next->directory = state_->directory;
     next->index.set_directory(next->directory);
     next->payload.set_directory(next->directory);
+    if (state_->history.bound()) {
+        next->history.bind(state_->history.factory, state_->history.extent, &state_->history);
+    }
     state_.swap(next);
 }
 
@@ -1104,17 +1395,47 @@ void TradeLedger::set_history_retirement(bool enabled) {
     if (state_->end != 0 || state_->index.opened() || state_->payload.opened())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: retirement policy changed after append");
-    state_->retiring = enabled;
+    state_->retiring = enabled && !state_->history.bound();
 }
 
 void TradeLedger::check_history_read(size_type global) const { state_->check(global); }
 
 std::array<std::uint64_t, 2> TradeLedger::scratch_storage_bytes() const {
+    if (state_->history.bound()) {
+        struct stat info{};
+        if (::fstat(state_->history.fd, &info) != 0)
+            throw detail::ScratchIoError(errno, "trade history capability stat");
+        if (info.st_size < 0)
+            throw detail::ScratchIoError(EIO, "trade history capability extent");
+        // One actual file extent, counted once. Not its populated frontiers,
+        // resident pages, allocated blocks or memory-domain charge.
+        return {static_cast<std::uint64_t>(info.st_size), 0};
+    }
     return {state_->index.storage_bytes(), state_->payload.storage_bytes()};
+}
+
+void TradeLedger::bind_retained_history(HistoryFactory factory, std::uint64_t extent) {
+    if (state_->end != 0 || state_->index.opened() || state_->payload.opened()
+        || state_->history.bound())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade history capability changed after binding or append");
+    state_->history.bind(std::move(factory), extent);
+    // A full retained resource never acquires no-history erasure semantics.
+    state_->retiring = false;
+}
+
+std::array<std::uint64_t, 4> TradeLedger::retained_history_bytes() const {
+    const auto& history = state_->history;
+    return {history.extent, history.index_end, history.text_end, history.high_water};
 }
 
 TradeLedger::TradeLedger(CacheCapacity capacity) : TradeLedger(size_type{0}) {
     set_cache_capacity(capacity);
+}
+
+TradeLedger::TradeLedger(const LedgerCachePolicy& policy) : TradeLedger() {
+    if (!policy.automatic())
+        set_cache_capacity(CacheCapacity{static_cast<size_type>(policy.capacity_bytes)});
 }
 
 void TradeLedger::set_cache_capacity(CacheCapacity capacity) {
@@ -1122,10 +1443,10 @@ void TradeLedger::set_cache_capacity(CacheCapacity capacity) {
         throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
                                            {{"input", "cache_policy"}, {"reason", "frozen"}},
                                            "trade ledger: cache capacity changed after append");
-    state_->cache.reset();
-    state_->cache_count = 0;
-    state_->cache_allocated_slots = 0;
+    state_->reset_cache();
+    state_->cache_max_bytes = capacity.capacity_bytes;
     state_->cache_rows = cache_rows_for_capacity(capacity);
+    state_->cache_auto = false;
 }
 
 TradeLedger::size_type TradeLedger::cache_rows_for_capacity(CacheCapacity capacity) noexcept {
@@ -1140,22 +1461,40 @@ TradeLedger::size_type TradeLedger::cache_rows_for_capacity(CacheCapacity capaci
     return complete_pages * kCachePageSlots + partial_rows;
 }
 
+void TradeLedger::set_cache_auto() {
+    set_ledger_cache_max_bytes(kDefaultLedgerCacheMaxBytes);
+}
+
+void TradeLedger::set_ledger_cache_max_bytes(size_type bytes) {
+    if (state_->end != 0 || state_->index.opened() || state_->payload.opened())
+        throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
+                                           {{"input", "cache_policy"}, {"reason", "frozen"}},
+                                           "trade ledger: cache policy changed after append");
+    state_->reset_cache();
+    state_->cache_max_bytes = bytes;
+    state_->cache_rows = cache_rows_for_capacity(CacheCapacity{bytes});
+    state_->cache_auto = true;
+}
+
+TradeLedger::size_type TradeLedger::ledger_cache_max_bytes() const {
+    return state_->cache_max_bytes;
+}
+
 void TradeLedger::set_cache_rows(size_type rows) {
     State::validate_cache_rows(rows);
     if (state_->end != 0 || state_->index.opened() || state_->payload.opened())
         throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
                                            {{"input", "resident.ledger_rows"}, {"reason", "frozen"}},
                                            "trade ledger: cache rows changed after spill");
-    state_->cache.reset();
-    state_->cache_count = 0;
-    state_->cache_allocated_slots = 0;
+    state_->reset_cache();
+    state_->cache_max_bytes = cache_capacity_bytes(rows);
     state_->cache_rows = rows;
+    state_->cache_auto = false;
 }
 TradeLedger::size_type TradeLedger::cache_rows() const { return state_->cache_rows; }
 TradeLedger::size_type TradeLedger::resident_cache_bytes(size_type rows) {
     State::validate_cache_rows(rows);
-    return sizeof(TradeLedger) + sizeof(State) + rows * kLedgerEntryBytes
-        + ((rows + kCachePageSlots - 1) / kCachePageSlots) * sizeof(void*);
+    return sizeof(TradeLedger) + sizeof(State) + cache_capacity_bytes(rows);
 }
 TradeLedger::size_type TradeLedger::cache_resident_bytes() const {
     return state_->cache_resident_bytes();
@@ -1165,9 +1504,12 @@ bool TradeLedger::cache_allocation_failed() const noexcept {
     return state_->cache_allocation_failed;
 }
 TradeLedger::CacheStats TradeLedger::read_cache_stats() const noexcept {
-    return {state_->allocation_bypass_count,
-            state_->cache_allocation_failed ? CacheBypassReason::allocation_failed
-                                            : CacheBypassReason::none};
+    auto stats = state_->cache_stats;
+    stats.bypass_reason = state_->cache_allocation_failed
+        ? CacheBypassReason::allocation_failed : CacheBypassReason::none;
+    stats.failed_population = state_->cache_failed_population;
+    stats.allocation_retry_blocked = state_->allocation_blocked();
+    return stats;
 }
 
 void TradeLedger::reserve(size_type) {}
@@ -1290,8 +1632,11 @@ bool TradeLedger::is_long_at(size_type global) const {
 void TradeLedger::replace(size_type global, const Trade& row) {
     state_->check(global, true);
     const auto previous = state_->descriptor(global);
-    state_->invalidate(global);
+    const auto legacy = state_->materialized.find(global);
+    Trade legacy_value{};
+    if (legacy != state_->materialized.end()) legacy_value = row;
     const auto record = state_->store(global, row, &previous);
+    state_->invalidate(global);
     if (state_->retiring) {
         const State::StringExtent old_texts[]{previous.entry_id, previous.entry_comment,
                                              previous.exit_comment, previous.exit_id};
@@ -1303,8 +1648,7 @@ void TradeLedger::replace(size_type global, const Trade& row) {
                 state_->erase_payload(old_texts[i]);
     }
     if (global >= state_->resident_first) state_->rows[state_->slot(global)] = record;
-    const auto legacy = state_->materialized.find(global);
-    if (legacy != state_->materialized.end()) legacy->second = row;
+    if (legacy != state_->materialized.end()) legacy->second = std::move(legacy_value);
     if (state_->cache) state_->remember(global, record, &row);
 }
 
@@ -1331,6 +1675,7 @@ void TradeLedger::push_back(const Trade& trade) {
 void TradeLedger::push_back(Trade&& trade) { push_back(static_cast<const Trade&>(trade)); }
 
 void TradeLedger::resize(size_type global_end) {
+    if (state_->rollback_failure) std::rethrow_exception(state_->rollback_failure);
     if (global_end < state_->first)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: rewind below resident window");
@@ -1381,6 +1726,7 @@ const Trade& TradeLedger::materialize(size_type global) const {
 }
 
 void TradeLedger::seal(size_type global_end) {
+    if (state_->rollback_failure) std::rethrow_exception(state_->rollback_failure);
     if (global_end < state_->first || global_end > size())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: seal outside resident window");
@@ -1392,6 +1738,113 @@ void TradeLedger::seal(size_type global_end) {
     // Physical retirement invalidates its cache and refuses erased rows.
     while (state_->count != 0 && state_->resident_first < global_end) state_->evict();
     state_->first = global_end;
+}
+
+// This adapter is deliberately private until P2/R compose the engine's frozen
+// report generation. The existing report contract supplies all wire types.
+class TradeLedger::Source final : public report::TradeSourceV1 {
+    const TradeLedger& ledger_;
+    using Index = report::LogicalIndexV1;
+    using Row = report::TradeRowV1;
+    using Text = report::TradeTextV1;
+    void range(Index first, Index count) const {
+        const auto total = size();
+        if (first > total || count > total - first)
+            throw std::out_of_range("trade source range");
+    }
+    State::StringExtent text(Index index, Text field) const {
+        // Validate selectors even on an otherwise invalid/empty request.
+        if (field != Text::EntryId && field != Text::EntryComment
+            && field != Text::ExitId && field != Text::ExitComment)
+            throw std::invalid_argument("trade source text selector");
+        if (index >= size()) throw std::out_of_range("trade source index");
+        ledger_.state_->check(static_cast<size_type>(index));
+        const auto row = ledger_.state_->descriptor(static_cast<size_type>(index));
+        switch (field) {
+        case Text::EntryId: return row.entry_id;
+        case Text::EntryComment: return row.entry_comment;
+        case Text::ExitId: return row.exit_id;
+        case Text::ExitComment: return row.exit_comment;
+        }
+        throw std::invalid_argument("trade source text selector");
+    }
+    report::VisitResultV1 visit_rows(Index from, Index count, void* context,
+                                     report::TradeVisitorV1 visitor, bool backward) const {
+        if (!visitor) throw std::invalid_argument("trade source null visitor");
+        range(from, count);
+        report::VisitResultV1 result{};
+        for (Index step = 0; step < count; ++step) {
+            const auto index = backward ? from + count - 1 - step : from + step;
+            const Row value = at(index);
+            ++result.visited;
+            if (!visitor(context, index, value)) return result;
+        }
+        result.complete = true;
+        return result;
+    }
+public:
+    explicit Source(const TradeLedger& ledger) : ledger_(ledger) {}
+    Index size() const override { return ledger_.size(); }
+    Row at(Index index) const override {
+        if (index >= size()) throw std::out_of_range("trade source index");
+        const Trade value = ledger_.numeric_at(static_cast<size_type>(index));
+        Row row{};
+        auto& out = row.value;
+        out.entry_time = value.entry_time; out.exit_time = value.exit_time;
+        out.entry_price = value.entry_price; out.exit_price = value.exit_price;
+        out.pnl = value.pnl; out.pnl_pct = value.pnl_pct;
+        out.is_long = value.is_long ? 1 : 0;
+        out.max_runup = value.max_runup; out.max_drawdown = value.max_drawdown;
+        out.qty = value.qty; out.commission = value.commission;
+        out.entry_bar_index = value.entry_bar_index; out.exit_bar_index = value.exit_bar_index;
+        out.open_at_end = value.open_at_end ? 1 : 0;
+        row.entry_incarnation = value.entry_incarnation;
+        // Same precedence as BacktestEngine::classify_report_close_cause.
+        const auto cause = value.open_at_end ? execution::CloseCause::RangeEnd
+            : value.close_cause != execution::CloseCause::Unspecified ? value.close_cause
+            : value.exit_from_bracket ? execution::CloseCause::Bracket
+                                     : execution::CloseCause::Script;
+        row.close_cause = static_cast<std::int32_t>(cause);
+        row.exit_from_bracket = value.exit_from_bracket ? 1u : 0u;
+        return row;
+    }
+    size_type read_page(Index from, Row* out, size_type capacity) const override {
+        if (!out && capacity != 0) throw std::invalid_argument("trade source null buffer");
+        range(from, 0);
+        const auto count = static_cast<size_type>(std::min<Index>(capacity, size() - from));
+        for (size_type i = 0; i < count; ++i) out[i] = at(from + i);
+        return count;
+    }
+    report::VisitResultV1 visit(Index from, Index count, void* context,
+                                 report::TradeVisitorV1 visitor) const override {
+        return visit_rows(from, count, context, visitor, false);
+    }
+    report::VisitResultV1 visit_backward(Index from, Index count, void* context,
+                                          report::TradeVisitorV1 visitor) const override {
+        return visit_rows(from, count, context, visitor, true);
+    }
+    std::uint64_t text_size(Index index, Text field) const override {
+        const auto extent = text(index, field);
+        ledger_.state_->validate_string(extent);
+        return extent.length;
+    }
+    size_type read_text(Index index, Text field, std::uint64_t offset,
+                        char* out, size_type capacity) const override {
+        if (!out && capacity != 0) throw std::invalid_argument("trade source null text buffer");
+        const auto extent = text(index, field);
+        ledger_.state_->validate_string(extent);
+        if (offset > extent.length) throw std::out_of_range("trade source text offset");
+        const auto count = static_cast<size_type>(
+            std::min<std::uint64_t>(capacity, extent.length - offset));
+        if (count != 0)
+            ledger_.state_->read_string({extent.offset + offset, count}, out);
+        return count;
+    }
+};
+
+std::unique_ptr<report::TradeSourceV1> TradeLedger::retained_trade_source() const {
+    if (state_->rollback_failure) std::rethrow_exception(state_->rollback_failure);
+    return std::make_unique<Source>(*this);
 }
 
 } // inline namespace engine_script_run_v19

@@ -76,6 +76,8 @@ inline void ledger_cache_telemetry(Telemetry& out, const pf::TradeLedger& ledger
     out.configured_metadata = directory;
     out.payload = optional - metadata;
     out.metadata = metadata;
+    // Sampled owner accounting only: this cannot observe private old/new
+    // allocation overlap, allocator overhead or a whole-process heap peak.
     out.peak_resident = std::max<std::uint64_t>(out.peak_resident, optional);
     out.fixed_control = sizeof(Ledger);
     out.fixed_workspace = fixed - sizeof(Ledger);
@@ -93,7 +95,8 @@ inline Result ledger_rows(Setting setting) {
     // descriptor on a miss, so a no-pread read is an actual decoded hit.
     ledger.resize(population - 1);
     ledger.push_back(ledger_row(population - 1));
-    require(ledger.resident_base() == population - 1,
+    require(ledger.base() == 0 && ledger.size() == population
+        && ledger.resident_base() == population - 1,
             "ledger census requires older descriptors to be physically cold");
     Result result;
     auto& s = result.cache;
@@ -153,6 +156,22 @@ inline Result ledger_rows(Setting setting) {
     s.fault_reads = reads - attempts;
     s.inner_reads = reads;
     s.inner_bytes = bytes;
+    // Keep actual geometry/accounted slots and syscall observations separate
+    // from the caller's independent expected geometry. Slots are recovered
+    // from State's live allocation charge, not from the input population.
+    std::printf("LEDGER_CACHE_OBSERVED setting=%s policy=%s cache_rows=%zu "
+                "accounted_allocated_slots=%llu accounted_payload=%llu "
+                "accounted_directory=%llu sampled_peak_optional=%llu "
+                "syscall_calls=%llu syscall_bytes=%llu "
+                "heap_live=UNMEASURED heap_peak=UNMEASURED reindex_overlap=UNMEASURED\n",
+        setting.name, setting.defaults ? "DEFAULT_AUTO" : "EXPLICIT_FINITE",
+        ledger.cache_rows(),
+        static_cast<unsigned long long>(s.payload / pf::TradeLedger::kLedgerEntryBytes),
+        static_cast<unsigned long long>(s.payload),
+        static_cast<unsigned long long>(s.metadata),
+        static_cast<unsigned long long>(s.peak_resident),
+        static_cast<unsigned long long>(s.inner_reads),
+        static_cast<unsigned long long>(s.inner_bytes));
     return result;
 }
 } // namespace cache_sweep

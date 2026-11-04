@@ -2846,6 +2846,10 @@ public:
     void set_cache_policy(const CacheDefaults& policy);
     const CacheDefaults& cache_policy_config() const;
     const CacheDefaults& cache_policy_for_run() const;
+    void set_scratch_io_policy(const ScratchIoPolicy& policy);
+    int set_scratch_io_policy_v1(const pf_scratch_io_policy_v1* descriptor);
+    const ScratchIoPolicy& scratch_io_policy_config() const;
+    const ScratchIoPolicy& scratch_io_policy_for_run() const;
 
     // The additive C ABI delegates here; receipt queries never bind a consumer.
     int set_report_sink_v1(const pf_report_sink_v1* sink);

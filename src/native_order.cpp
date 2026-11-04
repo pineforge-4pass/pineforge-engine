@@ -5,6 +5,7 @@
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/detail/journal_codec.hpp>
 #include "native_journal_codec.hpp"
+#include "native_issued_range_state.hpp"
 #include "optional_window.hpp"
 #include "read_through_window.hpp"
 #include <pineforge/native_host.hpp>
@@ -32,6 +33,48 @@ inline namespace native_order_v8 {
 
 namespace {
 using ReadStatus = detail::ScratchStatus;
+
+// Explicit LE words and complete session bytes. No RequestHandle padding,
+// interned pointer, narrowed incarnation, or population-sized staging copy.
+class CoreHistoryRecord final : public detail::ScratchByteSource {
+public:
+    CoreHistoryRecord(std::uint64_t primary, std::uint64_t secondary,
+                      std::uint64_t cohort, const RequestHandle& origin,
+                      const std::optional<RequestHandle>& canonical = {})
+        : origin_session_(origin.run.session_key),
+          canonical_session_(canonical ? canonical->run.session_key : SessionKey{}) {
+        const std::uint64_t words[]{1, primary, secondary, cohort,
+            origin.run.run_number, origin.incarnation, origin_session_.size(),
+            canonical ? 1ULL : 0ULL, canonical ? canonical->run.run_number : 0,
+            canonical ? canonical->incarnation : 0, canonical_session_.size()};
+        for (unsigned i = 0; i != 11; ++i)
+            detail::native_history_word(prefix_.data() + i * 8, words[i]);
+        size_ = detail::native_history_add(prefix_.size(),
+            detail::native_history_add(origin_session_.size(), canonical_session_.size()));
+    }
+    std::uint64_t size() const noexcept override { return size_; }
+    ReadStatus read(std::uint64_t offset, detail::ScratchBuffer out) const noexcept override {
+        if (offset > size_ || out.size > size_ - offset || (out.size && !out.data))
+            return ReadStatus::programming_error;
+        const detail::ScratchBytes parts[]{
+            {prefix_.data(), prefix_.size()},
+            {reinterpret_cast<const std::byte*>(origin_session_.data()), origin_session_.size()},
+            {reinterpret_cast<const std::byte*>(canonical_session_.data()), canonical_session_.size()}};
+        std::size_t copied = 0;
+        for (const auto& part : parts) {
+            if (offset >= part.size) { offset -= part.size; continue; }
+            const auto n = std::min(out.size - copied, part.size - static_cast<std::size_t>(offset));
+            if (n) std::memcpy(out.data + copied, part.data + offset, n);
+            copied += n;
+            offset = 0;
+        }
+        return copied == out.size ? ReadStatus::ok : ReadStatus::programming_error;
+    }
+private:
+    std::array<std::byte, 11 * 8> prefix_{};
+    SessionKey origin_session_, canonical_session_;
+    std::uint64_t size_ = 0;
+};
 
 // A synchronous throwing consumer owns the slot. No failure survives outside
 // that operation; nested operations restore the previous slot on every exit.
@@ -1707,6 +1750,11 @@ constexpr std::size_t kBookMax = 4096;
 // their chunk. Positions are absolute (the core's history_base()..
 // history_end()), ordinals ascend with positions.
 struct WorkingRequestCore::JournalStore {
+    // Kept in the already opaque lifetime owner: no installed core-layout
+    // change. Its fixed preparation log supplements the legacy containers
+    // until their public reference/failure contract is resolved.
+    detail::NativeCoreRegistration core_registration;
+    std::unique_ptr<detail::NativeHistoryOwner> managed_history;
     // Construction policy for the three lazy tail stores. Keeping physical
     // policy in this existing opaque owner preserves the public core layout.
     TailWindowConfig tail_windows;
@@ -1819,7 +1867,9 @@ struct WorkingRequestCore::JournalStore {
     // core itself holds no string for it.
     std::string where;
 
-    JournalStore() { chunks.reserve(kMaxResident / kChunk + 4); }
+    explicit JournalStore(const RunIdentity& identity) : core_registration(identity) {
+        chunks.reserve(kMaxResident / kChunk + 4);
+    }
     // Called by a beyond-resident reserve before the operation it provisions,
     // or lazily by the first unreserved spill. No added page/cache allocation
     // is charged to a core whose reservations and history stay resident.
@@ -2086,6 +2136,8 @@ struct WorkingRequestCore::JournalStore {
 void bind_journal_codec(WorkingRequestCore& core, detail::CommandScratchStore& store) {
     if (!core.journal_) throw std::invalid_argument("journal codec requires a bound run");
     core.journal_->bind(store);
+    if (core.journal_->managed_history)
+        core.journal_->managed_history->note_codec(store.stats().resident_bytes);
     core.prepare_codec_frames();
 }
 
@@ -2104,6 +2156,9 @@ ReadStatus append_journal_record(WorkingRequestCore& core,
     if (status == ReadStatus::ok) {
         ++journal.end;
         core.last_ordinal_ = ordinal;
+        // Raw codec import has no native prepare/install/issued fold. Expose
+        // that coverage gap; do not call this log a complete raw-codec owner.
+        if (journal.managed_history) journal.managed_history->note_raw_codec_append();
     }
     return status;
 }
@@ -3087,6 +3142,8 @@ void WorkingRequestCore::index_committed(const CommandEvent& event) noexcept {
     } else {
         issued_.push_back({incarnation, incarnation});
     }
+    if (journal_->managed_history)
+        journal_->managed_history->publish(detail::NativeHistoryRecordKind::issued);
     if (definition->root) append_successor_root(incarnation, definition->root->incarnation);
 }
 
@@ -3146,6 +3203,12 @@ CohortHandle WorkingRequestCore::cohort_open() {
         throw std::overflow_error("native cohort handle exhausted");
     }
     const CohortHandle handle{next_cohort_handle_};
+    if (journal_->managed_history) {
+        const CoreHistoryRecord source(handle.value, 0, handle.value, {});
+        auto candidate = journal_->managed_history->stage(detail::NativeHistoryRecordKind::cohort_open, source);
+        candidate.accept();
+        journal_->managed_history->publish(detail::NativeHistoryRecordKind::cohort_open);
+    }
     ++next_cohort_handle_;
     if (!bump_epoch()) throw std::overflow_error("native working-request epoch exhausted");
     return handle;
@@ -3158,13 +3221,27 @@ void WorkingRequestCore::cohort_add(CohortHandle cohort, RequestHandle origin) {
     receipt.operation = CohortReceiptOperation::Add;
     receipt.cohort = cohort;
     receipt.origin = origin;
+    std::optional<RequestHandle> canonical;
     if (!cohort_exists(cohort)) {
         receipt.status = CohortReceiptStatus::InvalidHandle;
     } else if (!issued(origin)) {
         receipt.status = CohortReceiptStatus::UnknownOrigin;
     } else if (!find_live(origin)) {
         receipt.status = CohortReceiptStatus::TerminalOrigin;
-    } else if (const auto canonical = canonical_cohort_origin(origin)) {
+    } else if ((canonical = canonical_cohort_origin(origin))) {
+        receipt.status = CohortReceiptStatus::Applied;
+    } else {
+        receipt.status = CohortReceiptStatus::UnknownOrigin;
+    }
+    std::optional<detail::NativeHistoryOwner::Candidate> history_candidate;
+    if (journal_->managed_history) {
+        reserve_n(cohort_receipts_, 1);
+        const CoreHistoryRecord source(static_cast<std::uint64_t>(receipt.operation),
+            static_cast<std::uint64_t>(receipt.status), cohort.value, origin, canonical);
+        history_candidate.emplace(journal_->managed_history->stage(
+            detail::NativeHistoryRecordKind::cohort_receipt, source));
+    }
+    if (receipt.status == CohortReceiptStatus::Applied) {
         const auto found = cohorts_.find(cohort.value);
         if (found == cohorts_.end()) {
             cohorts_.emplace(cohort.value, CohortRoster{cohort, {*canonical}});
@@ -3173,11 +3250,12 @@ void WorkingRequestCore::cohort_add(CohortHandle cohort, RequestHandle origin) {
             const auto where = std::lower_bound(origins.begin(), origins.end(), *canonical, handle_less);
             if (where == origins.end() || *where != *canonical) origins.insert(where, *canonical);
         }
-        receipt.status = CohortReceiptStatus::Applied;
-    } else {
-        receipt.status = CohortReceiptStatus::UnknownOrigin;
     }
     cohort_receipts_.push_back(std::move(receipt));
+    if (history_candidate) {
+        history_candidate->accept();
+        journal_->managed_history->publish(detail::NativeHistoryRecordKind::cohort_receipt);
+    }
     if (!bump_epoch()) throw std::overflow_error("native working-request epoch exhausted");
 }
 
@@ -3188,9 +3266,23 @@ void WorkingRequestCore::cohort_remove(CohortHandle cohort, RequestHandle origin
     receipt.operation = CohortReceiptOperation::Remove;
     receipt.cohort = cohort;
     receipt.origin = origin;
+    std::optional<RequestHandle> canonical;
     if (!cohort_exists(cohort)) {
         receipt.status = CohortReceiptStatus::InvalidHandle;
-    } else if (const auto canonical = canonical_cohort_origin(origin)) {
+    } else if ((canonical = canonical_cohort_origin(origin))) {
+        receipt.status = CohortReceiptStatus::Applied;
+    } else {
+        receipt.status = CohortReceiptStatus::UnknownOrigin;
+    }
+    std::optional<detail::NativeHistoryOwner::Candidate> history_candidate;
+    if (journal_->managed_history) {
+        reserve_n(cohort_receipts_, 1);
+        const CoreHistoryRecord source(static_cast<std::uint64_t>(receipt.operation),
+            static_cast<std::uint64_t>(receipt.status), cohort.value, origin, canonical);
+        history_candidate.emplace(journal_->managed_history->stage(
+            detail::NativeHistoryRecordKind::cohort_receipt, source));
+    }
+    if (receipt.status == CohortReceiptStatus::Applied) {
         const auto found = cohorts_.find(cohort.value);
         if (found != cohorts_.end()) {
             auto& origins = found->second.origins;
@@ -3198,11 +3290,12 @@ void WorkingRequestCore::cohort_remove(CohortHandle cohort, RequestHandle origin
             if (where != origins.end() && *where == *canonical) origins.erase(where);
             if (origins.empty()) cohorts_.erase(found);
         }
-        receipt.status = CohortReceiptStatus::Applied;
-    } else {
-        receipt.status = CohortReceiptStatus::UnknownOrigin;
     }
     cohort_receipts_.push_back(std::move(receipt));
+    if (history_candidate) {
+        history_candidate->accept();
+        journal_->managed_history->publish(detail::NativeHistoryRecordKind::cohort_receipt);
+    }
     if (!bump_epoch()) throw std::overflow_error("native working-request epoch exhausted");
 }
 
@@ -3211,6 +3304,8 @@ bool WorkingRequestCore::cohort_contains(
     PF_COHORT_WORK(Contains); if (!cohort_exists(cohort)) return false;
     const auto root = canonical_cohort_origin(opening);
     if (!root) return false;
+    if (journal_->managed_history)
+        return detail::NativeCohortSource(*journal_->managed_history).contains(cohort.value, *root);
     const auto found = cohorts_.find(cohort.value);
     if (found == cohorts_.end()) return false;
     const auto& origins = found->second.origins;
@@ -3572,7 +3667,11 @@ WorkingRequestCore::WorkingRequestCore(RunIdentity identity, TailWindowConfig wi
     require_identity(identity);
     identity_ = std::move(identity);
     instance_ = std::make_shared<InstanceBinding>();
-    journal_ = std::make_shared<JournalStore>();
+    journal_ = std::make_shared<JournalStore>(identity_);
+    // Invoked by direct cores, the consumer's initial core, and each actual
+    // run-begin replacement. Snapshot before codec bind or first issuance.
+    journal_->managed_history = detail::acquire_native_history(identity_);
+    journal_->core_registration.bind(identity_, journal_->managed_history.get());
     journal_->tail_windows = windows;
 }
 
@@ -3671,6 +3770,7 @@ void WorkingRequestCore::reset(RunIdentity identity) {
     require_identity(identity);
     if (journal_ && journal_->codec) {
         auto instance = std::make_shared<InstanceBinding>();
+        auto history = detail::acquire_native_history(identity);
         journal_->check(detail::journal_codec::clear(*journal_->codec));
         auto journal = std::move(journal_);
         for (auto& value : journal->codec_values) value.reset();
@@ -3680,12 +3780,20 @@ void WorkingRequestCore::reset(RunIdentity identity) {
         identity_ = std::move(identity);
         instance_ = std::move(instance);
         journal_ = std::move(journal);
+        journal_->managed_history = std::move(history);
+        journal_->core_registration.bind(identity_, journal_->managed_history.get());
+        if (journal_->managed_history)
+            journal_->managed_history->note_codec(journal_->codec->stats().resident_bytes);
         prepare_codec_frames();
         return;
     }
     WorkingRequestCore next(std::move(identity), tail_window_config());
     if (journal_) next.journal_->tail_cache_capacities = journal_->tail_cache_capacities;
     *this = std::move(next);
+}
+
+const detail::NativeHistoryOwner* WorkingRequestCore::managed_history_owner() const noexcept {
+    return journal_ ? journal_->managed_history.get() : nullptr;
 }
 
 std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
@@ -4686,7 +4794,15 @@ CommandInstalled<SubmitResult> WorkingRequestCore::apply_submit(
     AcceptedEvent accepted; accepted.ordinal = ordinal;
     accepted.definition = std::move(definition);
     accepted.surface = context.surface;
+    std::optional<detail::NativeHistoryOwner::Candidate> history_candidate;
+    if (journal_->managed_history) {
+        const CoreHistoryRecord source(incarnation, 0, 0, accepted.definition->handle,
+                                       accepted.definition->root);
+        history_candidate.emplace(journal_->managed_history->stage(
+            detail::NativeHistoryRecordKind::issued, source));
+    }
     seal_direct(1, true, false, true);
+    if (history_candidate) history_candidate->accept();
     const std::size_t first = history_end();
     append_direct(std::move(accepted), true);
     live_.push_back(std::move(live));
@@ -4784,7 +4900,15 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
         replaced.successor_definition = live.definition;
         replaced.surface = context.surface;
         if (options.keep_handle) reserve_n(repriced_, 1);
+        std::optional<detail::NativeHistoryOwner::Candidate> history_candidate;
+        if (!options.keep_handle && journal_->managed_history) {
+            const CoreHistoryRecord source(incarnation, 0, 0,
+                replaced.successor_definition->handle, replaced.successor_definition->root);
+            history_candidate.emplace(journal_->managed_history->stage(
+                detail::NativeHistoryRecordKind::issued, source));
+        }
         seal_direct(1, false, false, !options.keep_handle);
+        if (history_candidate) history_candidate->accept();
         const std::size_t first = history_end();
         append_direct(std::move(replaced), !options.keep_handle);
         // commit's erase-push: a fresh priority moves the successor to the back.
@@ -4823,7 +4947,15 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
         replaced.predecessor_definition = live_[live_index].definition;
         replaced.successor_definition = std::move(definition);
         replaced.surface = context.surface;
+        std::optional<detail::NativeHistoryOwner::Candidate> history_candidate;
+        if (journal_->managed_history) {
+            const CoreHistoryRecord source(incarnation, 0, 0,
+                replaced.successor_definition->handle, replaced.successor_definition->root);
+            history_candidate.emplace(journal_->managed_history->stage(
+                detail::NativeHistoryRecordKind::issued, source));
+        }
         seal_direct(1, false, false, true);
+        if (history_candidate) history_candidate->accept();
         const std::size_t first = history_end();
         append_direct(std::move(replaced), true);
         // commit's erase-push: later rows move down; the successor takes the
@@ -8342,6 +8474,7 @@ detail::ReadThroughCacheStats WorkingRequestCore::tail_read_cache_stats(
 // These reservations need the complete private helper to stage its transient
 // ticket. Their declarations and all callers keep their existing signatures.
 void WorkingRequestCore::reserve_plan(const MutationPlan& plan) {
+    std::optional<detail::NativeHistoryOwner::Candidate> history_candidate;
     // The journal's room first: it may write its oldest resident events to an
     // external page, which is a logical no-op, so a later refusal below leaves
     // the core as it was.
@@ -8358,6 +8491,14 @@ void WorkingRequestCore::reserve_plan(const MutationPlan& plan) {
     // range and names at most one successor root.
     if (plan.consume_incarnation) {
         reserve_n(issued_, 1);
+        if (journal_->managed_history
+            && plan.live_row.handle().incarnation == plan.incarnation_used) {
+            const auto& definition = *plan.live_row.definition;
+            const CoreHistoryRecord source(plan.incarnation_used, 0, 0,
+                                           definition.handle, definition.root);
+            history_candidate.emplace(journal_->managed_history->stage(
+                detail::NativeHistoryRecordKind::issued, source));
+        }
         if (successor_roots_ && successor_roots_->slab) {
             successor_roots_->next_adds_root = plan.live_row.definition
                     && plan.live_row.definition->root
@@ -8379,6 +8520,7 @@ void WorkingRequestCore::reserve_plan(const MutationPlan& plan) {
         make_book_room();
         reserve_n(live_, 1);
     }
+    if (history_candidate) history_candidate->accept();
 }
 
 void WorkingRequestCore::seal_direct(std::size_t events, bool push_live, bool add_receipt,

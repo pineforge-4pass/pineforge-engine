@@ -8,9 +8,24 @@ cache_sweep::Result private_ledger_rows(cache_sweep::Setting setting) {
     auto result = cache_sweep::ledger_rows(setting);
     const auto& measured = result.cache;
     using Ledger = pineforge::TradeLedger;
-    const auto rows = setting.defaults ? Ledger::kDefaultCacheRows : setting.units;
+    // ledger_rows exercises the fixed retained interval [0,100003), with
+    // retirement disabled. Model the declared AUTO doubling contract from
+    // that input, independently of every cache/accounting observation.
+    constexpr std::size_t retained_rows = 100003;
+    auto rows = setting.defaults ? Ledger::kDefaultCacheRows : setting.units;
+    if (setting.defaults)
+        while (rows < retained_rows) rows *= 2;
     const auto directory = (rows / Ledger::kCachePageSlots
         + (rows % Ledger::kCachePageSlots != 0)) * sizeof(void*);
+    const auto expected_slots = std::min(rows,
+        ((retained_rows + Ledger::kCachePageSlots - 1) / Ledger::kCachePageSlots)
+            * Ledger::kCachePageSlots);
+    std::printf("LEDGER_CACHE_EXPECTED setting=%s policy=%s retained_rows=%zu "
+                "initial_rows=%zu expected_geometry_rows=%zu expected_allocated_slots=%zu "
+                "expected_payload=%zu expected_directory=%zu\n",
+        setting.name, setting.defaults ? "DEFAULT_AUTO" : "EXPLICIT_FINITE",
+        retained_rows, Ledger::kDefaultCacheRows, rows, expected_slots,
+        expected_slots * Ledger::kLedgerEntryBytes, directory);
     cache_sweep::require(measured.configured_payload == rows * Ledger::kLedgerEntryBytes
         && measured.configured_metadata == directory,
         "ledger policy allowance omitted entries or directory pointers");
@@ -20,6 +35,14 @@ cache_sweep::Result private_ledger_rows(cache_sweep::Setting setting) {
     cache_sweep::require(measured.metadata == (rows == 0 ? 0 : directory)
         && measured.payload + measured.metadata == measured.peak_resident,
         "ledger reports each allocated page and directory exactly once");
+    cache_sweep::require(measured.payload == expected_slots * Ledger::kLedgerEntryBytes,
+        "complete retained-row walk did not allocate the independently expected pages");
+    if (setting.defaults)
+        cache_sweep::require(measured.hits > 0 && measured.evicted_reread_reads == 0,
+            "DEFAULT AUTO must retain the early row through the complete walk");
+    else if (rows < retained_rows)
+        cache_sweep::require(measured.evicted_reread_reads > 0,
+            "explicit finite capacity must physically reread the evicted early row");
     cache_sweep::require(measured.fixed_control + measured.fixed_workspace
         == Ledger::resident_cache_bytes(0),
         "ledger fixed base omitted control or read workspace");

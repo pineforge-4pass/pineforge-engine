@@ -8142,6 +8142,19 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     add_dependencies(test_cache_policy_v1 cache_policy_module)
 endif()
 # --- CR-150 cache-policy-v1 end ---
+
+# --- CR-150 ledger-cache-policy-wrapper begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8
+        AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(run_json_ledger_cache_policy_fixture MODULE run_json_ledger_cache_policy_fixture.cpp)
+    target_link_libraries(run_json_ledger_cache_policy_fixture PRIVATE pineforge)
+    target_compile_options(run_json_ledger_cache_policy_fixture PRIVATE -ffp-contract=off)
+    # Bind the fixture's real pread interposer for this module, including the
+    # linked engine; a Python process's earlier libc binding must not bypass it.
+    target_link_options(run_json_ledger_cache_policy_fixture PRIVATE "-Wl,-Bsymbolic-functions")
+endif()
+# --- CR-150 ledger-cache-policy-wrapper end ---
+
 # --- CR-150 ta-history-cache begin ---
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
     target_link_options(test_ta_history_cache_faults PRIVATE

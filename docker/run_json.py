@@ -3069,6 +3069,7 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
 class CachePolicyEntryC(ctypes.Structure):
     """Native C alignment; mirrors pf_cache_policy_entry_v1."""
     _fields_ = [("kind", ctypes.c_uint32),
+                ("reserved", ctypes.c_uint32),
                 ("capacity_bytes", ctypes.c_uint64)]
 
 
@@ -3077,7 +3078,8 @@ class CachePolicyC(ctypes.Structure):
     _fields_ = [("struct_size", ctypes.c_uint32),
                 ("version", ctypes.c_uint32),
                 ("entry_count", ctypes.c_uint64),
-                ("entries", ctypes.POINTER(CachePolicyEntryC))]
+                ("entries", ctypes.POINTER(CachePolicyEntryC)),
+                ("reserved", ctypes.c_uint32 * 2)]
 
 
 def _bind_cache_policy(lib) -> None:
@@ -3085,6 +3087,34 @@ def _bind_cache_policy(lib) -> None:
         lib.strategy_set_cache_policy_v1.argtypes = [
             ctypes.c_void_p, ctypes.POINTER(CachePolicyC)]
         lib.strategy_set_cache_policy_v1.restype = ctypes.c_int
+
+
+def apply_ledger_cache_policy(lib, state, capacity_bytes: int | None = None) -> None:
+    """Replace cache policy: None omits ledger/AUTO; integer bytes stay finite.
+
+    Other kinds use runtime defaults. No wrapper copies a numeric default or
+    treats zero as AUTO. Caller-owned storage survives through the setter.
+    Every request requires the runtime setter, including omission/AUTO.
+    """
+    if capacity_bytes is not None:
+        if type(capacity_bytes) is not int:
+            raise TypeError("ledger cache capacity must be integer bytes or None")
+        if not 0 <= capacity_bytes <= (1 << 64) - 1:
+            raise ValueError("ledger cache capacity is outside uint64")
+    setter = getattr(lib, "strategy_set_cache_policy_v1", None)
+    if setter is None:
+        raise StrategyLibraryError("ledger cache policy requires strategy_set_cache_policy_v1",
+                                   {"reason": "setter_missing"})
+    _bind_cache_policy(lib)
+    entries = ((CachePolicyEntryC * 1)(CachePolicyEntryC(
+        kind=1, reserved=0, capacity_bytes=capacity_bytes))
+        if capacity_bytes is not None else None)
+    policy = CachePolicyC(struct_size=ctypes.sizeof(CachePolicyC), version=1,
+                          entry_count=1 if entries is not None else 0, entries=entries)
+    if setter(state, ctypes.byref(policy)) != 0:
+        code, args = engine_failure_code(lib, state) or ("engine_unclassified_error", {})
+        raise RunFailure("cache policy rejected: " + json.dumps(args, sort_keys=True),
+                         code or "engine_unclassified_error", args)
 
 
 class ScratchTablesC(ctypes.Structure):

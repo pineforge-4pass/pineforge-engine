@@ -944,7 +944,14 @@ typedef uint32_t pf_cache_kind_t;
  *  selects the largest row count R with
  *  R * TradeLedger::kLedgerEntryBytes + ceil(R / 256) * sizeof(void*) <= capacity_bytes
  *  (312 bytes per decoded entry and 8 bytes per page pointer on LP64).
- *  The default is 20,449,280 bytes for 65,536 rows on LP64.
+ *  Omitting this entry selects AUTO, initially 65,536 rows (20,449,280
+ *  entry/directory bytes on LP64). AUTO doubles with actual retained history,
+ *  subject to representability and actual optional allocation, without the
+ *  explicit finite row ceiling. Private reindexing preserves warm entries;
+ *  old and replacement directories/pages coexist until publication succeeds.
+ *  AUTO memory grows with retained rows, including directory metadata.
+ *  Every present ledger entry selects a finite allowance, including an
+ *  allowance numerically equal to that initial geometry.
  *  Zero selects the existing zero-row
  *  bypass minimum. A nonzero capacity converting to fewer than one row fails
  *  with setting_rejected, input="cache_policy", reason="value_below_minimum";
@@ -952,8 +959,11 @@ typedef uint32_t pf_cache_kind_t;
  *  reason="value_above_maximum". No clamping or sub-row bypass occurs.
  *  The ledger keeps private pages; its allowance includes their page directory.
  *  Allocated pointers and pages are reported once in cache resident bytes.
- *  Optional directory/page allocation failure permanently bypasses further
- *  cache allocation for that ledger, preserving backing reads and writes.
+ *  A finite policy's optional directory/page allocation failure permanently
+ *  bypasses further allocation for that ledger, preserving backing reads and
+ *  writes. AUTO preserves the old cache on a failed rebuild and retries when
+ *  the retained population changes; its first allocation failure remains
+ *  observable until clear. Required backing I/O failures still propagate.
  *  Other kinds include optional line metadata in their byte allowances and
  *  bypass when below one line. Reads still use backing at zero capacity.
  *  reserved must be zero; a nonzero word is a typed setting_rejected error. */
@@ -971,7 +981,8 @@ typedef struct pf_cache_policy_entry_v1 {
  *  values before returning and retains neither pointer.
  *  entry_count is a uint64_t count; entries may be NULL only when it is zero.
  *  Each successful replacement starts from internal defaults, then applies
- *  the entries. Omitted kinds use defaults; duplicate and unknown kinds fail.
+ *  the entries. Omitted kinds use defaults (AUTO for the ledger); duplicate
+ *  and unknown kinds fail. NULL/empty descriptors restore ledger AUTO.
  *  No entry limits logical records, retained history or backing extent. */
 typedef struct pf_cache_policy_v1 {
     uint32_t struct_size;
@@ -996,6 +1007,34 @@ typedef struct pf_cache_policy_v1 {
  *  failure. This policy does not change scratch-table maxima or arena shares. */
 PF_API int strategy_set_cache_policy_v1(pf_strategy_t s,
                                         const pf_cache_policy_v1* policy);
+
+/** Disk scratch write batching, independent of resident cache policy.
+ *  Set struct_size = sizeof(pf_scratch_io_policy_v1), version = 1 and both
+ *  reserved words to zero. write_batch_bytes is successful write traffic in
+ *  bytes: default 65536; every uint64_t value is valid. Positive values retain
+ *  the before-next-batch sync/discard order. Zero syncs/discards each positive
+ *  transfer before write/write_some returns success, including short writes.
+ *  This is not a logical history limit or a physical-memory guarantee.
+ *  The fixed clean-read and userspace sequence windows remain unchanged. */
+typedef struct pf_scratch_io_policy_v1 {
+    uint32_t struct_size;
+    uint32_t version;
+    uint64_t write_batch_bytes;
+    uint64_t reserved[2];
+} pf_scratch_io_policy_v1;
+
+/** Copy settings before admission; NULL restores the 65536-byte default.
+ *  The descriptor is copied and no pointer is retained. Active begin,
+ *  callback, execution and stream calls reject atomically. Idle replacement
+ *  affects the next run and does not retune retained stores.
+ *  Returns 0 on success, -1 for a null handle, invalid descriptor or frozen
+ *  settings. Valid handles report setting_rejected, input="scratch_io_policy":
+ *  size/reserved errors use reason="unparseable_value", unsupported version
+ *  uses "invalid_enum_option", and active handles use "frozen".
+ *  A loader must resolve this symbol and fail if it is missing/incompatible,
+ *  including when requesting a NULL reset. */
+PF_API int strategy_set_scratch_io_policy_v1(pf_strategy_t s,
+                                             const pf_scratch_io_policy_v1* policy);
 
 /** Storage policy for the nine historical scratch-table regions. */
 typedef enum pf_scratch_table_backend_e {
