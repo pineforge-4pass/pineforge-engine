@@ -1646,7 +1646,7 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
 | `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; native shards: bare `gke-8cpu-16gb-amd64`; `matrix.runner`: live-sanitizers `gke-16cpu-32gb-amd64-256gb`, live-tsan `gke-16cpu-32gb-amd64-128gb` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz`: scalar `gke-2cpu-4gb-amd64`; credentialed `build`: `gkp-4cpu-8gb-amd64` |
-| `release.yml` | Dispatch from `main` | `release` and `notify-hub`: `gkp-2cpu-4gb-amd64`; x86_64 `prebuilt`: `gkp-16cpu-32gb-amd64-128gb`; arm64 `prebuilt`: hosted `ubuntu-22.04-arm` |
+| `release.yml` | Dispatch from `main` | `release` and `notify-hub`: `gkp-od-4cpu-8gb-amd64`; x86_64 `prebuilt`: `gkp-od-16cpu-32gb-amd64-128gb`; arm64 `prebuilt`: hosted `ubuntu-22.04-arm` |
 | `promote-baseline.yml` | Push to `main`, dispatch from `main` | `promote-guard`: `gke-2cpu-4gb-amd64`; `promote`: `gkp-2cpu-4gb-amd64` |
 | `release-ruleset-probe.yml` | Dispatch from `main` | `authz`: `gke-2cpu-4gb-amd64`; `probe`: `gkp-2cpu-4gb-amd64` |
 
@@ -1671,21 +1671,21 @@ Trusted post workflows and PR proof legs build cold; no trusted job restores an 
 `build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`. With the arm leg, the full set is `build`, `build-debug`, `build-arm`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.
 
 Release and promotion use protected GKE runner group 15:
-`release`, `notify-hub` and baseline `promote` use `gkp-2cpu-4gb-amd64`;
-Linux x64 `prebuilt` uses `gkp-16cpu-32gb-amd64-128gb`.
+`release` and `notify-hub` use `gkp-od-4cpu-8gb-amd64`; baseline `promote` uses `gkp-2cpu-4gb-amd64`;
+Linux x64 `prebuilt` uses `gkp-od-16cpu-32gb-amd64-128gb`.
 The release ruleset probe runs secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64` and
 `probe` on `gkp-2cpu-4gb-amd64`.
 Release's Linux arm64 artifact cell keeps its hosted `ubuntu-22.04-arm` pin;
 1.8.0 has no macOS test or artifact cells, and
 promotion runs on a push to `main` plus manual dispatch from `main`.
 
-The protected 2 CPU/4 GB set fits each orchestration job: release computes versions,
-stamps JSON catalogs and publishes with git/gh; notify-hub only mints an App token
-and dispatches an API request; promotion runs API/tree checks, Node campaign tooling
-and a Cloud SQL proxy; the probe reads rulesets with Python/gh. Docs uses the
-4 CPU/8 GB set for Doxygen and Graphviz over the full public header set before
-uploading the site to Pages. The x86_64 prebuilt set reserves 16 CPU/32 GB and
-128 GB disk for compiling, staging and packing the static library.
+Release and notify-hub use the protected on-demand 4 CPU/8 GB set: release
+computes versions, stamps JSON catalogs and publishes with git/gh; notify-hub
+mints an App token and dispatches an API request. The protected 2 CPU/4 GB set
+runs promotion's API/tree checks, Node campaign tooling and Cloud SQL proxy; the
+probe reads rulesets with Python/gh. Docs uses 4 CPU/8 GB for Doxygen and Graphviz
+over the full public header set before Pages upload. The x86_64 prebuilt set reserves
+16 CPU/32 GB and 128 GB disk for compiling, staging and packing the static library.
 Both Linux artifact cells install `libeigen3-dev` with `sudo apt-get update` and
 `sudo apt-get install -y libeigen3-dev`; Eigen is not baked into the protected image.
 Before CMake, x86_64 must read `Eigen/src/Core/util/Macros.h` and match exactly

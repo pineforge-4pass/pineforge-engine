@@ -2378,7 +2378,20 @@ class PostFleetRunnerPolicy(unittest.TestCase):
 
     def test_post_fleet_docs_match_runner_policy(self):
         docs = (ROOT / 'docs/ci.md').read_text()
-        self.assertEqual(len(docs.splitlines()), 2063)
+        # The test-owned job catalog defines the protected label inventory.
+        tables = re.findall(
+            r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
+            r'\| --- \| --- \| --- \|\n((?:\|[^\n]+\|\n)+)',
+            docs, re.MULTILINE)
+        self.assertEqual(len(tables), 1, 'one documented runner table')
+        rows = re.findall(r'^\| `([^`]+)` \|[^|\n]*\|([^|\n]*)\|$',
+                          tables[0], re.MULTILINE)
+        for name, jobs in EXPECTED_GKP_JOBS.items():
+            cells = [cell for workflow, cell in rows if workflow == name]
+            self.assertEqual(len(cells), 1, f'{name} documented runner row')
+            self.assertEqual(set(re.findall(r'`(gkp-[^`]+)`', cells[0])),
+                             set(jobs.values()),
+                             f'{name} documented protected runner inventory')
         requirements = (
             'Post Release/Debug/kernel, native shards and post sanitizers use fixed bare GKE scale-set names.\n'
             'The two native-live sanitizer profiles use an exact runner matrix. All GKE jobs run directly '
@@ -2428,6 +2441,21 @@ class PostFleetRunnerPolicy(unittest.TestCase):
         for required in requirements:
             with self.subTest(required=required):
                 self.assertIn(required, docs)
+
+    def test_post_fleet_docs_refuse_same_size_wrong_protected_runner(self):
+        docs = (ROOT / 'docs/ci.md').read_text()
+        rows = [line for line in docs.splitlines()
+                if line.startswith('| `docs-post.yml` |')]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].count(f'`{GKP_4}`'), 1)
+        changed = docs.replace(rows[0], rows[0].replace(GKP_4, GKE_4, 1), 1)
+        self.assertNotEqual(changed, docs)
+        self.assertEqual(len(changed.splitlines()), len(docs.splitlines()))
+        with mock.patch.object(Path, 'read_text', return_value=changed) as read_doc:
+            with self.assertRaisesRegex(
+                    AssertionError, r'docs-post\.yml documented protected runner inventory'):
+                self.test_post_fleet_docs_match_runner_policy()
+        read_doc.assert_called_once_with()
 
 
 POST_SHARD_CASES = (
@@ -4722,7 +4750,14 @@ class PreflightFailures(unittest.TestCase):
 
     def test_documented_slow_row_counts_match_literal_population(self):
         text = (ROOT / 'docs/ci.md').read_text()
-        self.assertEqual(len(text.splitlines()), 2063)
+        slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
+                       if name.startswith('test_ci_verify_slice_'))
+        self.assertTrue(slices, 'verifier slice inventory must not be empty')
+        ranges = re.findall(
+            r'rows, among them `(test_ci_verify_slice_\d+)` through '
+            r'`(test_ci_verify_slice_\d+)`,', text)
+        self.assertEqual(ranges, [(slices[0], slices[-1])],
+                         'documented slow slice inventory')
         counts = re.findall(
             r'^the (\d+) CTest rows labelled `slow` in `tests/CMakeLists.txt`$'
             r'|^The label `slow` (?:is|includes) `PINEFORGE_PR_SLOW_TESTS` '
@@ -4735,6 +4770,19 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(inventory, [('71', '43', '28')])
         self.assertIn('The timing list contains 43 names, and 28 additional names', text)
         self.assertIn('making 71 distinct pinned slow names.', text)
+
+    def test_documented_slow_rows_refuse_same_size_wrong_slice(self):
+        text = (ROOT / 'docs/ci.md').read_text()
+        before = ('rows, among them `test_ci_verify_slice_1` through '
+                  '`test_ci_verify_slice_8`,')
+        self.assertEqual(text.count(before), 1)
+        changed = text.replace(before, before.replace('_8`', '_7`'), 1)
+        self.assertNotEqual(changed, text)
+        self.assertEqual(len(changed.splitlines()), len(text.splitlines()))
+        with mock.patch.object(Path, 'read_text', return_value=changed) as read_doc:
+            with self.assertRaisesRegex(AssertionError, 'documented slow slice inventory'):
+                self.test_documented_slow_row_counts_match_literal_population()
+        read_doc.assert_called_once_with()
 
     def test_floor_table_documentation_anchors_point_to_definition(self):
         source = (ROOT / 'scripts/ci_verify.py').read_text().splitlines()
