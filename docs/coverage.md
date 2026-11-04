@@ -1023,7 +1023,7 @@ a `trail_points`, `trail_offset` or `trail_price` assignment selects
 production; otherwise it selects strict. The standalone verifier also
 supports an explicit `parity_profile` override in `inputs.json`.
 The sweep applies trail / production limits to 341 of its 7,989 probes
-(7 corpus, 334 scrapper, 58 distinct strategies) and strict limits to
+(58 distinct strategies) and strict limits to
 the other 7,648 probes.
 
 One probe, `corpus/validation/anomaly-equity-mirror-strategy-equity-01`,
