@@ -2333,6 +2333,7 @@ class GkeRunnerPolicy(unittest.TestCase):
                 'preflight': 'shellcheck',
                 'build': 'libeigen3-dev tzdata-legacy ccache',
                 'build-debug': 'libeigen3-dev tzdata-legacy ccache',
+                NATIVE_X86_JOB: None,
                 'build-arm': 'libeigen3-dev tzdata-legacy ccache strace',
                 'corpus-parity-subset': 'libeigen3-dev ccache git-lfs',
             },
@@ -2340,6 +2341,7 @@ class GkeRunnerPolicy(unittest.TestCase):
                 'preflight': 'shellcheck', 'preflight-slow': None,
                 'build': 'libeigen3-dev tzdata-legacy ccache strace',
                 'build-debug': 'libeigen3-dev tzdata-legacy ccache strace',
+                NATIVE_X86_JOB: None,
                 'build-arm': 'libeigen3-dev tzdata-legacy ccache strace',
                 'sanitizers': 'libeigen3-dev tzdata-legacy ccache',
                 'kernel-only': 'cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache',
@@ -4927,7 +4929,7 @@ class PreflightFailures(unittest.TestCase):
                 ('    if: always()\n', '    if: success()\n'),
                 ('test "$ADMIT_RESULT" = success', 'true'),
                 ('test "$ALLOWED" = true', 'true')):
-            self.assertIn('gke-pr.yml result must require admission, preflight and consistent proof results',
+            self.assertIn('gke-pr.yml result must require admission, preflight, native x86 and consistent proof results',
                           self.gke_mutated_findings('result', before, after))
 
     def test_status_function_jobs_refuse_before_checkout_from_mutated_files(self):
@@ -4992,8 +4994,7 @@ class PreflightFailures(unittest.TestCase):
             (6, '  corpus-parity-subset:\n', '  missing-subset:\n'),
             (6, '  build-gate:\n', '  missing-gate:\n'),
             (6, 'passed "$SANITIZER_RESULT"', 'true'),
-            (6, '[[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT"',
-                'passed "$PREFLIGHT_RESULT" && passed "$BUILD_RESULT"'),
+            (6, '[[ "$PREFLIGHT_RESULT" == "success" ]]', 'true'),
             (6, 'needs: [authz, changes, preflight,', 'needs: [authz, preflight,'),
             (6, '          CHANGES_RESULT: ${{ needs.changes.result }}\n', ''),
             (6, '          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}\n',
@@ -6790,9 +6791,11 @@ exit "$lookup_exit"
 
     def test_gcp_sites_reject_cross_class_routes(self):
         sites = list(self.gcp_sites())
-        # Admitted PR 5 + post preflight/shards/arm 7 + native 2 + parity 2 + docs 1 + release 3
-        # + probe 1 + promotion 1; the dispatch canary is a separate synthetic input.
-        self.assertEqual(len(sites), 22)
+        # Admitted PR 5 + post preflight/shards/arm 7 + native-live 2 + native x86 2
+        # + parity 2 + docs 1 + release 3 + probe 1 + promotion 1; the dispatch canary
+        # is a separate synthetic input.
+        # expectation corrected:22 ->24 because the PR and post native x86 jobs each add one declared GKE route
+        self.assertEqual(len(sites), 24)
         self.assertCountEqual([(name, job) for name, job, *_ in sites],
                               [(name, job) for name, jobs in FLEET_JOB_IDS.items()
                                for job in jobs if job not in LIGHT_JOB_IDS.get(name, ())
@@ -7470,9 +7473,9 @@ finally:
             self.assertEqual(ci_preflight._job_values(env, 'REPO'), ['${{ github.repository }}'])
         for job, before, after, finding in (
                 ('result', 'steps.second-classify.outputs.github_only', 'needs.admit.outputs.github_only',
-                 'gke-pr.yml result must require admission, preflight and consistent proof results'),
+                 'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results'),
                 ('result', 'steps.second-classify.outputs.arm_relevant', 'needs.admit.outputs.arm_relevant',
-                 'gke-pr.yml result must require admission, preflight and consistent proof results'),
+                 'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results'),
                 ('result', reader, '', 'gke-pr.yml result must read the immutable compare list independently'),
                 ('admit', '      github_only: ${{ steps.classify.outputs.github_only }}',
                  '      github_only: true', 'gke-pr.yml admit must publish only the base classifier outputs'),
@@ -7505,6 +7508,7 @@ finally:
                                'Require an independently consistent successful result')
         for class_name in ('docs', 'github', 'code'):
             base = {'ADMIT_RESULT': 'success', 'ALLOWED': 'true', 'PREFLIGHT_RESULT': 'success',
+                    'X86_RESULT': 'success',
                     'LEGS_RESULT': 'success' if class_name == 'code' else 'skipped',
                     'ADMIT_DOCS_ONLY': 'true' if class_name == 'docs' else 'false',
                     'SECOND_DOCS_ONLY': 'true' if class_name == 'docs' else 'false',
@@ -7517,6 +7521,7 @@ finally:
                 for outcome in dict.fromkeys((base[field], 'success', 'skipped', 'failure', 'cancelled', '')):
                     values = {**base, field: outcome}
                     expected = (values['ADMIT_RESULT'] == values['PREFLIGHT_RESULT'] == 'success'
+                                and values['X86_RESULT'] == 'success'
                                 and values['ALLOWED'] == 'true'
                                 and values['ADMIT_DOCS_ONLY'] == values['SECOND_DOCS_ONLY']
                                 and values['ADMIT_GITHUB_ONLY'] == values['SECOND_GITHUB_ONLY']
@@ -7531,14 +7536,14 @@ finally:
                                     else 'success'))
                     result = subprocess.run(
                         ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', pr_script],
-                        env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
-                             'X86_RESULT': 'success', **values},
+                        env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'), **values},
                         capture_output=True, text=True)
                     self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
         for event in ('push', 'schedule', 'workflow_dispatch'):
             script = job_script(self.ci_sources()[6], 'build-gate',
                                 'Require every verification lane to have passed')
-            required = {'AUTHZ_RESULT', 'CHANGES_RESULT', 'PREFLIGHT_RESULT', 'SLOW_PREFLIGHT_RESULT'}
+            required = {'AUTHZ_RESULT', 'CHANGES_RESULT', 'PREFLIGHT_RESULT',
+                        'SLOW_PREFLIGHT_RESULT', 'X86_GCC133_RESULT'}
             proof = {'BUILD_RESULT', 'PARITY_RESULT', 'ARM_BUILD_RESULT', 'SANITIZER_RESULT', 'NATIVE_RESULT',
                           'KERNEL_RESULT', 'FULL_PARITY_RESULT', 'DEBUG_BUILD_RESULT',
                           'RELEASE_GATE_RESULT', 'DEBUG_GATE_RESULT',
@@ -11104,14 +11109,14 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
         self.assert_arm_refused(changed, [], baseline=self.original, shape=(
             'gke-pr.yml admit must publish only the base classifier outputs',
             'gke-pr.yml legs must require every selected proof',
-            'gke-pr.yml result must require admission, preflight and consistent proof results'))
+            'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results'))
 
     def test_arm_job_removed_without_reverting_new_gates_is_refused(self) -> None:
         changed = self.workflow.replace(self.ARM_JOB, '', 1)
         self.assert_arm_refused(changed, [], shape=(
             'gke-pr.yml admit must publish only the base classifier outputs',
             'gke-pr.yml legs must require every selected proof',
-            'gke-pr.yml result must require admission, preflight and consistent proof results'))
+            'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results'))
 
     def test_new_variant_requires_exact_classifier_outputs(self) -> None:
         for replacement in (
@@ -11148,7 +11153,7 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
         self.assertTrue(new_step)
         changed = self.workflow.replace(new_step, old_step, 1)
         self.assert_arm_refused(changed, [], shape=(
-            'gke-pr.yml result must require admission, preflight and consistent proof results',))
+            'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results',))
 
     def test_old_legs_with_new_result_is_refused(self) -> None:
         old_body = _jobs(self.original)['legs']
@@ -11208,7 +11213,7 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
             'gke-pr.yml build-debug must run its complete fast Debug smoke',
             'gke-pr.yml build-debug must install only its smoke dependencies',
             'gke-pr.yml legs must require every selected proof',
-            'gke-pr.yml result must require admission, preflight and consistent proof results',
+            'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results',
             'gke-pr.yml build-debug must have one head checkout',
         ]
         runner = [
@@ -11247,7 +11252,7 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
                  'gke-pr.yml legs must require every selected proof'),
                 ('result', 'steps.second-classify.outputs.arm_relevant',
                  'needs.admit.outputs.arm_relevant',
-                 'gke-pr.yml result must require admission, preflight and consistent proof results')):
+                 'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results')):
             with self.subTest(job=job, change=after):
                 changed = in_job(self.workflow, job, before, after)
                 self.assert_arm_refused(changed, [], shape=(finding,))
