@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_cold_order_encoding)
+pineforge_add_unit_test(test_cold_order_encoding)

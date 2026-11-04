@@ -78,6 +78,11 @@ uint64_t book_key_value(const std::string& key) {
 // the last spilled rows a reader asked for.
 struct WorkingRequestCore::BookSpill {
     static constexpr std::size_t kSide = 8;
+    // New run-owned stores bind their format here, never by inspecting bytes.
+    // Compaction copies frames verbatim within this same context. No restore
+    // or legacy/mixed-format fallback is supplied by this private store.
+    enum class PayloadFormat { ColdBytesV1 };
+    const PayloadFormat payload_format;
     detail::DiskIdTable<BookSlot> rows;
     detail::DiskIdTable<IncarnationSlot> links;
     ExtFile blobs;
@@ -140,7 +145,8 @@ struct WorkingRequestCore::BookSpill {
     mutable uint64_t projected_reads = 0;
     uint64_t class_guard_failures = 0;
 
-    explicit BookSpill(const std::vector<LiveRequest>& live) {
+    explicit BookSpill(const std::vector<LiveRequest>& live)
+        : payload_format(PayloadFormat::ColdBytesV1) {
         // A fixed resident book, not a key/population admission limit. Files
         // remain unopened until the existing spill path first writes them.
         resident.reserve(kBookMax + 1);
@@ -642,11 +648,22 @@ struct WorkingRequestCore::BookSpill {
         ByteWriter out;
         SaveAr ar{out};
         ar(row);
+        if (payload_format != PayloadFormat::ColdBytesV1)
+            throw detail::ScratchIoError(EIO, "native cold book format binding");
+        std::vector<unsigned char> encoded;
+        try {
+            encoded = detail::cold_order::encode(out.data(), out.size());
+        } catch (const detail::cold_order::FormatError&) {
+            throw detail::ScratchIoError(EIO, "native cold book byte frame");
+        }
         const uint64_t priority = row.priority();
         const uint64_t incarnation = row.handle().incarnation;
         BookSlot slot;
-        slot.offset = blobs.append(out.data(), out.size());
-        slot.length = out.size();
+        if (encoded.size() > std::numeric_limits<uint64_t>::max()
+            || static_cast<uint64_t>(encoded.size()) > std::numeric_limits<uint64_t>::max() - blobs.size())
+            throw detail::ScratchIoError(EIO, "native cold book byte offset overflow");
+        slot.offset = blobs.append(encoded.data(), encoded.size());
+        slot.length = encoded.size();
         slot.incarnation = incarnation;
         if (meta.dormant) {
             const auto& r = reg[meta.cls];
@@ -672,12 +689,29 @@ struct WorkingRequestCore::BookSpill {
         }
     }
     LiveRequest read(const WorkingRequestCore& core, const BookSlot& slot) const {
-        std::vector<unsigned char> bytes(static_cast<std::size_t>(slot.length));
-        blobs.read(slot.offset, bytes.data(), bytes.size());
+        if (payload_format != PayloadFormat::ColdBytesV1
+            || slot.offset > blobs.size() || slot.length > blobs.size() - slot.offset
+            || slot.length > std::numeric_limits<std::size_t>::max()
+            || slot.length > std::vector<unsigned char>{}.max_size())
+            throw detail::ScratchIoError(EIO, "native cold book slot bounds");
+        std::vector<unsigned char> encoded(static_cast<std::size_t>(slot.length));
+        blobs.read(slot.offset, encoded.data(), encoded.size());
+        std::vector<unsigned char> bytes;
+        try {
+            bytes = detail::cold_order::decode(encoded.data(), encoded.size());
+        } catch (const detail::cold_order::FormatError&) {
+            throw detail::ScratchIoError(EIO, "native cold book byte frame");
+        }
+        // A LiveRequest archive cannot be empty. Keep the generic reader and
+        // all journal/refusal formats unchanged, including their error seams.
+        if (bytes.empty())
+            throw detail::ScratchIoError(EIO, "native cold book empty archive");
         ByteReader in(bytes.data(), bytes.size());
         LoadAr ar{in};
         LiveRequest row;
         ar(row);
+        if (in.remaining() != 0)
+            throw detail::ScratchIoError(EIO, "native cold book archive trailer");
         project(core, slot, row);
         if (!row.definition || !core.journal_ || core.journal_->codec) return row;
         const JournalStore& journal = *core.journal_;
@@ -708,21 +742,34 @@ struct WorkingRequestCore::BookSpill {
         return row;
     }
     // Replaces the serialized row of the live entry at `at`, keeping its
-    // priority. Bytes of the same length (a refreshed allowance usually is)
-    // overwrite the old ones in place; anything else is appended and the
+    // priority. Encoded bytes of the same length overwrite the old ones in
+    // place; anything else is appended and the
     // entry points at it, the old bytes becoming garbage.
     void rewrite(uint64_t at, BookSlot slot, const LiveRequest& row) {
         assert((slot.dormancy & 1u) == 0);  // only BookClose refreshes rewrite
         ByteWriter out;
         SaveAr ar{out};
         ar(row);
-        if (out.size() == slot.length) {
-            blobs.write(slot.offset, out.data(), out.size());
+        if (payload_format != PayloadFormat::ColdBytesV1)
+            throw detail::ScratchIoError(EIO, "native cold book format binding");
+        std::vector<unsigned char> encoded;
+        try {
+            encoded = detail::cold_order::encode(out.data(), out.size());
+        } catch (const detail::cold_order::FormatError&) {
+            throw detail::ScratchIoError(EIO, "native cold book byte frame");
+        }
+        if (encoded.size() == slot.length) {
+            if (slot.offset > blobs.size() || slot.length > blobs.size() - slot.offset)
+                throw detail::ScratchIoError(EIO, "native cold book rewrite bounds");
+            blobs.write(slot.offset, encoded.data(), encoded.size());
             return;
         }
         const uint64_t old_length = slot.length;
-        slot.offset = blobs.append(out.data(), out.size());
-        slot.length = out.size();
+        if (encoded.size() > std::numeric_limits<uint64_t>::max()
+            || static_cast<uint64_t>(encoded.size()) > std::numeric_limits<uint64_t>::max() - blobs.size())
+            throw detail::ScratchIoError(EIO, "native cold book byte offset overflow");
+        slot.offset = blobs.append(encoded.data(), encoded.size());
+        slot.length = encoded.size();
         rows.set(at, slot);
         garbage += old_length;
     }
@@ -791,7 +838,9 @@ struct WorkingRequestCore::BookSpill {
         return gone > 2 * alive + 64 || garbage > blobs.size() / 2 + (uint64_t{1} << 20);
     }
     // Rebuilds both tables and the blob file from the entries that still
-    // stand. Table offsets taken before are no longer valid.
+    // stand. Frames are copied unchanged; structural validation remains at
+    // read time, as archive validation did before framing. Table offsets
+    // taken before are no longer valid.
     void compact() {
         detail::DiskIdTable<BookSlot> fresh_rows;
         detail::DiskIdTable<IncarnationSlot> fresh_links;
@@ -803,8 +852,15 @@ struct WorkingRequestCore::BookSpill {
         }
         for (uint64_t at = first_alive(); at != 0; at = next_alive(at)) {
             BookSlot slot = rows.get(at);
+            if (payload_format != PayloadFormat::ColdBytesV1
+                || slot.offset > blobs.size() || slot.length > blobs.size() - slot.offset
+                || slot.length > std::numeric_limits<std::size_t>::max()
+                || slot.length > std::vector<unsigned char>{}.max_size())
+                throw detail::ScratchIoError(EIO, "native cold book compact bounds");
             std::vector<unsigned char> bytes(static_cast<std::size_t>(slot.length));
             blobs.read(slot.offset, bytes.data(), bytes.size());
+            if (static_cast<uint64_t>(bytes.size()) > std::numeric_limits<uint64_t>::max() - fresh_blobs.size())
+                throw detail::ScratchIoError(EIO, "native cold book compact offset overflow");
             slot.offset = fresh_blobs.append(bytes.data(), bytes.size());
             const std::string key = rows.key(at);
             const uint64_t priority = book_key_value(key);

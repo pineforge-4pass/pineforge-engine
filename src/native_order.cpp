@@ -5,6 +5,7 @@
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/detail/journal_codec.hpp>
 #include "native_journal_codec.hpp"
+#include "native_cold_order_codec.hpp"
 #include "native_issued_range_state.hpp"
 #include "optional_window.hpp"
 #include "read_through_window.hpp"

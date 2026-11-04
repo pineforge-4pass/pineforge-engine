@@ -137,6 +137,7 @@ set(PINEFORGE_KERNEL_SOURCES src/array.cpp
     src/engine_trade_accessors.cpp
     src/pending_order_mirror.cpp
     src/native_order.cpp
+    src/native_cold_order_codec.cpp
     src/native_journal_codec.cpp
     src/engine_consumer.cpp
     src/market_driver.cpp

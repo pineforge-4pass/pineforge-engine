@@ -4,14 +4,24 @@
 #include "global_allocation_replacement.hpp"
 
 #include <pineforge/native_order.hpp>
+#include <pineforge/native_host.hpp>
+#include <pineforge/detail/scratch_errors.hpp>
 
+#include <algorithm>
+#include <array>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <variant>
+#include <vector>
+
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace {
 namespace no = pineforge::native_order;
@@ -220,6 +230,207 @@ void exercise(bool cold, std::size_t live_allocation_bytes) {
                 row->definition.use_count(), census.calls, census.definition_calls,
                 census.retained_bytes, live_allocation_bytes, definition_allocation_bytes);
 }
+
+void exercise_held_frame() {
+    const no::RunIdentity run{"book-held-frame", 1};
+    no::WorkingRequestCore core{run};
+    std::uint64_t incarnation = 1;
+    std::uint64_t ordinal = 1;
+    auto request = limit_request();
+    request.label = "held cold definition";
+    request.comment = std::string(129, 'q');
+    for (std::uint64_t i = 1; i <= kBookMax + kBookSide + 3; ++i) {
+        const auto result = core.submit(request, 0, incarnation, ordinal);
+        REQUIRE(result.status == no::SubmitStatus::Accepted && result.handle);
+    }
+    const auto* accepted = std::get_if<no::AcceptedEvent>(&core.history_at(kTarget - 1));
+    REQUIRE(accepted && accepted->definition);
+    auto held = core.hold_live(no::RequestHandle{run, kTarget});
+    REQUIRE(held && held->definition);
+    CHECK(held.use_count() == 2); // caller and its side slot
+    CHECK(held->definition.get() == accepted->definition.get());
+    const auto* address = held.get();
+    // Every one of these is another spilled row. Turn over all eight side
+    // slots, then read an earlier held object after its decoded buffer died.
+    for (std::uint64_t i = 1; i <= kBookSide + 1; ++i) {
+        const auto* next = core.find_live(no::RequestHandle{run, kTarget + i});
+        REQUIRE(next && next->handle().incarnation == kTarget + i);
+    }
+    CHECK(held.get() == address && held.use_count() == 1);
+    CHECK(held->request().label == request.label);
+    CHECK(held->request().comment == request.comment);
+    CHECK(held->definition.get() == accepted->definition.get());
+    CHECK(held->birth().acceptance_ordinal == kTarget);
+}
+
+void exercise_replaced_successor_frame() {
+    const no::RunIdentity run{"book-replaced-frame", 1};
+    no::WorkingRequestCore core{run};
+    std::uint64_t incarnation = 1;
+    std::uint64_t ordinal = 1;
+    for (std::uint64_t i = 1; i <= kBookMax; ++i) {
+        const auto submitted = core.submit(limit_request(), 0, incarnation, ordinal);
+        REQUIRE(submitted.status == no::SubmitStatus::Accepted && submitted.handle);
+    }
+    const no::RequestHandle target{run, kTarget};
+    auto successor = limit_request();
+    successor.label = "successor definition";
+    successor.comment = "same handle, new birth and priority";
+    successor.trigger = no::Limit{49.0};
+    no::ReplaceOptions options;
+    options.keep_handle = true;
+    const auto replaced = core.replace(target, successor, 1, incarnation, ordinal,
+                                       std::nullopt, options);
+    REQUIRE(replaced.status == no::ReplaceStatus::Replaced);
+    const auto replacement_position = core.history_end() - 1;
+    const auto* resident = std::get_if<no::ReplacedEvent>(&core.history_at(replacement_position));
+    REQUIRE(resident && resident->predecessor_definition && resident->successor_definition);
+    const auto predecessor = resident->predecessor_definition;
+    const auto expected = resident->successor_definition;
+    REQUIRE(predecessor->handle == expected->handle);
+    REQUIRE(predecessor->birth != expected->birth);
+    REQUIRE(predecessor->priority != expected->priority);
+    const auto submitted = core.submit(limit_request(), 1, incarnation, ordinal);
+    REQUIRE(submitted.status == no::SubmitStatus::Accepted && submitted.handle);
+    // The kept-handle successor was newest and is now spilled. Read without
+    // promotion; ordinal lookup must choose this ReplacedEvent's successor.
+    const auto reads_before = core.book_lookup_reads().rows;
+    const auto row = core.hold_live(target);
+    REQUIRE(row && row->definition);
+    CHECK(core.book_lookup_reads().rows == reads_before + 1);
+    CHECK(row->definition.get() == expected.get());
+    CHECK(row->definition.get() != predecessor.get());
+    CHECK(row->birth() == expected->birth);
+    CHECK(row->priority() == expected->priority);
+    CHECK(row->request().label == successor.label);
+    CHECK(row->request().comment == successor.comment);
+    CHECK(std::get<no::Limit>(row->request().trigger).price == 49.0);
+}
+
+// Same descriptor seam as the existing spilled-read failure units. Restrict
+// the candidates to files opened by the FIRST book spill; never follow names.
+std::vector<int> unlinked_descriptors() {
+    std::vector<int> found;
+    const long limit = ::sysconf(_SC_OPEN_MAX);
+    const long end = limit > 0 ? std::min(limit, 4096L) : 1024L;
+    for (int fd = 3; fd < end; ++fd) {
+        struct stat status{};
+        if (::fstat(fd, &status) == 0 && S_ISREG(status.st_mode) && status.st_nlink == 0)
+            found.push_back(fd);
+    }
+    return found;
+}
+
+int first_frame_descriptor(const std::vector<int>& before) {
+    int result = -1;
+    for (const int fd : unlinked_descriptors()) {
+        if (std::find(before.begin(), before.end(), fd) != before.end()) continue;
+        std::array<unsigned char, 10> header{};
+        if (::pread(fd, header.data(), header.size(), 0) !=
+            static_cast<ssize_t>(header.size())) continue;
+        if (header[0] != 1 || header[1] != 1) continue;
+        // Independent V1 header recognition, only within the bounded fd delta.
+        std::uint64_t decoded = 0;
+        for (unsigned i = 0; i != 8; ++i)
+            decoded |= std::uint64_t{header[2 + i]} << (8 * i);
+        struct stat status{};
+        REQUIRE(::fstat(fd, &status) == 0);
+        REQUIRE(status.st_size > 10 && decoded > static_cast<std::uint64_t>(status.st_size - 10));
+        REQUIRE(result == -1); // exactly one first cold-byte payload file
+        result = fd;
+    }
+    REQUIRE(result != -1);
+    return result;
+}
+
+class MalformedFrameHost final : public pineforge::NativeStrategyHost {
+public:
+    explicit MalformedFrameHost(unsigned fault) : fault_(fault) {}
+    int frame = -1;
+    bool injected = false;
+    bool continuation_returned = false;
+    bool broker_returned = false;
+    bool continuation_failed = false;
+    bool broker_failed = false;
+
+    void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {
+        if (++bar_ == 1) {
+            std::vector<int> before;
+            for (std::uint64_t i = 1; i <= kPopulation; ++i) {
+                if (i == kPopulation) before = unlinked_descriptors();
+                REQUIRE(submit(limit_request()).handle);
+            }
+            frame = first_frame_descriptor(before);
+            return;
+        }
+        if (bar_ != 2) return;
+        REQUIRE(frame >= 0);
+        std::array<unsigned char, 10> saved{};
+        REQUIRE(::pread(frame, saved.data(), saved.size(), 0) == static_cast<ssize_t>(saved.size()));
+        auto damaged = saved;
+        if (fault_ == 0) damaged[0] = 2;        // version, no raw fallback
+        if (fault_ == 1) damaged[1] = 0xff;     // mode, no raw fallback
+        if (fault_ == 2) {
+            for (unsigned i = 2; i != 10; ++i) damaged[i] = 0; // expansion exceeds word
+        }
+        REQUIRE(::pwrite(frame, damaged.data(), damaged.size(), 0) ==
+                static_cast<ssize_t>(damaged.size()));
+        injected = true;
+        try {
+            (void)native_continuation_hash();
+            continuation_returned = true;
+        } catch (const pineforge::detail::AuxiliaryScratchIoError& error) {
+            continuation_failed = error.code().value() == EIO
+                && error.run_failure_code() == pineforge::RunFailureCode::scratch_io_failed;
+        }
+        // Repair physical bytes; a carried first failure must still prevent
+        // the next logical reader from answering a partial/default hash.
+        REQUIRE(::pwrite(frame, saved.data(), saved.size(), 0) == static_cast<ssize_t>(saved.size()));
+        try {
+            (void)broker_state_hash();
+            broker_returned = true;
+        } catch (const pineforge::detail::AuxiliaryScratchIoError& error) {
+            broker_failed = error.code().value() == EIO
+                && error.run_failure_code() == pineforge::RunFailureCode::scratch_io_failed;
+        }
+    }
+private:
+    unsigned fault_;
+    int bar_ = 0;
+};
+
+void exercise_failed_frames() {
+    pineforge::NativeRunSpec spec;
+    spec.identity = {"book-framed-failure", 1};
+    spec.input_tf = "5";
+    spec.script_tf = "5";
+    spec.tickerid = "TEST:COLD";
+    spec.timezone = "UTC";
+    spec.session = "24x7";
+    spec.slot_label_policy = pineforge::NativeSlotLabelPolicy::FeedTolerant;
+    spec.report_policy = pineforge::NativeReportPolicy::HostRecorded;
+    spec.initial_capital = 1.0e9;
+    spec.point_value = 1;
+    spec.account_fx = 1;
+    spec.price_tick = 0.25;
+    std::array<pineforge::Bar, 3> bars{};
+    for (std::size_t i = 0; i != bars.size(); ++i) {
+        auto& bar = bars[i];
+        bar.open = bar.high = bar.low = bar.close = 100;
+        bar.volume = 1;
+        bar.timestamp = 1736121600000LL + static_cast<std::int64_t>(i) * 300000;
+    }
+    for (unsigned fault = 0; fault != 3; ++fault) {
+        MalformedFrameHost host{fault};
+        REQUIRE(host.configure_native(spec).status == pineforge::NativeSetupStatus::Applied);
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        CHECK(host.injected);
+        CHECK(host.continuation_failed && !host.continuation_returned);
+        CHECK(host.broker_failed && !host.broker_returned);
+        CHECK(host.native_state().kind == pineforge::NativeLifecycleKind::Failed);
+        CHECK(pineforge::run_failure_value_of(host).code == pineforge::RunFailureCode::scratch_io_failed);
+    }
+}
 } // namespace
 
 int main() {
@@ -232,6 +443,9 @@ int main() {
 #endif
         exercise(false, live_allocation_bytes);
         exercise(true, live_allocation_bytes);
+        exercise_held_frame();
+        exercise_replaced_successor_frame();
+        exercise_failed_frames();
     } catch (const std::exception& error) {
         ++failures;
         std::fprintf(stderr, "book_read_definition_reuse: %s\n", error.what());
