@@ -3037,17 +3037,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         if _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY):
             findings.append('release.yml prebuilt must use exactly the isolated Linux x64 '
                             'and hosted ARM matrix')
-        prebuilt_steps = _steps(prebuilt)
-        install = _step_named(prebuilt_steps, '      - name: Install Eigen3 (Linux)')
-        eigen = _step_named(prebuilt_steps,
-                            '      - name: Assert Eigen3 3.4.0 on the protected Linux x86_64 slice')
-        configure = _step_named(prebuilt_steps, '      - name: Configure')
-        if (not configure or _code(install) != _code(RELEASE_EIGEN_INSTALL_STEP)
-                or _code(eigen) != _code(RELEASE_EIGEN_ASSERT_STEP)
-                or not (prebuilt_steps.index(install) < prebuilt_steps.index(eigen)
-                        < prebuilt_steps.index(configure))):
-            findings.append('release.yml prebuilt must install Eigen and assert exactly 3.4.0 '
-                            'before configuring')
+        findings += release_prebuilt_workflow_findings(workflows['release.yml'])
         if any(re.search(r'macos|darwin|CMAKE_OSX_', '\n'.join(_code(step)), re.IGNORECASE)
                for step in _steps(prebuilt)):
             findings.append('release.yml prebuilt must not contain macOS build steps')
@@ -3126,32 +3116,191 @@ def _compiler_cache_restore_with(step: str) -> list[str]:
             for line in _step_block(step, 'with')]
 
 
-# The release build installs Eigen and refuses any version other than 3.4.0.
-RELEASE_EIGEN_INSTALL_STEP = r'''      - name: Install Eigen3 (Linux)
-        if: runner.os == 'Linux'
+# Exact reviewed steps: ARM host commands, x86 transport, identity, all-library
+# inspection and publication order form one contract. Extra steps fail closed.
+RELEASE_PREBUILT_STEPS = r'''
+      # A dry run has no tag yet: it builds the dispatched commit.
+      - name: Checkout release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
+          fetch-depth: 0   # the version helper still observes the git sha
+          persist-credentials: false
+
+      - name: Assert tag still names the emitted release commit
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          SHA: ${{ needs.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::invalid emitted release sha: ${SHA}" >&2
+            exit 1
+          fi
+          test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${SHA}"
+
+      - name: Write the dry run's VERSION
+        if: ${{ inputs.dry_run }}
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: printf '%s\n' "${NEXT}" > VERSION
+
+      # The x86_64 build uses only the preloaded immutable Bookworm toolchain.
+      - name: Build x86_64 in preloaded Bookworm
+        if: matrix.triple == 'linux-x86_64'
+        env:
+          ENGINE_TOOLCHAIN_IMAGE: ${{ vars.ENGINE_TOOLCHAIN_IMAGE }}
+          SOURCE_SHA: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
+          NEXT: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          bash scripts/build_prebuilt_bookworm.sh \
+            "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" "${SOURCE_SHA}" "${NEXT}" "${TAG}" "${DRY_RUN}"
+
+      # The hosted ARM slice retains its system toolchain and Eigen setup.
+      - name: Install Eigen3 (Linux)
+        if: runner.os == 'Linux' && matrix.triple == 'linux-aarch64'
         run: |
           sudo apt-get update
           sudo apt-get install -y libeigen3-dev
-'''
 
-RELEASE_EIGEN_ASSERT_STEP = r'''      - name: Assert Eigen3 3.4.0 on the protected Linux x86_64 slice
-        if: runner.os == 'Linux' && matrix.triple == 'linux-x86_64'
+      - name: Configure
+        if: matrix.triple == 'linux-aarch64'
+        env:
+          TAG:         ${{ needs.release.outputs.tag }}
+          TRIPLE:      ${{ matrix.triple }}
         run: |
           set -euo pipefail
-          hdr=""
-          for p in /usr/include/eigen3/Eigen/Core /usr/local/include/eigen3/Eigen/Core; do
-            if [ -f "$p" ]; then hdr="$p"; break; fi
-          done
-          if [ -z "$hdr" ]; then
-            echo "::error::Eigen3 headers not found on the protected GKE runner"
-            exit 1
-          fi
-          macros="$(dirname "$hdr")/src/Core/util/Macros.h"
-          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "$macros"
-          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "$macros"
-          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "$macros"
-          echo "Eigen3 3.4.0 present at $(dirname "$(dirname "$hdr")")"
+          stage="stage/pineforge-${TAG}-${TRIPLE}"
+          echo "STAGE_DIR=${stage}" >> "$GITHUB_ENV"
+          # FILE: the version identity is the VERSION file exactly, -rc.N
+          # included, however the checkout's tags describe it; a dry run's
+          # VERSION has no tag at all.
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPINEFORGE_BUILD_TESTS=OFF \
+            -DPINEFORGE_BUILD_TUTORIAL=OFF \
+            -DPINEFORGE_VERSION_SOURCE=FILE \
+            -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}"
+
+      - name: Build
+        if: matrix.triple == 'linux-aarch64'
+        run: cmake --build build -j 4
+
+      - name: Install to staging
+        if: matrix.triple == 'linux-aarch64'
+        run: cmake --install build
+
+      # The generated version.h and the CMake package files must carry the
+      # full version, -rc.N included, and its numeric X.Y.Z.
+      - name: Verify the staged version
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: |
+          python3 scripts/release_version.py check-install \
+            --prefix "${STAGE_DIR}" --expect "${NEXT}"
+
+      # Both dry-run and publication inspect every installed .a/.so/.so.*.
+      # Keep raw checker output and its actual exit status, including setup errors.
+      - name: Check every staged library's glibc floor
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
+          mkdir -p "${log}"
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" \
+            > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+            checker_rc=0
+          else checker_rc=$?; fi
+          printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
+          cat "${log}/stdout.jsonl"
+          cat "${log}/stderr.txt" >&2
+          exit "${checker_rc}"
+
+      - name: Bundle docs into tarball root
+        run: |
+          set -euo pipefail
+          cp LICENSE NOTICE VERSION "${STAGE_DIR}/"
+
+      - name: Pack tarball + sha256
+        id: pack
+        env:
+          TAG:    ${{ needs.release.outputs.tag }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          base="pineforge-${TAG}-${TRIPLE}"
+          tarball="${base}.tar.gz"
+          tar -czf "${tarball}" -C "$(dirname "${STAGE_DIR}")" "${base}"
+          sha256sum "${tarball}" > "${tarball}.sha256"
+          echo "tarball=${tarball}"           >> "$GITHUB_OUTPUT"
+          echo "sha256=${tarball}.sha256"     >> "$GITHUB_OUTPUT"
+
+      - name: Upload to release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:     ${{ needs.release.outputs.tag }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          SHASUM:  ${{ steps.pack.outputs.sha256 }}
+        run: |
+          gh release upload "${TAG}" "${TARBALL}" "${SHASUM}" --clobber
+
+      - name: Keep the dry run's tarball as a workflow artifact
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.pack.outputs.tarball }}
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.sha256 }}
+          retention-days: 7
 '''
+
+
+# Git blob identity of the reviewed transport, including the inside-image build.
+# A changed helper requires reviewing its source and controls before repinning.
+# This is a source contract, never an engine/build/glibc verdict.
+RELEASE_BOOKWORM_HELPER_BLOB = '87b97b538032a3378a08ec825e89b0cba4f2db4e'
+
+
+def release_prebuilt_helper_findings(source: str) -> list[str]:
+    payload = source.encode('utf-8')
+    actual = hashlib.sha1(b'blob ' + str(len(payload)).encode('ascii') + b'\0' + payload).hexdigest()
+    if actual != RELEASE_BOOKWORM_HELPER_BLOB:
+        return ['release prebuilt Bookworm helper differs from the reviewed immutable-image, '
+                'bounded-mount, inside-build and no-fallback source contract']
+    return []
+
+
+def release_prebuilt_workflow_findings(workflow: str) -> list[str]:
+    """Pin every artifact step and its order without expanding credential admission."""
+    prebuilt = _jobs(workflow).get('prebuilt', '')
+    findings = []
+    if ([_code(step) for step in _steps(prebuilt)]
+            != [_code(step) for step in _steps(RELEASE_PREBUILT_STEPS)]):
+        findings.append('release.yml prebuilt must retain the credential-free Bookworm build, '
+                        'hosted ARM setup and all-library glibc gate before packing/upload')
+    if (any(_job_values(prebuilt, key) for key in ('if', 'continue-on-error', 'defaults'))
+            or _job_values(workflow, 'defaults')):
+        findings.append('release.yml prebuilt must keep default success/failure and shell behavior')
+    for scope in (workflow, prebuilt):
+        values = _job_values(scope, 'env')
+        block = _job_block(scope, 'env')
+        # The mapping header `env:` is not a shell ENV binding. Inspect only
+        # its children; duplicate, flow or expression mappings fail closed.
+        if (len(values) > 1 or (values and not block)
+                or re.search(r'''(?mi)^\s*['"]?(?:BASH_ENV|ENV|PATH|DOCKER_\w+|CMAKE_\w+|CC|CXX|'''
+                             r'''CFLAGS|CXXFLAGS|LDFLAGS|GITHUB_\w+|RUNNER_\w+|STAGE_DIR|'''
+                             r'''SOURCE_SHA|TRIPLE|ENGINE_TOOLCHAIN_IMAGE)['"]?\s*:''',
+                             '\n'.join(block[1:]))):
+            findings.append('release.yml prebuilt must not override toolchain, Docker or shared-path inputs')
+            break
+    return findings
+
 
 # ci_release_gate.py's phase-1 exemption is bounded by this exact writer.
 RELEASE_BUMP_PUBLISH_STEP = r'''      - name: Write bumped VERSION, commit, tag, push
@@ -4335,6 +4484,10 @@ def check_commands(source: Path, output: Path | None = None,
         CheckCommand('release-gate-tests',
                      [sys.executable, str(source / 'scripts/test_ci_release_gate.py')],
                      parallel=True),
+        CheckCommand('prebuilt-bookworm-tests',
+                     [sys.executable, str(source / 'scripts/test_build_prebuilt_bookworm.py'),
+                      '--scratch-root', str(output_dir)],
+                     parallel=True),
         # R5 run-failure codes: the catalog diff release.yml stamps is a tested
         # script, and the code tables of docs/pages/run-failure-codes.md are
         # generated from the catalog it diffs.
@@ -4605,6 +4758,11 @@ def main() -> int:
              if path.suffix in ('.yml', '.yaml') and path.name not in named},
             curl_action=read_ci_text(ROOT / '.github/actions/setup-live-curl/action.yml', findings),
             actions=actions)
+        helper_path = ROOT / 'scripts/build_prebuilt_bookworm.sh'
+        if helper_path.parent.is_symlink() or helper_path.is_symlink() or not helper_path.is_file():
+            findings.append('release prebuilt Bookworm helper must be a regular source file')
+        else:
+            checked += release_prebuilt_helper_findings(read_ci_text(helper_path, findings))
         findings = list(dict.fromkeys(findings + checked))
         for finding in findings:
             print(finding)

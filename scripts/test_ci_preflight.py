@@ -896,26 +896,19 @@ class ProtectedGkeRunners(unittest.TestCase):
         prebuilt = _jobs(workflow)['prebuilt']
         install = ci_preflight._step_named(ci_preflight._steps(prebuilt),
                                            '      - name: Install Eigen3 (Linux)')
-        self.assertEqual(ci_preflight._step_values(install, 'if'), ["runner.os == 'Linux'"])
+        self.assertEqual(ci_preflight._step_values(install, 'if'),
+                         ["runner.os == 'Linux' && matrix.triple == 'linux-aarch64'"])
         for command in ('sudo apt-get update', 'sudo apt-get install -y libeigen3-dev'):
             self.assertIn(command, install)
-        assertion = ci_preflight._step_named(
+        builder = ci_preflight._step_named(
             ci_preflight._steps(prebuilt),
-            '      - name: Assert Eigen3 3.4.0 on the protected Linux x86_64 slice')
-        self.assertIn('/src/Core/util/Macros.h', assertion)
-        for macro, version in (('WORLD', 3), ('MAJOR', 4), ('MINOR', 0)):
-            check = f"grep -Eq '^#define EIGEN_{macro}_VERSION[[:space:]]+{version}[[:space:]]*$'"
-            self.assertIn(check, assertion)
-            changed = in_job(workflow, 'prebuilt', check, 'true # removed exact version check')
-            self.assertIn('release.yml prebuilt must install Eigen and assert exactly 3.4.0 '
-                          'before configuring',
-                          ci_preflight.runner_findings({'release.yml': changed}))
+            '      - name: Build x86_64 in preloaded Bookworm')
+        self.assertIn('bash scripts/build_prebuilt_bookworm.sh', builder)
+        self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(workflow), [])
         for old, new in (("if: runner.os == 'Linux'", "if: false"),
                          ('sudo apt-get install -y libeigen3-dev', 'true')):
             changed = in_job(workflow, 'prebuilt', old, new)
-            self.assertIn('release.yml prebuilt must install Eigen and assert exactly 3.4.0 '
-                          'before configuring',
-                          ci_preflight.runner_findings({'release.yml': changed}))
+            self.assertTrue(ci_preflight.release_prebuilt_workflow_findings(changed))
 
 
 class PrebuiltReleaseEnvironment(unittest.TestCase):
@@ -926,6 +919,8 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
                            'on protected GKE')
     CREDENTIAL_FINDING = ('release.yml job prebuilt must keep production credentials '
                           'on a hosted standard runner')
+    INPUT_FINDING = ('release.yml prebuilt must not override toolchain, Docker or '
+                     'shared-path inputs')
 
     def setUp(self):
         self.workflows = {path.name: path.read_text()
@@ -951,6 +946,53 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
         self.assertEqual(ci_preflight.GKP_JOB_ENVIRONMENTS['release.yml'].get('prebuilt'),
                          'release')
         self.assertEqual(self.findings(self.shipped), [])
+
+    def test_shipped_inherited_release_tag_binding_is_not_a_shell_env_override(self):
+        self.assertEqual(ci_preflight._job_block(self.shipped, 'env'),
+                         ['env:', '  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"'])
+        self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(self.shipped), [])
+        self.assertEqual(self.findings(self.shipped), [])
+
+    def test_inherited_shell_docker_toolchain_and_shared_path_bindings_are_refused(self):
+        for name in ('BASH_ENV', 'ENV', 'eNv', 'PATH', 'DOCKER_HOST', 'DOCKER_CONFIG',
+                     'CMAKE_TOOLCHAIN_FILE', 'CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS',
+                     'GITHUB_ENV', 'GITHUB_WORKSPACE', 'GITHUB_OUTPUT', 'GITHUB_UNLISTED',
+                     'RUNNER_TEMP', 'RUNNER_UNLISTED', 'STAGE_DIR', 'SOURCE_SHA', 'TRIPLE',
+                     'ENGINE_TOOLCHAIN_IMAGE'):
+            for quote in ('', '"', "'"):
+                for scope in ('workflow', 'job'):
+                    with self.subTest(name=name, quote=quote, scope=scope):
+                        binding = f'{quote}{name}{quote}: /outside/input\n'
+                        if scope == 'workflow':
+                            changed = self.shipped.replace('env:\n', 'env:\n  ' + binding, 1)
+                        else:
+                            changed = in_job(
+                                self.shipped, 'prebuilt', '    steps:\n',
+                                '    env:\n      ' + binding + '    steps:\n')
+                        self.assertNotEqual(changed, self.shipped)
+                        self.assertIn(self.INPUT_FINDING,
+                                      ci_preflight.release_prebuilt_workflow_findings(changed))
+
+    def test_duplicate_flow_and_expression_inherited_environments_fail_closed(self):
+        original = 'env:\n  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"\n'
+        self.assertEqual(self.shipped.count(original), 1)
+        for value in ('env: {BASH_ENV: /outside/input}\n',
+                      'env: ${{ inputs.environment }}\n',
+                      original + 'env:\n  ENV: /outside/input\n'):
+            with self.subTest(scope='workflow', value=value):
+                changed = self.shipped.replace(original, value, 1)
+                self.assertNotEqual(changed, self.shipped)
+                self.assertIn(self.INPUT_FINDING,
+                              ci_preflight.release_prebuilt_workflow_findings(changed))
+        for value in ('    env: {DOCKER_HOST: "tcp://outside:2375"}\n',
+                      '    env: ${{ inputs.environment }}\n',
+                      '    env:\n      TOKEN: ${{ github.token }}\n'
+                      '    env:\n      ENV: /outside/input\n'):
+            with self.subTest(scope='job', value=value):
+                changed = in_job(self.shipped, 'prebuilt', '    steps:\n',
+                                 value + '    steps:\n')
+                self.assertIn(self.INPUT_FINDING,
+                              ci_preflight.release_prebuilt_workflow_findings(changed))
 
     def test_only_github_token_with_the_release_environment_is_admitted(self):
         self.assertIn('${{ secrets.GITHUB_TOKEN }}', _jobs(self.release)['prebuilt'])
@@ -3191,6 +3233,7 @@ class CiFileLoading(unittest.TestCase):
     DOCS_POST = '.github/workflows/docs-post.yml'
     CONFIG = '.github/actionlint.yaml'
     CMAKE = 'tests/CMakeLists.txt'
+    HELPER = 'scripts/build_prebuilt_bookworm.sh'
 
     @staticmethod
     def action_sources():
@@ -3204,7 +3247,7 @@ class CiFileLoading(unittest.TestCase):
     def workflow_sources(self):
         return [name for name in self.action_sources() if name.startswith('.github/workflows/')]
 
-    def make_tree(self):
+    def make_tree(self, *, include_helper=True):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         tree = Path(directory.name)
@@ -3213,6 +3256,9 @@ class CiFileLoading(unittest.TestCase):
         shutil.copyfile(ROOT / self.CONFIG, tree / self.CONFIG)
         (tree / 'tests').mkdir()
         shutil.copyfile(ROOT / self.CMAKE, tree / self.CMAKE)
+        if include_helper:
+            (tree / 'scripts').mkdir()
+            shutil.copyfile(ROOT / self.HELPER, tree / self.HELPER)
         return tree
 
     def crlf_tree(self, names):
@@ -3294,7 +3340,8 @@ class CiFileLoading(unittest.TestCase):
         changed = (ROOT / self.DOCS).read_bytes()[:-1] + b'\r'
         tree = self.make_tree()
         shutil.copytree(ROOT / 'scripts', tree / 'scripts',
-                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'),
+                        dirs_exist_ok=True)
         (tree / self.DOCS).write_bytes(changed)
         argv = {entry[0]: entry[1] for entry in check_commands(tree)}['ci-workflow-contract']
         result = subprocess.run(argv, cwd=tree, capture_output=True, text=True)
@@ -3318,6 +3365,43 @@ class CiFileLoading(unittest.TestCase):
             self.DOCS, original.count(b'\n') + 1, 'actions/checkout@main')], output)
         self.assertEqual(code, 1, output)
 
+    def test_required_bookworm_helper_is_copied_from_the_genuine_source(self):
+        tree = self.make_tree()
+        self.assertEqual((tree / self.HELPER).read_bytes(), (ROOT / self.HELPER).read_bytes())
+        self.assertFalse((tree / self.HELPER).is_symlink())
+        code, output = self.run_stage(tree, '--check-ci-workflow')
+        self.assertEqual(code, 0, output)
+
+    def test_missing_or_symlink_bookworm_helper_is_refused(self):
+        finding = 'release prebuilt Bookworm helper must be a regular source file'
+        for kind in ('missing', 'file-symlink', 'parent-symlink'):
+            with self.subTest(kind=kind):
+                tree = self.make_tree(include_helper=False)
+                if kind != 'missing':
+                    genuine = tree / 'helper-inputs'
+                    genuine.mkdir()
+                    shutil.copyfile(ROOT / self.HELPER, genuine / 'build_prebuilt_bookworm.sh')
+                    if kind == 'parent-symlink':
+                        (tree / 'scripts').symlink_to(genuine, target_is_directory=True)
+                    else:
+                        (tree / 'scripts').mkdir()
+                        (tree / self.HELPER).symlink_to(genuine / 'build_prebuilt_bookworm.sh')
+                code, output = self.run_stage(tree, '--check-ci-workflow')
+                self.assertEqual(code, 1, output)
+                self.assertIn(finding, output)
+
+    def test_changed_bookworm_helper_and_line_endings_are_refused_by_the_source_pin(self):
+        original = (ROOT / self.HELPER).read_bytes()
+        self.assertTrue(original.endswith(b'\n') and b'\r' not in original)
+        for changed in (original + b'# changed source\n',
+                        original.replace(b'\n', b'\r\n'), original[:-1] + b'\r'):
+            with self.subTest(ending=changed[-40:]):
+                tree = self.make_tree()
+                (tree / self.HELPER).write_bytes(changed)
+                code, output = self.run_stage(tree, '--check-ci-workflow')
+                self.assertEqual(code, 1, output)
+                self.assertIn('release prebuilt Bookworm helper differs from the reviewed', output)
+
     def test_the_combined_checker_takes_the_file_texts_as_stored(self):
         sources = [(ROOT / path).read_bytes().decode('utf-8') for path in CI_SOURCES]
         self.assertEqual(ci_workflow_findings(*sources), [])
@@ -3327,7 +3411,7 @@ class CiFileLoading(unittest.TestCase):
 
     def test_a_file_that_is_not_utf8_is_a_finding_not_a_crash(self):
         for name in (self.DOCS, '.github/workflows/release.yml',
-                     '.github/actions/setup-live-curl/action.yml', self.CMAKE):
+                     '.github/actions/setup-live-curl/action.yml', self.CMAKE, self.HELPER):
             with self.subTest(name=name):
                 self.assert_undecodable_is_a_finding(name, '--check-ci-workflow')
 
@@ -3797,7 +3881,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'native-c-surface-tests', 'kernel-residuals-tests', 'corpus-parity-identity-tests',
             'corpus-parity-subset-cover-tests', 'report-schema-key-tests',
             'selected-window-ownership-tests', 'report-outputs-key-tests', 'release-version-tests',
-            'release-gate-tests', 'run-failure-diff-tests', 'run-json-harness-tests',
+            'release-gate-tests', 'prebuilt-bookworm-tests', 'run-failure-diff-tests', 'run-json-harness-tests',
             'docs-only-tests', 'design-inventory-tests', 'design-inventory',
             'detached-comments-tests', 'detached-comments', 'native-tempdir-tests',
             'dangling-comment-names-tests', 'doc-anchors-tests', 'doc-anchors',
@@ -3808,8 +3892,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
         ]
         self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
         # main() prepends actionlint-version to all/fast/github-only.
-        self.assertEqual(len(expected) + 1, 63)
-        self.assertEqual(len(check_commands(ROOT, tier='fast')), 58)
+        self.assertEqual(len(expected) + 1, 64)
+        self.assertEqual(len(check_commands(ROOT, tier='fast')), 59)
         self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
         self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
 
@@ -7546,7 +7630,7 @@ finally:
         expected = {
             'preflight-tests', 'cr150-source-gate-tests', 'runner-allowlist',
             'rng-draw-order', 'rng-draw-order-tests', 'native-c-surface-tests',
-            'selected-window-ownership-tests', 'release-gate-tests',
+            'selected-window-ownership-tests', 'release-gate-tests', 'prebuilt-bookworm-tests',
             'run-failure-diff-tests', 'design-inventory', 'design-inventory-tests',
             'doc-anchors', 'doc-anchors-tests', 'doc-lint', 'doc-lint-tests',
             'kernel-seam-rows', 'kernel-seam-rows-tests',
