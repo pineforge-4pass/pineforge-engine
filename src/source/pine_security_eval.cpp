@@ -35,6 +35,31 @@ using namespace internal;
 
 namespace {
 
+// The request door owns literal parse failures. Catch only the numeric
+// parser's failures here; registration and other arguments keep their codes.
+int request_timeframe_seconds(const std::string& tf, bool lower_tf_array_requested) {
+    int requested_seconds = 0;
+    try {
+        requested_seconds = tf_to_seconds(tf);
+    } catch (const std::invalid_argument&) {
+        // Refuse the unparseable request below.
+    } catch (const std::out_of_range&) {
+        // Refuse the unrepresentable request below.
+    }
+    // Calendar month has no fixed second count: -1 is its parsed marker,
+    // valid for scalar HTF requests but never for the intrabar array API.
+    const bool is_calendar_month = requested_seconds == -1 && !lower_tf_array_requested;
+    if (requested_seconds <= 0 && !is_calendar_month) {
+        const char* api = lower_tf_array_requested
+            ? "request.security_lower_tf" : "request.security";
+        throw coded<std::runtime_error>(
+            RunFailureCode::request_timeframe_invalid, {{"api", api}},
+            std::string(api) + ": invalid timeframe literal '" + tf + "'"
+        );
+    }
+    return requested_seconds;
+}
+
 // TradingView's request.security_lower_tf accepts only the default merge
 // flags: lookahead_on and gaps_on are refused at validation. This is a rule
 // of the source language, not of the kernel's sub-bar synthesis, so it lives
@@ -57,6 +82,13 @@ void ensure_supported_lower_tf_emulation_flags(bool lookahead_on, bool gaps_on) 
 void source::PineStrategyHost::register_security_eval(
         int sec_id, const std::string& requested_tf, const std::string& input_tf,
         bool lookahead_on, bool gaps_on, bool heikinashi) {
+    const std::string& evaluator_input_tf =
+        security_input_tf_.empty() ? input_tf : security_input_tf_;
+    // Match the kernel's parse condition. With no input yet, validation
+    // remains deferred; an empty request retains its existing passthrough.
+    if (!evaluator_input_tf.empty() && !requested_tf.empty()) {
+        request_timeframe_seconds(requested_tf, false);
+    }
     const std::size_t before = security_eval_states_.size();
     // Generated configure_security_evaluators() opens with
     // security_eval_states_.clear(): the first site registered into an empty
@@ -71,8 +103,6 @@ void source::PineStrategyHost::register_security_eval(
     pine.lookahead_on = lookahead_on;
     pine.heikinashi = heikinashi;
 
-    const std::string& evaluator_input_tf =
-        security_input_tf_.empty() ? input_tf : security_input_tf_;
     if (evaluator_input_tf.empty()) return;
     int lower_ratio = 0;
     int lower_seconds = 0;
@@ -106,6 +136,13 @@ void source::PineStrategyHost::register_security_lower_tf_eval(
     const std::string& requested_tf,
     const std::string& input_tf
 ) {
+    const std::string& evaluator_input_tf =
+        security_input_tf_.empty() ? input_tf : security_input_tf_;
+    // The lower-TF door must own a malformed literal before delegating to
+    // scalar registration, which does not yet know this site's array API.
+    if (!evaluator_input_tf.empty() && !requested_tf.empty()) {
+        request_timeframe_seconds(requested_tf, true);
+    }
     auto before = security_eval_states_.size();
     register_security_eval(sec_id, requested_tf, input_tf, false, false);
     if (security_eval_states_.size() > before) {
@@ -202,6 +239,11 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
         pine.deferred_aux.clear();
         if (state.tf.empty()) continue;
 
+        // Deferred requests must also be checked before the emulation
+        // predicate can parse their timeframe.
+        const int requested_seconds =
+            request_timeframe_seconds(state.tf, pine.lower_tf_array_requested);
+        const bool is_calendar_month = requested_seconds == -1;
         int lower_ratio = 0;
         int lower_seconds = 0;
         bool ltf_supported = supports_lower_tf_emulation(
@@ -216,26 +258,6 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
             pine.lower_tf_ratio = lower_ratio;
             pine.lower_tf_seconds = lower_seconds;
             continue;
-        }
-
-        // Parse the requested TF defensively so a garbage literal like
-        // "abc" produces a precise diagnostic instead of an opaque
-        // std::invalid_argument from stoi.
-        int requested_seconds = safe_tf_to_seconds(state.tf);
-        // Calendar month ("M" / "NM") has no fixed second count; tf_to_seconds
-        // returns -1 as a calendar marker (a genuine parse failure returns 0).
-        // Month is always a COARSER HTF, so admit it for request.security and
-        // let the CALENDAR TimeframeAggregator (tf_ratio == -1) aggregate it.
-        // request.security_lower_tf("M") stays invalid — month is never an
-        // intrabar TF. (Weekly/daily already pass: they return positive seconds.)
-        bool is_calendar_month = (requested_seconds == -1 && !pine.lower_tf_array_requested);
-        if (requested_seconds <= 0 && !is_calendar_month) {
-            const char* api = pine.lower_tf_array_requested
-                ? "request.security_lower_tf" : "request.security";
-            throw coded<std::runtime_error>(
-                RunFailureCode::request_timeframe_invalid, {{"api", api}},
-                std::string(api) + ": invalid timeframe literal '" + state.tf + "'"
-            );
         }
 
         if (!is_calendar_month && requested_seconds < input_seconds) {
