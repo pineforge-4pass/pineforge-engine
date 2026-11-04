@@ -801,7 +801,8 @@
       "map_pairs",
       "max_bars_back",
       "matrix_elements",
-      "udt_objects"
+      "udt_objects",
+      "drawing_ids"
      ]
     },
     "max": {
@@ -816,7 +817,12 @@
     "map cannot contain more than 50000 key-value pairs",
     "matrix.elements_count: total exceeds int range",
     "matrix.reshape: dimension overflow",
-    "{bar_prefix}The script attempts to reference historical data that is too far from the current bar ({bars_back} bars back). The historical buffer's limit is {limit} bars."
+    "{bar_prefix}The script attempts to reference historical data that is too far from the current bar ({bars_back} bars back). The historical buffer's limit is {limit} bars.",
+    "line drawing ID domain exhausted",
+    "box drawing ID domain exhausted",
+    "label drawing ID domain exhausted",
+    "linefill drawing ID domain exhausted",
+    "generic drawing ID domain exhausted"
    ],
    "retryable": false,
    "since": "1.4.0"
@@ -1993,14 +1999,18 @@
       "risk_fills_per_day",
       "risk_day_basis",
       "risk_action",
-      "quantity_tolerance"
+      "quantity_tolerance",
+      "max_lines_count",
+      "max_boxes_count",
+      "max_labels_count"
      ]
     }
    },
    "class": "strategy",
    "description": "A strategy() declaration setting (or its override) is not a value the engine accepts.",
    "english": [
-    "Pine adapter produced invalid native run spec field {field}"
+    "Pine adapter produced invalid native run spec field {field}",
+    "drawing declared count is outside the int32 domain"
    ],
    "retryable": false,
    "since": "1.4.0"
