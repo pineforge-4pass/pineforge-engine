@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "ef7f0f20aed4af55291a8cfa77f268543f5f11c36912e960d084a7f93fcea6a0"
+    "catalogSha256": "40001596e0129a0a7ccf4aece277fffb893ceeb147f206ddee59444a6a3a0644"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -98,7 +98,146 @@
       }
     }
   ],
-  "changed": [],
+  "changed": [
+    {
+      "code": "pine_runtime_limit",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.limit.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "map_pairs",
+            "max_bars_back",
+            "matrix_elements",
+            "udt_objects"
+          ],
+          "after": [
+            "map_pairs",
+            "max_bars_back",
+            "matrix_elements",
+            "udt_objects",
+            "drawing_ids"
+          ]
+        },
+        {
+          "path": "english",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "UDT object-ID capacity exceeded",
+            "map cannot contain more than 50000 key-value pairs",
+            "matrix.elements_count: total exceeds int range",
+            "matrix.reshape: dimension overflow",
+            "{bar_prefix}The script attempts to reference historical data that is too far from the current bar ({bars_back} bars back). The historical buffer's limit is {limit} bars."
+          ],
+          "after": [
+            "UDT object-ID capacity exceeded",
+            "map cannot contain more than 50000 key-value pairs",
+            "matrix.elements_count: total exceeds int range",
+            "matrix.reshape: dimension overflow",
+            "{bar_prefix}The script attempts to reference historical data that is too far from the current bar ({bars_back} bars back). The historical buffer's limit is {limit} bars.",
+            "line drawing ID domain exhausted",
+            "box drawing ID domain exhausted",
+            "label drawing ID domain exhausted",
+            "linefill drawing ID domain exhausted",
+            "generic drawing ID domain exhausted"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "strategy_settings_rejected",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.field.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "initial_capital",
+            "slippage_ticks",
+            "fee_kind",
+            "fee_value",
+            "close_execution",
+            "max_abs_units",
+            "max_open_lots",
+            "allowed_open_directions",
+            "initial_margin_fraction",
+            "price_grid",
+            "grid_rounding",
+            "margin_model",
+            "margin_initial",
+            "margin_maintenance",
+            "margin_sizing",
+            "margin_shortfall_multiple",
+            "margin_min_units",
+            "margin_check",
+            "margin_equity_basis",
+            "margin_level_base",
+            "calculation",
+            "open_bar_view",
+            "risk_limits",
+            "risk_drawdown",
+            "risk_intraday_loss",
+            "risk_loss_days",
+            "risk_fills_per_day",
+            "risk_day_basis",
+            "risk_action",
+            "quantity_tolerance"
+          ],
+          "after": [
+            "initial_capital",
+            "slippage_ticks",
+            "fee_kind",
+            "fee_value",
+            "close_execution",
+            "max_abs_units",
+            "max_open_lots",
+            "allowed_open_directions",
+            "initial_margin_fraction",
+            "price_grid",
+            "grid_rounding",
+            "margin_model",
+            "margin_initial",
+            "margin_maintenance",
+            "margin_sizing",
+            "margin_shortfall_multiple",
+            "margin_min_units",
+            "margin_check",
+            "margin_equity_basis",
+            "margin_level_base",
+            "calculation",
+            "open_bar_view",
+            "risk_limits",
+            "risk_drawdown",
+            "risk_intraday_loss",
+            "risk_loss_days",
+            "risk_fills_per_day",
+            "risk_day_basis",
+            "risk_action",
+            "quantity_tolerance",
+            "max_lines_count",
+            "max_boxes_count",
+            "max_labels_count"
+          ]
+        },
+        {
+          "path": "english",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "Pine adapter produced invalid native run spec field {field}"
+          ],
+          "after": [
+            "Pine adapter produced invalid native run spec field {field}",
+            "drawing declared count is outside the int32 domain"
+          ]
+        }
+      ]
+    }
+  ],
   "removed": [],
   "deprecated": []
 }
