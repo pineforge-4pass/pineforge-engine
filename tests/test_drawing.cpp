@@ -5,6 +5,7 @@
 #include <limits>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <pineforge/drawing.hpp>
 
 using namespace pineforge;
@@ -169,27 +170,40 @@ static void test_copy_is_deep() {
 }
 
 // ---------------------------------------------------------------------------
-// delete() keeps the record's data accessible (TV-faithful): an explicit
-// line.delete() removes the object from the chart + *.all, but its geometry
-// stays read/writable — corpus/validation/drawing-delete-halt shows TV keeps
-// producing trades (2504) after the strategy's line.delete(). Only a na handle
-// (never created) or an out-of-range id throws. double-delete / na-delete silent.
-static void test_delete_keeps_data_accessible() {
-    std::printf("test_delete_keeps_data_accessible\n");
+// Deleted geometry is missing and setters do nothing. Invalid handles still
+// throw; direct unbound records retain the legacy C++ reference contract.
+static void test_deleted_line_is_missing() {
+    std::printf("test_deleted_line_is_missing\n");
     DrawingArena<LineRec> a;
-    Line h = pf_line_new(a, 1, 10.0, 2, 20.0);
+    Line h = pf_line_new(a, 1, 10.0, 2, 20.0, XLoc::bar_time, true, true);
     pf_line_delete(a, h);
-    CHECK(!a.alive(h.id));                            // tombstoned (out of *.all)
-
-    // getters on the dead record return the stored geometry (do NOT throw).
-    CHECK(pf_line_get_x1(a, h) == 1);
-    CHECK(near(pf_line_get_y2(a, h), 20.0));
-    // get_price on the dead record interpolates the stored geometry (infinite line).
-    CHECK(near(pf_line_get_price(a, h, 3), 30.0));    // line (1,10)-(2,20) at x=3 -> 30
-    // setters on the dead record mutate the stored geometry (do NOT throw).
+    CHECK(!a.alive(h.id));
+    const LineRec before{1, 2, 10.0, 20.0, XLoc::bar_time, true, true, false};
+    CHECK(is_na(pf_line_get_x1(a, h)));
+    CHECK(is_na(pf_line_get_x2(a, h)));
+    CHECK(is_na(pf_line_get_y1(a, h)));
+    CHECK(is_na(pf_line_get_y2(a, h)));
+    // A deleted bar-time line returns NA before live xloc validation.
+    CHECK(is_na(pf_line_get_price(a, h, 3)));
     CHECK_NOTHROW(pf_line_set_x1(a, h, 5));
-    CHECK(pf_line_get_x1(a, h) == 5);
-    // still tombstoned (delete is idempotent; setters don't resurrect into *.all).
+    pf_line_set_x2(a, h, 6);
+    pf_line_set_y1(a, h, 7.0);
+    pf_line_set_y2(a, h, 8.0);
+    pf_line_set_xy1(a, h, 9, 10.0);
+    pf_line_set_xy2(a, h, 11, 12.0);
+    pf_line_set_first_point(a, h, ChartPoint{13, 1700000000010LL, 14.0});
+    pf_line_set_second_point(a, h, ChartPoint{15, 1700000000020LL, 16.0});
+    pf_line_set_xloc(a, h, 17, 18, XLoc::bar_index);
+    CHECK(is_na(pf_line_get_x1(a, h)));
+    CHECK(is_na(pf_line_get_x2(a, h)));
+    CHECK(is_na(pf_line_get_y1(a, h)));
+    CHECK(is_na(pf_line_get_y2(a, h)));
+    CHECK(is_na(pf_line_get_price(a, h, 3)));
+    const auto& after = std::as_const(a).at(h.id);
+    CHECK(after.x1 == before.x1 && after.x2 == before.x2);
+    CHECK(after.y1 == before.y1 && after.y2 == before.y2);
+    CHECK(after.xloc == before.xloc && after.ext_l && after.ext_r);
+    CHECK(is_na(pf_line_copy(a, h)));
     CHECK(!a.alive(h.id));
 
     // a never-allocated na handle has NO record -> throws.
@@ -214,12 +228,14 @@ static void test_fifo_eviction() {
     for (int i = 0; i < 5; ++i)               // create cap+2 = 5
         h[i] = pf_line_new(a, i, (double)i, i + 1, (double)(i + 1));
 
-    // Oldest two (creation order) are evicted from *.all (tombstoned), but their
-    // geometry stays readable (TV-faithful: eviction leaves the chart, not data).
+    // The unbound legacy collector still evicts at its exact cap. Direct
+    // records remain resident; missing builtin reads are a separate policy.
     CHECK(!a.alive(h[0].id));
     CHECK(!a.alive(h[1].id));
-    CHECK(pf_line_get_x1(a, h[0]) == 0);
-    CHECK(pf_line_get_x1(a, h[1]) == 1);
+    CHECK(std::as_const(a).at(h[0].id).x1 == 0);
+    CHECK(std::as_const(a).at(h[1].id).x1 == 1);
+    CHECK(is_na(pf_line_get_x1(a, h[0])));
+    CHECK(is_na(pf_line_get_x1(a, h[1])));
 
     // The newest `cap` are live and read back correctly.
     CHECK(pf_line_get_x1(a, h[2]) == 2);
@@ -242,9 +258,10 @@ static void test_cap_zero_floors_to_one() {
     Line h0 = pf_line_new(a, 0, 0.0, 1, 1.0);
     Line h1 = pf_line_new(a, 1, 1.0, 2, 2.0);
 
-    // h0 is evicted from *.all (tombstoned) but its data is still readable.
+    // The cap floor belongs to the legacy collector.
     CHECK(!a.alive(h0.id));
-    CHECK(pf_line_get_x1(a, h0) == 0);
+    CHECK(std::as_const(a).at(h0.id).x1 == 0);
+    CHECK(is_na(pf_line_get_x1(a, h0)));
     CHECK(pf_line_get_x1(a, h1) == 1);
     CHECK(a.order().size() == 1u);
     CHECK(a.order().front() == h1.id);
@@ -304,10 +321,32 @@ static void test_box() {
     pf_box_set_top(a, cp, 777.0);
     CHECK(near(pf_box_get_top(a, b), 110.0));
 
-    // delete -> tombstoned but data still readable; na-delete silent
+    // Deleted box getters are missing; every geometry setter is ineffective.
     pf_box_delete(a, b);
     CHECK(!a.alive(b.id));
-    CHECK(near(pf_box_get_top(a, b), 110.0));
+    const BoxRec before{2, 6, 110.0, 40.0, XLoc::bar_index, false};
+    CHECK(is_na(pf_box_get_left(a, b)));
+    CHECK(is_na(pf_box_get_right(a, b)));
+    CHECK(is_na(pf_box_get_top(a, b)));
+    CHECK(is_na(pf_box_get_bottom(a, b)));
+    pf_box_set_left(a, b, 7);
+    pf_box_set_right(a, b, 8);
+    pf_box_set_top(a, b, 120.0);
+    pf_box_set_bottom(a, b, 30.0);
+    pf_box_set_lefttop(a, b, 9, 130.0);
+    pf_box_set_rightbottom(a, b, 10, 20.0);
+    pf_box_set_top_left_point(a, b, ChartPoint{11, 1700000000010LL, 140.0});
+    pf_box_set_bottom_right_point(a, b, ChartPoint{12, 1700000000020LL, 10.0});
+    pf_box_set_xloc(a, b, 1700000000030LL, 1700000000040LL, XLoc::bar_time);
+    CHECK(is_na(pf_box_get_left(a, b)));
+    CHECK(is_na(pf_box_get_right(a, b)));
+    CHECK(is_na(pf_box_get_top(a, b)));
+    CHECK(is_na(pf_box_get_bottom(a, b)));
+    const auto& after = std::as_const(a).at(b.id);
+    CHECK(after.left == before.left && after.right == before.right);
+    CHECK(after.top == before.top && after.bottom == before.bottom);
+    CHECK(after.xloc == before.xloc && !after.alive);
+    CHECK(is_na(pf_box_copy(a, b)));
     CHECK_NOTHROW(pf_box_delete(a, Box{}));
 }
 
@@ -345,12 +384,33 @@ static void test_label() {
 
     pf_label_delete(a, l);
     CHECK(!a.alive(l.id));
-    CHECK(pf_label_get_text(a, l) == "world");   // dead record's text still readable
+    CHECK(is_na(pf_label_get_x(a, l)));
+    CHECK(is_na(pf_label_get_y(a, l)));
+    CHECK(pf_label_get_text(a, l).empty());
+    const LabelRec before{9, 84.0, XLoc::bar_index, YLoc::price, "world", false};
+    pf_label_set_x(a, l, 17);
+    pf_label_set_y(a, l, 102.0);
+    pf_label_set_xy(a, l, 18, 103.0);
+    pf_label_set_point(a, l, ChartPoint{19, 1700000000010LL, 104.0});
+    pf_label_set_xloc(a, l, 1700000000020LL, XLoc::bar_time);
+    pf_label_set_yloc(a, l, YLoc::abovebar);
+    pf_label_set_text(a, l, std::string("ignored\0text", 12));
+    CHECK(is_na(pf_label_get_x(a, l)));
+    CHECK(is_na(pf_label_get_y(a, l)));
+    CHECK(pf_label_get_text(a, l).empty());
+    // The unbound direct-reference contract still exposes the original record.
+    const auto& after = std::as_const(a).at(l.id);
+    CHECK(after.x == before.x && after.y == before.y);
+    CHECK(after.xloc == before.xloc && after.yloc == before.yloc);
+    CHECK(after.text == before.text && !after.alive);
+    CHECK(is_na(pf_label_copy(a, l)));
+    CHECK(pf_label_get_x(a, cp) == 9);
+    CHECK(pf_label_get_text(a, cp) == "changed");
     CHECK_NOTHROW(pf_label_delete(a, l));        // double-delete silent
 }
 
 // ---------------------------------------------------------------------------
-// linefill: stores two line ids, get_line1/2, delete; dead -> throw
+// A deleted linefill still returns its original non-NA first line.
 static void test_linefill() {
     std::printf("test_linefill\n");
     DrawingArena<LineRec> la;
@@ -370,6 +430,7 @@ static void test_linefill() {
 
     pf_linefill_delete(fa, f);
     CHECK(!fa.alive(f.id));                        // linefill tombstoned in its own arena
+    CHECK(fa.order().size() == 1u && fa.order().front() == fna.id);
     CHECK(pf_linefill_get_line1(fa, f).id == l1.id);  // dead linefill's line1 still readable
     CHECK_NOTHROW(pf_linefill_delete(fa, f));     // double-delete silent
     CHECK_NOTHROW(pf_linefill_delete(fa, Linefill{}));
@@ -401,8 +462,7 @@ static void test_pf_noop() {
 // ---------------------------------------------------------------------------
 // Regression for corpus/validation/drawing-delete-halt: after line.delete(lv),
 // the strategy keeps calling line.set_y2(lv, ...) + line.get_y2(lv) every bar
-// and must NOT throw — TV produced 2504 trades post-delete. The level must keep
-// tracking the new y2 values written through the dead handle.
+// without throwing. The deleted getter remains missing after each setter.
 static void test_delete_halt_probe_pattern() {
     std::printf("test_delete_halt_probe_pattern\n");
     DrawingArena<LineRec> a;
@@ -418,7 +478,7 @@ static void test_delete_halt_probe_pattern() {
     for (int bar = 1; bar <= 5; ++bar) {
         double level = 100.0 + bar;                 // a moving "sma" level
         pf_line_set_y2(a, lv, level);
-        CHECK(near(pf_line_get_y2(a, lv), level));  // dead record tracks the new value
+        CHECK(is_na(pf_line_get_y2(a, lv)));
     }
 }
 
@@ -429,7 +489,7 @@ int main() {
     test_mutate_through_handle();
     test_set_xloc_reinterpret();
     test_copy_is_deep();
-    test_delete_keeps_data_accessible();
+    test_deleted_line_is_missing();
     test_fifo_eviction();
     test_cap_zero_floors_to_one();
     test_get_price();

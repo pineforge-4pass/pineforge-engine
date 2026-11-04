@@ -418,7 +418,14 @@ set(TEST_SOURCES
     test_pointvalue
     test_metrics
     test_drawing
+    test_drawing_bound_status
     test_drawing_checkpoint
+    test_drawing_id_domain
+    test_drawing_slot_atomicity
+    test_drawing_slot_bound
+    test_drawing_slot_checkpoint
+    test_drawing_slot_defaults
+    test_drawing_slot_reuse
     test_coof_drawing_checkpoint_cost
     test_coof_drawing_rollback_tape
     test_margin_call

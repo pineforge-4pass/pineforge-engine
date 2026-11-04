@@ -95,16 +95,17 @@ void deleted_handles(detail::o1::Store& store) {
     require(line_ids.get_i(0).id == line.id && box_ids.get_i(0).id == box.id &&
             label_ids.get_i(0).id == label.id && fill_ids.get_i(0).id == fill.id,
             "late read dropped a deleted handle");
-    require(pf_line_get_x1(lines, line_ids.get_i(0)) == 7, "deleted line geometry lost");
+    require(is_na(pf_line_get_x1(lines, line_ids.get_i(0))), "deleted line getter is not missing");
     pf_line_set_x2(lines, line_ids.get_i(0), 1234);
-    require(pf_line_get_x2(lines, line_ids.get_i(0)) == 1234, "deleted line no longer writable");
-    require(pf_box_get_top(boxes, box_ids.get_i(0)) == 20.0, "deleted box geometry lost");
-    require(pf_label_get_text(labels, label_ids.get_i(0)) == "retained after delete",
-            "deleted label text lost");
+    require(is_na(pf_line_get_x2(lines, line_ids.get_i(0))), "deleted line setter changed missingness");
+    require(is_na(pf_box_get_top(boxes, box_ids.get_i(0))), "deleted box getter is not missing");
+    require(pf_label_get_text(labels, label_ids.get_i(0)).empty(), "deleted label text is not missing");
     require(pf_linefill_get_line1(fills, fill_ids.get_i(0)).id == line.id, "deleted fill lost line id");
     ScriptArray<ScriptArray<Line>> nested_lines(store);
     nested_lines.push(line_ids);
-    require(pf_line_get_x1(lines, nested_lines.first().first()) == 7, "nested deleted handle changed");
+    require(nested_lines.first().first().id == line.id, "nested deleted handle changed");
+    require(is_na(pf_line_get_x1(lines, nested_lines.first().first())),
+            "nested deleted line getter is not missing");
 }
 } // namespace
 
