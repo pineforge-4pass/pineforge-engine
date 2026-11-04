@@ -1,8 +1,11 @@
 #pragma once
+#include <pineforge/owned_storage.hpp>
 #include <pineforge/detail/read_through_cache.hpp>
 #include <pineforge/detail/scratch_file.hpp>
 #include <pineforge/run_failure.hpp>
 #include <array>
+#include <atomic>
+#include <deque>
 #include <vector>
 #include <algorithm>
 #include <cstddef>
@@ -14,7 +17,10 @@
 #include <new>
 #include <optional>
 #include <stdexcept>
+#include <string>
+#include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include "na.hpp"
 
@@ -56,6 +62,8 @@ struct WindowCacheStats {
     std::uint64_t allocation_bypasses = 0, io_errors = 0;
     std::size_t resident_payload_bytes = 0, resident_metadata_bytes = 0;
     std::size_t workspace_bytes = 0;
+    std::uint64_t backing_bytes = 0, logical_payload_bytes = 0;
+    bool storage_complete = true;
     bool scratch_backed = false;
 };
 
@@ -150,8 +158,13 @@ public:
         const std::size_t page = index / kChunk, offset = index % kChunk;
         if (!spilled_) {
             auto& stored = pages_[page];
-            if (!stored) stored = std::make_shared<Page>(page_size(page), initial_);
-            else if (!stored.unique()) stored = std::make_shared<Page>(*stored);
+            if (!stored) {
+                OwnedAllocator<Page> allocation;
+                stored = std::allocate_shared<Page>(allocation, allocation, page_size(page), initial_);
+            } else if (!stored.unique()) {
+                OwnedAllocator<Page> allocation;
+                stored = std::allocate_shared<Page>(allocation, allocation, *stored);
+            }
             stored->values[offset] = std::move(value);
             return;
         }
@@ -187,6 +200,32 @@ public:
     ReadThroughCacheStats read_cache_stats() const noexcept {
         return cache_ ? cache_->stats() : ReadThroughCacheStats{};
     }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        if (!out.visit(*this)) return;
+        out.logical(out.product(size_, sizeof(T)));
+        ::pineforge::observe_owned_storage(out, initial_);
+        // The pointer directory has its own capacity, including after clear().
+        if (out.claim(pages_.data()))
+            out.metadata(out.product(pages_.capacity(), sizeof(std::shared_ptr<Page>)));
+        for (const auto& page : pages_) {
+            if (!page || !out.claim(page.get())) continue;
+            page->allocation.observe_owned_storage(out); // object + shared control allocation
+            ::pineforge::observe_owned_storage(out, page->values);
+        }
+        if (cache_ && out.claim(&*cache_)) {
+            // This immovable cache has one authoritative owner. Its public
+            // counters contain the actual allocated metadata/payload bytes.
+            const auto shared = read_cache_stats();
+            out.metadata(shared.current_metadata_bytes);
+            out.payload(shared.current_payload_bytes);
+        }
+        if (spilled_) out.workspace(sizeof(T) * kChunk);
+        if (backing_ && out.claim(backing_.get())) {
+            backing_->allocation.observe_owned_storage(out);
+            backing_->file.observe_owned_storage(out);
+        }
+        if (cache_failure_) out.incomplete(OwnedStorageUnsupported::exception_state);
+    }
     WindowCacheStats cache_stats() const {
         auto result = stats_;
         const auto shared = read_cache_stats();
@@ -196,36 +235,39 @@ public:
         add_counter(result.bypass_reads, shared.bypass_reads);
         add_counter(result.allocation_bypasses, shared.allocation_bypass_count);
         result.scratch_backed = spilled_;
-        result.workspace_bytes = spilled_ ? sizeof(T) * kChunk : 0;
-        result.resident_metadata_bytes = sizeof(*this) +
-            pages_.capacity() * sizeof(std::shared_ptr<Page>) +
-            shared.current_metadata_bytes;
-        result.resident_payload_bytes = shared.current_payload_bytes;
-        for (const auto& page : pages_) {
-            if (!page) continue;
-            if constexpr (std::is_same_v<T, bool>) {
-                constexpr auto bits_per_byte = std::numeric_limits<unsigned char>::digits;
-                result.resident_payload_bytes += page->values.capacity() / bits_per_byte +
-                    (page->values.capacity() % bits_per_byte != 0);
-            } else {
-                result.resident_payload_bytes += page->values.capacity() * sizeof(T);
-            }
-            result.resident_metadata_bytes += sizeof(Page);
-        }
-        if (backing_) result.resident_metadata_bytes += sizeof(Backing);
+        OwnedStorage observation;
+        observation.metadata(sizeof(*this));
+        observe_owned_storage(observation);
+        const auto owned = observation.usage();
+        const auto bounded_size = [](std::uint64_t bytes) {
+            return static_cast<std::size_t>(std::min<std::uint64_t>(
+                bytes, std::numeric_limits<std::size_t>::max()));
+        };
+        result.workspace_bytes = bounded_size(owned.workspace_bytes);
+        result.resident_metadata_bytes = bounded_size(owned.resident_metadata_bytes);
+        result.resident_payload_bytes = bounded_size(owned.resident_payload_bytes);
+        result.backing_bytes = owned.backing_bytes;
+        result.logical_payload_bytes = owned.logical_payload_bytes;
+        result.storage_complete = owned.complete();
         return result;
     }
 
 private:
     struct Page {
+        OwnedAllocator<Page> allocation;
         std::vector<T> values;
-        Page(std::size_t size, const T& initial) : values(size, initial) {}
+        Page(const OwnedAllocator<Page>& owner, std::size_t size, const T& initial)
+            : allocation(owner), values(size, initial) {}
+        Page(const OwnedAllocator<Page>& owner, const Page& other)
+            : allocation(owner), values(other.values) {}
     };
     struct Backing {
+        OwnedAllocator<Backing> allocation;
         ScratchFile file{ScratchFile::IoRaiser::auxiliary};
         // Checkpoint copies can read one backing from distinct owners.
         std::mutex io_mutex;
-        explicit Backing(const ScratchIoPolicy& policy) {
+        Backing(const OwnedAllocator<Backing>& owner, const ScratchIoPolicy& policy)
+            : allocation(owner) {
             file.bound_cache();
             file.set_scratch_io_policy(policy);
             file.open("pineforge-window-");
@@ -307,7 +349,9 @@ private:
     }
     void make_writable_backing() {
         if (backing_ && backing_.unique()) return;
-        auto replacement = std::make_shared<Backing>(capacity_.scratch_io_policy);
+        OwnedAllocator<Backing> allocation;
+        auto replacement = std::allocate_shared<Backing>(
+            allocation, allocation, capacity_.scratch_io_policy);
         std::array<T, kChunk> transfer;
         if (!backing_) transfer.fill(initial_);
         for (std::size_t page = 0; page != page_count(); ++page) {
@@ -386,6 +430,9 @@ public:
     std::size_t capacity() const { return capacity_; }
     WindowCacheCapacity cache_capacity() const { return buffer_.cache_capacity(); }
     WindowCacheStats cache_stats() const { return buffer_.cache_stats(); }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        buffer_.observe_owned_storage(out);
+    }
     // Optional read lines only; cache_stats() also counts fixed owner metadata.
     detail::ReadThroughCacheStats read_cache_stats() const noexcept {
         return buffer_.read_cache_stats();
@@ -455,6 +502,9 @@ public:
     }
     WindowCacheCapacity cache_capacity() const { return buf.cache_capacity(); }
     WindowCacheStats cache_stats() const { return buf.cache_stats(); }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        buf.observe_owned_storage(out);
+    }
 
     void clear() {
         buf.clear();

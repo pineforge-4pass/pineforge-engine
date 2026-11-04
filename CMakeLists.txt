@@ -131,6 +131,7 @@ set(PINEFORGE_KERNEL_SOURCES src/array.cpp
     src/reservation_expansion.cpp
     src/engine_run.cpp
     src/engine_security.cpp
+    src/runtime_context.cpp
     src/engine_state_hash.cpp
     src/engine_stream.cpp
     src/engine_trade_accessors.cpp

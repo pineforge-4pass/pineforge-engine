@@ -5,14 +5,17 @@
 
 #include <pineforge/run_failure.hpp>
 #include <pineforge/detail/run_quota.hpp>
+#include <pineforge/owned_storage.hpp>
 
 #include "native_execution_consumer.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -69,6 +72,16 @@ bool text_kind(RunFailureArgKind kind) noexcept {
         return false;
     }
     return false;
+}
+
+// Runtime ownership counters use the entire uint64_t domain. Their wire
+// representation is decimal text, so no byte is lost through int64_t or JSON
+// floating-point conversion. This contract is independent of host run quotas.
+bool canonical_u64_decimal(const std::string& text) noexcept {
+    if (text.empty() || (text.size() > 1 && text.front() == '0')) return false;
+    std::uint64_t value = 0;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value, 10);
+    return parsed.ec == std::errc() && parsed.ptr == text.data() + text.size();
 }
 
 // A scalar argument is text, an integer, a finite number, a boolean (held as 0
@@ -158,6 +171,40 @@ RunFailureValue invariant() noexcept {
     return RunFailureValue{RunFailureCode::engine_invariant, nullptr};
 }
 
+// The factory's JSON ownership domain. Private to this translation unit: only
+// make_run_failure mints it, and only RunFailureValue::observe_owned_storage
+// recognizes it, through std::get_deleter on this exact type plus its stable
+// tag. The deleter and the shared control each hold a copy of the same
+// OwnedAllocator, so the ledger outlives every weak owner until the control
+// request itself is deallocated. Records are non-owning: there is no cycle.
+constexpr std::uint64_t kRunFailureJsonTag = 0x50464a534f4e7631ull;  // "PFJSONv1"
+
+struct TrackedJsonDeleter {
+    OwnedAllocator<std::string> allocation;
+    const std::string* owned;
+    std::uint64_t tag;
+
+    void operator()(const std::string* object) noexcept {
+        if (object == nullptr) return;
+        // own_json constructed a non-const std::string in this request.
+        auto* constructed = const_cast<std::string*>(object);
+        std::destroy_at(constructed);
+        allocation.deallocate(constructed, 1);
+    }
+};
+
+// Moves the canonical text into a string object allocated through the domain's
+// real allocator, then shares it with that same allocator for the control
+// request. If the control allocation throws, shared_ptr calls the deleter, so
+// nothing leaks; every failure here is std::bad_alloc for the caller.
+std::shared_ptr<const std::string> own_json(std::string&& text) {
+    OwnedAllocator<std::string> allocation;
+    std::string* object = allocation.allocate(1);
+    ::new (static_cast<void*>(object)) std::string(std::move(text));
+    return std::shared_ptr<const std::string>(
+        object, TrackedJsonDeleter{allocation, object, kRunFailureJsonTag}, allocation);
+}
+
 }  // namespace
 
 RunFailureArg::RunFailureArg(const char* arg_name, const char* value)
@@ -212,6 +259,11 @@ RunFailureValue make_run_failure(RunFailureCode code, const RunFailureArgs& args
                 break;
             case RunFailureArgKind::string:
                 if (arg.type != RunFailureArg::Type::text) return invariant();
+                if ((code == RunFailureCode::runtime_history_budget_exhausted
+                     || code == RunFailureCode::runtime_storage_observation_incomplete)
+                    && !canonical_u64_decimal(arg.text)) {
+                    return invariant();
+                }
                 break;
             case RunFailureArgKind::nullable_string:
                 if (arg.type != RunFailureArg::Type::text
@@ -258,43 +310,83 @@ RunFailureValue make_run_failure(RunFailureCode code, const RunFailureArgs& args
         std::sort(matched.begin(), matched.end(), [](const auto& l, const auto& r) {
             return std::string(l.first->name) < std::string(r.first->name);
         });
-        auto json = std::make_shared<std::string>();
-        json->push_back('{');
+        std::string json;
+        json.push_back('{');
         bool first = true;
         for (const auto& [declared, arg] : matched) {
-            if (!first) json->push_back(',');
+            if (!first) json.push_back(',');
             first = false;
-            append_json_string(*json, declared->name);
-            json->push_back(':');
+            append_json_string(json, declared->name);
+            json.push_back(':');
             switch (arg->type) {
             case RunFailureArg::Type::integer:
-                *json += std::to_string(arg->integer);
+                json += std::to_string(arg->integer);
                 break;
             case RunFailureArg::Type::number:
-                if (!append_json_number(*json, arg->number)) return invariant();
+                if (!append_json_number(json, arg->number)) return invariant();
                 break;
             case RunFailureArg::Type::text:
-                append_json_string(*json, arg->text);
+                append_json_string(json, arg->text);
                 break;
             case RunFailureArg::Type::boolean:
                 if (arg->integer != 0) {
-                    *json += "true";
+                    json += "true";
                 } else {
-                    *json += "false";
+                    json += "false";
                 }
                 break;
             case RunFailureArg::Type::null_value:
-                *json += "null";
+                json += "null";
                 break;
             }
         }
-        json->push_back('}');
-        return RunFailureValue{code, std::move(json)};
+        json.push_back('}');
+        // The same canonical bytes, now held in the tracked ownership domain.
+        return RunFailureValue{code, own_json(std::move(json))};
     } catch (const std::bad_alloc&) {
         return RunFailureValue{RunFailureCode::out_of_memory, nullptr};
     } catch (...) {
         return invariant();
     }
+}
+
+void RunFailureValue::observe_owned_storage(OwnedStorage& out) const noexcept {
+    struct PreserveErrno {
+        int value;
+        ~PreserveErrno() { errno = value; }
+    } preserve_errno{errno};
+    // No control block: nothing is owned. A non-owning alias names storage
+    // this value does not own and proves no lower bound for it.
+    if (args.use_count() == 0) {
+        if (args) out.incomplete(OwnedStorageUnsupported::opaque_type);
+        return;
+    }
+    // Only this translation unit's deleter type and tag identify the factory
+    // domain. An unknown control, or a lost RTTI/module identity, stays unknown
+    // with no guessed bytes and no read of its pointee.
+    const TrackedJsonDeleter* tracked = std::get_deleter<TrackedJsonDeleter>(args);
+    if (tracked == nullptr || tracked->tag != kRunFailureJsonTag || tracked->owned == nullptr) {
+        out.incomplete(OwnedStorageUnsupported::allocator);
+        out.incomplete(OwnedStorageUnsupported::opaque_type);
+        return;
+    }
+    // The ledger, its records and the real requests (string object, control),
+    // claimed once per walk however many owners share the domain.
+    tracked->allocation.observe_owned_storage(out);
+    // Contain the original object in a real request before reading it. Its
+    // inline bytes are already in that request; only an out-of-object buffer
+    // is added, once per walk, by the existing string accounting.
+    if (!tracked->allocation.contains(tracked->owned, sizeof(std::string))) {
+        out.incomplete(OwnedStorageUnsupported::allocator);
+        out.incomplete(OwnedStorageUnsupported::opaque_type);
+        return;
+    }
+    ::pineforge::observe_owned_storage(out, *tracked->owned);
+    // A null alias retains exactly this domain. Any other pointee is foreign:
+    // the known domain stays counted; the pointee is neither owned nor read.
+    const std::string* pointee = args.get();
+    if (pointee != nullptr && pointee != tracked->owned)
+        out.incomplete(OwnedStorageUnsupported::opaque_type);
 }
 
 const char* run_failure_code_name(RunFailureCode code) noexcept {

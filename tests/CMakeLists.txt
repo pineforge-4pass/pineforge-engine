@@ -6,6 +6,10 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
 endif()
 
 set(TEST_SOURCES
+    test_runtime_context
+    test_runtime_context_failures
+    # Supplied by the concurrent N6 slice before configure, with no fallback.
+    test_runtime_security_cursor
     test_value_invalid_relative_risk
     test_value_invalid_relative_risk_source
     # R4-D L4a native-route behavioral twins.  These retain the legacy
@@ -3915,6 +3919,31 @@ endif()
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
+
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    target_link_libraries(test_runtime_context_failures PRIVATE Threads::Threads)
+    target_link_libraries(test_runtime_security_cursor PRIVATE Threads::Threads)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Real production ledger/service, with actual inherited marker channels.
+        # No test timeout, fixture skip, or replacement host protocol.
+        add_test(NAME test_runtime_context_managed_scratch_observation
+            COMMAND ${Python3_EXECUTABLE} -I -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_context_managed.py
+                --mode scratch --binary $<TARGET_FILE:test_runtime_context>)
+        add_test(NAME test_runtime_context_managed_quota_endpoint_observation
+            COMMAND ${Python3_EXECUTABLE} -I -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_context_managed.py
+                --mode endpoint --binary $<TARGET_FILE:test_runtime_context>)
+        add_test(NAME test_runtime_context_managed_endpoint_observer_race
+            COMMAND ${Python3_EXECUTABLE} -I -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_context_managed.py
+                --mode race --binary $<TARGET_FILE:test_runtime_context_failures>)
+        add_test(NAME test_runtime_context_managed_crash_control
+            COMMAND ${Python3_EXECUTABLE} -I -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_context_managed.py
+                --mode crash-control)
+    endif()
+endif()
 
 # Each order runs in its own process, before that process has seeded the
 # timezone-offset cache. These pin native legacy expectations, not TV rows.

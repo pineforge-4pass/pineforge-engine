@@ -5,6 +5,7 @@
 #include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/detail/scratch_directory.hpp>
 #include <pineforge/detail/run_quota.hpp>
+#include <pineforge/owned_storage.hpp>
 
 #include <algorithm>
 #include <array>
@@ -142,6 +143,14 @@ public:
         bool finished_ = false;
     };
 
+    // The containing ScratchFile counts this unique object, including the
+    // inline client/ticket. Their shared endpoint is walked only once.
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        if (!out.visit(*this)) return;
+        quota_.observe_owned_storage(out);
+        creation_.observe_owned_storage(out);
+    }
+
 private:
     RunQuota quota_;
     QuotaObject object_;
@@ -259,8 +268,8 @@ public:
         if (quota_) quota_->borrow_descriptor();
         return fd_;
     }
-    // Physical occupancy diagnostic, not logical row identity. Arena values
-    // include chunk rounding; disk values are the anonymous file's extent.
+    // Backing extent diagnostic, not heap, allocated filesystem blocks or RSS.
+    // Arena values include chunk rounding; disk values are current st_size.
     std::uint64_t storage_bytes() const {
         if (slab_) throw std::logic_error("scratch occupancy requires a file or arena");
         if (arena_) return region_.chunks.size() * ScratchArena::kChunkBytes;
@@ -271,6 +280,47 @@ public:
         if (result != 0) io_error(errno, "scratch extent");
         if (info.st_size < 0) io_error(EIO, "scratch extent");
         return static_cast<std::uint64_t>(info.st_size);
+    }
+    // Inline ScratchFile storage belongs to the containing owner. Observe only
+    // external requested C++ storage and an owned ordinary file's current
+    // extent. In particular, descriptor() would change last-close ownership.
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        struct PreserveErrno {
+            int value;
+            ~PreserveErrno() { errno = value; }
+        } preserve_errno{errno};
+        if (!out.visit(*this)) return;
+        ::pineforge::observe_owned_storage(out, directory_);
+        if (out.claim(region_.chunks.data()))
+            out.metadata(out.product(region_.chunks.capacity(), sizeof(std::uint32_t)));
+        if (quota_) {
+            // make_unique<ScratchFileQuota> is one typed new request. Its
+            // inline client/ticket are already included in that object.
+            if (out.claim(quota_.get())) out.metadata(sizeof(*quota_));
+            quota_->observe_owned_storage(out);
+        }
+        if (slab_) {
+            // Shared slab/control ownership has no public observation contract.
+            out.incomplete(OwnedStorageUnsupported::scratch_slab);
+            return;
+        }
+        if (arena_) {
+            // The attached arena and its fd are borrowed here. Only this
+            // file's chunk-directory allocation above is known to be owned.
+            out.incomplete(OwnedStorageUnsupported::scratch_arena);
+            return;
+        }
+        if (fd_ >= 0) {
+            // Avoid error rendering/allocations and preserve the caller's
+            // errno as well as file contents, offset and quota borrowing state.
+            struct stat info{};
+            int result;
+            do { result = ::fstat(fd_, &info); } while (result != 0 && errno == EINTR);
+            if (result != 0 || info.st_size < 0)
+                out.incomplete(OwnedStorageUnsupported::scratch_extent);
+            else
+                out.backing(static_cast<std::uint64_t>(info.st_size));
+        }
     }
     // Rebase a positional file after its owner has proved a complete head
     // chunk dead. The owner translates its logical offsets; no borrowed view
