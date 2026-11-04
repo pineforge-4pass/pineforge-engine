@@ -38,7 +38,7 @@ struct ValidationHarness : public pineforge::source::PineStrategyHost {
     std::size_t evaluator_count() const { return security_eval_states_.size(); }
     std::size_t pine_state_count() const { return pine_security_states_.size(); }
     bool lower_array_requested() const {
-        return pine_security_state(0).lower_tf_array_requested;
+        return pine_security_states_.at(0).lower_tf_array_requested;
     }
 };
 
