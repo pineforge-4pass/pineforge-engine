@@ -19,10 +19,12 @@ struct RetiredScratch { friend auto access(RetiredScratch); };
 struct BeforeScratch { friend auto access(BeforeScratch); };
 struct AfterScratch { friend auto access(AfterScratch); };
 struct HostAdapter { friend auto access(HostAdapter); };
+struct EngineContexts { friend auto access(EngineContexts); };
 template struct Access<RetiredScratch, &Adapter::retired_row_scratch_>;
 template struct Access<BeforeScratch, &Adapter::pine_view_>;
 template struct Access<AfterScratch, &Adapter::staged_scopes_>;
 template struct Access<HostAdapter, &Host::adapter_>;
+template struct Access<EngineContexts, &pineforge::BacktestEngine::runtime_contexts_>;
 
 class ProbeHost final : public Host {
 public:
@@ -56,7 +58,13 @@ using Scratch = std::remove_reference_t<
 // The ABI pins apply to Linux x86_64 builds that use GNU libstdc++.
 static_assert(sizeof(Scratch) == 672, "RetiredRowScratch size changed");
 static_assert(sizeof(Adapter) == 89488, "PineExecutionAdapter size changed");
-static_assert(sizeof(Host) == 107952, "PineStrategyHost size changed");
+#ifndef PINEFORGE_RUNTIME_LAYOUT_MEASURE_ONLY
+// Provisional pin: current main's host size, kept until a real Linux final-tree
+// ABI measurement confirms or replaces it. Measurement mode skips this pin and
+// is never a passing ABI gate.
+static_assert(sizeof(Host) == 107952, "PineStrategyHost size changed; measure and pin the final layout");
+#endif
+static_assert(PF_STREAM_ENGINE_LAYOUT_VERSION == 4u, "runtime contexts require layout stamp 4");
 static_assert(!HasRosterRoots<Scratch>::value,
               "RetiredRowScratch::roster_roots must be absent");
 #endif
@@ -118,11 +126,19 @@ int main() {
     print_offset("PineExecutionAdapter::staged_scopes_", adapter, access(AfterScratch{}));
     std::printf("abi sizeof PineStrategyHost=%zu\n", sizeof(Host));
     print_offset("PineStrategyHost::adapter_", host, access(HostAdapter{}));
+    pineforge::BacktestEngine& engine = storage;
+    std::printf("abi sizeof BacktestEngine=%zu\n", sizeof(pineforge::BacktestEngine));
+    print_offset("BacktestEngine::runtime_contexts_", engine, access(EngineContexts{}));
 #if defined(__linux__) && defined(__x86_64__) && defined(__GLIBCXX__)
     bool pins_hold = true;
     pins_hold &= pin("sizeof RetiredRowScratch", sizeof(Scratch), 672);
     pins_hold &= pin("sizeof PineExecutionAdapter", sizeof(Adapter), 89488);
+#ifndef PINEFORGE_RUNTIME_LAYOUT_MEASURE_ONLY
     pins_hold &= pin("sizeof PineStrategyHost", sizeof(Host), 107952);
+#else
+    // A successful measurement command is never a successful layout test.
+    pins_hold = false;
+#endif
     pins_hold &= pin("RetiredRowScratch::roots",
                      member_offset(adapter.*access(RetiredScratch{}), &Scratch::roots), 0);
     pins_hold &= pin("RetiredRowScratch::askable_origins",

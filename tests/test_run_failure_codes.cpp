@@ -24,6 +24,7 @@
 #include <pineforge/native_module.hpp>
 #include <pineforge/native_run_spec.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/runtime_context.hpp>
 
 #include "../src/source/pine_run_failure.hpp"
 
@@ -1192,7 +1193,9 @@ RunFailureArg sample_arg(const ArgSpec& spec, std::string& json_value) {
         json_value = "1.5";
         return RunFailureArg(spec.name.c_str(), 1.5);
     }
-    std::string text = "sample_text";
+    // Decimal text is also valid for string contracts that refine their
+    // values to uint64_t; the registry still checks the declared string kind.
+    std::string text = spec.kind == "string" ? "7" : "sample_text";
     if (spec.kind == "vocab") text = spec.values.front();
     if (spec.kind == "pine_source") text = R"(request.financial("NASDAQ:AAPL", "EPS", ...))";
     if (spec.kind == "symbol") text = "BINANCE:ETHUSDT";
@@ -1291,6 +1294,7 @@ void check_code_arg_specs(RunFailureCode code, const std::string& name,
             expect(spec.name + " as a null", with({arg, nullptr}), invariant, "{}");
         } else if (spec.kind == "string") {
             expect(spec.name + " as an integer", with({arg, std::int64_t{1}}), invariant, "{}");
+            expect(spec.name + " as a number", with({arg, 1.5}), invariant, "{}");
             expect(spec.name + " as a boolean", with({arg, true}), invariant, "{}");
             expect(spec.name + " as a null", with({arg, nullptr}), invariant, "{}");
         } else if (spec.kind == "nullable_string") {
@@ -1927,6 +1931,183 @@ void report_channel_vocabulary_rows() {
     }
 }
 
+// Runtime history errors preserve their typed catches, fields and old English.
+// These are constructor/wire boundary fixtures, not allocations of huge sizes;
+// test_runtime_context separately causes refusals with real owned storage.
+class RuntimeFailureHost final : public pineforge::NativeStrategyHost {
+public:
+    std::exception_ptr cause;
+    void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {
+        std::rethrow_exception(cause);
+    }
+};
+
+void runtime_native_failure(const std::exception_ptr& cause, const char* code,
+                            const std::string& args, const std::string& text) {
+    RuntimeFailureHost host;
+    host.cause = cause;
+    CHECK(host.configure_native(rfc::native_spec("rfc-runtime-failure")).status
+          == pineforge::NativeSetupStatus::Applied);
+    const auto bars = rfc::native_bars();
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    expect_row(code, observe(rfc::as_handle(host)), {code, args.c_str(), text.c_str(), 1, -1});
+}
+
+void runtime_typed_failure_rows() {
+    const auto max = std::numeric_limits<std::uint64_t>::max();
+    const struct {
+        std::uint64_t configured, used, needed;
+        const char* json;
+    } budgets[] = {
+        {0, 0, 1, R"({"configured":"0","needed":"1","used":"0"})"},
+        {37, 31, 7, R"({"configured":"37","needed":"7","used":"31"})"},
+        {9007199254740993ULL, 9007199254740991ULL, 3,
+         R"({"configured":"9007199254740993","needed":"3","used":"9007199254740991"})"},
+        {max - 1, max, 0,
+         R"({"configured":"18446744073709551614","needed":"0","used":"18446744073709551615"})"},
+        {max - 1, 0, max,
+         R"({"configured":"18446744073709551614","needed":"18446744073709551615","used":"0"})"},
+        {max, max - 2, 3,
+         R"({"configured":"18446744073709551615","needed":"3","used":"18446744073709551613"})"},
+    };
+    for (const auto& row : budgets) {
+        RunFailureValue retained;
+        std::exception_ptr cause;
+        const auto text = "runtime_history_budget_exhausted: configured="
+            + std::to_string(row.configured) + " used=" + std::to_string(row.used)
+            + " needed=" + std::to_string(row.needed);
+        try {
+            throw pineforge::RuntimeHistoryBudgetExhausted(row.configured, row.used, row.needed);
+        } catch (const pineforge::RuntimeHistoryBudgetExhausted& error) {
+            CHECK(error.configured == row.configured && error.used == row.used
+                  && error.needed == row.needed);
+            const std::runtime_error& base = error;
+            CHECK(dynamic_cast<const pineforge::RunFailureInfo*>(&base) != nullptr);
+            retained = pineforge::classify_run_failure(base);
+            CHECK_EQ("budget typed code", code_name(retained.code), "runtime_history_budget_exhausted");
+            CHECK_EQ("budget unchanged English", error.what(), text);
+            cause = std::current_exception();
+        }
+        CHECK(cause != nullptr);
+        CHECK_EQ("budget exact uint64 JSON", args_json(retained), row.json);
+        if (cause) runtime_native_failure(cause, "runtime_history_budget_exhausted", row.json, text);
+        cause = nullptr; // The independently owned JSON must outlive the exception and host.
+        CHECK_EQ("budget owned args after destruction", args_json(retained), row.json);
+    }
+
+    const struct {
+        std::uint64_t metadata, payload, backing, flags;
+        bool overflow;
+        const char* json;
+    } observations[] = {
+        {19, 97, 521, 1, false,
+         R"({"backing_bytes_lower_bound":"521","overflow":false,"resident_metadata_bytes_lower_bound":"19","resident_payload_bytes_lower_bound":"97","unsupported_flags":"1"})"},
+        {9007199254740993ULL, 31, 9007199254740995ULL, 9223372036854775808ULL, false,
+         R"({"backing_bytes_lower_bound":"9007199254740995","overflow":false,"resident_metadata_bytes_lower_bound":"9007199254740993","resident_payload_bytes_lower_bound":"31","unsupported_flags":"9223372036854775808"})"},
+        {max, 0, 0, max, false,
+         R"({"backing_bytes_lower_bound":"0","overflow":false,"resident_metadata_bytes_lower_bound":"18446744073709551615","resident_payload_bytes_lower_bound":"0","unsupported_flags":"18446744073709551615"})"},
+        {7, max, 1, 0, true,
+         R"({"backing_bytes_lower_bound":"1","overflow":true,"resident_metadata_bytes_lower_bound":"7","resident_payload_bytes_lower_bound":"18446744073709551615","unsupported_flags":"0"})"},
+    };
+    for (const auto& row : observations) {
+        pineforge::OwnedStorageUsage usage;
+        usage.resident_metadata_bytes = row.metadata;
+        usage.resident_payload_bytes = row.payload;
+        usage.backing_bytes = row.backing;
+        usage.unsupported = row.flags;
+        usage.overflow = row.overflow;
+        usage.logical_payload_bytes = 13;
+        usage.workspace_bytes = 17;
+        usage.observer_workspace_bytes = 23;
+        RunFailureValue retained;
+        std::exception_ptr cause;
+        const std::string text = "runtime context owned storage observation is incomplete";
+        try {
+            throw pineforge::RuntimeStorageObservationIncomplete(usage);
+        } catch (const pineforge::RuntimeStorageObservationIncomplete& error) {
+            CHECK(!error.observation.complete());
+            CHECK(error.observation.storage_bytes() == max);
+            CHECK(error.observation.resident_metadata_bytes == row.metadata);
+            CHECK(error.observation.resident_payload_bytes == row.payload);
+            CHECK(error.observation.backing_bytes == row.backing);
+            CHECK(error.observation.unsupported == row.flags);
+            CHECK(error.observation.overflow == row.overflow);
+            CHECK(error.observation.logical_payload_bytes == 13);
+            CHECK(error.observation.workspace_bytes == 17);
+            CHECK(error.observation.observer_workspace_bytes == 23);
+            const std::runtime_error& base = error;
+            CHECK(dynamic_cast<const pineforge::RunFailureInfo*>(&base) != nullptr);
+            retained = pineforge::classify_run_failure(base);
+            CHECK_EQ("observation typed code", code_name(retained.code),
+                     "runtime_storage_observation_incomplete");
+            CHECK_EQ("observation unchanged English", error.what(), text);
+            cause = std::current_exception();
+        }
+        CHECK(cause != nullptr);
+        CHECK_EQ("observation exact lower bounds JSON", args_json(retained), row.json);
+        if (cause) runtime_native_failure(
+            cause, "runtime_storage_observation_incomplete", row.json, text);
+        cause = nullptr;
+        CHECK_EQ("observation owned args after destruction", args_json(retained), row.json);
+    }
+    CHECK_EQ("bad_alloc fallback unchanged",
+             code_name(pineforge::classify_run_failure(std::bad_alloc()).code), "out_of_memory");
+    CHECK_EQ("logic fallback unchanged",
+             code_name(pineforge::classify_run_failure(std::logic_error("invariant")).code),
+             "engine_invariant");
+    CHECK_EQ("English cannot forge a typed budget failure",
+             code_name(pineforge::classify_run_failure(
+                 std::runtime_error("runtime_history_budget_exhausted: configured=0 used=0 needed=1"))
+                 .code), "engine_unclassified_error");
+}
+
+void runtime_decimal_argument_rows() {
+    const std::pair<RunFailureCode, RunFailureArgs> cases[] = {
+        {RunFailureCode::runtime_history_budget_exhausted,
+         {{"configured", "9007199254740993"}, {"needed", "18446744073709551615"}, {"used", "0"}}},
+        {RunFailureCode::runtime_storage_observation_incomplete,
+         {{"backing_bytes_lower_bound", "18446744073709551615"}, {"overflow", true},
+          {"resident_metadata_bytes_lower_bound", "0"},
+          {"resident_payload_bytes_lower_bound", "9007199254740993"},
+          {"unsupported_flags", "9223372036854775808"}}},
+    };
+    const std::string invalid[] = {
+        "", "00", "01", "-1", "+1", " 1", "1 ", "1.0", "1e3", "nan",
+        "18446744073709551616", std::string("1\0", 2)
+    };
+    for (const auto& row : cases) {
+        const auto code = row.first;
+        const auto& args = row.second;
+        CHECK(pineforge::make_run_failure(code, args).code == code);
+        for (std::size_t i = 0; i < args.size(); ++i) {
+            if (args[i].type != RunFailureArg::Type::text) continue;
+            for (const auto& bad : invalid) {
+                auto changed = args;
+                changed[i] = RunFailureArg(args[i].name, bad);
+                const auto value = pineforge::make_run_failure(code, changed);
+                CHECK(value.code == RunFailureCode::engine_invariant);
+                CHECK_EQ("invalid decimal has no args", args_json(value), "{}");
+            }
+        }
+    }
+    for (const char* total : {"storage_bytes", "total", "configured", "used", "needed"}) {
+        auto changed = cases[1].second;
+        changed.emplace_back(total, "18446744073709551615");
+        CHECK(pineforge::make_run_failure(cases[1].first, changed).code
+              == RunFailureCode::engine_invariant);
+    }
+    // The separate host quota still has its existing 2^53-1 integer domain.
+    RunFailureArgs quota{
+        {"artifact", "spool"}, {"limit", 9007199254740991LL}, {"peak", 7},
+        {"requested", 1}, {"resource", "scratch_bytes"}, {"stage", "execution"}, {"used", 7}
+    };
+    CHECK(pineforge::make_run_failure(RunFailureCode::run_resource_quota_exceeded, quota).code
+          == RunFailureCode::run_resource_quota_exceeded);
+    quota[1] = RunFailureArg("limit", 9007199254740992LL);
+    CHECK(pineforge::make_run_failure(RunFailureCode::run_resource_quota_exceeded, quota).code
+          == RunFailureCode::engine_invariant);
+}
+
 void registry_rows() {
     std::ifstream in(PINEFORGE_RUN_FAILURE_CATALOG, std::ios::binary);
     CHECK_EQ("catalog readable", in ? "open" : "missing", "open");
@@ -1973,6 +2154,30 @@ void registry_rows() {
         CHECK_EQ("retryable of " + name,
                  pineforge::run_failure_code_retryable(code) ? "true" : "false",
                  retryable && retryable->boolean ? "true" : "false");
+        if (name == "runtime_history_budget_exhausted"
+            || name == "runtime_storage_observation_incomplete") {
+            const auto expected_class = name == "runtime_history_budget_exhausted"
+                ? RunFailureClass::resource : RunFailureClass::unsupported;
+            const Json* since = entry.find("since");
+            CHECK_EQ("runtime catalog since", since ? since->string : "", "1.10.1");
+            CHECK(pineforge::run_failure_code_class(code) == expected_class);
+            CHECK(!pineforge::run_failure_code_retryable(code));
+            const Json* args = entry.find("args");
+            const std::vector<std::string> names = name == "runtime_history_budget_exhausted"
+                ? std::vector<std::string>{"configured", "needed", "used"}
+                : std::vector<std::string>{"backing_bytes_lower_bound", "overflow",
+                    "resident_metadata_bytes_lower_bound", "resident_payload_bytes_lower_bound",
+                    "unsupported_flags"};
+            CHECK(args && args->kind == Json::Kind::object);
+            CHECK(args && args->object.size() == names.size());
+            for (const auto& arg_name : names) {
+                const Json* arg = args ? args->find(arg_name) : nullptr;
+                const Json* kind = arg ? arg->find("kind") : nullptr;
+                CHECK_EQ("runtime catalog kind " + arg_name, kind ? kind->string : "",
+                         arg_name == "overflow" ? "boolean" : "string");
+                CHECK(arg && arg->find("optional") == nullptr);
+            }
+        }
         check_code_args(code, name, entry.find("args"));
     }
     // No code, an unknown code: engine_invariant, never a code of their own.
@@ -2011,6 +2216,8 @@ int main() {
     window_vocabulary_rows();
     chain_vocabulary_rows();
     report_channel_vocabulary_rows();
+    runtime_typed_failure_rows();
+    runtime_decimal_argument_rows();
     std::printf("test_run_failure_codes: %d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

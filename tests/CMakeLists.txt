@@ -6,6 +6,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
 endif()
 
 set(TEST_SOURCES
+    test_runtime_context
     test_value_invalid_relative_risk
     test_value_invalid_relative_risk_source
     # R4-D L4a native-route behavioral twins.  These retain the legacy

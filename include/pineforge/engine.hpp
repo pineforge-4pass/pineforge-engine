@@ -52,6 +52,7 @@
 #include <pineforge/metrics_fold.hpp>
 #include <pineforge/report_sink_writer.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
+#include <pineforge/runtime_context.hpp>
 // Generated script lifecycle users must be rebuilt against this runtime.
 // These internal C++ capabilities change no public C POD or C signature.
 #define PINEFORGE_HAS_TRADE_HISTORY_POLICY_V1 1
@@ -2995,11 +2996,18 @@ public:
     // setter; write that maximum. 0: none; -1: null destination. No allocation.
     static int output_series_limit_failure(std::int64_t* maximum) noexcept;
 
+    // Independent of legacy security_eval_states_: registering a context from
+    // an evaluator never invalidates the registry a native pump is visiting.
+    RuntimeContextService& runtime_contexts() noexcept { return runtime_contexts_; }
+    const RuntimeContextService& runtime_contexts() const noexcept { return runtime_contexts_; }
+    bool runtime_context_early_close_completes() const;
+
 private:
     static std::optional<std::int64_t> default_output_series_limit() noexcept;
     // Recorder admission only, outside execution state and its hashes, like
     // the output shape and recording switch. Existing hosts keep their setting.
     std::optional<std::int64_t> max_output_series_ = default_output_series_limit();
+    RuntimeContextService runtime_contexts_;
 };
 
 inline constexpr std::size_t kReportSinkHeldEquityPoints = 1;

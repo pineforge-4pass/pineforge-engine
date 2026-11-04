@@ -3080,6 +3080,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     dependency_scratch_stats_ = {};
     run_cache_diagnostics_.begin_run();
     engine.reset_run_state();
+    engine.runtime_contexts().reset();
     engine.reset_trade_percent_prefix();
     closed_trade_prefix_ = {};
     closed_trade_seal_bar_.reset();
@@ -9802,6 +9803,12 @@ bool NativeExecutionConsumer::contribute_input(
     }
     const int64_t script_key = script_interval->open_ms;
     if (!seal_stale_script(engine, script_key)) return false;
+    // Confirmed bars entered the provider before their input callback.
+    // Observed/quiet slots have no input callback; record their accepted
+    // OHLCV here, after the preceding script bar has been sealed.
+    if (kind != InputContribution::ConfirmedBar
+        && engine.runtime_contexts().history_enabled())
+        engine.runtime_contexts().append_live(bar);
     const int64_t source_close = (kind == InputContribution::ConfirmedBar)
         ? std::max(interval.last_traded_close_ms, interval.next_period_open_ms)
         : (last_print_time_ms_ != 0 ? last_print_time_ms_ : interval.last_traded_close_ms);
@@ -10837,6 +10844,12 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
         processing_input_ = false;
         return false;
     }
+    if (engine.runtime_contexts().history_enabled()) {
+        if (begin_is_stream_)
+            engine.runtime_contexts().append_live(bar);
+        else
+            engine.runtime_contexts().accept_batch(static_cast<std::uint64_t>(index) + 1);
+    }
     if (!invoke_input_callback(engine, bar, input_context)) {
         processing_input_ = false;
         return false;
@@ -10881,6 +10894,13 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
 }
 
 void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars, int n) {
+    // All synchronous batch entries keep this scope until every callback and
+    // replay reader unwinds. Stream warmup uses the live store instead: its
+    // caller's borrowed warmup array may disappear at stream_begin's exit.
+    if (engine.runtime_contexts().history_enabled()) {
+        if (begin_is_stream_)
+            engine.runtime_contexts().begin_live();
+    }
     // Every script bar this pump seals reads the bars around it off this
     // array (present_session_day); the view ends with the call.
     struct PumpView {
@@ -11046,6 +11066,7 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
 void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars, int n) {
     const BacktestEngine::ReportSinkCallScope sink_call(engine);
     const EntryExitGuard exit_scope(*this, engine, false);
+    std::optional<RuntimeBatchLease> runtime_lease;
     if (refuse_dispatch_reentry()) return;
     const BacktestEngine::MetricsStreamingAttemptV1 metrics_attempt(engine);
     const AttemptScope attempt(*this);
@@ -11063,6 +11084,10 @@ void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars
         const int64_t initial = n > 0 ? bars[0].timestamp
                                       : std::numeric_limits<int64_t>::min();
         if (!begin_ready(engine, NativeRunPhase::Batch, initial)) return;
+        if (engine.runtime_contexts().history_enabled()) {
+            runtime_lease.emplace(bars, static_cast<std::size_t>(n));
+            engine.runtime_contexts().bind_batch(*runtime_lease);
+        }
         pump_batch(engine, bars, n);
         if (failed()) return;
         record_open_position_report_rows(engine);
@@ -11088,6 +11113,7 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
                                      MagnifierDistribution magnifier_dist) {
     const BacktestEngine::ReportSinkCallScope sink_call(engine);
     const EntryExitGuard exit_scope(*this, engine, false);
+    std::optional<RuntimeBatchLease> runtime_lease;
     if (refuse_dispatch_reentry()) return;
     const BacktestEngine::MetricsStreamingAttemptV1 metrics_attempt(engine);
     const AttemptScope attempt(*this);
@@ -11118,6 +11144,10 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
         const int64_t initial = n_input > 0 ? input_bars[0].timestamp
                                             : std::numeric_limits<int64_t>::min();
         if (!begin_ready(engine, NativeRunPhase::Batch, initial)) return;
+        if (engine.runtime_contexts().history_enabled()) {
+            runtime_lease.emplace(input_bars, static_cast<std::size_t>(n_input));
+            engine.runtime_contexts().bind_batch(*runtime_lease);
+        }
         pump_batch(engine, input_bars, n_input);
         if (failed()) return;
         record_open_position_report_rows(engine);
@@ -11145,6 +11175,7 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
                                        MagnifierDistribution magnifier_dist) {
     const BacktestEngine::ReportSinkCallScope sink_call(engine);
     const EntryExitGuard exit_scope(*this, engine, false);
+    std::optional<RuntimeBatchLease> runtime_lease;
     if (refuse_dispatch_reentry()) return;
     const BacktestEngine::MetricsStreamingAttemptV1 metrics_attempt(engine);
     const AttemptScope attempt(*this);
@@ -11170,6 +11201,10 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
         const int64_t initial = n_input > 0 ? input_bars[0].timestamp
                                             : std::numeric_limits<int64_t>::min();
         if (!begin_ready(engine, NativeRunPhase::Batch, initial)) return;
+        if (engine.runtime_contexts().history_enabled()) {
+            runtime_lease.emplace(input_bars, static_cast<std::size_t>(n_input));
+            engine.runtime_contexts().bind_batch(*runtime_lease);
+        }
         pump_batch(engine, input_bars, n_input);
         if (failed()) return;
         record_open_position_report_rows(engine);
@@ -11584,6 +11619,8 @@ bool NativeExecutionConsumer::finalize_observed_tick_slot(
             engine.current_bar_ = forming_;
             calculating_bar_ = forming_;
             calculating_bar_has_ = true;
+            if (engine.runtime_contexts().history_enabled())
+                engine.runtime_contexts().append_live(forming_);
             clear_partial();
             invoke_callback(engine, forming_, calc);
             if (failed()) return false;

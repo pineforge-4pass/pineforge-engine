@@ -5,6 +5,7 @@
 #include <memory>
 #include "bar.hpp"
 #include <pineforge/detail/feed_projection.hpp>
+#include <pineforge/owned_storage.hpp>
 
 namespace pineforge {
 // ─── Day-length constants ──────────────────────────────────────────────────────
@@ -500,6 +501,16 @@ public:
         virtual int64_t last_stamp() const = 0;
         /// How many period opens the source holds in memory right now.
         virtual std::size_t stamps_held() const = 0;
+        /// Observe this shared source's allocation (including its control
+        /// ownership) and all owned descendants in the caller's common walk.
+        /// Implementations must use actual allocation requests/capacities and
+        /// shared identities, without querying, restarting or warming the source.
+        /// Borrowed feeds are excluded. The shared allocation covers the
+        /// source's inline object; do not add sizeof(*this) again.
+        /// Legacy sources have unknown allocation/control ownership.
+        virtual void observe_owned_storage(OwnedStorage& out) const {
+            out.incomplete(OwnedStorageUnsupported::opaque_type);
+        }
     };
 
     /// Install a DAY partition from `source`: each period's group open is its
@@ -514,6 +525,11 @@ public:
     /// Period opens this aggregator holds in memory: the stamps and group
     /// opens of a stored partition, what the source holds for a generated one.
     std::size_t native_period_stamps_held() const;
+
+    /// Observe external ownership only; the containing runtime root counts
+    /// this aggregator's inline storage. Use one walk for all runtime roots
+    /// to deduplicate shared sources. Never queries or mutates a source.
+    void observe_owned_storage(OwnedStorage& out) const noexcept;
 
     /// A RATIO aggregator's late day opens, from the installed native daily
     /// feed (native_late_day_opens over the evaluator's input): each opens a

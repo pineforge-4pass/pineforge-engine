@@ -2154,14 +2154,16 @@ PF_API int strategy_set_symbol_feed_borrowed_v1(
 
 /** Exact C++ engine layout accepted by the live report accumulator.
  *  Bump whenever that layout changes, independently of #PF_ABI_VERSION. */
-#define PF_STREAM_ENGINE_LAYOUT_VERSION 3u
+#define PF_STREAM_ENGINE_LAYOUT_VERSION 4u
 
 /** Optional module declaration that its strategy handles point directly to
  *  a BacktestEngine with the returned #PF_STREAM_ENGINE_LAYOUT_VERSION.
  *  The engine runtime exports this with its streaming implementation.
  *  Modules with opaque or wrapped handles must omit it or return 0.
- *  Absence or a different version requires using #strategy_stream_fill_report;
- *  stream ABI and execution-capabilities versions alone do not prove layout.
+ *  Absence or 0 requires using #strategy_stream_fill_report. A nonzero
+ *  different version is refused by the native runner before strategy creation;
+ *  rebuild the module with the exact paired engine. Stream ABI and
+ *  execution-capabilities versions alone do not prove layout.
  *  This query reads no strategy state and changes no report or hash. */
 PF_API uint32_t strategy_stream_engine_layout_version(void);
 

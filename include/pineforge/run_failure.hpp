@@ -137,6 +137,7 @@ namespace pineforge {
 inline namespace engine_script_run_v19 {
 class BacktestEngine;
 }
+class OwnedStorage;  // include/pineforge/owned_storage.hpp
 
 /// The class a code belongs to (the catalog's `class`).
 enum class RunFailureClass : std::uint8_t {
@@ -218,6 +219,16 @@ using RunFailureArgs = std::vector<RunFailureArg>;
 struct RunFailureValue {
     RunFailureCode code = RunFailureCode::none;
     std::shared_ptr<const std::string> args;
+
+    // External ownership of `args` only; the containing owner counts this
+    // inline value. JSON minted by make_run_failure is one real allocation
+    // domain (string object and shared control requests, their ledger and
+    // records, the string's own buffer), recognized through std::get_deleter
+    // and counted once per walk. A truly empty `args` owns nothing. Any other
+    // control, a non-owning alias, or a pointee other than the minted string
+    // is reported incomplete and never traversed as owned. Preserves errno;
+    // follows the owner's serialized execution like OwnedAllocator.
+    void observe_owned_storage(OwnedStorage& out) const noexcept;
 };
 
 /// Validate `args` against `code`'s registry entry and canonicalize them. Any

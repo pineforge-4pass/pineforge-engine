@@ -2558,6 +2558,7 @@ private:
                 c_.close_open_epoch_at_exit(engine_, std::uncaught_exceptions() > uncaught_,
                                             allow_live_);
             if (!allow_live_ || !c_.running()) {
+                engine_.runtime_contexts().end_run();
                 if (c_.batch_input_release_)
                     c_.batch_input_release_(c_.batch_input_owner_);
                 c_.detach_bar_views();

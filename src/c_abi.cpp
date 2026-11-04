@@ -1586,6 +1586,8 @@ PF_API int strategy_set_scratch_io_policy_v1(pf_strategy_t s, const pf_scratch_i
 }
 
 PF_API uint32_t strategy_stream_engine_layout_version(void) {
+    static_assert(PF_STREAM_ENGINE_LAYOUT_VERSION == 4u,
+                  "runtime-context live report boundary requires layout stamp 4");
     return PF_STREAM_ENGINE_LAYOUT_VERSION;
 }
 
