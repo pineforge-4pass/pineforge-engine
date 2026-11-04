@@ -117,7 +117,7 @@ GKP_JOB_RUNNERS = {
     'release-ruleset-probe.yml': {'probe': PROTECTED_RUNNER},
 }
 GKP_JOB_ENVIRONMENTS = {
-    'release.yml': {'release': 'release', 'prebuilt': 'release', 'notify-hub': 'release'},
+    'release.yml': {'release': 'release', 'notify-hub': 'release'},
     'release-ruleset-probe.yml': {'probe': 'release'},
     'promote-baseline.yml': {'promote': 'release-bot'},
 }
@@ -2240,19 +2240,39 @@ def _effective_permissions(workflow: str, body: str) -> list[str]:
     return _job_values(body, 'permissions') or _job_values(workflow, 'permissions')
 
 
-def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool = False,
-                       include_environment: bool = True) -> bool:
+def _private_key_inputs(text: str) -> bool:
+    """Recognize key inputs/material in env, action inputs and run scopes."""
+    scopes: list[tuple[int, str]] = []
+    for raw in _code(text):
+        line = _action_yaml_visible(raw)[0]
+        depth = _indent(raw)
+        while scopes and depth <= scopes[-1][0]:
+            scopes.pop()
+        key = re.match(r'''(?:-\s+)?(["']?)([A-Za-z_][\w-]*)\1[ \t]*:(?:[ \t]|$)''',
+                       line.strip())
+        if (key and scopes and scopes[-1][1] in {'env', 'with'}
+                and _PRIVATE_KEY_WORD.search(key.group(2))):
+            return True
+        if key:
+            scopes.append((depth, key.group(2)))
+        if (any(scope == 'run' for _, scope in scopes)
+                and re.search(r'(?<![\w-])--private[-_]?key(?:=|\s)', line,
+                              re.IGNORECASE)):
+            return True
+        if (any(scope in {'env', 'with', 'run'} for _, scope in scopes)
+                and re.search(r'-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----', line)):
+            return True
+    return False
+
+
+def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool = False) -> bool:
     """L6: non-GITHUB_TOKEN secrets, OIDC writes or a deployment environment.
 
     Existing VM checks conservatively include workflow permissions. GKE checks
     use the job's effective scopes. Bracket/dynamic secret access and inherited
     reusable-workflow secrets must not bypass either rule.
-
-    Only the structurally admitted prebuilt artifact job may omit environment
-    metadata from this classification. Its original token/secret text remains
-    visible, and App minting, key inputs and whole secret contexts stay refused.
     """
-    if ((include_environment and _job_values(body, 'environment'))
+    if (_job_values(body, 'environment')
             or _job_values(body, 'secrets') == ['inherit']):
         return True
     permissions = (_effective_permissions(workflow, body) if effective_permissions else
@@ -2261,41 +2281,39 @@ def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool 
     if any(value == 'write-all' or re.search(oidc_write, value, re.IGNORECASE)
            for value in permissions):
         return True
-    if not include_environment:
-        # Expressions expand even in script comments; retain every raw byte.
-        # Other jobs' App credentials are not inherited by the artifact job.
-        header = _JOBS_KEY.split(workflow, maxsplit=1)[0]
-        inherited_env = []
-        in_env = False
-        for line in workflow.split('\n'):
-            if line.strip() and _indent(line) == 0 and not line.startswith('#'):
-                in_env = _key_value(line, 'env') is not None
-            if in_env:
-                inherited_env.append(line)
-        text = header + '\n' + body + '\n' + '\n'.join(inherited_env)
-        if _uses_app_token(workflow, body) or _PRIVATE_KEY_WORD.search(text):
+
+    # Expressions expand even in script comments; retain every raw byte.
+    # Other jobs' App credentials are not inherited by the artifact job.
+    header = _JOBS_KEY.split(workflow, maxsplit=1)[0]
+    inherited_env = []
+    in_env = False
+    for line in workflow.split('\n'):
+        if line.strip() and _indent(line) == 0 and not line.startswith('#'):
+            in_env = _key_value(line, 'env') is not None
+        if in_env:
+            inherited_env.append(line)
+    text = header + '\n' + body + '\n' + '\n'.join(inherited_env)
+    if (_uses_app_token(workflow, body)
+            or _private_key_inputs(body + '\n' + '\n'.join(inherited_env))):
+        return True
+    # A whole/dynamic secrets context cannot prove GITHUB_TOKEN-only use.
+    # Prose may mention secrets; inspect expressions without cutting hashes
+    # or treating a quoted }} (including doubled quotes) as their end.
+    for expression in re.finditer(r'\$\{\{', text):
+        end, in_string = expression.end(), False
+        while end < len(text):
+            if text[end] == "'":
+                if in_string and text.startswith("''", end):
+                    end += 2
+                    continue
+                in_string = not in_string
+            elif not in_string and text.startswith('}}', end):
+                break
+            end += 1
+        value = text[expression.end():end]
+        if any(_SECRET_REFERENCE.match(value, context.start()) is None
+               for context in re.finditer(r'\bsecrets\b', value, re.IGNORECASE)):
             return True
-        # A whole/dynamic secrets context cannot prove GITHUB_TOKEN-only use.
-        # Prose may mention secrets; inspect expressions without cutting hashes
-        # or treating a quoted }} (including doubled quotes) as their end.
-        for expression in re.finditer(r'\$\{\{', text):
-            end, in_string = expression.end(), False
-            while end < len(text):
-                if text[end] == "'":
-                    if in_string and text.startswith("''", end):
-                        end += 2
-                        continue
-                    in_string = not in_string
-                elif not in_string and text.startswith('}}', end):
-                    break
-                end += 1
-            value = text[expression.end():end]
-            if any(_SECRET_REFERENCE.match(value, context.start()) is None
-                   for context in re.finditer(r'\bsecrets\b', value, re.IGNORECASE)):
-                return True
-    else:
-        text = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(body))
-        text += '\n' + '\n'.join(_job_values(workflow, 'env'))
     for match in _SECRET_REFERENCE.finditer(text):
         if match.group(1) is not None:
             if match.group(1).upper() != 'GITHUB_TOKEN':
@@ -2303,27 +2321,6 @@ def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool 
         elif match.group(2).strip().upper() not in ("'GITHUB_TOKEN'", '"GITHUB_TOKEN"'):
             return True
     return False
-
-
-def _prebuilt_environment_admitted(name: str, job: str, workflow: str, body: str,
-                                   reachable: set[str]) -> bool:
-    """Admit only release metadata on the existing token-only artifact matrix."""
-    return (name == 'release.yml' and job == 'prebuilt'
-            and _events(workflow) == {'workflow_dispatch'}
-            and reachable == {'workflow_dispatch'}
-            and not _unparsed(workflow)
-            and GKP_JOB_RUNNERS.get(name, {}).get(job) == PREBUILT_RUNNER
-            and RELEASE_JOB_RUNNERS.get(name, {}).get(job) == HOSTED_MATRIX_RUNNER
-            and _job_values(body, 'needs') == ['release']
-            and _job_values(body, 'runs-on', unquote=False) == [HOSTED_MATRIX_RUNNER]
-            and len(_job_values(body, 'strategy')) == 1
-            and _job_block(body, 'strategy') == _code(RELEASE_STRATEGY)
-            and _job_values(body, 'environment') == ['release']
-            and _literal_job_environment(body)
-            and _job_values(workflow, 'permissions') == ['contents: write']
-            and _job_values(body, 'permissions') == ['contents: write']
-            and not any(_job_values(body, key)
-                        for key in ('uses', 'container', 'services', 'secrets')))
 
 
 def _runner_value(value: str) -> str | list[str]:
@@ -2894,11 +2891,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             # Only an exact admitted GKE pin may use effective token scopes.
             # Other jobs retain the conservative workflow-plus-job credential check.
             exact_gke_runner = bool(gke_pin and job in fixed_hosted and raw_runners == [gke_pin])
-            prebuilt_environment = _prebuilt_environment_admitted(
-                name, job, workflow, body, routes[name])
             credentials = _holds_credentials(
-                workflow, body, effective_permissions=exact_gke_runner,
-                include_environment=not prebuilt_environment)
+                workflow, body, effective_permissions=exact_gke_runner)
             if job not in pinned:
                 if pinned and runs_on:
                     findings.append(f'{name} job {job} needs a pinned runner and time limit')
@@ -3056,7 +3050,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                     findings.append(f'ci-post.yml {job} legs must keep their names: {display}')
     if 'release.yml' in workflows:
         prebuilt = _jobs(workflows['release.yml']).get('prebuilt', '')
-        if _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY):
+        if (len(_job_values(prebuilt, 'strategy')) != 1
+                or _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY)):
             findings.append('release.yml prebuilt must use exactly the isolated Linux x64 '
                             'and hosted ARM matrix')
         prebuilt_steps = _steps(prebuilt)
@@ -3382,9 +3377,17 @@ def release_prebuilt_helper_findings(source: str) -> list[str]:
 
 
 def release_prebuilt_workflow_findings(workflow: str) -> list[str]:
-    """Pin every artifact step and its order without expanding credential admission."""
+    """Pin artifact structure and its token-only admission surface."""
     prebuilt = _jobs(workflow).get('prebuilt', '')
     findings = []
+    if _job_values(prebuilt, 'needs') != ['release']:
+        findings.append('release.yml prebuilt must retain needs: release before build')
+    if _job_values(workflow, 'permissions') != ['contents: write']:
+        findings.append('release.yml prebuilt must retain workflow permissions: contents: write')
+    if _job_values(prebuilt, 'permissions') != ['contents: write']:
+        findings.append('release.yml prebuilt must retain job permissions: contents: write')
+    if _job_values(prebuilt, 'uses'):
+        findings.append('release.yml prebuilt must not use a reusable workflow')
     if ([_code(step) for step in _steps(prebuilt)]
             != [_code(step) for step in _steps(RELEASE_PREBUILT_STEPS)]):
         findings.append('release.yml prebuilt must retain the credential-free Bookworm build, '

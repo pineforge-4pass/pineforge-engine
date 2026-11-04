@@ -770,6 +770,32 @@ class ProtectedGkeRunners(unittest.TestCase):
                     self.assertEqual(ci_preflight._job_values(body, 'runs-on', unquote=False),
                                      [label])
 
+    def test_plain_private_key_documentation_keeps_effective_token_scopes(self):
+        workflows = self.workflows()
+        self.assertEqual(ci_preflight.runner_findings(workflows), [])
+        for name, job in (('promote-baseline.yml', 'promote-guard'),
+                          ('ci-post.yml', 'authz')):
+            workflow = workflows[name]
+            body = _jobs(workflow)[job]
+            for documentation in (
+                    '# secrets PINEFORGE_APP_ID + PINEFORGE_APP_PRIVATE_KEY\n',
+                    '# private-key inputs are documented here, not supplied.\n'):
+                with self.subTest(workflow=name, documentation=documentation):
+                    changed = documentation + workflow
+                    self.assertNotEqual(changed, workflow)
+                    self.assertEqual(_jobs(changed)[job], body)
+                    self.assertFalse(ci_preflight._holds_credentials(
+                        changed, body, effective_permissions=True))
+                    self.assertEqual(ci_preflight.runner_findings(
+                        {**workflows, name: changed}), [])
+            for reference in ('secrets.DEPLOY_TOKEN', "secrets['DEPLOY_TOKEN']",
+                              'secrets[inputs.secret_name]', 'toJSON(secrets)'):
+                with self.subTest(workflow=name, reference=reference):
+                    changed = '# ${{ ' + reference + ' }}\n' + workflow
+                    self.assertNotEqual(changed, workflow)
+                    self.assertIn(f'{name} job {job} must not expose credentials on GKE',
+                                  ci_preflight.runner_findings({**workflows, name: changed}))
+
     def test_gkp_needs_group15_mirror(self):
         workflows = self.workflows()
         mirror_file = '.github/runner-group-15-allowlist.txt'
@@ -826,10 +852,11 @@ class ProtectedGkeRunners(unittest.TestCase):
                         prefix = f'{name} job {job}'
                         credential_finding = (f'{prefix} must keep production credentials '
                                               'on a hosted standard runner')
-                        if job == 'prebuilt':
+                        fixture_role = 'token-only' if job == 'prebuilt' else 'credentialed'
+                        if fixture_role == 'token-only':
                             # Only the x64 matrix row changes; runs-on stays a
                             # matrix expression and loses its exact admission.
-                            expected = [RELEASE_MATRIX_FINDING, credential_finding]
+                            expected = [RELEASE_MATRIX_FINDING]
                         else:
                             suffix = '' if name == 'docs-post.yml' else ' (isolated release)'
                             expected = [f'{prefix} must run on {label}{suffix}']
@@ -842,11 +869,11 @@ class ProtectedGkeRunners(unittest.TestCase):
                                 expected.append(f'{prefix} must use a bare scalar '
                                                 'protected GKE scale-set name')
                         elif policy == 'gke':
-                            expected.extend([
-                                f'{prefix} may use GKE routing only at its exact pinned job and label',
-                                f'{prefix} must not expose credentials on GKE',
-                            ])
-                            if job == 'prebuilt':
+                            expected.append(
+                                f'{prefix} may use GKE routing only at its exact pinned job and label')
+                            if fixture_role == 'credentialed':
+                                expected.append(f'{prefix} must not expose credentials on GKE')
+                            if fixture_role == 'token-only':
                                 expected.append(f'{prefix} must use a bare scalar GKE scale-set name')
                         findings = ci_preflight.runner_findings({**workflows, name: changed})
                         self.assertCountEqual(
@@ -1108,14 +1135,29 @@ class ProtectedGkeRunners(unittest.TestCase):
                                   ci_preflight.runner_findings({'release.yml': changed}))
 
 
-class PrebuiltReleaseEnvironment(unittest.TestCase):
-    """Exercise the environment admission with copies of the shipped workflow."""
+class PrebuiltCredentialAdmission(unittest.TestCase):
+    """Exercise the token-only prebuilt credential surface."""
 
-    ENVIRONMENT = '    environment: release\n'
-    ENVIRONMENT_FINDING = ('release.yml job prebuilt must use environment release '
-                           'on protected GKE')
+    DEPLOYMENT_ENVIRONMENT = '    environment: release\n'
     CREDENTIAL_FINDING = ('release.yml job prebuilt must keep production credentials '
                           'on a hosted standard runner')
+    NEEDS_FINDING = 'release.yml prebuilt must retain needs: release before build'
+    WORKFLOW_PERMISSIONS_FINDING = (
+        'release.yml prebuilt must retain workflow permissions: contents: write')
+    JOB_PERMISSIONS_FINDING = (
+        'release.yml prebuilt must retain job permissions: contents: write')
+    USES_FINDING = 'release.yml prebuilt must not use a reusable workflow'
+    EVENT_FINDING = 'release.yml must retain workflow_dispatch only for protected release jobs'
+    UNPARSED_FINDING = 'release.yml has jobs lines the runner contract cannot read'
+    PROTECTED_ROUTING_FINDING = (
+        'release.yml job prebuilt may use protected GKE routing '
+        'only at its exact pinned job and label')
+    PREBUILT_RUNNER_FINDING = (
+        'release.yml job prebuilt must run on ${{ matrix.runner }} (isolated release)')
+    CONTAINER_FINDING = (
+        'release.yml job prebuilt must not declare a job container on protected GKE')
+    SERVICES_FINDING = (
+        'release.yml job prebuilt must not declare job services on protected GKE')
     INPUT_FINDING = ('release.yml prebuilt must not override toolchain, Docker or '
                      'shared-path inputs')
 
@@ -1124,11 +1166,6 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
                           for path in (ROOT / '.github/workflows').glob('*.yml')}
         self.shipped = self.workflows['release.yml']
         self.release = self.shipped
-        # Build the proposed metadata addition from the real old workflow too,
-        # so the tests-only patch can exercise the old credential guard.
-        if not ci_preflight._job_values(_jobs(self.release)['prebuilt'], 'environment'):
-            self.release = in_job(self.release, 'prebuilt', '    needs: release\n',
-                                  '    needs: release\n' + self.ENVIRONMENT)
 
     def findings(self, workflow, *, name='release.yml'):
         with tempfile.TemporaryDirectory() as directory:
@@ -1137,11 +1174,10 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
             workflows = {**self.workflows, name: path.read_text()}
             return ci_preflight.runner_findings(workflows)
 
-    def test_shipped_prebuilt_requires_the_release_environment_pin(self):
+    def test_shipped_prebuilt_is_token_only_without_deployment_environment(self):
         body = _jobs(self.shipped)['prebuilt']
-        self.assertEqual(ci_preflight._job_values(body, 'environment'), ['release'])
-        self.assertEqual(ci_preflight.GKP_JOB_ENVIRONMENTS['release.yml'].get('prebuilt'),
-                         'release')
+        self.assertEqual(ci_preflight._job_values(body, 'environment'), [])
+        self.assertIsNone(ci_preflight.GKP_JOB_ENVIRONMENTS['release.yml'].get('prebuilt'))
         self.assertEqual(self.findings(self.shipped), [])
 
     def test_shipped_inherited_release_tag_binding_is_not_a_shell_env_override(self):
@@ -1191,8 +1227,10 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
                 self.assertIn(self.INPUT_FINDING,
                               ci_preflight.release_prebuilt_workflow_findings(changed))
 
-    def test_only_github_token_with_the_release_environment_is_admitted(self):
+    def test_only_github_token_without_deployment_environment_is_admitted(self):
         self.assertIn('${{ secrets.GITHUB_TOKEN }}', _jobs(self.release)['prebuilt'])
+        self.assertEqual(ci_preflight._job_values(_jobs(self.release)['prebuilt'],
+                                                 'environment'), [])
         self.assertEqual(self.findings(self.release), [])
         for reference in ('secrets.GITHUB_TOKEN', "secrets['GITHUB_TOKEN']",
                           'secrets["GITHUB_TOKEN"]', 'github.token'):
@@ -1222,31 +1260,25 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
         self.assertEqual(_jobs(changed)['prebuilt'], _jobs(self.release)['prebuilt'])
         return changed
 
-    def assert_admitted_secret_refused(self, changed):
+    def assert_secret_refused(self, changed):
         self.assertNotEqual(changed, self.release)
-        routes = ci_preflight.workflow_event_routes(
-            {**self.workflows, 'release.yml': changed})
-        self.assertTrue(ci_preflight._prebuilt_environment_admitted(
-            'release.yml', 'prebuilt', changed, _jobs(changed)['prebuilt'],
-            routes['release.yml']))
+        self.assertEqual(ci_preflight._job_values(_jobs(changed)['prebuilt'],
+                                                 'environment'), [])
         self.assertIn(self.CREDENTIAL_FINDING, self.findings(changed))
 
-    def assert_environment_admission_refused(self, changed):
+    def assert_prebuilt_admission_refused(self, changed, finding):
         self.assertNotEqual(changed, self.release)
-        routes = ci_preflight.workflow_event_routes(
-            {**self.workflows, 'release.yml': changed})
-        self.assertFalse(ci_preflight._prebuilt_environment_admitted(
-            'release.yml', 'prebuilt', changed, _jobs(changed)['prebuilt'],
-            routes['release.yml']))
-        self.assertIn(self.CREDENTIAL_FINDING, self.findings(changed))
+        findings = self.findings(changed)
+        self.assertIn(finding, findings)
+        self.assertNotIn(self.CREDENTIAL_FINDING, findings)
 
     def test_hash_led_run_block_secret_is_refused(self):
         changed = self.with_run_content('# ${{ secrets.DEPLOY_TOKEN }}')
-        self.assert_admitted_secret_refused(changed)
+        self.assert_secret_refused(changed)
 
     def test_inline_run_block_secret_is_refused(self):
         changed = self.with_run_content(': # ${{ secrets.DEPLOY_TOKEN }}')
-        self.assert_admitted_secret_refused(changed)
+        self.assert_secret_refused(changed)
 
     def test_bracket_run_comment_secrets_are_refused(self):
         for reference in ("secrets['DEPLOY_TOKEN']", 'secrets["DEPLOY_TOKEN"]',
@@ -1254,7 +1286,7 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
             for prefix in ('# ', '#', ': # ', ': #'):
                 with self.subTest(reference=reference, prefix=prefix):
                     changed = self.with_run_content(prefix + '${{ ' + reference + ' }}')
-                    self.assert_admitted_secret_refused(changed)
+                    self.assert_secret_refused(changed)
 
     def test_workflow_env_after_jobs_secrets_are_refused(self):
         for binding in (
@@ -1263,7 +1295,7 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
                 '  TOKEN: "prefix # ${{ secrets.DEPLOY_TOKEN }}"\n',
                 '  TOKEN: |\n    # ${{ secrets["DEPLOY_TOKEN"] }}\n'):
             with self.subTest(binding=binding):
-                self.assert_admitted_secret_refused(
+                self.assert_secret_refused(
                     self.with_trailing_workflow_env(binding))
 
     def test_raw_header_and_quoted_hash_secrets_are_refused(self):
@@ -1274,12 +1306,12 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
             with self.subTest(header=replacement):
                 self.assertEqual(self.release.count('name: Release\n'), 1)
                 changed = self.release.replace('name: Release\n', replacement, 1)
-                self.assert_admitted_secret_refused(changed)
+                self.assert_secret_refused(changed)
         changed = in_job(
             self.release, 'prebuilt', '    steps:\n',
             '    env:\n      TOKEN: "prefix # ${{ secrets.DEPLOY_TOKEN }}"\n'
             '    steps:\n')
-        self.assert_admitted_secret_refused(changed)
+        self.assert_secret_refused(changed)
 
     def test_comment_whole_dynamic_and_lookalike_secret_contexts_are_refused(self):
         for reference in (
@@ -1290,7 +1322,7 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
                 "format('it''s }}{0}', toJSON(secrets))"):
             with self.subTest(reference=reference):
                 changed = self.with_run_content('# ${{ ' + reference + ' }}')
-                self.assert_admitted_secret_refused(changed)
+                self.assert_secret_refused(changed)
 
     def test_github_token_raw_comments_and_trailing_workflow_env_are_admitted(self):
         self.assertEqual(self.findings(self.release), [])
@@ -1308,6 +1340,20 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
                 self.assertEqual(self.findings(changed), [])
         prose = self.with_run_content('# The secrets context is evaluated before the shell.')
         self.assertEqual(self.findings(prose), [])
+        for documentation in (
+                '# secrets PINEFORGE_APP_ID + PINEFORGE_APP_PRIVATE_KEY\n',
+                '# private-key inputs are documented here, not supplied.\n',
+                'run-name: "Document private-key inputs # without supplying them"\n'):
+            with self.subTest(documentation=documentation):
+                changed = documentation + self.release
+                self.assertNotEqual(changed, self.release)
+                self.assertEqual(self.findings(changed), [])
+        prose = self.with_run_content('# PINEFORGE_APP_PRIVATE_KEY is documentation.')
+        self.assertNotEqual(prose, self.release)
+        self.assertEqual(self.findings(prose), [])
+        prose = self.with_run_content('# python3 mint.py --private-key example.pem')
+        self.assertNotEqual(prose, self.release)
+        self.assertEqual(self.findings(prose), [])
 
     def test_other_jobs_app_credentials_do_not_enter_the_prebuilt_scan(self):
         self.assertEqual(self.findings(self.release), [])
@@ -1324,7 +1370,7 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
                 self.assertEqual(_jobs(changed)['prebuilt'], _jobs(self.release)['prebuilt'])
                 self.assertEqual(self.findings(changed), [])
 
-    def test_release_environment_admission_requires_release_needs(self):
+    def test_prebuilt_admission_requires_release_needs(self):
         for replacement in ('', '    needs: other\n',
                             '    needs: [release, notify-hub]\n',
                             '    needs: ${{ inputs.needs }}\n',
@@ -1332,41 +1378,49 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
             with self.subTest(needs=replacement):
                 changed = in_job(self.release, 'prebuilt', '    needs: release\n',
                                  replacement)
-                self.assert_environment_admission_refused(changed)
+                self.assert_prebuilt_admission_refused(changed, self.NEEDS_FINDING)
 
-    def test_release_environment_admission_refuses_duplicate_strategy_keys(self):
+    def test_prebuilt_admission_refuses_duplicate_strategy_keys(self):
         block = '\n'.join(ci_preflight._job_block(
             _jobs(self.release)['prebuilt'], 'strategy')) + '\n'
         self.assertEqual(_jobs(self.release)['prebuilt'].count(block), 1)
         changed = in_job(self.release, 'prebuilt', block, block * 2)
         self.assertEqual(len(ci_preflight._job_values(
             _jobs(changed)['prebuilt'], 'strategy')), 2)
-        self.assert_environment_admission_refused(changed)
+        self.assert_prebuilt_admission_refused(changed, RELEASE_MATRIX_FINDING)
 
-    def test_release_environment_admission_refuses_job_level_uses(self):
+    def test_prebuilt_admission_refuses_missing_strategy_key(self):
+        block = '\n'.join(ci_preflight._job_block(
+            _jobs(self.release)['prebuilt'], 'strategy')) + '\n'
+        self.assertEqual(_jobs(self.release)['prebuilt'].count(block), 1)
+        changed = in_job(self.release, 'prebuilt', block, '')
+        self.assertEqual(ci_preflight._job_values(_jobs(changed)['prebuilt'], 'strategy'), [])
+        self.assert_prebuilt_admission_refused(changed, RELEASE_MATRIX_FINDING)
+
+    def test_prebuilt_admission_refuses_job_level_uses(self):
         changed = in_job(
             self.release, 'prebuilt', '    steps:\n',
             '    uses: ./.github/workflows/reusable.yml\n    steps:\n')
-        self.assert_environment_admission_refused(changed)
+        self.assert_prebuilt_admission_refused(changed, self.USES_FINDING)
 
-    def test_release_environment_admission_refuses_unparsed_job_mappings(self):
+    def test_prebuilt_admission_refuses_unparsed_job_mappings(self):
         self.assertEqual(self.release.count('\njobs:\n'), 1)
         changed = self.release.replace(
             '\njobs:\n', '\njobs:\n  "unparsed-job":\n'
             '    runs-on: ubuntu-24.04\n    steps: []\n', 1)
         self.assertTrue(ci_preflight._unparsed(changed))
-        self.assert_environment_admission_refused(changed)
+        self.assert_prebuilt_admission_refused(changed, self.UNPARSED_FINDING)
 
-    def test_release_environment_admission_refuses_direct_event_additions(self):
+    def test_prebuilt_admission_refuses_direct_event_additions(self):
         self.assertEqual(self.release.count('\non:\n'), 1)
         for event in ('push', 'pull_request', 'workflow_call'):
             with self.subTest(event=event):
                 changed = self.release.replace('\non:\n', '\non:\n  ' + event + ':\n', 1)
                 self.assertEqual(ci_preflight._events(changed),
                                  {'workflow_dispatch', event})
-                self.assert_environment_admission_refused(changed)
+                self.assert_prebuilt_admission_refused(changed, self.EVENT_FINDING)
 
-    def test_release_environment_admission_requires_exact_token_permissions(self):
+    def test_prebuilt_admission_requires_exact_token_permissions(self):
         for scope in ('workflow', 'job'):
             for replacement in ('', 'permissions: read-all\n',
                                 'permissions:\n  contents: read\n',
@@ -1382,30 +1436,39 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
                             self.release, 'prebuilt',
                             '    permissions:\n      contents: write   # gh release upload\n',
                             indented)
-                    self.assert_environment_admission_refused(changed)
+                    finding = (self.WORKFLOW_PERMISSIONS_FINDING if scope == 'workflow'
+                               else self.JOB_PERMISSIONS_FINDING)
+                    self.assert_prebuilt_admission_refused(changed, finding)
 
-    def test_missing_wrong_empty_dynamic_and_duplicate_environments_are_refused(self):
+    def test_added_deployment_environments_are_refused(self):
         for replacement in (
-                '', '    environment: other\n', '    environment:\n',
+                self.DEPLOYMENT_ENVIRONMENT, '    environment: other\n',
+                '    environment:\n',
                 '    environment: ""\n', "    environment: ''\n",
                 '    environment: "   "\n', '    environment: null\n',
                 '    environment: ${{ inputs.environment }}\n',
                 '    environment: ${{ \'release\' }}\n',
                 '    environment: [release]\n',
                 '    environment:\n      name: release\n',
-                self.ENVIRONMENT * 2,
-                self.ENVIRONMENT + '    environment: other\n'):
+                self.DEPLOYMENT_ENVIRONMENT * 2,
+                self.DEPLOYMENT_ENVIRONMENT + '    environment: other\n'):
             with self.subTest(environment=replacement):
-                changed = in_job(self.release, 'prebuilt', self.ENVIRONMENT, replacement)
+                changed = in_job(
+                    self.release, 'prebuilt', '    needs: release\n',
+                    '    needs: release\n' + replacement)
                 self.assertNotEqual(changed, self.release)
-                self.assertIn(self.ENVIRONMENT_FINDING, self.findings(changed))
-        step_only = in_job(self.release, 'prebuilt', self.ENVIRONMENT, '')
+                self.assertIn(self.CREDENTIAL_FINDING, self.findings(changed))
+        step_only = self.release
         step_only = in_job(step_only, 'prebuilt', '    steps:\n',
                            '    steps:\n      - run: "true"\n'
                            '        environment: release\n')
-        self.assertIn(self.ENVIRONMENT_FINDING, self.findings(step_only))
+        self.assertIn(
+            'release.yml prebuilt must retain the credential-free Bookworm build, '
+            'ARM Eigen setup, all-library glibc gate and packed-archive consumer '
+            'before upload',
+            self.findings(step_only))
 
-    def test_release_environment_keeps_production_secret_rejections(self):
+    def test_prebuilt_keeps_production_secret_rejections(self):
         for reference in ('secrets.DEPLOY_KEY', "secrets['DEPLOY_KEY']",
                           'secrets[inputs.secret_name]', 'secrets . DEPLOY_KEY',
                           'toJSON(secrets)', 'secrets'):
@@ -1430,7 +1493,7 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
                                  '    secrets: ' + secrets + '\n    steps:\n')
                 self.assertIn(self.CREDENTIAL_FINDING, self.findings(changed))
 
-    def test_release_environment_keeps_app_mint_and_private_key_rejections(self):
+    def test_prebuilt_keeps_app_mint_and_private_key_rejections(self):
         for step in (
                 '      - uses: actions/create-github-app-token@' + ActionPins.SHA
                 + ' # v2.0.0\n',
@@ -1439,6 +1502,16 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
                 '        with:\n          private-key: ${{ github.token }}\n',
                 '      - uses: example/token@' + ActionPins.SHA + ' # v1.0.0\n'
                 '        with:\n          private_key: ${{ secrets.RELEASE_PEM }}\n',
+                '      - uses: example/token@' + ActionPins.SHA + ' # v1.0.0\n'
+                '        with:\n          "private-key": ${{ github.token }}\n',
+                '      - run: python3 mint.py\n'
+                '        env:\n          APP_PRIVATE_KEY: literal-key-input\n',
+                '      - run: python3 mint.py\n'
+                '        env:\n          APP_KEY: |\n'
+                '            -----BEGIN RSA PRIVATE KEY-----\n'
+                '            key-material\n'
+                '            -----END RSA PRIVATE KEY-----\n',
+                '      - run: python3 mint.py --private-key example.pem\n',
                 '      - run: gh api --method POST app/installations/123/access_tokens\n',
                 '      - run: node -e "createAppAuth({appId, privateKey})"\n'):
             with self.subTest(step=step):
@@ -1446,7 +1519,7 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
                                  '    steps:\n' + step)
                 self.assertIn(self.CREDENTIAL_FINDING, self.findings(changed))
 
-    def test_release_environment_keeps_job_and_workflow_oidc_rejections(self):
+    def test_prebuilt_keeps_job_and_workflow_oidc_rejections(self):
         for permissions in ('write-all',
                             '\n      contents: write\n      id-token: write'):
             with self.subTest(permissions=permissions):
@@ -1461,58 +1534,81 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
         self.assertNotEqual(inherited, self.release)
         self.assertIn(self.CREDENTIAL_FINDING, self.findings(inherited))
 
-    def test_release_environment_admission_requires_the_exact_job_matrix_and_runners(self):
-        for before, after in (
-                ('    runs-on: ${{ matrix.runner }}\n', runner_declaration(GKP_OD_PREBUILT)),
-                ('    runs-on: ${{ matrix.runner }}\n', runner_declaration(GKP_PREBUILT)),
-                ('    runs-on: ${{ matrix.runner }}\n', '    runs-on: ${{ inputs.runner }}\n'),
+    def test_prebuilt_admission_requires_the_exact_job_matrix_and_runners(self):
+        for before, after, finding in (
+                ('    runs-on: ${{ matrix.runner }}\n', runner_declaration(GKP_OD_PREBUILT),
+                 self.PREBUILT_RUNNER_FINDING),
+                ('    runs-on: ${{ matrix.runner }}\n', runner_declaration(GKP_PREBUILT),
+                 self.PREBUILT_RUNNER_FINDING),
+                ('    runs-on: ${{ matrix.runner }}\n', '    runs-on: ${{ inputs.runner }}\n',
+                 self.PREBUILT_RUNNER_FINDING),
                 ('    runs-on: ${{ matrix.runner }}\n',
-                 '    runs-on: ${{ matrix.runner }}\n' * 2),
+                 '    runs-on: ${{ matrix.runner }}\n' * 2,
+                 self.PREBUILT_RUNNER_FINDING),
                 (f'            runner: {GKP_OD_PREBUILT}\n',
-                 '            runner: gkp-od-8cpu-16gb-amd64\n'),
+                 '            runner: gkp-od-8cpu-16gb-amd64\n',
+                 RELEASE_MATRIX_FINDING),
                 (f'            runner: {GKP_OD_PREBUILT}\n',
-                 '            runner: gkp-od-16cpu-32gb-arm64-128gb\n'),
+                 '            runner: gkp-od-16cpu-32gb-arm64-128gb\n',
+                 RELEASE_MATRIX_FINDING),
                 ('            runner: ubuntu-22.04-arm\n',
-                 '            runner: ubuntu-24.04-arm\n'),
+                 '            runner: ubuntu-24.04-arm\n',
+                 RELEASE_MATRIX_FINDING),
                 (f'            runner: {GKP_OD_PREBUILT}\n',
-                 f'            runner: {GKP_BOOKWORM}\n'),
+                 f'            runner: {GKP_BOOKWORM}\n',
+                 RELEASE_MATRIX_FINDING),
                 ('            runner: ubuntu-22.04-arm\n',
-                 f'            runner: {GKP_ARM64}\n'),
-                ('          - triple: linux-x86_64\n', '          - triple: linux-other\n'),
-                ('      fail-fast: false\n', '      fail-fast: true\n'),
-                ('    steps:\n', '    container: ubuntu:24.04\n    steps:\n'),
+                 f'            runner: {GKP_ARM64}\n',
+                 RELEASE_MATRIX_FINDING),
+                ('          - triple: linux-x86_64\n', '          - triple: linux-other\n',
+                 RELEASE_MATRIX_FINDING),
+                ('      fail-fast: false\n', '      fail-fast: true\n',
+                 RELEASE_MATRIX_FINDING),
+                ('    steps:\n', '    container: ubuntu:24.04\n    steps:\n',
+                 self.CONTAINER_FINDING),
                 ('    steps:\n', '    services:\n      db:\n        image: postgres:16\n'
-                 '    steps:\n')):
+                 '    steps:\n', self.SERVICES_FINDING)):
             with self.subTest(before=before, after=after):
                 changed = in_job(self.release, 'prebuilt', before, after)
                 self.assertNotEqual(changed, self.release)
-                self.assertIn(self.CREDENTIAL_FINDING, self.findings(changed))
+                self.assert_prebuilt_admission_refused(changed, finding)
         renamed = self.release.replace('\n  prebuilt:\n', '\n  prebuilt-unlisted:\n', 1)
         self.assertNotEqual(renamed, self.release)
-        self.assertIn(self.CREDENTIAL_FINDING.replace('job prebuilt ', 'job prebuilt-unlisted '),
-                      self.findings(renamed))
-        self.assertIn(self.CREDENTIAL_FINDING.replace('release.yml ', 'unlisted.yml '),
-                      self.findings(self.release, name='unlisted.yml'))
+        renamed_findings = self.findings(renamed)
+        self.assertIn(self.PROTECTED_ROUTING_FINDING.replace(
+            'job prebuilt ', 'job prebuilt-unlisted '), renamed_findings)
+        self.assertNotIn(self.CREDENTIAL_FINDING, renamed_findings)
+        unlisted_findings = self.findings(self.release, name='unlisted.yml')
+        self.assertIn(self.PROTECTED_ROUTING_FINDING.replace(
+            'release.yml ', 'unlisted.yml '), unlisted_findings)
+        self.assertNotIn(self.CREDENTIAL_FINDING.replace('release.yml ', 'unlisted.yml '),
+                         unlisted_findings)
         caller = ('on: pull_request\njobs:\n  call:\n'
                   '    uses: ./.github/workflows/release.yml\n')
-        self.assertIn(self.CREDENTIAL_FINDING, ci_preflight.runner_findings(
-            {**self.workflows, 'release.yml': self.release, 'caller.yml': caller}))
+        caller_findings = ci_preflight.runner_findings(
+            {**self.workflows, 'release.yml': self.release, 'caller.yml': caller})
+        self.assertIn('release.yml must not admit untrusted caller events '
+                      'to isolated release jobs', caller_findings)
+        self.assertNotIn(self.CREDENTIAL_FINDING, caller_findings)
 
-    def test_workflow_contract_consumes_the_prebuilt_environment_mutations(self):
+    def test_workflow_contract_consumes_prebuilt_environment_mutations(self):
         sources = [(ROOT / path).read_text() for path in CI_SOURCES]
         named = {Path(path).name for path in CI_SOURCES}
         others = {name: text for name, text in self.workflows.items() if name not in named}
         self.assertEqual(ci_workflow_findings(
             *sources, others={**others, 'release.yml': self.release}), [])
-        for replacement in ('', '    environment: other\n', self.ENVIRONMENT * 2):
+        for replacement in (self.DEPLOYMENT_ENVIRONMENT, '    environment: other\n',
+                            self.DEPLOYMENT_ENVIRONMENT * 2):
             with self.subTest(environment=replacement), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / 'release.yml'
-                changed = in_job(self.release, 'prebuilt', self.ENVIRONMENT, replacement)
+                changed = in_job(
+                    self.release, 'prebuilt', '    needs: release\n',
+                    '    needs: release\n' + replacement)
                 self.assertNotEqual(changed, self.release)
                 path.write_text(changed)
                 findings = ci_workflow_findings(
                     *sources, others={**others, 'release.yml': path.read_text()})
-                self.assertIn(self.ENVIRONMENT_FINDING, findings)
+                self.assertIn(self.CREDENTIAL_FINDING, findings)
 
 
 class WorkflowEventFleets(unittest.TestCase):

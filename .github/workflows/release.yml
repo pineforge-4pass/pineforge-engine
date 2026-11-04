@@ -359,7 +359,6 @@ jobs:
   # release notes / README.
   prebuilt:
     needs: release
-    environment: release
     permissions:
       contents: write   # gh release upload
     strategy:
