@@ -140,7 +140,7 @@ single `.hpp`):
 | Strings            | `str_utils.hpp`          | `str_utils.cpp`                                                                                                                                                                                                                          | Format, format-time, regex match, split, and numeric-to-string helpers.                                                                                       |
 | Timeframe          | `timeframe.hpp`          | `timeframe.cpp`                                                                                                                                                                                                                          | TF string parsing, ratio computation, calendar detection, `TimeframeAggregator`.                                                                              |
 | Session / time     | `session_time.hpp`       | `session_time.cpp`                                                                                                                                                                                                                       | `pine_time(...)`, `pine_time_close(...)` with session and timezone gating.                                                                                    |
-| Timezone           | (private) `timezone.hpp` | `timezone.cpp`                                                                                                                                                                                                                           | `tz_util::ScopedTimezone` — mutex-guarded `TZ` env-var swap for thread-safe formatting. Internal; not in public include path.                                 |
+| Timezone           | (private) `timezone.hpp` | `timezone.cpp` | `tz_util::ScopedTimezone` — `TZ` env-var swap guarded by a per-image mutex for formatting and calendar conversion. Internal; not in public include path. |
 | Bar magnifier      | `magnifier.hpp`          | `magnifier.cpp`                                                                                                                                                                                                                          | OHLC price-path sampling with six distribution modes; optional volume-weighted sample density.                                                                |
 | Matrices           | `matrix.hpp`             | `matrix.cpp`                                                                                                                                                                                                                             | Eigen-backed `PineMatrix`.                                                                                                                                    |
 | Generic matrices   | `generic_matrix.hpp`     | header-only                                                                                                                                                                                                                              | Template `PineGenericMatrix<T>` over `std::vector<std::vector<T>>` (T=bool specialized to `vector<vector<char>>`) for non-double element types.               |
@@ -799,13 +799,21 @@ A 24-hour session's day in a zone with daylight saving runs from one
 wall-clock open to the next, 23 or 25 hours across a switch
 (the private fixture set `dst_day_close`).
 
-`tz_util::ScopedTimezone(tz)` is RAII — it grabs a process-wide mutex,
-swaps `TZ` (lazily: a same-zone request skips the `setenv` / `tzset`
-pair), and holds the mutex until the guard is destroyed, so the caller's
-`localtime_r` / `mktime` decomposition inside the scope runs under a
-stable `TZ`. This is the only reason `pine_str_format_time` and the
-session helpers are safe to call from a multi-strategy harness (see
-`tests/test_timezone_concurrency.cpp`).
+`tz_util::ScopedTimezone(tz)` holds a per-image mutex for its entire RAII
+scope, including the caller's `localtime_r` / `mktime` decomposition.
+Under that lock it compares the normalized target with the actual
+`getenv("TZ")` value, skipping `setenv` / `tzset` only when they match.
+`TZ` is intentionally left in place when the guard ends. Reading the actual
+environment fixes sequential timezone switches between independently linked
+engine images: one image observes the preceding image's switch before its
+next conversion. Valid per-zone interval cache hits still avoid libc and
+the lock.
+
+The mutex serializes guarded conversions within one engine image (covered
+by `tests/test_timezone_concurrency.cpp`). Independently linked images have
+separate mutexes, so atomicity of parallel conversions across images
+remains an open product issue. `tests/test_timezone_multi_module.py` covers
+the sequential two-image sequence and its same-image control.
 
 ## Matrices
 
