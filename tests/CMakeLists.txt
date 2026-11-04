@@ -3921,6 +3921,7 @@ endforeach()
 
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     target_link_libraries(test_runtime_context_failures PRIVATE Threads::Threads)
+    target_link_libraries(test_runtime_security_cursor PRIVATE Threads::Threads)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         # Real production ledger/service, with actual inherited marker channels.
         # No test timeout, fixture skip, or replacement host protocol.

@@ -13,14 +13,17 @@
 
 #include <array>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
 #include <initializer_list>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -264,6 +267,170 @@ void factory_validation() {
 }
 
 struct Unwind {};
+
+// IMPLEMENTATION DETAIL, source control / UNRUN. The scopes overlap across
+// threads, but every scope access (including destruction) holds this mutex.
+// Removing TLS therefore produces an ordered wrong observation, not a race.
+struct ScopeTurns {
+    std::mutex mutex;
+    std::condition_variable changed;
+    unsigned phase = 0;
+    bool cancelled = false;
+
+    void advance(unsigned next) { // Caller holds mutex.
+        phase = next;
+        changed.notify_all();
+    }
+
+    void wait(std::unique_lock<std::mutex>& lock, unsigned next) {
+        changed.wait(lock, [&] { return cancelled || phase >= next; });
+        if (cancelled)
+            throw std::runtime_error("N6 host isolation setup: peer worker failed");
+    }
+
+    void cancel() {
+        std::lock_guard<std::mutex> lock(mutex);
+        cancelled = true;
+        changed.notify_all();
+    }
+};
+
+struct ScopeObservation {
+    const PineRuntimeSecurityCursor* owner = nullptr;
+    const PineRuntimeSecurityCursor* peer = nullptr;
+    std::string owner_timeframe, peer_timeframe;
+    std::string child_timeframe, child_chart_timeframe;
+    std::string peer_child_timeframe, peer_child_chart_timeframe;
+};
+
+ScopeObservation observe_scope(const Host& owner, const Host& peer) {
+    const auto child = owner.make_runtime_security_cursor("", false, false, false);
+    const auto peer_child = peer.make_runtime_security_cursor("", false, false, false);
+    return {PineRuntimeSecurityScope::current(owner),
+            PineRuntimeSecurityScope::current(peer),
+            owner.runtime_security_timeframe(""), peer.runtime_security_timeframe(""),
+            child.timeframe, child.chart_timeframe,
+            peer_child.timeframe, peer_child.chart_timeframe};
+}
+
+void expect_scope(const ScopeObservation& actual,
+                  const PineRuntimeSecurityCursor* owner,
+                  const std::string& owner_timeframe,
+                  const std::string& peer_timeframe, const std::string& label) {
+    require(actual.owner == owner, label + ".owner");
+    require(actual.peer == nullptr, label + ".peer-hidden");
+    require(actual.owner_timeframe == owner_timeframe, label + ".owner-timeframe");
+    require(actual.peer_timeframe == peer_timeframe, label + ".peer-root-timeframe");
+    require(actual.child_timeframe == owner_timeframe, label + ".child-timeframe");
+    require(actual.child_chart_timeframe == owner_timeframe, label + ".child-chart");
+    require(actual.peer_child_timeframe == peer_timeframe, label + ".peer-child-timeframe");
+    require(actual.peer_child_chart_timeframe == peer_timeframe, label + ".peer-child-chart");
+}
+
+struct ScopeTrace {
+    ScopeObservation before, overlap, inner, restored, after, after_peer_exit;
+};
+
+void two_hosts_two_threads_scope_isolation() {
+    Host a, b;
+    a.prepare("1", "12");
+    b.prepare("1", "20");
+    auto a_parent = a.make_runtime_security_cursor("6", false, false, false);
+    auto a_child = a.make_runtime_security_cursor("3", false, false, false);
+    auto b_parent = b.make_runtime_security_cursor("5", false, false, false);
+    auto b_child = b.make_runtime_security_cursor("1", false, false, false);
+    pristine(a_parent, "6", "12", false, false, false, false);
+    pristine(a_child, "3", "12", false, false, false, false);
+    pristine(b_parent, "5", "20", false, false, false, false);
+    pristine(b_child, "1", "20", false, false, false, false);
+    ScopeTurns turns;
+    ScopeTrace seen_a, seen_b;
+    std::exception_ptr error_a, error_b;
+
+    std::thread first([&] {
+        try {
+            std::unique_lock<std::mutex> lock(turns.mutex);
+            seen_a.before = observe_scope(a, b);
+            {
+                PineRuntimeSecurityScope outer(a, a_parent);
+                turns.advance(1);
+                turns.wait(lock, 2); // B's outer scope is now alive.
+                seen_a.overlap = observe_scope(a, b);
+                try {
+                    PineRuntimeSecurityScope inner(a, a_child);
+                    seen_a.inner = observe_scope(a, b);
+                    throw Unwind{};
+                } catch (const Unwind&) {}
+                seen_a.restored = observe_scope(a, b);
+                turns.advance(3);
+                turns.wait(lock, 4); // B has also unwound its inner scope.
+            }
+            seen_a.after = observe_scope(a, b);
+            turns.advance(5); // A exits while B's outer scope is still alive.
+            turns.wait(lock, 6);
+            seen_a.after_peer_exit = observe_scope(a, b);
+        } catch (...) {
+            error_a = std::current_exception();
+            turns.cancel();
+        }
+    });
+    std::thread second;
+    try {
+        second = std::thread([&] {
+            try {
+                std::unique_lock<std::mutex> lock(turns.mutex);
+                turns.wait(lock, 1);
+                seen_b.before = observe_scope(b, a);
+                {
+                    PineRuntimeSecurityScope outer(b, b_parent);
+                    seen_b.overlap = observe_scope(b, a);
+                    turns.advance(2);
+                    turns.wait(lock, 3);
+                    try {
+                        PineRuntimeSecurityScope inner(b, b_child);
+                        seen_b.inner = observe_scope(b, a);
+                        throw Unwind{};
+                    } catch (const Unwind&) {}
+                    seen_b.restored = observe_scope(b, a);
+                    turns.advance(4);
+                    turns.wait(lock, 5);
+                    seen_b.after_peer_exit = observe_scope(b, a);
+                }
+                seen_b.after = observe_scope(b, a);
+                turns.advance(6);
+            } catch (...) {
+                error_b = std::current_exception();
+                turns.cancel();
+            }
+        });
+    } catch (...) {
+        turns.cancel();
+        first.join();
+        throw; // Thread creation is setup failure, never mutant evidence.
+    }
+    first.join();
+    second.join();
+    if (error_a) std::rethrow_exception(error_a);
+    if (error_b) std::rethrow_exception(error_b);
+
+    // Check the paired active observations first, so mutants reach this row
+    // before any pre-existing single-thread assertion. Expectations are fixed
+    // by the distinct host/request inputs above, never copied from observations.
+    expect_scope(seen_a.overlap, &a_parent, "6", "20", "N6 isolation A overlap");
+    expect_scope(seen_b.overlap, &b_parent, "5", "12", "N6 isolation B overlap");
+    expect_scope(seen_a.inner, &a_child, "3", "20", "N6 isolation A inner");
+    expect_scope(seen_b.inner, &b_child, "1", "12", "N6 isolation B inner");
+    expect_scope(seen_a.restored, &a_parent, "6", "20", "N6 isolation A unwind");
+    expect_scope(seen_b.restored, &b_parent, "5", "12", "N6 isolation B unwind");
+    expect_scope(seen_a.before, nullptr, "12", "20", "N6 isolation A entry");
+    expect_scope(seen_b.before, nullptr, "20", "12", "N6 isolation B entry");
+    expect_scope(seen_a.after, nullptr, "12", "20", "N6 isolation A exit");
+    expect_scope(seen_b.after_peer_exit, &b_parent, "5", "12",
+                 "N6 isolation B after A exit");
+    expect_scope(seen_b.after, nullptr, "20", "12", "N6 isolation B exit");
+    expect_scope(seen_a.after_peer_exit, nullptr, "12", "20",
+                 "N6 isolation A after B exit");
+}
 
 // IMPLEMENTATION DETAIL: one TLS (host,cursor) slot, including peer hiding.
 // These identity/inheritance/unwind expectations have no TV surface.
@@ -606,6 +773,7 @@ void throwing_delivery_restores_context() {
 
 int main() {
     try {
+        two_hosts_two_threads_scope_isolation();
         factory_validation();
         inherited_scopes_and_identity();
         chart_boundaries_and_publication();
