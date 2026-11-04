@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "4b830326de11955772718f1f9623e45348f3992ad91f6a32ba0213dd94d716f2"
+    "catalogSha256": "180a374cd5e104fcbe9ad947dac6b458c26743fe1a6cd918ee94edc25fc1aec0"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -40,7 +40,7 @@
           "Error on bar {bar_index}: A map cannot have more than {maxSize} key-value pairs. The current size is {currSize}."
         ],
         "retryable": false,
-        "since": "1.10.0"
+        "since": "1.11.0"
       }
     }
   ],
