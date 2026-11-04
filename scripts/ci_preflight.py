@@ -1796,8 +1796,8 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
         findings.append(f'{name} result must run always')
     if 'needs.legs.result' not in jobs.get('result', ''):
         findings.append(f'{name} result must test needs.legs.result')
-    if _needs(jobs.get('result', '')) != ['admit', 'preflight', 'legs']:
-        findings.append(f'{name} result must need admit, preflight and legs')
+    if _needs(jobs.get('result', '')) != ['admit', 'preflight', NATIVE_X86_JOB, 'legs']:
+        findings.append(f'{name} result must need admit, preflight, {NATIVE_X86_JOB} and legs')
     if 'workflow_call' in workflow or 'uses: ./.github/workflows/' in workflow:
         findings.append(f'{name}: reusable workflow calls are refused')
     if re.search(r'\b(?:secrets\.(?!GITHUB_TOKEN)|id-token\b|environment\s*:)', workflow):
@@ -4004,8 +4004,9 @@ def native_x86_job_findings(job: str, name: str, *, pr: bool) -> list[str]:
     if (_needs(job) != expected_needs or _job_values(job, 'if') != [expected_if]):
         findings.append(f'{name} {NATIVE_X86_JOB} must start after its admission gate '
                         'and run on every admitted path')
+    expected_permissions = ['{contents: read}'] if pr else ['contents: read']
     if (_job_values(job, 'runs-on') != [GKE_32_LABEL]
-            or _job_values(job, 'permissions') != ['{contents: read}']):
+            or _job_values(job, 'permissions') != expected_permissions):
         findings.append(f'{name} {NATIVE_X86_JOB} must use the bare x86 GKE runner '
                         'with read-only contents')
     if (_job_values(job, 'name') or any(_job_values(job, key) for key in (

@@ -7248,7 +7248,8 @@ finally:
                    'REPO': 'pfrel/pineforge-engine', 'BASE_SHA': 'b' * 40, 'HEAD_SHA': 'a' * 40,
                    'PATH_FILE': str(root / 'paths'), 'GH_TOKEN': 'fixture-token',
                    'ADMIT_RESULT': 'success', 'ALLOWED': 'true',
-                   'PREFLIGHT_RESULT': 'success', 'LEGS_RESULT': 'skipped',
+                   'PREFLIGHT_RESULT': 'success', 'X86_RESULT': 'success',
+                   'LEGS_RESULT': 'skipped',
                    **(results or {})}
             requests = []
             for index, reader in enumerate(readers):
@@ -7352,8 +7353,9 @@ finally:
         pr_jobs, post_jobs = _jobs(self.gke()), _jobs(sources[6])
         pr_gate, post_gate = pr_jobs['legs'], post_jobs['build-gate']
         self.assertEqual(set(ci_preflight._needs(pr_gate)),
-                         {'admit', *PR_ARM_PROOF_JOBS})
-        self.assertEqual(ci_preflight._needs(pr_jobs['result']), ['admit', 'preflight', 'legs'])
+                         {'admit', NATIVE_X86_JOB, *PR_ARM_PROOF_JOBS})
+        self.assertEqual(ci_preflight._needs(pr_jobs['result']),
+                         ['admit', 'preflight', NATIVE_X86_JOB, 'legs'])
         self.assertIn('ARM_RESULT: ${{ needs.build-arm.result }}', pr_gate)
         self.assertIn('ARM_BUILD_RESULT: ${{ needs.build-arm.result }}', post_gate)
         rows = [{'filename': '.github/workflows/ci.yml', 'status': 'modified'}]
@@ -7529,7 +7531,8 @@ finally:
                                     else 'success'))
                     result = subprocess.run(
                         ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', pr_script],
-                        env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'), **values},
+                        env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+                             'X86_RESULT': 'success', **values},
                         capture_output=True, text=True)
                     self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
         for event in ('push', 'schedule', 'workflow_dispatch'):
@@ -10947,8 +10950,8 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
                 '    needs: [admit, build, build-debug, build-x86-gcc133, corpus-parity-subset]\n')
             for job, addition in (
                     ('admit', '      arm_relevant: ${{ steps.classify.outputs.arm_relevant }}\n'),
-                    ('legs', '          ARM_RESULT: ${{ needs.build-arm.result }}\n'
-                     '          ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}\n'),
+                    ('legs', '          ARM_RESULT: ${{ needs.build-arm.result }}\n'),
+                    ('legs', '          ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}\n'),
                     ('legs', '          arm_passed() {\n'
                      '            case "$1:$2" in\n'
                      '              true:success|false:success|false:skipped) return 0 ;;\n'
@@ -10983,9 +10986,9 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
             '    needs: [admit, build, build-debug, build-arm, build-x86-gcc133, corpus-parity-subset]\n')
         self.workflow = in_step(
             self.workflow, 'legs', 'Require every proof leg',
-            '          DEBUG_RESULT: ${{ needs.build-debug.result }}\n',
-            '          DEBUG_RESULT: ${{ needs.build-debug.result }}\n'
+            '          X86_RESULT: ${{ needs.build-x86-gcc133.result }}\n',
             '          ARM_RESULT: ${{ needs.build-arm.result }}\n'
+            '          X86_RESULT: ${{ needs.build-x86-gcc133.result }}\n'
             '          ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}\n')
         self.workflow = in_step(
             self.workflow, 'legs', 'Require every proof leg',

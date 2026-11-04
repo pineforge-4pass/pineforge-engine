@@ -158,7 +158,8 @@ jobs:
     needs: [authz]
     if: ${{ always() && needs.authz.result == 'success' }}
     runs-on: gke-32cpu-64gb-amd64
-    permissions: {contents: read}
+    permissions:
+      contents: read
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
