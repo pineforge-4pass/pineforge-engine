@@ -210,6 +210,33 @@ constexpr const char* drawing_object_name() noexcept {
         {{"function", function}, {"argument", argument}, {"rule", rule}}, what);
 }
 
+// The logical drawing id domain: ids are issued in [0, kDrawingIdExclusive).
+inline constexpr std::int64_t kDrawingIdExclusive =
+    static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max());
+
+// The strategy() field that declares the arena count of a drawing kind, the
+// value strategy_settings_rejected names; exactly the three kinds the
+// declared-count default accepts.
+template <class Rec>
+constexpr const char* drawing_count_field() noexcept {
+    if constexpr (std::is_same_v<Rec, LineRec>) return "max_lines_count";
+    else if constexpr (std::is_same_v<Rec, BoxRec>) return "max_boxes_count";
+    else if constexpr (std::is_same_v<Rec, LabelRec>) return "max_labels_count";
+    else static_assert(!std::is_same_v<Rec, Rec>, "name the declared-count field of this record");
+}
+
+// The logical drawing id domain is exhausted: a limit a script can reach, so
+// pine_runtime_limit (limit drawing_ids, max the id bound), raised as the
+// pine_drawing_id_exhausted it always was.  The coded exception copies that
+// typed object, so its type and its English ("<object> drawing ID domain
+// exhausted") are unchanged.
+[[noreturn, gnu::noinline, gnu::cold]] inline void drawing_id_exhausted_error(const char* object) {
+    throw coded<pine_drawing_id_exhausted>(
+        RunFailureCode::pine_runtime_limit,
+        {{"limit", "drawing_ids"}, {"max", kDrawingIdExclusive}},
+        pine_drawing_id_exhausted(object));
+}
+
 template <class Rec, bool Builtin = is_builtin_drawing_record_v<Rec>>
 struct DrawingStaleSink {
     DrawingStaleSink() noexcept = default;
@@ -555,9 +582,14 @@ inline DrawingBoundConfig drawing_bound_from_declared_count(
     static_assert(std::is_same_v<Rec, LineRec> || std::is_same_v<Rec, BoxRec>
                       || std::is_same_v<Rec, LabelRec>,
                   "this default requires a declared count for line, box, or label");
+    // A strategy() header count a script wrote: strategy_settings_rejected,
+    // naming the field of this kind, raised as the std::invalid_argument it
+    // always was (the same English).
     if (declared_count < 0
         || declared_count > std::numeric_limits<std::int32_t>::max() - kDrawingObservedSlack)
-        throw std::invalid_argument("drawing declared count is outside the int32 domain");
+        throw coded<std::invalid_argument>(RunFailureCode::strategy_settings_rejected,
+                                           {{"field", drawing_count_field<Rec>()}},
+                                           "drawing declared count is outside the int32 domain");
     return {static_cast<std::int32_t>(declared_count + kDrawingObservedSlack),
             pending_creation_slots};
 }
@@ -671,8 +703,7 @@ class DrawingArena {
     // before this value is changed.
     DrawingAllocationDiagnostic last_allocation_diagnostic_{};
 
-    static constexpr std::int64_t kIdExclusive =
-        static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max());
+    static constexpr std::int64_t kIdExclusive = detail::kDrawingIdExclusive;
 
     void ensure_bound_unique() {
         if (bound_ && !bound_.unique())
@@ -830,9 +861,9 @@ public:
                                           "slot drawing creation requires try_alloc");
         if (static_cast<std::int64_t>(recs_.size()) >= kIdExclusive) {
             if constexpr (detail::is_builtin_drawing_record_v<Rec>)
-                throw pine_drawing_id_exhausted(detail::drawing_object_name<Rec>());
+                detail::drawing_id_exhausted_error(detail::drawing_object_name<Rec>());
             else
-                throw pine_drawing_id_exhausted("generic");
+                detail::drawing_id_exhausted_error("generic");
         }
 
         while ((int)order_.size() >= cap_) {        // exact-cap FIFO eviction (oldest first)
@@ -1032,7 +1063,7 @@ inline Handle drawing_builtin_allocate(DrawingArena<Rec>& arena, Rec&& record) {
     case DrawingAllocationStatus::drawing_slot_bound_exceeded:
         return Handle{};
     case DrawingAllocationStatus::pine_drawing_id_exhausted:
-        throw pine_drawing_id_exhausted(drawing_object_name<Rec>());
+        drawing_id_exhausted_error(drawing_object_name<Rec>());
     }
     std::terminate();
 }
