@@ -14,11 +14,17 @@
 #include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
+
+#if defined(__APPLE__)
+#include <dlfcn.h>
+#include <mach-o/dyld-interposing.h>
+#endif
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -343,39 +349,122 @@ int first_frame_descriptor(const std::vector<int>& before) {
     return result;
 }
 
+namespace read_transport {
+constexpr std::size_t kFrameHeader = 10;
+
+struct Observation {
+    int bound_fd = -1;
+    unsigned fault = 0;
+    bool armed = false;
+    bool disarmed = false;
+    bool reached = false;
+    bool full_frame = false;
+    bool valid_frame = false;
+    bool mutated = false;
+    int read_fd = -1;
+    off_t read_offset = -1;
+    std::size_t requested = 0;
+    ssize_t returned = -1;
+};
+
+Observation observation;
+
+#if defined(__APPLE__)
+using PreadFunction = ssize_t (*)(int, void*, std::size_t, off_t);
+PreadFunction real_pread = nullptr;
+
+// Resolve before main so loader work cannot enter a measured allocation window.
+__attribute__((constructor))
+static void resolve_real_pread() noexcept {
+    real_pread = reinterpret_cast<PreadFunction>(::dlsym(RTLD_NEXT, "pread"));
+}
+
+[[noreturn]] void fail_unbound_pread() noexcept {
+    std::fputs("book_read_definition_reuse: pread resolver unavailable before main\n",
+               stderr);
+    std::terminate();
+}
+#endif
+
+bool valid_frame(const unsigned char* frame, std::size_t length) noexcept {
+    if (!frame || length < kFrameHeader || frame[0] != 1
+        || (frame[1] != 0 && frame[1] != 1)) return false;
+    std::uint64_t decoded_word = 0;
+    for (unsigned i = 0; i != 8; ++i)
+        decoded_word |= std::uint64_t{frame[2 + i]} << (8 * i);
+    if (decoded_word > std::numeric_limits<std::size_t>::max()) return false;
+    const std::size_t decoded = static_cast<std::size_t>(decoded_word);
+    if (decoded == 0) return false;
+    if (frame[1] == 0) return decoded == length - kFrameHeader;
+
+    std::size_t produced = 0;
+    for (std::size_t at = kFrameHeader; at < length;) {
+        const unsigned char token = frame[at++];
+        const std::size_t count = (token & 0x7fu) + 1u;
+        if (produced > decoded || count > decoded - produced) return false;
+        if ((token & 0x80u) == 0) {
+            if (count > length - at) return false;
+            at += count;
+        }
+        produced += count;
+    }
+    return produced == decoded;
+}
+
+void arm(int fd, unsigned fault) noexcept {
+    observation = {};
+    observation.bound_fd = fd;
+    observation.fault = fault;
+    observation.armed = true;
+}
+
+void disarm() noexcept {
+    observation.armed = false;
+}
+
+void require_pread_binding() {
+#if defined(__APPLE__)
+    if (!real_pread) {
+        throw std::runtime_error(
+            "book_read_definition_reuse: macOS dlsym(RTLD_NEXT, \"pread\") binding failed");
+    }
+#elif !defined(__linux__)
+    throw std::runtime_error(
+        "book_read_definition_reuse: unsupported native pread interposition platform");
+#endif
+}
+} // namespace read_transport
+
 class MalformedFrameHost final : public pineforge::NativeStrategyHost {
 public:
     explicit MalformedFrameHost(unsigned fault) : fault_(fault) {}
     int frame = -1;
     bool injected = false;
+    bool frame_read_reached = false;
+    bool frame_read_full = false;
+    bool frame_read_valid = false;
+    bool frame_read_disarmed = false;
+    int frame_read_fd = -1;
+    off_t frame_read_offset = -1;
+    std::size_t frame_read_requested = 0;
+    ssize_t frame_read_returned = -1;
     bool continuation_returned = false;
     bool broker_returned = false;
     bool continuation_failed = false;
     bool broker_failed = false;
 
     void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {
-        if (++bar_ == 1) {
-            std::vector<int> before;
-            for (std::uint64_t i = 1; i <= kPopulation; ++i) {
-                if (i == kPopulation) before = unlinked_descriptors();
-                REQUIRE(submit(limit_request()).handle);
-            }
-            frame = first_frame_descriptor(before);
-            return;
+        if (++bar_ != 1) return;
+        std::vector<int> before;
+        for (std::uint64_t i = 1; i <= kPopulation; ++i) {
+            if (i == kPopulation) before = unlinked_descriptors();
+            REQUIRE(submit(limit_request()).handle);
         }
-        if (bar_ != 2) return;
+        frame = first_frame_descriptor(before);
+        // Before yielding to the matcher, row 4096's current BookSlot still
+        // names this first frame at offset zero.
         REQUIRE(frame >= 0);
-        std::array<unsigned char, 10> saved{};
-        REQUIRE(::pread(frame, saved.data(), saved.size(), 0) == static_cast<ssize_t>(saved.size()));
-        auto damaged = saved;
-        if (fault_ == 0) damaged[0] = 2;        // version, no raw fallback
-        if (fault_ == 1) damaged[1] = 0xff;     // mode, no raw fallback
-        if (fault_ == 2) {
-            for (unsigned i = 2; i != 10; ++i) damaged[i] = 0; // expansion exceeds word
-        }
-        REQUIRE(::pwrite(frame, damaged.data(), damaged.size(), 0) ==
-                static_cast<ssize_t>(damaged.size()));
-        injected = true;
+        read_transport::arm(frame, fault_);
         try {
             (void)native_continuation_hash();
             continuation_returned = true;
@@ -383,9 +472,19 @@ public:
             continuation_failed = error.code().value() == EIO
                 && error.run_failure_code() == pineforge::RunFailureCode::scratch_io_failed;
         }
-        // Repair physical bytes; a carried first failure must still prevent
-        // the next logical reader from answering a partial/default hash.
-        REQUIRE(::pwrite(frame, saved.data(), saved.size(), 0) == static_cast<ssize_t>(saved.size()));
+        read_transport::disarm();
+        const auto observed = read_transport::observation;
+        frame_read_reached = observed.reached;
+        frame_read_full = observed.full_frame;
+        frame_read_valid = observed.valid_frame;
+        frame_read_disarmed = observed.disarmed;
+        frame_read_fd = observed.read_fd;
+        frame_read_offset = observed.read_offset;
+        frame_read_requested = observed.requested;
+        frame_read_returned = observed.returned;
+        injected = observed.mutated;
+        // The first error is carried by the core; the second public reader
+        // sees the untouched physical bytes after the one-shot buffer fault.
         try {
             (void)broker_state_hash();
             broker_returned = true;
@@ -400,6 +499,7 @@ private:
 };
 
 void exercise_failed_frames() {
+    read_transport::require_pread_binding();
     pineforge::NativeRunSpec spec;
     spec.identity = {"book-framed-failure", 1};
     spec.input_tf = "5";
@@ -425,6 +525,11 @@ void exercise_failed_frames() {
         REQUIRE(host.configure_native(spec).status == pineforge::NativeSetupStatus::Applied);
         host.run(bars.data(), static_cast<int>(bars.size()));
         CHECK(host.injected);
+        CHECK(host.frame_read_reached && host.frame_read_fd == host.frame);
+        CHECK(host.frame_read_full && host.frame_read_valid);
+        CHECK(host.frame_read_returned
+              == static_cast<ssize_t>(host.frame_read_requested));
+        CHECK(host.frame_read_offset >= 0 && host.frame_read_disarmed);
         CHECK(host.continuation_failed && !host.continuation_returned);
         CHECK(host.broker_failed && !host.broker_returned);
         CHECK(host.native_state().kind == pineforge::NativeLifecycleKind::Failed);
@@ -432,6 +537,87 @@ void exercise_failed_frames() {
     }
 }
 } // namespace
+
+#if defined(__linux__)
+extern "C" ssize_t __real_pread(int, void*, std::size_t, off_t);
+
+extern "C" ssize_t __wrap_pread(int fd, void* data, std::size_t length, off_t offset) {
+    const ssize_t result = __real_pread(fd, data, length, offset);
+    const int real_errno = errno;
+    auto& observed = read_transport::observation;
+    if (!observed.armed || fd != observed.bound_fd) {
+        errno = real_errno;
+        return result;
+    }
+
+    observed.reached = true;
+    observed.read_fd = fd;
+    observed.read_offset = offset;
+    observed.requested = length;
+    observed.returned = result;
+    observed.full_frame = result >= 0
+        && static_cast<std::size_t>(result) == length;
+    observed.valid_frame = observed.full_frame
+        && read_transport::valid_frame(static_cast<const unsigned char*>(data), length);
+    if (observed.valid_frame) {
+        observed.armed = false;
+        observed.disarmed = true;
+        auto* frame = static_cast<unsigned char*>(data);
+        if (observed.fault == 0) {
+            frame[0] = 2; // original version fault, no raw fallback
+        } else if (observed.fault == 1) {
+            frame[1] = 0xff; // original mode fault, no raw fallback
+        } else if (observed.fault == 2) {
+            for (unsigned i = 2; i != 10; ++i)
+                frame[i] = 0; // original decoded-length fault
+        }
+        observed.mutated = true;
+    }
+    errno = real_errno;
+    return result;
+}
+#elif defined(__APPLE__)
+extern "C" ssize_t pineforge_test_pread(int fd, void* data, std::size_t length,
+                                        off_t offset) {
+    const auto real = read_transport::real_pread;
+    if (!real) read_transport::fail_unbound_pread();
+    const ssize_t result = real(fd, data, length, offset);
+    const int real_errno = errno;
+    auto& observed = read_transport::observation;
+    if (!observed.armed || fd != observed.bound_fd) {
+        errno = real_errno;
+        return result;
+    }
+
+    observed.reached = true;
+    observed.read_fd = fd;
+    observed.read_offset = offset;
+    observed.requested = length;
+    observed.returned = result;
+    observed.full_frame = result >= 0
+        && static_cast<std::size_t>(result) == length;
+    observed.valid_frame = observed.full_frame
+        && read_transport::valid_frame(static_cast<const unsigned char*>(data), length);
+    if (observed.valid_frame) {
+        observed.armed = false;
+        observed.disarmed = true;
+        auto* frame = static_cast<unsigned char*>(data);
+        if (observed.fault == 0) {
+            frame[0] = 2; // original version fault, no raw fallback
+        } else if (observed.fault == 1) {
+            frame[1] = 0xff; // original mode fault, no raw fallback
+        } else if (observed.fault == 2) {
+            for (unsigned i = 2; i != 10; ++i)
+                frame[i] = 0; // original decoded-length fault
+        }
+        observed.mutated = true;
+    }
+    errno = real_errno;
+    return result;
+}
+
+DYLD_INTERPOSE(pineforge_test_pread, pread);
+#endif
 
 int main() {
     try {

@@ -1,2 +1,5 @@
 list(APPEND TEST_SOURCES test_book_read_definition_reuse)
 pineforge_add_unit_test(test_book_read_definition_reuse)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(test_book_read_definition_reuse PRIVATE "-Wl,--wrap=pread")
+endif()
