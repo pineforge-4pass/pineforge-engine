@@ -2000,8 +2000,8 @@ class RulesetsProbeTests(unittest.TestCase):
             "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
             'bare scalar `gke-2cpu-4gb-amd64` and `probe` on `gkp-2cpu-4gb-amd64`.',
             "Release and promotion use protected GKE runner group 15:\n"
-            "`release`, `notify-hub` and baseline `promote` use `gkp-2cpu-4gb-amd64`;\n"
-            'Linux x64/arm64 `prebuilt` uses `gkp-16cpu-32gb-amd64`/`gkp-16cpu-32gb-arm64`.\n'
+            "`release` and `notify-hub` use `gkp-od-4cpu-8gb-amd64`;\n"
+            'Linux x64 `prebuilt` uses `gkp-od-16cpu-32gb-amd64-128gb`; baseline `promote` uses `gkp-2cpu-4gb-amd64`.\n'
             'The release ruleset probe runs secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64` and\n'
             '`probe` on `gkp-2cpu-4gb-amd64`.',
             "Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from\n"

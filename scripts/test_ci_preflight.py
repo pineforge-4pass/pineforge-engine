@@ -73,11 +73,12 @@ GKP_4 = 'gkp-4cpu-8gb-amd64'
 GKP_PREBUILT = 'gkp-16cpu-32gb-amd64-128gb'
 GKP_OD_4 = 'gkp-od-4cpu-8gb-amd64'
 GKP_OD_PREBUILT = 'gkp-od-16cpu-32gb-amd64-128gb'
+# Unadmitted release labels remain negative routing fixtures.
 GKP_BOOKWORM = 'gkp-16cpu-32gb-amd64'
 GKP_ARM64 = 'gkp-16cpu-32gb-arm64'
 RETIRED_VM_LABELS = tuple('pf-gcp-' + suffix for suffix in ('main', 'post'))
 EXPECTED_GKP_JOBS = {
-    'release.yml': {'release': GKP_2, 'notify-hub': GKP_2, 'prebuilt': GKP_BOOKWORM},
+    'release.yml': {'release': GKP_OD_4, 'notify-hub': GKP_OD_4, 'prebuilt': GKP_OD_PREBUILT},
     'promote-baseline.yml': {'promote': GKP_2},
     'docs-post.yml': {'build': GKP_4},
     'release-ruleset-probe.yml': {'probe': GKP_2},
@@ -181,7 +182,7 @@ POST_DEBUG_BUILD_RUNNER_FINDING = 'ci-post.yml build-debug must select only Ubun
 POST_ARM_BUILD_RUNNER_FINDING = ('ci-post.yml build-arm must select '
                                 'only Linux arm64 Release/Debug cells on full events')
 RELEASE_MATRIX_FINDING = ('release.yml prebuilt must use exactly the isolated Linux x64 '
-                          'and ARM protected GKE matrix')
+                          'and hosted ARM matrix')
 CI_JOB_IDS = ('authz',)
 GKE_PR_JOB_IDS = ('admit', 'preflight', 'build', 'build-debug', 'build-arm',
                   'corpus-parity-subset', 'legs', 'result')
@@ -762,8 +763,8 @@ class ProtectedGkeRunners(unittest.TestCase):
                 body = _jobs(workflows[name])[job]
                 if job == 'prebuilt':
                     self.assertEqual(ci_preflight._matrix_rows(body), [
-                        {'triple': 'linux-x86_64', 'runner': GKP_BOOKWORM},
-                        {'triple': 'linux-aarch64', 'runner': GKP_ARM64},
+                        {'triple': 'linux-x86_64', 'runner': GKP_OD_PREBUILT},
+                        {'triple': 'linux-aarch64', 'runner': 'ubuntu-22.04-arm'},
                     ])
                 else:
                     self.assertEqual(ci_preflight._job_values(body, 'runs-on', unquote=False),
@@ -785,10 +786,7 @@ class ProtectedGkeRunners(unittest.TestCase):
             changed = mirror.replace(reference + '\n', '', 1)
             findings = ci_preflight.runner_allowlist_findings(
                 workflows, changed, repository, mirror_file=mirror_file, label_prefix='gkp-')
-            labels = set(EXPECTED_GKP_JOBS[name].values())
-            if name == 'release.yml':
-                labels.add(GKP_ARM64)
-            for label in sorted(labels):
+            for label in sorted(set(EXPECTED_GKP_JOBS[name].values())):
                 self.assertIn(f'{name}: label "{label}" requires mirror line "{reference}"; '
                               'the org runner group must contain it before merge', findings)
         self.assertEqual(ci_preflight.runner_allowlist_findings(
@@ -809,6 +807,7 @@ class ProtectedGkeRunners(unittest.TestCase):
                         (GKP_2, 'protected'), (GKP_4, 'protected'),
                         (GKP_PREBUILT, 'protected'), (GKP_OD_4, 'protected'),
                         (GKP_OD_PREBUILT, 'protected'),
+                        (GKP_BOOKWORM, 'protected'), (GKP_ARM64, 'protected_shape'),
                         ('gkp-od-8cpu-16gb-amd64', 'protected'),
                         ('gkp-od-16cpu-32gb-amd64', 'protected'),
                         ('gkp-od-16cpu-32gb-arm64-128gb', 'protected_shape'),
@@ -836,16 +835,13 @@ class ProtectedGkeRunners(unittest.TestCase):
                             expected = [f'{prefix} must run on {label}{suffix}']
                             if policy != 'hosted':
                                 expected.append(credential_finding)
-                        if (policy in ('protected', 'protected_shape')
-                                or job == 'prebuilt' and policy != 'dynamic'):
-                            # A literal matrix retains the protected ARM row.
-                            # Dynamic rows make the entire matrix unreadable.
+                        if policy in ('protected', 'protected_shape'):
                             expected.append(f'{prefix} may use protected GKE routing '
                                             'only at its exact pinned job and label')
                             if policy == 'protected_shape' and job != 'prebuilt':
                                 expected.append(f'{prefix} must use a bare scalar '
                                                 'protected GKE scale-set name')
-                        if policy == 'gke':
+                        elif policy == 'gke':
                             expected.extend([
                                 f'{prefix} may use GKE routing only at its exact pinned job and label',
                                 f'{prefix} must not expose credentials on GKE',
@@ -942,30 +938,174 @@ class ProtectedGkeRunners(unittest.TestCase):
                                   ci_preflight.runner_findings({**workflows, name: changed}))
 
     def test_release_eigen_exact(self):
-        workflow = self.workflows()['release.yml']
+        workflows = self.workflows()
+        workflow = workflows['release.yml']
         prebuilt = _jobs(workflow)['prebuilt']
-        install = ci_preflight._step_named(ci_preflight._steps(prebuilt),
-                                           '      - name: Install Eigen3 (Linux)')
-        self.assertEqual(ci_preflight._step_values(install, 'if'),
-                         ["runner.os == 'Linux' && matrix.triple == 'linux-aarch64'"])
-        for command in ('sudo apt-get update', 'sudo apt-get install -y libeigen3-dev=3.4.0-4',
-                        'test "$(dpkg-query -W -f=\'${Version}\' libeigen3-dev)" = 3.4.0-4'):
-            self.assertIn(command, install)
+        steps = ci_preflight._steps(prebuilt)
+        install_name = 'Install Eigen3 (Linux)'
+        x86_name = 'Assert Eigen3 3.4.0 on the protected Linux x86_64 slice'
+        arm_name = 'Assert Eigen3 3.4.0 on ARM'
+        configure_name = 'Configure'
+        install, x86, arm, configure = (
+            ci_preflight._step_named(steps, '      - name: ' + name)
+            for name in (install_name, x86_name, arm_name, configure_name))
+        for name, step in ((install_name, install), (x86_name, x86),
+                           (arm_name, arm), (configure_name, configure)):
+            self.assertTrue(step, f'{name} must be exactly one named step')
+        # Host order: every Linux leg installs, each host asserts 3.4.0, then ARM configures.
+        self.assertLess(steps.index(install), steps.index(x86))
+        self.assertLess(steps.index(x86), steps.index(arm))
+        self.assertLess(steps.index(arm), steps.index(configure))
+        # Every Linux leg installs the unversioned package; the version is asserted
+        # afterwards, once per host, never inside the install step.
+        install_lines = [
+            '      - name: Install Eigen3 (Linux)',
+            "        if: runner.os == 'Linux'",
+            '        run: |',
+            '          sudo apt-get update',
+            '          sudo apt-get install -y libeigen3-dev']
+        # The protected x86_64 slice locates the headers, then asserts 3/4/0 through them.
+        x86_lines = [
+            '      - name: Assert Eigen3 3.4.0 on the protected Linux x86_64 slice',
+            "        if: runner.os == 'Linux' && matrix.triple == 'linux-x86_64'",
+            '        run: |',
+            '          set -euo pipefail',
+            '          hdr=""',
+            '          for p in /usr/include/eigen3/Eigen/Core /usr/local/include/eigen3/Eigen/Core; do',
+            '            if [ -f "$p" ]; then hdr="$p"; break; fi',
+            '          done',
+            '          if [ -z "$hdr" ]; then',
+            '            echo "::error::Eigen3 headers not found on the protected GKE runner"',
+            '            exit 1',
+            '          fi',
+            '          macros="$(dirname "$hdr")/src/Core/util/Macros.h"',
+            "          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' \"$macros\"",
+            "          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' \"$macros\"",
+            "          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' \"$macros\"",
+            '          echo "Eigen3 3.4.0 present at $(dirname "$(dirname "$hdr")")"']
+        # The ARM leg asserts 3/4/0 separately, in the exact headers CMake will consume.
+        arm_lines = [
+            '      - name: Assert Eigen3 3.4.0 on ARM',
+            "        if: runner.os == 'Linux' && matrix.triple == 'linux-aarch64'",
+            '        run: |',
+            '          set -euo pipefail',
+            '          macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h',
+            "          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' \"${macros}\"",
+            "          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' \"${macros}\"",
+            "          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' \"${macros}\""]
+        for step, lines in ((install, install_lines), (x86, x86_lines), (arm, arm_lines)):
+            self.assertEqual(ci_preflight._code(step), lines)
+        self.assertEqual(ci_preflight._code(ci_preflight.RELEASE_EIGEN_INSTALL_STEP),
+                         install_lines)
+        self.assertEqual(ci_preflight._code(ci_preflight.RELEASE_EIGEN_ASSERT_STEP), x86_lines)
+        self.assertNotIn('libeigen3-dev=', install)
+        self.assertNotIn('dpkg-query', install)
+        # The ARM configure consumes exactly the system Eigen the ARM step asserted.
+        for line in ("        if: matrix.triple == 'linux-aarch64'",
+                     '            -DEigen3_DIR=/usr/share/eigen3/cmake \\',
+                     '            -DFETCHCONTENT_FULLY_DISCONNECTED=ON \\',
+                     "          grep -Fx 'Eigen3_DIR:PATH=/usr/share/eigen3/cmake' build/CMakeCache.txt"):
+            self.assertIn(line, ci_preflight._code(configure))
         builder = ci_preflight._step_named(
             ci_preflight._steps(prebuilt),
             '      - name: Build x86_64 in preloaded Bookworm')
         self.assertIn('bash scripts/build_prebuilt_bookworm.sh', builder)
+        eigen_finding = ('release.yml prebuilt must install Eigen and assert exactly 3.4.0 '
+                         'before configuring')
+        steps_finding = ('release.yml prebuilt must retain the credential-free Bookworm build, '
+                         'ARM Eigen setup, all-library glibc gate and packed-archive consumer '
+                         'before upload')
         self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(workflow), [])
-        for old, new in (("if: runner.os == 'Linux'", "if: false"),
-                         ('libeigen3-dev=3.4.0-4', 'libeigen3-dev'),
-                         ('= 3.4.0-4', '= 3.3.9-1'),
-                         ('EIGEN_WORLD_VERSION[[:space:]]+3', 'EIGEN_WORLD_VERSION[[:space:]]+4'),
-                         ('EIGEN_MAJOR_VERSION[[:space:]]+4', 'EIGEN_MAJOR_VERSION[[:space:]]+3'),
-                         ('EIGEN_MINOR_VERSION[[:space:]]+0', 'EIGEN_MINOR_VERSION[[:space:]]+1'),
-                         ('-DEigen3_DIR=/usr/share/eigen3/cmake', '-DEigen3_DIR=/other/eigen'),
-                         ('-DFETCHCONTENT_FULLY_DISCONNECTED=ON', '-DFETCHCONTENT_FULLY_DISCONNECTED=OFF')):
-            changed = in_job(workflow, 'prebuilt', old, new)
-            self.assertTrue(ci_preflight.release_prebuilt_workflow_findings(changed))
+        self.assertNotIn(eigen_finding, ci_preflight.runner_findings({'release.yml': workflow}))
+        # Each row alters one literal inside the named shipped step; a row whose old text
+        # is the whole step removes it. The macro text now appears in both host steps, so
+        # every row is applied inside its own step. Every row must break the whole-step
+        # contract; a `gated` row (install, x86_64 assertion, Configure anchor) must also
+        # break the named-step check that pins them before Configure.
+        for name, old, new, gated in (
+                # Install: every Linux leg, the index refresh and the unversioned package.
+                (install_name, "if: runner.os == 'Linux'", 'if: false', True),
+                (install_name, "if: runner.os == 'Linux'",
+                 "if: runner.os == 'Linux' && matrix.triple == 'linux-aarch64'", True),
+                (install_name, 'sudo apt-get update', 'true', True),
+                (install_name, 'sudo apt-get install -y libeigen3-dev', 'true', True),
+                (install_name, 'libeigen3-dev', 'libeigen3-dev=3.3.9-1', True),
+                (install_name, 'libeigen3-dev', 'libeigen3-dev=3.4.0-4', True),
+                (install_name, install, '', True),
+                # x86_64 assertion: host guard, strict shell, header search, macros path,
+                # missing-header exit and each of the three version headers.
+                (x86_name, "if: runner.os == 'Linux' && matrix.triple == 'linux-x86_64'",
+                 'if: false', True),
+                (x86_name, " && matrix.triple == 'linux-x86_64'", '', True),
+                (x86_name, 'set -euo pipefail', 'true', True),
+                (x86_name, '/usr/include/eigen3/Eigen/Core', '/other/eigen/Eigen/Core', True),
+                (x86_name, 'macros="$(dirname "$hdr")/src/Core/util/Macros.h"',
+                 'macros=/other/eigen/Eigen/src/Core/util/Macros.h', True),
+                (x86_name, 'exit 1', 'exit 0', True),
+                (x86_name, 'EIGEN_WORLD_VERSION[[:space:]]+3',
+                 'EIGEN_WORLD_VERSION[[:space:]]+4', True),
+                (x86_name, 'EIGEN_MAJOR_VERSION[[:space:]]+4',
+                 'EIGEN_MAJOR_VERSION[[:space:]]+3', True),
+                (x86_name, 'EIGEN_MINOR_VERSION[[:space:]]+0',
+                 'EIGEN_MINOR_VERSION[[:space:]]+1', True),
+                (x86_name, x86_name, 'Assert Eigen3 3.4.0 on Linux x86_64', True),
+                (x86_name, x86, '', True),
+                # ARM assertion: host guard, strict shell, macros path and the same three
+                # version headers, mutated in the ARM step only.
+                (arm_name, "if: runner.os == 'Linux' && matrix.triple == 'linux-aarch64'",
+                 'if: false', False),
+                (arm_name, " && matrix.triple == 'linux-aarch64'", '', False),
+                (arm_name, "matrix.triple == 'linux-aarch64'",
+                 "matrix.triple == 'linux-x86_64'", False),
+                (arm_name, 'set -euo pipefail', 'true', False),
+                (arm_name, 'macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h',
+                 'macros=/other/eigen/Eigen/src/Core/util/Macros.h', False),
+                (arm_name, 'EIGEN_WORLD_VERSION[[:space:]]+3',
+                 'EIGEN_WORLD_VERSION[[:space:]]+4', False),
+                (arm_name, 'EIGEN_MAJOR_VERSION[[:space:]]+4',
+                 'EIGEN_MAJOR_VERSION[[:space:]]+3', False),
+                (arm_name, 'EIGEN_MINOR_VERSION[[:space:]]+0',
+                 'EIGEN_MINOR_VERSION[[:space:]]+1', False),
+                (arm_name, arm_name, 'Assert Eigen3 3.4.0 on arm64', False),
+                (arm_name, arm, '', False),
+                # Configure: the Eigen directory, the cache proof and offline FetchContent.
+                (configure_name, '-DEigen3_DIR=/usr/share/eigen3/cmake',
+                 '-DEigen3_DIR=/other/eigen', False),
+                (configure_name,
+                 "grep -Fx 'Eigen3_DIR:PATH=/usr/share/eigen3/cmake' build/CMakeCache.txt",
+                 'true', False),
+                (configure_name, '-DFETCHCONTENT_FULLY_DISCONNECTED=ON',
+                 '-DFETCHCONTENT_FULLY_DISCONNECTED=OFF', False),
+                (configure_name, configure_name, 'Configure ARM', True)):
+            with self.subTest(step=name, old=old.splitlines()[0].strip(), new=new):
+                changed = in_step(workflow, 'prebuilt', name, old, new)
+                self.assertNotEqual(changed, workflow)
+                self.assertIn(steps_finding,
+                              ci_preflight.release_prebuilt_workflow_findings(changed))
+                if gated:
+                    self.assertIn(eigen_finding,
+                                  ci_preflight.runner_findings({'release.yml': changed}))
+        # Reordered copies keep every step and move one pair across the other: the
+        # assertion before its install, and Configure before either host assertion.
+        shipped_order = [ci_preflight._code(step)[0] for step in steps]
+        for label, changed, gated in (
+                ('x86_64 assertion before the install',
+                 workflow.replace(install + '\n' + x86, x86 + '\n' + install, 1), True),
+                ('Configure before the x86_64 assertion',
+                 workflow.replace(arm + '\n' + configure, arm, 1)
+                 .replace(x86, configure + '\n' + x86, 1), True),
+                ('Configure before the ARM assertion',
+                 workflow.replace(arm + '\n' + configure, configure + '\n' + arm, 1), False)):
+            with self.subTest(order=label):
+                order = [ci_preflight._code(step)[0]
+                         for step in ci_preflight._steps(_jobs(changed)['prebuilt'])]
+                self.assertNotEqual(order, shipped_order)
+                self.assertEqual(sorted(order), sorted(shipped_order))
+                self.assertIn(steps_finding,
+                              ci_preflight.release_prebuilt_workflow_findings(changed))
+                if gated:
+                    self.assertIn(eigen_finding,
+                                  ci_preflight.runner_findings({'release.yml': changed}))
 
 
 class PrebuiltReleaseEnvironment(unittest.TestCase):
@@ -1328,12 +1468,16 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
                 ('    runs-on: ${{ matrix.runner }}\n', '    runs-on: ${{ inputs.runner }}\n'),
                 ('    runs-on: ${{ matrix.runner }}\n',
                  '    runs-on: ${{ matrix.runner }}\n' * 2),
-                (f'            runner: {GKP_BOOKWORM}\n',
+                (f'            runner: {GKP_OD_PREBUILT}\n',
                  '            runner: gkp-od-8cpu-16gb-amd64\n'),
-                (f'            runner: {GKP_BOOKWORM}\n',
+                (f'            runner: {GKP_OD_PREBUILT}\n',
                  '            runner: gkp-od-16cpu-32gb-arm64-128gb\n'),
-                (f'            runner: {GKP_ARM64}\n',
+                ('            runner: ubuntu-22.04-arm\n',
                  '            runner: ubuntu-24.04-arm\n'),
+                (f'            runner: {GKP_OD_PREBUILT}\n',
+                 f'            runner: {GKP_BOOKWORM}\n'),
+                ('            runner: ubuntu-22.04-arm\n',
+                 f'            runner: {GKP_ARM64}\n'),
                 ('          - triple: linux-x86_64\n', '          - triple: linux-other\n'),
                 ('      fail-fast: false\n', '      fail-fast: true\n'),
                 ('    steps:\n', '    container: ubuntu:24.04\n    steps:\n'),
@@ -1517,13 +1661,13 @@ class WorkflowEventFleets(unittest.TestCase):
         release = self.workflows()['release.yml']
         self.assertEqual(ci_preflight._events(release), {'workflow_dispatch'})
         self.assertEqual(ci_preflight._job_values(_jobs(release)['release'], 'runs-on'),
-                         [GKP_2])
+                         [GKP_OD_4])
         self.assertEqual(ci_preflight.runner_findings({'release.yml': release}), [])
         changed = in_job(release, 'release',
-                         f'    runs-on: {GKP_2}\n',
+                         f'    runs-on: {GKP_OD_4}\n',
                          '    runs-on: ["self-hosted","pf-ci","pf-ci-release"]\n')
         self.assertNotEqual(changed, release)
-        self.assertIn(f'release.yml job release must run on {GKP_2} '
+        self.assertIn(f'release.yml job release must run on {GKP_OD_4} '
                       '(isolated release)', ci_preflight.runner_findings({'release.yml': changed}))
 
     def test_flat_peak_release_pool_has_no_unproven_reusable_exception(self):
@@ -2447,11 +2591,8 @@ class PostFleetRunnerPolicy(unittest.TestCase):
         for name, jobs in EXPECTED_GKP_JOBS.items():
             cells = [cell for workflow, cell in rows if workflow == name]
             self.assertEqual(len(cells), 1, f'{name} documented runner row')
-            labels = set(jobs.values())
-            if name == 'release.yml':
-                labels.add(GKP_ARM64)
             self.assertEqual(set(re.findall(r'`(gkp-[^`]+)`', cells[0])),
-                             labels,
+                             set(jobs.values()),
                              f'{name} documented protected runner inventory')
         requirements = (
             'Post Release/Debug/kernel, native shards and post sanitizers use fixed bare GKE scale-set names.\n'
@@ -2465,7 +2606,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             'Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 36 GKE job instances: '
             "amd64 32 CPU default/256 GB labels carry 4/4 jobs, amd64 16 CPU default/128/256 GB labels carry 3/3/1, amd64 8/4/2 CPU labels carry 7/5/7, and arm64 16 CPU 128 GB carries 2; each label's static cap is 8.",
             'The amd64 post build shards and the two arm64 post cells use bare scalar',
-            'Hosted exceptions cover PR light jobs; release uses protected GKE and post light jobs use bare scalar GKE names.',
+            'Hosted exceptions cover PR light jobs and the existing hosted release cells; post light jobs use bare scalar GKE names.',
             '`native-live.yml` runs four `native` shards on `gke-8cpu-16gb-amd64`;\n'
             '`live-sanitizers` builds once on `gke-16cpu-32gb-amd64-256gb` and `live-tsan` once on `gke-16cpu-32gb-amd64-128gb`, selected by the exact `matrix.runner` include rows.',
             "paid 16-core runners' medians over five runs were 1815, 1812, 1770, 2050",
@@ -6200,9 +6341,9 @@ exit "$lookup_exit"
         self.assertEqual(MATRIX_RUNNER, '${{ fromJSON(matrix.platform.runner) }}')
         self.assertEqual(HOSTED_MATRIX_RUNNER, '${{ matrix.runner }}')
         self.assertEqual(ci_preflight.PROTECTED_RUNNER, GKP_2)
-        self.assertEqual(RELEASE_RUNNER, GKP_2)
-        self.assertEqual(PREBUILT_RUNNER, GKP_BOOKWORM)
-        self.assertEqual(ci_preflight.PREBUILT_ARM_RUNNER, GKP_ARM64)
+        self.assertEqual(RELEASE_RUNNER, GKP_OD_4)
+        self.assertEqual(PREBUILT_RUNNER, GKP_OD_PREBUILT)
+        self.assertEqual(ci_preflight.PREBUILT_ARM_RUNNER, 'ubuntu-22.04-arm')
         self.assertEqual(ci_preflight.HOSTED_JOB_RUNNERS,
                          {'ci.yml': {'authz': 'ubuntu-24.04'},
                           'gke-pr.yml': {'admit': 'ubuntu-24.04', 'legs': 'ubuntu-24.04',
@@ -6240,9 +6381,9 @@ exit "$lookup_exit"
         })
         self.assertEqual(ci_preflight.RELEASE_JOB_RUNNERS, {
             'release.yml': {
-                'release': 'gkp-2cpu-4gb-amd64',
+                'release': 'gkp-od-4cpu-8gb-amd64',
                 'prebuilt': '${{ matrix.runner }}',
-                'notify-hub': 'gkp-2cpu-4gb-amd64'},
+                'notify-hub': 'gkp-od-4cpu-8gb-amd64'},
             'release-ruleset-probe.yml': {
                 'probe': 'gkp-2cpu-4gb-amd64'},
             'promote-baseline.yml': {
@@ -7481,7 +7622,7 @@ finally:
                 self.assertIn('release.yml must retain workflow_dispatch only '
                               'for protected release jobs', findings)
         for job in ('release', 'notify-hub'):
-            for runner in ('ubuntu-latest', 'ubuntu-24.04', PR_RUNNER, GKP_OD_4, GKP_4,
+            for runner in ('ubuntu-latest', 'ubuntu-24.04', PR_RUNNER, GKP_2, GKP_4,
                            GKP_OD_PREBUILT,
                            f"${{{{ fromJSON('{GKP_2}') || 'ubuntu-latest' }}}}",
                            f"${{{{ fromJSON('{RELEASE_RUNNER}') || 'ubuntu-latest' }}}}"):
@@ -7492,27 +7633,29 @@ finally:
                         *original, others=dict(others, **{'release.yml': changed}))
                     self.assertIn(f'release.yml job {job} must run on {RELEASE_RUNNER} '
                                   '(isolated release)', findings)
-        # Restoring the old x64 label must fail, as must moving an ARM leg
+        # Other x64 labels must fail, as must moving the hosted ARM leg
         # or changing anything else in the pinned two-leg Linux matrix.
         for before, after in ((f'runner: {PREBUILT_RUNNER}\n', 'runner: ubuntu-22.04\n'),
                               (f'runner: {PREBUILT_RUNNER}\n', f'runner: {GKP_PREBUILT}\n'),
+                              (f'runner: {PREBUILT_RUNNER}\n', f'runner: {GKP_BOOKWORM}\n'),
                               (f'runner: {PREBUILT_RUNNER}\n', f'runner: {GKP_OD_4}\n'),
                               (f'runner: {PREBUILT_RUNNER}\n', f'runner: {MATRIX_LINUX_RUNNER}\n'),
                               (f'runner: {PREBUILT_RUNNER}\n',
                                f"runner: ${{{{ fromJSON('{GKP_2}') || 'ubuntu-22.04' }}}}\n"),
                               (f'runner: {PREBUILT_RUNNER}\n',
                                f"runner: ${{{{ fromJSON('{RELEASE_RUNNER}') || 'ubuntu-22.04' }}}}\n"),
-                              (f'runner: {GKP_ARM64}', 'runner: ubuntu-24.04'),
-                              (f'runner: {GKP_ARM64}', f'runner: {GKP_2}'),
-                              (f'runner: {GKP_ARM64}', 'runner: ubuntu-22.04-arm'),
-                              (f'runner: {GKP_ARM64}', 'runner: macos-latest'),
-                              (f'runner: {GKP_ARM64}', 'runner: macos-26-xlarge'),
+                              ('runner: ubuntu-22.04-arm', 'runner: ubuntu-24.04'),
+                              ('runner: ubuntu-22.04-arm', f'runner: {GKP_2}'),
+                              ('runner: ubuntu-22.04-arm', f'runner: {RELEASE_RUNNER}'),
+                              ('runner: ubuntu-22.04-arm', f'runner: {GKP_ARM64}'),
+                              ('runner: ubuntu-22.04-arm', 'runner: macos-latest'),
+                              ('runner: ubuntu-22.04-arm', 'runner: macos-26-xlarge'),
                               ('        include:\n', '        include:\n'
                                '          - triple: macos-universal\n'
                                '            runner: macos-latest\n'
                                '            cmake_extra: "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"\n'),
                               ('          - triple: linux-aarch64\n'
-                               f'            runner: {GKP_ARM64}\n', '')):
+                               '            runner: ubuntu-22.04-arm\n', '')):
             with self.subTest(release_runner=after):
                 changed = in_job(release, 'prebuilt', before, after)
                 findings = ci_workflow_findings(*original, others=dict(others, **{'release.yml': changed}))
@@ -9475,10 +9618,9 @@ class ActionlintRunnerLabels(unittest.TestCase):
         original = self.config.read_text()
         for label, sites in (
                 (GKP_4, (('docs-post.yml', 'build'),)),
-                (GKP_2, (('release-ruleset-probe.yml', 'probe'), ('promote-baseline.yml', 'promote'),
-                         ('release.yml', 'release'), ('release.yml', 'notify-hub'))),
-                (GKP_BOOKWORM, (('release.yml', 'prebuilt'),)),
-                (GKP_ARM64, (('release.yml', 'prebuilt'),)),
+                (GKP_2, (('release-ruleset-probe.yml', 'probe'), ('promote-baseline.yml', 'promote'))),
+                (GKP_OD_4, (('release.yml', 'release'), ('release.yml', 'notify-hub'))),
+                (GKP_OD_PREBUILT, (('release.yml', 'prebuilt'),)),
                 ('gke-32cpu-64gb-amd64', (('gke-pr.yml', 'build'),
                                          ('ci-post.yml', 'build'))),
                 ('gke-32cpu-64gb-amd64-256gb', (('ci-post.yml', 'sanitizers'),)),

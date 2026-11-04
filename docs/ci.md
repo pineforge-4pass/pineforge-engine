@@ -200,7 +200,7 @@ the preflight source guard rejects those includes before a build.
 CI uses Ubuntu 24.04 amd64 and arm64 cells and selects Python 3.12 explicitly.
 The amd64 post build shards and the two arm64 post cells use bare scalar
 architecture/size scale-set names and run directly in runner pods carrying the engine toolchain image and sudo. All three build jobs refuse an OS mismatch.
-Hosted exceptions cover PR light jobs; release uses protected GKE and post light jobs use bare scalar GKE names.
+Hosted exceptions cover PR light jobs and the existing hosted release cells; post light jobs use bare scalar GKE names.
 The runner-loss controller has its own exact hosted `ubuntu-24.04` pin.
 CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
@@ -1646,7 +1646,7 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
 | `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; native shards: bare `gke-8cpu-16gb-amd64`; `matrix.runner`: live-sanitizers `gke-16cpu-32gb-amd64-256gb`, live-tsan `gke-16cpu-32gb-amd64-128gb` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz`: scalar `gke-2cpu-4gb-amd64`; credentialed `build`: `gkp-4cpu-8gb-amd64` |
-| `release.yml` | Dispatch from `main` | `release` and `notify-hub`: `gkp-2cpu-4gb-amd64`; x86_64 `prebuilt`: `gkp-16cpu-32gb-amd64`; arm64 `prebuilt`: `gkp-16cpu-32gb-arm64` |
+| `release.yml` | Dispatch from `main` | `release` and `notify-hub`: `gkp-od-4cpu-8gb-amd64`; x86_64 `prebuilt`: `gkp-od-16cpu-32gb-amd64-128gb`; arm64 `prebuilt`: hosted `ubuntu-22.04-arm` |
 | `promote-baseline.yml` | Push to `main`, dispatch from `main` | `promote-guard`: `gke-2cpu-4gb-amd64`; `promote`: `gkp-2cpu-4gb-amd64` |
 | `release-ruleset-probe.yml` | Dispatch from `main` | `authz`: `gke-2cpu-4gb-amd64`; `probe`: `gkp-2cpu-4gb-amd64` |
 
@@ -1671,22 +1671,22 @@ Trusted post workflows and PR proof legs build cold; no trusted job restores an 
 `build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`. With the arm leg, the full set is `build`, `build-debug`, `build-arm`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.
 
 Release and promotion use protected GKE runner group 15:
-`release`, `notify-hub` and baseline `promote` use `gkp-2cpu-4gb-amd64`;
-Linux x64/arm64 `prebuilt` uses `gkp-16cpu-32gb-amd64`/`gkp-16cpu-32gb-arm64`.
+`release` and `notify-hub` use `gkp-od-4cpu-8gb-amd64`;
+Linux x64 `prebuilt` uses `gkp-od-16cpu-32gb-amd64-128gb`; baseline `promote` uses `gkp-2cpu-4gb-amd64`.
 The release ruleset probe runs secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64` and
 `probe` on `gkp-2cpu-4gb-amd64`.
-Release's Linux artifact cells both require their exact protected GKE labels;
+Release's ARM artifact cell retains hosted `ubuntu-22.04-arm`;
 1.8.0 has no macOS test or artifact cells, and
 promotion runs on a push to `main` plus manual dispatch from `main`.
 
-Release and notify-hub use the protected 2 CPU/4 GB set: release
-computes versions, stamps JSON catalogs and publishes with git/gh; notify-hub
+Release and notify-hub use the on-demand 4 CPU/8 GB set to prevent preemption after tag push.
+Release computes versions, stamps JSON catalogs and publishes with git/gh; notify-hub
 mints an App token and dispatches an API request. The protected 2 CPU/4 GB set
 runs promotion's API/tree checks, Node campaign tooling and Cloud SQL proxy; the
 probe reads rulesets with Python/gh. Docs uses 4 CPU/8 GB for Doxygen and Graphviz
-over the full public header set before Pages upload. Both prebuilt sets require
-16 CPU/32 GB; x86_64 also requires the preloaded immutable Bookworm Docker image.
-ARM installs exactly `libeigen3-dev=3.4.0-4`; x86_64 checks that package in its image.
+over the full public header set before Pages upload. The x86_64 prebuilt requires
+16 CPU/32 GB and 128 GB storage, plus the preloaded immutable Bookworm Docker image.
+ARM installs `libeigen3-dev` from Ubuntu; x86_64 requires Bookworm's `3.4.0-4`.
 Before CMake, both builds must read the consumed `Eigen/src/Core/util/Macros.h`,
 pin `Eigen3_DIR=/usr/share/eigen3/cmake`, disable FetchContent, and match exactly
 `EIGEN_WORLD_VERSION=3`, `EIGEN_MAJOR_VERSION=4`, `EIGEN_MINOR_VERSION=0` (3.4.0).

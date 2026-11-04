@@ -100,9 +100,9 @@ PR_RUNNER = '["self-hosted","pf-gcp-pr"]'
 # There is no general post fleet: an unpinned job on this label is refused.
 POST_RUNNER = 'gke-2cpu-4gb-amd64'
 PROTECTED_RUNNER = 'gkp-2cpu-4gb-amd64'
-RELEASE_RUNNER = 'gkp-2cpu-4gb-amd64'
-PREBUILT_RUNNER = 'gkp-16cpu-32gb-amd64'
-PREBUILT_ARM_RUNNER = 'gkp-16cpu-32gb-arm64'
+RELEASE_RUNNER = 'gkp-od-4cpu-8gb-amd64'
+PREBUILT_RUNNER = 'gkp-od-16cpu-32gb-amd64-128gb'
+PREBUILT_ARM_RUNNER = 'ubuntu-22.04-arm'
 GKE_32_LABEL = 'gke-32cpu-64gb-amd64'
 GKE_16_LABEL = 'gke-16cpu-32gb-amd64'
 GKE_8_LABEL = 'gke-8cpu-16gb-amd64'
@@ -3058,7 +3058,18 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         prebuilt = _jobs(workflows['release.yml']).get('prebuilt', '')
         if _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY):
             findings.append('release.yml prebuilt must use exactly the isolated Linux x64 '
-                            'and ARM protected GKE matrix')
+                            'and hosted ARM matrix')
+        prebuilt_steps = _steps(prebuilt)
+        install = _step_named(prebuilt_steps, '      - name: Install Eigen3 (Linux)')
+        eigen = _step_named(prebuilt_steps,
+                            '      - name: Assert Eigen3 3.4.0 on the protected Linux x86_64 slice')
+        configure = _step_named(prebuilt_steps, '      - name: Configure')
+        if (not configure or _code(install) != _code(RELEASE_EIGEN_INSTALL_STEP)
+                or _code(eigen) != _code(RELEASE_EIGEN_ASSERT_STEP)
+                or not (prebuilt_steps.index(install) < prebuilt_steps.index(eigen)
+                        < prebuilt_steps.index(configure))):
+            findings.append('release.yml prebuilt must install Eigen and assert exactly 3.4.0 '
+                            'before configuring')
         findings += release_prebuilt_workflow_findings(workflows['release.yml'])
         if any(re.search(r'macos|darwin|CMAKE_OSX_', '\n'.join(_code(step)), re.IGNORECASE)
                for step in _steps(prebuilt)):
@@ -3138,6 +3149,33 @@ def _compiler_cache_restore_with(step: str) -> list[str]:
             for line in _step_block(step, 'with')]
 
 
+# The release build installs Eigen and refuses any version other than 3.4.0.
+RELEASE_EIGEN_INSTALL_STEP = r'''      - name: Install Eigen3 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev
+'''
+
+RELEASE_EIGEN_ASSERT_STEP = r'''      - name: Assert Eigen3 3.4.0 on the protected Linux x86_64 slice
+        if: runner.os == 'Linux' && matrix.triple == 'linux-x86_64'
+        run: |
+          set -euo pipefail
+          hdr=""
+          for p in /usr/include/eigen3/Eigen/Core /usr/local/include/eigen3/Eigen/Core; do
+            if [ -f "$p" ]; then hdr="$p"; break; fi
+          done
+          if [ -z "$hdr" ]; then
+            echo "::error::Eigen3 headers not found on the protected GKE runner"
+            exit 1
+          fi
+          macros="$(dirname "$hdr")/src/Core/util/Macros.h"
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "$macros"
+          echo "Eigen3 3.4.0 present at $(dirname "$(dirname "$hdr")")"
+'''
+
 # Exact reviewed steps: ARM host commands, x86 transport, identity, all-library
 # inspection and publication order form one contract. Extra steps fail closed.
 RELEASE_PREBUILT_STEPS = r'''
@@ -3181,14 +3219,35 @@ RELEASE_PREBUILT_STEPS = r'''
           bash scripts/build_prebuilt_bookworm.sh \
             "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" "${SOURCE_SHA}" "${NEXT}" "${TAG}" "${DRY_RUN}"
 
-      # The ARM build checks the exact Eigen headers that CMake will consume.
       - name: Install Eigen3 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev
+
+      - name: Assert Eigen3 3.4.0 on the protected Linux x86_64 slice
+        if: runner.os == 'Linux' && matrix.triple == 'linux-x86_64'
+        run: |
+          set -euo pipefail
+          hdr=""
+          for p in /usr/include/eigen3/Eigen/Core /usr/local/include/eigen3/Eigen/Core; do
+            if [ -f "$p" ]; then hdr="$p"; break; fi
+          done
+          if [ -z "$hdr" ]; then
+            echo "::error::Eigen3 headers not found on the protected GKE runner"
+            exit 1
+          fi
+          macros="$(dirname "$hdr")/src/Core/util/Macros.h"
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "$macros"
+          echo "Eigen3 3.4.0 present at $(dirname "$(dirname "$hdr")")"
+
+      # The ARM build checks the exact Eigen headers that CMake will consume.
+      - name: Assert Eigen3 3.4.0 on ARM
         if: runner.os == 'Linux' && matrix.triple == 'linux-aarch64'
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y libeigen3-dev=3.4.0-4
-          test "$(dpkg-query -W -f='${Version}' libeigen3-dev)" = 3.4.0-4
           macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h
           grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "${macros}"
           grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "${macros}"
