@@ -792,21 +792,62 @@ class ProtectedGkeRunners(unittest.TestCase):
 
     def test_gkp_refuses_wrong_runners(self):
         workflows = self.workflows()
+        self.assertEqual(ci_preflight.runner_findings(workflows), [])
         for name, jobs in EXPECTED_GKP_JOBS.items():
             for job, label in jobs.items():
                 before = (f'            runner: {label}\n' if job == 'prebuilt'
                           else runner_declaration(label))
-                for wrong in (GKP_2, GKP_4, GKP_PREBUILT, GKP_OD_4, GKP_OD_PREBUILT,
-                              'gkp-od-8cpu-16gb-amd64', 'gkp-od-16cpu-32gb-amd64',
-                              'gkp-od-16cpu-32gb-arm64-128gb', 'gkp-8cpu-16gb-amd64',
-                              GKE_2, 'ubuntu-24.04', f'["self-hosted","{label}"]',
-                              f'"{label}"', '${{ inputs.runner }}'):
+                self.assertEqual(_jobs(workflows[name])[job].count(before), 1)
+                # Each fixture names its policy independently of the producer's
+                # route detection, runner tables and returned findings.
+                for wrong, policy in (
+                        (GKP_2, 'protected'), (GKP_4, 'protected'),
+                        (GKP_PREBUILT, 'protected'), (GKP_OD_4, 'protected'),
+                        (GKP_OD_PREBUILT, 'protected'),
+                        ('gkp-od-8cpu-16gb-amd64', 'protected'),
+                        ('gkp-od-16cpu-32gb-amd64', 'protected'),
+                        ('gkp-od-16cpu-32gb-arm64-128gb', 'protected_shape'),
+                        ('gkp-8cpu-16gb-amd64', 'protected'),
+                        (GKE_2, 'gke'), ('ubuntu-24.04', 'hosted'),
+                        (f'["self-hosted","{label}"]', 'protected_shape'),
+                        (f'"{label}"', 'protected_shape'),
+                        ('${{ inputs.runner }}', 'dynamic')):
                     if wrong == label:
                         continue
                     with self.subTest(workflow=name, job=job, runner=wrong):
-                        changed = in_job(workflows[name], job, before, routed_line(before, wrong))
+                        after = routed_line(before, wrong)
+                        changed = in_job(workflows[name], job, before, after)
                         self.assertNotEqual(changed, workflows[name])
-                        self.assertTrue(ci_preflight.runner_findings({**workflows, name: changed}))
+                        self.assertIn(after, _jobs(changed)[job])
+                        prefix = f'{name} job {job}'
+                        credential_finding = (f'{prefix} must keep production credentials '
+                                              'on a hosted standard runner')
+                        if job == 'prebuilt':
+                            # Only the x64 matrix row changes; runs-on stays a
+                            # matrix expression and loses its exact admission.
+                            expected = [RELEASE_MATRIX_FINDING, credential_finding]
+                        else:
+                            suffix = '' if name == 'docs-post.yml' else ' (isolated release)'
+                            expected = [f'{prefix} must run on {label}{suffix}']
+                            if policy != 'hosted':
+                                expected.append(credential_finding)
+                        if policy in ('protected', 'protected_shape'):
+                            expected.append(f'{prefix} may use protected GKE routing '
+                                            'only at its exact pinned job and label')
+                            if policy == 'protected_shape' and job != 'prebuilt':
+                                expected.append(f'{prefix} must use a bare scalar '
+                                                'protected GKE scale-set name')
+                        elif policy == 'gke':
+                            expected.extend([
+                                f'{prefix} may use GKE routing only at its exact pinned job and label',
+                                f'{prefix} must not expose credentials on GKE',
+                            ])
+                            if job == 'prebuilt':
+                                expected.append(f'{prefix} must use a bare scalar GKE scale-set name')
+                        findings = ci_preflight.runner_findings({**workflows, name: changed})
+                        self.assertCountEqual(
+                            findings, expected,
+                            msg=f'{prefix}: wrong runner {wrong!r} ({policy})')
 
     def test_gkp_labels_no_unpinned(self):
         for event in ('workflow_dispatch', 'push', 'pull_request', 'workflow_call'):
