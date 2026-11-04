@@ -191,7 +191,15 @@ def test_report_channel_catalog_contract():
         ),
     }
     catalogue, _ = registry.load_catalog(ROOT)
-    assert len(catalogue["codes"]) == 80
+    released = released_numbers()
+    expected_names = (
+        (set(released) - {"none"})
+        | set(V170_ADDITIONS)
+        | set(V190_ADDITIONS)
+        | set(V1101_ADDITIONS)
+        | set(V1110_ADDITIONS)
+    )
+    assert set(catalogue["codes"]) == expected_names
     for name, (cls, args, english) in expected.items():
         entry = catalogue["codes"].get(name)
         assert entry is not None, name
@@ -207,7 +215,7 @@ def test_cr559_map_capacity_catalog_contract():
     entry = catalogue["codes"]["pine_map_capacity_exceeded"]
     assert entry["class"] == "strategy_limit"
     assert entry["retryable"] is False
-    assert entry["since"] == "1.10.0"
+    assert entry["since"] == "1.11.0"
     assert entry["args"] == {
         "bar_index": {"kind": "integer"}, "code": {"kind": "identifier"},
         "maxSize": {"kind": "integer"}, "currSize": {"kind": "integer"}}
