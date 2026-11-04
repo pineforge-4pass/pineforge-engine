@@ -1876,7 +1876,7 @@ void report_channel_vocabulary_rows() {
           {"signal", "integer", true, {}}}},
     };
     CHECK_EQ("report-channel registry count including none",
-             std::to_string(pineforge::kRunFailureCodeCount), "80");
+             std::to_string(pineforge::kRunFailureCodeCount), "83");
     for (const auto& row : rows) {
         const std::string at = std::string("report-channel ") + row.name;
         CHECK_EQ(at + " name", code_name(row.code), row.name);

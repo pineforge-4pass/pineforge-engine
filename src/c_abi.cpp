@@ -30,6 +30,7 @@
  *     strategy_initial_capital, strategy_net_profit_sum,
  *     strategy_report_pointvalue, strategy_set_report_replay_v1,
  *     strategy_script_bars_processed), pf_output_series_limit_set_checked/pf_output_series_limit_failure,
+ *     pf_map_pairs_limit_set_checked,
  *     pf_version_get/pf_version_string,
  *     pf_abi_version, strategy_execution_contract,
  *     strategy_configure_native_v1, strategy_configure_native_fx_curve_v1,
@@ -61,6 +62,7 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/map_capacity.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/magnifier.hpp>
@@ -1602,5 +1604,10 @@ PF_API int pf_output_series_limit_set_checked(
 
 PF_API int pf_output_series_limit_failure(int64_t* maximum) {
     return pineforge::BacktestEngine::output_series_limit_failure(maximum);
+}
+
+PF_API int pf_map_pairs_limit_set_checked(
+        const int64_t* maximum, char* error, size_t error_capacity) {
+    return pineforge::detail::set_map_pair_limit_checked(maximum, error, error_capacity);
 }
 } // extern "C"

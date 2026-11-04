@@ -265,9 +265,10 @@ static void test_put_all_overwrites_in_source_order() {
 static void test_50000_pair_capacity_and_put_all_preflight() {
     using Map = PineMap<int, int>;
     constexpr const char* capacity_error =
-        "map cannot contain more than 50000 key-value pairs";
+        "Error on bar 0: A map cannot have more than 50000 key-value pairs. "
+        "The current size is 50001.";
 
-    auto map = Map::new_();
+    auto map = Map::new_(Map::max_pairs);
     for (int key = 0; key < Map::max_pairs; ++key) {
         const auto previous = map.put(key, key);
         assert(pineforge::is_na(previous));
@@ -959,7 +960,11 @@ static void test_empty_maps_materialize_fixed_headers_only() {
     pineforge::detail::MapStoreScope scope(holder);
     const Stats baseline = holder->store->stats();
     constexpr std::size_t map_count = 2000;
-    constexpr std::uint64_t logical_bytes_per_map = UINT64_C(3862176);
+    // CR-559: an empty map declares its header and one bucket, rather than
+    // reserving the historical 50,000-slot arena before the first put.
+    constexpr std::uint64_t logical_bytes_per_map =
+        sizeof(pineforge::detail::MapHeader) +
+        sizeof(pineforge::detail::MapLinks{}.chain);
     constexpr std::uint64_t max_backing_bytes_per_map = UINT64_C(512) * 1024;
     constexpr std::array<std::size_t, 3> marks{{1, 100, map_count}};
     std::vector<Map> maps;
@@ -971,8 +976,9 @@ static void test_empty_maps_materialize_fixed_headers_only() {
         if (index + 1 == marks[next_mark]) {
             const Stats checkpoint = holder->store->stats();
             const std::uint64_t count = marks[next_mark];
-            assert(checkpoint.objects_live == 2 * count);
-            assert(checkpoint.bytes_live == count * logical_bytes_per_map);
+            assert(checkpoint.objects_live == baseline.objects_live + 2 * count);
+            assert(checkpoint.bytes_live ==
+                   baseline.bytes_live + count * logical_bytes_per_map);
             assert(checkpoint.bytes_backing >= baseline.bytes_backing);
             assert(checkpoint.bytes_backing - baseline.bytes_backing <=
                    count * max_backing_bytes_per_map);
@@ -983,12 +989,17 @@ static void test_empty_maps_materialize_fixed_headers_only() {
     assert(next_mark == marks.size());
     assert(maps.back().size() == 0);
 
-    // The same handles can execute a real put/get workload after the empty
-    // construction checkpoints. These values are inline, so no payload object
-    // changes the two-map-object accounting above.
+    // The same handles grow their existing roots on their first put. These
+    // inline values add no payload objects and untouched maps stay empty.
     for (std::size_t index = 0; index < maps.size(); index += 500) {
+        const Stats before = holder->store->stats();
         maps[index].put("bar", static_cast<double>(index));
         assert(maps[index].get("bar") == static_cast<double>(index));
+        const Stats after = holder->store->stats();
+        assert(after.bytes_live > before.bytes_live);
+        assert(after.objects_live == before.objects_live);
+        assert(after.bytes_resident == before.bytes_resident);
+        assert(maps[index + 1].size() == 0);
     }
 }
 

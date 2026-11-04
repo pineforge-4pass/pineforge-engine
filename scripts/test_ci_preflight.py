@@ -161,7 +161,7 @@ SHARDED_VERIFY_RUNS = (
     (6, 'build', POST_BUILD_VERIFY + ' --ctest-shard ${{ matrix.shard }}/4'),
     (6, 'build-debug', POST_BUILD_VERIFY + ' --ctest-shard ${{ matrix.shard }}/2'),
     (6, 'sanitizers', 'run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan '
-     '--jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/4'),
+     '--jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/8'),
     (6, 'kernel-only', KERNEL_VERIFY),
     (1, 'native-live-shards',
      'run: python3 scripts/ci_verify.py ${{ matrix.profile }} --build-dir ${{ matrix.build_dir }} '
@@ -2038,7 +2038,7 @@ POST_SHARD_CASES = (
      'build (ubuntu-24.04, Release)'),
     ('build-debug', 'debug', 2, GKE_16_128, 'build-debug-gate',
      'build (ubuntu-24.04, Debug)'),
-    ('sanitizers', 'sanitizers', 4, GKE_32_256, 'sanitizers-gate', 'sanitizers'),
+    ('sanitizers', 'sanitizers', 8, GKE_32_256, 'sanitizers-gate', 'sanitizers'),
     ('kernel-only', 'kernel', 2, GKE_16, 'kernel-only-gate', 'kernel-only'),
 )
 
@@ -2124,7 +2124,8 @@ class PostCTestShardPolicy(unittest.TestCase):
                 spelled = in_job(source, job, flag, spelling)
                 self.assertNotIn(f'ci-post.yml {job} must pass {flag} exactly once to ci_verify',
                                  ci_preflight.runner_findings({'ci-post.yml': spelled}))
-                for replacement in ('', spelling.replace(f'/{count}', '/8'),
+                wrong_count = 4 if count == 8 else 8
+                for replacement in ('', spelling.replace(f'/{count}', f'/{wrong_count}'),
                                     '--ctest-shard 1/1', spelling + ' ' + spelling):
                     with self.subTest(job=job, spelling=spelling, flag=replacement):
                         changed = in_job(spelled, job, spelling, replacement)

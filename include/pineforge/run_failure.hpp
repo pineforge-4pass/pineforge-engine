@@ -24,6 +24,9 @@
 //    timeframes) -- never from a value the script computes while it runs;
 //    Q7's run_aborted additionally carries only engine-owned completion count
 //    and started witnesses, never a script-computed index or value;
+//    CR-559's pine_map_capacity_exceeded carries engine-owned map counts and
+//    current bar context, plus the fixed TV identifier RE10070; its maxSize and
+//    currSize argument names retain the provider's spelling;
 //  * a vocabulary argument outside its closed list, an undeclared argument, a
 //    wrong kind or a missing required argument turns the failure into
 //    engine_invariant (the English is kept): a wrong call cannot mint a code

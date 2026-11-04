@@ -33,7 +33,7 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) is source-available under the PineForge Source License 1.2 from its release 1.3.0 (release 1.2.0 keeps the PineForge Source License 1.1, and releases up to 1.1.0 keep the PolyForm Noncommercial terms they shipped with); personal trading is free, and commercial use requires a separate license; the capital in an account a proprietary-trading firm or funded-trader program provides or allocates, including a challenge, evaluation or simulated account, is investment capital. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
 - **Fast.** In-process, no interpreter: median **36× faster than PyneCore** on the 200 strategies both engines time (100 corpus probes and 100 held-out private strategies), measured at engine `35db01c8` on 2026-09-29 on an AWS c7a.8xlarge with PyneCore timed as a subprocess, its interpreter start-up included (PineForge runs a median 807k bars/s per strategy over its 201 slots with the bar magnifier on; [method](benchmarks/results/speed.md)). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists.
-- **Yours to embed.** 167 `PF_API` declarations across six installed headers — `pineforge.h`'s 111 (91 of the 102 runtime exports and up to 20 per-strategy functions a generated module defines), eleven more runtime declarations in `execution_observer.h`, `selected_window.h` and `report_sink.h` (three, three and five), `native_c_api.h`'s 43 native-host declarations and `selected_window_plan.h`'s two planner declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
+- **Yours to embed.** 168 `PF_API` declarations across six installed headers — `pineforge.h`'s 112 (92 of the 103 runtime exports and up to 20 per-strategy functions a generated module defines), eleven more runtime declarations in `execution_observer.h`, `selected_window.h` and `report_sink.h` (three, three and five), `native_c_api.h`'s 43 native-host declarations and `selected_window_plan.h`'s two planner declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
 Recorded outputs and their additional API declarations described here are
 part of **1.5.0**.
@@ -128,6 +128,18 @@ The [shared local/CI verifier](docs/ci.md) includes source guards, tests and ins
 **Supported platforms: Linux x86_64 and arm64.** From 1.8.0 the engine's release archives are built, and CI runs, for Linux only (`linux-x86_64` and `linux-aarch64` archives; no macOS archive). Other platforms build from source and are not tested or supported.
 
 Prerequisites: CMake ≥ 3.16 to build (the verifier and `ctest --test-dir` need 3.20), a C++17 compiler whose standard library has floating-point `std::to_chars` (libstdc++ from GCC 11 or later, or libc++ 14 or later; CI builds with GCC on Ubuntu 24.04), Eigen 3.3+ (fetched automatically if absent), Python 3 for the tests (`-DPINEFORGE_BUILD_TESTS=OFF -DPINEFORGE_BUILD_TUTORIAL=OFF` for a library-only build). `cmake --install build --prefix /usr/local` installs `lib/libpineforge.a` and `lib/libpineforge_kernel.a`, `include/pineforge/`, and the `find_package(PineForge)` config.
+
+Script maps have no pair limit by default. Their entry arenas grow in steps of
+4,096 slots over the spilling Store, and their bucket tables scale with capacity.
+Map sizes and slot links use 64-bit integers.
+Use `docker/run_json.py --limit-map-pairs 50000` for TradingView's pair policy;
+omitted or zero selects unlimited. C callers install the same creation policy
+with `pf_map_pairs_limit_set_checked` before the strategy factory and restore
+NULL afterward. C++ callers can override one map with
+`PineMap<Key, Value>::new_(maximum)`. A refused distinct insertion raises
+`MapCapacityError` with `RE10070`, `maxSize`, `currSize` and `bar_index`, exposed
+through the `pine_map_capacity_exceeded` run-failure code. Replacing an existing
+key remains valid at the configured maximum.
 
 ### Prebuilt library
 
@@ -529,11 +541,11 @@ is in [CHANGELOG.md](CHANGELOG.md).
 
 The counts below describe the current API, including recorded outputs, the report sink and scratch-table selection; recorded outputs are not part of 1.4.0.
 
-A newly generated strategy `.so` exposes 118 compiled-strategy `PF_API` declarations
-(102 runtime implementations plus sixteen generated exports) plus 43 native-host
-declarations: 161 `PF_API` exports in total; `use_bar_magnifier = true` adds
+A newly generated strategy `.so` exposes 119 compiled-strategy `PF_API` declarations
+(103 runtime implementations plus sixteen generated exports) plus 43 native-host
+declarations: 162 `PF_API` exports in total; `use_bar_magnifier = true` adds
 `strategy_declares_bar_magnifier` and a module that records [outputs](docs/outputs.md) its
-three outputs exports, bringing the inventories to at most 122 and 165. Older modules lack the six opt-in
+three outputs exports, bringing the inventories to at most 123 and 166. Older modules lack the six opt-in
 [checked-settings exports](docs/checked-settings.md). Older modules can also lack
 the two opt-in [execution-capability exports](docs/strategy-capabilities.md).
 In an optimized build `nm -gU` also shows libc++'s
@@ -571,6 +583,7 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 | `strategy_execution_contract` / `strategy_configure_native_v1` / `strategy_configure_native_fx_curve_v1` / `_fx_curve_ext_v1` | Query Legacy vs NativeMarketV1; apply the versioned native run specification (an invalid or refused base call returns `-1` and leaves the handle Failed; a cooperative `Aborted` handle may be reused with the same key and a higher run number); stage or clear an immutable native FX curve, `_fx_curve_ext_v1` also writing the typed refusal (`pf_native_fx_curve_error_e`) and the offending point's index |
 | `strategy_request_abort` / `strategy_last_run_status` | Cooperative abort of a run in progress; `0`=completed, `1`=aborted |
 | `strategy_set_scratch_tables_v1` | Copy disk-scratch or bounded-memory table policy and its eleven admission maxima while idle; NULL restores disk defaults (since 1.7.0) |
+| `pf_map_pairs_limit_set_checked` | Set the calling thread's creation-time limit for distinct pairs in each map before the strategy factory; NULL or zero selects unlimited. Restore NULL after the factory; existing hosts retain their captured policy |
 | `strategy_set_cache_policy_v1` | Copy optional per-kind resident cache bytes before run admission; omitted kinds use internal defaults, zero bypasses, and idle changes apply to the next run. See [memory controls](docs/pages/memory-management.md#memory_controls) for supported kinds |
 | `pf_run_abort_install_sigterm_v1` / `pf_run_abort_requested_v1` / `pf_run_abort_restore_sigterm_v1` | Opt-in child invocation SIGTERM flag; stop after a completed input bar, retaining typed progress and an incomplete sink; install/restore with SIGTERM blocked |
 | `strategy_set_realtime_tail` | Live-runtime surface (ABI v4): the array's last bar is a still-forming tail — `barstate.islast=false`, `last_bar_index`/`last_bar_time` frozen at the horizon bar, no range-end row |

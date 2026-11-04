@@ -2189,6 +2189,21 @@ PF_API int pf_output_series_limit_set_checked(const int64_t* maximum,
  *  the default. No exception or allocation crosses the ABI. */
 PF_API int pf_output_series_limit_failure(int64_t* maximum);
 
+/** Set this module's map-pair creation policy on the calling thread.
+ *  Call before strategy_create/strategy_create_checked (or C++ construction).
+ *  NULL or 0 means unlimited, the default. A positive value is the maximum
+ *  number of distinct pairs in EACH map; replacement never consumes a pair.
+ *  Each host captures the policy and installs it during script preparation
+ *  and callbacks, including maps first created on a later bar. Each map then
+ *  retains its own limit through copy, clear and rollback.
+ *  Restore NULL after the factory call; existing hosts keep their policy.
+ *  Returns a pf_settings_status_t and follows the checked-settings buffer
+ *  protocol. A negative maximum returns #PF_SETTINGS_INVALID_ARGUMENT
+ *  atomically. A refused put raises RE10070 with maxSize/currSize/bar_index
+ *  through the pine_map_capacity_exceeded run-failure catalog entry. */
+PF_API int pf_map_pairs_limit_set_checked(const int64_t* maximum,
+                                         char* error, size_t error_capacity);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

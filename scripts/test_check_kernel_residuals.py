@@ -1516,7 +1516,7 @@ class ReachTests(unittest.TestCase):
         installed headers alone: the same name in the archive or a kernel
         literal is a finding (PineMap, round 3's blind probe, now flags there)."""
         self.assertIn("PineMap", RULED.header_only)
-        self.assertIn("map.size: result exceeds int range", RULED.header_only)
+        self.assertIn("map.size: result exceeds int64 range", RULED.header_only)
         self.assertNotIn("tv_carry_qty", RULED.header_only)
         for surface in ("strings", "nm", "source-literal"):
             with self.subTest(surface=surface):
@@ -1530,8 +1530,8 @@ class ReachTests(unittest.TestCase):
                                          source_literals=(["PineMap"], ["src/probe.cpp:1"]))
                 self.assertIn("PineMap", found)
         strings, nm = table_archive()
-        self.assertIn("map.size: result exceeds int range",
-                      self.unruled(strings + ["map.size: result exceeds int range"], nm))
+        self.assertIn("map.size: result exceeds int64 range",
+                      self.unruled(strings + ["map.size: result exceeds int64 range"], nm))
         # Where the row puts them, they pass.
         findings, _ = evaluate_table(*table_archive())
         self.assertEqual(findings, [], [str(f) for f in findings])

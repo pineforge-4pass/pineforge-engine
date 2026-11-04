@@ -667,6 +667,29 @@
    "retryable": false,
    "since": "1.4.0"
   },
+  "pine_map_capacity_exceeded": {
+   "args": {
+    "bar_index": {
+     "kind": "integer"
+    },
+    "code": {
+     "kind": "identifier"
+    },
+    "currSize": {
+     "kind": "integer"
+    },
+    "maxSize": {
+     "kind": "integer"
+    }
+   },
+   "class": "strategy_limit",
+   "description": "A distinct map insertion exceeds that map's configured pair limit. Zero or omitted selects no limit. Counts and bar index are engine-owned context; code is the fixed TradingView identifier RE10070.",
+   "english": [
+    "Error on bar {bar_index}: A map cannot have more than {maxSize} key-value pairs. The current size is {currSize}."
+   ],
+   "retryable": false,
+   "since": "1.11.0"
+  },
   "pine_matrix_error": {
    "args": {
     "function": {

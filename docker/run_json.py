@@ -5043,7 +5043,8 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         """A fresh, fully configured strategy state (the ordinary run's setup without the
         legacy trade-start gate, which selected mode refuses); freed again if it fails."""
         nonlocal syminfo_applied
-        st = create_strategy(lib, checked, getattr(args, "max_output_series", None))
+        st = create_strategy(lib, checked, getattr(args, "max_output_series", None),
+                             getattr(args, "max_map_pairs", None))
         sink = None
         try:
             apply_settings(lib, st, inputs, overrides, checked)
@@ -5647,7 +5648,8 @@ def _main(argv, binary_inputs) -> int:
         Match the validation harness's setup and free a state whose
         configuration fails before propagating its failure."""
         nonlocal syminfo_applied
-        st = create_strategy(lib, checked, getattr(args, "max_output_series", None))
+        st = create_strategy(lib, checked, getattr(args, "max_output_series", None),
+                             getattr(args, "max_map_pairs", None))
         sink = None
         try:
             apply_settings(lib, st, inputs, overrides, checked)
@@ -9489,11 +9491,22 @@ def _output_series_count(text):
     return int(text)
 
 
+def _map_pairs_count(text):
+    if not re.fullmatch(r"[0-9]+", text) or int(text) > (1 << 63) - 1:
+        raise argparse.ArgumentTypeError("expected a nonnegative int64 map-pair count")
+    return int(text)
+
+
 def _parse_output_series_limit(parser, argv):
     parser.add_argument(
         "--limit-output-series", dest="max_output_series", type=_output_series_count,
         default=None, metavar="N",
         help="Maximum declared output series (N >= 0); 0 or omitted means no limit.")
+    parser.add_argument(
+        "--limit-map-pairs", dest="max_map_pairs", type=_map_pairs_count,
+        default=None, metavar="N",
+        help="Maximum distinct pairs per map; 0 or omitted means no limit. "
+             "Use 50000 for TradingView parity.")
     return parser.parse_args(argv)
 
 
@@ -9515,7 +9528,7 @@ def _output_series_limit_functions(lib, maximum):
     return setter, failure
 
 
-def create_strategy(lib, checked: bool, max_output_series=None):
+def _create_strategy_with_output_limit(lib, checked: bool, max_output_series=None):
     """Apply the checked option before the generated constructor declares."""
     if max_output_series == 0:
         max_output_series = None
@@ -9542,6 +9555,32 @@ def create_strategy(lib, checked: bool, max_output_series=None):
     finally:
         # Each handle has already snapshotted the option. Keep later creations
         # in this interpreter unlimited unless their caller supplies a limit.
+        setter(None, error, len(error))
+
+
+def create_strategy(lib, checked: bool, max_output_series=None, max_map_pairs=None):
+    """Install map policy before construction, then restore the thread default."""
+    name = "pf_map_pairs_limit_set_checked"
+    if not hasattr(lib, name):
+        if max_map_pairs is not None:
+            raise StrategyLibraryError(
+                f"the library lacks {name}; rebuild to configure map pairs",
+                {"reason": "symbol_missing", "missing": name})
+        return _create_strategy_with_output_limit(lib, checked, max_output_series)
+    setter = getattr(lib, name)
+    setter.argtypes = [ctypes.POINTER(ctypes.c_int64), ctypes.c_char_p, ctypes.c_size_t]
+    setter.restype = ctypes.c_int
+    maximum = None if max_map_pairs is None else ctypes.c_int64(max_map_pairs)
+    error = ctypes.create_string_buffer(_SETTINGS_ERROR_CAPACITY)
+    if setter(None if maximum is None else ctypes.byref(maximum),
+              error, len(error)) != PF_SETTINGS_OK:
+        raise _request_invalid(
+            "error: --limit-map-pairs: " + _c_text(error.value), "arguments")
+    try:
+        return _create_strategy_with_output_limit(lib, checked, max_output_series)
+    finally:
+        # The native consumer and constructor-created maps retain the policy;
+        # callbacks reinstall that host's value before creating later maps.
         setter(None, error, len(error))
 
 
