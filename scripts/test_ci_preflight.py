@@ -73,6 +73,9 @@ GKP_4 = 'gkp-4cpu-8gb-amd64'
 GKP_PREBUILT = 'gkp-16cpu-32gb-amd64-128gb'
 GKP_OD_4 = 'gkp-od-4cpu-8gb-amd64'
 GKP_OD_PREBUILT = 'gkp-od-16cpu-32gb-amd64-128gb'
+# Unadmitted release labels remain negative routing fixtures.
+GKP_BOOKWORM = 'gkp-16cpu-32gb-amd64'
+GKP_ARM64 = 'gkp-16cpu-32gb-arm64'
 RETIRED_VM_LABELS = tuple('pf-gcp-' + suffix for suffix in ('main', 'post'))
 EXPECTED_GKP_JOBS = {
     'release.yml': {'release': GKP_OD_4, 'notify-hub': GKP_OD_4, 'prebuilt': GKP_OD_PREBUILT},
@@ -766,6 +769,54 @@ class ProtectedGkeRunners(unittest.TestCase):
                     self.assertEqual(ci_preflight._job_values(body, 'runs-on', unquote=False),
                                      [label])
 
+    def test_plain_private_key_documentation_keeps_effective_token_scopes(self):
+        workflows = self.workflows()
+        self.assertEqual(ci_preflight.runner_findings(workflows), [])
+        for name, job in (('promote-baseline.yml', 'promote-guard'),
+                          ('ci-post.yml', 'authz')):
+            workflow = workflows[name]
+            body = _jobs(workflow)[job]
+            for documentation in (
+                    '# secrets PINEFORGE_APP_ID + PINEFORGE_APP_PRIVATE_KEY\n',
+                    '# private-key inputs are documented here, not supplied.\n'):
+                with self.subTest(workflow=name, documentation=documentation):
+                    changed = documentation + workflow
+                    self.assertNotEqual(changed, workflow)
+                    self.assertEqual(_jobs(changed)[job], body)
+                    self.assertFalse(ci_preflight._holds_credentials(
+                        changed, body, effective_permissions=True))
+                    self.assertEqual(ci_preflight.runner_findings(
+                        {**workflows, name: changed}), [])
+            for reference in ('secrets.DEPLOY_TOKEN', "secrets['DEPLOY_TOKEN']",
+                              'secrets[inputs.secret_name]'):
+                with self.subTest(workflow=name, reference=reference):
+                    changed = in_job(
+                        workflow, job, '    steps:\n',
+                        '    env:\n      TOKEN: ${{ ' + reference + ' }}\n'
+                        '    steps:\n')
+                    self.assertNotEqual(changed, workflow)
+                    changed_body = _jobs(changed)[job]
+                    self.assertTrue(ci_preflight._holds_credentials(
+                        changed, changed_body, effective_permissions=True))
+                    self.assertIn(f'{name} job {job} must not expose credentials on GKE',
+                                  ci_preflight.runner_findings({**workflows, name: changed}))
+
+        for reference in ('secrets.DEPLOY_TOKEN', "secrets['DEPLOY_TOKEN']",
+                          'secrets[inputs.secret_name]', 'toJSON(secrets)'):
+            with self.subTest(workflow='release.yml', reference=reference):
+                changed = '# ${{ ' + reference + ' }}\n' + workflows['release.yml']
+                self.assertNotEqual(changed, workflows['release.yml'])
+                changed_body = _jobs(changed)['prebuilt']
+                self.assertFalse(ci_preflight._holds_credentials(
+                    changed, changed_body, effective_permissions=True))
+                self.assertTrue(ci_preflight._holds_credentials(
+                    changed, changed_body, effective_permissions=True, strict=True))
+                self.assertIn(
+                    'release.yml job prebuilt must keep production credentials '
+                    'on a hosted standard runner',
+                    ci_preflight.runner_findings(
+                        {**workflows, 'release.yml': changed}))
+
     def test_gkp_needs_group15_mirror(self):
         workflows = self.workflows()
         mirror_file = '.github/runner-group-15-allowlist.txt'
@@ -791,25 +842,69 @@ class ProtectedGkeRunners(unittest.TestCase):
 
     def test_gkp_refuses_wrong_runners(self):
         workflows = self.workflows()
+        self.assertEqual(ci_preflight.runner_findings(workflows), [])
         for name, jobs in EXPECTED_GKP_JOBS.items():
             for job, label in jobs.items():
                 before = (f'            runner: {label}\n' if job == 'prebuilt'
                           else runner_declaration(label))
-                for wrong in (GKP_2, GKP_4, GKP_PREBUILT, GKP_OD_4, GKP_OD_PREBUILT,
-                              'gkp-od-8cpu-16gb-amd64', 'gkp-od-16cpu-32gb-amd64',
-                              'gkp-od-16cpu-32gb-arm64-128gb', 'gkp-8cpu-16gb-amd64',
-                              GKE_2, 'ubuntu-24.04', f'["self-hosted","{label}"]',
-                              f'"{label}"', '${{ inputs.runner }}'):
+                self.assertEqual(_jobs(workflows[name])[job].count(before), 1)
+                # Each fixture names its policy independently of the producer's
+                # route detection, runner tables and returned findings.
+                for wrong, policy in (
+                        (GKP_2, 'protected'), (GKP_4, 'protected'),
+                        (GKP_PREBUILT, 'protected'), (GKP_OD_4, 'protected'),
+                        (GKP_OD_PREBUILT, 'protected'),
+                        (GKP_BOOKWORM, 'protected'), (GKP_ARM64, 'protected_shape'),
+                        ('gkp-od-8cpu-16gb-amd64', 'protected'),
+                        ('gkp-od-16cpu-32gb-amd64', 'protected'),
+                        ('gkp-od-16cpu-32gb-arm64-128gb', 'protected_shape'),
+                        ('gkp-8cpu-16gb-amd64', 'protected'),
+                        (GKE_2, 'gke'), ('ubuntu-24.04', 'hosted'),
+                        (f'["self-hosted","{label}"]', 'protected_shape'),
+                        (f'"{label}"', 'protected_shape'),
+                        ('${{ inputs.runner }}', 'dynamic')):
                     if wrong == label:
                         continue
                     with self.subTest(workflow=name, job=job, runner=wrong):
-                        changed = in_job(workflows[name], job, before, routed_line(before, wrong))
+                        after = routed_line(before, wrong)
+                        changed = in_job(workflows[name], job, before, after)
                         self.assertNotEqual(changed, workflows[name])
-                        self.assertTrue(ci_preflight.runner_findings({**workflows, name: changed}))
+                        self.assertIn(after, _jobs(changed)[job])
+                        prefix = f'{name} job {job}'
+                        credential_finding = (f'{prefix} must keep production credentials '
+                                              'on a hosted standard runner')
+                        fixture_role = 'token-only' if job == 'prebuilt' else 'credentialed'
+                        if fixture_role == 'token-only':
+                            # Only the x64 matrix row changes; runs-on stays a
+                            # matrix expression and loses its exact admission.
+                            expected = [RELEASE_MATRIX_FINDING]
+                        else:
+                            suffix = '' if name == 'docs-post.yml' else ' (isolated release)'
+                            expected = [f'{prefix} must run on {label}{suffix}']
+                            if policy != 'hosted':
+                                expected.append(credential_finding)
+                        if policy in ('protected', 'protected_shape'):
+                            expected.append(f'{prefix} may use protected GKE routing '
+                                            'only at its exact pinned job and label')
+                            if policy == 'protected_shape' and job != 'prebuilt':
+                                expected.append(f'{prefix} must use a bare scalar '
+                                                'protected GKE scale-set name')
+                        elif policy == 'gke':
+                            expected.append(
+                                f'{prefix} may use GKE routing only at its exact pinned job and label')
+                            if fixture_role == 'credentialed':
+                                expected.append(f'{prefix} must not expose credentials on GKE')
+                            if fixture_role == 'token-only':
+                                expected.append(f'{prefix} must use a bare scalar GKE scale-set name')
+                        findings = ci_preflight.runner_findings({**workflows, name: changed})
+                        self.assertCountEqual(
+                            findings, expected,
+                            msg=f'{prefix}: wrong runner {wrong!r} ({policy})')
 
     def test_gkp_labels_no_unpinned(self):
         for event in ('workflow_dispatch', 'push', 'pull_request', 'workflow_call'):
-            for label in (GKP_2, GKP_4, GKP_PREBUILT, GKP_OD_4, GKP_OD_PREBUILT):
+            for label in (GKP_2, GKP_4, GKP_PREBUILT, GKP_OD_4, GKP_OD_PREBUILT,
+                          GKP_BOOKWORM, GKP_ARM64):
                 workflow = (f'on: {event}\njobs:\n  inspect:\n'
                             + runner_declaration(label) + '    steps:\n      - run: "true"\n')
                 with self.subTest(event=event, label=label):
@@ -891,30 +986,650 @@ class ProtectedGkeRunners(unittest.TestCase):
                                   ci_preflight.runner_findings({**workflows, name: changed}))
 
     def test_release_eigen_exact(self):
-        workflow = self.workflows()['release.yml']
+        workflows = self.workflows()
+        workflow = workflows['release.yml']
         prebuilt = _jobs(workflow)['prebuilt']
-        install = ci_preflight._step_named(ci_preflight._steps(prebuilt),
-                                           '      - name: Install Eigen3 (Linux)')
-        self.assertEqual(ci_preflight._step_values(install, 'if'), ["runner.os == 'Linux'"])
-        for command in ('sudo apt-get update', 'sudo apt-get install -y libeigen3-dev'):
-            self.assertIn(command, install)
-        assertion = ci_preflight._step_named(
+        steps = ci_preflight._steps(prebuilt)
+        install_name = 'Install Eigen3 (Linux)'
+        x86_name = 'Assert Eigen3 3.4.0 on the protected Linux x86_64 slice'
+        arm_name = 'Assert Eigen3 3.4.0 on ARM'
+        configure_name = 'Configure'
+        install, x86, arm, configure = (
+            ci_preflight._step_named(steps, '      - name: ' + name)
+            for name in (install_name, x86_name, arm_name, configure_name))
+        for name, step in ((install_name, install), (x86_name, x86),
+                           (arm_name, arm), (configure_name, configure)):
+            self.assertTrue(step, f'{name} must be exactly one named step')
+        # Host order: every Linux leg installs, each host asserts 3.4.0, then ARM configures.
+        self.assertLess(steps.index(install), steps.index(x86))
+        self.assertLess(steps.index(x86), steps.index(arm))
+        self.assertLess(steps.index(arm), steps.index(configure))
+        # Every Linux leg installs the unversioned package; the version is asserted
+        # afterwards, once per host, never inside the install step.
+        install_lines = [
+            '      - name: Install Eigen3 (Linux)',
+            "        if: runner.os == 'Linux'",
+            '        run: |',
+            '          sudo apt-get update',
+            '          sudo apt-get install -y libeigen3-dev']
+        # The protected x86_64 slice locates the headers, then asserts 3/4/0 through them.
+        x86_lines = [
+            '      - name: Assert Eigen3 3.4.0 on the protected Linux x86_64 slice',
+            "        if: runner.os == 'Linux' && matrix.triple == 'linux-x86_64'",
+            '        run: |',
+            '          set -euo pipefail',
+            '          hdr=""',
+            '          for p in /usr/include/eigen3/Eigen/Core /usr/local/include/eigen3/Eigen/Core; do',
+            '            if [ -f "$p" ]; then hdr="$p"; break; fi',
+            '          done',
+            '          if [ -z "$hdr" ]; then',
+            '            echo "::error::Eigen3 headers not found on the protected GKE runner"',
+            '            exit 1',
+            '          fi',
+            '          macros="$(dirname "$hdr")/src/Core/util/Macros.h"',
+            "          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' \"$macros\"",
+            "          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' \"$macros\"",
+            "          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' \"$macros\"",
+            '          echo "Eigen3 3.4.0 present at $(dirname "$(dirname "$hdr")")"']
+        # The ARM leg asserts 3/4/0 separately, in the exact headers CMake will consume.
+        arm_lines = [
+            '      - name: Assert Eigen3 3.4.0 on ARM',
+            "        if: runner.os == 'Linux' && matrix.triple == 'linux-aarch64'",
+            '        run: |',
+            '          set -euo pipefail',
+            '          macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h',
+            "          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' \"${macros}\"",
+            "          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' \"${macros}\"",
+            "          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' \"${macros}\""]
+        for step, lines in ((install, install_lines), (x86, x86_lines), (arm, arm_lines)):
+            self.assertEqual(ci_preflight._code(step), lines)
+        self.assertEqual(ci_preflight._code(ci_preflight.RELEASE_EIGEN_INSTALL_STEP),
+                         install_lines)
+        self.assertEqual(ci_preflight._code(ci_preflight.RELEASE_EIGEN_ASSERT_STEP), x86_lines)
+        self.assertNotIn('libeigen3-dev=', install)
+        self.assertNotIn('dpkg-query', install)
+        # The ARM configure consumes exactly the system Eigen the ARM step asserted.
+        for line in ("        if: matrix.triple == 'linux-aarch64'",
+                     '            -DEigen3_DIR=/usr/share/eigen3/cmake \\',
+                     '            -DFETCHCONTENT_FULLY_DISCONNECTED=ON \\',
+                     "          grep -Fx 'Eigen3_DIR:PATH=/usr/share/eigen3/cmake' build/CMakeCache.txt"):
+            self.assertIn(line, ci_preflight._code(configure))
+        builder = ci_preflight._step_named(
             ci_preflight._steps(prebuilt),
-            '      - name: Assert Eigen3 3.4.0 on the protected Linux x86_64 slice')
-        self.assertIn('/src/Core/util/Macros.h', assertion)
-        for macro, version in (('WORLD', 3), ('MAJOR', 4), ('MINOR', 0)):
-            check = f"grep -Eq '^#define EIGEN_{macro}_VERSION[[:space:]]+{version}[[:space:]]*$'"
-            self.assertIn(check, assertion)
-            changed = in_job(workflow, 'prebuilt', check, 'true # removed exact version check')
-            self.assertIn('release.yml prebuilt must install Eigen and assert exactly 3.4.0 '
-                          'before configuring',
-                          ci_preflight.runner_findings({'release.yml': changed}))
-        for old, new in (("if: runner.os == 'Linux'", "if: false"),
-                         ('sudo apt-get install -y libeigen3-dev', 'true')):
-            changed = in_job(workflow, 'prebuilt', old, new)
-            self.assertIn('release.yml prebuilt must install Eigen and assert exactly 3.4.0 '
-                          'before configuring',
-                          ci_preflight.runner_findings({'release.yml': changed}))
+            '      - name: Build x86_64 in preloaded Bookworm')
+        self.assertIn('bash scripts/build_prebuilt_bookworm.sh', builder)
+        eigen_finding = ('release.yml prebuilt must install Eigen and assert exactly 3.4.0 '
+                         'before configuring')
+        steps_finding = ('release.yml prebuilt must retain the credential-free Bookworm build, '
+                         'ARM Eigen setup, all-library glibc gate and packed-archive consumer '
+                         'before upload')
+        self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(workflow), [])
+        self.assertNotIn(eigen_finding, ci_preflight.runner_findings({'release.yml': workflow}))
+        # Each row alters one literal inside the named shipped step; a row whose old text
+        # is the whole step removes it. The macro text now appears in both host steps, so
+        # every row is applied inside its own step. Every row must break the whole-step
+        # contract; a `gated` row (install, x86_64 assertion, Configure anchor) must also
+        # break the named-step check that pins them before Configure.
+        for name, old, new, gated in (
+                # Install: every Linux leg, the index refresh and the unversioned package.
+                (install_name, "if: runner.os == 'Linux'", 'if: false', True),
+                (install_name, "if: runner.os == 'Linux'",
+                 "if: runner.os == 'Linux' && matrix.triple == 'linux-aarch64'", True),
+                (install_name, 'sudo apt-get update', 'true', True),
+                (install_name, 'sudo apt-get install -y libeigen3-dev', 'true', True),
+                (install_name, 'libeigen3-dev', 'libeigen3-dev=3.3.9-1', True),
+                (install_name, 'libeigen3-dev', 'libeigen3-dev=3.4.0-4', True),
+                (install_name, install, '', True),
+                # x86_64 assertion: host guard, strict shell, header search, macros path,
+                # missing-header exit and each of the three version headers.
+                (x86_name, "if: runner.os == 'Linux' && matrix.triple == 'linux-x86_64'",
+                 'if: false', True),
+                (x86_name, " && matrix.triple == 'linux-x86_64'", '', True),
+                (x86_name, 'set -euo pipefail', 'true', True),
+                (x86_name, '/usr/include/eigen3/Eigen/Core', '/other/eigen/Eigen/Core', True),
+                (x86_name, 'macros="$(dirname "$hdr")/src/Core/util/Macros.h"',
+                 'macros=/other/eigen/Eigen/src/Core/util/Macros.h', True),
+                (x86_name, 'exit 1', 'exit 0', True),
+                (x86_name, 'EIGEN_WORLD_VERSION[[:space:]]+3',
+                 'EIGEN_WORLD_VERSION[[:space:]]+4', True),
+                (x86_name, 'EIGEN_MAJOR_VERSION[[:space:]]+4',
+                 'EIGEN_MAJOR_VERSION[[:space:]]+3', True),
+                (x86_name, 'EIGEN_MINOR_VERSION[[:space:]]+0',
+                 'EIGEN_MINOR_VERSION[[:space:]]+1', True),
+                (x86_name, x86_name, 'Assert Eigen3 3.4.0 on Linux x86_64', True),
+                (x86_name, x86, '', True),
+                # ARM assertion: host guard, strict shell, macros path and the same three
+                # version headers, mutated in the ARM step only.
+                (arm_name, "if: runner.os == 'Linux' && matrix.triple == 'linux-aarch64'",
+                 'if: false', False),
+                (arm_name, " && matrix.triple == 'linux-aarch64'", '', False),
+                (arm_name, "matrix.triple == 'linux-aarch64'",
+                 "matrix.triple == 'linux-x86_64'", False),
+                (arm_name, 'set -euo pipefail', 'true', False),
+                (arm_name, 'macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h',
+                 'macros=/other/eigen/Eigen/src/Core/util/Macros.h', False),
+                (arm_name, 'EIGEN_WORLD_VERSION[[:space:]]+3',
+                 'EIGEN_WORLD_VERSION[[:space:]]+4', False),
+                (arm_name, 'EIGEN_MAJOR_VERSION[[:space:]]+4',
+                 'EIGEN_MAJOR_VERSION[[:space:]]+3', False),
+                (arm_name, 'EIGEN_MINOR_VERSION[[:space:]]+0',
+                 'EIGEN_MINOR_VERSION[[:space:]]+1', False),
+                (arm_name, arm_name, 'Assert Eigen3 3.4.0 on arm64', False),
+                (arm_name, arm, '', False),
+                # Configure: the Eigen directory, the cache proof and offline FetchContent.
+                (configure_name, '-DEigen3_DIR=/usr/share/eigen3/cmake',
+                 '-DEigen3_DIR=/other/eigen', False),
+                (configure_name,
+                 "grep -Fx 'Eigen3_DIR:PATH=/usr/share/eigen3/cmake' build/CMakeCache.txt",
+                 'true', False),
+                (configure_name, '-DFETCHCONTENT_FULLY_DISCONNECTED=ON',
+                 '-DFETCHCONTENT_FULLY_DISCONNECTED=OFF', False),
+                (configure_name, configure_name, 'Configure ARM', True)):
+            with self.subTest(step=name, old=old.splitlines()[0].strip(), new=new):
+                changed = in_step(workflow, 'prebuilt', name, old, new)
+                self.assertNotEqual(changed, workflow)
+                self.assertIn(steps_finding,
+                              ci_preflight.release_prebuilt_workflow_findings(changed))
+                if gated:
+                    self.assertIn(eigen_finding,
+                                  ci_preflight.runner_findings({'release.yml': changed}))
+        # Reordered copies keep every step and move one pair across the other: the
+        # assertion before its install, and Configure before either host assertion.
+        shipped_order = [ci_preflight._code(step)[0] for step in steps]
+        for label, changed, gated in (
+                ('x86_64 assertion before the install',
+                 workflow.replace(install + '\n' + x86, x86 + '\n' + install, 1), True),
+                ('Configure before the x86_64 assertion',
+                 workflow.replace(arm + '\n' + configure, arm, 1)
+                 .replace(x86, configure + '\n' + x86, 1), True),
+                ('Configure before the ARM assertion',
+                 workflow.replace(arm + '\n' + configure, configure + '\n' + arm, 1), False)):
+            with self.subTest(order=label):
+                order = [ci_preflight._code(step)[0]
+                         for step in ci_preflight._steps(_jobs(changed)['prebuilt'])]
+                self.assertNotEqual(order, shipped_order)
+                self.assertEqual(sorted(order), sorted(shipped_order))
+                self.assertIn(steps_finding,
+                              ci_preflight.release_prebuilt_workflow_findings(changed))
+                if gated:
+                    self.assertIn(eigen_finding,
+                                  ci_preflight.runner_findings({'release.yml': changed}))
+
+
+class PrebuiltCredentialAdmission(unittest.TestCase):
+    """Exercise the token-only prebuilt credential surface."""
+
+    DEPLOYMENT_ENVIRONMENT = '    environment: release\n'
+    CREDENTIAL_FINDING = ('release.yml job prebuilt must keep production credentials '
+                          'on a hosted standard runner')
+    NEEDS_FINDING = 'release.yml prebuilt must retain needs: release before build'
+    WORKFLOW_PERMISSIONS_FINDING = (
+        'release.yml prebuilt must retain workflow permissions: contents: write')
+    JOB_PERMISSIONS_FINDING = (
+        'release.yml prebuilt must retain job permissions: contents: write')
+    USES_FINDING = 'release.yml prebuilt must not use a reusable workflow'
+    EVENT_FINDING = 'release.yml must retain workflow_dispatch only for protected release jobs'
+    UNPARSED_FINDING = 'release.yml has jobs lines the runner contract cannot read'
+    PROTECTED_ROUTING_FINDING = (
+        'release.yml job prebuilt may use protected GKE routing '
+        'only at its exact pinned job and label')
+    PREBUILT_RUNNER_FINDING = (
+        'release.yml job prebuilt must run on ${{ matrix.runner }} (isolated release)')
+    CONTAINER_FINDING = (
+        'release.yml job prebuilt must not declare a job container on protected GKE')
+    SERVICES_FINDING = (
+        'release.yml job prebuilt must not declare job services on protected GKE')
+    INPUT_FINDING = ('release.yml prebuilt must not override toolchain, Docker or '
+                     'shared-path inputs')
+
+    def setUp(self):
+        self.workflows = {path.name: path.read_text()
+                          for path in (ROOT / '.github/workflows').glob('*.yml')}
+        self.shipped = self.workflows['release.yml']
+        self.release = self.shipped
+
+    def findings(self, workflow, *, name='release.yml'):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / name
+            path.write_text(workflow)
+            workflows = {**self.workflows, name: path.read_text()}
+            return ci_preflight.runner_findings(workflows)
+
+    def test_shipped_prebuilt_is_token_only_without_deployment_environment(self):
+        body = _jobs(self.shipped)['prebuilt']
+        self.assertEqual(ci_preflight._job_values(body, 'environment'), [])
+        self.assertIsNone(ci_preflight.GKP_JOB_ENVIRONMENTS['release.yml'].get('prebuilt'))
+        self.assertEqual(self.findings(self.shipped), [])
+
+    def test_shipped_inherited_release_tag_binding_is_not_a_shell_env_override(self):
+        self.assertEqual(ci_preflight._job_block(self.shipped, 'env'),
+                         ['env:', '  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"'])
+        self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(self.shipped), [])
+        self.assertEqual(self.findings(self.shipped), [])
+
+    def test_inherited_shell_docker_toolchain_and_shared_path_bindings_are_refused(self):
+        for name in ('BASH_ENV', 'ENV', 'eNv', 'PATH', 'DOCKER_HOST', 'DOCKER_CONFIG',
+                     'CMAKE_TOOLCHAIN_FILE', 'CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS',
+                     'GITHUB_ENV', 'GITHUB_WORKSPACE', 'GITHUB_OUTPUT', 'GITHUB_UNLISTED',
+                     'RUNNER_TEMP', 'RUNNER_UNLISTED', 'STAGE_DIR', 'SOURCE_SHA', 'TRIPLE',
+                     'ENGINE_TOOLCHAIN_IMAGE'):
+            for quote in ('', '"', "'"):
+                for scope in ('workflow', 'job'):
+                    with self.subTest(name=name, quote=quote, scope=scope):
+                        binding = f'{quote}{name}{quote}: /outside/input\n'
+                        if scope == 'workflow':
+                            changed = self.shipped.replace('env:\n', 'env:\n  ' + binding, 1)
+                        else:
+                            changed = in_job(
+                                self.shipped, 'prebuilt', '    steps:\n',
+                                '    env:\n      ' + binding + '    steps:\n')
+                        self.assertNotEqual(changed, self.shipped)
+                        self.assertIn(self.INPUT_FINDING,
+                                      ci_preflight.release_prebuilt_workflow_findings(changed))
+
+    def test_duplicate_flow_and_expression_inherited_environments_fail_closed(self):
+        original = 'env:\n  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"\n'
+        self.assertEqual(self.shipped.count(original), 1)
+        for value in ('env: {BASH_ENV: /outside/input}\n',
+                      'env: ${{ inputs.environment }}\n',
+                      original + 'env:\n  ENV: /outside/input\n'):
+            with self.subTest(scope='workflow', value=value):
+                changed = self.shipped.replace(original, value, 1)
+                self.assertNotEqual(changed, self.shipped)
+                self.assertIn(self.INPUT_FINDING,
+                              ci_preflight.release_prebuilt_workflow_findings(changed))
+        for value in ('    env: {DOCKER_HOST: "tcp://outside:2375"}\n',
+                      '    env: ${{ inputs.environment }}\n',
+                      '    env:\n      TOKEN: ${{ github.token }}\n'
+                      '    env:\n      ENV: /outside/input\n'):
+            with self.subTest(scope='job', value=value):
+                changed = in_job(self.shipped, 'prebuilt', '    steps:\n',
+                                 value + '    steps:\n')
+                self.assertIn(self.INPUT_FINDING,
+                              ci_preflight.release_prebuilt_workflow_findings(changed))
+
+    def test_only_github_token_without_deployment_environment_is_admitted(self):
+        self.assertIn('${{ secrets.GITHUB_TOKEN }}', _jobs(self.release)['prebuilt'])
+        self.assertEqual(ci_preflight._job_values(_jobs(self.release)['prebuilt'],
+                                                 'environment'), [])
+        self.assertEqual(self.findings(self.release), [])
+        for reference in ('secrets.GITHUB_TOKEN', "secrets['GITHUB_TOKEN']",
+                          'secrets["GITHUB_TOKEN"]', 'github.token'):
+            with self.subTest(reference=reference):
+                changed = in_job(self.release, 'prebuilt', '    steps:\n',
+                                 '    env:\n      TOKEN: ${{ ' + reference + ' }}\n'
+                                 '    steps:\n')
+                self.assertNotEqual(changed, self.release)
+                self.assertEqual(self.findings(changed), [])
+
+    def with_run_content(self, content):
+        anchor = ('      - name: Bundle docs into tarball root\n'
+                  '        run: |\n'
+                  '          set -euo pipefail\n')
+        self.assertEqual(_jobs(self.release)['prebuilt'].count(anchor), 1)
+        changed = in_job(self.release, 'prebuilt', anchor,
+                         anchor + '          ' + content + '\n')
+        self.assertIn('          ' + content + '\n', _jobs(changed)['prebuilt'])
+        return changed
+
+    def with_trailing_workflow_env(self, binding):
+        original = 'env:\n  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"\n'
+        self.assertEqual(self.release.count(original), 1)
+        changed = self.release.replace(original, '', 1).rstrip('\n')
+        changed += '\n\n' + original + binding
+        self.assertGreater(changed.index('\nenv:\n'), changed.index('\njobs:\n'))
+        self.assertEqual(_jobs(changed)['prebuilt'], _jobs(self.release)['prebuilt'])
+        return changed
+
+    def assert_secret_refused(self, changed):
+        self.assertNotEqual(changed, self.release)
+        self.assertEqual(ci_preflight._job_values(_jobs(changed)['prebuilt'],
+                                                 'environment'), [])
+        self.assertIn(self.CREDENTIAL_FINDING, self.findings(changed))
+
+    def assert_prebuilt_admission_refused(self, changed, finding):
+        self.assertNotEqual(changed, self.release)
+        findings = self.findings(changed)
+        self.assertIn(finding, findings)
+        self.assertNotIn(self.CREDENTIAL_FINDING, findings)
+
+    def test_hash_led_run_block_secret_is_refused(self):
+        changed = self.with_run_content('# ${{ secrets.DEPLOY_TOKEN }}')
+        self.assert_secret_refused(changed)
+
+    def test_inline_run_block_secret_is_refused(self):
+        changed = self.with_run_content(': # ${{ secrets.DEPLOY_TOKEN }}')
+        self.assert_secret_refused(changed)
+
+    def test_bracket_run_comment_secrets_are_refused(self):
+        for reference in ("secrets['DEPLOY_TOKEN']", 'secrets["DEPLOY_TOKEN"]',
+                          "secrets [ 'DEPLOY_TOKEN' ]"):
+            for prefix in ('# ', '#', ': # ', ': #'):
+                with self.subTest(reference=reference, prefix=prefix):
+                    changed = self.with_run_content(prefix + '${{ ' + reference + ' }}')
+                    self.assert_secret_refused(changed)
+
+    def test_workflow_env_after_jobs_secrets_are_refused(self):
+        for binding in (
+                '  TOKEN: ${{ secrets.DEPLOY_TOKEN }}\n',
+                '  TOKEN: "${{ secrets[\'DEPLOY_TOKEN\'] }}"\n',
+                '  TOKEN: "prefix # ${{ secrets.DEPLOY_TOKEN }}"\n',
+                '  TOKEN: |\n    # ${{ secrets["DEPLOY_TOKEN"] }}\n'):
+            with self.subTest(binding=binding):
+                self.assert_secret_refused(
+                    self.with_trailing_workflow_env(binding))
+
+    def test_raw_header_and_quoted_hash_secrets_are_refused(self):
+        for replacement in (
+                'name: Release\n# ${{ secrets.DEPLOY_TOKEN }}\n',
+                'name: Release\n#${{ secrets["DEPLOY_TOKEN"] }}\n',
+                'name: Release # ${{ secrets[\'DEPLOY_TOKEN\'] }}\n'):
+            with self.subTest(header=replacement):
+                self.assertEqual(self.release.count('name: Release\n'), 1)
+                changed = self.release.replace('name: Release\n', replacement, 1)
+                self.assert_secret_refused(changed)
+        changed = in_job(
+            self.release, 'prebuilt', '    steps:\n',
+            '    env:\n      TOKEN: "prefix # ${{ secrets.DEPLOY_TOKEN }}"\n'
+            '    steps:\n')
+        self.assert_secret_refused(changed)
+
+    def test_comment_whole_dynamic_and_lookalike_secret_contexts_are_refused(self):
+        for reference in (
+                'secrets', 'toJSON(secrets)', 'secrets[inputs.secret_name]',
+                "secrets[format('{0}', 'DEPLOY_TOKEN')]",
+                'secrets.GITHUB_TOKEN_SUFFIX', "secrets['GITHUB_TOKEN_SUFFIX']",
+                "format('}}{0}', toJSON(secrets))",
+                "format('it''s }}{0}', toJSON(secrets))"):
+            with self.subTest(reference=reference):
+                changed = self.with_run_content('# ${{ ' + reference + ' }}')
+                self.assert_secret_refused(changed)
+
+    def test_github_token_raw_comments_and_trailing_workflow_env_are_admitted(self):
+        self.assertEqual(self.findings(self.release), [])
+        for reference in ('secrets.GITHUB_TOKEN', "secrets['GITHUB_TOKEN']",
+                          'secrets["GITHUB_TOKEN"]', 'github.token'):
+            for prefix in ('# ', '#'):
+                with self.subTest(reference=reference, prefix=prefix):
+                    changed = self.with_run_content(prefix + '${{ ' + reference + ' }}')
+                    self.assertNotEqual(changed, self.release)
+                    self.assertEqual(self.findings(changed), [])
+            with self.subTest(reference=reference, scope='trailing workflow env'):
+                changed = self.with_trailing_workflow_env(
+                    '  TOKEN: "prefix # ${{ ' + reference + ' }}"\n')
+                self.assertNotEqual(changed, self.release)
+                self.assertEqual(self.findings(changed), [])
+        prose = self.with_run_content('# The secrets context is evaluated before the shell.')
+        self.assertEqual(self.findings(prose), [])
+        for documentation in (
+                '# secrets PINEFORGE_APP_ID + PINEFORGE_APP_PRIVATE_KEY\n',
+                '# private-key inputs are documented here, not supplied.\n',
+                'run-name: "Document private-key inputs # without supplying them"\n'):
+            with self.subTest(documentation=documentation):
+                changed = documentation + self.release
+                self.assertNotEqual(changed, self.release)
+                self.assertEqual(self.findings(changed), [])
+        prose = self.with_run_content('# PINEFORGE_APP_PRIVATE_KEY is documentation.')
+        self.assertNotEqual(prose, self.release)
+        self.assertEqual(self.findings(prose), [])
+        prose = self.with_run_content('# python3 mint.py --private-key example.pem')
+        self.assertNotEqual(prose, self.release)
+        self.assertEqual(self.findings(prose), [])
+
+    def test_other_jobs_app_credentials_do_not_enter_the_prebuilt_scan(self):
+        self.assertEqual(self.findings(self.release), [])
+        for job in ('release', 'notify-hub'):
+            with self.subTest(job=job):
+                body = _jobs(self.release)[job]
+                self.assertIn('uses: actions/create-github-app-token@', body)
+                self.assertIn('private-key: ${{ secrets.', body)
+                changed = in_job(
+                    self.release, job, '    steps:\n',
+                    '    env:\n      EXTRA_TOKEN: ${{ secrets.OTHER_TOKEN }}\n'
+                    '    steps:\n')
+                self.assertNotEqual(changed, self.release)
+                self.assertEqual(_jobs(changed)['prebuilt'], _jobs(self.release)['prebuilt'])
+                self.assertEqual(self.findings(changed), [])
+
+    def test_prebuilt_admission_requires_release_needs(self):
+        for replacement in ('', '    needs: other\n',
+                            '    needs: [release, notify-hub]\n',
+                            '    needs: ${{ inputs.needs }}\n',
+                            '    needs: release\n' * 2):
+            with self.subTest(needs=replacement):
+                changed = in_job(self.release, 'prebuilt', '    needs: release\n',
+                                 replacement)
+                self.assert_prebuilt_admission_refused(changed, self.NEEDS_FINDING)
+
+    def test_prebuilt_admission_refuses_duplicate_strategy_keys(self):
+        block = '\n'.join(ci_preflight._job_block(
+            _jobs(self.release)['prebuilt'], 'strategy')) + '\n'
+        self.assertEqual(_jobs(self.release)['prebuilt'].count(block), 1)
+        changed = in_job(self.release, 'prebuilt', block, block * 2)
+        self.assertEqual(len(ci_preflight._job_values(
+            _jobs(changed)['prebuilt'], 'strategy')), 2)
+        self.assert_prebuilt_admission_refused(changed, RELEASE_MATRIX_FINDING)
+
+    def test_prebuilt_admission_refuses_missing_strategy_key(self):
+        block = '\n'.join(ci_preflight._job_block(
+            _jobs(self.release)['prebuilt'], 'strategy')) + '\n'
+        self.assertEqual(_jobs(self.release)['prebuilt'].count(block), 1)
+        changed = in_job(self.release, 'prebuilt', block, '')
+        self.assertEqual(ci_preflight._job_values(_jobs(changed)['prebuilt'], 'strategy'), [])
+        self.assert_prebuilt_admission_refused(changed, RELEASE_MATRIX_FINDING)
+
+    def test_prebuilt_admission_refuses_job_level_uses(self):
+        changed = in_job(
+            self.release, 'prebuilt', '    steps:\n',
+            '    uses: ./.github/workflows/reusable.yml\n    steps:\n')
+        self.assert_prebuilt_admission_refused(changed, self.USES_FINDING)
+
+    def test_prebuilt_admission_refuses_unparsed_job_mappings(self):
+        self.assertEqual(self.release.count('\njobs:\n'), 1)
+        changed = self.release.replace(
+            '\njobs:\n', '\njobs:\n  "unparsed-job":\n'
+            '    runs-on: ubuntu-24.04\n    steps: []\n', 1)
+        self.assertTrue(ci_preflight._unparsed(changed))
+        self.assert_prebuilt_admission_refused(changed, self.UNPARSED_FINDING)
+
+    def test_prebuilt_admission_refuses_direct_event_additions(self):
+        self.assertEqual(self.release.count('\non:\n'), 1)
+        for event in ('push', 'pull_request', 'workflow_call'):
+            with self.subTest(event=event):
+                changed = self.release.replace('\non:\n', '\non:\n  ' + event + ':\n', 1)
+                self.assertEqual(ci_preflight._events(changed),
+                                 {'workflow_dispatch', event})
+                self.assert_prebuilt_admission_refused(changed, self.EVENT_FINDING)
+
+    def test_prebuilt_admission_requires_exact_token_permissions(self):
+        for scope in ('workflow', 'job'):
+            for replacement in ('', 'permissions: read-all\n',
+                                'permissions:\n  contents: read\n',
+                                'permissions:\n  contents: write\n  actions: write\n'):
+                with self.subTest(scope=scope, permissions=replacement):
+                    if scope == 'workflow':
+                        changed = self.release.replace(
+                            'permissions:\n  contents: write\n', replacement, 1)
+                    else:
+                        indented = ''.join('    ' + line + '\n'
+                                           for line in replacement.splitlines())
+                        changed = in_job(
+                            self.release, 'prebuilt',
+                            '    permissions:\n      contents: write   # gh release upload\n',
+                            indented)
+                    finding = (self.WORKFLOW_PERMISSIONS_FINDING if scope == 'workflow'
+                               else self.JOB_PERMISSIONS_FINDING)
+                    self.assert_prebuilt_admission_refused(changed, finding)
+
+    def test_added_deployment_environments_are_refused(self):
+        for replacement in (
+                self.DEPLOYMENT_ENVIRONMENT, '    environment: other\n',
+                '    environment:\n',
+                '    environment: ""\n', "    environment: ''\n",
+                '    environment: "   "\n', '    environment: null\n',
+                '    environment: ${{ inputs.environment }}\n',
+                '    environment: ${{ \'release\' }}\n',
+                '    environment: [release]\n',
+                '    environment:\n      name: release\n',
+                self.DEPLOYMENT_ENVIRONMENT * 2,
+                self.DEPLOYMENT_ENVIRONMENT + '    environment: other\n'):
+            with self.subTest(environment=replacement):
+                changed = in_job(
+                    self.release, 'prebuilt', '    needs: release\n',
+                    '    needs: release\n' + replacement)
+                self.assertNotEqual(changed, self.release)
+                self.assertIn(self.CREDENTIAL_FINDING, self.findings(changed))
+        step_only = self.release
+        step_only = in_job(step_only, 'prebuilt', '    steps:\n',
+                           '    steps:\n      - run: "true"\n'
+                           '        environment: release\n')
+        self.assertIn(
+            'release.yml prebuilt must retain the credential-free Bookworm build, '
+            'ARM Eigen setup, all-library glibc gate and packed-archive consumer '
+            'before upload',
+            self.findings(step_only))
+
+    def test_prebuilt_keeps_production_secret_rejections(self):
+        for reference in ('secrets.DEPLOY_KEY', "secrets['DEPLOY_KEY']",
+                          'secrets[inputs.secret_name]', 'secrets . DEPLOY_KEY',
+                          'toJSON(secrets)', 'secrets'):
+            for location in ('job', 'step', 'workflow'):
+                with self.subTest(reference=reference, location=location):
+                    value = '${{ ' + reference + ' }}'
+                    if location == 'workflow':
+                        changed = self.release.replace(
+                            'env:\n', 'env:\n  DEPLOY_TOKEN: ' + value + '\n', 1)
+                    else:
+                        insertion = ('    env:\n      DEPLOY_TOKEN: ' + value + '\n'
+                                     '    steps:\n' if location == 'job' else
+                                     '    steps:\n      - run: "true"\n'
+                                     '        env:\n          DEPLOY_TOKEN: ' + value + '\n')
+                        changed = in_job(self.release, 'prebuilt', '    steps:\n', insertion)
+                    self.assertNotEqual(changed, self.release)
+                    self.assertIn(self.CREDENTIAL_FINDING, self.findings(changed))
+        for secrets in ('inherit', '${{ inputs.secrets }}',
+                        '\n      DEPLOY_TOKEN: ${{ secrets.DEPLOY_KEY }}'):
+            with self.subTest(secrets=secrets):
+                changed = in_job(self.release, 'prebuilt', '    steps:\n',
+                                 '    secrets: ' + secrets + '\n    steps:\n')
+                self.assertIn(self.CREDENTIAL_FINDING, self.findings(changed))
+
+    def test_prebuilt_keeps_app_mint_and_private_key_rejections(self):
+        for step in (
+                '      - uses: actions/create-github-app-token@' + ActionPins.SHA
+                + ' # v2.0.0\n',
+                '      - uses: tibdex/github-app-token@' + ActionPins.SHA + ' # v2.0.0\n',
+                '      - uses: example/token@' + ActionPins.SHA + ' # v1.0.0\n'
+                '        with:\n          private-key: ${{ github.token }}\n',
+                '      - uses: example/token@' + ActionPins.SHA + ' # v1.0.0\n'
+                '        with:\n          private_key: ${{ secrets.RELEASE_PEM }}\n',
+                '      - uses: example/token@' + ActionPins.SHA + ' # v1.0.0\n'
+                '        with:\n          "private-key": ${{ github.token }}\n',
+                '      - run: python3 mint.py\n'
+                '        env:\n          APP_PRIVATE_KEY: literal-key-input\n',
+                '      - run: python3 mint.py\n'
+                '        env:\n          APP_KEY: |\n'
+                '            -----BEGIN RSA PRIVATE KEY-----\n'
+                '            key-material\n'
+                '            -----END RSA PRIVATE KEY-----\n',
+                '      - run: python3 mint.py --private-key example.pem\n',
+                '      - run: gh api --method POST app/installations/123/access_tokens\n',
+                '      - run: node -e "createAppAuth({appId, privateKey})"\n'):
+            with self.subTest(step=step):
+                changed = in_job(self.release, 'prebuilt', '    steps:\n',
+                                 '    steps:\n' + step)
+                self.assertIn(self.CREDENTIAL_FINDING, self.findings(changed))
+
+    def test_prebuilt_keeps_job_and_workflow_oidc_rejections(self):
+        for permissions in ('write-all',
+                            '\n      contents: write\n      id-token: write'):
+            with self.subTest(permissions=permissions):
+                changed = in_job(
+                    self.release, 'prebuilt',
+                    '    permissions:\n      contents: write   # gh release upload\n',
+                    '    permissions: ' + permissions + '\n')
+                self.assertIn(self.CREDENTIAL_FINDING, self.findings(changed))
+        inherited = self.release.replace(
+            'permissions:\n  contents: write\n',
+            'permissions:\n  contents: write\n  id-token: write\n', 1)
+        self.assertNotEqual(inherited, self.release)
+        self.assertIn(self.CREDENTIAL_FINDING, self.findings(inherited))
+
+    def test_prebuilt_admission_requires_the_exact_job_matrix_and_runners(self):
+        for before, after, finding in (
+                ('    runs-on: ${{ matrix.runner }}\n', runner_declaration(GKP_OD_PREBUILT),
+                 self.PREBUILT_RUNNER_FINDING),
+                ('    runs-on: ${{ matrix.runner }}\n', runner_declaration(GKP_PREBUILT),
+                 self.PREBUILT_RUNNER_FINDING),
+                ('    runs-on: ${{ matrix.runner }}\n', '    runs-on: ${{ inputs.runner }}\n',
+                 self.PREBUILT_RUNNER_FINDING),
+                ('    runs-on: ${{ matrix.runner }}\n',
+                 '    runs-on: ${{ matrix.runner }}\n' * 2,
+                 self.PREBUILT_RUNNER_FINDING),
+                (f'            runner: {GKP_OD_PREBUILT}\n',
+                 '            runner: gkp-od-8cpu-16gb-amd64\n',
+                 RELEASE_MATRIX_FINDING),
+                (f'            runner: {GKP_OD_PREBUILT}\n',
+                 '            runner: gkp-od-16cpu-32gb-arm64-128gb\n',
+                 RELEASE_MATRIX_FINDING),
+                ('            runner: ubuntu-22.04-arm\n',
+                 '            runner: ubuntu-24.04-arm\n',
+                 RELEASE_MATRIX_FINDING),
+                (f'            runner: {GKP_OD_PREBUILT}\n',
+                 f'            runner: {GKP_BOOKWORM}\n',
+                 RELEASE_MATRIX_FINDING),
+                ('            runner: ubuntu-22.04-arm\n',
+                 f'            runner: {GKP_ARM64}\n',
+                 RELEASE_MATRIX_FINDING),
+                ('          - triple: linux-x86_64\n', '          - triple: linux-other\n',
+                 RELEASE_MATRIX_FINDING),
+                ('      fail-fast: false\n', '      fail-fast: true\n',
+                 RELEASE_MATRIX_FINDING),
+                ('    steps:\n', '    container: ubuntu:24.04\n    steps:\n',
+                 self.CONTAINER_FINDING),
+                ('    steps:\n', '    services:\n      db:\n        image: postgres:16\n'
+                 '    steps:\n', self.SERVICES_FINDING)):
+            with self.subTest(before=before, after=after):
+                changed = in_job(self.release, 'prebuilt', before, after)
+                self.assertNotEqual(changed, self.release)
+                self.assert_prebuilt_admission_refused(changed, finding)
+        renamed = self.release.replace('\n  prebuilt:\n', '\n  prebuilt-unlisted:\n', 1)
+        self.assertNotEqual(renamed, self.release)
+        renamed_findings = self.findings(renamed)
+        self.assertIn(self.PROTECTED_ROUTING_FINDING.replace(
+            'job prebuilt ', 'job prebuilt-unlisted '), renamed_findings)
+        self.assertNotIn(self.CREDENTIAL_FINDING, renamed_findings)
+        unlisted_findings = self.findings(self.release, name='unlisted.yml')
+        self.assertIn(self.PROTECTED_ROUTING_FINDING.replace(
+            'release.yml ', 'unlisted.yml '), unlisted_findings)
+        self.assertNotIn(self.CREDENTIAL_FINDING.replace('release.yml ', 'unlisted.yml '),
+                         unlisted_findings)
+        caller = ('on: pull_request\njobs:\n  call:\n'
+                  '    uses: ./.github/workflows/release.yml\n')
+        caller_findings = ci_preflight.runner_findings(
+            {**self.workflows, 'release.yml': self.release, 'caller.yml': caller})
+        self.assertIn('release.yml must not admit untrusted caller events '
+                      'to isolated release jobs', caller_findings)
+        self.assertNotIn(self.CREDENTIAL_FINDING, caller_findings)
+
+    def test_workflow_contract_consumes_prebuilt_environment_mutations(self):
+        sources = [(ROOT / path).read_text() for path in CI_SOURCES]
+        named = {Path(path).name for path in CI_SOURCES}
+        others = {name: text for name, text in self.workflows.items() if name not in named}
+        self.assertEqual(ci_workflow_findings(
+            *sources, others={**others, 'release.yml': self.release}), [])
+        for replacement in (self.DEPLOYMENT_ENVIRONMENT, '    environment: other\n',
+                            self.DEPLOYMENT_ENVIRONMENT * 2):
+            with self.subTest(environment=replacement), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'release.yml'
+                changed = in_job(
+                    self.release, 'prebuilt', '    needs: release\n',
+                    '    needs: release\n' + replacement)
+                self.assertNotEqual(changed, self.release)
+                path.write_text(changed)
+                findings = ci_workflow_findings(
+                    *sources, others={**others, 'release.yml': path.read_text()})
+                self.assertIn(self.CREDENTIAL_FINDING, findings)
 
 
 class WorkflowEventFleets(unittest.TestCase):
@@ -1982,6 +2697,20 @@ class PostFleetRunnerPolicy(unittest.TestCase):
     def test_post_fleet_docs_match_runner_policy(self):
         docs = (ROOT / 'docs/ci.md').read_text()
         self.assertEqual(len(docs.splitlines()), 2063)
+        # The test-owned job catalog defines the protected label inventory.
+        tables = re.findall(
+            r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
+            r'\| --- \| --- \| --- \|\n((?:\|[^\n]+\|\n)+)',
+            docs, re.MULTILINE)
+        self.assertEqual(len(tables), 1, 'one documented runner table')
+        rows = re.findall(r'^\| `([^`]+)` \|[^|\n]*\|([^|\n]*)\|$',
+                          tables[0], re.MULTILINE)
+        for name, jobs in EXPECTED_GKP_JOBS.items():
+            cells = [cell for workflow, cell in rows if workflow == name]
+            self.assertEqual(len(cells), 1, f'{name} documented runner row')
+            self.assertEqual(set(re.findall(r'`(gkp-[^`]+)`', cells[0])),
+                             set(jobs.values()),
+                             f'{name} documented protected runner inventory')
         requirements = (
             'Post Release/Debug/kernel, native shards and post sanitizers use fixed bare GKE scale-set names.\n'
             'The two native-live sanitizer profiles use an exact runner matrix. All GKE jobs run directly '
@@ -2031,6 +2760,21 @@ class PostFleetRunnerPolicy(unittest.TestCase):
         for required in requirements:
             with self.subTest(required=required):
                 self.assertIn(required, docs)
+
+    def test_post_fleet_docs_refuse_same_size_wrong_protected_runner(self):
+        docs = (ROOT / 'docs/ci.md').read_text()
+        rows = [line for line in docs.splitlines()
+                if line.startswith('| `docs-post.yml` |')]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].count(f'`{GKP_4}`'), 1)
+        changed = docs.replace(rows[0], rows[0].replace(GKP_4, GKE_4, 1), 1)
+        self.assertNotEqual(changed, docs)
+        self.assertEqual(len(changed.splitlines()), len(docs.splitlines()))
+        with mock.patch.object(Path, 'read_text', return_value=changed) as read_doc:
+            with self.assertRaisesRegex(
+                    AssertionError, r'docs-post\.yml documented protected runner inventory'):
+                self.test_post_fleet_docs_match_runner_policy()
+        read_doc.assert_called_once_with()
 
 
 POST_SHARD_CASES = (
@@ -3018,6 +3762,8 @@ class CiFileLoading(unittest.TestCase):
     DOCS_POST = '.github/workflows/docs-post.yml'
     CONFIG = '.github/actionlint.yaml'
     CMAKE = 'tests/CMakeLists.txt'
+    HELPER = 'scripts/build_prebuilt_bookworm.sh'
+    CONSUMER = 'scripts/check_shipped_archive_runtime.sh'
 
     @staticmethod
     def action_sources():
@@ -3031,7 +3777,7 @@ class CiFileLoading(unittest.TestCase):
     def workflow_sources(self):
         return [name for name in self.action_sources() if name.startswith('.github/workflows/')]
 
-    def make_tree(self):
+    def make_tree(self, *, include_helper=True):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         tree = Path(directory.name)
@@ -3040,6 +3786,11 @@ class CiFileLoading(unittest.TestCase):
         shutil.copyfile(ROOT / self.CONFIG, tree / self.CONFIG)
         (tree / 'tests').mkdir()
         shutil.copyfile(ROOT / self.CMAKE, tree / self.CMAKE)
+        (tree / 'scripts').mkdir(exist_ok=True)
+        shutil.copyfile(ROOT / CiFileLoading.CONSUMER, tree / CiFileLoading.CONSUMER)
+        if include_helper:
+            helper = CiFileLoading.HELPER
+            shutil.copyfile(ROOT / helper, tree / helper)
         return tree
 
     def crlf_tree(self, names):
@@ -3121,7 +3872,8 @@ class CiFileLoading(unittest.TestCase):
         changed = (ROOT / self.DOCS).read_bytes()[:-1] + b'\r'
         tree = self.make_tree()
         shutil.copytree(ROOT / 'scripts', tree / 'scripts',
-                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'),
+                        dirs_exist_ok=True)
         (tree / self.DOCS).write_bytes(changed)
         argv = {entry[0]: entry[1] for entry in check_commands(tree)}['ci-workflow-contract']
         result = subprocess.run(argv, cwd=tree, capture_output=True, text=True)
@@ -3145,6 +3897,73 @@ class CiFileLoading(unittest.TestCase):
             self.DOCS, original.count(b'\n') + 1, 'actions/checkout@main')], output)
         self.assertEqual(code, 1, output)
 
+    def test_required_bookworm_helper_is_copied_from_the_genuine_source(self):
+        tree = self.make_tree()
+        self.assertEqual((tree / self.HELPER).read_bytes(), (ROOT / self.HELPER).read_bytes())
+        self.assertFalse((tree / self.HELPER).is_symlink())
+        code, output = self.run_stage(tree, '--check-ci-workflow')
+        self.assertEqual(code, 0, output)
+
+    def test_required_bookworm_consumer_is_copied_from_the_genuine_source(self):
+        consumer = CiFileLoading.CONSUMER
+        tree = self.make_tree()
+        self.assertEqual((tree / consumer).read_bytes(), (ROOT / consumer).read_bytes())
+        self.assertFalse((tree / consumer).is_symlink())
+        code, output = self.run_stage(tree, '--check-ci-workflow')
+        self.assertEqual(code, 0, output)
+
+    def test_missing_or_symlink_bookworm_helper_is_refused(self):
+        finding = 'release prebuilt Bookworm helper must be a regular source file'
+        for kind in ('missing', 'file-symlink', 'parent-symlink'):
+            with self.subTest(kind=kind):
+                tree = self.make_tree(include_helper=False)
+                if kind != 'missing':
+                    genuine = tree / 'helper-inputs'
+                    genuine.mkdir()
+                    shutil.copyfile(ROOT / self.HELPER, genuine / 'build_prebuilt_bookworm.sh')
+                    if kind == 'parent-symlink':
+                        shutil.rmtree(tree / 'scripts')
+                        (tree / 'scripts').symlink_to(genuine, target_is_directory=True)
+                    else:
+                        (tree / 'scripts').mkdir(exist_ok=True)
+                        (tree / self.HELPER).symlink_to(genuine / 'build_prebuilt_bookworm.sh')
+                code, output = self.run_stage(tree, '--check-ci-workflow')
+                self.assertEqual(code, 1, output)
+                self.assertIn(finding, output)
+
+    def test_missing_bookworm_consumer_is_refused_by_its_source_pin(self):
+        consumer = CiFileLoading.CONSUMER
+        tree = self.make_tree()
+        (tree / consumer).unlink()
+        code, output = self.run_stage(tree, '--check-ci-workflow')
+        finding = 'release prebuilt archive consumer must be a regular source file'
+        self.assertEqual(code, 1, output)
+        self.assertEqual(output.splitlines(), [finding], output)
+
+    def test_changed_bookworm_consumer_is_refused_by_its_source_pin(self):
+        consumer = CiFileLoading.CONSUMER
+        original = (ROOT / consumer).read_bytes()
+        self.assertTrue(original.endswith(b'\n') and b'\r' not in original)
+        tree = self.make_tree()
+        (tree / consumer).write_bytes(original + b'# changed source\n')
+        code, output = self.run_stage(tree, '--check-ci-workflow')
+        finding = ('release prebuilt archive consumer differs from the reviewed full-library '
+                   'native consumer source contract')
+        self.assertEqual(code, 1, output)
+        self.assertEqual(output.splitlines(), [finding], output)
+
+    def test_changed_bookworm_helper_and_line_endings_are_refused_by_the_source_pin(self):
+        original = (ROOT / self.HELPER).read_bytes()
+        self.assertTrue(original.endswith(b'\n') and b'\r' not in original)
+        for changed in (original + b'# changed source\n',
+                        original.replace(b'\n', b'\r\n'), original[:-1] + b'\r'):
+            with self.subTest(ending=changed[-40:]):
+                tree = self.make_tree()
+                (tree / self.HELPER).write_bytes(changed)
+                code, output = self.run_stage(tree, '--check-ci-workflow')
+                self.assertEqual(code, 1, output)
+                self.assertIn('release prebuilt Bookworm helper differs from the reviewed', output)
+
     def test_the_combined_checker_takes_the_file_texts_as_stored(self):
         sources = [(ROOT / path).read_bytes().decode('utf-8') for path in CI_SOURCES]
         self.assertEqual(ci_workflow_findings(*sources), [])
@@ -3154,7 +3973,7 @@ class CiFileLoading(unittest.TestCase):
 
     def test_a_file_that_is_not_utf8_is_a_finding_not_a_crash(self):
         for name in (self.DOCS, '.github/workflows/release.yml',
-                     '.github/actions/setup-live-curl/action.yml', self.CMAKE):
+                     '.github/actions/setup-live-curl/action.yml', self.CMAKE, self.HELPER):
             with self.subTest(name=name):
                 self.assert_undecodable_is_a_finding(name, '--check-ci-workflow')
 
@@ -3624,7 +4443,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'native-c-surface-tests', 'kernel-residuals-tests', 'corpus-parity-identity-tests',
             'corpus-parity-subset-cover-tests', 'report-schema-key-tests',
             'selected-window-ownership-tests', 'report-outputs-key-tests', 'release-version-tests',
-            'release-gate-tests', 'run-failure-diff-tests', 'run-json-harness-tests',
+            'release-gate-tests', 'prebuilt-bookworm-tests', 'prebuilt-glibc-tests',
+            'run-failure-diff-tests', 'run-json-harness-tests',
             'docs-only-tests', 'design-inventory-tests', 'design-inventory',
             'detached-comments-tests', 'detached-comments', 'native-tempdir-tests',
             'dangling-comment-names-tests', 'doc-anchors-tests', 'doc-anchors',
@@ -3633,12 +4453,97 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'kernel-seam-rows-tests', 'kernel-seam-rows', 'doc-pine-coverage',
             'doc-pine-coverage-tests', 'duplicate-test-names-tests', 'duplicate-test-names',
         ]
-        self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
-        # main() prepends actionlint-version to all/fast/github-only.
-        self.assertEqual(len(expected) + 1, 63)
-        self.assertEqual(len(check_commands(ROOT, tier='fast')), 58)
-        self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
-        self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
+        with mock.patch.object(ci_preflight.sys, 'platform', 'linux'):
+            self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
+            # main() prepends actionlint-version to all/fast/github-only.
+            self.assertEqual(len(expected) + 1, 65)
+            self.assertEqual(len(check_commands(ROOT, tier='fast')), 60)
+            self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
+            self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
+        for platform in ('darwin', 'win32'):
+            with mock.patch.object(ci_preflight.sys, 'platform', platform):
+                expected_platform = [name for name in expected
+                                     if name not in ('prebuilt-bookworm-tests', 'prebuilt-glibc-tests')]
+                self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})],
+                                 expected_platform)
+                self.assertEqual(len(check_commands(ROOT, tier='fast')), 58)
+
+
+class PrebuiltGlibcRegistration(unittest.TestCase):
+    NAME = 'prebuilt-glibc-tests'
+
+    def entry(self, source, output, tier='fast', *, plan=None):
+        plan = check_commands(source, output, tier=tier) if plan is None else plan
+        entries = [entry for entry in plan if entry[0] == self.NAME]
+        self.assertEqual(entries, [(self.NAME, [
+            sys.executable, '-B', str(source / 'scripts/test_check_prebuilt_glibc.py'),
+            '--scratch-root', str(output), '-v',
+        ])])
+        return entries[0]
+
+    def test_linux_fast_all_command_and_platform_contract(self):
+        output = ROOT / 'build-ci-preflight'
+        with mock.patch.object(ci_preflight.sys, 'platform', 'linux'):
+            for tier in ('fast', 'all'):
+                entry = self.entry(ROOT, output, tier)
+                # Removal, duplicate registration, a filtered suite, wrong
+                # scratch, and advisory status must all break the same oracle.
+                for wrong in ([], [entry, entry], [(self.NAME, entry[1][:-1])],
+                              [(self.NAME, [*entry[1], 'RealArtifacts.test_older_numeric_versions_are_accepted'])],
+                              [(self.NAME, [*entry[1][:-2], '/missing-scratch', '-v'])],
+                              [(*entry, True)]):
+                    with self.subTest(tier=tier, wrong=wrong), self.assertRaises(AssertionError):
+                        self.entry(ROOT, output, tier, plan=wrong)
+            for tier in ('slow', 'github-only'):
+                self.assertNotIn(self.NAME, dict(check_commands(ROOT, tier=tier)))
+        for platform in ('darwin', 'win32'):
+            with mock.patch.object(ci_preflight.sys, 'platform', platform):
+                self.assertNotIn(self.NAME, dict(check_commands(ROOT)))
+
+    @unittest.skipUnless(sys.platform.startswith('linux'),
+                         'real GNU ELF fixtures require Linux cc/ar/readelf; Darwin emits Mach-O')
+    def test_registered_full_collection_and_planted_assertion_propagate(self):
+        script = ROOT / 'scripts/test_check_prebuilt_glibc.py'
+        ids = discover_test_ids(script)
+        names = {test_id.rsplit('.', 1)[-1] for test_id in ids}
+        self.assertEqual(len(ids), 33)
+        self.assertEqual(len(names), 33)
+        self.assertTrue({'test_version_policy_mutation_breaks_real_rejection_assertion',
+                         'test_isoc23_policy_mutation_breaks_real_rejection_assertion'} <= names)
+        area = Path(tempfile.mkdtemp(prefix='prebuilt-glibc-registration-'))
+        print(f'prebuilt GLIBC registration evidence: {area}', flush=True)
+        mutant_root = area / 'mutant'
+        (mutant_root / 'scripts').mkdir(parents=True)
+        text = script.read_text()
+        needle = 'self.assertEqual(records[-1]["archive_members"], 3)'
+        self.assertEqual(text.count(needle), 1)
+        (mutant_root / 'scripts' / script.name).write_text(text.replace(needle, needle[:-2] + '4)', 1))
+        shutil.copyfile(ROOT / 'scripts/check_prebuilt_glibc.py',
+                        mutant_root / 'scripts/check_prebuilt_glibc.py')
+        for source, expected_code in ((ROOT, 0), (mutant_root, 1)):
+            output = area / ('fixed-logs' if expected_code == 0 else 'mutant-logs')
+            self.assertFalse(output.exists())
+            entry = self.entry(source, output)
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = run_checks([entry], output, source=source)
+            summary = json.loads((output / 'preflight-summary.json').read_text())
+            log = (output / (self.NAME + '.log')).read_text()
+            self.assertEqual(code, expected_code, log)
+            self.assertEqual([(row['name'], row['status'], row['exitCode'], row['advisory'])
+                              for row in summary['stages']],
+                             [(self.NAME, 'passed' if expected_code == 0 else 'failed',
+                               expected_code, False)])
+            rows = re.findall(r'^(test_\w+) \([^\n]+\) \.\.\. (ok|FAIL)$', log, re.MULTILINE)
+            self.assertEqual(sorted(name for name, _ in rows), sorted(names), log)
+            self.assertRegex(log, r'Ran 33 tests in ')
+            failed = [name for name, status in rows if status == 'FAIL']
+            self.assertEqual(failed, [] if expected_code == 0 else
+                             ['test_complete_inventory_members_spaces_and_content_identity'])
+            if expected_code:
+                self.assertIn('AssertionError: 3 != 4', log)
+                self.assertIn('FAILED (failures=1)', log)
+                with self.assertRaises(AssertionError):
+                    self.assertEqual(code, 0, log)
 
 
 class PreflightFailures(unittest.TestCase):
@@ -4206,6 +5111,14 @@ class PreflightFailures(unittest.TestCase):
     def test_documented_slow_row_counts_match_literal_population(self):
         text = (ROOT / 'docs/ci.md').read_text()
         self.assertEqual(len(text.splitlines()), 2063)
+        slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
+                       if name.startswith('test_ci_verify_slice_'))
+        self.assertTrue(slices, 'verifier slice inventory must not be empty')
+        ranges = re.findall(
+            r'rows, among them `(test_ci_verify_slice_\d+)` through '
+            r'`(test_ci_verify_slice_\d+)`,', text)
+        self.assertEqual(ranges, [(slices[0], slices[-1])],
+                         'documented slow slice inventory')
         counts = re.findall(
             r'^the (\d+) CTest rows labelled `slow` in `tests/CMakeLists.txt`$'
             r'|^The label `slow` (?:is|includes) `PINEFORGE_PR_SLOW_TESTS` '
@@ -4218,6 +5131,19 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(inventory, [('71', '43', '28')])
         self.assertIn('The timing list contains 43 names, and 28 additional names', text)
         self.assertIn('making 71 distinct pinned slow names.', text)
+
+    def test_documented_slow_rows_refuse_same_size_wrong_slice(self):
+        text = (ROOT / 'docs/ci.md').read_text()
+        before = ('rows, among them `test_ci_verify_slice_1` through '
+                  '`test_ci_verify_slice_8`,')
+        self.assertEqual(text.count(before), 1)
+        changed = text.replace(before, before.replace('_8`', '_7`'), 1)
+        self.assertNotEqual(changed, text)
+        self.assertEqual(len(changed.splitlines()), len(text.splitlines()))
+        with mock.patch.object(Path, 'read_text', return_value=changed) as read_doc:
+            with self.assertRaisesRegex(AssertionError, 'documented slow slice inventory'):
+                self.test_documented_slow_row_counts_match_literal_population()
+        read_doc.assert_called_once_with()
 
     def test_floor_table_documentation_anchors_point_to_definition(self):
         source = (ROOT / 'scripts/ci_verify.py').read_text().splitlines()
@@ -5567,6 +6493,7 @@ exit "$lookup_exit"
         self.assertEqual(ci_preflight.PROTECTED_RUNNER, GKP_2)
         self.assertEqual(RELEASE_RUNNER, GKP_OD_4)
         self.assertEqual(PREBUILT_RUNNER, GKP_OD_PREBUILT)
+        self.assertEqual(ci_preflight.PREBUILT_ARM_RUNNER, 'ubuntu-22.04-arm')
         self.assertEqual(ci_preflight.HOSTED_JOB_RUNNERS,
                          {'ci.yml': {'authz': 'ubuntu-24.04'},
                           'gke-pr.yml': {'admit': 'ubuntu-24.04', 'legs': 'ubuntu-24.04',
@@ -6856,10 +7783,11 @@ finally:
                         *original, others=dict(others, **{'release.yml': changed}))
                     self.assertIn(f'release.yml job {job} must run on {RELEASE_RUNNER} '
                                   '(isolated release)', findings)
-        # Restoring the old x64 label must fail, as must moving a hosted leg
+        # Other x64 labels must fail, as must moving the hosted ARM leg
         # or changing anything else in the pinned two-leg Linux matrix.
         for before, after in ((f'runner: {PREBUILT_RUNNER}\n', 'runner: ubuntu-22.04\n'),
                               (f'runner: {PREBUILT_RUNNER}\n', f'runner: {GKP_PREBUILT}\n'),
+                              (f'runner: {PREBUILT_RUNNER}\n', f'runner: {GKP_BOOKWORM}\n'),
                               (f'runner: {PREBUILT_RUNNER}\n', f'runner: {GKP_OD_4}\n'),
                               (f'runner: {PREBUILT_RUNNER}\n', f'runner: {MATRIX_LINUX_RUNNER}\n'),
                               (f'runner: {PREBUILT_RUNNER}\n',
@@ -6869,6 +7797,7 @@ finally:
                               ('runner: ubuntu-22.04-arm', 'runner: ubuntu-24.04'),
                               ('runner: ubuntu-22.04-arm', f'runner: {GKP_2}'),
                               ('runner: ubuntu-22.04-arm', f'runner: {RELEASE_RUNNER}'),
+                              ('runner: ubuntu-22.04-arm', f'runner: {GKP_ARM64}'),
                               ('runner: ubuntu-22.04-arm', 'runner: macos-latest'),
                               ('runner: ubuntu-22.04-arm', 'runner: macos-26-xlarge'),
                               ('        include:\n', '        include:\n'
@@ -7105,10 +8034,8 @@ finally:
                     self.assertIn('deploy.yml job deploy must keep production credentials '
                                   'on a hosted standard runner', findings)
 
-    def test_github_token_alone_and_credential_comments_keep_the_pool(self):
-        original, others = self.ci_sources(), self.other_sources()
-        for reference in ('secrets.GITHUB_TOKEN', "secrets['GITHUB_TOKEN']"):
-            workflow = ('name: token\non: workflow_dispatch\npermissions:\n  contents: write\n'
+    def github_token_pool_workflow(self, reference):
+        return ('name: token\non: workflow_dispatch\npermissions:\n  contents: write\n'
                         'jobs:\n  token:\n'
                         f'    runs-on: {POST_RUNNER}\n'
                         '    # secrets.DEPLOY_KEY, id-token: write, environment: production\n'
@@ -7116,9 +8043,73 @@ finally:
                         f"      PF_CI_LABELS: '{POST_RUNNER}'\n"
                         f'      TOKEN: ${{{{ {reference} }}}}\n'
                         '    steps:\n      - run: "true"\n')
+
+    def test_github_token_alone_and_credential_comments_keep_the_pool(self):
+        self.maxDiff = None
+        original, others = self.ci_sources(), self.other_sources()
+        for reference in ('secrets.GITHUB_TOKEN', "secrets['GITHUB_TOKEN']"):
+            workflow = self.github_token_pool_workflow(reference)
             with self.subTest(reference=reference):
-                self.assertIn('token.yml job token may use GKE routing only at its exact pinned job and label',
-                              ci_workflow_findings(*original, others=dict(others, **{'token.yml': workflow})))
+                # An arbitrary token job is unregistered: its sole refusal is
+                # the independent exact-job pin policy, never credentials.
+                self.assertEqual(ci_workflow_findings(
+                    *original, others=dict(others, **{'token.yml': workflow})), [
+                        'token.yml job token may use GKE routing only at its exact pinned job and label'])
+            with self.subTest(reference=reference, route='registered corpus job'):
+                pinned = in_job(original[4], 'corpus-parity', '    env:\n',
+                                '    # secrets.DEPLOY_KEY, id-token: write, environment: production\n'
+                                '    env:\n' + f'      TOKEN: ${{{{ {reference} }}}}\n')
+                self.assertNotEqual(pinned, original[4])
+                self.assertEqual(ci_preflight._job_values(_jobs(pinned)['corpus-parity'], 'runs-on'),
+                                 [GKE_16])
+                changed = [*original]
+                changed[4] = pinned
+                self.assertEqual(ci_workflow_findings(*changed, others=others), [])
+
+    def test_wrong_github_token_classification_breaks_the_exact_positive_row(self):
+        source = inspect.getsource(ci_preflight._holds_credentials)
+        needle = "if match.group(1).upper() != 'GITHUB_TOKEN':"
+        self.assertEqual(source.count(needle), 1)
+        namespace = dict(vars(ci_preflight))
+        exec(compile(source.replace(needle, needle.replace('GITHUB_TOKEN', 'GITHUB_TOKEN_WRONG'), 1),
+                     '<github-token-misclassified-as-production>', 'exec'), namespace)
+        result = unittest.TestResult()
+        target_case = type(self)('test_github_token_alone_and_credential_comments_keep_the_pool')
+        with mock.patch.object(ci_preflight, '_holds_credentials', namespace['_holds_credentials']):
+            findings = ci_workflow_findings(
+                *self.ci_sources(), others={**self.other_sources(),
+                                           'token.yml': self.github_token_pool_workflow('secrets.GITHUB_TOKEN')})
+            # The former assertIn still passes on this actual wrong classifier.
+            self.assertIn('token.yml job token may use GKE routing only at its exact pinned job and label',
+                          findings)
+            self.assertIn('token.yml job token must not expose credentials on GKE', findings)
+            target_case.run(result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.skipped, [])
+        self.assertEqual(len(result.failures), 4)
+        expected = (
+            ({'reference': 'secrets.GITHUB_TOKEN'},
+             'token.yml job token must not expose credentials on GKE'),
+            ({'reference': 'secrets.GITHUB_TOKEN', 'route': 'registered corpus job'},
+             'corpus-parity.yml job corpus-parity must not expose credentials on GKE'),
+            ({'reference': "secrets['GITHUB_TOKEN']"}, None),
+            ({'reference': "secrets['GITHUB_TOKEN']", 'route': 'registered corpus job'}, None),
+        )
+        # Every call reads release.yml's dotted token, including the bracket rows.
+        # unittest may wrap this policy message into adjacent string literals.
+        release_finding = (
+            r"release\.yml job prebuilt must keep production credentials on a hosted"
+            r"(?: | '\n-  ')standard runner")
+        for (subtest, diagnostic), (params, gke_finding) in zip(result.failures, expected):
+            self.assertIs(subtest.test_case, target_case)
+            self.assertEqual(dict(subtest.params), params)
+            self.assertIn('AssertionError: Lists differ:', diagnostic)
+            self.assertRegex(diagnostic, release_finding)
+            if gke_finding is None:
+                self.assertNotIn('must not expose credentials on GKE', diagnostic)
+            else:
+                self.assertIn(gke_finding, diagnostic)
 
     def test_today_release_and_deployment_jobs_pass_only_on_their_pinned_routes(self):
         self.assertEqual(ci_preflight.runner_findings(self.light_workflows()), [])
@@ -7373,16 +8364,20 @@ finally:
         expected = {
             'preflight-tests', 'cr150-source-gate-tests', 'runner-allowlist',
             'rng-draw-order', 'rng-draw-order-tests', 'native-c-surface-tests',
-            'selected-window-ownership-tests', 'release-gate-tests',
+            'selected-window-ownership-tests', 'release-gate-tests', 'prebuilt-bookworm-tests',
             'run-failure-diff-tests', 'design-inventory', 'design-inventory-tests',
             'doc-anchors', 'doc-anchors-tests', 'doc-lint', 'doc-lint-tests',
             'kernel-seam-rows', 'kernel-seam-rows-tests',
         }
-        for tier in ('all', 'fast'):
-            plan = check_commands(ROOT, env={}, tier=tier)
-            self.assertEqual({entry[0] for entry in plan
-                              if getattr(entry, 'parallel', False)}, expected)
-            self.assertTrue(all(len(entry) == 2 for entry in plan))
+        for platform in ('linux', 'darwin', 'win32'):
+            with mock.patch.object(ci_preflight.sys, 'platform', platform):
+                expected_platform = (expected if platform == 'linux'
+                                     else expected - {'prebuilt-bookworm-tests'})
+                for tier in ('all', 'fast'):
+                    plan = check_commands(ROOT, env={}, tier=tier)
+                    self.assertEqual({entry[0] for entry in plan
+                                      if getattr(entry, 'parallel', False)}, expected_platform)
+                    self.assertTrue(all(len(entry) == 2 for entry in plan))
         self.assertFalse(any(getattr(entry, 'parallel', False)
                              for entry in check_commands(ROOT, tier='slow')))
         self.assertEqual({entry[0] for entry in check_commands(ROOT, tier='github-only')
@@ -7668,7 +8663,7 @@ finally:
         original, others = self.ci_sources(), self.other_sources()
         finding = (f'release-ruleset-probe.yml job probe must run on {GKP_2} '
                    '(isolated release)')
-        for runner in (POST_RUNNER, PR_RUNNER, GKP_4, RELEASE_RUNNER, PREBUILT_RUNNER):
+        for runner in (POST_RUNNER, PR_RUNNER, GKP_4, GKP_OD_4, PREBUILT_RUNNER):
             with self.subTest(runner=runner):
                 changed = in_job(RULESETS_PROBE_WORKFLOW, 'probe',
                                  f'    runs-on: {GKP_2}\n',

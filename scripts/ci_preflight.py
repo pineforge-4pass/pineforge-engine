@@ -102,6 +102,7 @@ POST_RUNNER = 'gke-2cpu-4gb-amd64'
 PROTECTED_RUNNER = 'gkp-2cpu-4gb-amd64'
 RELEASE_RUNNER = 'gkp-od-4cpu-8gb-amd64'
 PREBUILT_RUNNER = 'gkp-od-16cpu-32gb-amd64-128gb'
+PREBUILT_ARM_RUNNER = 'ubuntu-22.04-arm'
 GKE_32_LABEL = 'gke-32cpu-64gb-amd64'
 GKE_16_LABEL = 'gke-16cpu-32gb-amd64'
 GKE_8_LABEL = 'gke-8cpu-16gb-amd64'
@@ -225,7 +226,7 @@ RELEASE_STRATEGY = ('    strategy:\n'
                     '          - triple: linux-x86_64\n'
                     f'            runner: {PREBUILT_RUNNER}\n'
                     '          - triple: linux-aarch64\n'
-                    '            runner: ubuntu-22.04-arm\n')
+                    f'            runner: {PREBUILT_ARM_RUNNER}\n')
 NATIVE_STRATEGY = f'''    strategy:
       fail-fast: false
       matrix:
@@ -2150,6 +2151,18 @@ def _private_key_handoff(text: str) -> bool:
     return False
 
 
+def _uses_app_token(workflow: str, body: str) -> bool:
+    """Share the visible App mint/private-key indicators between both guards."""
+    references = (reference for _, _, reference, _ in
+                  action_uses({'workflow': body}, findings=[]))
+    action_mint = any(reference.partition('@')[0].casefold()
+                      in {'actions/create-github-app-token', 'tibdex/github-app-token'}
+                      for reference in references)
+    text = '\n'.join(_job_values(workflow, 'env')) + '\n' + body
+    return bool(action_mint or _private_key_handoff(text)
+                or _APP_MINT_SCRIPT.search('\n'.join(_code(text))))
+
+
 def app_token_environment_findings(workflows: dict[str, str]) -> list[str]:
     """Require an environment for every visible App mint/private-key handoff.
 
@@ -2161,17 +2174,8 @@ def app_token_environment_findings(workflows: dict[str, str]) -> list[str]:
     """
     findings = []
     for name, workflow in workflows.items():
-        inherited_env = '\n'.join(_job_values(workflow, 'env'))
         for job, body in _jobs(workflow).items():
-            references = (reference for _, _, reference, _ in
-                          action_uses({name: body}, findings=[]))
-            action_mint = any(reference.partition('@')[0].casefold()
-                              in {'actions/create-github-app-token',
-                                  'tibdex/github-app-token'}
-                              for reference in references)
-            text = inherited_env + '\n' + body
-            if not (action_mint or _private_key_handoff(text)
-                    or _APP_MINT_SCRIPT.search('\n'.join(_code(text)))):
+            if not _uses_app_token(workflow, body):
                 continue
             if not _literal_job_environment(body):
                 findings.append(
@@ -2236,14 +2240,43 @@ def _effective_permissions(workflow: str, body: str) -> list[str]:
     return _job_values(body, 'permissions') or _job_values(workflow, 'permissions')
 
 
-def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool = False) -> bool:
+def _private_key_inputs(text: str) -> bool:
+    """Recognize key inputs/material in env, action inputs and run scopes."""
+    scopes: list[tuple[int, str]] = []
+    for raw in _code(text):
+        line = _action_yaml_visible(raw)[0]
+        depth = _indent(raw)
+        while scopes and depth <= scopes[-1][0]:
+            scopes.pop()
+        key = re.match(r'''(?:-\s+)?(["']?)([A-Za-z_][\w-]*)\1[ \t]*:(?:[ \t]|$)''',
+                       line.strip())
+        if (key and scopes and scopes[-1][1] in {'env', 'with'}
+                and _PRIVATE_KEY_WORD.search(key.group(2))):
+            return True
+        if key:
+            scopes.append((depth, key.group(2)))
+        if (any(scope == 'run' for _, scope in scopes)
+                and re.search(r'(?<![\w-])--private[-_]?key(?:=|\s)', line,
+                              re.IGNORECASE)):
+            return True
+        if (any(scope in {'env', 'with', 'run'} for _, scope in scopes)
+                and re.search(r'-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----', line)):
+            return True
+    return False
+
+
+def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool = False,
+                       strict: bool = False) -> bool:
     """L6: non-GITHUB_TOKEN secrets, OIDC writes or a deployment environment.
 
     Existing VM checks conservatively include workflow permissions. GKE checks
     use the job's effective scopes. Bracket/dynamic secret access and inherited
-    reusable-workflow secrets must not bypass either rule.
+    reusable-workflow secrets must not bypass either rule. ``strict`` is
+    reserved for the token-only prebuilt artifact job; other callers retain
+    the main workflow's comment-stripped credential scan.
     """
-    if _job_values(body, 'environment') or _job_values(body, 'secrets') == ['inherit']:
+    if (_job_values(body, 'environment')
+            or _job_values(body, 'secrets') == ['inherit']):
         return True
     permissions = (_effective_permissions(workflow, body) if effective_permissions else
                    _job_values(workflow, 'permissions') + _job_values(body, 'permissions'))
@@ -2251,10 +2284,44 @@ def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool 
     if any(value == 'write-all' or re.search(oidc_write, value, re.IGNORECASE)
            for value in permissions):
         return True
-    text = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(body))
-    text += '\n' + '\n'.join(_job_values(workflow, 'env'))
-    for match in re.finditer(r'\bsecrets\s*(?:\.\s*([A-Za-z_]\w*)|\[([^\]]+)\])',
-                             text, re.IGNORECASE):
+
+    if strict:
+        # Expressions expand even in script comments; retain every raw byte.
+        # Other jobs' App credentials are not inherited by the artifact job.
+        header = _JOBS_KEY.split(workflow, maxsplit=1)[0]
+        inherited_env = []
+        in_env = False
+        for line in workflow.split('\n'):
+            if line.strip() and _indent(line) == 0 and not line.startswith('#'):
+                in_env = _key_value(line, 'env') is not None
+            if in_env:
+                inherited_env.append(line)
+        text = header + '\n' + body + '\n' + '\n'.join(inherited_env)
+        if (_uses_app_token(workflow, body)
+                or _private_key_inputs(body + '\n' + '\n'.join(inherited_env))):
+            return True
+        # A whole/dynamic secrets context cannot prove GITHUB_TOKEN-only use.
+        # Prose may mention secrets; inspect expressions without cutting hashes
+        # or treating a quoted }} (including doubled quotes) as their end.
+        for expression in re.finditer(r'\$\{\{', text):
+            end, in_string = expression.end(), False
+            while end < len(text):
+                if text[end] == "'":
+                    if in_string and text.startswith("''", end):
+                        end += 2
+                        continue
+                    in_string = not in_string
+                elif not in_string and text.startswith('}}', end):
+                    break
+                end += 1
+            value = text[expression.end():end]
+            if any(_SECRET_REFERENCE.match(value, context.start()) is None
+                   for context in re.finditer(r'\bsecrets\b', value, re.IGNORECASE)):
+                return True
+    else:
+        text = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(body))
+        text += '\n' + '\n'.join(_job_values(workflow, 'env'))
+    for match in _SECRET_REFERENCE.finditer(text):
         if match.group(1) is not None:
             if match.group(1).upper() != 'GITHUB_TOKEN':
                 return True
@@ -2776,6 +2843,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                      if job not in jobs]
         for job, body in jobs.items():
             runs_on, uses = _job_values(body, 'runs-on'), _job_values(body, 'uses')
+            strict_prebuilt = (name, job) == ('release.yml', 'prebuilt')
             gke_pin = gke_pins.get(job)
             resolved_runners, _ = _resolved_runner_values(workflow, body)
             has_gke = bool(_GKE_ROUTE.search(' '.join(runs_on + resolved_runners)))
@@ -2816,7 +2884,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 findings.append(f'{name} job {job} must not declare job services on GKE')
             if has_gke:
                 permissions = _effective_permissions(workflow, body)
-                if (_holds_credentials(workflow, body, effective_permissions=True)
+                if (_holds_credentials(workflow, body, effective_permissions=True,
+                                       strict=strict_prebuilt)
                         or any(re.search(r'\bid-token\b', value) for value in permissions)):
                     findings.append(f'{name} job {job} must not expose credentials on GKE')
             runner_text = ' '.join(runs_on + _job_block(body, 'strategy'))
@@ -2831,7 +2900,9 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             # Only an exact admitted GKE pin may use effective token scopes.
             # Other jobs retain the conservative workflow-plus-job credential check.
             exact_gke_runner = bool(gke_pin and job in fixed_hosted and raw_runners == [gke_pin])
-            credentials = _holds_credentials(workflow, body, effective_permissions=exact_gke_runner)
+            credentials = _holds_credentials(
+                workflow, body, effective_permissions=exact_gke_runner,
+                strict=strict_prebuilt)
             if job not in pinned:
                 if pinned and runs_on:
                     findings.append(f'{name} job {job} needs a pinned runner and time limit')
@@ -2989,7 +3060,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                     findings.append(f'ci-post.yml {job} legs must keep their names: {display}')
     if 'release.yml' in workflows:
         prebuilt = _jobs(workflows['release.yml']).get('prebuilt', '')
-        if _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY):
+        if (len(_job_values(prebuilt, 'strategy')) != 1
+                or _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY)):
             findings.append('release.yml prebuilt must use exactly the isolated Linux x64 '
                             'and hosted ARM matrix')
         prebuilt_steps = _steps(prebuilt)
@@ -3003,6 +3075,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                         < prebuilt_steps.index(configure))):
             findings.append('release.yml prebuilt must install Eigen and assert exactly 3.4.0 '
                             'before configuring')
+        findings += release_prebuilt_workflow_findings(workflows['release.yml'])
         if any(re.search(r'macos|darwin|CMAKE_OSX_', '\n'.join(_code(step)), re.IGNORECASE)
                for step in _steps(prebuilt)):
             findings.append('release.yml prebuilt must not contain macOS build steps')
@@ -3107,6 +3180,265 @@ RELEASE_EIGEN_ASSERT_STEP = r'''      - name: Assert Eigen3 3.4.0 on the protect
           grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "$macros"
           echo "Eigen3 3.4.0 present at $(dirname "$(dirname "$hdr")")"
 '''
+
+# Exact reviewed steps: ARM host commands, x86 transport, identity, all-library
+# inspection and publication order form one contract. Extra steps fail closed.
+RELEASE_PREBUILT_STEPS = r'''
+      # A dry run has no tag yet: it builds the dispatched commit.
+      - name: Checkout release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
+          fetch-depth: 0   # the version helper still observes the git sha
+          persist-credentials: false
+
+      - name: Assert tag still names the emitted release commit
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          SHA: ${{ needs.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::invalid emitted release sha: ${SHA}" >&2
+            exit 1
+          fi
+          test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${SHA}"
+
+      - name: Write the dry run's VERSION
+        if: ${{ inputs.dry_run }}
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: printf '%s\n' "${NEXT}" > VERSION
+
+      # The x86_64 build uses only the preloaded immutable Bookworm toolchain.
+      - name: Build x86_64 in preloaded Bookworm
+        if: matrix.triple == 'linux-x86_64'
+        env:
+          ENGINE_TOOLCHAIN_IMAGE: ${{ vars.ENGINE_TOOLCHAIN_IMAGE }}
+          SOURCE_SHA: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
+          NEXT: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          bash scripts/build_prebuilt_bookworm.sh \
+            "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" "${SOURCE_SHA}" "${NEXT}" "${TAG}" "${DRY_RUN}"
+
+      - name: Install Eigen3 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev
+
+      - name: Assert Eigen3 3.4.0 on the protected Linux x86_64 slice
+        if: runner.os == 'Linux' && matrix.triple == 'linux-x86_64'
+        run: |
+          set -euo pipefail
+          hdr=""
+          for p in /usr/include/eigen3/Eigen/Core /usr/local/include/eigen3/Eigen/Core; do
+            if [ -f "$p" ]; then hdr="$p"; break; fi
+          done
+          if [ -z "$hdr" ]; then
+            echo "::error::Eigen3 headers not found on the protected GKE runner"
+            exit 1
+          fi
+          macros="$(dirname "$hdr")/src/Core/util/Macros.h"
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "$macros"
+          echo "Eigen3 3.4.0 present at $(dirname "$(dirname "$hdr")")"
+
+      # The ARM build checks the exact Eigen headers that CMake will consume.
+      - name: Assert Eigen3 3.4.0 on ARM
+        if: runner.os == 'Linux' && matrix.triple == 'linux-aarch64'
+        run: |
+          set -euo pipefail
+          macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "${macros}"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "${macros}"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "${macros}"
+
+      - name: Configure
+        if: matrix.triple == 'linux-aarch64'
+        env:
+          TAG:         ${{ needs.release.outputs.tag }}
+          TRIPLE:      ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          stage="stage/pineforge-${TAG}-${TRIPLE}"
+          echo "STAGE_DIR=${stage}" >> "$GITHUB_ENV"
+          # FILE: the version identity is the VERSION file exactly, -rc.N
+          # included, however the checkout's tags describe it; a dry run's
+          # VERSION has no tag at all.
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DEigen3_DIR=/usr/share/eigen3/cmake \
+            -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+            -DPINEFORGE_BUILD_TESTS=OFF \
+            -DPINEFORGE_BUILD_TUTORIAL=OFF \
+            -DPINEFORGE_VERSION_SOURCE=FILE \
+            -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}"
+          grep -Fx 'Eigen3_DIR:PATH=/usr/share/eigen3/cmake' build/CMakeCache.txt
+
+      - name: Build
+        if: matrix.triple == 'linux-aarch64'
+        run: cmake --build build -j 4
+
+      - name: Install to staging
+        if: matrix.triple == 'linux-aarch64'
+        run: cmake --install build
+
+      # The generated version.h and the CMake package files must carry the
+      # full version, -rc.N included, and its numeric X.Y.Z.
+      - name: Verify the staged version
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: |
+          python3 scripts/release_version.py check-install \
+            --prefix "${STAGE_DIR}" --expect "${NEXT}"
+
+      # Both dry-run and publication inspect every installed .a/.so/.so.*.
+      # Keep raw checker output and its actual exit status, including setup errors.
+      - name: Check every staged library's glibc floor
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
+          mkdir -p "${log}"
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+            checker_rc=0
+          else checker_rc=$?; fi
+          printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
+          cat "${log}/stdout.jsonl"
+          cat "${log}/stderr.txt" >&2
+          exit "${checker_rc}"
+
+      - name: Bundle docs into tarball root
+        run: |
+          set -euo pipefail
+          cp LICENSE NOTICE VERSION "${STAGE_DIR}/"
+
+      - name: Pack tarball + sha256
+        id: pack
+        env:
+          TAG:    ${{ needs.release.outputs.tag }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          base="pineforge-${TAG}-${TRIPLE}"
+          tarball="${base}.tar.gz"
+          tar -czf "${tarball}" -C "$(dirname "${STAGE_DIR}")" "${base}"
+          sha256sum "${tarball}" > "${tarball}.sha256"
+          echo "tarball=${tarball}"           >> "$GITHUB_OUTPUT"
+          echo "sha256=${tarball}.sha256"     >> "$GITHUB_OUTPUT"
+
+      # The x86_64 release path must consume the bytes it is about to upload.
+      # The helper checks the sidecar, unpacks the archive, and runs the
+      # existing native host against the shipped full archive in Bookworm.
+      - name: Consume packed x86_64 archive
+        if: matrix.triple == 'linux-x86_64'
+        env:
+          ENGINE_TOOLCHAIN_IMAGE: ${{ vars.ENGINE_TOOLCHAIN_IMAGE }}
+          TARBALL:  ${{ steps.pack.outputs.tarball }}
+          SHASUM:   ${{ steps.pack.outputs.sha256 }}
+          TAG:      ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          bash scripts/build_prebuilt_bookworm.sh \
+            --consume "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" \
+            "${TARBALL}" "${SHASUM}" "${TAG}"
+
+      - name: Upload to release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:     ${{ needs.release.outputs.tag }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          SHASUM:  ${{ steps.pack.outputs.sha256 }}
+        run: |
+          gh release upload "${TAG}" "${TARBALL}" "${SHASUM}" --clobber
+
+      - name: Keep the dry run's tarball as a workflow artifact
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.pack.outputs.tarball }}
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.sha256 }}
+          retention-days: 7
+'''
+
+
+# Git blob identity of the transport, including build and archive-consumer launch.
+# A changed helper requires reviewing its source and controls before repinning.
+# This is a source contract, never an engine/build/glibc verdict.
+RELEASE_BOOKWORM_HELPER_BLOB = 'daaf2fe0541b5d0f8aab0746b35dcf069862afa3'
+# The helper delegates the shipped-archive execution to this exact consumer.
+# This is a source contract, never a native-runtime verdict.
+RELEASE_BOOKWORM_CONSUMER_BLOB = 'd066968913c0d4ff7358e6fd4dde2a794e1be600'
+
+
+def release_prebuilt_helper_findings(source: str) -> list[str]:
+    payload = source.encode('utf-8')
+    actual = hashlib.sha1(b'blob ' + str(len(payload)).encode('ascii') + b'\0' + payload).hexdigest()
+    if actual != RELEASE_BOOKWORM_HELPER_BLOB:
+        return ['release prebuilt Bookworm helper differs from the reviewed immutable-image, '
+                'bounded-mount, inside-build and no-fallback source contract']
+    return []
+
+
+def release_prebuilt_consumer_findings(source: str) -> list[str]:
+    payload = source.encode('utf-8')
+    actual = hashlib.sha1(b'blob ' + str(len(payload)).encode('ascii') + b'\0' + payload).hexdigest()
+    if actual != RELEASE_BOOKWORM_CONSUMER_BLOB:
+        return ['release prebuilt archive consumer differs from the reviewed full-library '
+                'native consumer source contract']
+    return []
+
+
+def release_prebuilt_workflow_findings(workflow: str) -> list[str]:
+    """Pin artifact structure and its token-only admission surface."""
+    prebuilt = _jobs(workflow).get('prebuilt', '')
+    findings = []
+    if _job_values(prebuilt, 'needs') != ['release']:
+        findings.append('release.yml prebuilt must retain needs: release before build')
+    if _job_values(workflow, 'permissions') != ['contents: write']:
+        findings.append('release.yml prebuilt must retain workflow permissions: contents: write')
+    if _job_values(prebuilt, 'permissions') != ['contents: write']:
+        findings.append('release.yml prebuilt must retain job permissions: contents: write')
+    if _job_values(prebuilt, 'uses'):
+        findings.append('release.yml prebuilt must not use a reusable workflow')
+    if ([_code(step) for step in _steps(prebuilt)]
+            != [_code(step) for step in _steps(RELEASE_PREBUILT_STEPS)]):
+        findings.append('release.yml prebuilt must retain the credential-free Bookworm build, '
+                        'ARM Eigen setup, all-library glibc gate and packed-archive consumer before upload')
+    marker = "      - name: Check every staged library's glibc floor"
+    gate = _step_named(_steps(prebuilt), marker)
+    required_gate = _step_named(_steps(RELEASE_PREBUILT_STEPS), marker)
+    # Compare raw physical lines in the named step. Removing blank/comment
+    # lines before comparison can turn a disabled shell continuation into proof.
+    if gate.rstrip('\n') != required_gate.rstrip('\n'):
+        findings.append('release.yml prebuilt must retain the raw single-line all-library '
+                        'glibc checker invocation and its run context')
+    if (any(_job_values(prebuilt, key) for key in ('if', 'continue-on-error', 'defaults'))
+            or _job_values(workflow, 'defaults')):
+        findings.append('release.yml prebuilt must keep default success/failure and shell behavior')
+    for scope in (workflow, prebuilt):
+        values = _job_values(scope, 'env')
+        block = _job_block(scope, 'env')
+        # The mapping header `env:` is not a shell ENV binding. Inspect only
+        # its children; duplicate, flow or expression mappings fail closed.
+        if (len(values) > 1 or (values and not block)
+                or re.search(r'''(?mi)^\s*['"]?(?:BASH_ENV|ENV|PATH|DOCKER_\w+|CMAKE_\w+|CC|CXX|'''
+                             r'''CFLAGS|CXXFLAGS|LDFLAGS|GITHUB_\w+|RUNNER_\w+|STAGE_DIR|'''
+                             r'''SOURCE_SHA|TRIPLE|ENGINE_TOOLCHAIN_IMAGE)['"]?\s*:''',
+                             '\n'.join(block[1:]))):
+            findings.append('release.yml prebuilt must not override toolchain, Docker or shared-path inputs')
+            break
+    return findings
+
 
 # ci_release_gate.py's phase-1 exemption is bounded by this exact writer.
 RELEASE_BUMP_PUBLISH_STEP = r'''      - name: Write bumped VERSION, commit, tag, push
@@ -4290,6 +4622,21 @@ def check_commands(source: Path, output: Path | None = None,
         CheckCommand('release-gate-tests',
                      [sys.executable, str(source / 'scripts/test_ci_release_gate.py')],
                      parallel=True),
+        # The transport uses Bash 4 parameter expansion; Darwin's default
+        # Bash 3 cannot run it. Linux retains every transport control.
+        *([CheckCommand('prebuilt-bookworm-tests',
+                       [sys.executable, str(source / 'scripts/test_build_prebuilt_bookworm.py'),
+                        '--scratch-root', str(output_dir)],
+                       parallel=True)]
+          if sys.platform.startswith('linux') else []),
+        # All real ELF/archive rows and their mutations require Linux cc,
+        # GNU ar/readelf; missing tools fail in setUpClass. Darwin's compiler
+        # emits Mach-O. run_checks creates this owned output/scratch root
+        # before invoking any stage; keep the complete suite unfiltered.
+        *([('prebuilt-glibc-tests',
+            [sys.executable, '-B', str(source / 'scripts/test_check_prebuilt_glibc.py'),
+             '--scratch-root', str(output_dir), '-v'])]
+          if sys.platform.startswith('linux') else []),
         # R5 run-failure codes: the catalog diff release.yml stamps is a tested
         # script, and the code tables of docs/pages/run-failure-codes.md are
         # generated from the catalog it diffs.
@@ -4560,6 +4907,22 @@ def main() -> int:
              if path.suffix in ('.yml', '.yaml') and path.name not in named},
             curl_action=read_ci_text(ROOT / '.github/actions/setup-live-curl/action.yml', findings),
             actions=actions)
+        helper_path = ROOT / 'scripts/build_prebuilt_bookworm.sh'
+        if helper_path.parent.is_symlink() or helper_path.is_symlink() or not helper_path.is_file():
+            findings.append('release prebuilt Bookworm helper must be a regular source file')
+        else:
+            checked += release_prebuilt_helper_findings(read_ci_text(helper_path, findings))
+        consumer_path = ROOT / 'scripts/check_shipped_archive_runtime.sh'
+        if (consumer_path.parent.is_symlink() or consumer_path.is_symlink()
+                or not consumer_path.is_file()):
+            findings.append('release prebuilt archive consumer must be a regular source file')
+        else:
+            try:
+                consumer = read_ci_text(consumer_path, findings, ROOT)
+            except OSError as error:
+                findings.append(f'release prebuilt archive consumer cannot be read: {error}')
+            else:
+                checked += release_prebuilt_consumer_findings(consumer)
         findings = list(dict.fromkeys(findings + checked))
         for finding in findings:
             print(finding)
