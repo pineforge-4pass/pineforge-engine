@@ -295,6 +295,7 @@ set(TEST_SOURCES
     test_native_daily_holiday
     test_o_close_pct_day_anchor
     test_oanda_lazy_close
+    test_security_initial_calendar_bucket
     test_historical_security_lookahead_projection
     test_security_range_start_na_warmup
     test_security_range_start_bucket_gating

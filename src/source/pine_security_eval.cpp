@@ -14,8 +14,10 @@
 
 #include "../engine_internal.hpp"
 #include "../native_execution_consumer.hpp"
+#include "pine_host_reads.hpp"
 #include "pine_run_failure.hpp"
 
+#include <pineforge/native_calendar.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
 
@@ -476,6 +478,31 @@ bool source::PineStrategyHost::security_input_precedes_range_start(
         }
 #endif
         return state.aggregator.bucket_open_ms(input_ts) < security_range_start_ms_;
+    }
+    // With no other feed or exchange calendar, an all-day, every-day clock
+    // proves that a calendar bucket already traded before the chart began.
+    // Drop that initial bucket before aggregation or requested-context state
+    // can advance. Multi-unit calendars retain their own partition rules;
+    // session_period_open_ms describes a single calendar unit.
+    if (!stream_warmup_mode_ && !realtime_tail_
+        && detail::run_phase(*this) == NativeRunPhase::Batch
+        && native_security_feeds_.empty() && !scheduler_uses_aux_security_feed()
+        && symbol_calendar_.empty() && security_first_chart_bar_ms_ > 0
+        && script_tf_seconds_ > 0 && script_tf_seconds_ < 86400
+        && !pine.lookahead_on && !pine.lower_tf_requested
+        && !pine.lower_tf_array_requested) {
+        const auto requested = native_calendar::parse_timeframe(state.tf);
+        if (requested && requested->is_calendar() && requested->count() == 1) {
+            const int64_t nominal_open = session_period_open_ms(
+                input_ts, syminfo_.timezone, syminfo_.session,
+                calendar_period_for(state.tf));
+            if (nominal_open < security_first_chart_bar_ms_) {
+                const auto calendar = native_calendar::parse_session(
+                    syminfo_.session, syminfo_.timezone);
+                if (calendar && calendar->all_day() && calendar->day_mask() == 0xFE)
+                    return true;
+            }
+        }
     }
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     // R19 OTC daily pins: a historical intraday chart beginning mid-session

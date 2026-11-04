@@ -2068,6 +2068,13 @@ bool source::PineStrategyHost::same_symbol_sites_routable(
             || pine.calling_close_completes_partial || pine.calling_open_latches_first) {
             return false;
         }
+        // A Pine range cut must happen before the generic subscription's
+        // aggregator sees any child of the clipped calendar bucket.
+        if (security_first_chart_bar_ms_ > 0
+            && security_input_precedes_range_start(
+                state, security_first_chart_bar_ms_)) {
+            return false;
+        }
         if (otc_daily_pins && (state.tf == "D" || state.tf == "1D")) return false;
         // TradingView's N-day bars restart every year and count the symbol's
         // trading dates (make_multi_day_period_source); the kernel's are a
