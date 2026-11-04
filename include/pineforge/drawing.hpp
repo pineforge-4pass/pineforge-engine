@@ -661,6 +661,12 @@ class DrawingArena {
     std::shared_ptr<detail::BoundDrawingState<Rec>> bound_;
     std::optional<DrawingBoundConfig> bound_config_;
     detail::DrawingStaleSink<Rec> stale_sink_;
+    // The last typed allocation outcome is part of the arena value.  A
+    // failed bound admission records its diagnostic without changing the
+    // logical image; ordinary reads and edits leave it unchanged.  A later
+    // successful typed allocation records status `ok`.  ID exhaustion throws
+    // before this value is changed.
+    DrawingAllocationDiagnostic last_allocation_diagnostic_{};
 
     static constexpr std::int64_t kIdExclusive =
         static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max());
@@ -712,7 +718,7 @@ public:
     DrawingArena(const DrawingArena& other)
         : recs_(other.recs_), order_(other.order_), cap_(other.cap_),
           bound_(other.bound_), bound_config_(other.bound_config_),
-          stale_sink_() {
+          stale_sink_(), last_allocation_diagnostic_(other.last_allocation_diagnostic_) {
         other.stale_sink_.reset();
     }
 
@@ -727,6 +733,7 @@ public:
             cap_ = other.cap_;
             bound_.swap(state);
             bound_config_ = other.bound_config_;
+            last_allocation_diagnostic_ = other.last_allocation_diagnostic_;
             other.stale_sink_.reset();
         }
         stale_sink_.reset();
@@ -739,8 +746,10 @@ public:
         : recs_(std::move(other.recs_)), order_(std::move(other.order_)),
           cap_(other.cap_), bound_(std::move(other.bound_)),
           bound_config_(other.bound_config_),
-          stale_sink_(std::move(other.stale_sink_)) {
+          stale_sink_(std::move(other.stale_sink_)),
+          last_allocation_diagnostic_(other.last_allocation_diagnostic_) {
         other.order_.clear();
+        other.last_allocation_diagnostic_ = {};
     }
 
     DrawingArena& operator=(DrawingArena&& other) noexcept {
@@ -750,17 +759,21 @@ public:
             bound_ = std::move(other.bound_);
             bound_config_ = other.bound_config_;
             stale_sink_ = std::move(other.stale_sink_);
+            last_allocation_diagnostic_ = other.last_allocation_diagnostic_;
             other.order_.clear();
             cap_ = other.cap_;
+            other.last_allocation_diagnostic_ = {};
         }
         stale_sink_.reset();
         return *this;
     }
 
-    // Creation for explicitly configured slot arenas.  An invariant outcome
-    // contains no ID and does not modify diagnostic or logical arena state.
-    // The generated caller must consume this result before publishing a
-    // script handle.  Genuine allocation failures retain their C++ exception.
+    // Creation for explicitly configured slot arenas.  A slot-bound outcome
+    // contains no ID and records only its typed diagnostic; the logical arena
+    // state remains unchanged.  ID exhaustion also contains no ID and leaves
+    // the arena value untouched.  The generated caller must consume this
+    // result before publishing a script handle.  Genuine allocation failures
+    // retain their C++ exception and leave the previous diagnostic in place.
     [[nodiscard]] DrawingAllocationResult try_alloc(Rec r) {
         static_assert(detail::is_builtin_drawing_record_v<Rec>,
                       "slot allocation requires a builtin drawing record");
@@ -782,6 +795,7 @@ public:
             + bound_config_->pending_creation_slots;
         if (required > available) {
             diagnostic.status = DrawingAllocationStatus::drawing_slot_bound_exceeded;
+            last_allocation_diagnostic_ = diagnostic;
             return {diagnostic, std::nullopt};
         }
         auto candidate = bound_
@@ -797,6 +811,7 @@ public:
         candidate->order.push_back(id);
         candidate->next_id = next_id + 1;
         stale_sink_.reset();
+        last_allocation_diagnostic_ = diagnostic;
         bound_.swap(candidate);
         return {diagnostic, id};
     }
@@ -897,6 +912,9 @@ public:
     std::size_t occupied_slots() const noexcept {
         return bound_ ? bound_->directory.size() : order_.size();
     }
+    DrawingAllocationDiagnostic last_allocation_diagnostic() const noexcept {
+        return last_allocation_diagnostic_;
+    }
 
     // Bound direct borrows classify stale IDs before returning the immutable
     // NA record or this arena object's reset sink.  Unbound raw access keeps
@@ -990,6 +1008,29 @@ struct DrawingBuiltinAccess {
     }
 };
 
+// The builtin bridge has one runtime dispatch at its boundary.  The
+// unbound branch calls the legacy integer allocator, preserving its existing
+// eviction, ID and exception behavior.  Bound allocation consumes the typed
+// result: a slot-bound outcome is the script-visible NA handle, while ID
+// exhaustion remains a typed C++ error.
+template <class Handle, class Rec>
+inline Handle drawing_builtin_allocate(DrawingArena<Rec>& arena, Rec&& record) {
+    if (!arena.is_bound())
+        return Handle{arena.alloc(std::forward<Rec>(record))};
+
+    const DrawingAllocationResult result = arena.try_alloc(std::forward<Rec>(record));
+    switch (result.diagnostic.status) {
+    case DrawingAllocationStatus::ok:
+        if (!result.id) std::terminate();
+        return Handle{*result.id};
+    case DrawingAllocationStatus::drawing_slot_bound_exceeded:
+        return Handle{};
+    case DrawingAllocationStatus::pine_drawing_id_exhausted:
+        throw pine_drawing_id_exhausted(drawing_object_name<Rec>());
+    }
+    std::terminate();
+}
+
 } // namespace detail
 
 // Selects the x-coordinate a ChartPoint contributes for a given xloc.
@@ -1001,12 +1042,14 @@ inline int64_t pf_point_x(const ChartPoint& p, XLoc xloc) {
 inline Line pf_line_new(DrawingArena<LineRec>& a, int64_t x1, double y1, int64_t x2, double y2,
                         XLoc xloc = XLoc::bar_index, bool el = false, bool er = false) {
     // *_new(na,na,na,na) allocates a LIVE record with na coords (NOT a na handle).
-    return Line{ a.alloc(LineRec{ x1, x2, y1, y2, xloc, el, er, true }) };
+    return detail::drawing_builtin_allocate<Line>(
+        a, LineRec{ x1, x2, y1, y2, xloc, el, er, true });
 }
 inline Line pf_line_new_pts(DrawingArena<LineRec>& a, ChartPoint p1, ChartPoint p2,
                             XLoc xloc = XLoc::bar_index) {
-    return Line{ a.alloc(LineRec{ pf_point_x(p1, xloc), pf_point_x(p2, xloc),
-                                  p1.price, p2.price, xloc, false, false, true }) };
+    return detail::drawing_builtin_allocate<Line>(
+        a, LineRec{ pf_point_x(p1, xloc), pf_point_x(p2, xloc),
+                    p1.price, p2.price, xloc, false, false, true });
 }
 
 inline int64_t pf_line_get_x1(DrawingArena<LineRec>& a, Line h) { return detail::DrawingBuiltinAccess::read(a, h).x1; }
@@ -1049,19 +1092,22 @@ inline double pf_line_get_price(DrawingArena<LineRec>& a, Line h, int64_t x) {
 inline Line pf_line_copy(DrawingArena<LineRec>& a, Line h) {
     if (!a.alive(h.id)) return Line{};
     LineRec r = detail::DrawingBuiltinAccess::read(a, h);
-    return Line{ a.alloc(r) };
+    if (!a.is_bound()) return Line{a.alloc(r)};
+    return detail::drawing_builtin_allocate<Line>(a, std::move(r));
 }
 inline void pf_line_delete(DrawingArena<LineRec>& a, Line h) { a.erase(h.id); } // silent no-op on na/dead
 
 // ============================ box ===========================================
 inline Box pf_box_new(DrawingArena<BoxRec>& a, int64_t left, double top, int64_t right, double bottom,
                       XLoc xloc = XLoc::bar_index) {
-    return Box{ a.alloc(BoxRec{ left, right, top, bottom, xloc, true }) };
+    return detail::drawing_builtin_allocate<Box>(
+        a, BoxRec{ left, right, top, bottom, xloc, true });
 }
 inline Box pf_box_new_pts(DrawingArena<BoxRec>& a, ChartPoint top_left, ChartPoint bottom_right,
                           XLoc xloc = XLoc::bar_index) {
-    return Box{ a.alloc(BoxRec{ pf_point_x(top_left, xloc), pf_point_x(bottom_right, xloc),
-                                top_left.price, bottom_right.price, xloc, true }) };
+    return detail::drawing_builtin_allocate<Box>(
+        a, BoxRec{ pf_point_x(top_left, xloc), pf_point_x(bottom_right, xloc),
+                   top_left.price, bottom_right.price, xloc, true });
 }
 
 inline int64_t pf_box_get_left  (DrawingArena<BoxRec>& a, Box h) { return detail::DrawingBuiltinAccess::read(a, h).left; }
@@ -1092,7 +1138,8 @@ inline void pf_box_set_xloc(DrawingArena<BoxRec>& a, Box h, int64_t left, int64_
 inline Box pf_box_copy(DrawingArena<BoxRec>& a, Box h) {
     if (!a.alive(h.id)) return Box{};
     BoxRec r = detail::DrawingBuiltinAccess::read(a, h);
-    return Box{ a.alloc(r) };
+    if (!a.is_bound()) return Box{a.alloc(r)};
+    return detail::drawing_builtin_allocate<Box>(a, std::move(r));
 }
 inline void pf_box_delete(DrawingArena<BoxRec>& a, Box h) { a.erase(h.id); }
 
@@ -1105,14 +1152,16 @@ inline void pf_box_delete(DrawingArena<BoxRec>& a, Box h) { a.erase(h.id); }
 // no corpus label reads get_y back (spec note 4), so no parity claim.
 inline Label pf_label_new(DrawingArena<LabelRec>& a, int64_t x, double y, std::string text,
                           XLoc xloc = XLoc::bar_index, YLoc yloc = YLoc::price) {
-    return Label{ a.alloc(LabelRec{ x, y, xloc, yloc, std::move(text), true }) };
+    return detail::drawing_builtin_allocate<Label>(
+        a, LabelRec{ x, y, xloc, yloc, std::move(text), true });
 }
 inline Label pf_label_new_pt(DrawingArena<LabelRec>& a, ChartPoint point, std::string text,
                              YLoc yloc = YLoc::price) {
     // xloc carried by the ChartPoint: bar_time only when index is na but time is set.
     XLoc xloc = (is_na(point.index) && !is_na(point.time)) ? XLoc::bar_time : XLoc::bar_index;
-    return Label{ a.alloc(LabelRec{ pf_point_x(point, xloc), point.price, xloc, yloc,
-                                    std::move(text), true }) };
+    return detail::drawing_builtin_allocate<Label>(
+        a, LabelRec{ pf_point_x(point, xloc), point.price, xloc, yloc,
+                     std::move(text), true });
 }
 
 inline int64_t     pf_label_get_x(DrawingArena<LabelRec>& a, Label h)    { return detail::DrawingBuiltinAccess::read(a, h).x; }
@@ -1140,7 +1189,8 @@ inline void pf_label_set_text(DrawingArena<LabelRec>& a, Label h, std::string te
 inline Label pf_label_copy(DrawingArena<LabelRec>& a, Label h) {
     if (!a.alive(h.id)) return Label{};
     LabelRec r = detail::DrawingBuiltinAccess::read(a, h);
-    return Label{ a.alloc(std::move(r)) };
+    if (!a.is_bound()) return Label{a.alloc(std::move(r))};
+    return detail::drawing_builtin_allocate<Label>(a, std::move(r));
 }
 inline void pf_label_delete(DrawingArena<LabelRec>& a, Label h) { a.erase(h.id); }
 

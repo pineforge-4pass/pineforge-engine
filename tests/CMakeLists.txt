@@ -419,6 +419,8 @@ set(TEST_SOURCES
     test_metrics
     test_drawing
     test_drawing_bound_status
+    test_drawing_bounded_builtins
+    test_drawing_bounded_creation_failure
     test_drawing_checkpoint
     test_drawing_id_domain
     test_drawing_slot_atomicity
