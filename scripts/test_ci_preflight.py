@@ -1006,6 +1006,187 @@ class PrebuiltReleaseEnvironment(unittest.TestCase):
                 self.assertNotEqual(changed, self.release)
                 self.assertEqual(self.findings(changed), [])
 
+    def with_run_content(self, content):
+        anchor = ('      - name: Bundle docs into tarball root\n'
+                  '        run: |\n'
+                  '          set -euo pipefail\n')
+        self.assertEqual(_jobs(self.release)['prebuilt'].count(anchor), 1)
+        changed = in_job(self.release, 'prebuilt', anchor,
+                         anchor + '          ' + content + '\n')
+        self.assertIn('          ' + content + '\n', _jobs(changed)['prebuilt'])
+        return changed
+
+    def with_trailing_workflow_env(self, binding):
+        original = 'env:\n  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"\n'
+        self.assertEqual(self.release.count(original), 1)
+        changed = self.release.replace(original, '', 1).rstrip('\n')
+        changed += '\n\n' + original + binding
+        self.assertGreater(changed.index('\nenv:\n'), changed.index('\njobs:\n'))
+        self.assertEqual(_jobs(changed)['prebuilt'], _jobs(self.release)['prebuilt'])
+        return changed
+
+    def assert_admitted_secret_refused(self, changed):
+        self.assertNotEqual(changed, self.release)
+        routes = ci_preflight.workflow_event_routes(
+            {**self.workflows, 'release.yml': changed})
+        self.assertTrue(ci_preflight._prebuilt_environment_admitted(
+            'release.yml', 'prebuilt', changed, _jobs(changed)['prebuilt'],
+            routes['release.yml']))
+        self.assertIn(self.CREDENTIAL_FINDING, self.findings(changed))
+
+    def assert_environment_admission_refused(self, changed):
+        self.assertNotEqual(changed, self.release)
+        routes = ci_preflight.workflow_event_routes(
+            {**self.workflows, 'release.yml': changed})
+        self.assertFalse(ci_preflight._prebuilt_environment_admitted(
+            'release.yml', 'prebuilt', changed, _jobs(changed)['prebuilt'],
+            routes['release.yml']))
+        self.assertIn(self.CREDENTIAL_FINDING, self.findings(changed))
+
+    def test_hash_led_run_block_secret_is_refused(self):
+        changed = self.with_run_content('# ${{ secrets.DEPLOY_TOKEN }}')
+        self.assert_admitted_secret_refused(changed)
+
+    def test_inline_run_block_secret_is_refused(self):
+        changed = self.with_run_content(': # ${{ secrets.DEPLOY_TOKEN }}')
+        self.assert_admitted_secret_refused(changed)
+
+    def test_bracket_run_comment_secrets_are_refused(self):
+        for reference in ("secrets['DEPLOY_TOKEN']", 'secrets["DEPLOY_TOKEN"]',
+                          "secrets [ 'DEPLOY_TOKEN' ]"):
+            for prefix in ('# ', '#', ': # ', ': #'):
+                with self.subTest(reference=reference, prefix=prefix):
+                    changed = self.with_run_content(prefix + '${{ ' + reference + ' }}')
+                    self.assert_admitted_secret_refused(changed)
+
+    def test_workflow_env_after_jobs_secrets_are_refused(self):
+        for binding in (
+                '  TOKEN: ${{ secrets.DEPLOY_TOKEN }}\n',
+                '  TOKEN: "${{ secrets[\'DEPLOY_TOKEN\'] }}"\n',
+                '  TOKEN: "prefix # ${{ secrets.DEPLOY_TOKEN }}"\n',
+                '  TOKEN: |\n    # ${{ secrets["DEPLOY_TOKEN"] }}\n'):
+            with self.subTest(binding=binding):
+                self.assert_admitted_secret_refused(
+                    self.with_trailing_workflow_env(binding))
+
+    def test_raw_header_and_quoted_hash_secrets_are_refused(self):
+        for replacement in (
+                'name: Release\n# ${{ secrets.DEPLOY_TOKEN }}\n',
+                'name: Release\n#${{ secrets["DEPLOY_TOKEN"] }}\n',
+                'name: Release # ${{ secrets[\'DEPLOY_TOKEN\'] }}\n'):
+            with self.subTest(header=replacement):
+                self.assertEqual(self.release.count('name: Release\n'), 1)
+                changed = self.release.replace('name: Release\n', replacement, 1)
+                self.assert_admitted_secret_refused(changed)
+        changed = in_job(
+            self.release, 'prebuilt', '    steps:\n',
+            '    env:\n      TOKEN: "prefix # ${{ secrets.DEPLOY_TOKEN }}"\n'
+            '    steps:\n')
+        self.assert_admitted_secret_refused(changed)
+
+    def test_comment_whole_dynamic_and_lookalike_secret_contexts_are_refused(self):
+        for reference in (
+                'secrets', 'toJSON(secrets)', 'secrets[inputs.secret_name]',
+                "secrets[format('{0}', 'DEPLOY_TOKEN')]",
+                'secrets.GITHUB_TOKEN_SUFFIX', "secrets['GITHUB_TOKEN_SUFFIX']",
+                "format('}}{0}', toJSON(secrets))",
+                "format('it''s }}{0}', toJSON(secrets))"):
+            with self.subTest(reference=reference):
+                changed = self.with_run_content('# ${{ ' + reference + ' }}')
+                self.assert_admitted_secret_refused(changed)
+
+    def test_github_token_raw_comments_and_trailing_workflow_env_are_admitted(self):
+        self.assertEqual(self.findings(self.release), [])
+        for reference in ('secrets.GITHUB_TOKEN', "secrets['GITHUB_TOKEN']",
+                          'secrets["GITHUB_TOKEN"]', 'github.token'):
+            for prefix in ('# ', '#'):
+                with self.subTest(reference=reference, prefix=prefix):
+                    changed = self.with_run_content(prefix + '${{ ' + reference + ' }}')
+                    self.assertNotEqual(changed, self.release)
+                    self.assertEqual(self.findings(changed), [])
+            with self.subTest(reference=reference, scope='trailing workflow env'):
+                changed = self.with_trailing_workflow_env(
+                    '  TOKEN: "prefix # ${{ ' + reference + ' }}"\n')
+                self.assertNotEqual(changed, self.release)
+                self.assertEqual(self.findings(changed), [])
+        prose = self.with_run_content('# The secrets context is evaluated before the shell.')
+        self.assertEqual(self.findings(prose), [])
+
+    def test_other_jobs_app_credentials_do_not_enter_the_prebuilt_scan(self):
+        self.assertEqual(self.findings(self.release), [])
+        for job in ('release', 'notify-hub'):
+            with self.subTest(job=job):
+                body = _jobs(self.release)[job]
+                self.assertIn('uses: actions/create-github-app-token@', body)
+                self.assertIn('private-key: ${{ secrets.', body)
+                changed = in_job(
+                    self.release, job, '    steps:\n',
+                    '    env:\n      EXTRA_TOKEN: ${{ secrets.OTHER_TOKEN }}\n'
+                    '    steps:\n')
+                self.assertNotEqual(changed, self.release)
+                self.assertEqual(_jobs(changed)['prebuilt'], _jobs(self.release)['prebuilt'])
+                self.assertEqual(self.findings(changed), [])
+
+    def test_release_environment_admission_requires_release_needs(self):
+        for replacement in ('', '    needs: other\n',
+                            '    needs: [release, notify-hub]\n',
+                            '    needs: ${{ inputs.needs }}\n',
+                            '    needs: release\n' * 2):
+            with self.subTest(needs=replacement):
+                changed = in_job(self.release, 'prebuilt', '    needs: release\n',
+                                 replacement)
+                self.assert_environment_admission_refused(changed)
+
+    def test_release_environment_admission_refuses_duplicate_strategy_keys(self):
+        block = '\n'.join(ci_preflight._job_block(
+            _jobs(self.release)['prebuilt'], 'strategy')) + '\n'
+        self.assertEqual(_jobs(self.release)['prebuilt'].count(block), 1)
+        changed = in_job(self.release, 'prebuilt', block, block * 2)
+        self.assertEqual(len(ci_preflight._job_values(
+            _jobs(changed)['prebuilt'], 'strategy')), 2)
+        self.assert_environment_admission_refused(changed)
+
+    def test_release_environment_admission_refuses_job_level_uses(self):
+        changed = in_job(
+            self.release, 'prebuilt', '    steps:\n',
+            '    uses: ./.github/workflows/reusable.yml\n    steps:\n')
+        self.assert_environment_admission_refused(changed)
+
+    def test_release_environment_admission_refuses_unparsed_job_mappings(self):
+        self.assertEqual(self.release.count('\njobs:\n'), 1)
+        changed = self.release.replace(
+            '\njobs:\n', '\njobs:\n  "unparsed-job":\n'
+            '    runs-on: ubuntu-24.04\n    steps: []\n', 1)
+        self.assertTrue(ci_preflight._unparsed(changed))
+        self.assert_environment_admission_refused(changed)
+
+    def test_release_environment_admission_refuses_direct_event_additions(self):
+        self.assertEqual(self.release.count('\non:\n'), 1)
+        for event in ('push', 'pull_request', 'workflow_call'):
+            with self.subTest(event=event):
+                changed = self.release.replace('\non:\n', '\non:\n  ' + event + ':\n', 1)
+                self.assertEqual(ci_preflight._events(changed),
+                                 {'workflow_dispatch', event})
+                self.assert_environment_admission_refused(changed)
+
+    def test_release_environment_admission_requires_exact_token_permissions(self):
+        for scope in ('workflow', 'job'):
+            for replacement in ('', 'permissions: read-all\n',
+                                'permissions:\n  contents: read\n',
+                                'permissions:\n  contents: write\n  actions: write\n'):
+                with self.subTest(scope=scope, permissions=replacement):
+                    if scope == 'workflow':
+                        changed = self.release.replace(
+                            'permissions:\n  contents: write\n', replacement, 1)
+                    else:
+                        indented = ''.join('    ' + line + '\n'
+                                           for line in replacement.splitlines())
+                        changed = in_job(
+                            self.release, 'prebuilt',
+                            '    permissions:\n      contents: write   # gh release upload\n',
+                            indented)
+                    self.assert_environment_admission_refused(changed)
+
     def test_missing_wrong_empty_dynamic_and_duplicate_environments_are_refused(self):
         for replacement in (
                 '', '    environment: other\n', '    environment:\n',
