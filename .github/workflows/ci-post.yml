@@ -154,6 +154,37 @@ jobs:
             echo "verifier_slow=true" >> "$GITHUB_OUTPUT"
           fi
 
+  build-x86-gcc133:
+    needs: [authz]
+    if: ${{ always() && needs.authz.result == 'success' }}
+    runs-on: gke-32cpu-64gb-amd64
+    permissions: {contents: read}
+    steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
+      - name: Checkout the exact workflow head
+        if: ${{ needs.authz.result == 'success' }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build native x86 GNU 13.3.0 Release
+        if: ${{ needs.authz.result == 'success' }}
+        run: |
+          python3 scripts/ci_native_x86_release.py --source . --build-dir build-x86-gcc133 --artifact-dir ci-native-x86-gcc133 --jobs "$(getconf _NPROCESSORS_ONLN)"
+      - name: Retain native x86 GNU 13.3.0 build artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-post-native-x86-gcc133
+          path: ci-native-x86-gcc133/
+          if-no-files-found: warn
+
   preflight:
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' }}
@@ -728,7 +759,7 @@ jobs:
   # maintainers, rather than this build context.
   build-gate:
     name: build
-    needs: [authz, changes, preflight, build, build-debug, build-release-gate, build-debug-gate, build-arm, sanitizers, sanitizers-gate, native-live, kernel-only, kernel-only-gate, corpus-parity-subset, preflight-slow, corpus-parity]
+    needs: [authz, changes, preflight, build, build-debug, build-release-gate, build-debug-gate, build-arm, build-x86-gcc133, sanitizers, sanitizers-gate, native-live, kernel-only, kernel-only-gate, corpus-parity-subset, preflight-slow, corpus-parity]
     if: always()
     # The aggregate runs inline Python and shell on the light pool class.
     runs-on: gke-2cpu-4gb-amd64
@@ -749,6 +780,7 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          X86_GCC133_RESULT: ${{ needs.build-x86-gcc133.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           DEBUG_BUILD_RESULT: ${{ needs.build-debug.result }}
           RELEASE_GATE_RESULT: ${{ needs.build-release-gate.result }}
@@ -765,6 +797,7 @@ jobs:
         run: |
           printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
             "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
+            "native x86 GNU 13.3.0: $X86_GCC133_RESULT" \
             "debug shards: $DEBUG_BUILD_RESULT" "release aggregate: $RELEASE_GATE_RESULT" "debug aggregate: $DEBUG_GATE_RESULT" \
             "arm64 matrix: $ARM_BUILD_RESULT" \
             "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
@@ -778,7 +811,8 @@ jobs:
           if [[ "$CHANGES_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then docs_only=true; fi
           passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
           [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
-            && [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
+            && [[ "$PREFLIGHT_RESULT" == "success" ]] \
+            && [[ "$X86_GCC133_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
             && passed "$DEBUG_BUILD_RESULT" && passed "$RELEASE_GATE_RESULT" && passed "$DEBUG_GATE_RESULT" \
             && passed "$ARM_BUILD_RESULT" \
             && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \

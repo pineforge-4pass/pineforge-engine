@@ -25,6 +25,7 @@ from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES,
                           DOCS_ONLY_SKIP, GITHUB_ONLY_SKIP, HEAVY_SKIP, HOSTED_MATRIX_RUNNER, JOB_COMMANDS,
                           PR_RUNNER, POST_RUNNER, MATRIX_LINUX_RUNNER, MATRIX_RUNNER,
                           NATIVE_EXCLUSION,
+                          NATIVE_X86_ARTIFACT_DIR, NATIVE_X86_JOB, NATIVE_X86_RUN,
                           PREFLIGHT_IF, PROOF_JOBS, PR_PROOF_JOBS, PR_ARM_PROOF_JOBS,
                           RELEASE_RUNNER, PREBUILT_RUNNER, _jobs, check_commands,
                           ADMIT_MAX_DEPTH, ADMIT_MAX_FILE_BYTES, ADMIT_MAX_LINE, ADMIT_MAX_LINES,
@@ -97,10 +98,12 @@ EXPECTED_LIGHT_GKE_JOBS = {
 }
 EXPECTED_GKE_JOBS = {
     'gke-pr.yml': {'preflight': GKE_PR_8, 'build': GKE_PR_32, 'build-debug': GKE_PR_16,
+                   NATIVE_X86_JOB: GKE_PR_32,
                    'build-arm': GKE_ARM,
                    'corpus-parity-subset': GKE_PR_8},
     'ci-post.yml': {'preflight': GKE_8, 'preflight-slow': GKE_8,
                     'build': GKE_32, 'build-debug': GKE_16_128,
+                    NATIVE_X86_JOB: GKE_32,
                     'sanitizers': GKE_32_256, 'kernel-only': GKE_16, 'build-arm': GKE_ARM},
     'corpus-parity.yml': {'corpus-parity': GKE_16, 'corpus-parity-subset': GKE_8},
     'native-live.yml': {'native-live': NATIVE_RUNNER, 'native-live-shards': GKE_8},
@@ -187,7 +190,7 @@ POST_ARM_BUILD_RUNNER_FINDING = ('ci-post.yml build-arm must select '
 RELEASE_MATRIX_FINDING = ('release.yml prebuilt must use exactly the isolated Linux x64 '
                           'and hosted ARM matrix')
 CI_JOB_IDS = ('authz',)
-GKE_PR_JOB_IDS = ('admit', 'preflight', 'build', 'build-debug', 'build-arm',
+GKE_PR_JOB_IDS = ('admit', 'preflight', NATIVE_X86_JOB, 'build', 'build-debug', 'build-arm',
                   'corpus-parity-subset', 'legs', 'result')
 GKE_PROOF_IF = ("${{ needs.admit.outputs.allowed == 'true' && "
                 "needs.admit.outputs.docs_only != 'true' && "
@@ -195,7 +198,7 @@ GKE_PROOF_IF = ("${{ needs.admit.outputs.allowed == 'true' && "
 POST_CI_JOB_IDS = ('authz', 'changes', 'preflight', 'preflight-slow', 'build',
                   'build-debug', 'build-release-gate', 'build-debug-gate',
                   'sanitizers-gate', 'kernel-only-gate',
-                  'build-arm', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity-subset',
+                  'build-arm', NATIVE_X86_JOB, 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity-subset',
                   'corpus-parity', 'build-gate')
 NATIVE_HOSTED_RUNNERS = {'authz': GKE_4, 'native-live': NATIVE_RUNNER,
                          'native-live-shards': GKE_8,
@@ -204,7 +207,7 @@ FLEET_JOB_IDS = {
     'ci.yml': ('authz',),
     'gke-pr.yml': GKE_PR_JOB_IDS,
     'ci-post.yml': ('authz', 'changes', 'preflight', 'preflight-slow', 'build',
-                    'build-debug', 'build-arm', 'sanitizers', 'kernel-only', 'build-gate',
+                    'build-debug', 'build-arm', NATIVE_X86_JOB, 'sanitizers', 'kernel-only', 'build-gate',
                     'build-release-gate', 'build-debug-gate', 'sanitizers-gate', 'kernel-only-gate'),
     'native-live.yml': ('authz', 'native-live', 'native-live-shards', 'native-live-native', 'native-live-gate'),
     'corpus-parity.yml': ('authz', 'corpus-parity', 'corpus-parity-subset'),
@@ -2727,8 +2730,8 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             'These light, secret-free jobs need no VM-only tools, mounts or caches.',
             'The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use '
             '`gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.',
-            'Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 36 GKE job instances: '
-            "amd64 32 CPU default/256 GB labels carry 4/4 jobs, amd64 16 CPU default/128/256 GB labels carry 3/3/1, amd64 8/4/2 CPU labels carry 7/5/7, and arm64 16 CPU 128 GB carries 2; each label's static cap is 8.",
+            'Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 37 GKE job instances: '
+            "amd64 32 CPU default/256 GB labels carry 5/4 jobs, amd64 16 CPU default/128/256 GB labels carry 3/3/1, amd64 8/4/2 CPU labels carry 7/5/7, and arm64 16 CPU 128 GB carries 2; each label's static cap is 8.",
             'The amd64 post build shards and the two arm64 post cells use bare scalar',
             'Hosted exceptions cover PR light jobs and the existing hosted release cells; post light jobs use bare scalar GKE names.',
             '`native-live.yml` runs four `native` shards on `gke-8cpu-16gb-amd64`;\n'
@@ -4450,7 +4453,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'source-guard-cancellation', 'source-guard-cr150-source-bounds',
             'cr150-source-gate-tests', 'rng-draw-order-tests', 'rng-draw-order', 'verifier-tests',
             'preflight-tests', 'unittest-shards-tests', 'verifier-paths-tests',
-            'native-c-surface-tests', 'kernel-residuals-tests', 'corpus-parity-identity-tests',
+            'native-c-surface-tests', 'native-x86-release-tests', 'kernel-residuals-tests',
+            'corpus-parity-identity-tests',
             'corpus-parity-subset-cover-tests', 'report-schema-key-tests',
             'selected-window-ownership-tests', 'report-outputs-key-tests', 'release-version-tests',
             'release-gate-tests', 'prebuilt-bookworm-tests', 'prebuilt-glibc-tests',
@@ -4463,11 +4467,15 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'kernel-seam-rows-tests', 'kernel-seam-rows', 'doc-pine-coverage',
             'doc-pine-coverage-tests', 'duplicate-test-names-tests', 'duplicate-test-names',
         ]
+        self.assertEqual(
+            {entry[0]: entry[1] for entry in check_commands(ROOT, env={})}[
+                'native-x86-release-tests'],
+            [sys.executable, str(ROOT / 'scripts/test_ci_native_x86_release.py')])
         with mock.patch.object(ci_preflight.sys, 'platform', 'linux'):
             self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
             # main() prepends actionlint-version to all/fast/github-only.
-            self.assertEqual(len(expected) + 1, 65)
-            self.assertEqual(len(check_commands(ROOT, tier='fast')), 60)
+            self.assertEqual(len(expected) + 1, 66)
+            self.assertEqual(len(check_commands(ROOT, tier='fast')), 61)
             self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
             self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
         for platform in ('darwin', 'win32'):
@@ -4476,7 +4484,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
                                      if name not in ('prebuilt-bookworm-tests', 'prebuilt-glibc-tests')]
                 self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})],
                                  expected_platform)
-                self.assertEqual(len(check_commands(ROOT, tier='fast')), 58)
+                self.assertEqual(len(check_commands(ROOT, tier='fast')), 59)
 
 
 class PrebuiltGlibcRegistration(unittest.TestCase):
@@ -7085,11 +7093,13 @@ exit "$lookup_exit"
                'CHANGES_RESULT': 'success', 'DOCS_ONLY': 'false',
                'PREFLIGHT_RESULT': 'success',
                'SLOW_PREFLIGHT_RESULT': 'success',
+               'X86_GCC133_RESULT': 'success',
                **{variable: 'success' for variable in PROOF_JOBS.values()}}
         pr_script = job_script(self.gke(), 'legs', 'Require every proof leg')
         for variable in PR_ARM_PROOF_JOBS.values():
             for outcome in ('success', 'failure', 'cancelled', 'skipped', ''):
                 env_pr = {**dict.fromkeys(PR_ARM_PROOF_JOBS.values(), 'success'), 'ARM_RELEVANT': 'true'}
+                env_pr['X86_RESULT'] = 'success'
                 result = subprocess.run(
                     ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', pr_script],
                     env={'PATH': env['PATH'], **env_pr, variable: outcome},
@@ -7099,7 +7109,8 @@ exit "$lookup_exit"
         for event in ('push', 'workflow_dispatch', 'schedule', 'release'):
             script = job_script(self.ci_sources()[6], 'build-gate',
                                 'Require every verification lane to have passed')
-            matrices = [('BUILD_RESULT', 'matrix')]
+            matrices = [('X86_GCC133_RESULT', 'native x86 GNU 13.3.0')]
+            matrices.append(('BUILD_RESULT', 'matrix'))
             if event != 'pull_request':
                 matrices.append(('ARM_BUILD_RESULT', 'arm64 matrix'))
             for variable, label in matrices:
@@ -7132,13 +7143,14 @@ exit "$lookup_exit"
                     results = [common] * len(lanes)
                     results[odd] = outcome
                     vectors.add(tuple(results))
-        cases = [(changes, docs_only, preflight, *results)
+        cases = [(changes, docs_only, preflight, *results, 'success')
                  for preflight in ('success', 'failure', 'skipped', 'cancelled')
                  for changes in ('success', 'failure', 'skipped')
                  for docs_only in ('true', 'false', '') for results in sorted(vectors)]
         # One bash reads every case; each runs the step in a subshell with the
         # options GitHub gives a bash step (-e, pipefail).
-        names = ['CHANGES_RESULT', 'DOCS_ONLY', 'PREFLIGHT_RESULT', *lanes]
+        names = ['CHANGES_RESULT', 'DOCS_ONLY', 'PREFLIGHT_RESULT', *lanes,
+                 'X86_GCC133_RESULT']
         # The harness's own variables share no name with the step's.
         columns = [f'case_{name.lower()}' for name in names]
         driver = ('while read -r ' + ' '.join(columns) + '; do\n'
@@ -7163,7 +7175,8 @@ exit "$lookup_exit"
             with self.subTest(case=dict(zip(names, case))):
                 self.assertEqual(answer == '0', expected, answer)
         # And as the runner starts it: the docs-only pass, and a skip that is not.
-        docs_only = dict(zip(names, ('success', 'true', 'success', *['skipped'] * len(lanes))))
+        docs_only = dict(zip(names, ('success', 'true', 'success', *['skipped'] * len(lanes),
+                                     'success')))
         for override, code in (({}, 0), ({'DOCS_ONLY': 'false'}, 1), ({'CHANGES_RESULT': 'failure'}, 1),
                                *[({'AUTHZ_RESULT': result}, 1)
                                  for result in ('failure', 'cancelled', 'skipped', '')]):
@@ -7173,6 +7186,13 @@ exit "$lookup_exit"
                 self.assertEqual(result.returncode, code, result.stdout + result.stderr)
                 self.assertIn('preflight: success', result.stdout)
                 self.assertIn('matrix: skipped', result.stdout)
+        for outcome in ('failure', 'cancelled', 'skipped', ''):
+            with self.subTest(native_x86=outcome):
+                result = subprocess.run(
+                    ['bash', '--noprofile', '--norc', '-eo', 'pipefail', str(script)],
+                    env={**env, 'X86_GCC133_RESULT': outcome},
+                    capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def github_only_aggregate(self, rows, *, files_response='fixture',
                               second_rows=None, results=None):
@@ -10678,20 +10698,28 @@ class GkePrArmProofTests(unittest.TestCase):
             env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'), **values},
             capture_output=True, text=True)
 
-    def arm_result(self, relevant, outcome, *, legs_script=None, second=None):
+    def arm_result(self, relevant, outcome, *, legs_script=None, second=None,
+                   native='success', docs_only='false', github_only='false'):
+        # `native` reaches only the result step, so the legs step cannot be the
+        # step that refuses it. A classified documentation class skips the proof
+        # legs, and both classification reads agree on it.
         legs = job_script(self.workflow, 'legs', 'Require every proof leg')
         if legs_script is not None:
             legs = legs_script
         proof = self.run_shell(
             legs, {'BUILD_RESULT': 'success', 'DEBUG_RESULT': 'success',
-                   'PARITY_RESULT': 'success', 'ARM_RELEVANT': relevant, 'ARM_RESULT': outcome})
+                   'PARITY_RESULT': 'success', 'X86_RESULT': 'success',
+                   'ARM_RELEVANT': relevant, 'ARM_RESULT': outcome})
+        classified = 'true' in (docs_only, github_only)
         result = self.run_shell(
             job_script(self.workflow, 'result',
                        'Require an independently consistent successful result'),
             {'ADMIT_RESULT': 'success', 'ALLOWED': 'true', 'PREFLIGHT_RESULT': 'success',
-             'LEGS_RESULT': 'success' if proof.returncode == 0 else 'failure',
-             'ADMIT_DOCS_ONLY': 'false', 'ADMIT_GITHUB_ONLY': 'false',
-             'SECOND_DOCS_ONLY': 'false', 'SECOND_GITHUB_ONLY': 'false',
+             'X86_RESULT': native,
+             'LEGS_RESULT': ('skipped' if classified
+                             else 'success' if proof.returncode == 0 else 'failure'),
+             'ADMIT_DOCS_ONLY': docs_only, 'ADMIT_GITHUB_ONLY': github_only,
+             'SECOND_DOCS_ONLY': docs_only, 'SECOND_GITHUB_ONLY': github_only,
              'ADMIT_ARM_RELEVANT': relevant,
              'SECOND_ARM_RELEVANT': relevant if second is None else second,
              'CODE_EXTENSION': 'false'})
@@ -10747,8 +10775,10 @@ class GkePrArmProofTests(unittest.TestCase):
         self.assertIn('      arm_relevant: ${{ steps.classify.outputs.arm_relevant }}',
                       jobs['admit'])
         self.assertEqual(ci_preflight._needs(jobs['legs']),
-                         ['admit', 'build', 'build-debug', 'build-arm', 'corpus-parity-subset'])
+                         ['admit', 'build', 'build-debug', 'build-arm',
+                          NATIVE_X86_JOB, 'corpus-parity-subset'])
         self.assertIn('ARM_RESULT: ${{ needs.build-arm.result }}', jobs['legs'])
+        self.assertIn(f'X86_RESULT: ${{{{ needs.{NATIVE_X86_JOB}.result }}}}', jobs['legs'])
         self.assertIn('ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}', jobs['legs'])
         self.assertIn('ADMIT_ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}',
                       jobs['result'])
@@ -10801,6 +10831,36 @@ class GkePrArmProofTests(unittest.TestCase):
             with self.subTest(admitted=admitted, second=second):
                 _, result = self.arm_result(admitted, 'success', second=second)
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_native_x86_result_gates_every_coherent_class_with_its_named_refusal(self):
+        step = 'Require an independently consistent successful result'
+        refusal = '::error title=gke-pr result::native x86 GNU 13.3.0 build did not pass\n'
+        # Coherent metadata per class; only the native outcome varies.
+        classes = (
+            ('normal, arm relevant', 'true', 'success', {}),
+            ('normal, arm irrelevant', 'false', 'skipped', {}),
+            ('docs-only', 'false', 'skipped', {'docs_only': 'true'}),
+            ('github-only', 'false', 'skipped', {'github_only': 'true'}),
+        )
+        for name, relevant, arm, klass in classes:
+            with self.subTest(klass=name, native='success'):
+                _, result = self.arm_result(relevant, arm, **klass)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for native in ('failure', 'cancelled', 'skipped', ''):
+                with self.subTest(klass=name, native=native):
+                    _, result = self.arm_result(relevant, arm, native=native, **klass)
+                    # The one named refusal, with no setup failure beside it.
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, refusal)
+                    self.assertEqual(result.stderr, '')
+        # Control: the same step without its native line ignores the input and
+        # passes a failed native build, so the refusals above come from that line.
+        line = ('          test "$X86_RESULT" = success || '
+                'fail "native x86 GNU 13.3.0 build did not pass"\n')
+        self.assertEqual(job_script(self.workflow, 'result', step).count(line.strip()), 1)
+        self.workflow = in_step(self.workflow, 'result', step, line, '')
+        _, result = self.arm_result('true', 'success', native='failure')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_arm_aggregation_deliberate_crash_is_not_success(self):
         script = job_script(self.workflow, 'legs', 'Require every proof leg')
@@ -10883,8 +10943,8 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
             self.original = self.original.replace(self.ARM_JOB, '', 1)
             self.original = in_job(
                 self.original, 'legs',
-                '    needs: [admit, build, build-debug, build-arm, corpus-parity-subset]\n',
-                '    needs: [admit, build, build-debug, corpus-parity-subset]\n')
+                '    needs: [admit, build, build-debug, build-arm, build-x86-gcc133, corpus-parity-subset]\n',
+                '    needs: [admit, build, build-debug, build-x86-gcc133, corpus-parity-subset]\n')
             for job, addition in (
                     ('admit', '      arm_relevant: ${{ steps.classify.outputs.arm_relevant }}\n'),
                     ('legs', '          ARM_RESULT: ${{ needs.build-arm.result }}\n'
@@ -10919,8 +10979,8 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
             '      arm_relevant: ${{ steps.classify.outputs.arm_relevant }}\n')
         self.workflow = in_job(
             self.workflow, 'legs',
-            '    needs: [admit, build, build-debug, corpus-parity-subset]\n',
-            '    needs: [admit, build, build-debug, build-arm, corpus-parity-subset]\n')
+            '    needs: [admit, build, build-debug, build-x86-gcc133, corpus-parity-subset]\n',
+            '    needs: [admit, build, build-debug, build-arm, build-x86-gcc133, corpus-parity-subset]\n')
         self.workflow = in_step(
             self.workflow, 'legs', 'Require every proof leg',
             '          DEBUG_RESULT: ${{ needs.build-debug.result }}\n',
@@ -11400,9 +11460,9 @@ class GkeAdmissionRuleTests(unittest.TestCase):
         cases = (
             ('    if: always()\n', '    if: success()\n',
              'gke-pr.yml result must run always'),
-            ('    needs: [admit, preflight, legs]\n',
+            ('    needs: [admit, preflight, build-x86-gcc133, legs]\n',
              '    needs: [admit, preflight]\n',
-             'gke-pr.yml result must need admit, preflight and legs'),
+             'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results'),
             ('          ref: ${{ needs.admit.outputs.head_sha }}\n',
              '          ref: ${{ github.event.pull_request.head.ref }}\n',
              'gke-pr.yml preflight checkout must use the admitted immutable head'),
