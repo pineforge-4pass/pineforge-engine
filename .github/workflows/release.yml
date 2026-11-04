@@ -77,7 +77,7 @@ env:
 
 jobs:
   release:
-    runs-on: gkp-2cpu-4gb-amd64
+    runs-on: gkp-od-4cpu-8gb-amd64
     environment: release
 
     outputs:
@@ -366,7 +366,7 @@ jobs:
       matrix:
         include:
           - triple: linux-x86_64
-            runner: gkp-16cpu-32gb-amd64-128gb
+            runner: gkp-od-16cpu-32gb-amd64-128gb
           - triple: linux-aarch64
             runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
@@ -504,7 +504,7 @@ jobs:
   notify-hub:
     needs: [release, prebuilt]
     if: ${{ !inputs.dry_run }}
-    runs-on: gkp-2cpu-4gb-amd64
+    runs-on: gkp-od-4cpu-8gb-amd64
     environment: release
     steps:
       - name: Mint org App token (hub dispatch)

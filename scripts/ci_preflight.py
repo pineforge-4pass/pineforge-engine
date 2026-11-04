@@ -99,8 +99,9 @@ PR_FAST_ROWS_SHA256 = '0509b2219786efb6878b193639344c299ff8075ba4532dbe09e80e6e9
 PR_RUNNER = '["self-hosted","pf-gcp-pr"]'
 # There is no general post fleet: an unpinned job on this label is refused.
 POST_RUNNER = 'gke-2cpu-4gb-amd64'
-RELEASE_RUNNER = 'gkp-2cpu-4gb-amd64'
-PREBUILT_RUNNER = 'gkp-16cpu-32gb-amd64-128gb'
+PROTECTED_RUNNER = 'gkp-2cpu-4gb-amd64'
+RELEASE_RUNNER = 'gkp-od-4cpu-8gb-amd64'
+PREBUILT_RUNNER = 'gkp-od-16cpu-32gb-amd64-128gb'
 GKE_32_LABEL = 'gke-32cpu-64gb-amd64'
 GKE_16_LABEL = 'gke-16cpu-32gb-amd64'
 GKE_8_LABEL = 'gke-8cpu-16gb-amd64'
@@ -110,9 +111,9 @@ GKE_4_LABEL = 'gke-4cpu-8gb-amd64'
 GKP_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'notify-hub': RELEASE_RUNNER,
                     'prebuilt': PREBUILT_RUNNER},
-    'promote-baseline.yml': {'promote': RELEASE_RUNNER},
+    'promote-baseline.yml': {'promote': PROTECTED_RUNNER},
     'docs-post.yml': {'build': 'gkp-4cpu-8gb-amd64'},
-    'release-ruleset-probe.yml': {'probe': RELEASE_RUNNER},
+    'release-ruleset-probe.yml': {'probe': PROTECTED_RUNNER},
 }
 GKP_JOB_ENVIRONMENTS = {
     'release.yml': {'release': 'release', 'notify-hub': 'release'},
@@ -345,8 +346,8 @@ HOSTED_JOB_RUNNERS = {
 RELEASE_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
                     'notify-hub': RELEASE_RUNNER},
-    'release-ruleset-probe.yml': {'probe': RELEASE_RUNNER},
-    'promote-baseline.yml': {'promote': RELEASE_RUNNER},
+    'release-ruleset-probe.yml': {'probe': PROTECTED_RUNNER},
+    'promote-baseline.yml': {'promote': PROTECTED_RUNNER},
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
 # standard hosted labels. Existing hosted exceptions above are pinned separately.
@@ -2351,7 +2352,7 @@ _GKE_ROUTE = re.compile(r'(?<![\w.-])gke-[\w.-]+', re.IGNORECASE)
 _GKE_SCALE_LABEL = re.compile(
     r'(?<![\w.-])gke-\d+cpu-\d+gb-(?:amd64|arm64)(?:-(?:128|256)gb)?(?![\w.-])')
 _GKP_ROUTE = re.compile(r'(?<![\w.-])gkp-[\w.-]+', re.IGNORECASE)
-_GKP_SCALE_LABEL = re.compile(r'gkp-\d+cpu-\d+gb-amd64(?:-\d+gb)?')
+_GKP_SCALE_LABEL = re.compile(r'gkp-(?:od-)?\d+cpu-\d+gb-amd64(?:-\d+gb)?')
 
 
 def _native_runner_matrix(name: str, job: str, body: str) -> bool:
@@ -2571,7 +2572,7 @@ def _resolved_runner_values(workflow: str, body: str) -> tuple[list[str], bool]:
 
 # Disk suffixes still require group membership; admitted sizes are pinned separately.
 _RUNNER_GROUP_LABEL = re.compile(
-    r'(?<![\w.-])(?:gke|gkp)-\d+cpu-\d+gb-[A-Za-z0-9_]+(?:-\d+gb)?(?![\w.-])',
+    r'(?<![\w.-])(?:gke|gkp(?:-od)?)-\d+cpu-\d+gb-[A-Za-z0-9_]+(?:-\d+gb)?(?![\w.-])',
     re.IGNORECASE)
 _REPOSITORY_ID = r'[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*'
 _RUNNER_GROUP_REFERENCE = re.compile(
