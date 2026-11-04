@@ -36,7 +36,7 @@ namespace {
 // TradingView's request.security_lower_tf accepts only the default merge
 // flags: lookahead_on and gaps_on are refused at validation. This is a rule
 // of the source language, not of the kernel's sub-bar synthesis, so it lives
-// here beside the evaluator that applies it (R5 lane N14: it used to be
+// here beside the evaluator that applies it (the source-runtime extraction: it used to be
 // internal::ensure_supported_lower_tf_emulation_flags in engine_lower_tf.cpp;
 // the message and the refusal are unchanged).
 void ensure_supported_lower_tf_emulation_flags(bool lookahead_on, bool gaps_on) {
@@ -350,11 +350,11 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
             // exposed value (and any ``[k]`` offset off it) advances at
             // the security's own finer cadence — one push per completed
             // security period, exactly the ungated behavior. Gating it
-            // regressed masayanfx-multi-time-score-strategy
+            // regressed the multi-timeframe scoring probe
             // (request.security(sym, "5", ta.highest(high, 20)[1],
             // barmerge.gaps_off, barmerge.lookahead_off) on a 15m chart)
             // from 100.0% to 93.7% trade parity vs TradingView, while
-            // the gated lookahead_on case (3commas triple-RSI DCA,
+            // the gated lookahead_on case (the triple-RSI DCA probe,
             // so2Rsi = request.security(sym, "5", ta.rsi(close,7)[1],
             // lookahead=barmerge.lookahead_on)) needs the latch to hold
             // 100.0%.
@@ -382,7 +382,7 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
             // finer than the script/chart TF, served by the auxiliary finer
             // feed: TV's merge takes the LAST intrabar of the calling bar,
             // whatever its sub-bar count -- see the field's note. The
-            // aggregator's own completions stay ungated (masayanfx above);
+            // aggregator's own completions stay ungated (the multi-timeframe scoring probe above);
             // only a bucket still partial on the calling bar's last
             // auxiliary bar is finalized and published there.
             pine.calling_close_completes_partial = true;
@@ -443,7 +443,7 @@ bool source::PineStrategyHost::security_input_precedes_range_start(
         // first IN-RANGE stamp -- Tue 2025-04-01 for the week that opened Mon
         // 03-31 -- so the bucket-open cut above keeps it as bar 0 and every
         // SMA-seeded weekly EMA runs one bar early (round 8, family P:
-        // hungpixi-macd-enhanced-mtf on BINANCE:BTCUSDT 1D under the ladder's
+        // the weekly MACD probe on BINANCE:BTCUSDT 1D under the ladder's
         // range-start-na-warmup candidate, lab tv famp-sense-hp-btc1d
         // 2026-09-05: TradingView's weekly EMA26 first reads on the 09-29
         // week and its signal EMA9 on the 11-24 week -- weekly bar 0 is the
@@ -583,7 +583,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
     // No bar of the requested timeframe is loaded (no_loaded_bars): the
     // site is never evaluated, so it and its TA read na throughout.
     if (pine.no_loaded_bars) return;
-    // On the pump's runtime block when it has one (R5 lane D2-C).
+    // On the pump's runtime block when it has one (the per-pump state cache).
     internal::AmbientEmaSeedingScope _na_warmup_scope(
         NativeExecutionConsumer::bound(*this).pump_ambient(),
         security_range_start_na_warmup_);
@@ -903,7 +903,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         // for a calendar W / M bucket -- so every weekly completion on its
         // last daily bar looked like a boundary and committed a phantom copy
         // of the week as one more requested bar (round 7, family I: the
-        // hungpixi weekly f_count carry decayed twice per week, hist ties
+        // weekly MACD probe's f_count carry decayed twice per week, hist ties
         // compared the week with its own copy).
         const bool boundary_emission = pine.lookahead_on
             && state.aggregator.is_active()

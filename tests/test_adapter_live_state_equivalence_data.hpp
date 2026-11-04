@@ -453,7 +453,7 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     10097469201518996692ull,  // reversals seed 1466206, 154 trades, 387 commands, 435 rows placed
     1616424144157930691ull,  // reversals seed 1570935, 69 trades, 344 commands, 269 rows placed
     333669427024790972ull,  // reversals seed 1675664, 118 trades, 404 commands, 436 rows placed
-    9326889037921890283ull,  // reversals seed 1780393, 176 trades, 668 commands, 627 rows placed
+    14687553434961642780ull,  // reversals seed 1780393, 179 trades, 667 commands, 632 rows placed
     16157662191262207287ull,  // reversals seed 1885122, 126 trades, 396 commands, 401 rows placed
     17916942874076346951ull,  // reversals seed 1989851, 169 trades, 429 commands, 453 rows placed
     8226435249272520348ull,  // reversals seed 2094580, 92 trades, 384 commands, 349 rows placed

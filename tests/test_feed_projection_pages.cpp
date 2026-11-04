@@ -292,7 +292,7 @@ void borrowed_arrays() {
     (void)reader.at(1);
     CHECK(first.bar.timestamp == 1000 && first.bar.close == 12.5);
     CHECK(reader.size() == 2);
-    detail::FeedProjectionBuilder<FeedBar> builder;
+    detail::FeedProjectionBuilder<FeedBarRow> builder;
     builder.append(reader.at(0));
     builder.append(reader.at(1));
     const auto disk = builder.finish(0);

@@ -13,7 +13,7 @@
  * The lowering placed that close_all as a Flatten request of its own: at a
  * declined open it flattened the held position, and the flat book then took
  * the next bar's entries as two openings where TradingView reverses once
- * (job-2614-andrewwieiw-frosty-alerts on BINANCE:ETHUSDT.P 15, whose
+ * (the end-of-window reversal probe on BINANCE:ETHUSDT.P 15, whose
  * end-of-window strategy.close_all follows its reversal entries every day).
  *
  * Each row replays TradingView's own tape of a synthetic probe
@@ -93,7 +93,7 @@ struct FeedBar {
     double open, high, low, close, volume;
 };
 
-// BINANCE:ETHUSDT.P 15m, 2025-04-01 00:00 .. 2025-04-17 00:00 UTC.
+// BINANCE:ETHUSDT.P 15m fixture spanning successive sessions.
 #include "fixtures/margin_v6/bars.inc"
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();

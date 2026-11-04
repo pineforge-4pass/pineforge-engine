@@ -121,9 +121,9 @@ struct Fnv {
     void s(const std::string& v) noexcept { u(v.size()); bytes(v.data(), v.size()); }
 };
 
-// The v19 continuation's fold (native-consumer/v9, R5 lane V19-A): one
+// The v19 continuation's fold (native-consumer/v9, the v19 live-state hash change): one
 // multiply-xorshift per 64-bit word, in fold order, where Fnv above takes one
-// multiply per byte (PERF0-P's O1, PERF-D1 step s6). A scalar is one word; a
+// multiply per byte (the word-at-a-time scalar fold). A scalar is one word; a
 // string is its length, then its bytes eight at a time, the last word
 // zero-padded. Every step is a bijection of the accumulator for a fixed word,
 // and of the word for a fixed accumulator, so two folds of one length that
@@ -235,7 +235,7 @@ native_order::ActivationGrid activation_grid(const NativeRunSpec& spec) noexcept
     grid.half_up = threshold.half_up;
     // The declared ladder is a separate fact from the quantization mode: a
     // trailing stop spelled a whole number of ticks from a best on it names
-    // that ladder point under every mode (R5 lane E16).
+    // that ladder point under every mode (the integer-tick trailing stop).
     grid.ladder_tick = spec.price_tick;
     return grid;
 }
@@ -490,9 +490,9 @@ bool explicit_reduction_units_representable(double units, double exposure) noexc
 
 // A request that settles its units in one fill, all of them: no point budget
 // splits them and no group deduction is pending against them that takes any
-// -- a pending total `units` absorb takes none (R5 lane K-ULP5), so it
-// settles them all (R5 lane K-OCA-KEEP). Only such a request's units can be
-// the book's own quantity, closed as it stands (R5 lane K-ULP4).
+// -- an outstanding total `units` absorb takes none (the absorbed-deduction rule), so it
+// settles them all (the stable group-recipient ordering). Only such a request's units can be
+// the book's own quantity, closed as it stands (the representable-quantity refusal change).
 bool settles_in_one_fill(const native_order::LiveRequest& live, double units) noexcept {
     if (!std::holds_alternative<native_order::ImmediateRemaining>(live.request().capacity)) {
         return false;
@@ -508,7 +508,7 @@ bool settles_in_one_fill(const native_order::LiveRequest& live, double units) no
 
 // `own_quantity`: the answered units are the book's own -- a closing size,
 // settled in one fill, equal to its scope's held total (which a fraction of one
-// resolves to) -- which the quantity grid admits as they stand (R5 lane K-ULP4).
+// resolves to) -- which the quantity grid admits as they stand (the representable-quantity refusal change).
 bool execution_terms_grid_representable(
         const native_order::ExecutionTerms& terms,
         const native_order::HostSized* host_sized, bool unresolved,
@@ -1183,7 +1183,7 @@ void hash_bar(F& f, const Bar& bar) noexcept {
     f.i(bar.timestamp);
 }
 
-// R5 lane E23: the digest names the run's INPUTS, and where a zone file lives
+// The digest names the run's INPUTS, and where a zone file lives
 // on this machine is not one of them. What the run read is: the kind of source
 // the zone is, the definition it resolved to, and the CONTENT of the resources
 // the resolver opened (`resource_digest`, folded at identity time). The
@@ -1222,10 +1222,10 @@ constexpr char kNativeLiquidationComment[] = "Margin liquidation";
 constexpr char kNativeRiskLabel[] = "__kernel_risk__";
 constexpr char kNativeRiskComment[] = "Risk limit";
 
-// R5 lane L12 (2.ii l): the settling row records why it closed. Authorship is
+// The kernel/source boundary extraction (2.ii l): the settling row records why it closed. Authorship is
 // the generic fact — a host request never carries a kernel cause, and a host
 // that runs its own forced-close policy records its own cause afterwards.
-// R5 lane F3: so is the owner relation. A host request its owner's fill armed
+// So is the parent relation. A host request its parent's fill armed
 // (WaitForApplied, the one relation that arms: what native_toolkit's bracket
 // builds and what an anchored FromOwnerFill level requires) and whose intent
 // only closes is a bracket leg. An armed OPENING transaction that reverses the
@@ -2130,7 +2130,7 @@ const NativeExecutionConsumer::SpecBarDigests& NativeExecutionConsumer::spec_bar
 }
 
 uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
-    // The v19 continuation (native-consumer/v9, R5 lane V19-A) folds what a
+    // The v19 continuation (native-consumer/v9, the v19 live-state hash change) folds what a
     // resume continues from -- the consumer's live state -- and nothing that
     // only records how the run got there: the command history, the driver log
     // and the account log are readbacks, never inputs, so a read costs the
@@ -2200,7 +2200,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     hash_driver_statistics(f, callback_context_.driver_statistics);
     // The four session-day facts are not folded, here or in the frames and
     // notifications below: each is a function of the label and calendar this
-    // digest already folds and of the run's input around the bar (R5 lane F5,
+    // digest already folds and of the run's input around the bar (the kernel session-day integration,
     // present_session_day), so folding them would move every established
     // continuation value for nothing it does not already identify.
     f.b(consuming_request_);
@@ -2341,8 +2341,8 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     // nothing. The issued incarnations are one dense range [1,
     // last_incarnation] under a consumer, which the counter above already
     // folds, and fold here only where they are not: where a re-price kept
-    // its handle and took a number no handle was issued under (R5 lane
-    // V19-D). Then the closed ranges fold as their running digest and the
+    // its handle and took a number no handle was issued under (the
+    // handle-preserving reissue change). Then the closed ranges fold as their running digest and the
     // open one as itself, so a read costs the same at any length of run.
     if (chain_roots_.count != 0) {
         f.u(chain_roots_.count);
@@ -3038,7 +3038,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         render(engine, "native calendar apply failed");
         return false;
     }
-    // R5 lane F3 (E23): the continuation names the zone by its identity, and a
+    // The continuation names the zone by its identity, and a
     // zone whose resources cannot be read back -- one past any zone file's
     // size, or a POSIX default-DST rule with no posixrules to read -- has none
     // to name. Such a run is refused, never run under an identity-less hash
@@ -3696,8 +3696,8 @@ native_order::TargetObservation NativeExecutionConsumer::read_target(
 }
 
 // read_target, written over `out` (and the cohort's lot handles over
-// `handles`) so a caller that keeps both reuses their capacity (R5 lane
-// PERF-L5). Every field of `out` is rewritten.
+// `handles`) so a caller that keeps both reuses their capacity (the
+// trigger-band and scratch reuse). Every field of `out` is rewritten.
 void NativeExecutionConsumer::read_target_into(
         const BacktestEngine& engine, const native_order::LiveRequest* live,
         native_order::TargetObservation& out,
@@ -3841,8 +3841,8 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
     if (const auto* spec = spec_ptr()) {
         ctx.quantity_grid = spec->quantity_grid;
         // A Reduce whose units are a FIFO boundary of its scope is on the grid
-        // as it stands (CommandContext::units_are_scope_boundary; R5 lane
-        // K-ULP4) -- one that closes in one fill, so the candidate can hold
+        // as it stands (CommandContext::units_are_scope_boundary; the
+        // representable-quantity refusal change) -- one that closes in one fill, so the candidate can hold
         // what it settles to the same test (grid_boundary_holds).
         if (spec->quantity_grid && engine.position_side_ != PositionSide::FLAT
             && std::holds_alternative<native_order::ImmediateRemaining>(request.capacity)) {
@@ -4119,7 +4119,7 @@ double NativeExecutionConsumer::margin_sizing_price(
     if (!has_margin_path_) return fallback;
     // The waypoints in walk order -- open, the first extreme, the second,
     // close -- and the position of `phase` among them. Spelled without local
-    // arrays (R5 lane PERF-L1), which hardened toolchains stack-protect at
+    // arrays (the reused per-pump storage), which hardened toolchains stack-protect at
     // every bar-open check: the same order, the same scan.
     const NativePathPhase first = margin_path_high_first_ ? NativePathPhase::High
                                                           : NativePathPhase::Low;
@@ -4935,6 +4935,21 @@ bool NativeExecutionConsumer::settle_step(BacktestEngine& engine, CoreStep&& ste
     return token && install_mutation(engine, std::move(*token), operation, ordinal);
 }
 
+NativeExecutionConsumer::CoreStep NativeExecutionConsumer::trigger_step(
+        const NativeRunSpec* spec, const native_order::RequestHandle& target,
+        const native_order::TriggerTransition& transition,
+        native_order::DriverEligibilityClass driver_class,
+        std::optional<native_order::Side> side, bool open_grant) {
+    const native_order::ActivationGrid trigger_grid = activation_grid(*spec);
+    return direct_mutation_
+        ? core_step(requests_.apply_trigger(target, transition, driver_class,
+                                            next_timeline_ordinal_, side, trigger_grid,
+                                            open_grant))
+        : core_step(requests_.prepare_trigger(target, transition, driver_class,
+                                              next_timeline_ordinal_, side, trigger_grid,
+                                              open_grant));
+}
+
 bool NativeExecutionConsumer::install_execution(
         BacktestEngine& engine, native_order::PreparedExecution&& prepared,
         const native_order::CommittedExecutionFacts& facts, uint64_t ordinal) {
@@ -5301,7 +5316,7 @@ void NativeExecutionConsumer::drain_after_applied(
 
         // The queue drains the waiting children of its seeds: with no other
         // seed and none waiting on the filler it would drain nothing, so the
-        // filler's seed is not built (R5 lane PERF-L5), as drain_parent_terminal
+        // filler's seed is not built (the trigger-band and scratch reuse), as drain_parent_terminal
         // already does for a single parent.
         if (seeds.empty() && !requests_.has_waiting_children(filler)) return;
         seeds.push_back({applied, filler});
@@ -6040,8 +6055,8 @@ std::optional<double> NativeExecutionConsumer::resolve_sized_units(
     // up to a whole step short, left a dust lot, or found nothing to close. A
     // scope net of siblings' claims or frozen at another total, a point budget
     // and a pending group deduction that takes any settle something else, and
-    // are floored as before (R5 lane K-ULP4); a pending total the units absorb
-    // takes none (R5 lane K-OCA-KEEP).
+    // are floored as before (the representable-quantity refusal change); an outstanding total the units absorb
+    // takes none (the stable group-recipient ordering).
     if (units == scope && scope == facts.scope_exposure_units
         && settles_in_one_fill(live, units)) {
         return scope;
@@ -6120,7 +6135,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         // settlement contexts, the account observation, the risk note). A
         // driver point's matching also presents that instant, which is its own
         // point; a current execution presents nothing and leaves the host's
-        // clock where its frame put it (R5 lane B-ADAPTER; E21's rule -- thread
+        // clock where its frame put it (the execution-rate and clock correction; the opening-gate rule -- thread
         // the rate, never the clock).
         const double execution_fx =
             engine.account_currency_fx_at(evaluation.cursor.point.effective_time_ms);
@@ -6420,7 +6435,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         // An off-grid Reduce the grid admitted at submit as a FIFO boundary of
         // its scope settles only what still closes whole lots: if its book or
         // remaining units changed so that closing them would split a lot off
-        // the grid, it ends here with the same typed refusal (R5 lane K-ULP4).
+        // the grid, it ends here with the same typed refusal (the representable-quantity refusal change).
         if (!grid_boundary_holds(engine, *live, evaluation.cursor)) {
             return terminal(native_order::MatchRejectReason::UnrepresentableQuantity,
                             nonidentity_attempt);
@@ -6431,7 +6446,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         if (inspect.status == execution::Status::NoEffect) return terminal(std::nullopt);
         // A quantity the settlement cannot book exactly on this book is that
         // request's refusal, not the run's failure: the request ends with a
-        // typed MatchRejected and nothing moves (R5 lane K-ULP4). Every other
+        // typed MatchRejected and nothing moves (the representable-quantity refusal change). Every other
         // non-Applied inspection is a broken book, price or accounting, and
         // still stops the run.
         if (inspect.status == execution::Status::UnrepresentableQuantity) {
@@ -6476,7 +6491,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         // closed by a far larger request, whose remaining units the close
         // cannot move -- is the same typed refusal, before anything is
         // written: the request core checks and prepares without a mutation
-        // (R5 lane K-ULP4).
+        // (the representable-quantity refusal change).
         const auto unrepresentable = [](const native_order::PreparationError& error) {
             return error.code == native_order::CoreFailure::NonrepresentableQuantity;
         };
@@ -6953,7 +6968,7 @@ void NativeExecutionConsumer::match_path(
     };
 
     // The hit a priced trigger gets on the rest of this segment from `start`,
-    // and the transition that hit would be (R5 lane PERF-L5). One computation
+    // and the transition that hit would be (the trigger-band and scratch reuse). One computation
     // for the band pre-check and the full evaluation below, so the pre-check
     // passes a row over exactly when the full evaluation would find no hit:
     //   Absent          no hit, or a trigger that does not price the state it
@@ -7095,7 +7110,7 @@ void NativeExecutionConsumer::match_path(
     };
     const bool band_precheck = match_band_precheck_;
 
-    // Rows survive an allowance refresh (R5 lane PERF-K3). Every live request
+    // Rows survive an allowance refresh (the retained request-candidate index). Every live request
     // refresh_point_allowances did not refresh in bulk is an Evaluate winner
     // of its own at each point, and each winner used to be followed by a scan
     // of the whole book: K such requests cost K scans of K rows per point.
@@ -7104,7 +7119,7 @@ void NativeExecutionConsumer::match_path(
     // and path cursor -- the next scan differs from the last in that row only:
     //  - refresh_allowance writes the winner's allowance and the core's epoch
     //    and nothing else -- and, for an unbound close carrying a binding
-    //    the book still has (ReplaceOptions::keep_binding, R5 lane V19-D),
+    //    the book still has (ReplaceOptions::keep_binding, the handle-preserving reissue change),
     //    the winner's own authority, which no other row reads. It moves no
     //    request, trigger state, roster, position or pre-open birth and
     //    installs nothing, so the cohort target cache is not cleared either.
@@ -7245,7 +7260,7 @@ void NativeExecutionConsumer::match_path(
             // the request that produced the callback.
             const bool include_current = !born_on_remaining_path(*live)
                 && !armed_after_print_here(*live);
-            // The band pre-check (R5 lane PERF-L5). A priced trigger whose
+            // The band pre-check (the trigger-band and scratch reuse). A priced trigger whose
             // allowance is already this point's is not an Evaluate row, so
             // the full evaluation below decides it on reach_trigger alone: no
             // hit, and it passes the row over. Every other way it can pass
@@ -7494,7 +7509,7 @@ void NativeExecutionConsumer::match_path(
                 } else {
                     read_target_into(engine, live, match_target_, match_target_handles_);
                     // A kept unbound-close binding binds here, taking an
-                    // ordinal (ReplaceOptions::keep_binding, R5 lane V19-D).
+                    // ordinal (ReplaceOptions::keep_binding, the handle-preserving reissue change).
                     if (requests_.refresh_allowance(winner->handle, eval, match_target_,
                                                     next_timeline_ordinal_, open_grant)) {
                         catch_up_timeline();
@@ -7566,15 +7581,8 @@ void NativeExecutionConsumer::match_path(
             }
             CoreStep step;
             try {
-                const native_order::ActivationGrid trigger_grid = activation_grid(*spec);
-                step = direct_mutation_
-                    ? core_step(requests_.apply_trigger(winner->handle, transition, driver_class,
-                                                        next_timeline_ordinal_, eval.cohort_side,
-                                                        trigger_grid, open_grant))
-                    : core_step(requests_.prepare_trigger(winner->handle, transition,
-                                                          driver_class, next_timeline_ordinal_,
-                                                          eval.cohort_side, trigger_grid,
-                                                          open_grant));
+                step = trigger_step(spec, winner->handle, transition, driver_class,
+                                    eval.cohort_side, open_grant);
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                            NativeFailureOperation::Settlement, P});
@@ -7766,7 +7774,7 @@ std::optional<NativeCurrentRefusal> NativeExecutionConsumer::validate_current_ex
     // A BindCohort roster is read at the match, never fixed at the command:
     // the evaluation's current shape (native_order.cpp current_shape) admits
     // no such owner, so a cohort close is refused here, before its point is
-    // taken, rather than left unevaluated there (R5 lane PAR-ORDERS-2).
+    // taken, rather than left unevaluated there (the recalculation fill-order correction).
     if (!std::holds_alternative<native_order::Independent>(request.owner)
         && !std::holds_alternative<native_order::BindOpening>(request.owner)
         && !std::holds_alternative<native_order::BindOpenings>(request.owner))
@@ -8103,7 +8111,7 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         // threads that instant's rate to the terms, the inspection, the
         // admission and the settlement, and presents no clock. The clock the
         // calling frame presents is the host's, and a host command never
-        // writes it (R5 lanes F3 and B-ADAPTER), as submit and replace do not.
+        // writes it (the host excursion and bracket-cause integration and the execution-rate and clock correction), as submit and replace do not.
         auto outcome = consume_matched_request(engine, command.target, evaluation,
             anchor.price, resolved, anchor,
             native_order::NativeCandidatePriceKind::CurrentQuote, command.price_rule);
@@ -8128,6 +8136,99 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Settlement});
         if (!recoverable_abort() && failure_value_of(engine).code == RunFailureCode::none)
             render_unclassified(engine, "native current execution exception");
+        throw;
+    }
+}
+
+std::optional<NativeCurrentRefusal> NativeExecutionConsumer::activate_current_stop_limit(
+        BacktestEngine& engine, const native_order::RequestHandle& target) {
+    using Refusal = NativeCurrentRefusal;
+    if (!std::holds_alternative<NativeRunning>(state_)) return Refusal::NoExecutionContext;
+    if (consuming_request_ || open_activation_scope_) return Refusal::Reentrant;
+    if (!current_execution_point()) return Refusal::NoExecutionContext;
+    if (callback_phase_ != CallbackPhase::PreOpen && callback_phase_ != CallbackPhase::Bar
+        && callback_phase_ != CallbackPhase::Applied && callback_phase_ != CallbackPhase::Tick)
+        return Refusal::NoExecutionContext;
+    const auto recorded_cause = [this, &engine]() {
+        auto cause = run_failure_value_of(engine);
+        if (cause.code == RunFailureCode::none)
+            cause = RunFailureValue{recoverable_abort() ? RunFailureCode::run_aborted
+                                                       : RunFailureCode::engine_invariant, nullptr};
+        return cause;
+    };
+    if (!check_abort(engine, NativeFailureOperation::Command)
+        || !check_projection(engine, NativeFailureOperation::Command))
+        throw coded<std::runtime_error>(recorded_cause(),
+                                        "native current activation projection/abort failure");
+    try {
+        if (target.incarnation == 0 || target.run != requests_.identity())
+            return Refusal::InvalidHandle;
+        // Held while cohort-side observation may read other spilled requests.
+        const auto held = requests_.hold_live(target);
+        if (!held) return Refusal::NotWorking;
+        const auto* stop_limit = std::get_if<native_order::StopLimit>(&held->request().trigger);
+        if (!stop_limit) return Refusal::UnsupportedRequest;
+        if (std::holds_alternative<native_order::StopLimitLive>(held->trigger_state))
+            return std::nullopt;
+        if (!std::holds_alternative<native_order::StopLimitPending>(held->trigger_state))
+            return Refusal::UnsupportedRequest;
+        if (std::holds_alternative<native_order::Wait>(held->authority)
+            || std::holds_alternative<native_order::UnboundBookClose>(held->authority))
+            return Refusal::UnreadyOwner;
+        const auto* spec = spec_ptr();
+        if (!spec) return Refusal::NoExecutionContext;
+        const auto side = cohort_side(engine, *held);
+        const bool buy = requests_.working_is_buy(*held, side);
+        const double price = current_frame_->point.price;
+        // Same predicate as the core's stop_price_reached: pre-check before
+        // taking an ordinal, since a core PreparationError fails the run.
+        const auto stop_price_reached = [](bool is_buy, double level, double reached,
+                                          const native_matching::GridThreshold& grid) {
+            if (!std::isfinite(reached) || !std::isfinite(level) || level < 0.0) return false;
+            return native_matching::region_reached(reached, level, /*le=*/!is_buy, grid);
+        };
+        if (!stop_price_reached(buy, stop_limit->stop, price, grid_threshold(*spec)))
+            return Refusal::UnsupportedRequest;
+        consuming_request_ = true;
+        const auto ordinal = take_ordinal(engine);
+        if (failed())
+            throw coded<std::runtime_error>(recorded_cause(), "native current activation point failed");
+        NativeDriverPoint point;
+        point.coordinate = current_execution_coordinate(ordinal);
+        point.raw_price = price;
+        point.matching = true;
+        record_driver(point);
+        const native_order::ActivateStopLimit transition{make_cursor(point, 0.0), price};
+        const auto driver = native_order::DriverEligibilityClass::CurrentExecution;
+        CoreStep step = trigger_step(spec, target, transition, driver, side,
+                                     /*open_grant=*/false);
+        if (const auto* error = std::get_if<native_order::PreparationError>(&step)) {
+            fail_preparation(engine, *error, NativeFailureOperation::Settlement);
+            throw coded<std::runtime_error>(recorded_cause(), "native current activation failed");
+        }
+        // All ordinary refusals were checked before recording the point.
+        // A missing transition here is an internal sequencing failure.
+        if (std::holds_alternative<native_order::NoChange>(step)
+            || !settle_step(engine, std::move(step), NativeFailureOperation::Settlement, ordinal))
+            throw coded<std::runtime_error>(recorded_cause(), "native current activation install failed");
+        consuming_request_ = false;
+        return std::nullopt;
+    } catch (const std::bad_alloc& e) {
+        consuming_request_ = false;
+        fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Settlement});
+        render_exception(engine, e);
+        throw;
+    } catch (const std::exception& e) {
+        consuming_request_ = false;
+        if (!failed()) fail(engine, NativeFailure{NativeFailureCode::SettlementFailure,
+                                                NativeFailureOperation::Settlement});
+        render_exception(engine, e);
+        throw;
+    } catch (...) {
+        consuming_request_ = false;
+        fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Settlement});
+        if (!recoverable_abort() && failure_value_of(engine).code == RunFailureCode::none)
+            render_unclassified(engine, "native current activation exception");
         throw;
     }
 }
@@ -8445,8 +8546,8 @@ void NativeExecutionConsumer::drain_queued_notifications(BacktestEngine& engine)
         // left behind. Inert for a run that declares no margin model. The
         // fill was reached on the segment into its driver point, so the path
         // still ahead of it starts at that point's waypoint: a limit filled on
-        // the way down to the bar's low still faces the low (R5 lane
-        // PAR-MARGIN-2). Measured from the segment's origin, with the fill
+        // the way down to the bar's low still faces the low (the
+        // intrabar margin correction). Measured from the segment's origin, with the fill
         // price as the point's own mark.
         if (drained && margin_model() != nullptr) {
             native_order::MatchCursor cursor;
@@ -8485,8 +8586,8 @@ void NativeExecutionConsumer::invoke_bar_open_callback(
     if (callback_context_.script_bar_open_ms == 0) {
         callback_context_.script_bar_open_ms = point.coordinate.open_ms;
     }
-    // A host that declared no bar-open hook (declare_bar_open_hook, R5 lane
-    // D2-A) is not called. What the call leaves behind for the kernel is the
+    // A host that declared no bar-open hook (declare_bar_open_hook, the
+    // optional-hook and quiet-point changes) is not called. What the call leaves behind for the kernel is the
     // kernel's own and is made here as the call would make it: the context
     // above, the point's epoch, the complete bar at the point's instant (an
     // OpenOnly view is restored to it after the call), no frame, and the
@@ -8500,7 +8601,7 @@ void NativeExecutionConsumer::invoke_bar_open_callback(
         return;
     }
     // The frame is constructed where it lives, from its parts: one copy of the
-    // context rather than three (R5 lane PERF-L1), every field what the
+    // context rather than three (the reused per-pump storage), every field what the
     // aggregate it replaces held.
     current_frame_.emplace(callback_context_, point.raw_price,
                            NativeCurrentQuoteKind::MarketDecision, point.coordinate.ordinal,
@@ -8725,7 +8826,7 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
     finish_callback(engine, coordinate.ordinal);
 }
 
-// Session-day facts (R5 lane F5). A generic reading of the run's own
+// Session-day facts (the kernel session-day integration). A generic reading of the run's own
 // calendar, with no platform rule in it: the in-session test and the session
 // day are native_calendar's (in_session, session_day_ordinal), asked of the
 // script bar's label and of its neighbours. A neighbour is the bar the run
@@ -8756,7 +8857,7 @@ void NativeExecutionConsumer::present_session_day(NativeDecisionContext& context
     // label is 13:00); a FeedTolerant label past that instant is the bar's own
     // open, so the instants before it are not the bar's (lane K-SESSION F1).
     //
-    // R5 lanes PERF-KEDGE and PERF-ZONED: on a certified cycle
+    // The UTC calendar fast path and the certified zoned-calendar lookup: on a certified cycle
     // (native_calendar::cycle_certificate) every lookup of every instant is
     // the cycle's own day, no other day holds any of them, and the
     // calendar's answers there do not depend on the order they are asked in.
@@ -9125,7 +9226,7 @@ void NativeExecutionConsumer::deliver_intrabar_script(
     // its first sample and after fills.
     has_margin_path_ = false;
     // The script bar's sub-bars and one sub-bar's samples, in consumer-owned
-    // buffers whose capacity outlives the bar (R5 lane PERF-L1): a lower-path
+    // buffers whose capacity outlives the bar (the reused per-pump storage): a lower-path
     // or magnifier run no longer allocates both once per script bar. Nothing
     // re-enters this delivery -- no host callback can pump an input -- so the
     // buffers are this call's alone.
@@ -9237,11 +9338,11 @@ void NativeExecutionConsumer::deliver_intrabar_script(
             // margin model (IntrabarSample below), so a sample off the bar's
             // own ticks would measure a price the bar never printed there,
             // and a call armed at an open that is also the low is reached by
-            // the (zero-length) segment into that low (R5 lane MAG-INTRABAR).
+            // the (zero-length) segment into that low (the TradingView intrabar import).
             // A bar that traded nothing at one price (volume 0, open = high =
             // low = close) is one print, walked once as a discrete point: it
             // has no path, and a request born at it waits for the next point
-            // (R5 lane MAG-INTRABAR: a host marks the script bar's own open
+            // (the TradingView intrabar import: a host marks the script bar's own open
             // and close in its lower path this way).
             double corners[4];
             if (lower && sub.volume == 0.0 && sub.high == sub.open && sub.low == sub.open
@@ -9430,7 +9531,7 @@ int64_t NativeExecutionConsumer::calculation_time(const NativeCoordinate& base) 
 // host's; under KernelRecordedAtHostMarks the marking host appends its own
 // row, after the continuation snapshot only it can name.
 //
-// R5 lane F3: the kernel takes that snapshot for the policy it records, at
+// The host excursion and bracket-cause integration: the kernel takes that snapshot for the policy it records, at
 // every point and whatever the switch says (NativeStrategyHost::
 // broker_state_hash_projection folds it), so the run's final broker_state_hash()
 // is the last point's fingerprint -- the last row, when there are rows -- and
@@ -11925,7 +12026,7 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
     }
     const auto predicted_status = ok.result.status;
     note_committed_events(ok.events);
-    // A re-price that kept the handle (R5 lane V19-D) is, to everything the
+    // A re-price that kept the handle (the handle-preserving reissue change) is, to everything the
     // consumer keys by handle, the successor a replace would have issued:
     // what the matcher remembered about the request at this point, and a
     // pre-open birth recorded under it, belong to the definition it
@@ -12359,7 +12460,7 @@ void NativeExecutionConsumer::note_committed_events(
         if (std::holds_alternative<native_order::ExecutionAppliedEvent>(event)) ++applied_events_;
         // v19-B: the chain index is durable cohort state, folded once per
         // replace successor, at the replace that names its root. A re-price
-        // that kept its handle (R5 lane V19-D) adds no successor to the index
+        // that kept its handle (the handle-preserving reissue change) adds no successor to the index
         // and folds nothing: the pair it would name was folded when the
         // handle was issued, and the index holds it once.
         if (const auto* replaced = std::get_if<native_order::ReplacedEvent>(&event)) {
@@ -12680,6 +12781,11 @@ NativeCurrentExecutionResult NativeStrategyHost::execute_current(const NativeCur
     return NativeExecutionConsumer::bound(*this).execute_current(*this, command);
 }
 
+std::optional<NativeCurrentRefusal> NativeStrategyHost::activate_current_stop_limit(
+        const native_order::RequestHandle& target) {
+    return NativeExecutionConsumer::bound(*this).activate_current_stop_limit(*this, target);
+}
+
 bool NativeStrategyHost::mark_native_report_point(int64_t report_ts) {
     return NativeExecutionConsumer::bound(*this).mark_script_report_point(*this, report_ts);
 }
@@ -12829,7 +12935,7 @@ void NativeStrategyHost::native_closed_rows_amended(std::size_t first_row) {
     as_native_consumer(execution_consumer()).closed_rows_amended(first_row);
 }
 
-// R5 lane F3: the latch record_script_report_point takes at every
+// The host excursion and bracket-cause integration: the latch record_script_report_point takes at every
 // kernel-recorded report point. Batch teardown moves the consumer into
 // Completed after the last point, which would otherwise make the final scalar
 // a different fold than the last recorded row.

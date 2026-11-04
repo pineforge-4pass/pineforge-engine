@@ -131,7 +131,7 @@ struct PineSecurityEvalState {
     // advances at the security's own finer cadence (one hist.push per
     // completed security period), which is exactly the ungated
     // behavior. Gating lookahead_off regressed
-    // masayanfx-multi-time-score-strategy
+    // the multi-timeframe scoring probe
     // (request.security(sym, "5", ta.highest(high, 20)[1],
     // barmerge.gaps_off, barmerge.lookahead_off) on a 15m chart) from
     // 100.0% to 93.7% trade parity vs TradingView.
@@ -155,14 +155,14 @@ struct PineSecurityEvalState {
     // path), under ``lookahead_off``: TradingView surfaces the LAST
     // intrabar of the calling chart bar at that bar's close whatever
     // the bucket's sub-bar count -- on the OANDA:XAUUSD 1D chart the
-    // Thanksgiving 2025-11-26 bar's last 3m bucket (21:57Z, holding
-    // the 21:59Z minute alone before the 22:00Z session close) is the
+    // last 3m bucket of a daily bar, even if it holds only
+    // the last minute before the session close, is the
     // value ``request.security(tickerid, "3", ta.rsi(close, 14))``
-    // reads at the daily close (72.64, lab tv dca-ltf-last-intrabar,
-    // 2026-09-05), where the aggregator's count / real-end /
+    // reads at the daily close (synthetic RSI 60.00), where
+    // the aggregator's count / real-end /
     // session-close rules leave that bucket partial until the next
-    // chart bar's first sub-bar and the close read the 21:54Z bucket
-    // (38.87). When set, pine_feed_security_eval_state
+    // chart bar's first sub-bar and the close read the preceding bucket
+    // (synthetic RSI 40.00). When set, pine_feed_security_eval_state
     // finalizes and publishes the pending partial bucket on the
     // calling bar's last auxiliary bar (TimeframeAggregator::
     // complete_pending_partial), once: the next chart bar's first
@@ -335,7 +335,7 @@ public:
         const NativeMarginRequirementView&) const final;
     std::optional<double> resolve_margin_call_units(
         const NativeMarginCallView&) const final;
-    // R5 lane R4d: the kernel arms a relative strategy.exit leg at its
+    // The anchored-leg integration: the kernel arms a relative strategy.exit leg at its
     // parent's fill; TradingView's projection of that level is the adapter's.
     std::optional<double> resolve_anchored_level(
         const NativeAnchoredLevelView&) const final;
@@ -531,7 +531,7 @@ public:
     // can never be liquidated — the formula denominator ``margin/100 -
     // direction`` is 0 — and no corpus short is sized at full equity).
     //
-    // R5 lane L12 (2.ii k): this used to be BacktestEngine state.  The kernel
+    // The kernel/source boundary extraction (2.ii k): this used to be BacktestEngine state.  The kernel
     // toggle is the presence of `spec.margin` since L4/L4b, so the TV emulator
     // switch belongs to the adapter that implements that emulator.  The value
     // reaches `PineExecutionAdapter::source_margin_call_enabled_` at the
@@ -553,7 +553,7 @@ public:
     // range-end close row/trade. Default off: every historical run is
     // byte-identical to before this flag existed.
     //
-    // R5 lane N14: this and probe tail suppression used to be BacktestEngine
+    // The source-runtime extraction: this and probe tail suppression used to be BacktestEngine
     // state. Both are the live runner's probe / settle protocol expressed in
     // Pine language state (barstate, session flags, the range-end row), so
     // they belong to the host that implements that protocol; the frozen C
@@ -592,7 +592,7 @@ public:
     bool probe_suppress_tail_logic() const { return probe_suppress_tail_logic_; }
 
     // Keep every event of the following runs readable after they end
-    // (NativeEventRetention::Full as a readback, R5 lane V19-B). The adapter
+    // (NativeEventRetention::Full as a readback, the bounded event journal). The adapter
     // declares Window and acknowledges what it reads, so a fixture that reads
     // a whole run's native_events() asks for this before the run. The spec,
     // its digest and every decision stay the adapter's.
@@ -729,7 +729,7 @@ protected:
     // code reads them (open_profit(current_bar_.close)). TradingView marks the
     // open position at the tick-built close floor(close / mintick + 0.5) *
     // mintick, not at an off-grid close: NYSE:F 15m closes on half cents
-    // (10.155 marks 10.15, 10.265 marks 10.27;
+    // (synthetic 35.035 marks 35.03, 25.005 marks 25.01;
     // tests/fixtures/explicit_qty_floor). An on-grid close is read as it is.
     // The kernel's own marks (equity extremes, reports, sizing) keep
     // BacktestEngine::open_profit. The tick is syminfo_mintick_: a host that
@@ -944,7 +944,7 @@ private:
     void scheduler_configure_security_evaluators();
     bool scheduler_uses_aux_security_feed() const noexcept;
     void scheduler_prepare_security_sequence(PineScheduler::InputView);
-    // R5 lane R3b: the plain request.security sites of a batch run whose
+    // The source/kernel separation: the plain request.security sites of a batch run whose
     // input and script timeframes coincide are declared to the kernel as
     // NativeTimeframeSubscription series instances at the L6c begin-time hook
     // -- one per site, sec_id by index, barmerge.gaps_on as the kernel's
@@ -1163,7 +1163,7 @@ protected:
     std::string aux_security_input_tf_;
     std::vector<std::size_t> aux_security_chart_begin_;
     std::vector<std::size_t> aux_security_chart_end_;
-    // R5 lane V19-E: the four above as the v4 extension folds them, digested
+    // The retired-row compaction: the four above as the v4 extension folds them, digested
     // whenever they are set (never during a run): the fold reads one word
     // instead of every auxiliary bar.
     std::uint64_t aux_security_digest_ = 1469598103934665603ULL;
@@ -1296,15 +1296,15 @@ protected:
     // timeframe request.security aggregation: TradingView's deep-backtest
     // series of a timeframe hold the bars of that timeframe whose OPEN lies
     // at or after the range start, and the bucket in progress at the range
-    // start is absent -- on every lane (round 8, family P: masayanfx
-    // multi-time-score; lab tv famp-sense-{es15full,nq15full,f15full,
-    // nifty15full,nifty1d,xau1d,xau15,eur15,eth15,btc1d}, 2026-09-05: "D"
-    // on CME_MINI:ES1! 15m first reads on the 05-01 20:45Z bar (bucket 0 is
-    // the 04-02 trade date; the 04-01 date opened 03-31 22:00Z before the
-    // 04-01 00:00Z range start), "240" on 04-04 13:45Z (the 22:00Z bucket
-    // dropped), "W" on the 08-29 / 08-28 bar on every 15m and 1D lane (the
-    // Mon 03-31 week dropped), while "60" on a 00:00Z start and "D" on the
-    // NYSE / NSE lanes (the chart's first bar IS the session open) keep
+    // start is absent -- on every chart (a third-party strategy and
+    // diagnostic probes cover the different session and timeframe shapes).
+    // For example, let a synthetic range start at UTC midnight: "D"
+    // on CME_MINI:ES1! 15m omits the daily bucket already in progress.
+    // Its first complete daily bucket becomes bucket 0; "240" likewise
+    // drops the bucket that opened before the range. "W" drops the
+    // partial week on both 15m and 1D charts, without shifting its calendar.
+    // By contrast, "60" on an hourly boundary and "D" on the
+    // NYSE / NSE charts (the chart's first bar IS the session open) keep
     // their first bucket). Whether the bucket was in progress is read from
     // the auxiliary 1m feed (did it trade between the bucket's nominal open
     // and the first chart bar? the NSE week whose Monday was a holiday opens

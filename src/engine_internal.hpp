@@ -119,7 +119,7 @@ void sample_price_path_volume_weighted_ordered(const Bar& bar, bool high_first,
                                                std::vector<double>& out);
 
 // The four ENDPOINTS samples of one bar -- the open, the two turning points
-// and the close -- computed directly (R5 lane D2-A): the same values, from
+// and the close -- computed directly (the optional-hook and quiet-point changes): the same values, from
 // the same operations, as the general routine gives for four samples, without
 // its t-value pass. It answers false, writing nothing, for every bar whose
 // four turning times are not four distinct ones (a zero, non-finite or
@@ -162,7 +162,7 @@ bool supports_lower_tf_emulation(const std::string& input_tf,
 std::vector<Bar> synthesize_lower_tf_bars(const Bar& input_bar,
                                                  int ratio,
                                                  int requested_seconds);
-// ── Fused settlement (R5 lane PERF-L2, defined in engine_execution.cpp) ──
+// ── Fused settlement (the compact context reads, defined in engine_execution.cpp) ──
 // A settlement call that a book of at most one lot settles in one pass
 // (BacktestEngine::NativeSettlementStage::OneLot) takes that pass unless
 // set_fused_settlement(false) turns it off, which restores the staged chain

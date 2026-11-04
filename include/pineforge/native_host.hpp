@@ -1052,7 +1052,7 @@ public:
         return {};
     }
 
-    /// Which of two optional hooks this host implements (R5 lane D2-A). A host
+    /// Which of two optional hooks this host implements (the optional-hook and quiet-point changes). A host
     /// that declares nothing implements both, which is every host written before
     /// the declarations existed; a declaration stands, across runs, until the
     /// host makes another. Neither moves a value: each lets the kernel skip work
@@ -1122,6 +1122,12 @@ public:
     /// drains are visible before the call returns. Only the named target is consumed.
     /// C spelling: strategy_native_execute_current_v1.
     NativeCurrentExecutionResult execute_current(const NativeCurrentExecution&);
+
+    /// Activate only the named pending stop-limit when its stop is reached by
+    /// the current quote. nullopt means activated or already live; a refusal
+    /// changes nothing. Does not execute the limit or evaluate other requests.
+    std::optional<NativeCurrentRefusal> activate_current_stop_limit(
+        const native_order::RequestHandle& target);
 
     /// Append one kernel-owned equity point at this host's report mark.
     /// Returns true only in a running KernelRecordedAtHostMarks run; false
@@ -1363,7 +1369,7 @@ public:
     /// the host has not yet acknowledged, and no driver point or account row;
     /// a read from below native_event_window_start() starts there.
     std::vector<NativeMarketEvent> native_events(uint64_t after_ordinal) const;
-    /// The host has read every event through `through_ordinal` (R5 lane V19-B).
+    /// The host has read every event through `through_ordinal` (the bounded event journal).
     /// Under NativeEventRetention::Window the kernel drops the acknowledged
     /// command events at the next script-bar boundary -- never one its own live
     /// state still reads -- and keeps every event above the acknowledgement for
@@ -1398,7 +1404,7 @@ public:
     /// the run's resolved timezone identity by its content — the kind, the effective
     /// definition and a digest of the zone resources actually read — and not by where
     /// they live, so two hosts carrying the same tzdata release answer the same value
-    /// for the same spec over the same bars (R5 lane E23). A tzdata update that
+    /// for the same spec over the same bars (the timezone-content identity change). A tzdata update that
     /// rewrites the zone's rules moves it, which is why it is still not a source
     /// constant: pin `native_run_spec_digest(spec)` for that, and compare continuation
     /// values between runs. C spelling:

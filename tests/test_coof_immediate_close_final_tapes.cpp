@@ -15,7 +15,7 @@
  * follows such a close. Under calc_on_order_fills the engine recalculated
  * after it and released the entry at the close's own fill price; when the
  * recalculation closed again, the pair looped without end
- * (job-2660-pinecoderstasc-tasc-2026-06-one-percent-a-week-adaptive re-entered
+ * (the adaptive weekly probe re-entered
  * at Friday's close where TradingView enters on Monday's open).
  *
  * Each case replays TradingView's tape of the probe on BINANCE:ETHUSDT.P 15
@@ -68,7 +68,7 @@ struct FeedBar {
     double open, high, low, close, volume;
 };
 
-// kEthImmediate: BINANCE:ETHUSDT.P 15m, 2025-04-01 00:00 .. 04-03 00:15 UTC.
+// kEthImmediate: BINANCE:ETHUSDT.P 15m fixture spanning several sessions.
 #include "fixtures/coof_immediate_close/bars.inc"
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();

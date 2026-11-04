@@ -109,7 +109,7 @@ def module_layout(probe, module):
 
 
 def engine_layout_proof(probe):
-    assert module_layout(probe, native_example) == {'has_stamp': True, 'version': 2}, (
+    assert module_layout(probe, native_example) == {'has_stamp': True, 'version': 3}, (
         'the normally linked native example must export the current engine layout stamp')
     with tempfile.TemporaryDirectory(prefix='pineforge-engine-layout-') as temporary:
         root = Path(temporary)
@@ -141,9 +141,13 @@ def engine_layout_proof(probe):
     print('native engine layout: stamped module uses interval accumulator and EOF refresh')
 
 
-def opaque_report_proof(probe):
-    assert module_layout(probe, stub) == {'has_stamp': False, 'version': None}, (
-        'the int-handle module must export no engine layout stamp')
+def opaque_report_proof(probe, expected_stamp=None):
+    if expected_stamp is None:
+        assert module_layout(probe, stub) == {'has_stamp': False, 'version': None}, (
+            'the int-handle module must export no engine layout stamp')
+    else:
+        assert module_layout(probe, stub) == {'has_stamp': True, 'version': expected_stamp}, (
+            'the old-layout control module must export the prior engine layout stamp')
     with tempfile.TemporaryDirectory(prefix='pineforge-opaque-report-') as temporary:
         root = Path(temporary)
         default = root / 'default'
@@ -205,6 +209,8 @@ if len(sys.argv) > 8:
         engine_layout_proof(probe)
     elif proof == 'opaque-report':
         opaque_report_proof(probe)
+    elif proof == 'old-layout-report':
+        opaque_report_proof(probe, expected_stamp=2)
     else:
         raise AssertionError(f'unknown layout proof: {proof}')
     sys.exit(0)

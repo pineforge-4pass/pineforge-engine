@@ -430,7 +430,7 @@ The v18 to v19 step, between development builds before v1.0.0, is an internal C+
 transition rather than a public C ABI break: the historical `PF_ABI_VERSION` was 4 on both sides. <!-- verified HEAD -->
 The 1.8.0 module rebuild requirement advances the C ABI independently.
 
-R5 lane D2-A adds two non-virtual `NativeStrategyHost` members inside v19,
+The optional-hook and quiet-point changes add two non-virtual `NativeStrategyHost` members inside v19,
 without an epoch: `declare_native_bar_open_hook(bool)` and
 `declare_native_precommit_hook(bool)`, a host stating that it does not
 implement `on_native_bar_open` or `validate_execution_precommit`, so the kernel
@@ -440,7 +440,7 @@ moves -- a declaring host's run is its empty-hook run, value for value -- and
 no C symbol is added: a C host declares both from its `pf_native_callbacks_v1`,
 a table without `on_bar_open` or `on_precommit`.
 
-R5 lane XSYM-D adds four `BacktestEngine` virtuals inside v19, beside
+The shared-library export change adds four `BacktestEngine` virtuals inside v19, beside
 `set_aux_security_feed`: `set_symbol_feed`, `set_symbol_feed_column`,
 `set_symbol_facts` and `set_recorded_series`, the source host's doors for
 `strategy_set_symbol_feed` and its three siblings. Like N5's
@@ -533,11 +533,11 @@ The current integrated representation uses generic broker fingerprint domain
 `pineforge-broker-state/v19` and stream fingerprint version 19; the source
 extension begins with `pineforge-source-adapter/v4`. Native consumer identity
 is `native-consumer/v9`, driver values own `native_driver_v5`, and run specs own
-`native_run_spec_v3`. R5 lane E23 bumped the consumer identity v7 -> v8: the
+`native_run_spec_v3`. The timezone-content identity change bumped the consumer identity v7 -> v8: the
 continuation digest's *recipe* changed, because the timezone identity entered
 it as `TimezoneIdentityDescriptor::resource_digest` — an FNV-1a over the zone
 files the resolver read — in place of `zoneinfo_root` and `resource_paths`, which
-named this machine rather than the run. The v19 value epoch (R5 lane V19-A)
+named this machine rather than the run. The v19 value epoch (the v19 live-state hash change)
 bumps it v8 -> v9 and moves every continuation, broker-state, stream and
 recorded per-bar value once, while no trade moves: the continuation folds the
 consumer's live state only, word by word (one multiply-xorshift per 64-bit
@@ -551,7 +551,7 @@ notification of the execution that booked it has returned; a host that changes
 a final row names the first one through
 `NativeStrategyHost::native_closed_rows_amended`, a C++-only member of the v19
 host (a C host never writes a closed row). The latched continuation is taken
-at once again: R5 lane PERF-P1's deferred view saved the v18 log folds, which
+at once again: the deferred continuation capture's deferred view saved the v18 log folds, which
 v19 no longer makes, and no value moves with it. `native_run_spec_digest`
 keeps its byte-wise FNV-1a and its values. The values the tree pins were
 re-pinned once, each marked "expectation corrected".
@@ -569,7 +569,7 @@ so a caller built before the tail reads back the record it always did. The
 continuation folds the state the window made durable (the chain index, a
 trail's arm ordinal, the FX-roll check's two driver instants); the values
 that moved with it were re-pinned once more, each marked.
-R5 lane V19-E advances the source extension v3 -> v4, and the scheduler's
+The retired-row compaction advances the source extension v3 -> v4, and the scheduler's
 sub-domain inside it `pineforge-pine-scheduler/v2` -> v3, and moves every Pine <!-- verified HEAD -->
 broker-state, recorded per-bar and host-extension value once, while no trade,
 equity point, event or readback moves: a read of the extension costs what is
@@ -585,7 +585,7 @@ consumed input prefix fold as counts and running digests, each element once;
 the auxiliary request.security feed folds as the digest taken when it is set.
 The values the tree pins were re-pinned once more, each marked "expectation
 corrected ... because v19-E folds live adapter state".
-R5 lane V19-FIX moves every Pine broker-state, recorded per-bar,
+The cancelled-origin retirement moves every Pine broker-state, recorded per-bar,
 host-extension and continuation value once more, inside the v19 epoch before
 its first release and with the source extension still v4, because two of those reads
 still cost what the run had done. An exit the script cancelled and re-placed
@@ -605,7 +605,7 @@ v19fix-cancel-at-1000, v19fix-gapped-stop-cancel and
 v19fix-gapped-stop-cancel-after-pair show TradingView never does; the values
 the tree pins were re-pinned once more, each marked "expectation corrected
 (V19-FIX, ...)".
-R5 lane H-THIN moves them once more, inside the v19 epoch before its first release and with
+The adapter state consolidation moves them once more, inside the v19 epoch before its first release and with
 the source extension still v4, in one hash step. The Pine host no longer owns
 lot excursions: it keeps the kernel's `owns_lot_excursions()` default, so the
 extension's fold no longer carries the retired host model's state (its

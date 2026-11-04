@@ -10,12 +10,12 @@
  * therefore needs more than the equity unless a coarse lot step absorbs the
  * gap: TradingView drops it from a flat book and keeps only the closing leg
  * of one that reverses a long, whether a strategy.close of that long precedes
- * the entry or follows it. 99.99 % of 100000 at slippage 15 opens (64.1385 x
- * 1559.12 = 99999.6), 99.995 % does not.
+ * the entry or follows it. Synthetic 99.99 % of 100000 at slippage 15 opens
+ * (49.9987 x 2000.00 = 99997.40, lot 0.0001); 99.995 % does not.
  *
  * The engine opened each such short, sized at the slipped fill, and margin-
  * called it on its entry bar -- the zero-length and fragmented trades of
- * julzalgo's NYSE:F, ETH and EURUSD tapes, which TradingView books no short
+ * third-party NYSE:F, ETH and EURUSD tapes, which TradingView books no short
  * on at all.
  *
  * A strategy.exit placed after its entry on the calculation that also closes
@@ -78,7 +78,7 @@ struct FeedBar {
     double open, high, low, close, volume;
 };
 
-// kEthF14: BINANCE:ETHUSDT.P 15m, 2025-04-08 00:00 .. 2025-04-09 08:00 UTC.
+// kEthF14: BINANCE:ETHUSDT.P 15m fixture spanning successive sessions.
 #include "fixtures/pooc_short_slip_admission/bars.inc"
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();

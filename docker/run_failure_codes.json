@@ -688,7 +688,7 @@
     "Error on bar {bar_index}: A map cannot have more than {maxSize} key-value pairs. The current size is {currSize}."
    ],
    "retryable": false,
-   "since": "1.10.0"
+   "since": "1.11.0"
   },
   "pine_matrix_error": {
    "args": {

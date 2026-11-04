@@ -19,7 +19,7 @@
 // session.ispostmarket are false — a daily bar covers whole session days,
 // not a time of day. Intraday charts keep the time-of-day test unchanged.
 //
-// Evidence: roi10x-shiva-lt-ls-blend on OANDA:XAUUSD @1D. The symbol's
+// Evidence: the daily session-predicate probe on OANDA:XAUUSD @1D. The symbol's
 // session is 1800-1700 America/New_York and its daily bars are stamped at
 // the 17:00 ET break (minute 1020, outside the wrapped window [1080, 1020)),
 // so the time-of-day test never held, every signal ANDed with

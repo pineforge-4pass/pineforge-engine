@@ -18,7 +18,7 @@ namespace pineforge {
 
 // ---- authoritative higher-timeframe feeds ---------------------------------
 //
-// The generic contract (R5 lane N14 ruling, design §2.iv item 6 / ADR-0001):
+// The generic contract (the source-runtime extraction ruling, design §2.iv item 6 / ADR-0001):
 // a feed installed here is the venue's own bars of one timeframe. Four
 // rules follow from that and from nothing else:
 //   (a) a completed bucket of that timeframe takes its OHLCV from the bar
@@ -55,9 +55,9 @@ namespace pineforge {
 // v = the sum -- never from the chart's intraday prints (pinned 2026-09-05 by
 // lab tv, wm-security-buckets: 1473/1473 qty-encoded reads on NYSE:F 15m and
 // CME_MINI:ES1! 15m equal the native-1D-built period, 0 the 15m-built one;
-// NYSE:F week 2025-07-28 c 10.82 vs 10.81, week 2025-11-17 o = h = 13.1751
-// vs 13.14 / 13.155, ES1! week 2025-08-11 c 6471.5 = Friday's settlement vs
-// the 15m print 6467.25). So a "W" / "M" evaluator with no feed of its own
+// synthetic NYSE:F week c 25.02 vs 25.01, another week o = h = 26.1751
+// vs 26.14 / 26.155, ES1! week c 5000.50 = Friday's settlement vs
+// the 15m print 4996.25). So a "W" / "M" evaluator with no feed of its own
 // derives its buckets from the installed daily feed, keyed exactly as its
 // aggregator labels the same period.
 //
@@ -67,13 +67,13 @@ namespace pineforge {
 // 17:00 the same day (Labor Day, Thanksgiving, Independence Day) has no
 // stamp of its own and is folded into the NEXT trade date's daily bar, which
 // advances on that session's last bar and carries TradingView's own o/h/l/c/v
-// (pinned 2026-09-05 by lab tv, es-daily-timing, ledger
-// log-20260905t031053z-f283208c: the Sun 08-31 17:00 stamp runs to Tue 09-02
-// 15:45, o 6478.75 h 6491.5 l 6371.75 c 6425.5 v 1802584; the Wed 11-26 17:00
-// stamp to Fri 11-28 12:00 across the Thanksgiving pause, reopen and the
-// registry's Thu 20:45 -> Fri 07:15 hole; the Thu 07-03 17:00 stamp to Mon
-// 07-07 15:45 with o 6307.75 = the Sunday open and h 6315 below the holiday
-// session's 6322.75 -- values no chart aggregate produces). Every evaluator
+// (the daily-timing probes establish the partition). A synthetic Sunday
+// stamp can span a holiday and end on Tuesday; its daily bar might be
+// o 5000.00 h 5020.00 l 4980.00 c 4990.00 v 1000000. Another
+// merged session can span a holiday pause, a reopen and an intraday feed hole.
+// A bar spanning a holiday weekend might instead have
+// o 5100.00 = the Sunday open and h 5110.00 below the holiday
+// session's 5120.00 -- values a chart aggregate cannot infer. Every evaluator
 // that reads the feed therefore takes its stamps as its aggregator's period
 // partition (TimeframeAggregator::set_native_periods), each period's trade
 // date being the session-day of its last chart bar, so the derived W / M
@@ -143,10 +143,10 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
     // timeframe>, expr) is the chart series itself, and its "W" / "M" on a
     // daily chart are those daily bars aggregated -- never the auxiliary 1m
     // slice re-aggregated (round 7 family M mechanism 4: on NYSE:F 1D the
-    // 1m aggregate closes 12.195 on 2026-04-08 where the chart bar closes
-    // 12.18, so amandaborgeson06's "D" stoch read K 90.84 > D 90.60 and
-    // TradingView's chart K 90.13 < D 90.32; sensor tape scratchpad/r7/pins/
-    // m1d-amanda-sense-f). An explicit native feed of that timeframe (the
+    // 1m aggregate can close at synthetic 25.005 while the chart closes at
+    // 25.00, making a third-party strategy's "D" stochastic read K > D
+    // where the chart's own values read K < D; the diagnostic probes
+    // establish which series is authoritative). An explicit native feed of that timeframe (the
     // 15m lanes' FEED_1D on a 1D chart is the same file) keeps precedence;
     // the implicit feed lives only for this preparation.
     bool pushed_chart_feed = false;

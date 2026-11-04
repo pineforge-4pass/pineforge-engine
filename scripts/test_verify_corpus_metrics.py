@@ -1041,6 +1041,214 @@ class DeclaredTierOverrideTests(unittest.TestCase):
             self.assertIn(f"-> {expected_label}", output.getvalue())
 
 
+# TradingView's current trade-list header, verbatim. Only the header is real:
+# every row built under it below is invented.
+TV_RETURN_HEADER = (
+    "Trade number,Type,Date and time,Signal,Price USD,Size (qty),Size (value),"
+    "Net PnL USD,Return %,Commission USD,Favorable excursion USD,"
+    "Favorable excursion %,Adverse excursion USD,Adverse excursion %,"
+    "Cumulative PnL USD,Cumulative PnL %,Duration (bars)"
+)
+# The engine's own trades CSV header (run_strategy.py _ENGINE_TRADES_HEADER);
+# the spelling of the percent column is a parameter.
+ENGINE_PCT_HEADER = (
+    "Trade #,Type,Date and time,Price,Qty,Net PnL,{pct},"
+    "Favorable excursion USD,Adverse excursion USD,Cumulative PnL,"
+    "Engine entry incarnation,Engine range-end"
+)
+
+
+def tv_return_tape(
+    *percents: str | tuple[str, str], return_column: bool = True,
+) -> str:
+    """TradingView's header over invented rows.
+
+    Trade ``n`` is a long entered at 2025-01-0n 00:00 and closed at 02:00 the
+    same day, its exit row first as the export writes a pair. Each argument
+    is that trade's ``Return %`` cell, written on both of its rows, or an
+    ``(exit row, entry row)`` pair of cells; every other cell is the same
+    invented number on every trade. ``return_column=False`` drops the column
+    from the header and from every row: the same tape without a percent.
+    """
+    header = TV_RETURN_HEADER.split(",")
+    rows = []
+    for number, percent in enumerate(percents, start=1):
+        exit_cell, entry_cell = (
+            (percent, percent) if isinstance(percent, str) else percent)
+        for kind, hour, signal, price, cell in (
+            ("Exit long", "02", "Exit", "99.58", exit_cell),
+            ("Entry long", "00", "Long", "100.00", entry_cell),
+        ):
+            rows.append([
+                str(number), kind, f"2025-01-{number:02d} {hour}:00", signal,
+                price, "20", "2000.00", "-8.40", cell, "0.00", "4.00", "0.20",
+                "-12.00", "-0.60", "-8.40", "-0.08", "2",
+            ])
+    if not return_column:
+        drop = header.index("Return %")
+        header = header[:drop] + header[drop + 1:]
+        rows = [row[:drop] + row[drop + 1:] for row in rows]
+    return "\n".join(",".join(row) for row in [header, *rows]) + "\n"
+
+
+def engine_pct_csv(*percents: str, spelling: str = "Net PnL %") -> str:
+    """The engine's trades CSV over the same invented trades as
+    ``tv_return_tape`` (same entries, exits, qty and P&L); each argument is
+    one trade's percent cell, written on both of its rows."""
+    rows = [ENGINE_PCT_HEADER.format(pct=spelling)]
+    for number, cell in enumerate(percents, start=1):
+        for kind, hour, price in (("Exit long", "02", "99.58"),
+                                  ("Entry long", "00", "100.00")):
+            rows.append(
+                f"{number},{kind},2025-01-{number:02d} {hour}:00,{price},20,"
+                f"-8.40,{cell},4.00,-12.00,-8.40,,")
+    return "\n".join(rows) + "\n"
+
+
+class TradingViewReturnPercentTests(unittest.TestCase):
+    """A trade's percent is report-only (never gated). TradingView names the
+    column ``Return %``; the engine's CSV says ``Net PnL %`` and older
+    exports ``Net P&L %``. A blank or absent cell is NOT OBSERVED (None),
+    never 0.0, and the report-only delta skips a pair with a None side."""
+
+    def parse(self, text: str) -> list[TradePair]:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "trades.csv"
+            path.write_text(text, encoding="utf-8")
+            return parse_trades(path, tz=timezone.utc)
+
+    def grade(self, tv_text: str, engine_text: str):
+        with tempfile.TemporaryDirectory() as tmp:
+            strategy = Path(tmp) / "return-percent"
+            strategy.mkdir()
+            (strategy / "inputs.json").write_text(
+                json.dumps({"tv_trades_csv_tz": "utc"}), encoding="utf-8")
+            (strategy / "tv_trades.csv").write_text(tv_text, encoding="utf-8")
+            (strategy / "engine_trades.csv").write_text(
+                engine_text, encoding="utf-8")
+            return analyze_strategy(strategy)
+
+    def test_return_percent_column_is_read(self) -> None:
+        parsed = self.parse(tv_return_tape("-0.42", "1.37"))
+
+        self.assertEqual([t.pnl_pct for t in parsed], [-0.42, 1.37])
+        # The USD P&L beside it is still the Net PnL USD cell.
+        self.assertEqual([t.pnl for t in parsed], [-8.40, -8.40])
+
+    def test_absent_return_percent_column_is_not_observed(self) -> None:
+        text = tv_return_tape("-0.42", "1.37", return_column=False)
+        self.assertNotIn("Return %", text)
+
+        parsed = self.parse(text)
+
+        self.assertEqual(len(parsed), 2)
+        self.assertEqual([t.pnl for t in parsed], [-8.40, -8.40])
+        self.assertEqual([t.pnl_pct for t in parsed], [None, None])
+
+    def test_blank_return_percent_cell_is_not_observed(self) -> None:
+        parsed = self.parse(tv_return_tape("", "1.37", "  "))
+
+        self.assertEqual([t.pnl_pct for t in parsed], [None, 1.37, None])
+
+    def test_explicit_zero_return_percent_is_observed(self) -> None:
+        parsed = self.parse(tv_return_tape("0.00", "0", "2.50"))
+
+        self.assertIsNotNone(parsed[0].pnl_pct)
+        self.assertIsNotNone(parsed[1].pnl_pct)
+        self.assertEqual([t.pnl_pct for t in parsed], [0.0, 0.0, 2.5])
+
+    def test_a_blank_row_keeps_the_percent_of_the_trades_other_row(
+        self,
+    ) -> None:
+        parsed = self.parse(
+            tv_return_tape(("-0.42", ""), ("", "1.37"), ("", "")))
+
+        self.assertEqual([t.pnl_pct for t in parsed], [-0.42, 1.37, None])
+
+    def test_engine_and_older_spellings_are_still_read(self) -> None:
+        for spelling in ("Net PnL %", "Net P&L %"):
+            with self.subTest(spelling=spelling):
+                parsed = self.parse(
+                    engine_pct_csv("-0.40", "0.77", spelling=spelling))
+
+                self.assertEqual([t.pnl_pct for t in parsed], [-0.40, 0.77])
+
+    def test_blank_engine_percent_cell_is_not_observed(self) -> None:
+        parsed = self.parse(engine_pct_csv("", "0.77"))
+
+        self.assertEqual([t.pnl_pct for t in parsed], [None, 0.77])
+
+    def test_a_pair_built_without_a_percent_has_none(self) -> None:
+        self.assertIsNone(trade(1, 100, 10.0, 200, 12.0).pnl_pct)
+
+    def test_fragment_merge_has_a_percent_only_if_every_fragment_does(
+        self,
+    ) -> None:
+        def merged(first: float | None, second: float | None) -> TradePair:
+            out = consolidate_fragments([
+                replace(trade(1, 100, 10.0, 200, 12.0, qty=1.0),
+                        pnl_pct=first),
+                replace(trade(2, 100, 10.0, 200, 12.0, qty=3.0),
+                        pnl_pct=second),
+            ])
+            self.assertEqual(len(out), 1)
+            return out[0]
+
+        # Both observed: the qty-weighted average, as before.
+        self.assertAlmostEqual(
+            merged(1.0, 2.0).pnl_pct, (1.0 * 1.0 + 3.0 * 2.0) / 4.0)
+        self.assertIsNone(merged(1.0, None).pnl_pct)
+        self.assertIsNone(merged(None, 2.0).pnl_pct)
+        self.assertIsNone(merged(None, None).pnl_pct)
+
+    def test_report_only_delta_skips_a_pair_with_a_missing_percent(
+        self,
+    ) -> None:
+        result = self.grade(
+            tv_return_tape("-0.42", "", "1.50", "2.25"),
+            engine_pct_csv("-0.40", "0.77", "", "2.00"),
+        )
+
+        # All four trades are matched and gated; only the first and the last
+        # have a percent on both sides, so only they are compared.
+        self.assertEqual(len(result.matched), 4)
+        self.assertEqual(len(result.pnlpct_deltas), 2)
+        self.assertAlmostEqual(
+            result.pnlpct_deltas[0], abs(-0.42 - (-0.40)))
+        self.assertAlmostEqual(result.pnlpct_deltas[1], abs(2.25 - 2.00))
+        self.assertAlmostEqual(result.pnlpct_p100, abs(2.25 - 2.00))
+
+    def test_tape_without_the_percent_leaves_the_delta_list_empty(
+        self,
+    ) -> None:
+        result = self.grade(
+            tv_return_tape("-0.42", "1.37", return_column=False),
+            engine_pct_csv("-0.40", "0.77"),
+        )
+
+        self.assertEqual(len(result.matched), 2)
+        self.assertEqual(result.pnlpct_deltas, [])
+        self.assertEqual(result.pnlpct_p100, 0.0)
+        output = StringIO()
+        with redirect_stdout(output):
+            _print_verification(result)
+        self.assertIn(
+            "PnL%  p90/p100 (pts):  0.0000 / 0.0000", output.getvalue())
+
+    def test_the_percent_never_reaches_a_gate_or_the_tier(self) -> None:
+        engine = engine_pct_csv("-0.40", "0.77")
+        with_percent = self.grade(tv_return_tape("-0.42", "1.37"), engine)
+        without = self.grade(
+            tv_return_tape("-0.42", "1.37", return_column=False), engine)
+
+        self.assertEqual(len(with_percent.pnlpct_deltas), 2)
+        for gated in ("label", "count_abs_delta", "entry_p90", "exit_p90",
+                      "pnl_p90", "coverage"):
+            with self.subTest(gated=gated):
+                self.assertEqual(
+                    getattr(with_percent, gated), getattr(without, gated))
+
+
 if __name__ == "__main__":
     if not _coof_cascade_tape.exists():
         print(PRIVATE_FIXTURE_SKIP_LITERAL

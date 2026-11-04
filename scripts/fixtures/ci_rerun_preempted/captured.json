@@ -1,0 +1,162 @@
+{
+  "run-41588378688.json": {
+    "id": 41588378688,
+    "status": "in_progress",
+    "conclusion": null,
+    "run_attempt": 1,
+    "path": ".github/workflows/ci-post.yml",
+    "event": "push",
+    "head_branch": "main",
+    "head_sha": "d129cc03724e135f238a1dc4f8ec3b9ab1714aa2",
+    "repository": {
+      "full_name": "pineforge-4pass/pineforge-engine"
+    }
+  },
+  "run-41515706477.json": {
+    "id": 41515706477,
+    "status": "completed",
+    "conclusion": "failure",
+    "run_attempt": 1,
+    "path": ".github/workflows/gke-pr.yml",
+    "event": "pull_request_target",
+    "head_branch": "fix-stop-limit-grid-fill",
+    "head_sha": "0dede17e11c7ae372f916d9843b0b9370854a858",
+    "repository": {
+      "full_name": "pineforge-4pass/pineforge-engine"
+    }
+  },
+  "run-41588378688-a1-jobs.json": {
+    "jobs": [
+      {
+        "id": 125760264898,
+        "name": "sanitizers-shard (4/4)",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "gke-32cpu-64gb-amd64"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pass/pineforge-engine/check-runs/125760264898",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Refuse an unauthorised run before anything else",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "conclusion": "success"
+          },
+          {
+            "name": "Set up Python",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install the CTest pytest runner",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install dependencies",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify (sanitizers)",
+            "conclusion": "cancelled"
+          },
+          {
+            "name": "Stage and summarize diagnostics",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Retain CI diagnostics",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Set up Python",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      }
+    ]
+  },
+  "run-41515706477-jobs.json": {
+    "jobs": [
+      {
+        "id": 125518846442,
+        "name": "preflight",
+        "status": "completed",
+        "conclusion": "failure",
+        "labels": [
+          "gke-8cpu-16gb-amd64"
+        ],
+        "check_run_url": "https://api.github.com/repos/pineforge-4pass/pineforge-engine/check-runs/125518846442",
+        "steps": [
+          {
+            "name": "Set up job",
+            "conclusion": "success"
+          },
+          {
+            "name": "Checkout the admitted head",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install workflow linters",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run the class-specific preflight",
+            "conclusion": "failure"
+          },
+          {
+            "name": "Post Checkout the admitted head",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "conclusion": "success"
+          }
+        ]
+      }
+    ]
+  },
+  "check-125760264898-annotations.json": [
+    {
+      "annotation_level": "failure",
+      "message": "The operation was canceled."
+    }
+  ],
+  "check-125518846442-annotations.json": [
+    {
+      "annotation_level": "failure",
+      "message": "Process completed with exit code 1."
+    }
+  ],
+  "log_files": [
+    "job-125518846442.log",
+    "job-125760264898.log"
+  ],
+  "capture": {
+    "job-125518846442.log": [
+      "2026-11-02T20:14:41.3063508Z ##[error]Process completed with exit code 1.\n"
+    ],
+    "job-125760264898.log": [
+      "2026-11-03T06:17:42.1290045Z \u001b[36;1mpython3 -m pip install --disable-pip-version-check --no-input \\\u001b[0m\n",
+      "2026-11-03T06:17:42.1290763Z \u001b[36;1m  --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt\u001b[0m\n",
+      "2026-11-03T06:17:44.4077827Z \u001b[36;1msudo apt-get update\u001b[0m\n",
+      "2026-11-03T06:17:44.4078408Z \u001b[36;1msudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache\u001b[0m\n",
+      "2026-11-03T06:17:50.0756396Z \u001b[36;1mpython3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs \"$(getconf _NPROCESSORS_ONLN)\" --ccache --ctest-shard 4/4\u001b[0m\n",
+      "2026-11-03T06:29:00.0326985Z ##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.\n",
+      "2026-11-03T06:29:01.0112153Z ##[error]The operation was canceled.\n"
+    ]
+  }
+}

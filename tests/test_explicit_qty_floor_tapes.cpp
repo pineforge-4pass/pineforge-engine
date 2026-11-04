@@ -2,11 +2,11 @@
 // sized from, against TradingView
 // (tests/fixtures/explicit_qty_floor/README.md).
 //   explicit_qty_decimal_floor  an explicit quantity the lot-grid floor would
-//        snap UP is floored on its shortest decimal: (E/100)/0.3200000000000003
-//        = 3124.9999999999973 trades 3124 on NYSE:F (lot 1), not 0 shares.
+//        snap UP is floored on its shortest decimal: (100000/100)/0.4000000000000001
+//        = 2499.9999999999995 trades 2499 synthetic NYSE:F shares (lot 1), not 0.
 //   equity_tick_mark  strategy.equity / strategy.openprofit mark an open
 //        position at the tick-built close floor(close / mintick + 0.5) * mintick
-//        (10.155 marks 10.15, 10.265 marks 10.27): the order sized from it matches.
+//        (synthetic 35.035 marks 35.03, 25.005 marks 25.01): sizing uses that mark.
 // Each host below is a hand port of the control's codegen lowering (codegen
 // ee04fc6: strategy_entry / strategy_close arguments, config fields,
 // `current_equity() + open_profit(current_bar_.close)` for strategy.equity).
@@ -166,8 +166,8 @@ private:
 };
 
 // computed-risk-* and literal-*: NYSE:F 1D, process_orders_on_close, one short
-// at 2025-09-05 sized by a risk formula or a literal, optionally split into TP1 (50%) and
-// MAIN (stop 12.06) legs.
+// on a daily bar, sized by a risk formula or a literal, optionally split into TP1 (50%) and
+// MAIN (a fixed stop) legs.
 struct RiskFloorPlan {
     bool computed;
     double literal_qty;

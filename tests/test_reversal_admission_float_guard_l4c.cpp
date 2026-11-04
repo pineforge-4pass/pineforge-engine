@@ -22,7 +22,7 @@
  * sub-lot ground truth.
  *
  * WHAT FALSIFIED IT (reversal arm only). A reference 13-month ETHUSDT.P row
- * (chartprime-power-order-blocks-chartprime; percent_of_equity = 100, margin
+ * (the order-block probe; percent_of_equity = 100, margin
  * 100, qty_step 0.0001) carries 2,419 TradingView reversal decisions: 94
  * declines and 2,325 admits. 92 of the 94 declines have margins BELOW one lot
  * of notional. On an all-in reversal the whole decision lives inside
@@ -49,7 +49,7 @@
  * Pins below (A-D are the reversal arm; E is the add arm, since lane
  * W5B-ENG-MARGIN-RESIDUAL without slack too; G is the scope control that must
  * NOT move; F rides the SEPARATE true-flat gap-reject upstream of the margin gate, which
- * has since dropped its own one-lot slack — design-cntvxiao-gap-reject):
+ * has since dropped its own one-lot slack — the frozen-quantity gap probe):
  *   A. Reversal, adverse gap costing LESS than one lot -> DECLINED (the RED:
  *      base admits this).
  *   B. Reversal, zero gap (required == free exactly) -> ADMITTED. The guard is
@@ -170,7 +170,7 @@ static void run_reversal(Probe& eng, double flip_open) {
 //    required = 100 * 100.5 = 10050, free = 10000, shortfall $50.
 //    One lot of notional is 1.0 * 100.5 = $100.5, so the shortfall is well
 //    INSIDE the old widening: the pre-fix engine admits this flip.
-//    TradingView declines it (chartprime: 92 of 94 confirmed declines are
+//    TradingView declines it (the order-block probe: 92 of 94 confirmed declines are
 //    sub-lot), so the reversal arm must now decline it too. The close leg is
 //    suppressed with the entry, so the LONG survives and no trade row is
 //    emitted.
@@ -280,11 +280,11 @@ void test_same_dir_add_has_no_one_lot_slack() {
 //    not by the margin gate. Frozen qty = floor_1(10000/100) = 100, sizing_price 100,
 //    and the bar opens at 100.5 — byte-for-byte the same adverse gap that pin
 //    A declines. The true-flat zero-commission gap-reject above the margin gate
-//    dropped its one-lot slack (design-cntvxiao-gap-reject): TV re-checks the
+//    dropped its one-lot slack (the frozen-quantity gap probe): TV re-checks the
 //    frozen margin against the sizing-equity snapshot at fill and cancels on
-//    ANY positive shortfall ($50 here). Evidence: ycelestine77 33/33 true-flat
+//    ANY positive shortfall ($50 here). Evidence: the flat-entry probe, 33/33 true-flat
 //    sub-lot-shortfall rejects on open-uptick fill bars (+0.01..+0.32);
-//    cntvxiao census 0/556 TV positive-shortfall admissions. The flat
+//    frozen-quantity gap probe census 0/556 TV positive-shortfall admissions. The flat
 //    admit (which prices at the SIZING notional, required 10000 == free 10000)
 //    is never reached.
 void test_flat_open_sub_lot_gap_declined() {

@@ -15,7 +15,7 @@ namespace pineforge::source {
 /// magnifier backtesting mode"), each row covering the chart timeframes from
 /// it up to the next one: below 30S 1S, 30S 5S, 1 10S, 5 30S, 10 1, 15 2,
 /// 30 5, 60 10, 240 30, 1D 60, 3D 240, 1W and up 1D. Empty for a literal that
-/// does not parse. R5 lane MAG-INTRABAR measured every row the population
+/// does not parse. the TradingView intrabar import measured every row the population
 /// uses against TradingView's own request.security_lower_tf bars and
 /// magnified tapes (tests/fixtures/magnifier_intrabars).
 std::string tradingview_intrabar_timeframe(std::string_view chart_tf);

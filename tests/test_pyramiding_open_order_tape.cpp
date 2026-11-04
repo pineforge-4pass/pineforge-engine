@@ -9,7 +9,7 @@
  * default quantity, refused a priced entry at its fill once the open trades
  * reached the cap.
  *
- * The reference job-2712-3commas-3commas-gold-vault-long (BINANCE:BTCUSDT and
+ * The reference safety-order grid probe (BINANCE:BTCUSDT and
  * BINANCE:ETHUSDT.P 1D) rests its safety-order limits at the cap:
  * TradingView books five lots at pyramiding=4 where the engine refused the
  * fifth.

@@ -15,30 +15,30 @@
  * same-direction market entry filled an add TradingView rejects.
  *
  * Ground truth (clause 4 — bracket drain PINS the slot) —
- * thulashimohanr-prev-day-week-levels-or-vwap-strategy, pyramiding=2,
- * ETH-USDT-USDT 15m (all times UTC):
+ * the paired-bracket probe's rule, pyramiding=2,
+ * ETH-USDT-USDT 15m, illustrated synthetically (original inputs stay below):
  *
- *   2026-03-26 09:45  SHORT 2u @2082.49                     entry #1
- *   2026-03-26 17:45  ShortT1 limit 2042.49 fills 1u        (never flat)
- *   2026-03-27 09:45  SHORT 2u @2043.29                     entry #2  (TV admits)
- *   2026-03-27 10:30  limit 2003.30 fills 1u = the 03-26 remnant
- *                     -> the 03-26 leg drains; pyramid_entries_.size() 2 -> 1
- *   2026-03-29 09:45  SHORT would be entry #3 > pyramiding 2  TV REJECTS
+ *   bar A  SHORT 2u @1500.00                              first entry
+ *   bar B  ShortT1 limit 1460.00 fills 1u                  (never flat)
+ *   bar C  SHORT 2u @1462.00                              second entry admitted
+ *   bar D  limit 1422.00 fills 1u = the first entry's remnant
+ *          -> that leg drains; pyramid_entries_.size() 2 -> 1
+ *   bar E  SHORT would be entry 3 > pyramiding 2           entry rejected
  *
- * Both retirements of the 03-26 entry were `strategy.exit` T1 bracket fills,
+ * Both reductions of the first entry were `strategy.exit` T1 bracket fills,
  * i.e. the entry was FULLY closed and TV still refused the third entry.
  *
- * The price gate on 2026-03-29 is unambiguously true (09:30 close 1997.67 <
- * vwap 2003.236 and < orMid 2001.60) and the strategy.exit calls in the SAME
- * if-block did execute (the carried stops re-armed from orHigh(03-27)=2051.11
- * to orHigh(03-29)=2003.61 and fired at 11:00). Pine ran the block; TV's
+ * The synthetic price gate on bar E is true (prior close 1420.00 <
+ * vwap 1425.00 and < orMid 1423.00) and the strategy.exit calls in the SAME
+ * if-block execute (the carried stops re-arm from orHigh=1470.00
+ * to orHigh=1426.00 and fire later). Pine runs the block; the
  * broker emulator refused only the entry. Tape-wide rescan of
- * 2025-03-31..2026-04-30 confirms 2026-03-29 is the ONLY day TV skipped a
+ * the original window confirms a single day on which TV skipped a
  * gate-satisfied OR entry, 15 entries occurred at streak=2 (all admitted) and
  * ZERO at streak=3.
  *
  * Ground truth (clause 3 — close-path retirement RELEASES the slot) —
- * 3commas-ena-grid-bot-long-strategy, pyramiding=200: 1021 entry fills over
+ * the grid-bot probe, pyramiding=200: 1021 entry fills over
  * only 64 REUSED entry ids, 776 entries accumulated between two flats, and
  * never more than 50 CONCURRENT open entries. Every exit is
  * strategy.close("L"+i) — zero strategy.exit calls in the script. TV admits
@@ -65,7 +65,7 @@
  *      strategy.close("A", qty=1) instead of a bracket leg — the slot IS
  *      returned and the third same-direction entry is ADMITTED.
  *      (RED under the unconditional-monotone rule: count stays 2 and the
- *      third entry is refused, which is the 3commas-ena regression.)
+ *      third entry is refused, which is the grid-bot probe's regression.)
  */
 
 #include <cmath>
@@ -302,7 +302,7 @@ namespace {
 
 // ── D: scenario A's shape, with strategy.close doing the draining ─────────
 //
-// The grid-bot clause. 3commas-ena reuses 64 entry ids for 1021 fills and
+// The grid-bot clause. The grid-bot probe reuses 64 entry ids for 1021 fills and
 // retires every one with strategy.close(); TV never refuses an entry even
 // though 776 accumulate between flats under a cap of 200, because occupancy
 // peaks at 50. A rule that pinned the slot on ANY reduction would refuse 576

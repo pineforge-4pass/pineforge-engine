@@ -70,9 +70,9 @@ enum class Seed { LiveShort, LiveLong };
 // What the dual-signal bar queues besides the two entries.
 enum class Shape {
     // if bull: entry Long; close Short   /   if bear: entry Short; close Long
-    // The chartprime / market-logic-india idiom.
+    // The order-block / oscillator probes' idiom.
     ClosePairIdiom,
-    // if bull: entry Long   /   if bear: entry Short  (fluxchart idiom)
+    // if bull: entry Long   /   if bear: entry Short  (supply-demand probe idiom)
     BareEntryPair,
     // Same-direction pair: never this rule.
     SameDirection,

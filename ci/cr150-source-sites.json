@@ -1286,18 +1286,6 @@
    "ordinal": 1
   },
   {
-   "file": "include/pineforge/detail/id_pair_ordered_fold.hpp",
-   "symbol": "reader",
-   "scope": [
-    "namespace pineforge :: detail #1",
-    "class IdPairOrderedFold #1",
-    "template < class Reader > static void leaf_fold ( const Leaf & leaf , Reader & reader , BrokerStateByteFold & fold ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "reader . append ( . . . )",
-   "ordinal": 1
-  },
-  {
    "file": "include/pineforge/detail/feed_projection.hpp",
    "symbol": "cache_",
    "scope": [
@@ -1323,11 +1311,12 @@
   },
   {
    "file": "include/pineforge/detail/feed_projection.hpp",
-   "symbol": "reader_",
+   "symbol": "provider",
    "scope": [
     "namespace pineforge :: detail #1",
     "template < class Row > class FeedProjectionBuilder #1",
-    "private : void spill_to_scratch ( ) #1"
+    "FeedProjection < Row > finish ( std :: size_t capacity_bytes = kFeedProjectionCacheBytes ) #1",
+    "else #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
@@ -1335,12 +1324,11 @@
   },
   {
    "file": "include/pineforge/detail/feed_projection.hpp",
-   "symbol": "provider",
+   "symbol": "reader_",
    "scope": [
     "namespace pineforge :: detail #1",
     "template < class Row > class FeedProjectionBuilder #1",
-    "FeedProjection < Row > finish ( std :: size_t capacity_bytes = kFeedProjectionCacheBytes ) #1",
-    "else #1"
+    "private : void spill_to_scratch ( ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
@@ -1366,6 +1354,18 @@
    ],
    "cls": "grow",
    "spelling": "builder . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/id_pair_ordered_fold.hpp",
+   "symbol": "reader",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class IdPairOrderedFold #1",
+    "template < class Reader > static void leaf_fold ( const Leaf & leaf , Reader & reader , BrokerStateByteFold & fold ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "reader . append ( . . . )",
    "ordinal": 1
   },
   {
@@ -1713,6 +1713,18 @@
   },
   {
    "file": "include/pineforge/detail/id_table_read_cache.hpp",
+   "symbol": "operator new",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "class IdTableReadCache #1",
+    "bool prepare ( ) const noexcept #1"
+   ],
+   "cls": "alloc",
+   "spelling": "operator new",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/id_table_read_cache.hpp",
    "symbol": "reset",
    "scope": [
     "namespace pineforge :: detail #1",
@@ -1722,18 +1734,6 @@
    ],
    "cls": "alloc",
    "spelling": "new",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/detail/id_table_read_cache.hpp",
-   "symbol": "operator new",
-   "scope": [
-    "namespace pineforge :: detail #1",
-    "class IdTableReadCache #1",
-    "bool prepare ( ) const noexcept #1"
-   ],
-   "cls": "alloc",
-   "spelling": "operator new",
    "ordinal": 1
   },
   {
@@ -19023,6 +19023,19 @@
   },
   {
    "file": "src/native_execution_consumer.cpp",
+   "symbol": "held",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v19 #1",
+    "std :: optional < NativeCurrentRefusal > NativeExecutionConsumer :: activate_current_stop_limit ( BacktestEngine & engine , const native_order :: RequestHandle & target ) #1",
+    "try #1"
+   ],
+   "cls": "assign",
+   "spelling": "held = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
    "symbol": "applied_notifications_",
    "scope": [
     "namespace pineforge #1",
@@ -26979,7 +26992,7 @@
    "scope": [
     "namespace pineforge #1",
     "namespace #2",
-    "static int64_t compute_tf_close_ms ( int64_t open_ms , const std :: string & tf , const std :: string & tz ) #1",
+    "static int64_t compute_tf_close_ms ( int64_t bar_ms , const std :: string & tf , const std :: string & tz , const std :: string & sym_tz , const std :: string & sym_session ) #1",
     "if ( cp ! = CalendarPeriod :: NONE && utc_zone ( tz ) && in_civil_span ( static_cast < int64_t > ( osec ) ) ) #1"
    ],
    "cls": "assign",
@@ -30579,118 +30592,6 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "positions",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
-    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
-    "for ( const auto & unit : live_units_by_origin ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "positions = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "remaining",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
-    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
-    "if ( ! abandoned ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "remaining = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "next",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
-    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
-    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
-    ") #1"
-   ],
-   "cls": "assign",
-   "spelling": "next = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "positions",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
-    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
-    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
-    ") #1",
-    "for ( const auto & unit : live_units_by_origin ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "positions = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "next",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
-    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
-    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
-    ") #1",
-    "for ( const auto & unit : live_units_by_origin ) #1",
-    "for ( const auto position : * positions ) #1",
-    "if ( ! have_next || position < next ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "next = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "next",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
-    ") #1"
-   ],
-   "cls": "assign",
-   "spelling": "next = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "positions",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
-    ") #1",
-    "for ( const auto & unit : live_units_by_origin ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "positions = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "next",
-   "scope": [
-    "namespace pineforge :: source :: detail #1",
-    "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
-    ") #1",
-    "for ( const auto & unit : live_units_by_origin ) #1",
-    "for ( const auto position : * positions ) #1",
-    "if ( ! have_next || position < next ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "next = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
    "symbol": "open_entry_fees_",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -31991,7 +31892,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
-    "if ( ! same_bar_market_candidate && config_ . pyramiding > 0 && current ! = 0 . 0 && ( ( current > 0 . 0 ) = = is_long ) && ! ( priced && config_ . process_orders_on_close ) ) #1",
+    "if ( ! same_bar_market_candidate && config_ . pyramiding > 0 && current ! = 0 . 0 && ( ( current > 0 . 0 ) = = is_long ) && ! ( priced && config_ . process_orders_on_close && ! coof_recalc_active_ ) ) #1",
     "PF_RARE ( records . has_value ( ) ) ) #1"
    ],
    "cls": "assign",
@@ -32004,7 +31905,7 @@
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: place_entry ( const SourceId & id , bool is_long , double limit_price , double stop_price , double qty , const std :: string & comment , const std :: string & oca_name , int oca_type , int qty_type ) #1",
-    "if ( ! same_bar_market_candidate && config_ . pyramiding > 0 && current ! = 0 . 0 && ( ( current > 0 . 0 ) = = is_long ) && ! ( priced && config_ . process_orders_on_close ) ) #1",
+    "if ( ! same_bar_market_candidate && config_ . pyramiding > 0 && current ! = 0 . 0 && ( ( current > 0 . 0 ) = = is_long ) && ! ( priced && config_ . process_orders_on_close && ! coof_recalc_active_ ) ) #1",
     "if ( ! ( config_ . process_orders_on_close && close_precedes_entry ) && accepted_in_cycle > = static_cast < std :: size_t > ( config_ . pyramiding ) && ! short_seed_final_candidate && ! paired_all_in_reentry && ! default_gross_over_cap_candidate && ! ( config_ . process_orders_on_close && opposite_opening_pending && ( opposite_opening_in_close_pass || detail :: run_position ( require_host ( ) ) . lot_count < static_cast < std :: size_t > ( config_ . pyramiding ) ) ) ) #1",
     "if ( priced ) #1",
     "if ( prior ! = live_by_source_key_ . end ( ) ) #1"
@@ -39657,6 +39558,118 @@
    "ordinal": 1
   },
   {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "positions",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "for ( const auto & unit : live_units_by_origin ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "positions = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "remaining",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "if ( ! abandoned ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "remaining = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
+    ") #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "positions",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
+    ") #1",
+    "for ( const auto & unit : live_units_by_origin ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "positions = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "CohortExposureFold fold_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin ) noexcept #1",
+    "if ( origins . members ( ) . size ( ) > 4 * live_units_by_origin . size ( ) + 16 ) #1",
+    "if ( static_cast < std :: uint64_t > ( origins . members ( ) . size ( ) ) > = selector_charge ) #1",
+    ") #1",
+    "for ( const auto & unit : live_units_by_origin ) #1",
+    "for ( const auto position : * positions ) #1",
+    "if ( ! have_next || position < next ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
+    ") #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "positions",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
+    ") #1",
+    "for ( const auto & unit : live_units_by_origin ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "positions = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: source :: detail #1",
+    "void verify_cohort_exposure ( const OriginRoster & origins , const std :: unordered_map < std :: uint64_t , double > & live_units_by_origin , double actual ) noexcept #1",
+    ") #1",
+    "for ( const auto & unit : live_units_by_origin ) #1",
+    "for ( const auto position : * positions ) #1",
+    "if ( ! have_next || position < next ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
    "file": "src/source/pine_aux_security.cpp",
    "symbol": "aux_security_bars_",
    "scope": [
@@ -43608,9 +43621,10 @@
   },
   {
    "file": "src/str_utils.cpp",
-   "symbol": "str_format_time",
+   "symbol": "time_format_tokens",
    "scope": [
-    "namespace pineforge #1"
+    "namespace pineforge #1",
+    "namespace #2"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -43621,7 +43635,7 @@
    "symbol": "fmt",
    "scope": [
     "namespace pineforge #1",
-    "std :: string str_format_time ( long long timestamp_ms , const std :: string & format , const std :: string & timezone ) #1"
+    "namespace #2"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -43629,12 +43643,297 @@
   },
   {
    "file": "src/str_utils.cpp",
-   "symbol": "<temp:string>",
+   "symbol": "time_format_chunk",
    "scope": [
     "namespace pineforge #1",
-    "std :: string str_format_time ( long long timestamp_ms , const std :: string & format , const std :: string & timezone ) #1"
+    "namespace #2"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "marked",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_chunk ( const std :: string & fmt , const std :: tm & fields ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "buffer",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_chunk ( const std :: string & fmt , const std :: tm & fields ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "buffer",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_chunk ( const std :: string & fmt , const std :: tm & fields ) #1",
+    ") #2",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "buffer . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "time_format_unquoted",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "fmt",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_unquoted ( const std :: string & pattern , const std :: tm & fields ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "expanded",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_unquoted ( const std :: string & pattern , const std :: tm & fields ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "expanded",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_unquoted ( const std :: string & pattern , const std :: tm & fields ) #1",
+    ") #1",
+    "if ( fmt [ pos ] = = ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "expanded . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "expanded",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_unquoted ( const std :: string & pattern , const std :: tm & fields ) #1",
+    ") #1",
+    "else if ( fmt [ pos ] = = && ( pos = = 0 || fmt [ pos - 1 ] ! = ) && ( pos + 1 = = fmt . size ( ) || fmt [ pos + 1 ] ! = ) ) #1"
+   ],
+   "cls": "append",
+   "spelling": "expanded + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "hours",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_unquoted ( const std :: string & pattern , const std :: tm & fields ) #1",
+    ") #1",
+    "else if ( fmt [ pos ] = = && ( pos = = 0 || fmt [ pos - 1 ] ! = ) && ( pos + 1 = = fmt . size ( ) || fmt [ pos + 1 ] ! = ) ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_unquoted ( const std :: string & pattern , const std :: tm & fields ) #1",
+    ") #1",
+    "else if ( fmt [ pos ] = = && ( pos = = 0 || fmt [ pos - 1 ] ! = ) && ( pos + 1 = = fmt . size ( ) || fmt [ pos + 1 ] ! = ) ) #1"
    ],
    "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "expanded",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_unquoted ( const std :: string & pattern , const std :: tm & fields ) #1",
+    ") #1",
+    "else if ( fmt [ pos ] = = && ( pos = = 0 || fmt [ pos - 1 ] ! = ) && ( pos + 1 = = fmt . size ( ) || fmt [ pos + 1 ] ! = ) ) #1"
+   ],
+   "cls": "append",
+   "spelling": "expanded + = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "expanded",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_unquoted ( const std :: string & pattern , const std :: tm & fields ) #1",
+    ") #1",
+    "else if ( fmt [ pos ] = = && ( pos = = 0 || fmt [ pos - 1 ] ! = ) && ( pos + 1 = = fmt . size ( ) || fmt [ pos + 1 ] ! = ) ) #1"
+   ],
+   "cls": "append",
+   "spelling": "expanded + = . . .",
+   "ordinal": 3
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "expanded",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_unquoted ( const std :: string & pattern , const std :: tm & fields ) #1",
+    ") #1",
+    "else if ( fmt [ pos ] = = && ( pos = = 0 || fmt [ pos - 1 ] ! = ) && ( pos + 1 = = fmt . size ( ) || fmt [ pos + 1 ] ! = ) ) #1"
+   ],
+   "cls": "append",
+   "spelling": "expanded + = . . .",
+   "ordinal": 4
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "expanded",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_unquoted ( const std :: string & pattern , const std :: tm & fields ) #1",
+    ") #1",
+    "else if ( fmt [ pos ] = = && ( pos = = 0 || fmt [ pos - 1 ] ! = ) && ( pos + 1 = = fmt . size ( ) || fmt [ pos + 1 ] ! = ) ) #1"
+   ],
+   "cls": "append",
+   "spelling": "expanded + = . . .",
+   "ordinal": 5
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "expanded",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_unquoted ( const std :: string & pattern , const std :: tm & fields ) #1",
+    ") #1",
+    "else #1"
+   ],
+   "cls": "append",
+   "spelling": "expanded + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "time_format_pattern",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "pattern",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_pattern ( const std :: string & format , const std :: tm & fields ) try #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_pattern ( const std :: string & format , const std :: tm & fields ) try #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_pattern ( const std :: string & format , const std :: tm & fields ) try #1",
+    "while ( pos < pattern . size ( ) ) #1",
+    "if ( first_quote = = pattern . size ( ) ) #1"
+   ],
+   "cls": "append",
+   "spelling": "result + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_pattern ( const std :: string & format , const std :: tm & fields ) try #1",
+    "while ( pos < pattern . size ( ) ) #1"
+   ],
+   "cls": "append",
+   "spelling": "result + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "std :: string time_format_pattern ( const std :: string & format , const std :: tm & fields ) try #1",
+    "while ( pos < pattern . size ( ) ) #1",
+    "while ( pos < pattern . size ( ) ) #1"
+   ],
+   "cls": "append",
+   "spelling": "result + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/str_utils.cpp",
+   "symbol": "str_format_time",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
    "spelling": "std :: string",
    "ordinal": 1
   },

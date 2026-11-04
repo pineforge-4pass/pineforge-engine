@@ -259,6 +259,8 @@ set(TEST_SOURCES
     test_math_sum
     test_recompute
     test_str_utils
+    test_str_format_time_patterns
+    test_str_format_time_preservation
     test_ta
     test_mfi_source_direction
     test_ta_indicators_extras
@@ -335,6 +337,8 @@ set(TEST_SOURCES
     test_calendar_wm_open_utc_fastpath
     test_calendar_bucket_closes_once
     test_intraday_grid_late_day_open
+    test_intraday_bucket_dst_characterization
+    test_intraday_bucket_end_contract
     test_native_day_labels
     test_daily_magnifier_tapes
     test_htf_session_close_completion
@@ -1759,6 +1763,11 @@ list(APPEND TEST_SOURCES test_symbol_calendar_tapes)
 list(APPEND TEST_SOURCES test_session_break_open_bar_tape)
 #   F1(e) an aggregated process_orders_on_close script reading entry_bar_index.
 list(APPEND TEST_SOURCES test_aggregated_entry_bar_index_tape)
+# Quantity-step metadata against TradingView quantities for the next release.
+list(APPEND TEST_SOURCES test_qty_step_mincontract_tapes)
+list(APPEND TEST_SOURCES test_qty_step_qna_rows)
+# Requested-bar grids against TradingView quantities and raw observations.
+list(APPEND TEST_SOURCES test_requested_bar_grid_tapes)
 #   F1's magnified residual on the aggregated chart.
 list(APPEND TEST_SOURCES test_magnified_aggregated_tape)
 #   G2-23 every condition that keeps request.security on the source evaluator.
@@ -2113,6 +2122,9 @@ set(_pf_source_bound_private_rows
     test_publication_witness
     test_pyramiding_count_differential
     test_pyramiding_open_order_tape
+    test_qty_step_mincontract_tapes
+    test_qty_step_qna_rows
+    test_requested_bar_grid_tapes
     test_reversal_admission_float_guard_l4c
     test_reversal_close_all_tapes
     test_risk_max_intraday_loss_tv_l4a
@@ -2227,11 +2239,9 @@ if(NOT PINEFORGE_BUILD_SOURCE_LAYER)
             "skipped (PINEFORGE_BUILD_SOURCE_LAYER is OFF)")
     endif()
 endif()
-
 add_test(NAME test_cmake_version_source
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_cmake_version_source.py)
-# Compute each slice from real unittest collection at invocation, never from
-# a handwritten method list. One parent becomes eight slices plus a cover: +8.
+# Slice real unittest collection at invocation: eight slices plus a cover (+8 rows).
 set(PINEFORGE_CI_VERIFY_SLICE_COUNT 8)
 set(PINEFORGE_CI_VERIFY_SLICES)
 foreach(_pf_ci_verify_slice RANGE 1 ${PINEFORGE_CI_VERIFY_SLICE_COUNT})
@@ -2243,6 +2253,8 @@ endforeach()
 add_test(NAME test_ci_verify_slices_cover
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_verify_split.py
         --slice-count ${PINEFORGE_CI_VERIFY_SLICE_COUNT})
+add_test(NAME test_ci_verify_fetch_lock
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_verify_fetch_lock.py)
 add_test(NAME test_ci_preflight_slice_1
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py --slice 1/8)
 add_test(NAME test_ci_preflight_slice_2
@@ -2304,7 +2316,7 @@ add_test(NAME test_run_json_post_execution
     COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_post_execution.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 add_test(NAME test_compile_inventory_pipeline
-    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py ${PROJECT_SOURCE_DIR}/tests/test_entrypoint_build_only.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
 # Opt-in supervised report channel and compile-step limits: real-process rows (Linux only,
@@ -3817,6 +3829,9 @@ list(APPEND _pf_private_fixture_rows
     test_pooc_same_pass_close_tape
     test_pooc_short_slip_admission_tapes
     test_pyramiding_open_order_tape
+    test_qty_step_mincontract_tapes
+    test_qty_step_qna_rows
+    test_requested_bar_grid_tapes
     test_same_bar_reissue_tapes
     test_same_point_entries_tapes
     test_samebar_pyramiding_entries_tapes
@@ -3899,6 +3914,22 @@ endif()
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
+
+# Each order runs in its own process, before that process has seeded the
+# timezone-offset cache. These pin native legacy expectations, not TV rows.
+add_test(NAME test_intraday_bucket_dst_characterization_reverse
+    COMMAND test_intraday_bucket_dst_characterization --reverse)
+
+# Lab measurements for the next release require externally supplied inputs.
+# Opting in makes absent inputs a failure; there is no placeholder or skip.
+option(PINEFORGE_LAB_ONLY_TESTS "Build lab-only measurement tests" OFF)
+if(PINEFORGE_LAB_ONLY_TESTS)
+    if(NOT PINEFORGE_BUILD_SOURCE_LAYER)
+        message(FATAL_ERROR "PINEFORGE_LAB_ONLY_TESTS requires PINEFORGE_BUILD_SOURCE_LAYER")
+    endif()
+    pineforge_add_unit_test(test_requested_bar_grid_private_tapes)
+    set_tests_properties(test_requested_bar_grid_private_tapes PROPERTIES LABELS "lab-only")
+endif()
 
 if(UNIX)
     # PASS_REGULAR_EXPRESSION makes output matching replace CTest's exit-code
@@ -5936,6 +5967,27 @@ elseif(NOT test_aggregated_entry_bar_index_tape IN_LIST _pf_kernel_absent_rows)
     set_tests_properties(test_aggregated_entry_bar_index_tape PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
+if(NOT test_qty_step_mincontract_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/qty_step_mincontract/btc60/reporter/tv_trades.csv")
+    pineforge_add_unit_test(test_qty_step_mincontract_tapes)
+elseif(NOT test_qty_step_mincontract_tapes IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_qty_step_mincontract_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/qty_step_mincontract/btc60/reporter/tv_trades.csv")
+    set_tests_properties(test_qty_step_mincontract_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+if(NOT test_qty_step_qna_rows IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/qty_step_mincontract/qna/signal_rows.tsv")
+    pineforge_add_unit_test(test_qty_step_qna_rows)
+elseif(NOT test_qty_step_qna_rows IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_qty_step_qna_rows COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/qty_step_mincontract/qna/signal_rows.tsv")
+    set_tests_properties(test_qty_step_qna_rows PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+if(NOT test_requested_bar_grid_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/requested_bar_grid/btc60/bi-300/tv_trades.csv")
+    pineforge_add_unit_test(test_requested_bar_grid_tapes)
+elseif(NOT test_requested_bar_grid_tapes IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_requested_bar_grid_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/requested_bar_grid/btc60/bi-300/tv_trades.csv")
+    set_tests_properties(test_requested_bar_grid_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
 if(NOT test_color_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/color_tv/w11-color-alpha-eth15/meta.json")
     pineforge_add_unit_test(test_color_tapes)
 elseif(NOT test_color_tapes IN_LIST _pf_kernel_absent_rows)
@@ -6784,6 +6836,9 @@ foreach(_pf_hm_row IN ITEMS
         "test_pine_dust_sweep_paired|PINEFORGE_G232_FIXTURE_DIR|g232_decimal_dust"
         "test_session_ismarket_tape|PINEFORGE_G236_FIXTURE_DIR|session_ismarket"
         "test_aggregated_entry_bar_index_tape|PINEFORGE_HM_F1E_FIXTURE_DIR|aggregated_entry_bar_index"
+        "test_qty_step_mincontract_tapes|PINEFORGE_QTY_STEP_FIXTURE_DIR|qty_step_mincontract"
+        "test_qty_step_qna_rows|PINEFORGE_QTY_STEP_FIXTURE_DIR|qty_step_mincontract"
+        "test_requested_bar_grid_tapes|PINEFORGE_REQUESTED_BAR_GRID_FIXTURE_DIR|requested_bar_grid"
         "test_magnified_aggregated_tape|PINEFORGE_HM_MAG_FIXTURE_DIR|magnified_aggregated"
         "test_adapter_margin_schedule_differential|PINEFORGE_HM_M7A_FIXTURE_DIR|margin_entry_bar"
         # R5 lane PAR-ORDERS-2's tape rows.
@@ -7383,7 +7438,7 @@ endforeach()
 # execute every slice. Both covers only collect and stay outside the slow
 # population. All are PUBLIC with no private-fixture label or SKIP_RETURN_CODE,
 # and register in both fixture modes.
-set_tests_properties(${PINEFORGE_CI_VERIFY_SLICES} test_ci_verify_slices_cover PROPERTIES
+set_tests_properties(${PINEFORGE_CI_VERIFY_SLICES} test_ci_verify_slices_cover test_ci_verify_fetch_lock PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 set_tests_properties(
     test_ci_preflight_slice_1

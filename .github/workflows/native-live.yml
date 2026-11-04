@@ -39,7 +39,7 @@ env:
 jobs:
   authz:
     name: authz
-    # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
+    # Fleet routing is fixed per job; credentials use protected GKE runners.
     runs-on: gke-4cpu-8gb-amd64
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
@@ -102,16 +102,18 @@ jobs:
   native-live:
     name: native-live (${{ matrix.profile }})
     needs: [authz]
-    # Each instrumented tree builds once on its pinned GKE size.
-    runs-on: gke-16cpu-32gb-amd64
+    # Each instrumented tree builds once on its pinned GKE size; the work disk follows the measured peak per profile.
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - profile: live-sanitizers
             build_dir: build-live-sanitizers
+            runner: gke-16cpu-32gb-amd64-256gb
           - profile: live-tsan
             build_dir: build-live-tsan
+            runner: gke-16cpu-32gb-amd64-128gb
     # Keep every runner row and let the platform supply its own job maximum.
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}

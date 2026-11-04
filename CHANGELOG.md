@@ -7,6 +7,20 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- `pineforge-live` status files now report `metrics.feed_idle_ms`, the
+  milliseconds since the last feed arrival, or null before the first; the
+  consumer owns freshness. HTTP and WebSocket feeds now also default to no
+  idle or message deadline, with 0 meaning none and positive seconds accepted
+  when their milliseconds fit a `long`. A caller relying on the former
+  15 second network default to end a run must set the timeout flag or close
+  the connection. The TCP/TLS connect no longer has a fixed 5000 ms bound:
+  the new `--feed-connect-timeout S` (integer seconds, network feeds only)
+  defaults to 0, which sets the connect option to the largest value libcurl
+  accepts, so the runner adds no connect bound: connecting ends only on a
+  system or peer failure, unless a nonzero `--feed-message-timeout` ends it
+  sooner (that total timeout covers connecting). A positive value sets the
+  connect bound in seconds. Files and stdin ignore a well-formed value;
+  malformed values are refused for every feed kind.
 - **Default change, user-visible:** `pineforge-live run --feed -` (the stdin
   feed) no longer ends a run by itself after 15 seconds without data or 15
   seconds to complete a line. With neither flag given, `--feed-idle-timeout`
@@ -29,6 +43,15 @@ version number follows semantic versioning over the surfaces the
   limit and a 1% P&L limit. The exit-coupled P&L forgiveness window narrows
   with that exit limit from 0.05% to 0.02% for trail_* probes. The exit and
   P&L gates remain per-strategy 90th-percentile measurements.
+- Full and transpile-only runs with `PINEFORGE_WORK_DIR` set are refused with exit status 4.
+
+- The container entrypoint accepts `PINEFORGE_BUILD_ONLY=1` with an empty
+  caller-owned `PINEFORGE_WORK_DIR`, retaining the compiled artifacts and an
+  `engine-step.json` manifest for a separate engine invocation. The manifest
+  records the exact arguments, working directory, artifact hashes,
+  inherited-descriptor contract and structured status mapping distinguishing
+  engine exits from build-phase failures; the two-phase run documentation
+  describes the caller's integrity checks and read-only execution boundary.
 - An opt-in supervised report channel separates report and diagnostic output
   and records terminal delivery facts. It is not yet host-attested and needs
   an external sink for now, while the internal snapshot handoff is pending.
@@ -1388,13 +1411,13 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   effect. The release image's `docker/run_json.py` default (unjailed)
   profile installs a temporary report sink on every handle, so there the
   cache holds 128 rows and a script that loops over its closed trades reads
-  them from scratch files on every pass: hungpixi (24,238 closed trades),
+  them from scratch files on every pass: one measured example,
   one run each started together on one 16 vCPU machine, took 74.18 s on
   1.6.3 and did not finish within 1800 s on 1.7.0, where the run was
   stopped at that limit. The trigger is a report sink installed together
   with a loop over more than 128 closed trades. Not affected:
   `scripts/run_strategy.py` without a sink, which the hosted case runner,
-  the verifier and the sweep run (hungpixi takes 107.2 s there, mean of
+  the verifier and the sweep run (the same example takes 107.2 s there, mean of
   three runs; the corpus-parity canary pass sets
   `PINEFORGE_REPORT_SINK=1`), and the HPO native adapter, which installs no
   sink.

@@ -73,7 +73,7 @@ configuration**, not one-shot: it stays in effect until a caller passes
    peek at, so it asks whether the next bucket — this bar's timestamp plus
    one script-TF step — falls out of session, or belongs to another session
    day), pinned to agree with the `i+1` lookahead on every interior bar of
-   the 24x7 lanes. Since R5 lane F5 that is the kernel's answer, not the
+   the 24x7 execution paths. Since the kernel session-day integration that is the kernel's answer, not the
    host's: the tail bar reads `NativeDecisionContext::closes_session_day_open_ended`
    (`market_driver.hpp:164`), the same fact as `closes_session_day` on every
    bar except a batch's final one, which it reads off the calendar instead
@@ -113,7 +113,7 @@ Read the tail bar's `session.islastbar` column: `1` is the calendar
 lookahead's answer, and the legacy expression could only have produced `0`.
 The one dispatch-path caveat that remains is not this flag's, and it is
 narrower than it was: every historical bar ends its session at the session
-day (R5 lane E26), so a non-24x7 tape's early closes are read from the tape
+day (the session-day rule), so a non-24x7 tape's early closes are read from the tape
 itself. Only the forming tail bar is left — its calendar step cannot know a
 close the session string does not declare — and that residue is ruled, not
 open (ADR-0001, ruling "Session-day facts at a bar with nothing held after

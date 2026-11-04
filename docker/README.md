@@ -95,6 +95,183 @@ Mount points (provide exactly one of `strategy.pine` / `strategy.cpp`):
 | `strategy.cpp`   | `/in/strategy.cpp`    | back-compat | Pre-transpiled PineForge translation unit (used only if no `.pine`). Refused unless `PINEFORGE_STRATEGY_CPP_SHA256` holds the sha256 of exactly these bytes, or `PINEFORGE_ALLOW_UNATTESTED_CPP=1` (local trust only; a hosted caller must never set it) |
 | `ohlcv.csv`      | `/in/ohlcv.csv`       | yes      | `timestamp,open,high,low,close,volume` |
 
+### Two-phase run
+
+Set `PINEFORGE_BUILD_ONLY` to exactly `1` or `true` and
+`PINEFORGE_WORK_DIR` to the absolute path of an existing empty directory
+created by the caller. Phase 1 performs the normal source resolution,
+attestation, translation, compilation and selected-window inventory binding,
+then writes `engine-step.json` and exits 0. Its stdout is empty; stderr ends
+with `[pineforge] build complete; engine step not started`. The engine has
+not run. The caller owns this directory and its eventual cleanup. The
+build-only checks and manifest publication live inside `entrypoint.sh`,
+using inline Python and its standard-library JSON module.
+
+Other build-mode values, including unset, empty, `0`, `false` and `yes`, leave
+build mode off. A set `PINEFORGE_WORK_DIR` with that mode off is refused with
+status 4 and one `run_request_invalid` JSON line, option `work_dir`.
+Build mode requires an absolute existing empty directory that is writable
+and searchable by the caller and is not a symlink: a relative path,
+file, missing directory or directory containing even a hidden entry is
+refused before building, with status 4 and one `run_request_invalid` JSON
+line whose `args.option` is `work_dir`. Nothing in that directory is replaced.
+Both build mode and `PINEFORGE_TRANSPILE_ONLY` being on is refused with
+status 4, `run_request_invalid`, option `arguments`, naming both variables.
+Transpile mode is on for exactly `1` or `true` too.
+
+The manifest is one ASCII-escaped JSON object with schema
+`pineforge-engine-step/v1`, atomically published with mode 0600. Its `argv`
+is the single Bash array assembled for the ordinary engine invocation.
+`argv[0]` is the absolute result of resolving `python3` during the build;
+phase 2 performs no interpreter lookup through `PATH`. An interpreter
+resolution that is relative, or a manifest publication failure, returns
+status 4 with `harness_internal_error`. Other phase-1 failures retain their
+ordinary statuses: missing input or C++ attestation 2, compilation or binding
+3, compile-guard refusal 4, translation 5.
+
+The caller must execute **every element of the manifest's `argv`, in order**,
+without shell splitting, adding flags or reconstructing the command.
+The following table describes how the entrypoint constructs it; the manifest
+is authoritative.
+
+| Arguments | Source and inclusion rule |
+| --- | --- |
+| Interpreter, `run_json.py` | Resolved `python3`, then `${PINEFORGE_PREFIX:-/opt/pineforge}/bin/run_json.py` |
+| `--so`, `--ohlcv` | Built library, then the input directory's `ohlcv.csv` |
+| `--inputs`, `--overrides` | `PINEFORGE_INPUTS`, `PINEFORGE_OVERRIDES`; always passed, empty when unset |
+| `--input-tf`, `--script-tf`, `--bar-magnifier` | Corresponding `PINEFORGE_INPUT_TF`, `PINEFORGE_SCRIPT_TF`, `PINEFORGE_BAR_MAGNIFIER`; always passed, empty when unset |
+| `--magnifier-samples`, `--magnifier-dist` | `PINEFORGE_MAGNIFIER_SAMPLES` and `PINEFORGE_MAGNIFIER_DIST`; unset or empty uses `4` and `endpoints` |
+| `--generated-cpp`, `--transpiled` | The compiled source path and whether it was translated from Pine in this invocation |
+| `--trade-start-ms`, `--chart-tz` | Nonempty `PINEFORGE_TRADE_START_MS`, `PINEFORGE_CHART_TZ`, in that order |
+| `--magnifier-volume-weighted` | `PINEFORGE_MAGNIFIER_VOLUME_WEIGHTED` is `1`, `true`, `yes` or `on` |
+| `--syminfo`, `--symbol-feeds` | Nonempty `PINEFORGE_SYMINFO`, `PINEFORGE_SYMBOL_FEEDS`, in that order |
+| `--max-symbol-feeds` | `PINEFORGE_MAX_SYMBOL_FEEDS` is set, including empty or `0` |
+| `--tv-compat`, `--max-inventory-bytes` | On the plain g++ branch (including zero-only compile-guard settings), compatibility flag when `PINEFORGE_TV_COMPAT` is `1`, `true`, `yes` or `on`; then the inventory value when `PINEFORGE_MAX_INVENTORY_BYTES` is set, including empty or `0`. Neither flag is forwarded on the compile-guard branch |
+| `--report-sink-fd`, `--run-id` | Corresponding `PINEFORGE_REPORT_SINK_FD`, `PINEFORGE_RUN_ID` is set; empty strings are retained |
+| `--bench`, `--warmup`, `--repeats` | `PINEFORGE_BENCH` is `1`, `true`, `yes` or `on`; warmup/repeats use `PINEFORGE_WARMUP`/`PINEFORGE_REPEATS`, with unset or empty values defaulting to `3`/`20` |
+| `--report-policy`, window arguments | Nonempty `PINEFORGE_REPORT_POLICY`, followed by each nonempty `PINEFORGE_WINDOW_START_MS`, `PINEFORGE_WINDOW_END_MS`, `PINEFORGE_PREROLL_BARS`, `PINEFORGE_FED_START_MS` as `--window-start-ms`, `--window-end-ms`, `--preroll-bars`, `--fed-start-ms` |
+| `--request-feed-inventory` | Last, when the selected path produced a bound inventory |
+
+Run phase 2 in the manifest's `cwd`, the entrypoint's working directory.
+In particular, relative syminfo and symbol-feed index paths resolve there.
+Preserve the phase-1 environment unchanged, as `inherits.environment` states.
+The engine reads `PINEFORGE_RUN_JSON_PROFILE`,
+`PINEFORGE_COMMAND_SCRATCH_MAX_BYTES`, `PINEFORGE_COMMAND_SCRATCH_DIR`,
+`TMPDIR`, `PF_SCRATCH_ARENA_FD`, `PF_SCRATCH_ARENA_BYTES`,
+`PF_SCRATCH_ARENA_JAILED`, `PF_SCRATCH_WINDOW_BYTES`, `PATH` and locale
+settings. Build mode exports or clears none of them.
+
+Preserve stdin and the inherited descriptors. Stdout carries the JSON report;
+stderr carries diagnostics. If `PINEFORGE_REPORT_SINK_FD` is set,
+`inherits.descriptors` records its value verbatim and `--report-sink-fd`
+passes it to the engine. The caller opens that descriptor before phase 1 and
+keeps the same descriptor open through phase 2. The engine validates it;
+an empty value is forwarded for that validation. A launcher's outcome
+descriptor belongs to the wrapper, must not alias the report sink, and is
+neither opened nor selected by this contract.
+
+The plain engine step is one process and can be the target of a launcher
+that denies child-process creation. Its report-channel dispatch is excluded.
+Build mode refuses **any set value, including empty**, for each of these
+eleven names because their dispatch starts additional processes:
+`PINEFORGE_REPORT_CHANNEL`, `PINEFORGE_TERMINAL_STATUS_FD`,
+`PINEFORGE_REPORT_MAX_BYTES`, `PINEFORGE_DIAGNOSTIC_MAX_BYTES`,
+`PINEFORGE_CHANNEL_WALL_MS`, `PINEFORGE_CHANNEL_STALL_MS`,
+`PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS`, `PINEFORGE_CHANNEL_STOP_GRACE_MS`,
+`PINEFORGE_REPORT_PLANNED_SINK_BYTES`, `PINEFORGE_REPORT_ATTEMPT_ID`,
+`PINEFORGE_REPORT_HOST_ATTESTATION_FD`. The manifest records them in
+`forbidden_environment_spawning`.
+
+It also refuses `PINEFORGE_REPORT_PRODUCER`,
+`PINEFORGE_REPORT_CANDIDATE_FD` and `PINEFORGE_REPORT_NATIVE_SINK_FD`,
+recorded in `forbidden_environment_producer`. These three select or configure
+the producer side of a channel, which has a different destination and
+descriptor contract. Each refusal is status 4, `run_request_invalid`, option
+`arguments`, naming the first offending variable. Ordinary full runs retain
+their channel behavior.
+
+No forbidden environment name may be introduced in phase 2. None of these
+twelve `forbidden_flags` may be added to its argv:
+`--report-channel`, `--terminal-status-fd`, `--report-max-bytes`,
+`--diagnostic-max-bytes`, `--channel-wall-ms`, `--channel-stall-ms`,
+`--post-exit-drain-ms`, `--stop-grace-ms`, `--planned-sink-bytes`,
+`--attempt-id`, `--host-attestation-fd`, `--test-only-host-attestation-fd`.
+Build mode checks every argv token, including option values, against these
+flags, including the `--flag=value` form. A matching token is refused with
+status 4, `run_request_invalid`, option `arguments`, naming that token;
+the compiled library is removed and no manifest is published.
+The plain `PINEFORGE_REPORT_SINK_FD` remains allowed.
+
+The launcher observes the engine's own exit status. The engine step returns
+0, 1 or 2, plus death by a signal: 0 means the report was written and the run
+completed; 1 means a failed run, harness fault or report that could not be
+written whole; 2 means argparse refused the command line or explicit request
+validation failed. The module describes failures and incomplete publication
+at `docker/run_json.py:114` and `docker/run_json.py:133`; `main()` describes
+its status contract at `docker/run_json.py:5280` and propagates typed failure
+statuses at `docker/run_json.py:5302` and `docker/run_json.py:5311`.
+The argparse error exits 2 at `docker/run_json.py:4551`; explicit sink-option
+refusals also use 2 at `docker/run_json.py:6005`. The standalone `csv2bin`
+refusal returns 2 at `docker/run_json.py:5270`, but the entrypoint never
+selects that subcommand. `_host_main()` returns 1 on report-channel setup
+failure at `docker/run_json.py:8683`, propagates the run status at
+`docker/run_json.py:8716`, and the process exits through
+`sys.exit(_host_main())` at `docker/run_json.py:9547`.
+
+Statuses 3 (compile or bind failure) and 5 (transpile failure) are
+build-phase-only; the engine step never returns them. Status 4 is only the
+entrypoint's mapping, or a usage/limit failure of an opt-in compile guard or
+of build-only (including a manifest publication failure). The entrypoint's
+2 means missing input or C++ attestation failure; the engine step's argparse
+2 has a different meaning despite sharing the number.
+The entrypoint maps **every nonzero engine status to 4**, with
+`[pineforge] backtest failed` on stderr. The manifest's structured
+`status_mapping` records `engine_step_statuses`, `engine_step_meaning`,
+`build_phase_only`, `entrypoint_only_codes`, `full_run_mapping` and `signals`;
+the mapping and its entrypoint code use the same `ENGINE_FAILURE_STATUS`
+constant. A process terminated by a signal has no status of its own; the
+caller reports it, conventionally as 128 plus the signal number.
+A wrapper needing the entrypoint's mapping must apply it itself, after
+interpreting its launcher's own outcomes and signals.
+
+Phase 2 reads the library, CSV chart and generated source named in
+`artifacts`, the bound inventory when present, syminfo and symbol-feed
+indexes when requested, and the CSVs those indexes name. The manifest hashes
+the library, compiled source and bound inventory as left by phase 1.
+`artifacts.ohlcv.sha256` is null: the CSV mount is read during phase 2 and is
+not hashed by the build. `artifacts.request_feed_inventory` is null when no
+inventory was bound. Keep these inputs and the installation's interpreter,
+modules and native dependencies readable until the engine exits.
+
+The library, inventory files and manifest persist in `work_dir`, as does
+the compiled source except on the non-selected path with
+`PINEFORGE_ALLOW_UNATTESTED_CPP=1`: that path leaves the source at
+`/in/strategy.cpp` (or the configured input directory), so `artifacts.cpp`
+and `--generated-cpp` refer to the caller-mutable input mount. Keep that
+source readable and verify its hash before phase 2 too. The existing
+inventory binder may also retain its temporary publication file.
+Phase 2 must finish before the caller removes these files. Engine writes go
+to stdout, the inherited report descriptor when selected, and temporary
+report-sink, report-replay and command-store files under `TMPDIR` (otherwise
+`/tmp`); `PINEFORGE_COMMAND_SCRATCH_DIR` can select a separate command-store
+directory. The entrypoint passes no named report-output, replay-output or
+spill-directory flags. Provide writable scratch and sink destinations
+separately from the read-only build directory.
+
+The wrapper has three mandatory duties at the trust boundary:
+
+1. Terminate **every process started by phase 1 before reading anything
+   from the work directory**, using its process containment mechanism.
+   Waiting for the entrypoint alone is insufficient.
+2. In addition to checking the artifact hashes, obtain and verify the
+   manifest's own sha256 over a channel **only the wrapper owns**.
+   Hashes stored inside the manifest do not establish its integrity.
+3. Mount the work directory **read-only for phase 2**, and verify the
+   artifact hashes before executing the manifest argv.
+
+The entrypoint runs inside phase 1 and cannot establish those guarantees
+for its caller.
+
 ### Opt-in compile guards
 
 The entrypoint can apply cooperative limits to compilation on Linux. The
@@ -885,10 +1062,10 @@ directly (for example `base64 -d | shasum -a 256`).
 
 | Code | Meaning |
 | ---: | ------- |
-|  `0` | Success — JSON report (or C++ in transpile-only mode) on stdout |
+|  `0` | Success — JSON report, C++ in transpile-only mode, or empty stdout after a build-only run |
 |  `2` | Missing input mount (`/in/strategy.pine` or `/in/strategy.cpp`, and `/in/ohlcv.csv`), or a mounted `strategy.cpp` the host did not vouch for (one typed `run_request_invalid` line on stdout) |
 |  `3` | `g++` compile or selected inventory binding failed |
-|  `4` | Backtest aborted at runtime, or an explicitly requested compile guard refused its settings or stopped compilation |
+|  `4` | Backtest aborted at runtime, a compile guard refused its settings or stopped compilation, or a build-only request or manifest failed |
 |  `5` | Transpile failed (unsupported Pine construct or syntax error) |
 
 ## Smoke test

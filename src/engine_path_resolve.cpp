@@ -22,7 +22,7 @@ namespace internal {
 
 // A declared leg order never reaches here: the consumer resolves it and hands
 // it to the intrabar sampler itself (internal::sample_price_path_ordered).
-// Until R5 lane D2-A a thread-local override, installed around the sampler
+// Until the optional-hook and quiet-point changes a thread-local override, installed around the sampler
 // alone, carried it in; it was AUTO everywhere else, which is what this
 // answers.
 bool bar_path_uses_high_first(const Bar& bar) {

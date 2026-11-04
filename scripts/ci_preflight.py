@@ -45,6 +45,7 @@ ACTIONLINT_VERSION = '1.7.12'
 # --repository overrides this canonical repository; the mirror test pins both.
 RUNNER_ALLOWLIST_REPOSITORY = 'pineforge-4pass/pineforge-engine'
 RUNNER_ALLOWLIST_FILE = '.github/runner-group-allowlist.txt'
+PROTECTED_RUNNER_ALLOWLIST_FILE = '.github/runner-group-15-allowlist.txt'
 # Pin the exact ordered names extracted from the CMake slow-label list.
 # Verifier and command-after slices inherit slow labels; their covers do not.
 PR_SLOW_ROWS = (
@@ -94,27 +95,49 @@ PR_SLOW_ROWS = (
 )
 PR_FAST_ROWS_SHA256 = '0509b2219786efb6878b193639344c299ff8075ba4532dbe09e80e6e97b60a9a'
 # Admitted PR jobs and secret-free post jobs use fixed GKE sizes.
-# Release artifacts and baseline promotion retain their isolated -main policy.
+# Credentialed jobs use a separate, exact protected GKE inventory.
 PR_RUNNER = '["self-hosted","pf-gcp-pr"]'
-POST_RUNNER = '["self-hosted","pf-gcp-post"]'
-RELEASE_RUNNER = '["self-hosted","pf-gcp-main"]'
+# There is no general post fleet: an unpinned job on this label is refused.
+POST_RUNNER = 'gke-2cpu-4gb-amd64'
+PROTECTED_RUNNER = 'gkp-2cpu-4gb-amd64'
+RELEASE_RUNNER = 'gkp-od-4cpu-8gb-amd64'
+PREBUILT_RUNNER = 'gkp-od-16cpu-32gb-amd64-128gb'
 GKE_32_LABEL = 'gke-32cpu-64gb-amd64'
 GKE_16_LABEL = 'gke-16cpu-32gb-amd64'
 GKE_8_LABEL = 'gke-8cpu-16gb-amd64'
 GKE_ARM_LABEL = 'gke-16cpu-32gb-arm64'
 GKE_2_LABEL = 'gke-2cpu-4gb-amd64'
 GKE_4_LABEL = 'gke-4cpu-8gb-amd64'
+GKP_JOB_RUNNERS = {
+    'release.yml': {'release': RELEASE_RUNNER, 'notify-hub': RELEASE_RUNNER,
+                    'prebuilt': PREBUILT_RUNNER},
+    'promote-baseline.yml': {'promote': PROTECTED_RUNNER},
+    'docs-post.yml': {'build': 'gkp-4cpu-8gb-amd64'},
+    'release-ruleset-probe.yml': {'probe': PROTECTED_RUNNER},
+}
+GKP_JOB_ENVIRONMENTS = {
+    'release.yml': {'release': 'release', 'notify-hub': 'release'},
+    'release-ruleset-probe.yml': {'probe': 'release'},
+    'promote-baseline.yml': {'promote': 'release-bot'},
+}
+GKE_32_256_LABEL = 'gke-32cpu-64gb-amd64-256gb'
+GKE_16_128_LABEL = 'gke-16cpu-32gb-amd64-128gb'
+GKE_16_256_LABEL = 'gke-16cpu-32gb-amd64-256gb'
+GKE_ARM_128_LABEL = 'gke-16cpu-32gb-arm64-128gb'
+GKE_MATRIX_RUNNER = '${{ matrix.runner }}'
 GKE_JOB_LABELS = {
     'gke-pr.yml': {'preflight': GKE_8_LABEL, 'build': GKE_32_LABEL,
-                   'build-debug': GKE_16_LABEL,
+                   'build-debug': GKE_16_128_LABEL,
                    'corpus-parity-subset': GKE_8_LABEL},
     'ci-post.yml': {'preflight': GKE_8_LABEL, 'preflight-slow': GKE_8_LABEL,
-                    'build': GKE_32_LABEL, 'build-debug': GKE_16_LABEL,
-                    'sanitizers': GKE_32_LABEL, 'kernel-only': GKE_16_LABEL,
-                    'build-arm': GKE_ARM_LABEL},
+                    'build': GKE_32_LABEL, 'build-debug': GKE_16_128_LABEL,
+                    'sanitizers': GKE_32_256_LABEL, 'kernel-only': GKE_16_LABEL,
+                    'build-arm': GKE_ARM_128_LABEL},
     'corpus-parity.yml': {'corpus-parity': GKE_16_LABEL, 'corpus-parity-subset': GKE_8_LABEL},
-    'native-live.yml': {'native-live': GKE_16_LABEL, 'native-live-shards': GKE_8_LABEL},
+    'native-live.yml': {'native-live': GKE_MATRIX_RUNNER, 'native-live-shards': GKE_8_LABEL},
 }
+# The arm admission variant has its own exact inventory; main keeps the old one.
+GKE_PR_ARM_JOB_LABELS = {**GKE_JOB_LABELS['gke-pr.yml'], 'build-arm': GKE_ARM_128_LABEL}
 GKE_LIGHT_JOB_RUNNERS = {
     'ci-post.yml': dict.fromkeys(
         ('authz', 'changes', 'build-release-gate', 'build-debug-gate',
@@ -127,7 +150,7 @@ GKE_LIGHT_JOB_RUNNERS = {
     'release-ruleset-probe.yml': {'authz': GKE_2_LABEL},
     'promote-baseline.yml': {'promote-guard': GKE_2_LABEL},
 }
-# Admitted PR and post jobs use bare GKE scale-set names.
+# Admitted PR and post jobs use bare GKE names or the exact native profile matrix.
 GKE_JOB_RUNNERS = {
     name: {**GKE_JOB_LABELS.get(name, {}),
            **GKE_LIGHT_JOB_RUNNERS.get(name, {})}
@@ -181,7 +204,7 @@ POST_ARM_BUILD_STRATEGY = ('    strategy:\n'
                           '        build_type: [Release, Debug]\n')
 BUILD_NAME = 'build (${{ matrix.platform.os }}, ${{ matrix.build_type }})'
 POST_ARM_BUILD_NAME = 'build (ubuntu-24.04-arm, ${{ matrix.build_type }})'
-POST_SHARDS = {'build': 4, 'build-debug': 2, 'sanitizers': 4, 'kernel-only': 2}
+POST_SHARDS = {'build': 4, 'build-debug': 2, 'sanitizers': 8, 'kernel-only': 2}
 POST_LEG_GATES = {
     'build-release-gate': ('build', 'build (ubuntu-24.04, Release)'),
     'build-debug-gate': ('build-debug', 'build (ubuntu-24.04, Debug)'),
@@ -200,17 +223,19 @@ RELEASE_STRATEGY = ('    strategy:\n'
                     '      matrix:\n'
                     '        include:\n'
                     '          - triple: linux-x86_64\n'
-                    f'            runner: {RELEASE_RUNNER}\n'
+                    f'            runner: {PREBUILT_RUNNER}\n'
                     '          - triple: linux-aarch64\n'
                     '            runner: ubuntu-22.04-arm\n')
-NATIVE_STRATEGY = '''    strategy:
+NATIVE_STRATEGY = f'''    strategy:
       fail-fast: false
       matrix:
         include:
           - profile: live-sanitizers
             build_dir: build-live-sanitizers
+            runner: {GKE_16_256_LABEL}
           - profile: live-tsan
             build_dir: build-live-tsan
+            runner: {GKE_16_128_LABEL}
 '''
 NATIVE_SHARD_STRATEGY = '''    strategy:
       fail-fast: false
@@ -301,17 +326,19 @@ JOB_COMMANDS = {
     'docs.yml': {'authz': None, 'build': None},
     'docs-post.yml': {'authz': None, 'build': None},
 }
-# Exact hosted pins and bare GKE scale-set names, checked per job.
+GKE_PR_ARM_JOB_COMMANDS = {**JOB_COMMANDS['gke-pr.yml'], 'build-arm': VERIFY}
+# Exact hosted pins and GKE scalar or native matrix pins, checked per job.
 # Historical name: this table also holds the exact GKE pins.
 HOSTED_JOB_RUNNERS = {
     'ci.yml': {'authz': 'ubuntu-24.04'},
     'gke-pr.yml': {**dict.fromkeys(('admit', 'legs', 'result'), 'ubuntu-24.04'),
                    **GKE_JOB_RUNNERS['gke-pr.yml']},
     'ci-post.yml': GKE_JOB_RUNNERS['ci-post.yml'],
-    'docs-post.yml': GKE_JOB_RUNNERS['docs-post.yml'],
+    'docs-post.yml': {**GKE_JOB_RUNNERS['docs-post.yml'], **GKP_JOB_RUNNERS['docs-post.yml']},
     'native-live.yml': GKE_JOB_RUNNERS['native-live.yml'],
     'corpus-parity.yml': GKE_JOB_RUNNERS['corpus-parity.yml'],
     'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
+    'rerun-preempted.yml': {'rerun': 'ubuntu-24.04'},
     'promote-baseline.yml': GKE_JOB_RUNNERS['promote-baseline.yml'],
     'release-ruleset-probe.yml': GKE_JOB_RUNNERS['release-ruleset-probe.yml'],
 }
@@ -319,8 +346,8 @@ HOSTED_JOB_RUNNERS = {
 RELEASE_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
                     'notify-hub': RELEASE_RUNNER},
-    'release-ruleset-probe.yml': {'probe': POST_RUNNER},
-    'promote-baseline.yml': {'promote': RELEASE_RUNNER},
+    'release-ruleset-probe.yml': {'probe': PROTECTED_RUNNER},
+    'promote-baseline.yml': {'promote': PROTECTED_RUNNER},
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
 # standard hosted labels. Existing hosted exceptions above are pinned separately.
@@ -331,7 +358,8 @@ _LARGER_RUNNER_LABEL = re.compile(
 _LARGER_RUNNER_KEY = re.compile(r'(?<![\w.-])["\']?larger_runner["\']?[ \t]*:')
 # Retired release labels remain refused by the runner pins as well. Neither
 # spelling may grant an arbitrary workflow access to the isolated release pool.
-_RELEASE_POOL_LABEL = re.compile(r'(?<![\w.-])(?:pf-ci-release|pf-gcp-main)(?![\w.-])')
+_RELEASE_POOL_LABEL = re.compile(r'(?<![\w.-])(?:pf-ci-release|pf-gcp-(?:main|post))(?![\w.-])')
+_RETIRED_VM_LABEL = re.compile(r'(?<![\w.-])pf-gcp-(?:main|post)(?![\w.-])')
 # A docs-only change (scripts/ci_docs_only.py) skips the proof jobs. Each waits
 # for authz and changes and skips only when changes succeeded and answered
 # docs-only -- exactly the skip the build aggregate accepts -- so a failed or
@@ -345,6 +373,8 @@ PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-arm': 'ARM_BUILD_RESULT',
               'corpus-parity-subset': 'PARITY_RESULT', 'corpus-parity': 'FULL_PARITY_RESULT'}
 PR_PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-debug': 'DEBUG_RESULT',
                  'corpus-parity-subset': 'PARITY_RESULT'}
+PR_ARM_PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-debug': 'DEBUG_RESULT',
+                     'build-arm': 'ARM_RESULT', 'corpus-parity-subset': 'PARITY_RESULT'}
 HEAVY_JOBS = frozenset(('sanitizers', 'kernel-only', 'native-live', 'corpus-parity'))
 AUTHZ_SUCCESS = "${{ needs.authz.result == 'success' }}"
 AUTHZ_ALWAYS = "${{ always() && needs.authz.result == 'success' }}"
@@ -375,6 +405,8 @@ ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error \
 GKE_PROOF_IF = ("${{ needs.admit.outputs.allowed == 'true' && "
                 "needs.admit.outputs.docs_only != 'true' && "
                 "needs.admit.outputs.github_only != 'true' }}")
+GKE_ARM_PROOF_IF = GKE_PROOF_IF.replace(
+    ' }}', " && needs.admit.outputs.arm_relevant == 'true' }}")
 GKE_PREFLIGHT_TIER = ("${{ (needs.admit.outputs.docs_only == 'true' || "
                       "needs.admit.outputs.github_only == 'true') && 'github-only' || 'fast' }}")
 GKE_IDENTITY_RUN = ' '.join(r'''|
@@ -446,6 +478,64 @@ GKE_RESULT_STEP = '''      - name: Require an independently consistent successfu
           test "$PREFLIGHT_RESULT" = success || fail "preflight did not pass"
           test "$SECOND_DOCS_ONLY" = "$ADMIT_DOCS_ONLY" || fail "docs-only classification changed"
           test "$SECOND_GITHUB_ONLY" = "$ADMIT_GITHUB_ONLY" || fail "github-only classification changed"
+          test "$CODE_EXTENSION" != true || {
+            test "$ADMIT_DOCS_ONLY" != true || fail "code extension vetoed docs-only classification"
+            test "$ADMIT_GITHUB_ONLY" != true || fail "code extension vetoed github-only classification"
+          }
+          if test "$ADMIT_DOCS_ONLY" = true || test "$ADMIT_GITHUB_ONLY" = true; then
+            test "$LEGS_RESULT" = skipped || fail "proof legs were not skipped for a classified documentation class"
+          else
+            test "$LEGS_RESULT" = success || fail "proof legs did not pass"
+          fi
+'''
+# Verbatim #701 gate bodies. The old bodies above remain the OLD variant.
+GKE_ARM_LEGS_STEP = '''      - name: Require every proof leg
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          DEBUG_RESULT: ${{ needs.build-debug.result }}
+          ARM_RESULT: ${{ needs.build-arm.result }}
+          ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}
+          PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
+        run: |
+          set -euo pipefail
+          arm_passed() {
+            case "$1:$2" in
+              true:success|false:success|false:skipped) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          test "$BUILD_RESULT" = success
+          test "$DEBUG_RESULT" = success
+          arm_passed "$ARM_RELEVANT" "$ARM_RESULT"
+          test "$PARITY_RESULT" = success
+'''
+GKE_ARM_RESULT_STEP = '''      - name: Require an independently consistent successful result
+        if: always()
+        env:
+          ADMIT_RESULT: ${{ needs.admit.result }}
+          ALLOWED: ${{ needs.admit.outputs.allowed }}
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          LEGS_RESULT: ${{ needs.legs.result }}
+          ADMIT_DOCS_ONLY: ${{ needs.admit.outputs.docs_only }}
+          ADMIT_GITHUB_ONLY: ${{ needs.admit.outputs.github_only }}
+          ADMIT_ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}
+          SECOND_DOCS_ONLY: ${{ steps.second-classify.outputs.docs_only }}
+          SECOND_GITHUB_ONLY: ${{ steps.second-classify.outputs.github_only }}
+          SECOND_ARM_RELEVANT: ${{ steps.second-classify.outputs.arm_relevant }}
+          CODE_EXTENSION: ${{ steps.veto.outputs.code_extension }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=gke-pr result::$1"; exit 1; }
+          test "$ADMIT_RESULT" = success || fail "admission refused"
+          test "$ALLOWED" = true || fail "admission did not allow the head"
+          test "$PREFLIGHT_RESULT" = success || fail "preflight did not pass"
+          test "$SECOND_DOCS_ONLY" = "$ADMIT_DOCS_ONLY" || fail "docs-only classification changed"
+          test "$SECOND_GITHUB_ONLY" = "$ADMIT_GITHUB_ONLY" || fail "github-only classification changed"
+          test "$SECOND_ARM_RELEVANT" = "$ADMIT_ARM_RELEVANT" || fail "arm relevance classification changed"
+          case "$ADMIT_ARM_RELEVANT" in
+            true|false) ;;
+            *) fail "arm relevance classification is unanswered" ;;
+          esac
           test "$CODE_EXTENSION" != true || {
             test "$ADMIT_DOCS_ONLY" != true || fail "code extension vetoed docs-only classification"
             test "$ADMIT_GITHUB_ONLY" != true || fail "code extension vetoed github-only classification"
@@ -565,7 +655,7 @@ AUTHZ_STEP_SHA256 = '94bf3afefe4588bc33dad5fd4d8fa3d2a104cc45743ad59286c756fa3a1
 # Scoped CI workflows bind this canon header byte for byte, including its
 # fleet comment and comma spacing. The release probe pins executable lines.
 AUTHZ_JOB_HEADER = '''    name: authz
-    # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
+    # Fleet routing is fixed per job; credentials use protected GKE runners.
     runs-on: ubuntu-24.04
     permissions: {}
 '''
@@ -1418,12 +1508,14 @@ def _admit_scalar(value: str) -> bool:
     return False
 
 
-def _admit_flow_findings(name: str, key: str, value: str, line: int) -> list[str]:
+def _admit_flow_findings(name: str, key: str, value: str, line: int, *,
+                         native_matrix: bool = False) -> list[str]:
     """Apply the deliberately small flow grammar to routing and capability keys."""
     value = _admit_strip_comment(value).strip()
     if not value or value.startswith('${{'):
         if key == 'runs-on' and value.startswith('${{') and not (
-                Path(name).name == 'release.yml' and value == '${{ matrix.runner }}'):
+                Path(name).name == 'release.yml' and value == '${{ matrix.runner }}'
+                or native_matrix and value == GKE_MATRIX_RUNNER):
             return [f'{name}:{line}: every runs-on must be a literal value']
         return []
     if key == 'permissions':
@@ -1457,6 +1549,9 @@ def admit_yaml_findings(sources: dict[str, str]) -> list[str]:
     """Refuse parser differentials in structural YAML positions."""
     findings = []
     for name, text in sources.items():
+        native_matrix = (Path(name).name == 'native-live.yml'
+                         and _native_runner_matrix('native-live.yml', 'native-live',
+                                                   _jobs(text).get('native-live', '')))
         stack: list[tuple[int, str]] = []
         seen: set[tuple[tuple[str, ...], str]] = set()
         block_indent: int | None = None
@@ -1517,7 +1612,9 @@ def admit_yaml_findings(sources: dict[str, str]) -> list[str]:
                 stack.append((indent, key))
                 if key == '<<':
                     findings.append(f'{name}:{number}: merge keys are refused')
-                findings.extend(_admit_flow_findings(name, key, value, number))
+                findings.extend(_admit_flow_findings(
+                    name, key, value, number,
+                    native_matrix=native_matrix and scope == ('jobs', 'native-live')))
                 visible = _admit_strip_comment(value).lstrip()
                 if visible.startswith(('&', '*', '!')):
                     findings.append(f'{name}:{number}: anchors, aliases and tags are refused')
@@ -1620,6 +1717,11 @@ def trusted_cache_findings(sources: dict[str, str]) -> list[str]:
     return findings
 
 
+def _gke_pr_arm_variant(name: str, jobs: dict[str, str]) -> bool:
+    """Select all NEW rules together, only for the defined build-arm job."""
+    return name == 'gke-pr.yml' and 'build-arm' in jobs
+
+
 def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list[str]:
     """Rules that bind the hosted admission workflow to the reviewed shape."""
     findings = []
@@ -1639,9 +1741,13 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
         findings.append(f'{name}: run-name must bind the PR number and head SHA')
     if not re.search(r'(?m)^permissions:\s*\{\s*\}\s*$', workflow):
         findings.append(f'{name}: top-level permissions must be empty')
+    # Admission also runs runner_findings, whose _unparsed check refuses quoted job keys.
     jobs = _jobs(workflow)
-    required = {'admit', 'preflight', 'build', 'build-debug',
-                'corpus-parity-subset', 'legs', 'result'}
+    arm_variant = _gke_pr_arm_variant(name, jobs)
+    proofs = PR_ARM_PROOF_JOBS if arm_variant else PR_PROOF_JOBS
+    legs_step = GKE_ARM_LEGS_STEP if arm_variant else GKE_LEGS_STEP
+    result_template = GKE_ARM_RESULT_STEP if arm_variant else GKE_RESULT_STEP
+    required = {'admit', 'preflight', *proofs, 'legs', 'result'}
     if not required <= set(jobs):
         findings.append(f'{name}: required jobs are missing')
     if set(jobs) != required:
@@ -1685,7 +1791,7 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
                     'github.event.' in value or 'github.head_ref' in value
                     for value in _step_values(step, 'script') + _step_block(step, 'script')):
                 findings.append(f'{name} job {job} github-script must pass PR values through env')
-    expected = GKE_JOB_RUNNERS.get(name, {})
+    expected = GKE_PR_ARM_JOB_LABELS if arm_variant else GKE_JOB_RUNNERS.get(name, {})
     for job, label in expected.items():
         actual = _job_values(jobs.get(job, ''), 'runs-on', unquote=False)
         if actual != [label]:
@@ -1697,12 +1803,15 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
                     for label, count in counts.items() if count > 8)
     admit_steps = steps.get('admit', [])
     admit = jobs.get('admit', '')
-    if _job_block(admit, 'outputs') != [
+    expected_outputs = [
             '    outputs:', '      allowed: ${{ steps.allowed.outputs.allowed }}',
             '      base_sha: ${{ steps.identity.outputs.base_sha }}',
             '      head_sha: ${{ steps.identity.outputs.head_sha }}',
             '      docs_only: ${{ steps.classify.outputs.docs_only }}',
-            '      github_only: ${{ steps.classify.outputs.github_only }}']:
+            '      github_only: ${{ steps.classify.outputs.github_only }}']
+    if arm_variant:
+        expected_outputs.append('      arm_relevant: ${{ steps.classify.outputs.arm_relevant }}')
+    if _job_block(admit, 'outputs') != expected_outputs:
         findings.append(f'{name} admit must publish only the base classifier outputs')
     classify = _step_named(admit_steps, '        id: classify')
     if (_step_values(classify, 'run') != [
@@ -1760,10 +1869,11 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
             or _job_values(identity_env, 'HEAD_IS_FORK') != [
                 '${{ toJSON(github.event.pull_request.head.repo.fork) }}']):
         findings.append(f'{name} admit must refuse drafts and stale or unauthorized identities')
-    for job in ('preflight', 'build', 'build-debug', 'corpus-parity-subset'):
+    for job in ('preflight', *proofs):
         body = jobs.get(job, '')
         condition = ("${{ needs.admit.outputs.allowed == 'true' }}"
-                     if job == 'preflight' else GKE_PROOF_IF)
+                     if job == 'preflight' else
+                     GKE_ARM_PROOF_IF if job == 'build-arm' else GKE_PROOF_IF)
         if (_needs(body) != ['admit'] or _job_values(body, 'if') != [condition]):
             findings.append(f'{name} {job} must follow admission and keep its path policy')
         if _job_block(body, 'strategy') or _job_values(body, 'strategy'):
@@ -1792,6 +1902,42 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
                 '| sudo apt-get update sudo DEBIAN_FRONTEND=noninteractive apt-get install -y '
                 'libeigen3-dev tzdata-legacy ccache']):
             findings.append(f'{name} {job} must install only its smoke dependencies')
+    if arm_variant:
+        arm_steps = steps.get('build-arm', [])
+        if any(_CONTINUE_ON_ERROR.match(line) for line in _code(jobs['build-arm'])):
+            findings.append(f'{name} build-arm must not continue on error')
+        if any(_step_values(step, key) for step in arm_steps
+               for key in ('env', 'shell', 'working-directory')):
+            findings.append(f'{name} build-arm steps must not set env, shell or working-directory')
+        arm_names = ('Require the arm64 machine', 'Checkout the admitted head', 'Set up Python',
+                     'Install the CTest pytest runner', 'Install dependencies (Linux)', 'Verify Debug')
+        if [_step_values(step, 'name') for step in arm_steps] != [[name] for name in arm_names]:
+            findings.append(f'{name} build-arm must keep its full Debug setup')
+        arm_machine = _step_named(arm_steps, '      - name: Require the arm64 machine')
+        if (_step_values(arm_machine, 'run') != ['| test "$(uname -m)" = aarch64']
+                or _step_values(arm_machine, 'if')):
+            findings.append(f'{name} build-arm must fail unless the machine is aarch64')
+        arm_python = _step_named(arm_steps, '      - name: Set up Python')
+        debug_python = _step_named(steps.get('build-debug', []), '      - name: Set up Python')
+        if not arm_python or _code(arm_python) != _code(debug_python):
+            findings.append(f'{name} build-arm must use the same pinned Python setup as build-debug')
+        arm_pytest = _step_named(arm_steps, '      - name: Install the CTest pytest runner')
+        if (_step_values(arm_pytest, 'run') != [
+                '| python3 -m pip install --disable-pip-version-check --no-input \\ '
+                "--require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt"]
+                or _step_values(arm_pytest, 'if')):
+            findings.append(f'{name} build-arm must install the hash-pinned CTest pytest runner')
+        arm_install = _step_named(arm_steps, '      - name: Install dependencies (Linux)')
+        if (_step_values(arm_install, 'run') != [
+                '| sudo apt-get update sudo DEBIAN_FRONTEND=noninteractive apt-get install -y '
+                'libeigen3-dev tzdata-legacy ccache strace']
+                or _step_values(arm_install, 'if')):
+            findings.append(f'{name} build-arm must install its full Debug dependencies')
+        arm_verify = _step_named(arm_steps, '      - name: Verify Debug')
+        if (_step_values(arm_verify, 'run') != [
+                f'| python3 scripts/ci_verify.py debug --build-dir build --jobs {CORES} --ccache']
+                or _step_values(arm_verify, 'if')):
+            findings.append(f'{name} build-arm must run the complete Debug profile')
     subset = _step_named(steps.get('corpus-parity-subset', []),
                          '      - name: Check TradingView parity over the pull-request subset')
     if (_step_values(subset, 'run') != [f'{PARITY_COMMAND} --subset']
@@ -1799,14 +1945,14 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
         findings.append(f'{name} corpus-parity-subset must run its unconditional inline subset command')
     legs = jobs.get('legs', '')
     legs_if = GKE_PROOF_IF.replace('${{ ', '${{ always() && ', 1)
-    if (_needs(legs) != ['admit', 'build', 'build-debug', 'corpus-parity-subset']
+    if (_needs(legs) != ['admit', *proofs]
             or _job_values(legs, 'if') != [legs_if]
-            or [_code(step) for step in steps.get('legs', [])] != [_code(GKE_LEGS_STEP)]):
+            or [_code(step) for step in steps.get('legs', [])] != [_code(legs_step)]):
         findings.append(f'{name} legs must require every selected proof')
     result_step = _step_named(steps.get('result', []),
                               '      - name: Require an independently consistent successful result')
     if (_job_values(jobs.get('result', ''), 'if') != ['always()']
-            or _code(result_step) != _code(GKE_RESULT_STEP)):
+            or _code(result_step) != _code(result_template)):
         findings.append(f'{name} result must require admission, preflight and consistent proof results')
     if not admit_steps or 'id: allowed' not in admit_steps[-1] \
             or 'allowed=true' not in admit_steps[-1] \
@@ -1824,7 +1970,7 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
                 if (_job_values(inputs, 'repository') != ['${{ github.repository }}']
                         or _job_values(inputs, 'ref') != [ref]):
                     findings.append(f'{name} {job} checkout must use the base tree')
-    for job in ('preflight', 'build', 'build-debug', 'corpus-parity-subset'):
+    for job in ('preflight', *proofs):
         if job not in jobs:
             continue
         checkout_steps = [step for step in steps[job]
@@ -2156,7 +2302,7 @@ def workflow_fleet_findings(workflows: dict[str, str]) -> list[str]:
         if name == 'gke-pr.yml':
             continue
         # Per-job release/probe pins are checked by runner_findings; the probe
-        # shares release.yml's App credential and uses the post fleet.
+        # shares release.yml's App credential and uses the protected fleet.
         if name in RELEASE_JOB_RUNNERS:
             continue
         events = _events(workflow)
@@ -2203,7 +2349,18 @@ def _authz_header(name: str) -> str:
 
 
 _GKE_ROUTE = re.compile(r'(?<![\w.-])gke-[\w.-]+', re.IGNORECASE)
-_GKE_SCALE_LABEL = re.compile(r'(?<![\w.-])gke-\d+cpu-\d+gb-(?:amd64|arm64)(?![\w.-])')
+_GKE_SCALE_LABEL = re.compile(
+    r'(?<![\w.-])gke-\d+cpu-\d+gb-(?:amd64|arm64)(?:-(?:128|256)gb)?(?![\w.-])')
+_GKP_ROUTE = re.compile(r'(?<![\w.-])gkp-[\w.-]+', re.IGNORECASE)
+_GKP_SCALE_LABEL = re.compile(r'gkp-(?:od-)?\d+cpu-\d+gb-amd64(?:-\d+gb)?')
+
+
+def _native_runner_matrix(name: str, job: str, body: str) -> bool:
+    """Only the two pinned native sanitizer rows may select a GKE runner by matrix."""
+    return (name == 'native-live.yml' and job == 'native-live'
+            and _job_values(body, 'runs-on', unquote=False) == [GKE_MATRIX_RUNNER]
+            and len(_job_values(body, 'strategy')) == 1
+            and _job_block(body, 'strategy') == _code(NATIVE_STRATEGY))
 
 
 def _matrix_rows(body: str) -> list[dict[str, str]] | None:
@@ -2413,17 +2570,20 @@ def _resolved_runner_values(workflow: str, body: str) -> tuple[list[str], bool]:
     return list(dict.fromkeys((resolved or []) + visible)), resolved is not None
 
 
+# Disk suffixes still require group membership; admitted sizes are pinned separately.
 _RUNNER_GROUP_LABEL = re.compile(
-    r'(?<![\w.-])(?:gke|gkp)-\d+cpu-\d+gb-[A-Za-z0-9_]+(?![\w.-])', re.IGNORECASE)
+    r'(?<![\w.-])(?:gke|gkp(?:-od)?)-\d+cpu-\d+gb-[A-Za-z0-9_]+(?:-\d+gb)?(?![\w.-])',
+    re.IGNORECASE)
 _REPOSITORY_ID = r'[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*'
 _RUNNER_GROUP_REFERENCE = re.compile(
     r'(' + _REPOSITORY_ID + r')/\.github/workflows/([A-Za-z0-9_][A-Za-z0-9_.-]*\.yml)@([^\s@]+)')
 
 
 def runner_allowlist_findings(workflows: dict[str, str], mirror_text: str | None,
-                              repository: str) -> list[str]:
+                              repository: str, *, mirror_file: str = RUNNER_ALLOWLIST_FILE,
+                              label_prefix: str | None = None) -> list[str]:
     """Bind every GKE/GKP job's own workflow reference to the committed mirror."""
-    mirror = RUNNER_ALLOWLIST_FILE
+    mirror = mirror_file
     if not re.fullmatch(_REPOSITORY_ID, repository):
         return [f'{mirror}: cannot derive repository identity (expected owner/repo)']
     if mirror_text is None:
@@ -2461,7 +2621,8 @@ def runner_allowlist_findings(workflows: dict[str, str], mirror_text: str | None
             unresolved_files.add(name)
         for job, body in _jobs(workflow).items():
             values, resolved = _resolved_runner_values(workflow, body)
-            labels.update(label for value in values for label in _RUNNER_GROUP_LABEL.findall(value))
+            labels.update(label for value in values for label in _RUNNER_GROUP_LABEL.findall(value)
+                          if label_prefix is None or label.lower().startswith(label_prefix))
             if not resolved:
                 unresolved_files.add(name)
                 findings.append(f'{name}: job {job} runs-on cannot be resolved from literal '
@@ -2506,7 +2667,8 @@ def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
              for name, jobs in workflow_jobs.items() for job, body in jobs.items()}
     gke_workflows = {name for name, jobs in workflow_jobs.items()
                      if any(_GKE_ROUTE.search(' '.join(_job_values(body, 'runs-on')))
-                            for body in jobs.values())}
+                            or _native_runner_matrix(name, job, body)
+                            for job, body in jobs.items())}
     # Credentials follow all calls, independent of input conditions or matrix rows.
     while True:
         callers = {name for (name, _), callees in calls.items()
@@ -2532,16 +2694,22 @@ def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
             runners = ' '.join(_job_values(body, 'runs-on'))
             labels = [label.lower() for label in _GKE_ROUTE.findall(runners)
                       if label.lower() != 'gke-runners']
+            native_matrix = _native_runner_matrix(name, job, body)
             callees = calls[(name, job)]
-            if not labels and not callees:
+            if not labels and not callees and not native_matrix:
                 continue
             rows = _matrix_rows(body)
             if rows is None:
                 findings.append(f'{name} job {job} must use a readable static matrix for the GKE cap')
                 continue
             instances = multiplier * len(rows)
-            for label in set(labels):
-                counts[label] = counts.get(label, 0) + instances
+            if native_matrix:
+                for row in rows:
+                    label = row['runner']
+                    counts[label] = counts.get(label, 0) + multiplier
+            else:
+                for label in set(labels):
+                    counts[label] = counts.get(label, 0) + instances
             arguments = '\n'.join(_job_block(body, 'with')[1:])
             keys = re.findall(r'^\s+([A-Za-z_]\w*):', arguments, re.MULTILINE)
             passed = {key: values[0] for key in keys
@@ -2563,12 +2731,21 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
     routes = workflow_event_routes(workflows)
     for name, workflow in workflows.items():
         code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(workflow))
-        if 'pull_request' in routes[name] and _GKE_ROUTE.search(code):
+        if 'pull_request' in routes[name] and (_GKE_ROUTE.search(code) or _GKP_ROUTE.search(code)):
             findings.append(f'{name} is reachable from pull_request and must not contain GKE routing')
+        if _RETIRED_VM_LABEL.search(code):
+            findings.append(f'{name} must not name retired GCP main/post runner labels')
         if _LARGER_RUNNER_KEY.search(code):
             findings.append(f'{name} must not define a larger_runner key; use the GCP fleet or hosted exceptions')
-        timed = JOB_COMMANDS.get(name, {})
-        fixed_hosted = {job: label for job, label in HOSTED_JOB_RUNNERS.get(name, {}).items()
+        jobs = _jobs(workflow)
+        arm_variant = _gke_pr_arm_variant(name, jobs)
+        timed = GKE_PR_ARM_JOB_COMMANDS if arm_variant else JOB_COMMANDS.get(name, {})
+        gke_pins = GKE_PR_ARM_JOB_LABELS if arm_variant else GKE_JOB_RUNNERS.get(name, {})
+        gkp_pins = GKP_JOB_RUNNERS.get(name, {})
+        hosted_pins = HOSTED_JOB_RUNNERS.get(name, {})
+        if arm_variant:
+            hosted_pins = {**hosted_pins, **gke_pins}
+        fixed_hosted = {job: label for job, label in hosted_pins.items()
                         if label == 'ubuntu-24.04' or name == 'gke-pr.yml'
                         or (routes[name] & POST_EVENTS and 'pull_request' not in routes[name])}
         if _LARGER_RUNNER_LABEL.search(code):
@@ -2580,11 +2757,11 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         pinned.update(fixed_release)
         if (fixed_release and name != 'promote-baseline.yml'
                 and _events(workflow) != {'workflow_dispatch'}):
-            findings.append(f'{name} must retain workflow_dispatch only for pf-gcp-main jobs')
+            findings.append(f'{name} must retain workflow_dispatch only for protected release jobs')
         if (name == 'promote-baseline.yml'
                 and _events(workflow) != {'push', 'workflow_dispatch'}):
             findings.append(f'{name} must retain push and workflow_dispatch '
-                            'only for pf-gcp-main promotion')
+                            'only for protected baseline promotion')
         if name == 'promote-baseline.yml':
             on_body = '\n'.join(_job_block(workflow, 'on')[1:])
             if _job_values(on_body, 'push') != ['branches: [main]']:
@@ -2595,16 +2772,41 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             findings.append(f'{name} must not admit untrusted caller events to isolated release jobs')
         if _unparsed(workflow):
             findings.append(f'{name} has jobs lines the runner contract cannot read')
-        jobs = _jobs(workflow)
-        findings += [f'{name} is missing job {job}' for job in pinned if job not in jobs]
+        findings += [f'{name} is missing job {job}' for job in pinned
+                     if job not in jobs]
         for job, body in jobs.items():
             runs_on, uses = _job_values(body, 'runs-on'), _job_values(body, 'uses')
-            gke_pin = GKE_JOB_RUNNERS.get(name, {}).get(job)
+            gke_pin = gke_pins.get(job)
             resolved_runners, _ = _resolved_runner_values(workflow, body)
             has_gke = bool(_GKE_ROUTE.search(' '.join(runs_on + resolved_runners)))
+            has_gkp = bool(_GKP_ROUTE.search(' '.join(runs_on + resolved_runners)))
+            gkp_pin = gkp_pins.get(job)
             raw_runners = _job_values(body, 'runs-on', unquote=False)
-            if has_gke and (len(raw_runners) != 1
-                            or not _GKE_SCALE_LABEL.fullmatch(raw_runners[0])):
+            if has_gkp:
+                release_matrix = (name, job) == ('release.yml', 'prebuilt')
+                exact = (raw_runners == [HOSTED_MATRIX_RUNNER]
+                         and _job_block(body, 'strategy') == _code(RELEASE_STRATEGY)
+                         if release_matrix else raw_runners == [gkp_pin])
+                if not release_matrix and (len(raw_runners) != 1
+                                           or not _GKP_SCALE_LABEL.fullmatch(raw_runners[0])):
+                    findings.append(f'{name} job {job} must use a bare scalar protected GKE scale-set name')
+                if not gkp_pin or not exact:
+                    findings.append(f'{name} job {job} may use protected GKE routing '
+                                    'only at its exact pinned job and label')
+                if _job_values(body, 'container'):
+                    findings.append(f'{name} job {job} must not declare a job container on protected GKE')
+                if _job_values(body, 'services'):
+                    findings.append(f'{name} job {job} must not declare job services on protected GKE')
+            protected_environment = GKP_JOB_ENVIRONMENTS.get(name, {}).get(job)
+            if protected_environment and _job_values(body, 'environment') != [protected_environment]:
+                findings.append(f'{name} job {job} must use environment {protected_environment} '
+                                'on protected GKE')
+            native_matrix = _native_runner_matrix(name, job, body)
+            if gke_pin == GKE_MATRIX_RUNNER and not native_matrix:
+                findings.append(f'{name} job {job} must keep exactly '
+                                'the pinned native profile runner matrix')
+            if has_gke and not native_matrix and (
+                    len(raw_runners) != 1 or not _GKE_SCALE_LABEL.fullmatch(raw_runners[0])):
                 findings.append(f'{name} job {job} must use a bare scalar GKE scale-set name')
             if has_gke and runs_on != [gke_pin]:
                 findings.append(f'{name} job {job} may use GKE routing only at its exact pinned job and label')
@@ -2626,7 +2828,10 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             if any(not value.startswith('./.github/workflows/') for value in uses):
                 findings.append(f'{name} job {job} calls a workflow the runner contract '
                                 'cannot see; call one under ./.github/workflows/')
-            credentials = _holds_credentials(workflow, body, effective_permissions=has_gke)
+            # Only an exact admitted GKE pin may use effective token scopes.
+            # Other jobs retain the conservative workflow-plus-job credential check.
+            exact_gke_runner = bool(gke_pin and job in fixed_hosted and raw_runners == [gke_pin])
+            credentials = _holds_credentials(workflow, body, effective_permissions=exact_gke_runner)
             if job not in pinned:
                 if pinned and runs_on:
                     findings.append(f'{name} job {job} needs a pinned runner and time limit')
@@ -2658,6 +2863,12 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS '
                                     'on an isolated release job')
+            elif gkp_pin and job in fixed_hosted:
+                if raw_runners != [gkp_pin]:
+                    findings.append(f'{name} job {job} must run on {gkp_pin}')
+                environments = _job_values(workflow, 'env') + _job_values(body, 'env')
+                if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
+                    findings.append(f'{name} job {job} must not set PF_CI_LABELS on a gated docs job')
             elif gke_pin and job in fixed_hosted:
                 if _job_values(body, 'runs-on', unquote=False) != [gke_pin]:
                     findings.append(f'{name} job {job} must run on {gke_pin}')
@@ -2718,6 +2929,17 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                                         'on a gated docs job')
                 # Legacy PF_CI_LABELS metadata never selects the GCP fleet.
                 # Event reachability and literal runs-on arrays bind routing.
+            # A release/docs job name alone cannot exempt a different runner.
+            # The artifact matrix is not a literal protected-runner exemption.
+            exact_protected_runner = bool(gkp_pin and pinned.get(job) == gkp_pin
+                                          and raw_runners == [gkp_pin])
+            standard_hosted = (len(runs_on) == 1
+                               and (runs_on[0] in STANDARD_RUNNERS or hosted_platform))
+            if credentials and not exact_protected_runner and not standard_hosted:
+                finding = (f'{name} job {job} must keep production credentials '
+                           'on a hosted standard runner')
+                if finding not in findings:
+                    findings.append(finding)
             if job not in timed:
                 continue
             command = timed[job]
@@ -2770,6 +2992,17 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         if _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY):
             findings.append('release.yml prebuilt must use exactly the isolated Linux x64 '
                             'and hosted ARM matrix')
+        prebuilt_steps = _steps(prebuilt)
+        install = _step_named(prebuilt_steps, '      - name: Install Eigen3 (Linux)')
+        eigen = _step_named(prebuilt_steps,
+                            '      - name: Assert Eigen3 3.4.0 on the protected Linux x86_64 slice')
+        configure = _step_named(prebuilt_steps, '      - name: Configure')
+        if (not configure or _code(install) != _code(RELEASE_EIGEN_INSTALL_STEP)
+                or _code(eigen) != _code(RELEASE_EIGEN_ASSERT_STEP)
+                or not (prebuilt_steps.index(install) < prebuilt_steps.index(eigen)
+                        < prebuilt_steps.index(configure))):
+            findings.append('release.yml prebuilt must install Eigen and assert exactly 3.4.0 '
+                            'before configuring')
         if any(re.search(r'macos|darwin|CMAKE_OSX_', '\n'.join(_code(step)), re.IGNORECASE)
                for step in _steps(prebuilt)):
             findings.append('release.yml prebuilt must not contain macOS build steps')
@@ -2848,6 +3081,33 @@ def _compiler_cache_restore_with(step: str) -> list[str]:
             for line in _step_block(step, 'with')]
 
 
+# The release build installs Eigen and refuses any version other than 3.4.0.
+RELEASE_EIGEN_INSTALL_STEP = r'''      - name: Install Eigen3 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev
+'''
+
+RELEASE_EIGEN_ASSERT_STEP = r'''      - name: Assert Eigen3 3.4.0 on the protected Linux x86_64 slice
+        if: runner.os == 'Linux' && matrix.triple == 'linux-x86_64'
+        run: |
+          set -euo pipefail
+          hdr=""
+          for p in /usr/include/eigen3/Eigen/Core /usr/local/include/eigen3/Eigen/Core; do
+            if [ -f "$p" ]; then hdr="$p"; break; fi
+          done
+          if [ -z "$hdr" ]; then
+            echo "::error::Eigen3 headers not found on the protected GKE runner"
+            exit 1
+          fi
+          macros="$(dirname "$hdr")/src/Core/util/Macros.h"
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "$macros"
+          echo "Eigen3 3.4.0 present at $(dirname "$(dirname "$hdr")")"
+'''
+
 # ci_release_gate.py's phase-1 exemption is bounded by this exact writer.
 RELEASE_BUMP_PUBLISH_STEP = r'''      - name: Write bumped VERSION, commit, tag, push
         id: publish
@@ -2900,7 +3160,7 @@ jobs:
   authz:
     name: authz
     # Preflight pins executable workflow lines after removing comment-only lines.
-    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses pf-gcp-post.
+    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses gkp-2cpu-4gb-amd64.
     runs-on: gke-2cpu-4gb-amd64
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
@@ -2962,7 +3222,7 @@ jobs:
 
   probe:
     needs: [authz]
-    runs-on: ["self-hosted","pf-gcp-post"]
+    runs-on: gkp-2cpu-4gb-amd64
     environment: release
     steps:
       - name: Refuse a dispatch ref other than main
@@ -3210,7 +3470,7 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
     jobs = _jobs(native)
     job, gate = jobs.get('native-live', ''), jobs.get('native-live-gate', '')
     shards, aggregate = jobs.get('native-live-shards', ''), jobs.get('native-live-native', '')
-    if (_job_block(job, 'strategy') != _code(NATIVE_STRATEGY)
+    if (not _native_runner_matrix('native-live.yml', 'native-live', job)
             or _needs(job) != ['authz'] or _job_values(job, 'if')
             or _job_values(job, 'continue-on-error')
             or _job_values(job, 'name') != ['native-live (${{ matrix.profile }})']):
@@ -3872,9 +4132,14 @@ def actionlint_runner_label_findings(source: Path) -> list[str]:
         for job, body in _jobs(workflow).items():
             mapping = '\n'.join(_job_block(body, 'runs-on')[1:])
             values = _job_values(mapping, 'labels') if mapping else _job_values(body, 'runs-on')
+            resolved, _ = _resolved_runner_values(workflow, body)
+            values += [value for value in resolved if value not in values
+                       and value.startswith(('pf-', 'gke-', 'gkp-'))]
+            if _native_runner_matrix(path.name, job, body):
+                values = [row['runner'] for row in _matrix_rows(body)]
             for value in values:
                 if not value.startswith('['):
-                    if value.startswith(('pf-', 'gke-')) and re.fullmatch(_LITERAL_RUNNER_LABEL, value):
+                    if value.startswith(('pf-', 'gke-', 'gkp-')) and re.fullmatch(_LITERAL_RUNNER_LABEL, value):
                         if value not in declared:
                             findings.append(f'{path.name} job {job}: label "{value}" is not declared '
                                             f'in {config_name}')
@@ -3890,7 +4155,7 @@ def actionlint_runner_label_findings(source: Path) -> list[str]:
                     for label in sorted(labels - declared):
                         findings.append(f'{path.name} job {job}: label "{label}" is not declared '
                                         f'in {config_name}')
-    return findings
+    return list(dict.fromkeys(findings))
 
 
 RUN_JSON_TESTS = 'run_json_*_test.py'
@@ -4077,9 +4342,11 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/test_check_doc_reverts.py')]),
         ('doc-reverts',
          [sys.executable, str(source / 'scripts/check_doc_reverts.py')]),
-        # R5 lane H-DOCGATES (AUDIT4-opus X10): every kernel `source_*` seam and
-        # every kernel member or row field the source layer writes is named by
-        # an ADR-0001 row, which states who writes it and its ruling.
+        ('doc-reverts-net', [sys.executable, str(source / 'scripts/check_doc_reverts.py'), '--head', 'HEAD']),
+        ('public-role-words-tests', [sys.executable, str(source / 'scripts/test_check_public_role_words.py')]),
+        ('public-role-words', [sys.executable, str(source / 'scripts/check_public_role_words.py')]),
+        # Every kernel `source_*` seam and every kernel member or row field the
+        # source layer writes has an ADR-0001 row stating its writer and rule.
         CheckCommand('kernel-seam-rows-tests',
                      [sys.executable, str(source / 'scripts/test_check_kernel_seam_rows.py')],
                      parallel=True),
@@ -4237,13 +4504,15 @@ def main() -> int:
         return 1 if findings else 0
     if args.check_runner_allowlist:
         findings = []
-        try:
-            mirror_text = read_ci_text(ROOT / RUNNER_ALLOWLIST_FILE, findings)
-        except FileNotFoundError:
-            mirror_text = None
-        except OSError as error:
-            print(f'{RUNNER_ALLOWLIST_FILE}: cannot read mirror: {error}')
-            return 1
+        mirrors = {}
+        for mirror_file in (RUNNER_ALLOWLIST_FILE, PROTECTED_RUNNER_ALLOWLIST_FILE):
+            try:
+                mirrors[mirror_file] = read_ci_text(ROOT / mirror_file, findings)
+            except FileNotFoundError:
+                mirrors[mirror_file] = None
+            except OSError as error:
+                print(f'{mirror_file}: cannot read mirror: {error}')
+                return 1
         workflows = {}
         try:
             directory = ROOT / '.github/workflows'
@@ -4255,7 +4524,12 @@ def main() -> int:
         except OSError as error:
             print(f'.github/workflows: cannot read workflow files: {error}')
             return 1
-        findings += runner_allowlist_findings(workflows, mirror_text, args.repository)
+        for mirror_file, prefix in ((RUNNER_ALLOWLIST_FILE, 'gke-'),
+                                    (PROTECTED_RUNNER_ALLOWLIST_FILE, 'gkp-')):
+            findings += runner_allowlist_findings(
+                workflows, mirrors[mirror_file], args.repository,
+                mirror_file=mirror_file, label_prefix=prefix)
+        findings = list(dict.fromkeys(findings))
         for finding in findings:
             print(finding)
         failed = any(not finding.startswith('advisory:') for finding in findings)

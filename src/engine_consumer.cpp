@@ -73,7 +73,11 @@ void BacktestEngine::guard_native_mutation(const char* operation) {
 void BacktestEngine::set_syminfo_metadata(const std::string& key, double value) {
     guard_native_mutation("set_syminfo_metadata");
     syminfo_metadata_[key] = value;
-    if (key == "qty_step") {
+    // Metadata is per-handle. An explicit qty_step (including zero/invalid)
+    // wins in either setter order; otherwise retain the last valid mincontract.
+    if (key == "qty_step"
+        || (key == "mincontract" && std::isfinite(value) && value > 0.0
+            && syminfo_metadata_.find("qty_step") == syminfo_metadata_.end())) {
         qty_step_ = (std::isfinite(value) && value > 0.0) ? value : 0.0;
         syminfo_.qty_step = qty_step_;
     }

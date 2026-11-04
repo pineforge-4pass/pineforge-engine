@@ -10,9 +10,9 @@
  * own realized P&L is not yet in the equity TradingView checks) also ran at
  * the open: it read the winner's whole open profit as a loss at least the
  * 1.5 % threshold, blocked the day and dropped every later order. The
- * reference officialjackofalltrades-aureate-market-architecture-strategy-joat
- * (BINANCE:ETHUSDT.P 1D, 2026-02-07) lost TradingView's two re-entries of
- * that day this way.
+ * reference daily intraday-loss probe
+ * (BINANCE:ETHUSDT.P 1D) lost TradingView's two re-entries after an
+ * opening profit was misread as a day's loss.
  *
  * One recorded reference run (tests/fixtures/intraday_loss_open_fill/w8a-ild-open,
  * BINANCE:ETHUSDT.P 1D, 2025-04-01 .. 2026-05-01) replayed through the Pine
@@ -21,13 +21,13 @@
  * entry and exit time, side, price and quantity -- and the rule is read off
  * TradingView's rows:
  *
- *   K  the control: a long held into 2025-10-07 closes at that day's low by
+ *   K  the control: a long carried overnight closes at the next day's low by
  *      "Close Position (Max intraday Loss)";
- *   P  a short winner closed at the 2025-11-13 open by a limit exit carried
- *      from the 11-12 close; the buy limit PL placed beside it fills that day
+ *   P  a short winner closed at the next open by a limit exit carried
+ *      from the prior close; the buy limit PL placed beside it fills that day
  *      and is closed at the low by the rule;
- *   W  the probe's shape: a short winner closed at the 2026-02-07 open by a
- *      strategy.close carried from the 02-06 close; WL fills and is closed at
+ *   W  the probe's shape: a short winner closed at the next open by a
+ *      strategy.close carried from the prior close; WL fills and is closed at
  *      the low by the rule.
  */
 

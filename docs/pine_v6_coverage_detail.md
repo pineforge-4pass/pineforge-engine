@@ -160,7 +160,7 @@
 
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
-| `session.isfirstbar` | var | ✅ Runtime | `session_isfirstbar_` on the Pine host, selected by `scheduler_update_session_state` (`src/source/pine_strategy_host.cpp`) from the kernel's `NativeDecisionContext::opens_session_day` (R5 lane F5), widened on an extended-hours chart to the first pre-market bar of the day (`update_extended_session_day`, `tests/test_session_extended_day_tape.cpp`); the first bar of a session DAY — its predecessor was out of session or belonged to another session day; on a 1D+ chart every bar (the bar is its whole session) | Sprint A |
+| `session.isfirstbar` | var | ✅ Runtime | `session_isfirstbar_` on the Pine host, selected by `scheduler_update_session_state` (`src/source/pine_strategy_host.cpp`) from the kernel's `NativeDecisionContext::opens_session_day` (the kernel session-day integration), widened on an extended-hours chart to the first pre-market bar of the day (`update_extended_session_day`, `tests/test_session_extended_day_tape.cpp`); the first bar of a session DAY — its predecessor was out of session or belonged to another session day; on a 1D+ chart every bar (the bar is its whole session) | Sprint A |
 | `session.isfirstbar_regular` | var | ✅ Runtime | The regular session day's first bar, `PineStrategyHost::session_isfirstbar_regular_` (the kernel's `opens_session_day`); on an extended-hours chart `session.isfirstbar` is the pre-market's first bar instead. The transpiler lowers it to that member | Sprint A |
 | `session.islastbar` | var | ✅ Runtime | `session_islastbar_` on the Pine host, same selection, from `NativeDecisionContext::closes_session_day` (`closes_session_day_open_ended` on a live probe's forming bar), widened on an extended-hours chart to the last post-market bar of the day; the last bar of a session DAY — a one-bar lookahead whose successor is out of session or belongs to another session day, as TradingView's tapes flag it (private fixture set `session_islastbar`); on a 1D+ chart every bar (the bar is its whole session). Where the run holds TradingView's calendar for the symbol (`PineStrategyHost::set_symbol_calendar`, the harness's `PINEFORGE_RUN_SESSION_CALENDAR`), a regular intraday bar is last when the calendar's next slot opens another day: OANDA:XAUUSD's calendar goes on past the feed's early closes (private fixture set `symbol_calendar`) | Sprint A |
 | `session.islastbar_regular` | var | ✅ Runtime | The regular session day's last bar, `PineStrategyHost::session_islastbar_regular_`; on an extended-hours chart `session.islastbar` is the post-market's last bar instead. The transpiler lowers it to that member | Sprint A |
@@ -694,7 +694,7 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 | `str.contains()` | fn | 🔧 Transpiler | `std::string::find` | |
 | `str.endswith()` | fn | 🔧 Transpiler | `std::string::ends_with` or substr compare | |
 | `str.format()` | fn | ✅ Runtime | `pine_str_format()` in `str_utils.hpp` | |
-| `str.format_time()` | fn | ✅ Runtime | `pine_str_format_time()` in `str_utils.hpp` | |
+| `str.format_time()` | fn | ✅ Runtime | `pine_str_format_time()` in `str_utils.hpp` | A single-quoted span is literal, including a `%` inside it; a single `Z` outside quotes is the numeric UTC offset (`+hhmm`); an unmatched quote keeps the previous behaviour. |
 | `str.length()` | fn | 🔧 Transpiler | `std::string::size()` | |
 | `str.lower()` | fn | 🔧 Transpiler | `std::tolower` transform | |
 | `str.match()` | fn | ✅ Runtime | `pine_str_match()` — regex match | |
@@ -774,7 +774,7 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
-| `ta.alma()` | fn | ✅ Runtime | `ta::ALMA` class | `floor` is the fourth constructor argument, `ALMA(length, offset, sigma, floor)` (R5 lane TA1) |
+| `ta.alma()` | fn | ✅ Runtime | `ta::ALMA` class | `floor` is the fourth constructor argument, `ALMA(length, offset, sigma, floor)` (the technical-indicator corrections) |
 | `ta.atr()` | fn | ✅ Runtime | `ta::ATR` class | |
 | `ta.barssince()` | fn | ✅ Runtime | `ta::BarsSince` class | |
 | `ta.bb()` | fn | ✅ Runtime | `ta::BB` class | |
@@ -795,8 +795,8 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 | `ta.highest()` | fn | ✅ Runtime | `ta::Highest` class | bar-addressed ring (K = length + 1 slots by `bar_index`, per context — chart and each `request.security`): a call inside an `if` that does not run every bar keeps stale slots, skips never-written ones, na iff `bar_index < length - 1` (NYSE:F 1D pins 39/39, 30/30), read through a cached extremum with an implied bar — a call within `length` bars of the cached bar compares against the cache only and does not rescan the aliased slots (8 tapes, 696/696); every-bar callers unchanged |
 | `ta.highestbars()` | fn | ✅ Runtime | `ta::HighestBars` class | same ring as `ta.highest`; offset = slot distance of the extremum |
 | `ta.hma()` | fn | ✅ Runtime | `ta::HMA` class | |
-| `ta.kc()` | fn | ✅ Runtime | `ta::KC` class | middle band = `ta::EMA` of the source on every bar (first bar included); bands na until the range EMA has a value; `useTrueRange` is the third constructor argument, `KC(length, mult, use_true_range)` (R5 lane TA1) |
-| `ta.kcw()` | fn | ✅ Runtime | `ta::KCW` class | `useTrueRange` is the third constructor argument, `KCW(length, mult, use_true_range)` (R5 lane TA1) |
+| `ta.kc()` | fn | ✅ Runtime | `ta::KC` class | middle band = `ta::EMA` of the source on every bar (first bar included); bands na until the range EMA has a value; `useTrueRange` is the third constructor argument, `KC(length, mult, use_true_range)` (the technical-indicator corrections) |
+| `ta.kcw()` | fn | ✅ Runtime | `ta::KCW` class | `useTrueRange` is the third constructor argument, `KCW(length, mult, use_true_range)` (the technical-indicator corrections) |
 | `ta.linreg()` | fn | ✅ Runtime | `ta::Linreg` class | |
 | `ta.lowest()` | fn | ✅ Runtime | `ta::Lowest` class | same bar-addressed ring and cached extremum as `ta.highest` (mirror; the 696/696 alias tapes are `ta.lowest(low, 10)`) |
 | `ta.lowestbars()` | fn | ✅ Runtime | `ta::LowestBars` class | same ring as `ta.lowest`; offset = slot distance of the extremum |
@@ -810,7 +810,7 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 | `ta.percentile_linear_interpolation()` | fn | ✅ Runtime | `ta::PercentileLinearInterpolation` class | |
 | `ta.percentile_nearest_rank()` | fn | ✅ Runtime | `ta::PercentileNearestRank` class | |
 | `ta.percentrank()` | fn | ✅ Runtime | `ta::PercentRank` class | |
-| `ta.pivot_point_levels()` | fn | ✅ Runtime | Free function `ta::pivot_point_levels(method, high, low, close)`; with `anchor` / `developing`: `ta::PivotPointLevels` class | Free function: Traditional / Fibonacci / Classic / Camarilla equal `PivotPointLevels`; Woodie and DM keep a historical approximation, and `ta::pivot_point_levels(method, open, high, low, close, next_open)` computes every type as `PivotPointLevels` does (R5 lane B-ENGINE). `PivotPointLevels::compute(type, anchor, developing, open, high, low, close)` accumulates the anchored period, held or developing; Woodie + developing throws (R5 lane TA1) |
+| `ta.pivot_point_levels()` | fn | ✅ Runtime | Free function `ta::pivot_point_levels(method, high, low, close)`; with `anchor` / `developing`: `ta::PivotPointLevels` class | Free function: Traditional / Fibonacci / Classic / Camarilla equal `PivotPointLevels`; Woodie and DM keep a historical approximation, and `ta::pivot_point_levels(method, open, high, low, close, next_open)` computes every type as `PivotPointLevels` does (the source arithmetic correction). `PivotPointLevels::compute(type, anchor, developing, open, high, low, close)` accumulates the anchored period, held or developing; Woodie + developing throws (the technical-indicator corrections) |
 | `ta.pivothigh()` | fn | ✅ Runtime | `ta::PivotHigh` class | |
 | `ta.pivotlow()` | fn | ✅ Runtime | `ta::PivotLow` class | |
 | `ta.range()` | fn | ✅ Runtime | `ta::Range` class | |
@@ -829,7 +829,7 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 | `ta.tsi()` | fn | ✅ Runtime | `ta::TSI` class | |
 | `ta.valuewhen()` | fn | ✅ Runtime | `ta::ValueWhen` class | |
 | `ta.variance()` | fn | ✅ Runtime | `ta::Variance` class | |
-| `ta.vwap()` | fn | ✅ Runtime | `ta::VWAP` (single value) + `ta::VWAPBands` 3-tuple class (`VWAPBandsResult{vwap,upper,lower}`); any anchor other than the session day: `ta::AnchoredVWAP` + `ta::AnchoredVWAPBands` | Both overloads supported; Sprint B added 3-arg `(src, anchor, stdev_mult)` form with running variance. `AnchoredVWAP::compute(src, volume, anchor)` restarts on each bar the anchor is true and is na until the first (R5 lane TA1) |
+| `ta.vwap()` | fn | ✅ Runtime | `ta::VWAP` (single value) + `ta::VWAPBands` 3-tuple class (`VWAPBandsResult{vwap,upper,lower}`); any anchor other than the session day: `ta::AnchoredVWAP` + `ta::AnchoredVWAPBands` | Both overloads supported; Sprint B added 3-arg `(src, anchor, stdev_mult)` form with running variance. `AnchoredVWAP::compute(src, volume, anchor)` restarts on each bar the anchor is true and is na until the first (the technical-indicator corrections) |
 | `ta.vwma()` | fn | ✅ Runtime | `ta::VWMA` class | |
 | `ta.wma()` | fn | ✅ Runtime | `ta::WMA` class | |
 | `ta.wpr()` | fn | ✅ Runtime | `ta::WPR` class | |

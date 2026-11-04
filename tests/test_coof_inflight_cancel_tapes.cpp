@@ -10,7 +10,7 @@
  * once, and since the recalculation's close waits for the leg's end (lane
  * TAIL-D, tests/test_coof_immediate_close_tapes.cpp) that close took the
  * position at the extreme instead of the exit at its level
- * (job-2898-repost64-orb-meeeeeks-quote-ccy on BINANCE:BTCUSDT 15: TP1's
+ * (the opening-range probe on BINANCE:BTCUSDT 15: TP1's
  * recalculation calls cancel_all() and close(immediately = true), and
  * TradingView fills TP2 on the same leg).
  *
@@ -30,9 +30,9 @@
  * and quantity.
  *
  * Fail-before (lane report): -a and -d close the rest at TP1's fill price in
- * four cells, one of them (2025-04-04 17:30) where TradingView fills TP2;
+ * four cells, including a later bar where TradingView fills TP2;
  * -b and -c withdraw TP2 in the two cells whose TP2 the rest of TP1's leg
- * reaches (2025-04-01 12:30, 2025-04-04 17:30) and hold to the time exit.
+ * reaches on two separate bars, and hold to the time exit.
  * With only the lane's leg-end close, -a and -d took those two cells' rest
  * at the leg's end instead of TP2.
  */

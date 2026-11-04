@@ -11,8 +11,8 @@ using internal::kPathTimeEps;
 
 namespace {
 // The direct four-sample path's test switch and probe
-// (internal::set_direct_endpoints, internal::count_endpoint_paths; R5 lane
-// D2-A). A sampler call only reads the mode: the shipped one is 0, direct and
+// (internal::set_direct_endpoints, internal::count_endpoint_paths; the
+// optional-hook and quiet-point changes). A sampler call only reads the mode: the shipped one is 0, direct and
 // uncounted.
 constexpr unsigned kEndpointsGeneralOnly = 1u;
 constexpr unsigned kEndpointsCounting = 2u;
@@ -122,7 +122,7 @@ OhlcPathLegs compute_ohlc_path_legs(const Bar& bar, bool high_first) {
 // set. Falls back to plain uniform when the bar is degenerate (total==0).
 // `t_values` holds N values on entry and all N on return; the mandatory set
 // (at most four) lives on the stack and the uniform fill is written straight
-// into `t_values`, so no scratch outlives the call (R5 lane D2-A: these were
+// into `t_values`, so no scratch outlives the call (the optional-hook and quiet-point changes: these were
 // two thread_local vectors, a TLS-descriptor call per use in a dlopen'd
 // strategy). The arithmetic, the dedup and both sorts are the ones they fed.
 void fill_endpoints_t_values(std::vector<double>& t_values, int N,
@@ -233,7 +233,7 @@ void internal::sample_price_path_ordered(const Bar& bar, bool high_first, int n_
 
     // Four ENDPOINTS samples of a bar whose four turning times are distinct
     // are the turning points themselves: taken directly, without the t-value
-    // pass below (R5 lane D2-A).
+    // pass below (the optional-hook and quiet-point changes).
     if (n_samples == 4 && dist == MagnifierDistribution::ENDPOINTS) {
         const unsigned mode = endpoint_path_mode.load(std::memory_order_relaxed);
         double four[4];

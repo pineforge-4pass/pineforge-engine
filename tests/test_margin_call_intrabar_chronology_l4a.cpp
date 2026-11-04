@@ -14,15 +14,15 @@
  * checked margin once AFTER all order processing, so a same-bar full exit
  * hid the deficit (FLAT early-return) and the event was lost.
  *
- * The fixtures reproduce the rhyme17 derivation's 2025-10-11 20:45 seed
- * arithmetic exactly (short 2.5105, adverse high 3721.62, deficit ~8.15,
- * q_min 0.0021894... -> floor 0.0021 -> 4x = 0.0084):
+ * The intrabar-margin rule, illustrated with synthetic quantities
+ * (short 3, adverse high 2000.00, equity 5993.62, deficit 6.38):
+ * q_min 0.00319 -> floor 0.0031 -> 4x = 0.0124.
  *
- *   A. HIGH-first bar, TP limit fills after the high -> slice 0.0084@high,
- *      TP closes the remainder 2.5021. (The confirmed gap event.)
+ *   A. HIGH-first bar, TP limit fills after the high -> slice 0.0124@high,
+ *      TP closes the remainder 2.9876 in the synthetic book.
  *   B. LOW-first bar with the SAME large deficit at the high -> the exit
  *      fills before the extreme on the path -> NO margin call. (The two
- *      tape bars 2025-06-28 08:15 / 2025-09-17 18:45 that a naive
+ *      tape bars reproduce this ordering, which a naive
  *      check-before-orders would false-fire.)
  *   C. TIE — the exit stop fills exactly AT the adverse extreme -> exit
  *      first, NO margin call. (Protects the 157/158 quiet SL-stop bars.)
@@ -94,11 +94,11 @@ static int margin_call_rows(const MCEngine& eng) {
     return count;
 }
 
-// A 1x short (the rhyme17 seed's margin regime) opened with explicit qty
-// 2.5105 at 3706.26 and carried into the event bar with a resting
-// strategy.exit. Chosen so the deficit at the adverse high 3721.62 is
-// 8.152... USDT: q_min = 2.5105 - 9334.978672/3721.62 = 0.0021894...,
-// floored to 0.0021 at qty_step 0.0001, 4x = the seed's bit-exact 0.0084.
+// Synthetic illustration: a 1x short of 3 at 1999.00 with 5996.62 cash
+// carries a resting strategy.exit. At a 2000.00 high its equity is
+// 5993.62 and its deficit is 6.38 USDT: q_min = 3 - 5993.62/2000 = 0.00319,
+// floored to 0.0031 at qty_step 0.0001, 4x = 0.0124.
+// Assertions below retain the original fixture quantities.
 class ChronologyShortProbe : public MCEngine {
 public:
     enum class ExitKind { TpLimit, SlStop };
@@ -185,11 +185,11 @@ static void test_gap_event_slices_before_tp_exit() {
 
 static void test_low_first_large_deficit_stays_quiet() {
     std::printf("test_low_first_large_deficit_stays_quiet\n");
-    // LOW-first (|3721.62-3666| = 55.62 > |3666-3660| = 6): path is
-    // O -> L -> H -> C. The TP fills on the O->L leg (position ~0.22),
-    // BEFORE the adverse high (position 2.0), even though the deficit at
-    // the high is the same 8.15. This is the naive check-before-orders
-    // false-fire shape (tape bars 2025-06-28 08:15 / 2025-09-17 18:45).
+    // Synthetic LOW-first (|26-25| = 1 > |25-24.90| = 0.10): path is
+    // O -> L -> H -> C. A TP at 24.95 reduces 4 short units to 1
+    // BEFORE the adverse high; the unreduced book could still be 1.00
+    // short at that high. This is the naive check-before-orders false-fire
+    // shape; assertions below keep the original tape bars and quantities.
     std::vector<Bar> bars = seed_bars(
         mk_bar(3000, 3666.0, 3721.62, 3660.0, 3700.0, 1.0));
 

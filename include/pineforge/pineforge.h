@@ -171,9 +171,9 @@ typedef struct pf_trade_s {
     double  pnl;            /**< Net realized PnL in account currency (commission-inclusive). */
     double  pnl_pct;        /**< Net return-on-cost in percent: pnl (NET of commission) /
                              *   entry cost (entry_price * qty * pointvalue) * 100. This is
-                             *   TradingView's "Net P&L %" convention, arbitrated 2026-06-12
-                             *   against a real TV export (trade #258 short: 102.44 USD on a
-                             *   2276.66 entry => 4.50%). Degenerates to the old gross
+                             *   TradingView's "Net P&L %" convention (synthetic one-unit
+                             *   short: 90.00 net PnL on a 2000.00 entry cost =>
+                             *   4.50%). Degenerates to the old gross
                              *   (exit/entry-1)*100 form for longs with zero commission;
                              *   the previous short form (entry/exit-1)*100 was wrong on
                              *   large moves. Sign always matches pnl. */
@@ -192,8 +192,8 @@ typedef struct pf_trade_s {
                              *   open: it reports it as a closed trade whose exit leg is
                              *   the range's last bar at that bar's CLOSE, with an
                              *   empty exit Signal, and counts it in closedTrades
-                             *   (orb-lite on NYSE:F 1D: Entry short 2026-03-16 @ 11.82,
-                             *   Exit 2026-04-30 @ 12.08 = the last close,
+                             *   (synthetic NYSE:F daily example: Entry short @ 25.00,
+                             *   Exit @ 26.00 on the final daily bar = the last close,
                              *   closedTrades:1). The engine emulates that row
                              *   (operator decision 2026-09-02): exit_time is the last
                              *   script bar's label, exit_price its mintick-rounded
@@ -1517,7 +1517,7 @@ typedef enum pf_close_cause_e {
  *  a kernel margin model now reads `3` for its own liquidation rows (and `4`
  *  for a kernel risk flatten) where the retired string derivation, which only
  *  recognised the adapter's sentinels, answered `1`, and it reads `2` for a
- *  bracket leg its owner armed, where it read `1` before R5 lane F3.
+ *  bracket leg its parent request armed, where it read `1` before the host excursion and bracket-cause integration.
  *  `-1` when @p s is NULL, or when @p trade_index is out of range (final
  *  review F7: matches every sibling indexed live accessor's -1-on-bad-index
  *  convention -- #strategy_pending_order_fill_qty,
@@ -1579,7 +1579,7 @@ PF_API int64_t strategy_script_bars_processed(pf_strategy_t s);
  *  wall-clock for the chart's timezone — TV exports trade rows in chart
  *  TZ too. Engine bars are stored as Unix-ms (UTC), so without this
  *  override these builtins return UTC and silently diverge from TV by N
- *  hours when the chart is on a non-UTC zone (Asia/Taipei = UTC+8 is the
+ *  hours when the chart is on a non-UTC zone (Asia/Hong_Kong = UTC+8 is the
  *  validator default).
  *
  *  Pass `NULL`, `""`, `"UTC"` or `"Etc/UTC"` for the legacy UTC
@@ -1631,10 +1631,10 @@ PF_API void strategy_set_syminfo_mintick(pf_strategy_t s, double mintick);
  *  (e.g. 50 for ES). Non-positive ignored. Call before #run_backtest / #run_backtest_full. */
 PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue);
 
-/** Inject a fundamental/exchange metadata value by Pine member name
- *  (e.g. "shares_outstanding_total", "target_price_average"). These have
- *  no OHLCV source; reads of un-injected members return na. Call before
- *  #run_backtest / #run_backtest_full. */
+/** Inject a fundamental/exchange metadata value by Pine member name (e.g.
+ *  "shares_outstanding_total"); un-injected reads return na. Quantity step: a
+ *  declared "qty_step", or a finite "mincontract" > 0 while no "qty_step" is
+ *  declared, sets the order quantity grid. Call before #run_backtest[_full]. */
 PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
                                           double value);
 
@@ -2115,7 +2115,7 @@ PF_API int strategy_set_symbol_feed_borrowed_v1(
 
 /** Exact C++ engine layout accepted by the live report accumulator.
  *  Bump whenever that layout changes, independently of #PF_ABI_VERSION. */
-#define PF_STREAM_ENGINE_LAYOUT_VERSION 2u
+#define PF_STREAM_ENGINE_LAYOUT_VERSION 3u
 
 /** Optional module declaration that its strategy handles point directly to
  *  a BacktestEngine with the returned #PF_STREAM_ENGINE_LAYOUT_VERSION.
@@ -2166,7 +2166,7 @@ PF_API int pf_map_pairs_limit_set_checked(const int64_t* maximum,
 } /* extern "C" */
 #endif
 
-/* The C-level native host API (R5 lane L13). Included last, after the PODs
+/* The C-level native host API (the versioned C host API). Included last, after the PODs
  * it builds on (pf_bar_t, pf_report_t, pf_strategy_t) and outside this
  * header's `extern "C"` block, which it opens for itself. Both headers guard
  * their own include, so either include order resolves. Its PF_API symbols are

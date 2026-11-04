@@ -26,7 +26,7 @@
  *
  * Evidence anchors: data/probes/pf-probe-allin-floor-comm0 (4,740 from-flat
  * attempts, decline iff fill notional > equity, zero slack, 99.94%);
- * mdfe3757-trade-strategy-v8-4-pine-v6-ready (306/306 separation).
+ * the explicit-quantity probe (306/306 separation).
  *
  * RED-1  flat explicit all-in, comm 0, fill +1 mintick above signal -> DECLINED.
  * RED-2  same WITH commission > 0 -> STILL DECLINED (commission not in predicate).
