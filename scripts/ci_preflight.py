@@ -100,8 +100,9 @@ PR_RUNNER = '["self-hosted","pf-gcp-pr"]'
 # There is no general post fleet: an unpinned job on this label is refused.
 POST_RUNNER = 'gke-2cpu-4gb-amd64'
 PROTECTED_RUNNER = 'gkp-2cpu-4gb-amd64'
-RELEASE_RUNNER = 'gkp-od-4cpu-8gb-amd64'
-PREBUILT_RUNNER = 'gkp-od-16cpu-32gb-amd64-128gb'
+RELEASE_RUNNER = 'gkp-2cpu-4gb-amd64'
+PREBUILT_RUNNER = 'gkp-16cpu-32gb-amd64'
+PREBUILT_ARM_RUNNER = 'gkp-16cpu-32gb-arm64'
 GKE_32_LABEL = 'gke-32cpu-64gb-amd64'
 GKE_16_LABEL = 'gke-16cpu-32gb-amd64'
 GKE_8_LABEL = 'gke-8cpu-16gb-amd64'
@@ -225,7 +226,7 @@ RELEASE_STRATEGY = ('    strategy:\n'
                     '          - triple: linux-x86_64\n'
                     f'            runner: {PREBUILT_RUNNER}\n'
                     '          - triple: linux-aarch64\n'
-                    '            runner: ubuntu-22.04-arm\n')
+                    f'            runner: {PREBUILT_ARM_RUNNER}\n')
 NATIVE_STRATEGY = f'''    strategy:
       fail-fast: false
       matrix:
@@ -3057,7 +3058,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         prebuilt = _jobs(workflows['release.yml']).get('prebuilt', '')
         if _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY):
             findings.append('release.yml prebuilt must use exactly the isolated Linux x64 '
-                            'and hosted ARM matrix')
+                            'and ARM protected GKE matrix')
         findings += release_prebuilt_workflow_findings(workflows['release.yml'])
         if any(re.search(r'macos|darwin|CMAKE_OSX_', '\n'.join(_code(step)), re.IGNORECASE)
                for step in _steps(prebuilt)):
@@ -3180,12 +3181,18 @@ RELEASE_PREBUILT_STEPS = r'''
           bash scripts/build_prebuilt_bookworm.sh \
             "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" "${SOURCE_SHA}" "${NEXT}" "${TAG}" "${DRY_RUN}"
 
-      # The hosted ARM slice retains its system toolchain and Eigen setup.
+      # The ARM build checks the exact Eigen headers that CMake will consume.
       - name: Install Eigen3 (Linux)
         if: runner.os == 'Linux' && matrix.triple == 'linux-aarch64'
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y libeigen3-dev
+          sudo apt-get install -y libeigen3-dev=3.4.0-4
+          test "$(dpkg-query -W -f='${Version}' libeigen3-dev)" = 3.4.0-4
+          macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "${macros}"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "${macros}"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "${macros}"
 
       - name: Configure
         if: matrix.triple == 'linux-aarch64'
@@ -3201,10 +3208,13 @@ RELEASE_PREBUILT_STEPS = r'''
           # VERSION has no tag at all.
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DEigen3_DIR=/usr/share/eigen3/cmake \
+            -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
             -DPINEFORGE_BUILD_TESTS=OFF \
             -DPINEFORGE_BUILD_TUTORIAL=OFF \
             -DPINEFORGE_VERSION_SOURCE=FILE \
             -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}"
+          grep -Fx 'Eigen3_DIR:PATH=/usr/share/eigen3/cmake' build/CMakeCache.txt
 
       - name: Build
         if: matrix.triple == 'linux-aarch64'
@@ -3232,8 +3242,7 @@ RELEASE_PREBUILT_STEPS = r'''
           set -euo pipefail
           log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
           mkdir -p "${log}"
-          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" \
-            > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
             checker_rc=0
           else checker_rc=$?; fi
           printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
@@ -3260,6 +3269,22 @@ RELEASE_PREBUILT_STEPS = r'''
           echo "tarball=${tarball}"           >> "$GITHUB_OUTPUT"
           echo "sha256=${tarball}.sha256"     >> "$GITHUB_OUTPUT"
 
+      # The x86_64 release path must consume the bytes it is about to upload.
+      # The helper checks the sidecar, unpacks the archive, and runs the
+      # existing native host against the shipped full archive in Bookworm.
+      - name: Consume packed x86_64 archive
+        if: matrix.triple == 'linux-x86_64'
+        env:
+          ENGINE_TOOLCHAIN_IMAGE: ${{ vars.ENGINE_TOOLCHAIN_IMAGE }}
+          TARBALL:  ${{ steps.pack.outputs.tarball }}
+          SHASUM:   ${{ steps.pack.outputs.sha256 }}
+          TAG:      ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          bash scripts/build_prebuilt_bookworm.sh \
+            --consume "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" \
+            "${TARBALL}" "${SHASUM}" "${TAG}"
+
       - name: Upload to release
         if: ${{ !inputs.dry_run }}
         env:
@@ -3282,10 +3307,10 @@ RELEASE_PREBUILT_STEPS = r'''
 '''
 
 
-# Git blob identity of the reviewed transport, including the inside-image build.
+# Git blob identity of the transport, including build and archive-consumer launch.
 # A changed helper requires reviewing its source and controls before repinning.
 # This is a source contract, never an engine/build/glibc verdict.
-RELEASE_BOOKWORM_HELPER_BLOB = '87b97b538032a3378a08ec825e89b0cba4f2db4e'
+RELEASE_BOOKWORM_HELPER_BLOB = 'daaf2fe0541b5d0f8aab0746b35dcf069862afa3'
 
 
 def release_prebuilt_helper_findings(source: str) -> list[str]:
@@ -3304,7 +3329,15 @@ def release_prebuilt_workflow_findings(workflow: str) -> list[str]:
     if ([_code(step) for step in _steps(prebuilt)]
             != [_code(step) for step in _steps(RELEASE_PREBUILT_STEPS)]):
         findings.append('release.yml prebuilt must retain the credential-free Bookworm build, '
-                        'hosted ARM setup and all-library glibc gate before packing/upload')
+                        'ARM Eigen setup, all-library glibc gate and packed-archive consumer before upload')
+    marker = "      - name: Check every staged library's glibc floor"
+    gate = _step_named(_steps(prebuilt), marker)
+    required_gate = _step_named(_steps(RELEASE_PREBUILT_STEPS), marker)
+    # Compare raw physical lines in the named step. Removing blank/comment
+    # lines before comparison can turn a disabled shell continuation into proof.
+    if gate.rstrip('\n') != required_gate.rstrip('\n'):
+        findings.append('release.yml prebuilt must retain the raw single-line all-library '
+                        'glibc checker invocation and its run context')
     if (any(_job_values(prebuilt, key) for key in ('if', 'continue-on-error', 'defaults'))
             or _job_values(workflow, 'defaults')):
         findings.append('release.yml prebuilt must keep default success/failure and shell behavior')
@@ -4505,10 +4538,13 @@ def check_commands(source: Path, output: Path | None = None,
         CheckCommand('release-gate-tests',
                      [sys.executable, str(source / 'scripts/test_ci_release_gate.py')],
                      parallel=True),
-        CheckCommand('prebuilt-bookworm-tests',
-                     [sys.executable, str(source / 'scripts/test_build_prebuilt_bookworm.py'),
-                      '--scratch-root', str(output_dir)],
-                     parallel=True),
+        # The transport uses Bash 4 parameter expansion; Darwin's default
+        # Bash 3 cannot run it. Linux retains every transport control.
+        *([CheckCommand('prebuilt-bookworm-tests',
+                       [sys.executable, str(source / 'scripts/test_build_prebuilt_bookworm.py'),
+                        '--scratch-root', str(output_dir)],
+                       parallel=True)]
+          if sys.platform.startswith('linux') else []),
         # All real ELF/archive rows and their mutations require Linux cc,
         # GNU ar/readelf; missing tools fail in setUpClass. Darwin's compiler
         # emits Mach-O. run_checks creates this owned output/scratch root

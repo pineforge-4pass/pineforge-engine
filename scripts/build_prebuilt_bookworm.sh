@@ -63,25 +63,53 @@ shared_directory() {
         || fail "directory is outside declared shared workspace/temp: $1"
 }
 
-inside_build() {
-    [[ $# == 4 ]] || fail "inside build requires version, short SHA, dirty flag and tag"
-    local version=$1 short_sha=$2 dirty=$3 tag=$4
-    valid_version "$version"
-    [[ "$short_sha" =~ ^[0-9a-f]{7,40}$ && "$dirty" =~ ^(ON|OFF)$ && "$tag" == "v$version" ]] \
-        || fail "invalid inside source identity"
-    [[ "$(id -u):$(id -g)" == 1001:123 ]] || fail "builder UID:GID must be 1001:123"
-    [[ -d /source && -d /output && ! -e /source/.git && ! -L /source/.git ]] \
-        || fail "source export must have no checkout metadata"
-    safe_absolute /source
-    safe_absolute /output
-    [[ ! -e /output/build && ! -e /output/stage ]] || fail "reused build or staging path"
-    [[ "$(cat /source/VERSION)" == "$version" ]] || fail "export VERSION identity mismatch"
-    [[ -f /output/identity.cmake && ! -L /output/identity.cmake ]] \
-        || fail "missing regular identity input"
-    grep -Fx "set(PINEFORGE_VERSION_GIT_SHA \"$short_sha\")" /output/identity.cmake
-    grep -Fx "set(PINEFORGE_VERSION_DIRTY $dirty)" /output/identity.cmake
+admit_image() {
+    local evidence=$1
+    [[ -n "$image" ]] || fail "ENGINE_TOOLCHAIN_IMAGE is required"
+    [[ "$image" == ?*"@$image_digest" && "$image" != *[[:space:]]* && "${image%@*}" != *'@'* ]] \
+        || fail "ENGINE_TOOLCHAIN_IMAGE must be a repository@$image_digest"
+    safe_absolute "$evidence"
+    docker images --digests --no-trunc > "$evidence/docker-images.txt"
+    cat "$evidence/docker-images.txt"
+    docker info --format '{{.Driver}}' > "$evidence/docker-storage-driver.txt"
+    cat "$evidence/docker-storage-driver.txt"
+    docker version --format '{{.Client.Version}} {{.Server.Version}}' > "$evidence/docker-versions.txt"
+    cat "$evidence/docker-versions.txt"
+    [[ "$(cat "$evidence/docker-versions.txt")" == '29.9.2 29.8.1' ]] \
+        || fail "admitted Docker client/daemon versions changed"
+    if docker image inspect "$image" > "$evidence/docker-image-inspect.json" 2> "$evidence/docker-image-inspect.stderr"; then
+        inspect_rc=0
+    else
+        inspect_rc=$?
+    fi
+    cat "$evidence/docker-image-inspect.json"
+    cat "$evidence/docker-image-inspect.stderr" >&2
+    if [[ "$inspect_rc" != 0 ]]; then
+        printf 'prebuilt-bookworm: same-daemon preload canary dependency: digest is not addressable; no image-ID fallback\n' >&2
+        exit "$inspect_rc"
+    fi
+    if docker image inspect --format '{{.Id}}' "$image" \
+        > "$evidence/docker-image-id.txt" 2> "$evidence/docker-image-id.stderr"; then
+        image_id_rc=0
+    else
+        image_id_rc=$?
+    fi
+    cat "$evidence/docker-image-id.txt"
+    cat "$evidence/docker-image-id.stderr" >&2
+    printf '%s\n' "$image_id_rc" > "$evidence/docker-image-id.exitcode"
+    if [[ "$image_id_rc" != 0 ]]; then exit "$image_id_rc"; fi
+    [[ "$(cat "$evidence/docker-image-id.txt")" == "$image_digest" ]] \
+        || fail "preloaded image Id differs from pinned digest"
+    [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" == linux/amd64 ]] \
+        || fail "preloaded image must be linux/amd64"
+    docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" \
+        > "$evidence/docker-repo-digests.txt"
+    grep -Fx "$image" "$evidence/docker-repo-digests.txt" \
+        || fail "same-daemon preload canary dependency: RepoDigests missing exact pin; classic image-ID fallback disabled"
+}
 
-    # All probes and all compiler/header/library resolution occur in the image.
+check_bookworm_toolchain() {
+    # All compiler/header/library resolution occurs in the immutable image.
     # Network is disabled and FetchContent is disconnected even on setup failure.
     export PATH=/usr/bin:/bin TMPDIR=/output/tmp
     mkdir /output/tmp
@@ -106,6 +134,27 @@ inside_build() {
     grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "$macros"
     grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "$macros"
     grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "$macros"
+}
+
+inside_build() {
+    [[ $# == 4 ]] || fail "inside build requires version, short SHA, dirty flag and tag"
+    local version=$1 short_sha=$2 dirty=$3 tag=$4
+    valid_version "$version"
+    [[ "$short_sha" =~ ^[0-9a-f]{7,40}$ && "$dirty" =~ ^(ON|OFF)$ && "$tag" == "v$version" ]] \
+        || fail "invalid inside source identity"
+    [[ "$(id -u):$(id -g)" == 1001:123 ]] || fail "builder UID:GID must be 1001:123"
+    [[ -d /source && -d /output && ! -e /source/.git && ! -L /source/.git ]] \
+        || fail "source export must have no checkout metadata"
+    safe_absolute /source
+    safe_absolute /output
+    [[ ! -e /output/build && ! -e /output/stage ]] || fail "reused build or staging path"
+    [[ "$(cat /source/VERSION)" == "$version" ]] || fail "export VERSION identity mismatch"
+    [[ -f /output/identity.cmake && ! -L /output/identity.cmake ]] \
+        || fail "missing regular identity input"
+    grep -Fx "set(PINEFORGE_VERSION_GIT_SHA \"$short_sha\")" /output/identity.cmake
+    grep -Fx "set(PINEFORGE_VERSION_DIRTY $dirty)" /output/identity.cmake
+
+    check_bookworm_toolchain
     local stage="/output/stage/pineforge-${tag}-linux-x86_64"
     cmake -S /source -B /output/build \
         -DCMAKE_BUILD_TYPE=Release \
@@ -131,15 +180,102 @@ inside_build() {
     done
 }
 
+inside_consume() {
+    [[ $# == 1 ]] || fail "inside archive consumer requires tag"
+    local tag=$1
+    [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]] \
+        || fail "invalid archive consumer tag"
+    [[ "$(id -u):$(id -g)" == 1001:123 ]] || fail "consumer UID:GID must be 1001:123"
+    [[ -d /source && -d /output && ! -L /source && ! -L /output ]] \
+        || fail "consumer source/output mounts are invalid"
+    safe_absolute /source
+    safe_absolute /output
+    [[ -f /source/scripts/check_shipped_archive_runtime.sh
+        && ! -L /source/scripts/check_shipped_archive_runtime.sh ]] \
+        || fail "missing regular archive consumer helper"
+    check_bookworm_toolchain
+    exec /bin/bash /source/scripts/check_shipped_archive_runtime.sh --inside "$tag"
+}
+
+consume_archive() {
+    [[ $# == 5 ]] || fail "archive consumer requires workspace, runner temp, tarball, checksum and tag"
+    local workspace=$1
+    local runner_temp=$2
+    local tarball=$3
+    local shasum=$4
+    local tag=$5
+    [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]] \
+        || fail "invalid archive consumer tag"
+    local base="pineforge-${tag}-linux-x86_64"
+    [[ "$tarball" == "${base}.tar.gz" && "$shasum" == "${tarball}.sha256" ]] \
+        || fail "archive consumer inputs do not name the packed x86_64 tarball"
+    [[ "$(id -u):$(id -g)" == 1001:123 ]] || fail "consumer host UID:GID must be 1001:123"
+    shared_directory "$workspace"
+    shared_directory "$runner_temp"
+    [[ -w "$runner_temp" ]] || fail "runner temp is not writable"
+    safe_absolute "$workspace/$tarball"
+    safe_absolute "$workspace/$shasum"
+    [[ -f "$workspace/$tarball" && ! -L "$workspace/$tarball" ]] \
+        || fail "packed archive is not a regular file"
+    [[ -f "$workspace/$shasum" && ! -L "$workspace/$shasum" ]] \
+        || fail "packed archive checksum is not a regular file"
+    local run_root
+    run_root=$(mktemp -d "$runner_temp/archive-runtime.XXXXXXXX")
+    shared_directory "$run_root"
+    local output_dir="$run_root/output"
+    local evidence="$run_root/evidence"
+    local source_dir="$run_root/source"
+    mkdir "$output_dir" "$evidence" "$source_dir"
+    # Export only the packed bytes and consumer inputs, without checkout
+    # metadata, credentials or the source build/staging directories.
+    local input
+    for input in "$tarball" "$shasum" examples/native/hello_kernel.cpp \
+        scripts/build_prebuilt_bookworm.sh scripts/check_shipped_archive_runtime.sh; do
+        safe_absolute "$workspace/$input"
+        [[ -f "$workspace/$input" && ! -L "$workspace/$input" ]] \
+            || fail "archive consumer input is not a regular file: $input"
+        mkdir -p "$source_dir/$(dirname "$input")"
+        cp "$workspace/$input" "$source_dir/$input"
+    done
+    shared_directory "$source_dir"
+    admit_image "$evidence"
+    if docker run --rm --pull=never --platform linux/amd64 --network none --user 1001:123 \
+        --read-only --cap-drop ALL --security-opt no-new-privileges \
+        --mount "type=bind,source=$source_dir,target=/source,readonly" \
+        --mount "type=bind,source=$output_dir,target=/output" \
+        --workdir /source "$image" /bin/bash /source/scripts/build_prebuilt_bookworm.sh \
+        --inside-consume "$tag" \
+        > "$evidence/consumer.stdout" 2> "$evidence/consumer.stderr"; then
+        consumer_rc=0
+    else
+        consumer_rc=$?
+    fi
+    cat "$evidence/consumer.stdout"
+    cat "$evidence/consumer.stderr" >&2
+    printf '%s\n' "$consumer_rc" > "$evidence/consumer.exitcode"
+    if [[ "$consumer_rc" != 0 ]]; then exit "$consumer_rc"; fi
+    printf 'prebuilt-bookworm: shipped archive consumer completed; evidence=%s\n' "$evidence"
+    return "$consumer_rc"
+}
+
 if [[ "${1:-}" == --inside ]]; then
     shift
     inside_build "$@"
     exit 0
 fi
 
-[[ -n "$image" ]] || fail "ENGINE_TOOLCHAIN_IMAGE is required"
-[[ "$image" == ?*"@$image_digest" && "$image" != *[[:space:]]* && "${image%@*}" != *'@'* ]] \
-    || fail "ENGINE_TOOLCHAIN_IMAGE must be a repository@$image_digest"
+if [[ "${1:-}" == --inside-consume ]]; then
+    shift
+    inside_consume "$@"
+    exit "$?"
+fi
+
+if [[ "${1:-}" == --consume ]]; then
+    shift
+    consume_archive "$@"
+    exit "$?"
+fi
+
 [[ $# == 6 ]] || fail "requires workspace, runner temp, emitted SHA, version, tag and dry-run flag"
 workspace=$1
 runner_temp=$2
@@ -263,43 +399,7 @@ printf 'set(PINEFORGE_VERSION_GIT_SHA "%s")\nset(PINEFORGE_VERSION_DIRTY %s)\n' 
 shared_directory "$source_dir"
 shared_directory "$output_dir"
 
-docker images --digests --no-trunc > "$evidence/docker-images.txt"
-cat "$evidence/docker-images.txt"
-docker info --format '{{.Driver}}' > "$evidence/docker-storage-driver.txt"
-cat "$evidence/docker-storage-driver.txt"
-docker version --format '{{.Client.Version}} {{.Server.Version}}' > "$evidence/docker-versions.txt"
-cat "$evidence/docker-versions.txt"
-[[ "$(cat "$evidence/docker-versions.txt")" == '29.9.2 29.8.1' ]] \
-    || fail "admitted Docker client/daemon versions changed"
-if docker image inspect "$image" > "$evidence/docker-image-inspect.json" 2> "$evidence/docker-image-inspect.stderr"; then
-    inspect_rc=0
-else
-    inspect_rc=$?
-fi
-cat "$evidence/docker-image-inspect.json"
-cat "$evidence/docker-image-inspect.stderr" >&2
-if [[ "$inspect_rc" != 0 ]]; then
-    printf 'prebuilt-bookworm: same-daemon preload canary dependency: digest is not addressable; no image-ID fallback\n' >&2
-    exit "$inspect_rc"
-fi
-if docker image inspect --format '{{.Id}}' "$image" \
-    > "$evidence/docker-image-id.txt" 2> "$evidence/docker-image-id.stderr"; then
-    image_id_rc=0
-else
-    image_id_rc=$?
-fi
-cat "$evidence/docker-image-id.txt"
-cat "$evidence/docker-image-id.stderr" >&2
-printf '%s\n' "$image_id_rc" > "$evidence/docker-image-id.exitcode"
-if [[ "$image_id_rc" != 0 ]]; then exit "$image_id_rc"; fi
-[[ "$(cat "$evidence/docker-image-id.txt")" == "$image_digest" ]] \
-    || fail "preloaded image Id differs from pinned digest"
-[[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" == linux/amd64 ]] \
-    || fail "preloaded image must be linux/amd64"
-docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" \
-    > "$evidence/docker-repo-digests.txt"
-grep -Fx "$image" "$evidence/docker-repo-digests.txt" \
-    || fail "same-daemon preload canary dependency: RepoDigests missing exact pin; classic image-ID fallback disabled"
+admit_image "$evidence"
 if docker run --rm --pull=never --platform linux/amd64 --network none --user 1001:123 \
     --read-only --cap-drop ALL --security-opt no-new-privileges \
     --mount "type=bind,source=$source_dir,target=/source,readonly" \

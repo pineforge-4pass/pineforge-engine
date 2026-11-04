@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """Recording-Docker transport controls, never evidence of an engine build.
 
-Run off-master with --scratch-root /explicit/path. Fixtures are retained.
+Run on Linux with --scratch-root /explicit/path. Fixtures are retained.
 The private helper copy changes only the shared-path root and uses a recording
 id/Docker protocol; no image, compiler, ELF inspection, or network is invoked.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import shlex
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 import ci_preflight
 
@@ -67,13 +70,21 @@ def recording_command() -> int:
             raise AssertionError(f"unexpected inspect format: {args!r}")
     elif args and args[0] == "run":
         if controls.get("run_rc"):
-            print("RECORDING FIXTURE: builder child failed", file=sys.stderr)
+            child = "consumer" if "--inside-consume" in args else "builder"
+            print(f"RECORDING FIXTURE: {child} child failed", file=sys.stderr)
             return controls["run_rc"]
         mounts = [args[index + 1] for index, value in enumerate(args) if value == "--mount"]
         source = Path(next(value.split(",")[1].removeprefix("source=")
                            for value in mounts if "target=/source," in value))
         output = Path(next(value.split(",")[1].removeprefix("source=")
                            for value in mounts if value.endswith("target=/output")))
+        if "--inside-consume" in args:
+            (root / "consumer-inputs.json").write_text(json.dumps({
+                str(path.relative_to(source)): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in source.rglob("*") if path.is_file()
+            }))
+            print("RECORDING FIXTURE: consumer transport only; no compatibility verdict")
+            return 0
         (root / "source-observed.json").write_text(json.dumps({
             "git_metadata": (source / ".git").exists(),
             "untracked": (source / "untracked.txt").exists(),
@@ -420,14 +431,82 @@ class BookwormTransport(unittest.TestCase):
             self.assertTrue(ci_preflight.release_prebuilt_helper_findings(source + addition))
 
     def test_transport_controls_are_registered_in_fast_and_full_preflight(self):
-        for tier in ("fast", "all"):
-            plan = {entry[0]: entry for entry in ci_preflight.check_commands(ROOT, tier=tier)}
-            entry = plan["prebuilt-bookworm-tests"]
-            self.assertEqual(entry[1], [sys.executable, str(HELPER.with_name(
-                "test_build_prebuilt_bookworm.py")), "--scratch-root", str(ROOT / "build-ci-preflight")])
-            self.assertIs(entry.parallel, True)
-        self.assertNotIn("prebuilt-bookworm-tests",
-                         dict(ci_preflight.check_commands(ROOT, tier="slow")))
+        with mock.patch.object(ci_preflight.sys, "platform", "linux"):
+            for tier in ("fast", "all"):
+                plan = {entry[0]: entry for entry in ci_preflight.check_commands(ROOT, tier=tier)}
+                entry = plan["prebuilt-bookworm-tests"]
+                self.assertEqual(entry[1], [sys.executable, str(HELPER.with_name(
+                    "test_build_prebuilt_bookworm.py")), "--scratch-root", str(ROOT / "build-ci-preflight")])
+                self.assertIs(entry.parallel, True)
+            for tier in ("slow", "github-only"):
+                self.assertNotIn("prebuilt-bookworm-tests",
+                                 dict(ci_preflight.check_commands(ROOT, tier=tier)))
+        for platform in ("darwin", "win32"):
+            with mock.patch.object(ci_preflight.sys, "platform", platform):
+                for tier in ("fast", "all"):
+                    self.assertNotIn("prebuilt-bookworm-tests",
+                                     dict(ci_preflight.check_commands(ROOT, tier=tier)))
+
+    def consumer_inputs(self):
+        # A real tar stream exercises byte transport only. It intentionally
+        # contains no library and the recording Docker never runs a consumer.
+        archive = self.workspace / "pineforge-v1.11.0-rc.2-linux-x86_64.tar.gz"
+        with tarfile.open(archive, "w:gz") as packed:
+            packed.add(self.workspace / "tracked.txt", arcname="transport-input.txt")
+        checksum = archive.with_name(archive.name + ".sha256")
+        checksum.write_text(hashlib.sha256(archive.read_bytes()).hexdigest()
+                            + "  " + archive.name + "\n")
+        for relative in ("scripts/build_prebuilt_bookworm.sh",
+                         "scripts/check_shipped_archive_runtime.sh",
+                         "examples/native/hello_kernel.cpp"):
+            target = self.workspace / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((ROOT / relative).read_bytes())
+        return archive, checksum
+
+    def consume(self, archive, checksum, *, controls=None):
+        (self.root / "controls.json").write_text(json.dumps(controls or {}))
+        return subprocess.run(
+            ["bash", str(self.helper), "--consume", str(self.workspace), str(self.temp),
+             archive.name, checksum.name, "v1.11.0-rc.2"],
+            env={**self.env, "ENGINE_TOOLCHAIN_IMAGE": IMAGE}, text=True, capture_output=True)
+
+    def test_archive_consumer_exports_exact_packed_inputs_without_checkout_or_build_tree(self):
+        archive, checksum = self.consumer_inputs()
+        ran = self.consume(archive, checksum)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        paths = (archive, checksum, self.workspace / "scripts/build_prebuilt_bookworm.sh",
+                 self.workspace / "scripts/check_shipped_archive_runtime.sh",
+                 self.workspace / "examples/native/hello_kernel.cpp")
+        observed = json.loads((self.root / "consumer-inputs.json").read_text())
+        self.assertEqual(observed, {
+            str(path.relative_to(self.workspace)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in paths
+        })
+        run = next(row for row in self.commands() if row[1:2] == ["run"])
+        self.assertEqual(run[-2:], ["--inside-consume", "v1.11.0-rc.2"])
+        for token in ("--pull=never", "--read-only", IMAGE):
+            self.assertIn(token, run)
+        for option, value in (("--platform", "linux/amd64"), ("--network", "none"),
+                              ("--user", "1001:123")):
+            index = run.index(option)
+            self.assertEqual(run[index + 1], value)
+        mounts = [run[index + 1] for index, arg in enumerate(run) if arg == "--mount"]
+        self.assertEqual(len(mounts), 2)
+        self.assertTrue(all(str(self.temp) in mount for mount in mounts))
+        self.assertEqual(self.env_file.read_text(), "")
+
+    def test_archive_consumer_preserves_child_failure_status_and_stderr(self):
+        archive, checksum = self.consumer_inputs()
+        ran = self.consume(archive, checksum, controls={"run_rc": 23})
+        self.assertEqual(ran.returncode, 23, ran.stderr)
+        evidence = next(self.temp.glob("archive-runtime.*")) / "evidence"
+        self.assertEqual((evidence / "consumer.stderr").read_text(),
+                         "RECORDING FIXTURE: consumer child failed\n")
+        self.assertEqual((evidence / "consumer.exitcode").read_text(), "23\n")
+        self.assertIn((evidence / "consumer.stderr").read_text(), ran.stderr)
+        self.assertNotIn("shipped archive consumer completed", ran.stdout)
+        self.assertEqual(len([row for row in self.commands() if row[1:2] == ["run"]]), 1)
 
 
 if __name__ == "__main__":

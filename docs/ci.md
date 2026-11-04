@@ -200,7 +200,7 @@ the preflight source guard rejects those includes before a build.
 CI uses Ubuntu 24.04 amd64 and arm64 cells and selects Python 3.12 explicitly.
 The amd64 post build shards and the two arm64 post cells use bare scalar
 architecture/size scale-set names and run directly in runner pods carrying the engine toolchain image and sudo. All three build jobs refuse an OS mismatch.
-Hosted exceptions cover PR light jobs and the existing hosted release cells; post light jobs use bare scalar GKE names.
+Hosted exceptions cover PR light jobs; release uses protected GKE and post light jobs use bare scalar GKE names.
 The runner-loss controller has its own exact hosted `ubuntu-24.04` pin.
 CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
@@ -1646,7 +1646,7 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
 | `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; native shards: bare `gke-8cpu-16gb-amd64`; `matrix.runner`: live-sanitizers `gke-16cpu-32gb-amd64-256gb`, live-tsan `gke-16cpu-32gb-amd64-128gb` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz`: scalar `gke-2cpu-4gb-amd64`; credentialed `build`: `gkp-4cpu-8gb-amd64` |
-| `release.yml` | Dispatch from `main` | `release` and `notify-hub`: `gkp-od-4cpu-8gb-amd64`; x86_64 `prebuilt`: `gkp-od-16cpu-32gb-amd64-128gb`; arm64 `prebuilt`: hosted `ubuntu-22.04-arm` |
+| `release.yml` | Dispatch from `main` | `release` and `notify-hub`: `gkp-2cpu-4gb-amd64`; x86_64 `prebuilt`: `gkp-16cpu-32gb-amd64`; arm64 `prebuilt`: `gkp-16cpu-32gb-arm64` |
 | `promote-baseline.yml` | Push to `main`, dispatch from `main` | `promote-guard`: `gke-2cpu-4gb-amd64`; `promote`: `gkp-2cpu-4gb-amd64` |
 | `release-ruleset-probe.yml` | Dispatch from `main` | `authz`: `gke-2cpu-4gb-amd64`; `probe`: `gkp-2cpu-4gb-amd64` |
 
@@ -1671,31 +1671,31 @@ Trusted post workflows and PR proof legs build cold; no trusted job restores an 
 `build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`. With the arm leg, the full set is `build`, `build-debug`, `build-arm`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.
 
 Release and promotion use protected GKE runner group 15:
-`release` and `notify-hub` use `gkp-od-4cpu-8gb-amd64`; baseline `promote` uses `gkp-2cpu-4gb-amd64`;
-Linux x64 `prebuilt` uses `gkp-od-16cpu-32gb-amd64-128gb`.
+`release`, `notify-hub` and baseline `promote` use `gkp-2cpu-4gb-amd64`;
+Linux x64/arm64 `prebuilt` uses `gkp-16cpu-32gb-amd64`/`gkp-16cpu-32gb-arm64`.
 The release ruleset probe runs secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64` and
 `probe` on `gkp-2cpu-4gb-amd64`.
-Release's Linux arm64 artifact cell keeps its hosted `ubuntu-22.04-arm` pin;
+Release's Linux artifact cells both require their exact protected GKE labels;
 1.8.0 has no macOS test or artifact cells, and
 promotion runs on a push to `main` plus manual dispatch from `main`.
 
-Release and notify-hub use the protected on-demand 4 CPU/8 GB set: release
+Release and notify-hub use the protected 2 CPU/4 GB set: release
 computes versions, stamps JSON catalogs and publishes with git/gh; notify-hub
 mints an App token and dispatches an API request. The protected 2 CPU/4 GB set
 runs promotion's API/tree checks, Node campaign tooling and Cloud SQL proxy; the
 probe reads rulesets with Python/gh. Docs uses 4 CPU/8 GB for Doxygen and Graphviz
-over the full public header set before Pages upload. The x86_64 prebuilt set reserves
-16 CPU/32 GB and 128 GB disk for compiling, staging and packing the static library.
-Both Linux artifact cells install `libeigen3-dev` with `sudo apt-get update` and
-`sudo apt-get install -y libeigen3-dev`; Eigen is not baked into the protected image.
-Before CMake, x86_64 must read `Eigen/src/Core/util/Macros.h` and match exactly
+over the full public header set before Pages upload. Both prebuilt sets require
+16 CPU/32 GB; x86_64 also requires the preloaded immutable Bookworm Docker image.
+ARM installs exactly `libeigen3-dev=3.4.0-4`; x86_64 checks that package in its image.
+Before CMake, both builds must read the consumed `Eigen/src/Core/util/Macros.h`,
+pin `Eigen3_DIR=/usr/share/eigen3/cmake`, disable FetchContent, and match exactly
 `EIGEN_WORLD_VERSION=3`, `EIGEN_MAJOR_VERSION=4`, `EIGEN_MINOR_VERSION=0` (3.4.0).
 Missing headers or any other version fail the job. Preflight pins these steps and
 their order, the exact protected job/label inventory, and the App environments.
 Protected routing cannot be used by another job, PR caller, container or service.
 The group 15 mirror lists only docs-post, promote-baseline, release-ruleset-probe
-and release at `refs/heads/main`; live membership and a release dry run remain
-supervisor checks. The secret-free `gke-*` credential ban stays binding.
+and release at `refs/heads/main`; label catalog/live membership, Docker versions,
+preload, shared `/home/runner/_work` and UID:GID `1001:123` still require operational confirmation; checks fail closed. The secret-free `gke-*` credential ban stays binding.
 
 Every split workflow retains the canon authz step and its digest. All other
 jobs need authz; CI/native aggregates always run and refuse failed authz
@@ -1965,12 +1965,12 @@ sleeping or retrying; empty or unparseable evidence also refuses. An empty JSON
 array is a valid list response; each caller refuses if its required PR or
 context evidence is absent. An empty single-object payload still refuses.
 
-Prebuilt jobs build the commit sha emitted after the release job's atomic
-push, and assert that the release tag still resolves to that sha before
-building. A missing or malformed sha or a changed tag fails the job. Dry runs
-build `github.sha` and skip the tag assertion because no tag exists. A
-separate tag ruleset forbids updates and deletion of `v*` tags; see "Release
-tag immutability and recovery" below.
+Prebuilt jobs build the sha emitted after the release job's atomic push and assert that the release tag still resolves to it before building.
+A missing/malformed sha or changed tag fails. Dry runs build `github.sha` and skip the tag assertion because no tag exists.
+A separate tag ruleset forbids updates and deletion of `v*` tags; see "Release tag immutability and recovery" below.
+After packing, x86_64 checks the emitted tarball's SHA-256 sidecar and unpacks those exact bytes in the pinned Bookworm environment before upload.
+It compiles and runs unchanged `examples/native/hello_kernel.cpp` against the extracted headers and full `libpineforge.a`; configure, link and run diagnostics retain their actual exit status.
+This archive consumer does not establish an arm64 support-floor result.
 
 #### Release tag immutability and recovery
 

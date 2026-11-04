@@ -2001,7 +2001,7 @@ class RulesetsProbeTests(unittest.TestCase):
             'bare scalar `gke-2cpu-4gb-amd64` and `probe` on `gkp-2cpu-4gb-amd64`.',
             "Release and promotion use protected GKE runner group 15:\n"
             "`release`, `notify-hub` and baseline `promote` use `gkp-2cpu-4gb-amd64`;\n"
-            'Linux x64 `prebuilt` uses `gkp-16cpu-32gb-amd64-128gb`.\n'
+            'Linux x64/arm64 `prebuilt` uses `gkp-16cpu-32gb-amd64`/`gkp-16cpu-32gb-arm64`.\n'
             'The release ruleset probe runs secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64` and\n'
             '`probe` on `gkp-2cpu-4gb-amd64`.',
             "Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from\n"
@@ -2309,7 +2309,7 @@ class WorkflowPinTests(unittest.TestCase):
                        if step.startswith("      - name: Build x86_64 in preloaded Bookworm\n"))
         binding = "          ENGINE_TOOLCHAIN_IMAGE: ${{ vars.ENGINE_TOOLCHAIN_IMAGE }}\n"
         self.assertEqual(builder.count(binding), 1)
-        self.assertEqual(workflow.count("vars.ENGINE_TOOLCHAIN_IMAGE"), 1)
+        self.assertEqual(workflow.count("vars.ENGINE_TOOLCHAIN_IMAGE"), 2)
         self.assertEqual(release_prebuilt_workflow_findings(workflow), [])
         helper = (ROOT / "scripts/build_prebuilt_bookworm.sh").read_text()
         self.assertNotIn("docker.pkg.dev/", workflow + helper)
@@ -2332,13 +2332,35 @@ class WorkflowPinTests(unittest.TestCase):
                 ("Build x86_64 in preloaded Bookworm", "Verify the staged version"),
                 ("Install to staging", "Check every staged library's glibc floor"),
                 ("Check every staged library's glibc floor", "Pack tarball + sha256"),
-                ("Pack tarball + sha256", "Upload to release")):
+                ("Pack tarball + sha256", "Consume packed x86_64 archive"),
+                ("Consume packed x86_64 archive", "Upload to release")):
             self.assertLess(names.index("      - name: " + earlier),
                             names.index("      - name: " + later))
         gate = next(step for step in steps if "      - name: Check every staged library's glibc floor" in step)
         self.assertNotIn("        if:", gate)
         self.assertIn('python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}"', gate)
         self.assertIn('exit "${checker_rc}"', gate)
+
+    def test_glibc_invocation_rejects_raw_blank_and_comment_continuations(self):
+        workflow = self.workflow()
+        command = ('          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" '
+                   '> "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then')
+        finding = ('release.yml prebuilt must retain the raw single-line all-library '
+                   'glibc checker invocation and its run context')
+        self.assertEqual(workflow.count(command), 1)
+        self.assertEqual(release_prebuilt_workflow_findings(workflow), [])
+        for separator in ("\n", "            # disabled continuation\n"):
+            with self.subTest(separator=separator):
+                changed = workflow.replace(command, command.replace(
+                    ' > "${log}/stdout.jsonl"', ' \\\n' + separator
+                    + '            > "${log}/stdout.jsonl"', 1), 1)
+                self.assertNotEqual(changed, workflow)
+                self.assertIn(finding, release_prebuilt_workflow_findings(changed))
+        for changed in (workflow.replace(command, "", 1),
+                        workflow.replace(command, command.replace('"${STAGE_DIR}"',
+                                                                  '"${STAGE_DIR}/lib/libpineforge.a"'), 1),
+                        workflow.replace(command, "          # " + command.lstrip(), 1)):
+            self.assertIn(finding, release_prebuilt_workflow_findings(changed))
 
     def test_bookworm_workflow_controls_consume_each_mutated_workflow(self):
         workflow = self.workflow()
