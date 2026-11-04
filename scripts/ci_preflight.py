@@ -4509,6 +4509,14 @@ def check_commands(source: Path, output: Path | None = None,
                      [sys.executable, str(source / 'scripts/test_build_prebuilt_bookworm.py'),
                       '--scratch-root', str(output_dir)],
                      parallel=True),
+        # All real ELF/archive rows and their mutations require Linux cc,
+        # GNU ar/readelf; missing tools fail in setUpClass. Darwin's compiler
+        # emits Mach-O. run_checks creates this owned output/scratch root
+        # before invoking any stage; keep the complete suite unfiltered.
+        *([('prebuilt-glibc-tests',
+            [sys.executable, '-B', str(source / 'scripts/test_check_prebuilt_glibc.py'),
+             '--scratch-root', str(output_dir), '-v'])]
+          if sys.platform.startswith('linux') else []),
         # R5 run-failure codes: the catalog diff release.yml stamps is a tested
         # script, and the code tables of docs/pages/run-failure-codes.md are
         # generated from the catalog it diffs.

@@ -4062,7 +4062,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'native-c-surface-tests', 'kernel-residuals-tests', 'corpus-parity-identity-tests',
             'corpus-parity-subset-cover-tests', 'report-schema-key-tests',
             'selected-window-ownership-tests', 'report-outputs-key-tests', 'release-version-tests',
-            'release-gate-tests', 'prebuilt-bookworm-tests', 'run-failure-diff-tests', 'run-json-harness-tests',
+            'release-gate-tests', 'prebuilt-bookworm-tests', 'prebuilt-glibc-tests',
+            'run-failure-diff-tests', 'run-json-harness-tests',
             'docs-only-tests', 'design-inventory-tests', 'design-inventory',
             'detached-comments-tests', 'detached-comments', 'native-tempdir-tests',
             'dangling-comment-names-tests', 'doc-anchors-tests', 'doc-anchors',
@@ -4071,12 +4072,90 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'kernel-seam-rows-tests', 'kernel-seam-rows', 'doc-pine-coverage',
             'doc-pine-coverage-tests', 'duplicate-test-names-tests', 'duplicate-test-names',
         ]
-        self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
-        # main() prepends actionlint-version to all/fast/github-only.
-        self.assertEqual(len(expected) + 1, 64)
-        self.assertEqual(len(check_commands(ROOT, tier='fast')), 59)
-        self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
-        self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
+        with mock.patch.object(ci_preflight.sys, 'platform', 'linux'):
+            self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
+            # main() prepends actionlint-version to all/fast/github-only.
+            self.assertEqual(len(expected) + 1, 65)
+            self.assertEqual(len(check_commands(ROOT, tier='fast')), 60)
+            self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
+            self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
+
+
+class PrebuiltGlibcRegistration(unittest.TestCase):
+    NAME = 'prebuilt-glibc-tests'
+
+    def entry(self, source, output, tier='fast', *, plan=None):
+        plan = check_commands(source, output, tier=tier) if plan is None else plan
+        entries = [entry for entry in plan if entry[0] == self.NAME]
+        self.assertEqual(entries, [(self.NAME, [
+            sys.executable, '-B', str(source / 'scripts/test_check_prebuilt_glibc.py'),
+            '--scratch-root', str(output), '-v',
+        ])])
+        return entries[0]
+
+    def test_linux_fast_all_command_and_platform_contract(self):
+        output = ROOT / 'build-ci-preflight'
+        with mock.patch.object(ci_preflight.sys, 'platform', 'linux'):
+            for tier in ('fast', 'all'):
+                entry = self.entry(ROOT, output, tier)
+                # Removal, duplicate registration, a filtered suite, wrong
+                # scratch, and advisory status must all break the same oracle.
+                for wrong in ([], [entry, entry], [(self.NAME, entry[1][:-1])],
+                              [(self.NAME, [*entry[1], 'RealArtifacts.test_older_numeric_versions_are_accepted'])],
+                              [(self.NAME, [*entry[1][:-2], '/missing-scratch', '-v'])],
+                              [(*entry, True)]):
+                    with self.subTest(tier=tier, wrong=wrong), self.assertRaises(AssertionError):
+                        self.entry(ROOT, output, tier, plan=wrong)
+            for tier in ('slow', 'github-only'):
+                self.assertNotIn(self.NAME, dict(check_commands(ROOT, tier=tier)))
+        for platform in ('darwin', 'win32'):
+            with mock.patch.object(ci_preflight.sys, 'platform', platform):
+                self.assertNotIn(self.NAME, dict(check_commands(ROOT)))
+
+    @unittest.skipUnless(sys.platform.startswith('linux'),
+                         'real GNU ELF fixtures require Linux cc/ar/readelf; Darwin emits Mach-O')
+    def test_registered_full_collection_and_planted_assertion_propagate(self):
+        script = ROOT / 'scripts/test_check_prebuilt_glibc.py'
+        ids = discover_test_ids(script)
+        names = {test_id.rsplit('.', 1)[-1] for test_id in ids}
+        self.assertEqual(len(ids), 33)
+        self.assertEqual(len(names), 33)
+        self.assertTrue({'test_version_policy_mutation_breaks_real_rejection_assertion',
+                         'test_isoc23_policy_mutation_breaks_real_rejection_assertion'} <= names)
+        area = Path(tempfile.mkdtemp(prefix='prebuilt-glibc-registration-'))
+        print(f'prebuilt GLIBC registration evidence: {area}', flush=True)
+        mutant_root = area / 'mutant'
+        (mutant_root / 'scripts').mkdir(parents=True)
+        text = script.read_text()
+        needle = 'self.assertEqual(records[-1]["archive_members"], 3)'
+        self.assertEqual(text.count(needle), 1)
+        (mutant_root / 'scripts' / script.name).write_text(text.replace(needle, needle[:-2] + '4)', 1))
+        shutil.copyfile(ROOT / 'scripts/check_prebuilt_glibc.py',
+                        mutant_root / 'scripts/check_prebuilt_glibc.py')
+        for source, expected_code in ((ROOT, 0), (mutant_root, 1)):
+            output = area / ('fixed-logs' if expected_code == 0 else 'mutant-logs')
+            self.assertFalse(output.exists())
+            entry = self.entry(source, output)
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = run_checks([entry], output, source=source)
+            summary = json.loads((output / 'preflight-summary.json').read_text())
+            log = (output / (self.NAME + '.log')).read_text()
+            self.assertEqual(code, expected_code, log)
+            self.assertEqual([(row['name'], row['status'], row['exitCode'], row['advisory'])
+                              for row in summary['stages']],
+                             [(self.NAME, 'passed' if expected_code == 0 else 'failed',
+                               expected_code, False)])
+            rows = re.findall(r'^(test_\w+) \([^\n]+\) \.\.\. (ok|FAIL)$', log, re.MULTILINE)
+            self.assertEqual(sorted(name for name, _ in rows), sorted(names), log)
+            self.assertRegex(log, r'Ran 33 tests in ')
+            failed = [name for name, status in rows if status == 'FAIL']
+            self.assertEqual(failed, [] if expected_code == 0 else
+                             ['test_complete_inventory_members_spaces_and_content_identity'])
+            if expected_code:
+                self.assertIn('AssertionError: 3 != 4', log)
+                self.assertIn('FAILED (failures=1)', log)
+                with self.assertRaises(AssertionError):
+                    self.assertEqual(code, 0, log)
 
 
 class PreflightFailures(unittest.TestCase):
@@ -7543,10 +7622,8 @@ finally:
                     self.assertIn('deploy.yml job deploy must keep production credentials '
                                   'on a hosted standard runner', findings)
 
-    def test_github_token_alone_and_credential_comments_keep_the_pool(self):
-        original, others = self.ci_sources(), self.other_sources()
-        for reference in ('secrets.GITHUB_TOKEN', "secrets['GITHUB_TOKEN']"):
-            workflow = ('name: token\non: workflow_dispatch\npermissions:\n  contents: write\n'
+    def github_token_pool_workflow(self, reference):
+        return ('name: token\non: workflow_dispatch\npermissions:\n  contents: write\n'
                         'jobs:\n  token:\n'
                         f'    runs-on: {POST_RUNNER}\n'
                         '    # secrets.DEPLOY_KEY, id-token: write, environment: production\n'
@@ -7554,9 +7631,53 @@ finally:
                         f"      PF_CI_LABELS: '{POST_RUNNER}'\n"
                         f'      TOKEN: ${{{{ {reference} }}}}\n'
                         '    steps:\n      - run: "true"\n')
+
+    def test_github_token_alone_and_credential_comments_keep_the_pool(self):
+        self.maxDiff = None
+        original, others = self.ci_sources(), self.other_sources()
+        for reference in ('secrets.GITHUB_TOKEN', "secrets['GITHUB_TOKEN']"):
+            workflow = self.github_token_pool_workflow(reference)
             with self.subTest(reference=reference):
-                self.assertIn('token.yml job token may use GKE routing only at its exact pinned job and label',
-                              ci_workflow_findings(*original, others=dict(others, **{'token.yml': workflow})))
+                # An arbitrary token job is unregistered: its sole refusal is
+                # the independent exact-job pin policy, never credentials.
+                self.assertEqual(ci_workflow_findings(
+                    *original, others=dict(others, **{'token.yml': workflow})), [
+                        'token.yml job token may use GKE routing only at its exact pinned job and label'])
+            with self.subTest(reference=reference, route='registered corpus job'):
+                pinned = in_job(original[4], 'corpus-parity', '    env:\n',
+                                '    # secrets.DEPLOY_KEY, id-token: write, environment: production\n'
+                                '    env:\n' + f'      TOKEN: ${{{{ {reference} }}}}\n')
+                self.assertNotEqual(pinned, original[4])
+                self.assertEqual(ci_preflight._job_values(_jobs(pinned)['corpus-parity'], 'runs-on'),
+                                 [GKE_16])
+                changed = [*original]
+                changed[4] = pinned
+                self.assertEqual(ci_workflow_findings(*changed, others=others), [])
+
+    def test_wrong_github_token_classification_breaks_the_exact_positive_row(self):
+        source = inspect.getsource(ci_preflight._holds_credentials)
+        needle = "if match.group(1).upper() != 'GITHUB_TOKEN':"
+        self.assertEqual(source.count(needle), 1)
+        namespace = dict(vars(ci_preflight))
+        exec(compile(source.replace(needle, needle.replace('GITHUB_TOKEN', 'GITHUB_TOKEN_WRONG'), 1),
+                     '<github-token-misclassified-as-production>', 'exec'), namespace)
+        result = unittest.TestResult()
+        with mock.patch.object(ci_preflight, '_holds_credentials', namespace['_holds_credentials']):
+            findings = ci_workflow_findings(
+                *self.ci_sources(), others={**self.other_sources(),
+                                           'token.yml': self.github_token_pool_workflow('secrets.GITHUB_TOKEN')})
+            # The former assertIn still passes on this actual wrong classifier.
+            self.assertIn('token.yml job token may use GKE routing only at its exact pinned job and label',
+                          findings)
+            self.assertIn('token.yml job token must not expose credentials on GKE', findings)
+            type(self)('test_github_token_alone_and_credential_comments_keep_the_pool').run(result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.skipped, [])
+        self.assertTrue(result.failures)
+        for _, diagnostic in result.failures:
+            self.assertIn('AssertionError: Lists differ:', diagnostic)
+            self.assertIn('must not expose credentials on GKE', diagnostic)
 
     def test_today_release_and_deployment_jobs_pass_only_on_their_pinned_routes(self):
         self.assertEqual(ci_preflight.runner_findings(self.light_workflows()), [])
