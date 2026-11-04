@@ -19,9 +19,13 @@ import re
 import subprocess
 import sys
 import textwrap
+import time
 
 PRIMARY_BRANCH = 'main'
 MAX_ATTEMPTS = 3
+# Let the jobs API converge after the workflow_run completion event.
+JOB_POLL_INTERVAL = 30
+JOB_POLL_BOUND = 10 * 60
 # Exact entrypoints/events, independently checked in addition to workflow_run names.
 ALLOWED_WORKFLOWS = {
     '.github/workflows/ci-post.yml': frozenset({'push', 'schedule'}),
@@ -131,6 +135,14 @@ class GitHubAPI:
 
     def post(self, path):
         self._call(path, method='POST')
+
+
+def _clock():
+    return time.monotonic()
+
+
+def _sleep(seconds):
+    time.sleep(seconds)
 
 
 def _gate(run, repo, expected_attempt):
@@ -580,6 +592,38 @@ def _job_evidence(api, repo, job, *, diagnostics=None):
     return reason
 
 
+def _jobs(api, endpoint, attempt):
+    return [job for page in api.pages(f'{endpoint}/attempts/{attempt}/jobs?per_page=100')
+            for job in page['jobs']]
+
+
+def _run_changed(current, initial, repo, attempt):
+    identity = ('id', 'run_attempt', 'head_sha', 'path', 'event', 'head_branch')
+    return _gate(current, repo, attempt) or any(current[key] != initial[key] for key in identity)
+
+
+def _completed_jobs(api, endpoint, attempt, initial_run, repo):
+    jobs = _jobs(api, endpoint, attempt)
+    if jobs and all(job['status'] == 'completed' for job in jobs):
+        return jobs, None, None
+
+    started = _clock()
+    deadline = started + JOB_POLL_BOUND
+    while True:
+        remaining = deadline - _clock()
+        if remaining <= 0:
+            waited = round(max(0.0, _clock() - started), 3)
+            return jobs, waited, 'missing_or_incomplete_jobs'
+        _sleep(min(JOB_POLL_INTERVAL, remaining))
+        waited = round(max(0.0, _clock() - started), 3)
+        current = api.get(endpoint)
+        if _run_changed(current, initial_run, repo, attempt):
+            return jobs, waited, 'run_changed_during_classification'
+        jobs = _jobs(api, endpoint, attempt)
+        if jobs and all(job['status'] == 'completed' for job in jobs):
+            return jobs, waited, None
+
+
 def process(api, repo, run_id, *, dry_run=False, expected_attempt=None):
     """Return a bounded decision; lookup ambiguity always refuses the POST."""
     result = {'run_id': run_id, 'dry_run': dry_run, 'rerun': False,
@@ -595,9 +639,11 @@ def process(api, repo, run_id, *, dry_run=False, expected_attempt=None):
             result['reason'] = reason
             return result
         attempt = int(run['run_attempt'])
-        jobs = [job for page in api.pages(f'{endpoint}/attempts/{attempt}/jobs?per_page=100') for job in page['jobs']]
-        if not jobs or any(job['status'] != 'completed' for job in jobs):
-            result['reason'] = 'missing_or_incomplete_jobs'
+        jobs, waited, reason = _completed_jobs(api, endpoint, attempt, run, repo)
+        if waited is not None:
+            result['waited_seconds'] = waited
+        if reason:
+            result['reason'] = reason
             return result
         if any(job['conclusion'] not in {'success', 'skipped', 'neutral', 'failure'} for job in jobs):
             result['reason'] = 'ambiguous_unsuccessful_job'
@@ -611,7 +657,11 @@ def process(api, repo, run_id, *, dry_run=False, expected_attempt=None):
             specs = _workflow_jobs(api, repo, run)
             # Map failures first so an unresolvable failure names its blocker.
             mapped = _map_jobs(specs, failed)
-            mapped.update(_map_jobs(specs, [j for j in jobs if j not in failed]))
+            # A skipped matrix row may collapse to an aggregate display name
+            # when a docs-only condition is evaluated before expansion. It
+            # cannot be a failed DAG node, so only non-skipped jobs need aliases.
+            mapped.update(_map_jobs(specs, [j for j in jobs
+                                           if j not in failed and j['conclusion'] != 'skipped']))
             failed_needs = {
                 int(job['id']): {int(other['id']) for other in failed
                                 if any(mapped[int(other['id'])] in specs[need]['members']
@@ -658,8 +708,7 @@ def process(api, repo, run_id, *, dry_run=False, expected_attempt=None):
             return result
         # Re-read just before mutation; concurrency serializes controller runs too.
         current = api.get(endpoint)
-        identity = ('id', 'run_attempt', 'head_sha', 'path', 'event', 'head_branch')
-        if _gate(current, repo, attempt) or any(current[key] != run[key] for key in identity):
+        if _run_changed(current, run, repo, attempt):
             result['reason'] = 'run_changed_during_classification'
             return result
         if not dry_run:

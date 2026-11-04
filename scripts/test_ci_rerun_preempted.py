@@ -54,6 +54,8 @@ class FakeAPI:
         self.endpoint = f'repos/{REPO}/actions/runs/{self.run["id"]}'
         self.jobs_path = f'{self.endpoint}/attempts/{self.run["run_attempt"]}/jobs?per_page=100'
         self.job_pages = deepcopy([{'jobs': [CUT_JOB]}] if job_pages is None else job_pages)
+        self.job_pages_after = []
+        self.job_reads = 0
         self.calls = []
         self.reads = 0
         self.annotation_error = None
@@ -105,7 +107,10 @@ class FakeAPI:
     def pages(self, path):
         self.calls.append(('PAGES', path))
         if path == self.jobs_path:
-            return deepcopy(self.job_pages)
+            self.job_reads += 1
+            pages = (self.job_pages_after.pop(0)
+                     if self.job_reads > 1 and self.job_pages_after else self.job_pages)
+            return deepcopy(pages)
         if path not in self.annotations:
             raise AssertionError('unexpected paginated lookup')
         if self.annotation_error:
@@ -270,8 +275,15 @@ class ControllerTests(unittest.TestCase):
                 job.update(mutation)
                 self.assert_refused(FakeAPI(job_pages=[{'jobs': [job]}]), reason)
 
-    def test_incomplete_ambiguous_jobs_refused(self):
-        self.assert_refused(FakeAPI(job_pages=[]), 'missing_or_incomplete_jobs')
+    def test_incomplete_jobs_poll_before_deciding(self):
+        pending = deepcopy(CUT_JOB)
+        pending['status'] = 'in_progress'
+        api = FakeAPI(job_pages=[{'jobs': [pending]}])
+        api.job_pages_after = [[{'jobs': [CUT_JOB]}]]
+        with patch.object(controller, '_sleep'):
+            result = self.decide(api)
+        self.assertTrue(result['rerun'], result)
+        self.assertIn('waited_seconds', result)
         for mutation, reason in (
                 ({'status': 'in_progress'}, 'missing_or_incomplete_jobs'),
                 ({'conclusion': 'cancelled'}, 'ambiguous_unsuccessful_job'),
@@ -280,7 +292,15 @@ class ControllerTests(unittest.TestCase):
             with self.subTest(mutation=mutation):
                 job = deepcopy(CUT_JOB)
                 job.update(mutation)
-                self.assert_refused(FakeAPI(job_pages=[{'jobs': [job]}]), reason)
+                api = FakeAPI(job_pages=[{'jobs': [job]}])
+                if mutation.get('status') == 'in_progress':
+                    with patch.object(controller, '_clock',
+                                      side_effect=(0, controller.JOB_POLL_BOUND,
+                                                   controller.JOB_POLL_BOUND)):
+                        result = self.assert_refused(api, reason)
+                    self.assertEqual(result['waited_seconds'], controller.JOB_POLL_BOUND)
+                else:
+                    self.assert_refused(api, reason)
 
     def test_optional_annotations_and_dry_run(self):
         api = FakeAPI()
@@ -1116,6 +1136,16 @@ class AggregateTests(unittest.TestCase):
         api = case_api(SMALL_FLOW + '\n  other:\n    name: Result\n',
                        ('Worker (linux, one)', 'loss'), ('Result', 'gate'))
         self.refused(api, 'aggregate_mapping_unavailable', 101)
+        flow = SMALL_FLOW + '''
+  other:
+    name: Hidden
+  duplicate:
+    name: Hidden
+'''
+        api = case_api(flow, ('Worker (linux, one)', 'loss'),
+                       ('Result', 'gate'), ('Hidden', 'ok'))
+        api.job_pages[0]['jobs'][2]['conclusion'] = 'skipped'
+        self.accepted(api, [101])
 
     def test_needs_not_name_or_order(self):
         flow = SMALL_FLOW.replace('needs: work', 'needs: unrelated') + '''
