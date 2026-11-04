@@ -104,6 +104,11 @@ def identity(info: os.stat_result) -> dict:
     }
 
 
+def ancestor_identity(info: os.stat_result) -> tuple[int, int, int]:
+    # Ancestors can gain unrelated entries without being replaced.
+    return info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
+
+
 def directory_flags() -> int:
     return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
@@ -124,7 +129,7 @@ def open_root(root: Path) -> int:
             child = os.open(name, directory_flags(), dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child
-            if identity(os.fstat(descriptor)) != identity(info):
+            if ancestor_identity(os.fstat(descriptor)) != ancestor_identity(info):
                 raise InspectionError(f"root component changed while opening: {current}")
         return descriptor
     except BaseException:

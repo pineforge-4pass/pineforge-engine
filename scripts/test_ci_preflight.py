@@ -4506,9 +4506,13 @@ class PrebuiltGlibcRegistration(unittest.TestCase):
         script = ROOT / 'scripts/test_check_prebuilt_glibc.py'
         ids = discover_test_ids(script)
         names = {test_id.rsplit('.', 1)[-1] for test_id in ids}
-        self.assertEqual(len(ids), 33)
-        self.assertEqual(len(names), 33)
-        self.assertTrue({'test_version_policy_mutation_breaks_real_rejection_assertion',
+        # expectation corrected: 33 -> 35, because the ancestor-entry and
+        # inode-replacement controls extend the complete existing collection.
+        self.assertEqual(len(ids), 35)
+        self.assertEqual(len(names), 35)
+        self.assertTrue({'test_ancestor_entry_added_between_stat_and_open_is_accepted',
+                         'test_ancestor_inode_replaced_between_stat_and_open_is_refused',
+                         'test_version_policy_mutation_breaks_real_rejection_assertion',
                          'test_isoc23_policy_mutation_breaks_real_rejection_assertion'} <= names)
         area = Path(tempfile.mkdtemp(prefix='prebuilt-glibc-registration-'))
         print(f'prebuilt GLIBC registration evidence: {area}', flush=True)
@@ -4535,7 +4539,7 @@ class PrebuiltGlibcRegistration(unittest.TestCase):
                                expected_code, False)])
             rows = re.findall(r'^(test_\w+) \([^\n]+\) \.\.\. (ok|FAIL)$', log, re.MULTILINE)
             self.assertEqual(sorted(name for name, _ in rows), sorted(names), log)
-            self.assertRegex(log, r'Ran 33 tests in ')
+            self.assertRegex(log, r'Ran 35 tests in ')
             failed = [name for name, status in rows if status == 'FAIL']
             self.assertEqual(failed, [] if expected_code == 0 else
                              ['test_complete_inventory_members_spaces_and_content_identity'])

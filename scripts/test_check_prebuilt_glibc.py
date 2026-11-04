@@ -508,6 +508,83 @@ class RealArtifacts(unittest.TestCase):
         records = self.assert_verdict(self.run_checker(), False)
         self.assert_issue(records, link, "symlink")
 
+    def test_ancestor_entry_added_between_stat_and_open_is_accepted(self):
+        ancestor = self.root
+        self.root = ancestor / "payload"
+        declare(self.root)
+        self.generated(self.root).mkdir()
+        path = self.shared("lib/good.so")
+        entry = ancestor / "parallel ctest entry"
+        declare(entry)
+        self.generated(entry)
+        module = self.load_checker()
+        original = os.open
+        mutations = []
+
+        def add_entry(name, flags, *args, **kwargs):
+            if (name == ancestor.name and flags & os.O_DIRECTORY
+                    and kwargs.get("dir_fd") is not None and not mutations
+                    and os.path.samestat(os.fstat(kwargs["dir_fd"]), self.area.stat())):
+                # open_root has already statted this ancestor, but has not
+                # opened it yet. The entry is outside the staged payload.
+                before = ancestor.stat()
+                entry.mkdir()
+                # Force distinct metadata even on a coarse timestamp clock.
+                os.utime(ancestor, ns=(before.st_atime_ns,
+                                      before.st_mtime_ns + 1_000_000_000))
+                mutations.append((before, ancestor.stat()))
+            return original(name, flags, *args, **kwargs)
+
+        with mock.patch.object(module.os, "open", side_effect=add_entry):
+            outcome = self.in_process(module)
+        self.assertEqual(len(mutations), 1)
+        before, after = mutations[0]
+        self.assertTrue(entry.is_dir())
+        self.assertEqual((before.st_dev, before.st_ino, before.st_mode),
+                         (after.st_dev, after.st_ino, after.st_mode))
+        self.assertNotEqual(before.st_mtime_ns, after.st_mtime_ns)
+        records = self.assert_verdict(outcome, True)
+        self.assertTrue(self.targets(records)[str(path)]["inspected"])
+
+    def test_ancestor_inode_replaced_between_stat_and_open_is_refused(self):
+        ancestor = self.root
+        self.root = ancestor / "payload"
+        declare(self.root)
+        self.generated(self.root).mkdir()
+        path = self.shared("lib/good.so")
+        replacement = self.area / "replacement ancestor"
+        retired = self.area / "original ancestor"
+        declare(replacement, retired)
+        self.generated(retired)
+        # Keep a valid payload in the replacement so a weakened identity
+        # check cannot pass this control by failing on missing libraries.
+        self.copy(path, replacement / path.relative_to(ancestor))
+        module = self.load_checker()
+        original = os.open
+        mutations = []
+
+        def replace_ancestor(name, flags, *args, **kwargs):
+            if (name == ancestor.name and flags & os.O_DIRECTORY
+                    and kwargs.get("dir_fd") is not None and not mutations
+                    and os.path.samestat(os.fstat(kwargs["dir_fd"]), self.area.stat())):
+                before = ancestor.stat()
+                ancestor.rename(retired)
+                replacement.rename(ancestor)
+                mutations.append((before, ancestor.stat()))
+            return original(name, flags, *args, **kwargs)
+
+        with mock.patch.object(module.os, "open", side_effect=replace_ancestor):
+            outcome = self.in_process(module)
+        self.assertEqual(len(mutations), 1)
+        before, after = mutations[0]
+        self.assertEqual(before.st_dev, after.st_dev)
+        self.assertEqual(before.st_mode, after.st_mode)
+        self.assertNotEqual(before.st_ino, after.st_ino)
+        records = self.assert_verdict(outcome, False)
+        self.assert_issue(records, self.root, "root component changed")
+        self.assertEqual(records[-1]["inspected"], 0)
+        self.assertFalse(any(row["event"] == "command" for row in records))
+
     def test_protected_entry_and_library_named_directory_fail_without_content_reads(self):
         self.shared("lib/good.so")
         protected = self.root / ".env"
