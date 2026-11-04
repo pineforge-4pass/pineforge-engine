@@ -26,6 +26,9 @@ namespace pineforge {
 struct WindowCacheCapacity {
     static constexpr std::size_t kKeepResident = std::numeric_limits<std::size_t>::max();
     std::size_t pages = kKeepResident;
+    // Captured with the existing evaluation context at owner construction.
+    // Later scope changes never retune an existing window or its COW clone.
+    ScratchIoPolicy scratch_io_policy{};
 };
 
 inline WindowCacheCapacity& window_cache_capacity() {
@@ -222,8 +225,9 @@ private:
         ScratchFile file{ScratchFile::IoRaiser::auxiliary};
         // Checkpoint copies can read one backing from distinct owners.
         std::mutex io_mutex;
-        Backing() {
+        explicit Backing(const ScratchIoPolicy& policy) {
             file.bound_cache();
+            file.set_scratch_io_policy(policy);
             file.open("pineforge-window-");
         }
     };
@@ -303,7 +307,7 @@ private:
     }
     void make_writable_backing() {
         if (backing_ && backing_.unique()) return;
-        auto replacement = std::make_shared<Backing>();
+        auto replacement = std::make_shared<Backing>(capacity_.scratch_io_policy);
         std::array<T, kChunk> transfer;
         if (!backing_) transfer.fill(initial_);
         for (std::size_t page = 0; page != page_count(); ++page) {

@@ -40,7 +40,7 @@ int failures = 0;
 } while (0)
 
 constexpr std::array<CacheCapacity CacheDefaults::*, 19> members{{
-    &CacheDefaults::ledger_rows, &CacheDefaults::trade_pages,
+    nullptr, &CacheDefaults::trade_pages,
     &CacheDefaults::dependency_pages, &CacheDefaults::exit_pages,
     &CacheDefaults::book_pages, &CacheDefaults::retained_sequence_pages,
     &CacheDefaults::cohort_id_pages, &CacheDefaults::exit_rank_pages,
@@ -64,10 +64,18 @@ constexpr std::array<std::uint32_t, 19> kinds{{
     PF_CACHE_KIND_PROJECTION_EXIT_PAGES,
 }};
 
+CacheCapacity capacity(const CacheDefaults& policy, std::size_t index) {
+    return index == 0 ? static_cast<CacheCapacity>(policy.ledger_rows) : policy.*members[index];
+}
+void set_capacity(CacheDefaults& policy, std::size_t index, std::size_t bytes) {
+    if (index == 0) policy.ledger_rows.capacity_bytes = bytes;
+    else (policy.*members[index]).capacity_bytes = bytes;
+}
+
 bool same_policy(const CacheDefaults& a, const CacheDefaults& b) {
-    for (const auto member : members)
-        if ((a.*member).capacity_bytes != (b.*member).capacity_bytes) return false;
-    return true;
+    for (std::size_t i = 0; i < members.size(); ++i)
+        if (capacity(a, i).capacity_bytes != capacity(b, i).capacity_bytes) return false;
+    return a.ledger_rows.automatic() == b.ledger_rows.automatic();
 }
 
 pf_strategy_t handle(BacktestEngine& engine) { return static_cast<pf_strategy_t>(&engine); }
@@ -234,14 +242,15 @@ void descriptor_validation() {
     // Every kind replaces its intended field; omitted kinds reset to defaults
     // even if the immediately preceding successful call overrode them.
     for (std::size_t i = 0; i < kinds.size(); ++i) {
-        const auto capacity = i == 0 ? line + 101 : 101 + i;
-        const pf_cache_policy_entry_v1 one{kinds[i], 0, capacity};
+        const auto bytes = i == 0 ? line + 101 : 101 + i;
+        const pf_cache_policy_entry_v1 one{kinds[i], 0, bytes};
         const auto single = descriptor(&one, 1);
         CHECK(strategy_set_cache_policy_v1(handle(engine), &single) == 0);
         for (std::size_t j = 0; j < members.size(); ++j) {
-            const auto expected = j == i ? capacity : (defaults.*members[j]).capacity_bytes;
-            CHECK((engine.cache_policy_config().*members[j]).capacity_bytes == expected);
+            const auto expected = j == i ? bytes : capacity(defaults, j).capacity_bytes;
+            CHECK(capacity(engine.cache_policy_config(), j).capacity_bytes == expected);
         }
+        CHECK(engine.cache_policy_config().ledger_rows.automatic() == (i != 0));
     }
 }
 
@@ -372,6 +381,46 @@ void copied_ledger_policy() {
     }
 }
 
+void typed_ledger_policy_presence() {
+    CacheDefaults policy;
+    CHECK(policy.ledger_rows.automatic());
+    const auto initial = TradeLedger::cache_capacity_bytes(TradeLedger::kDefaultCacheRows);
+    policy.ledger_rows = CacheCapacity{initial};
+    CHECK(!policy.ledger_rows.automatic() && policy.ledger_rows.capacity_bytes == initial);
+    CacheDefaults copy(policy);
+    CHECK(!copy.ledger_rows.automatic());
+    copy.ledger_rows = LedgerCachePolicy{};
+    CHECK(copy.ledger_rows.automatic());
+    // Existing direct byte-assignment spelling also has explicit presence.
+    copy.ledger_rows.capacity_bytes = initial;
+    CHECK(!copy.ledger_rows.automatic() && copy.ledger_rows.capacity_bytes == initial);
+    copy.ledger_rows.capacity_bytes = 0;
+    CHECK(!copy.ledger_rows.automatic() && copy.ledger_rows.capacity_bytes == 0);
+    Probe engine;
+    engine.set_cache_policy(copy);
+    CHECK(!engine.cache_policy_config().ledger_rows.automatic());
+    CHECK(engine.cache_policy_config().ledger_rows.capacity_bytes == 0);
+    policy.ledger_rows = LedgerCachePolicy{};
+    engine.set_cache_policy(policy);
+    CHECK(engine.cache_policy_config().ledger_rows.automatic());
+    TradeLedger ledger(0);
+    ledger.set_cache_auto();
+    CHECK(ledger.cache_rows() == TradeLedger::kDefaultCacheRows);
+    ledger.set_cache_rows(0);
+    CHECK(ledger.cache_rows() == 0);
+    ledger.set_cache_auto();
+    ledger.push_back(Trade{});
+    bool frozen = false;
+    try { ledger.set_cache_auto(); }
+    catch (const std::invalid_argument& error) {
+        frozen = true;
+        const auto failure = classify_run_failure(error);
+        CHECK(failure.code == RunFailureCode::setting_rejected);
+        CHECK(failure.args && *failure.args == "{\"input\":\"cache_policy\",\"reason\":\"frozen\"}");
+    }
+    CHECK(frozen);
+}
+
 void copy_and_next_run(const std::vector<Bar>& bars) {
     Probe engine;
     const CacheDefaults defaults;
@@ -453,6 +502,37 @@ void run_freeze(const std::vector<Bar>& bars) {
     CHECK(same_policy(stream.cache_policy_config(), CacheDefaults{}));
 }
 
+// Baseline-compatible behavioral RED: no new declarations are needed. The
+// old consumer makes omission and an explicit old-default byte value finite.
+void descriptor_default_and_explicit_run_setup() {
+    auto bars = feed();
+    const auto population = TradeLedger::kDefaultCacheRows + 3;
+    while (bars.size() < population) {
+        auto next = bars.back();
+        next.timestamp += 60000;
+        bars.push_back(next);
+    }
+    Probe engine;
+    pf_cache_policy_entry_v1 entry{PF_CACHE_KIND_LEDGER_CACHE, 0,
+        TradeLedger::cache_capacity_bytes(TradeLedger::kDefaultCacheRows)};
+    auto policy = descriptor(&entry, 1);
+    // Reconfiguration between runs must preserve presence, not guess from
+    // equality with the default byte value. Null and empty both restore AUTO.
+    for (const int mode : {0, 1, 2, 3, 1}) {
+        entry.capacity_bytes = mode == 2 ? 0
+            : TradeLedger::cache_capacity_bytes(TradeLedger::kDefaultCacheRows);
+        const auto empty = descriptor(nullptr, 0);
+        CHECK(strategy_set_cache_policy_v1(handle(engine),
+            mode == 0 ? nullptr : mode == 3 ? &empty : &policy) == 0);
+        engine.run(bars.data(), static_cast<int>(bars.size()));
+        CHECK(engine.last_run_status() == 0 && engine.last_error().empty());
+        CHECK(engine.trade_count() > static_cast<int>(TradeLedger::kDefaultCacheRows));
+        CHECK(engine.ledger_rows() == (mode == 0 || mode == 3
+            ? 2 * TradeLedger::kDefaultCacheRows
+            : mode == 2 ? 0 : TradeLedger::kDefaultCacheRows));
+    }
+}
+
 struct TemporaryDirectory {
     char name[64] = "/tmp/pineforge-cache-policy-XXXXXX";
     TemporaryDirectory() {
@@ -475,9 +555,12 @@ struct Result {
 Result run_sink(const std::vector<Bar>& bars, const CacheDefaults& settings, const std::string& path) {
     Probe engine;
     std::array<pf_cache_policy_entry_v1, kinds.size()> entries{};
-    for (std::size_t i = 0; i < kinds.size(); ++i)
-        entries[i] = {kinds[i], 0, (settings.*members[i]).capacity_bytes};
-    const auto policy = descriptor(entries.data(), entries.size());
+    std::size_t count = 0;
+    for (std::size_t i = 0; i < kinds.size(); ++i) {
+        if (i == 0 && settings.ledger_rows.automatic()) continue;
+        entries[count++] = {kinds[i], 0, capacity(settings, i).capacity_bytes};
+    }
+    const auto policy = descriptor(entries.data(), count);
     CHECK(strategy_set_cache_policy_v1(handle(engine), &policy) == 0);
     const auto bytes = settings.ledger_rows.capacity_bytes;
     engine.set_trace_enabled(true);
@@ -516,9 +599,9 @@ void byte_identity(const std::vector<Bar>& bars) {
     CHECK(large.bytes.find("[\"H\",") != std::string::npos);
     CHECK(large.cached_rows > 1);
     CacheDefaults bypass, subline, tiny;
-    for (const auto member : members) {
-        (bypass.*member).capacity_bytes = 0;
-        (subline.*member).capacity_bytes = 1;
+    for (std::size_t i = 0; i < members.size(); ++i) {
+        set_capacity(bypass, i, 0);
+        set_capacity(subline, i, 1);
     }
     // The ledger rejects nonzero sub-entry bytes; zero is its explicit bypass.
     // The subline run still supplies one byte to every other cache kind.
@@ -539,7 +622,7 @@ void byte_identity(const std::vector<Bar>& bars) {
         detail::FeedProjection<source::RecordedSeriesRow>::page_bytes(),
         detail::ReadThroughCache::line_bytes(512),
     }};
-    for (std::size_t i = 0; i < members.size(); ++i) (tiny.*members[i]).capacity_bytes = one_line[i];
+    for (std::size_t i = 0; i < members.size(); ++i) set_capacity(tiny, i, one_line[i]);
     for (const auto& setting : std::array<std::pair<const char*, CacheDefaults>, 3>{{
              {"bypass", bypass}, {"subline", subline}, {"tiny", tiny}}}) {
         const auto small = run_sink(bars, setting.second, base + setting.first);
@@ -636,8 +719,10 @@ int main() {
         ledger_byte_validation();
         retired_kind_validation();
         copied_ledger_policy();
+        typed_ledger_policy_presence();
         copy_and_next_run(bars);
         run_freeze(bars);
+        descriptor_default_and_explicit_run_setup();
         byte_identity(bars);
         module_constructors();
     } catch (const std::exception& error) {

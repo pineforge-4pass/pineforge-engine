@@ -29,6 +29,7 @@
 
 namespace pineforge::detail {
 class ScratchSlab;
+class NativeHistoryOwner;
 struct ReadThroughCacheStats;
 }
 // The matcher (src/native_execution_consumer.hpp) is declared in the engine
@@ -2343,6 +2344,9 @@ public:
 
 private:
     enum class TargetKind { Live, NotWorking, InvalidHandle };
+    // Native-private bridge. The existing opaque journal owns the resource;
+    // this borrow ends at reset/move/destruction, like its other core reads.
+    const detail::NativeHistoryOwner* managed_history_owner() const noexcept;
     friend void bind_journal_codec(WorkingRequestCore&, detail::CommandScratchStore&);
     friend detail::ScratchStatus append_journal_record(WorkingRequestCore&,
         const detail::ScratchByteSource&) noexcept;

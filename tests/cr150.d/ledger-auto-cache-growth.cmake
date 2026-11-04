@@ -1,0 +1,5 @@
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND TEST_SOURCES test_ledger_auto_cache_growth)
+    pineforge_add_unit_test(test_ledger_auto_cache_growth)
+    set_tests_properties(test_ledger_auto_cache_growth PROPERTIES LABELS "slow;mem")
+endif()

@@ -22,7 +22,17 @@ class ScratchSequence {
     static_assert(sizeof(T) <= 64 * 1024);
     static constexpr std::size_t kValues = 64 * 1024 / sizeof(T);
 public:
-    ScratchSequence() { file_.bound_cache(); }
+    ScratchSequence() : ScratchSequence(ScratchIoPolicy{}) {}
+    explicit ScratchSequence(const ScratchIoPolicy& policy) {
+        file_.bound_cache();
+        file_.set_scratch_io_policy(policy);
+    }
+    void set_scratch_io_policy(const ScratchIoPolicy& policy) {
+        file_.set_scratch_io_policy(policy);
+    }
+    const ScratchIoPolicy& scratch_io_policy() const noexcept {
+        return file_.scratch_io_policy();
+    }
     class const_iterator {
     public:
         using iterator_category = std::input_iterator_tag;
@@ -98,7 +108,7 @@ public:
     }
     template<class Compare>
     void stable_sort(Compare before) {
-        ScratchSequence scratch;
+        ScratchSequence scratch(scratch_io_policy());
         scratch.set_directory(directory_);
         for (std::size_t width = 1; width < size();) {
             scratch.clear();

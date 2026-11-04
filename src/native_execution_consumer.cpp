@@ -1,4 +1,5 @@
 #include "native_execution_consumer.hpp"
+#include "native_issued_range_state.hpp"
 #include "engine_internal.hpp"
 #include "engine_value_invalid.hpp"
 #include "engine_settlement_stage.hpp"
@@ -1345,6 +1346,12 @@ std::unique_ptr<IExecutionConsumer> make_native_execution_consumer() {
     return std::make_unique<NativeExecutionConsumer>();
 }
 
+detail::NativeHistoryRegistryStats NativeExecutionConsumer::managed_history_registry_stats() const {
+    // All current/retained/nested cores, including UNSUPPLIED registrations
+    // and older context snapshots. Private source facts, not physical fields.
+    return detail::native_history_registry.stats();
+}
+
 bool NativeExecutionConsumer::failed() const noexcept {
     return std::holds_alternative<NativeFailed>(state_);
 }
@@ -1841,6 +1848,7 @@ bool NativeExecutionConsumer::prepare_public_begin(
         return false;
     }
     cache_policy_attempt_ = cache_policy_config_;
+    scratch_io_policy_attempt_ = scratch_io_policy_config_;
     struct RestorePolicyPreparation {
         bool& flag;
         bool previous;
@@ -3066,6 +3074,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         return false;
     }
     cache_policy_run_ = cache_policy_attempt_;
+    scratch_io_policy_run_ = scratch_io_policy_attempt_;
     release_run_command_scratch();
     for (auto& run : run_command_scratch_) run.reset();
     dependency_scratch_stats_ = {};
@@ -3205,8 +3214,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     engine.trades_.set_scratch_directory(engine.report_sink_state_.scratch_dir);
     // Reset above closed the previous generation before its new allowance is
     // applied. Sink and array runs share the same internal default.
-    engine.trades_.set_cache_rows(
-        CacheDefaults::ledger_cache_rows(cache_policy_run_.ledger_rows));
+    cache_policy_run_.apply_ledger_cache(engine.trades_);
     precommit_digest_.reset();
     margin_liquidation_.reset();
     has_margin_path_ = false;

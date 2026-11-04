@@ -26,6 +26,7 @@
 #include <vector>
 #include "report_scratch.hpp"
 namespace pineforge::report { struct LiveReportPatch; }
+namespace pineforge::detail { struct NativeHistoryRegistryStats; }
 #define PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1 1
 
 namespace pineforge {
@@ -212,6 +213,19 @@ public:
     }
     void set_cache_policy_config(const CacheDefaults& policy) noexcept {
         cache_policy_config_ = policy;
+    }
+    const ScratchIoPolicy& scratch_io_policy_config() const noexcept {
+        return scratch_io_policy_config_;
+    }
+    const ScratchIoPolicy& scratch_io_policy_for_run() const noexcept {
+        return cache_policy_preparing_ ? scratch_io_policy_attempt_ : scratch_io_policy_run_;
+    }
+    void set_scratch_io_policy_config(const ScratchIoPolicy& policy) noexcept {
+        scratch_io_policy_config_ = policy;
+    }
+    bool scratch_io_policy_setter_busy() const noexcept {
+        return preparing_begin_ || cache_policy_preparing_ || in_callback_
+            || processing_input_ || in_attempt_call_ || running();
     }
     // Whether the configured spec's script bars are buckets gathered from its
     // input under the resolved pairing (native_aggregates_input_bars).
@@ -626,6 +640,12 @@ public:
     // index V19-B keeps in the core -- against an oracle folded over the whole
     // journal. No host reaches it.
     const native_order::WorkingRequestCore& request_core() const noexcept { return requests_; }
+    // Private-header bridge for the host integration stage. No Pine-specific
+    // adapter dependency or installed/public provider setter is introduced.
+    const detail::NativeHistoryOwner* managed_history_owner() const noexcept {
+        return requests_.managed_history_owner();
+    }
+    detail::NativeHistoryRegistryStats managed_history_registry_stats() const;
 
     // The host's parked lookup cache (NativeHostCache), or null. A host adopts
     // one per run and it lives until the next run begin or the next adoption.
@@ -1823,6 +1843,9 @@ private:
     CacheDefaults cache_policy_config_{};
     CacheDefaults cache_policy_attempt_{};
     CacheDefaults cache_policy_run_{};
+    ScratchIoPolicy scratch_io_policy_config_{};
+    ScratchIoPolicy scratch_io_policy_attempt_{};
+    ScratchIoPolicy scratch_io_policy_run_{};
     bool cache_policy_preparing_ = false;
     void leave_running() noexcept { running_spec_ = nullptr; }
     // The caches beside the lookups they replace, compared bit for bit by
