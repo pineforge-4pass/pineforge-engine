@@ -11221,6 +11221,9 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
             'gke-pr.yml job build-debug must use a bare scalar GKE scale-set name',
             'gke-pr.yml job build-debug may use GKE routing only at its exact pinned job and label',
             'gke-pr.yml job build-debug must run on gke-16cpu-32gb-amd64-128gb',
+            # The source runner contract checks each parsed job's parallelism;
+            # the folded ARM body therefore also exposes build-debug's size check.
+            'gke-pr.yml job build-debug must size its parallelism to the runner',
         ]
         number = changed.splitlines().index(quoted) + 1
         self.assertEqual(gke_admit_workflow_findings(changed), shape)
@@ -11465,9 +11468,12 @@ class GkeAdmissionRuleTests(unittest.TestCase):
 
     def test_result_and_checkout_mutations_are_red(self) -> None:
         original = self.workflow()
+        with self.subTest(finding='gke-pr.yml result must run always'):
+            self.assert_workflow_mutation(
+                original,
+                in_job(original, 'result', '    if: always()\n', '    if: success()\n'),
+                'gke-pr.yml result must run always')
         cases = (
-            ('    if: always()\n', '    if: success()\n',
-             'gke-pr.yml result must run always'),
             ('    needs: [admit, preflight, build-x86-gcc133, legs]\n',
              '    needs: [admit, preflight]\n',
              'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results'),
