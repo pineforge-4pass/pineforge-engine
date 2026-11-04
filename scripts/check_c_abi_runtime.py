@@ -140,6 +140,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_set_scratch_io_policy_v1",
     "strategy_report_sink_summary_v1",
     "strategy_stream_engine_layout_version", "pf_output_series_limit_set_checked", "pf_output_series_limit_failure",
+    "pf_map_pairs_limit_set_checked",
 })
 
 # The headers under include/pineforge/ whose PF_API declarations are read as one

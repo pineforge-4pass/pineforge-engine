@@ -5634,11 +5634,22 @@
   },
   {
    "file": "include/pineforge/map.hpp",
+   "symbol": "new_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1"
+   ],
+   "cls": "decl",
+   "spelling": "PineMap",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/map.hpp",
    "symbol": "storage",
    "scope": [
     "namespace pineforge #1",
     "template < typename Key , typename Value > class PineMap #1",
-    "[ [ nodiscard ] ] static PineMap new_ ( ) #1"
+    "[ [ nodiscard ] ] static PineMap new_ ( std :: uint64_t maximum ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
@@ -5650,7 +5661,7 @@
    "scope": [
     "namespace pineforge #1",
     "template < typename Key , typename Value > class PineMap #1",
-    "[ [ nodiscard ] ] static PineMap new_ ( ) #1"
+    "[ [ nodiscard ] ] static PineMap new_ ( std :: uint64_t maximum ) #1"
    ],
    "cls": "temp",
    "spelling": "PineMap",
@@ -5792,11 +5803,23 @@
   },
   {
    "file": "include/pineforge/map.hpp",
+   "symbol": "store",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1",
+    "static void resize_exact ( Storage & storage , StoreId id , std :: uint64_t bytes ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "store . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
    "symbol": "heap_values",
    "scope": [
     "namespace pineforge #1",
     "template < typename Key , typename Value > class PineMap #1",
-    "static void set_heap_value ( Storage & storage , std :: uint32_t slot , Value && value ) #1"
+    "static void set_heap_value ( Storage & storage , std :: uint64_t slot , Value && value ) #1"
    ],
    "cls": "grow",
    "spelling": "heap_values . resize ( . . . )",
@@ -26718,6 +26741,36 @@
    "cls": "alloc",
    "spelling": "make_unique",
    "ordinal": 1
+  },
+  {
+   "file": "src/script_store.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/script_store.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/script_store.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 3
   },
   {
    "file": "src/script_string.cpp",

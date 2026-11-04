@@ -1215,8 +1215,9 @@ class RealTree(unittest.TestCase):
         self.assertGreater(c['entries_matched'], 0)
         self.assertEqual(c['findings'], 0)
         self.assertEqual(c['PASS(bounded)'], 0)
-        # Exact manifest entry counts: unreviewed + pending-flat-memory.
-        self.assertEqual(c['OPEN'], 1354 + 184)
+        # Exact manifest union: 1,344 original unreviewed groups, ten time-format
+        # groups and two map groups; all 184 pending-flat-memory groups remain.
+        self.assertEqual(c['OPEN'], 1356 + 184)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')

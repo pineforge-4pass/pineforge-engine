@@ -8369,6 +8369,41 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
 endif()
 # --- CR-150 roster-pass-work end ---
 
+# --- CR-150 cr559-map-capacity begin ---
+if(UNIX)
+    target_link_libraries(test_cr559_map_capacity_limit PRIVATE ${CMAKE_DL_LIBS})
+    if(APPLE)
+        target_link_options(test_cr559_map_capacity_limit PRIVATE "-Wl,-export_dynamic")
+    else()
+        target_link_options(test_cr559_map_capacity_limit PRIVATE "-Wl,--export-dynamic")
+    endif()
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        target_link_libraries(test_cr559_map_capacity_run PRIVATE ${CMAKE_DL_LIBS})
+        if(APPLE)
+            target_link_options(test_cr559_map_capacity_run PRIVATE "-Wl,-export_dynamic")
+        else()
+            target_link_options(test_cr559_map_capacity_run PRIVATE "-Wl,--export-dynamic")
+        endif()
+    endif()
+    if(NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+        add_library(cr559_map_capacity_fixture MODULE cr559_map_capacity_cli_fixture.cpp)
+        target_link_libraries(cr559_map_capacity_fixture PRIVATE pineforge)
+        target_compile_options(cr559_map_capacity_fixture PRIVATE -ffp-contract=off -UNDEBUG)
+        if(APPLE)
+            target_link_options(cr559_map_capacity_fixture PRIVATE
+                "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+        else()
+            target_link_options(cr559_map_capacity_fixture PRIVATE
+                "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+        endif()
+        add_test(NAME test_cr559_map_capacity_cli
+            COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/cr559_map_capacity_cli.py
+                --library $<TARGET_FILE:cr559_map_capacity_fixture>
+                --runner ${PROJECT_SOURCE_DIR}/docker/run_json.py)
+    endif()
+endif()
+# --- CR-150 cr559-map-capacity end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

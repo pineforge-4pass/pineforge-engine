@@ -215,7 +215,13 @@ def validate_catalog(catalog: dict, text: str | None = None) -> list[str]:
             continue
         for arg_name, arg in args.items():
             at = f"{where} arg {arg_name}"
-            if not NAME.match(arg_name) and not re.match(r"^[a-z][a-z0-9_]{1,47}$", arg_name):
+            # Preserve the provider's exact map-error context names. This
+            # closed exception admits no other camel-case catalog arguments.
+            tv_map_context = (name == "pine_map_capacity_exceeded"
+                              and arg_name in {"maxSize", "currSize"})
+            if (not NAME.match(arg_name)
+                    and not re.match(r"^[a-z][a-z0-9_]{1,47}$", arg_name)
+                    and not tv_map_context):
                 errors.append(f"{at}: name must be lower snake_case")
             if not isinstance(arg, dict):
                 errors.append(f"{at}: must be an object")
@@ -726,6 +732,21 @@ def self_test() -> int:
     failures = []
     if validate_catalog(good, canonical(good)):
         failures.append("a valid catalog was refused: " + repr(validate_catalog(good)))
+    tv_map = json.loads(json.dumps(good))
+    tv_map["codes"]["pine_map_capacity_exceeded"] = {
+        "class": "strategy_limit", "retryable": False, "since": "1.10.0",
+        "description": "configured map admission", "english": [],
+        "args": {"maxSize": {"kind": "integer"}, "currSize": {"kind": "integer"}}}
+    if validate_catalog(tv_map, canonical(tv_map)):
+        failures.append("the exact TV map context names were refused")
+    bad = json.loads(json.dumps(tv_map))
+    bad["codes"]["pine_map_capacity_exceeded"]["args"]["otherSize"] = {"kind": "integer"}
+    if not validate_catalog(bad):
+        failures.append("an undeclared camel-case map context name passed")
+    bad = json.loads(json.dumps(good))
+    bad["codes"]["alpha_code"]["args"]["maxSize"] = {"kind": "integer"}
+    if not validate_catalog(bad):
+        failures.append("the TV argument-name exception leaked to another code")
     bad = json.loads(json.dumps(good))
     bad["codes"]["Bad-Name"] = bad["codes"].pop("beta_code")
     if not validate_catalog(bad):
