@@ -1,4 +1,9 @@
-// N6 direct Pine publication cursor rows. WRITTEN / UNRUN by this lane.
+// N6 cursor source rows. WRITTEN / UNRUN; classifications follow CORE18:37/L618:39.
+// TV CONTRACT: scalar lookaheadON prefixes/complete flag; OFF completed bars;
+// lower-timeframe arrays contain completed elements even with lookaheadON.
+// IMPLEMENTATION DETAIL: chart_open is first-observed/crossing input time;
+// one TLS (host,cursor) slot, peer hiding/root fallback and unwind restoration.
+// METADATA ONLY: gaps_on has no tested NA/result-envelope rule in these rows.
 // Expected bars below are hand-computed literals, never product aggregation.
 #include <pineforge/bar.hpp>
 #include <pineforge/run_failure.hpp>
@@ -128,7 +133,7 @@ struct Capture {
                 latest = delivered.close;
             },
             [&] {
-                require(cursor.chart_open == bar.timestamp, "begin_chart timestamp");
+                require(cursor.chart_open == bar.timestamp, "implementation detail: begin_chart observed input timestamp");
                 require(cursor.sub_bar_index == 0, "begin_chart resets array index");
                 starts.push_back(cursor.chart_open);
                 begin_positions.push_back(rows.size());
@@ -151,7 +156,7 @@ void row(const Row& actual, const Bar& expected, bool complete, bool slot_new,
     require(actual.slot_new == slot_new, label + ".slot_new");
     require(actual.requested_index == index, label + ".requested_index");
     require(actual.sub_bar_index == sub_index, label + ".sub_bar_index");
-    require(actual.chart_open == chart_open, label + ".chart_open");
+    require(actual.chart_open == chart_open, label + ".chart_open [implementation detail]");
     require(actual.ta_installed, label + ".TA installed");
     require(actual.ta_index == index, label + ".TA requested index");
     require(actual.ta_origin == 0, label + ".TA origin");
@@ -164,6 +169,7 @@ void pristine(const PineRuntimeSecurityCursor& cursor,
     require(cursor.chart_timeframe == chart, "factory enclosing timeframe");
     require(cursor.timezone == "UTC" && cursor.session == "24x7",
             "factory symbol clock");
+    // gaps_on is checked only as stored metadata, never as an NA policy.
     require(cursor.lookahead_on == lookahead && cursor.gaps_on == gaps
                 && cursor.lower_array == lower && cursor.heikinashi == ha,
             "factory request flags");
@@ -259,6 +265,8 @@ void factory_validation() {
 
 struct Unwind {};
 
+// IMPLEMENTATION DETAIL: one TLS (host,cursor) slot, including peer hiding.
+// These identity/inheritance/unwind expectations have no TV surface.
 void inherited_scopes_and_identity() {
     Host host, peer;
     host.prepare("1", "12");
@@ -302,6 +310,8 @@ void inherited_scopes_and_identity() {
     pristine(reset, "3", "3", false, false, false, false);
 }
 
+// TV CONTRACT: scalar partial/completed delivery and complete flags.
+// chart_open assertions below remain IMPLEMENTATION DETAIL characterization.
 void chart_boundaries_and_publication() {
     Host host;
     host.prepare("1", "6");
@@ -330,7 +340,7 @@ void chart_boundaries_and_publication() {
             require(cursor.sub_bar_index == 0, "scalar request has no lower-array count");
         }
         require(out.starts == std::vector<std::int64_t>({0, 360000}),
-                "chart begins only at 6-minute boundaries");
+                "implementation detail: chart begins at observed/crossing input times");
         require(out.begin_positions == (lookahead ? std::vector<std::size_t>{0, 6}
                                                    : std::vector<std::size_t>{0, 2}),
                 "begin_chart precedes new chart deliveries");
@@ -348,7 +358,7 @@ void chart_boundaries_and_publication() {
 void lower_arrays_every_element() {
     Host host;
     host.prepare("1", "6");
-    // Even with lookahead enabled the lower-array route emits completed bars only.
+    // TV CONTRACT: lower arrays contain completed bars even with lookaheadON.
     auto cursor = host.make_runtime_security_cursor("2", true, false, true);
     Capture out;
     const std::array<double, 9> latest{{
@@ -386,6 +396,7 @@ void lower_arrays_every_element() {
             "lower incomplete tail did not advance published slot");
 }
 
+// Completed lower elements are contract; synthetic path/order values are characterization.
 void subdivision_every_element_and_order() {
     Host host;
     host.prepare("3", "6", 180000);
@@ -431,6 +442,7 @@ void subdivision_every_element_and_order() {
     require(cursor.requested_index == 8, "subdivision terminal requested index");
 }
 
+// Empty-route/NA state is characterization, not a gaps_on result-envelope rule.
 void no_loaded_bars_has_no_publication() {
     Host host;
     host.prepare("3", "6", 180000);
@@ -455,6 +467,7 @@ void no_loaded_bars_has_no_publication() {
     }
 }
 
+// Scalar delivery/complete flags are contract; chart_open remains implementation detail.
 void heikin_ashi_complete_and_partial() {
     Host host;
     host.prepare("1", "6");
@@ -511,6 +524,8 @@ void heikin_ashi_complete_and_partial() {
     }
 }
 
+// IMPLEMENTATION DETAIL: a fresh cursor starts at its first observed input.
+// Keep these values pending an independent off-boundary TV witness.
 void handoff_switch_and_factory_reset() {
     Host host;
     host.prepare("1", "6");
@@ -559,6 +574,7 @@ void handoff_switch_and_factory_reset() {
             "fresh partial has no inherited HA seed");
 }
 
+// IMPLEMENTATION DETAIL: scope/TA restoration on delivery unwind.
 void throwing_delivery_restores_context() {
     Host host;
     host.prepare("1", "6");
