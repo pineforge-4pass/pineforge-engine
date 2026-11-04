@@ -65,7 +65,8 @@ bytes and field order. `run --report-jsonl=full` is an explicit alias with
 identical output. The new opt-in `run --report-jsonl=delta` mirrors the ledger's
 `pineforge-native-report-delta/v1` patch with an additional top-level integer
 `input_cursor` as the FIRST key of the line (the stored ledger row has no such
-key and begins with `schema_version`). Other option values are refused.
+transport key). `--report-jsonl=delta-v2` selects the separate
+[versioned change-only format](#delta-v2-report-stream). Other option values are refused.
 Both streams begin after startup reads, warmup, recovery and the first new
 input's commit; the first committed input has cursor 1. Neither warmup nor
 replay of source-prefix messages is mirrored. To apply delta output, start with
@@ -161,7 +162,7 @@ payload length supplies the extra-payload reservation. After the input commits,
 the checkpoint is inserted in its own admitted transaction while retaining the
 writer mutex, with a byte ceiling no greater than the input's reservation.
 Charging that payload to the boundary input is intended
-(`Ledger::commit_input`, `runner/store.cpp:1099`): the boundary input can hit a
+(`Ledger::commit_input`, `runner/store.cpp:1140`): the boundary input can hit a
 storage stop when the input alone would fit, up to the cumulative payload's
 reservation earlier than strictly necessary. This cost buys the guarantee that
 no input commits with a checkpoint admitted without room in its reservation.
@@ -216,8 +217,8 @@ document memory. Ledgers that first need reports or integrity digests populated
 retry after startup replay, before new inputs. Later opens add no startup copy
 when a checkpoint already exists.
 Startup and post-replay checkpoints intentionally have no input reservation
-behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1225`;
-the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1137`).
+behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1266`;
+the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1147`).
 With a large budget, either can spend most of the remaining headroom on an
 O(T) payload before the first live input. The run can stop sooner, never over
 budget; this is the intended cost of preparing the report shortcut at startup.
@@ -329,6 +330,7 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   routed actions, not journal-only actions; age is null for legacy rows with
   no known creation/attempt time. No secrets, URLs or receiver response text
   are written to this status file. Metrics are sampled at the status interval, not on every control-loop heartbeat.
+  `metrics.ledger_storage` adds the advisory [disk observations](#ledger-disk-observations).
   Each ignored request is counted once per run. A directory failure is counted
   again if it recurs after a successful poll; removing an acknowledgement during
   directory enumeration can cause a transient `directory_io_failure` that heals
@@ -1058,3 +1060,95 @@ The legacy `--max-attempts` option remains accepted; when explicitly supplied
 without a routes file, it caps transport retries to `min(2, N-1)`. HTTP errors
 are always final. Delivery failures do not stop feed computation or change
 the run exit status; they are reported in stderr, the audit log and status.
+
+## Delta-v2 report stream
+
+`run --report-jsonl=delta-v2` opts into `pineforge-native-report-delta/v2`.
+Plain `--report-jsonl`, explicit `full`, and `delta` retain their existing
+formats and bytes. There is one `kind:"input"` record per newly committed
+message, with no warmup or replay records. Each line starts with integer
+`input_cursor`; its remaining keys are canonical:
+
+```json
+{"input_cursor":1,"arrays":{},"fields":{"input_cursor":1},"kind":"input","ratios":{"as_of_input":1,"chart_timezone":"UTC","exact":true},"schema_version":"pineforge-native-report-delta/v2"}
+```
+
+The example illustrates the envelope; actual records carry their changes.
+`fields` recursively merges scalar/object changes; an absent field is
+unchanged and JSON null is an explicit null. The seven report arrays never
+appear in `fields`. `arrays` uses the names `closed_trades`, `trades`,
+`equity_curve`, `security_diag`, `trace`, `trace_names`, `broker_state_hash`.
+Each present entry is `{"offset":k,"items":[...]}` and replaces the complete
+suffix from `k`, including truncation. `k` cannot exceed the preceding length.
+Unchanged arrays and unchanged leading suffix items are omitted. `closed_trades`
+belongs at the document root; the other arrays belong under `report`.
+
+Every v2 record carries `ratios.as_of_input`, the cursor where the four
+Sharpe/Sortino values were computed. This control metadata stays outside the
+cumulative document; `ratios.exact` states whether it equals this record's
+cursor, and `ratios.chart_timezone` is constant for the deployment.
+This change delivers the change-only envelope, with bounded emitted bytes and
+serialized rows per input on the 10,000/100,000-input work populations.
+Ratio scheduling is a separate later change. The existing `--ratio-interval`
+policy remains: its default computes exact ratios at every input, and a larger
+positive interval can produce stale ratios between computations.
+Whole-curve ratio passes and resident report history remain.
+
+If EOF, shutdown or a storage stop reveals a stale last committed cursor,
+the stream emits at most one `kind:"final"` patch at that same cursor. It has
+no array changes or new input/action, and refreshes only changed ratio fields.
+The refresh reads the retained committed report, including after an advanced
+input was refused. A known finite-feed final input refreshes before commit,
+so it needs no duplicate terminal record. The operational summary still ends
+the stream and has no delta schema identifier.
+
+Bootstrap with `report --delta-base --ledger PATH --at-input C`. It returns
+`pineforge-native-report-base/v2`, with first member `input_cursor:C`, then
+canonical `document`, `ratios`, `schema_version` members. It preserves raw
+stored ratios; ordinary `report` refreshes exact ratios. Apply the next input
+at C+1, permitting only a terminal `final` at the current cursor. A cursor gap
+or regression requires another base. The base option currently requires v2
+rows, which record the ratio clock; a legacy exact report does not supply it.
+`--verify-full` also works with the base and retains full-chain verification.
+
+The stored report payload is this v2 object without the first transport
+`input_cursor` member. `fields.input_cursor` still updates the cumulative
+document. Tables, columns, schema version and checkpoint layout do not change.
+Use a v2-aware runner for these report rows and replay with the same format
+and ratio interval. Existing readers do not understand the new payload;
+an unchanged database schema does not guarantee an old reader will refuse it.
+
+## Ledger disk observations
+
+`run --ledger-warn-free-fraction F` and `status --ledger-warn-free-fraction F`
+accept finite `0 < F <= 1`; the default is **0.8**, defined once in
+`kDefaultLedgerWarnFreeFraction` in `ledger_observability.hpp`. This parameter
+is transient and does not change deployment identity or persistent settings.
+The default ledger allowance remains unlimited.
+
+The service status file reports `metrics.ledger_storage`; the read-only
+`status` command reports the same object at `ledger_storage`:
+
+| Member | Measurement |
+|---|---|
+| `used_bytes` | Current database file size plus WAL file size; an absent WAL counts as zero. |
+| `bytes_per_input` | `used_bytes / committed inputs`, including existing ledger overhead; null with no inputs. |
+| `free_disk_bytes` | Space available to this process on the ledger's filesystem. |
+| `growth_bytes_per_second` | Positive net footprint growth divided by elapsed steady-clock seconds since recovery finished for this invocation. |
+| `seconds_to_disk_exhaustion` | Available free disk divided by that measured growth rate. |
+| `warn_free_fraction` | The effective operator parameter. |
+| `state` | `WARNING` when `used_bytes >= F * free_disk_bytes`; otherwise `OK`, or `UNKNOWN` if measurement failed. |
+| `growth_start_bytes`, `growth_elapsed_seconds` | The measurement baseline and elapsed interval. |
+
+The rate and projection are null without a positive measured growth interval.
+A one-shot `status` has no running interval and reports null rate/projection.
+Filesystem measurement errors produce null figures and `UNKNOWN`. Growth is
+a running average for this invocation; WAL reuse and checkpointing can reduce
+net file growth, and future input rates or row sizes can change the projection.
+The comparison uses currently free disk, not total disk capacity.
+
+`WARNING` forces status publication but leaves `ready`, all readiness predicates,
+input admission, delivery and exit status unchanged. It never stops the runner.
+The existing `ledger_bytes` metric and explicit `--max-ledger-bytes` admission
+continue to include SHM; the new advisory footprint uses database plus WAL.
+No database cache, WAL or ledger size limit is introduced by these observations.
