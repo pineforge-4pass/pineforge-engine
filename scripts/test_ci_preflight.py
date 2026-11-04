@@ -7751,6 +7751,7 @@ finally:
         exec(compile(source.replace(needle, needle.replace('GITHUB_TOKEN', 'GITHUB_TOKEN_WRONG'), 1),
                      '<github-token-misclassified-as-production>', 'exec'), namespace)
         result = unittest.TestResult()
+        target_case = type(self)('test_github_token_alone_and_credential_comments_keep_the_pool')
         with mock.patch.object(ci_preflight, '_holds_credentials', namespace['_holds_credentials']):
             findings = ci_workflow_findings(
                 *self.ci_sources(), others={**self.other_sources(),
@@ -7759,14 +7760,33 @@ finally:
             self.assertIn('token.yml job token may use GKE routing only at its exact pinned job and label',
                           findings)
             self.assertIn('token.yml job token must not expose credentials on GKE', findings)
-            type(self)('test_github_token_alone_and_credential_comments_keep_the_pool').run(result)
+            target_case.run(result)
         self.assertEqual(result.testsRun, 1)
         self.assertEqual(result.errors, [])
         self.assertEqual(result.skipped, [])
-        self.assertTrue(result.failures)
-        for _, diagnostic in result.failures:
+        self.assertEqual(len(result.failures), 4)
+        expected = (
+            ({'reference': 'secrets.GITHUB_TOKEN'},
+             'token.yml job token must not expose credentials on GKE'),
+            ({'reference': 'secrets.GITHUB_TOKEN', 'route': 'registered corpus job'},
+             'corpus-parity.yml job corpus-parity must not expose credentials on GKE'),
+            ({'reference': "secrets['GITHUB_TOKEN']"}, None),
+            ({'reference': "secrets['GITHUB_TOKEN']", 'route': 'registered corpus job'}, None),
+        )
+        # Every call reads release.yml's dotted token, including the bracket rows.
+        # unittest may wrap this policy message into adjacent string literals.
+        release_finding = (
+            r"release\.yml job prebuilt must keep production credentials on a hosted"
+            r"(?: | '\n-  ')standard runner")
+        for (subtest, diagnostic), (params, gke_finding) in zip(result.failures, expected):
+            self.assertIs(subtest.test_case, target_case)
+            self.assertEqual(dict(subtest.params), params)
             self.assertIn('AssertionError: Lists differ:', diagnostic)
-            self.assertIn('must not expose credentials on GKE', diagnostic)
+            self.assertRegex(diagnostic, release_finding)
+            if gke_finding is None:
+                self.assertNotIn('must not expose credentials on GKE', diagnostic)
+            else:
+                self.assertIn(gke_finding, diagnostic)
 
     def test_today_release_and_deployment_jobs_pass_only_on_their_pinned_routes(self):
         self.assertEqual(ci_preflight.runner_findings(self.light_workflows()), [])
