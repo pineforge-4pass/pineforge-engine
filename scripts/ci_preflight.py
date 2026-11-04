@@ -2260,20 +2260,41 @@ def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool 
     if any(value == 'write-all' or re.search(oidc_write, value, re.IGNORECASE)
            for value in permissions):
         return True
-    text = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(body))
-    text += '\n' + '\n'.join(_job_values(workflow, 'env'))
     if not include_environment:
-        # Scan the original header/job so quoted hashes cannot hide a secret.
+        # Expressions expand even in script comments; retain every raw byte.
         # Other jobs' App credentials are not inherited by the artifact job.
         header = _JOBS_KEY.split(workflow, maxsplit=1)[0]
-        text = '\n'.join(_action_yaml_visible(line)[0]
-                         for line in _code(header + '\n' + body))
+        inherited_env = []
+        in_env = False
+        for line in workflow.split('\n'):
+            if line.strip() and _indent(line) == 0 and not line.startswith('#'):
+                in_env = _key_value(line, 'env') is not None
+            if in_env:
+                inherited_env.append(line)
+        text = header + '\n' + body + '\n' + '\n'.join(inherited_env)
         if _uses_app_token(workflow, body) or _PRIVATE_KEY_WORD.search(text):
             return True
         # A whole/dynamic secrets context cannot prove GITHUB_TOKEN-only use.
-        if any(_SECRET_REFERENCE.match(text, context.start()) is None
-               for context in re.finditer(r'\bsecrets\b', text, re.IGNORECASE)):
-            return True
+        # Prose may mention secrets; inspect expressions without cutting hashes
+        # or treating a quoted }} (including doubled quotes) as their end.
+        for expression in re.finditer(r'\$\{\{', text):
+            end, in_string = expression.end(), False
+            while end < len(text):
+                if text[end] == "'":
+                    if in_string and text.startswith("''", end):
+                        end += 2
+                        continue
+                    in_string = not in_string
+                elif not in_string and text.startswith('}}', end):
+                    break
+                end += 1
+            value = text[expression.end():end]
+            if any(_SECRET_REFERENCE.match(value, context.start()) is None
+                   for context in re.finditer(r'\bsecrets\b', value, re.IGNORECASE)):
+                return True
+    else:
+        text = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(body))
+        text += '\n' + '\n'.join(_job_values(workflow, 'env'))
     for match in _SECRET_REFERENCE.finditer(text):
         if match.group(1) is not None:
             if match.group(1).upper() != 'GITHUB_TOKEN':
