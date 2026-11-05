@@ -39,7 +39,7 @@ static double sample(int i) {
     return static_cast<double>((i * 37) % 211 - 105) / 8.0;
 }
 
-static void report(const char* name, WindowCacheCapacity capacity, const WindowCacheStats& stats) {
+static void print_cache_stats(const char* name, WindowCacheCapacity capacity, const WindowCacheStats& stats) {
     std::printf("%s pages=%zu payload=%zu metadata=%zu workspace=%zu "
                 "hits=%llu misses=%llu evictions=%llu bypass=%llu "
                 "reads=%llu read_bytes=%llu writes=%llu write_bytes=%llu "
@@ -223,7 +223,7 @@ static void series_boundaries(WindowCacheCapacity capacity) {
     const double checkpoint_value = checkpoint[0];
     series.update(123.0);
     require(bits(checkpoint[0]) == bits(checkpoint_value), "Series checkpoint is independent");
-    report("Series", capacity, series.cache_stats());
+    print_cache_stats("Series", capacity, series.cache_stats());
     series.clear();
     require(series.size() == 0 && is_na(series[0]), "clear retires logical history");
     series.update(-0.0);
@@ -297,7 +297,7 @@ static void held_history(WindowCacheCapacity capacity) {
     require(bits(history.at(new_last)) == bits(77.0), "long gap stores the new source");
     if (capacity.pages == 1)
         require(history.cache_stats().backing_reads != 0, "tiny history exercises backing I/O");
-    report("HeldHistory", capacity, history.cache_stats());
+    print_cache_stats("HeldHistory", capacity, history.cache_stats());
 }
 
 static void extrema_rescans(WindowCacheCapacity capacity) {
@@ -346,8 +346,8 @@ static void extrema_rescans(WindowCacheCapacity capacity) {
                     "each tiny extrema rescan completes real backing transfers");
         }
     }
-    report("ExtremeRingRescanHigh", capacity, high.cache_stats());
-    report("ExtremeRingRescanLow", capacity, low.cache_stats());
+    print_cache_stats("ExtremeRingRescanHigh", capacity, high.cache_stats());
+    print_cache_stats("ExtremeRingRescanLow", capacity, low.cache_stats());
 }
 
 struct Tape {
@@ -409,8 +409,8 @@ static Tape ta_tape(WindowCacheCapacity capacity) {
         tape.add(series_copy.compute(value, 17));
         tape.add(series_copy.recompute(value + 1.0, 17));
     }
-    report("ExtremeRing", capacity, high.cache_stats());
-    report("WMA", capacity, wma.cache_stats());
+    print_cache_stats("ExtremeRing", capacity, high.cache_stats());
+    print_cache_stats("WMA", capacity, wma.cache_stats());
     if (capacity.pages <= 2) {
         require(wma.cache_stats().backing_read_attempts != 0,
                 "tiny weighted sweep proves inner backing reads");

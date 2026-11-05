@@ -1717,6 +1717,10 @@ _CODE_PASSTHROUGHS = [
     ("enable_outputs",
      'OutputsError("--outputs: " + (text or "the library refused to record"), code, args)', 1,
      "engine_failure_code ABI tuple or the literal outputs_rejected fallback"),
+    ("apply_ledger_cache_policy",
+     'RunFailure("cache policy rejected: " + json.dumps(args, sort_keys=True), '
+     'code or "engine_unclassified_error", args)', 1,
+     "engine_failure_code ABI tuple or the literal engine_unclassified_error fallback"),
 ]
 
 _HELPER_CODE_SOURCES = {

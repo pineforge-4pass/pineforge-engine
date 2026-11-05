@@ -30,6 +30,7 @@
 
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
+#include <pineforge/map_capacity.hpp>
 
 namespace pineforge {
 namespace internal {
@@ -129,6 +130,7 @@ public:
 private:
     RuntimeAmbient* block_;
     ta::BarContext prior_;
+    detail::MapBarContextScope map_context_;
 };
 
 }  // namespace internal

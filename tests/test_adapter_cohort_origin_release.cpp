@@ -68,14 +68,14 @@ struct CountScope {
 #undef PINEFORGE_LOOKUP_INDEX_WORK
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 struct NativeExecutionConsumerProbe {
     static std::pair<std::uint64_t, std::uint64_t> cohort_digest(
             const NativeExecutionConsumer& consumer) {
         return {consumer.cohort_receipts_.count, consumer.cohort_receipts_.h};
     }
 };
-} // inline namespace engine_script_run_v19
+} // inline namespace engine_script_run_v20
 } // namespace pineforge
 
 namespace cohort_origin_fixture {

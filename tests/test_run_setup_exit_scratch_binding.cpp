@@ -32,7 +32,7 @@
 #endif
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 // Observe the real run's workspace; never install or mutate it from the test.
 // These members and this friend seam already exist on 461127bc65.
 struct NativeExecutionConsumerProbe {
@@ -43,7 +43,7 @@ struct NativeExecutionConsumerProbe {
         return consumer.dependency_scratch_stats_.queued_rows;
     }
 };
-} // inline namespace engine_script_run_v19
+} // inline namespace engine_script_run_v20
 } // namespace pineforge
 
 namespace {

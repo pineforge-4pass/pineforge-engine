@@ -1,9 +1,11 @@
 #pragma once
 
+#include <pineforge/cache_policy.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/detail/scratch_directory.hpp>
 #include <pineforge/detail/run_quota.hpp>
+#include <pineforge/owned_storage.hpp>
 
 #include <algorithm>
 #include <array>
@@ -141,6 +143,14 @@ public:
         bool finished_ = false;
     };
 
+    // The containing ScratchFile counts this unique object, including the
+    // inline client/ticket. Their shared endpoint is walked only once.
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        if (!out.visit(*this)) return;
+        quota_.observe_owned_storage(out);
+        creation_.observe_owned_storage(out);
+    }
+
 private:
     RunQuota quota_;
     QuotaObject object_;
@@ -162,7 +172,7 @@ private:
 // or RAM fallback. clear() releases the region and its mapped windows.
 class ScratchFile {
 public:
-    // Fixed byte window shared by scratch I/O amortisation contracts.
+    // Existing clean-read window; independent of the selected write quantum.
     static constexpr std::size_t kCacheBytes = 64 * 1024;
 
     enum class IoRaiser { report_sink, auxiliary };
@@ -182,9 +192,9 @@ public:
             region_ = std::move(other.region_);
             other.region_.size = 0;
             io_raiser_ = other.io_raiser_;
-            bounded_cache_ = other.bounded_cache_;
-            clean_bytes_read_ = std::exchange(other.clean_bytes_read_, 0);
-            bytes_written_since_sync_ = std::exchange(other.bytes_written_since_sync_, 0);
+            cache_state_ = other.cache_state_;
+            other.cache_state_ &= kBoundedCacheBit;
+            scratch_io_policy_ = other.scratch_io_policy_;
         }
         return *this;
     }
@@ -217,8 +227,18 @@ public:
     // existing scratch users keep their established I/O behavior.
     void bound_cache() {
         if (fd_ >= 0) throw std::logic_error("scratch cache policy changed after open");
-        bounded_cache_ = true;
+        enable_bounded_cache();
     }
+    // Capture before any backing is opened; clear/reopen and moves retain it.
+    // The existing bounded-cache opt-in determines which disk files batch I/O.
+    void set_scratch_io_policy(const ScratchIoPolicy& policy) {
+        if (opened() || slab_)
+            throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
+                {{"input", "scratch_io_policy"}, {"reason", "frozen"}},
+                "scratch I/O policy changed after open or binding");
+        scratch_io_policy_ = policy;
+    }
+    const ScratchIoPolicy& scratch_io_policy() const noexcept { return scratch_io_policy_; }
     void set_directory(const std::string& value) {
         if (arena_) return;
         if (fd_ >= 0 && directory_ != value)
@@ -234,7 +254,8 @@ public:
         }
         fd_ = -1;
         quota_.reset();
-        clean_bytes_read_ = bytes_written_since_sync_ = 0;
+        set_clean_bytes_read(0);
+        reset_disk_write_bytes();
         // resource_ was validated at bind. Clearing reuses the same allocation
         // and binding; a later empty-owner bind explicitly restores disk mode.
         if (slab_) slab_->reset(resource_);
@@ -247,8 +268,8 @@ public:
         if (quota_) quota_->borrow_descriptor();
         return fd_;
     }
-    // Physical occupancy diagnostic, not logical row identity. Arena values
-    // include chunk rounding; disk values are the anonymous file's extent.
+    // Backing extent diagnostic, not heap, allocated filesystem blocks or RSS.
+    // Arena values include chunk rounding; disk values are current st_size.
     std::uint64_t storage_bytes() const {
         if (slab_) throw std::logic_error("scratch occupancy requires a file or arena");
         if (arena_) return region_.chunks.size() * ScratchArena::kChunkBytes;
@@ -259,6 +280,47 @@ public:
         if (result != 0) io_error(errno, "scratch extent");
         if (info.st_size < 0) io_error(EIO, "scratch extent");
         return static_cast<std::uint64_t>(info.st_size);
+    }
+    // Inline ScratchFile storage belongs to the containing owner. Observe only
+    // external requested C++ storage and an owned ordinary file's current
+    // extent. In particular, descriptor() would change last-close ownership.
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        struct PreserveErrno {
+            int value;
+            ~PreserveErrno() { errno = value; }
+        } preserve_errno{errno};
+        if (!out.visit(*this)) return;
+        ::pineforge::observe_owned_storage(out, directory_);
+        if (out.claim(region_.chunks.data()))
+            out.metadata(out.product(region_.chunks.capacity(), sizeof(std::uint32_t)));
+        if (quota_) {
+            // make_unique<ScratchFileQuota> is one typed new request. Its
+            // inline client/ticket are already included in that object.
+            if (out.claim(quota_.get())) out.metadata(sizeof(*quota_));
+            quota_->observe_owned_storage(out);
+        }
+        if (slab_) {
+            // Shared slab/control ownership has no public observation contract.
+            out.incomplete(OwnedStorageUnsupported::scratch_slab);
+            return;
+        }
+        if (arena_) {
+            // The attached arena and its fd are borrowed here. Only this
+            // file's chunk-directory allocation above is known to be owned.
+            out.incomplete(OwnedStorageUnsupported::scratch_arena);
+            return;
+        }
+        if (fd_ >= 0) {
+            // Avoid error rendering/allocations and preserve the caller's
+            // errno as well as file contents, offset and quota borrowing state.
+            struct stat info{};
+            int result;
+            do { result = ::fstat(fd_, &info); } while (result != 0 && errno == EINTR);
+            if (result != 0 || info.st_size < 0)
+                out.incomplete(OwnedStorageUnsupported::scratch_extent);
+            else
+                out.backing(static_cast<std::uint64_t>(info.st_size));
+        }
     }
     // Rebase a positional file after its owner has proved a complete head
     // chunk dead. The owner translates its logical offsets; no borrowed view
@@ -364,7 +426,7 @@ public:
             io_error(error, "scratch cloexec");
         }
         fd_ = opened;
-        if (bounded_cache_) {
+        if (bounded_cache_enabled()) {
 #if defined(__linux__)
             struct statfs backing{};
             if (::fstatfs(fd_, &backing) != 0) {
@@ -462,7 +524,7 @@ public:
         check_extent(offset, length, arena_ != nullptr, io_raiser_);
         // This window-edge cap is inert for current users: IdPairScratchFile
         // does not enable bound_cache(), and cache-bound users call write().
-        const auto count = std::min(length, bounded_cache_
+        const auto count = std::min(length, bounded_cache_enabled()
             ? kCacheBytes - static_cast<std::size_t>(offset % kCacheBytes)
             : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
         if (slab_) slab_->write_at(resource_, offset, data, count);
@@ -471,16 +533,18 @@ public:
             std::optional<ScratchFileQuota::Growth> reservation;
             if (quota_) reservation.emplace(*quota_, length == 0 ? 0 : offset + length);
             prepare_write();
-            const auto chunk = std::min(count, bounded_cache_
-                ? kCacheBytes - bytes_written_since_sync_
-                : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+            const auto chunk = write_transfer_size(count);
             const ssize_t written = ::pwrite(fd_, data, chunk, static_cast<off_t>(offset));
+            if (written > 0) account_write(static_cast<std::uint64_t>(written));
             if (reservation && written >= 0) {
                 if (written > 0) reservation->wrote(offset + static_cast<std::uint64_t>(written));
+            }
+            if (written > 0 && bounded_cache_enabled()
+                && scratch_io_policy_.write_batch_bytes == 0)
+                flush_write_batch();
+            if (reservation && written >= 0) {
                 reservation->finish();
             }
-            if (written > 0 && bounded_cache_)
-                bytes_written_since_sync_ += static_cast<std::uint32_t>(written);
             return written;
         }
         return static_cast<ssize_t>(count);
@@ -489,20 +553,21 @@ public:
         check_extent(offset, length, arena_ != nullptr, io_raiser_);
         // This window cap is likewise inert for current users: IdPairScratchFile
         // leaves bound_cache() off, and cache-bound users call read().
-        const auto count = std::min(length, bounded_cache_ ? kCacheBytes
+        const auto count = std::min(length, bounded_cache_enabled() ? kCacheBytes
             : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
         if (slab_) slab_->read_at(resource_, offset, data, count);
         else if (arena_) arena_io([&] { arena_->read(region_, offset, data, count); });
         else {
             // Retry a failed discard before admitting another read batch.
-            if (bounded_cache_ && clean_bytes_read_ == kCacheBytes) discard_clean_cache();
-            const auto chunk = std::min(count, bounded_cache_
-                ? kCacheBytes - clean_bytes_read_
+            if (bounded_cache_enabled() && clean_bytes_read() == kCacheBytes)
+                discard_clean_cache();
+            const auto chunk = std::min(count, bounded_cache_enabled()
+                ? kCacheBytes - clean_bytes_read()
                 : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
             const auto received = ::pread(fd_, data, chunk, static_cast<off_t>(offset));
-            if (received > 0 && bounded_cache_) {
-                clean_bytes_read_ += static_cast<std::uint32_t>(received);
-                if (clean_bytes_read_ == kCacheBytes) discard_clean_cache();
+            if (received > 0 && bounded_cache_enabled()) {
+                add_clean_bytes(static_cast<std::uint32_t>(received));
+                if (clean_bytes_read() == kCacheBytes) discard_clean_cache();
             }
             return received;
         }
@@ -524,16 +589,16 @@ public:
         std::size_t written = 0;
         while (written < length) {
             prepare_write();
-            const auto chunk = std::min(length - written, bounded_cache_
-                ? kCacheBytes - bytes_written_since_sync_
-                : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+            const auto chunk = write_transfer_size(length - written);
             const ssize_t count = ::pwrite(fd_, bytes + written, chunk,
                                            static_cast<off_t>(offset + written));
             if (count < 0 && errno == EINTR) continue;
             if (count <= 0) io_error(count < 0 ? errno : EIO, "scratch write");
             written += static_cast<std::size_t>(count);
             if (reservation) reservation->wrote(offset + written);
-            if (bounded_cache_) bytes_written_since_sync_ += static_cast<std::uint32_t>(count);
+            account_write(static_cast<std::uint64_t>(count));
+            if (bounded_cache_enabled() && scratch_io_policy_.write_batch_bytes == 0)
+                flush_write_batch();
         }
         if (reservation) reservation->finish();
     }
@@ -551,18 +616,19 @@ public:
         std::size_t received = 0;
         while (received < length) {
             // Retry a failed discard before admitting another read batch.
-            if (bounded_cache_ && clean_bytes_read_ == kCacheBytes) discard_clean_cache();
-            const auto chunk = std::min(length - received, bounded_cache_
-                ? kCacheBytes - clean_bytes_read_
+            if (bounded_cache_enabled() && clean_bytes_read() == kCacheBytes)
+                discard_clean_cache();
+            const auto chunk = std::min(length - received, bounded_cache_enabled()
+                ? kCacheBytes - clean_bytes_read()
                 : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
             const ssize_t count = ::pread(fd_, bytes + received, chunk,
                                           static_cast<off_t>(offset + received));
             if (count < 0 && errno == EINTR) continue;
             if (count <= 0) io_error(count < 0 ? errno : EIO, "scratch read");
             received += static_cast<std::size_t>(count);
-            if (bounded_cache_) {
-                clean_bytes_read_ += static_cast<std::uint32_t>(count);
-                if (clean_bytes_read_ == kCacheBytes) discard_clean_cache();
+            if (bounded_cache_enabled()) {
+                add_clean_bytes(static_cast<std::uint32_t>(count));
+                if (clean_bytes_read() == kCacheBytes) discard_clean_cache();
             }
         }
     }
@@ -586,55 +652,91 @@ private:
             throw AuxiliaryScratchIoError(error, operation);
         throw ReportScratchIoError(error, operation, {{"reason", "scratch_io"}});
     }
-    // Bound traffic between whole-file discards: at most kCacheBytes of reads
-    // and kCacheBytes of unsynced writes per file, independent of offset span.
-    // With RANDOM disabling read-ahead, the current users on 4 KiB OS pages
-    // have much smaller per-window footprints: TradeLedger's 168 B records
-    // and short strings touch at most about 391 pages; ScratchSequence's
-    // whole 64 KiB windows touch at most about 17 pages. The universal
-    // worst-case bound across the read and unsynced-write windows is
-    // 2*kCacheBytes OS pages for one-byte accesses to distinct pages:
-    // 512 MiB at 4 KiB pages, not 128 KiB of physical cache. DONTNEED retains
-    // any still-dirty pages; the write counter bounds those until the next
-    // sync and discard.
+    // The clean-read window stays fixed. Write batching counts successful
+    // bytes, not touched pages, allocation size or physical memory.
     void discard_clean_cache() const {
-        if (!bounded_cache_) return;
+        if (!bounded_cache_enabled()) return;
 #if defined(__linux__)
         const int error = ::posix_fadvise(fd_, 0, 0, POSIX_FADV_DONTNEED);
         if (error != 0) io_error(error, "scratch discard cache");
 #endif
-        clean_bytes_read_ = 0;
+        set_clean_bytes_read(0);
     }
     void prepare_write() {
-        if (!bounded_cache_ || bytes_written_since_sync_ < kCacheBytes) return;
+        if (!bounded_cache_enabled() || disk_write_bytes() == 0) return;
+        if (scratch_io_policy_.write_batch_bytes != 0
+            && disk_write_bytes() < scratch_io_policy_.write_batch_bytes) return;
+        flush_write_batch();
+    }
+    std::size_t write_transfer_size(std::size_t requested) const noexcept {
+        const auto representable = std::min(requested,
+            static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+        if (!bounded_cache_enabled() || scratch_io_policy_.write_batch_bytes == 0)
+            return representable;
+        return static_cast<std::size_t>(std::min<std::uint64_t>(representable,
+            scratch_io_policy_.write_batch_bytes - disk_write_bytes()));
+    }
+    void account_write(std::uint64_t bytes) {
+        if (!bounded_cache_enabled()) return;
+        if (bytes > std::numeric_limits<std::uint64_t>::max() - disk_write_bytes())
+            io_error(EOVERFLOW, "scratch write byte counter");
+        disk_write_bytes() += bytes;
+    }
+    void flush_write_batch() {
 #if defined(__linux__)
         int result;
         do { result = ::fdatasync(fd_); } while (result != 0 && errno == EINTR);
         if (result != 0) io_error(errno, "scratch flush cache window");
+#elif defined(__APPLE__)
+        // Preserve the established positive-policy F_NOCACHE path. Zero
+        // additionally requires completion of the successful write transfer.
+        if (scratch_io_policy_.write_batch_bytes == 0) {
+            int result;
+            do { result = ::fsync(fd_); } while (result != 0 && errno == EINTR);
+            if (result != 0) io_error(errno, "scratch flush cache window");
+        }
 #endif
         // Only the successful byte count triggers sync; a far-back update
         // followed by a tail append cannot flush once per offset change.
         discard_clean_cache();
-        bytes_written_since_sync_ = 0;
+        reset_disk_write_bytes();
     }
+    static constexpr std::uint32_t kBoundedCacheBit =
+        std::uint32_t{1} << (std::numeric_limits<std::uint32_t>::digits - 1);
+    static constexpr std::uint32_t kCleanBytesMask = kBoundedCacheBit - 1;
+
+    bool bounded_cache_enabled() const noexcept {
+        return (cache_state_ & kBoundedCacheBit) != 0;
+    }
+    void enable_bounded_cache() noexcept { cache_state_ |= kBoundedCacheBit; }
+    std::uint32_t clean_bytes_read() const noexcept {
+        return cache_state_ & kCleanBytesMask;
+    }
+    void set_clean_bytes_read(std::uint32_t bytes) const noexcept {
+        cache_state_ = (cache_state_ & kBoundedCacheBit) | bytes;
+    }
+    void add_clean_bytes(std::uint32_t bytes) const noexcept {
+        set_clean_bytes_read(clean_bytes_read() + bytes);
+    }
+    // Region::size is arena extent while arena_ is set and the disk write
+    // counter otherwise; no operation observes both meanings at once.
+    std::uint64_t& disk_write_bytes() noexcept { return region_.size; }
+    std::uint64_t disk_write_bytes() const noexcept { return region_.size; }
+    void reset_disk_write_bytes() noexcept { region_.size = 0; }
+
     int fd_ = -1;
-    // Group policy scalars in existing padding: the fixed fold-segment
-    // arrays embed this type and retain their unchanged 32 KiB assertion,
-    // including ScratchArena::Region::max_bytes for bounded command scratch.
     IoRaiser io_raiser_ = IoRaiser::report_sink;
+    ScratchResource resource_ = ScratchResource::cohort;
+    mutable std::uint32_t cache_state_ = 0;
     std::string directory_;
     // Physical backing only; logical table records and hash folds are shared
     // by both backends. No region base/payload pointer is retained here.
     std::shared_ptr<ScratchSlab> slab_;
-    ScratchResource resource_ = ScratchResource::cohort;
-    bool bounded_cache_ = false;
     ScratchArena* arena_ = nullptr;
     ScratchArena::Region region_;
-    // Each transfer is capped at the remaining 64 KiB cache window. These
-    // counters stay in [0, kCacheBytes]; two 32-bit counters leave room for
-    // the quota pointer without enlarging the original unmanaged footprint.
-    mutable std::uint32_t clean_bytes_read_ = 0;
-    std::uint32_t bytes_written_since_sync_ = 0;
+    // Read traffic stays 64 KiB; the disk-only counter remains a full
+    // uint64_t in region_.size for every declared quantum.
+    ScratchIoPolicy scratch_io_policy_{};
     // All per-file quota state lives behind this one pointer, allocated only
     // for a managed open. Empty in unmanaged mode: no allocation or traffic.
     std::unique_ptr<ScratchFileQuota> quota_;

@@ -79,7 +79,7 @@ STRING_TYPES = ('string', 'wstring', 'u8string', 'u16string', 'u32string', 'basi
                 'ostringstream', 'stringstream', 'basic_ostringstream')
 # Growable wrappers this repository defines (include/pineforge).
 CUSTOM_CONTAINERS = ('Series', 'DynamicRingBuffer', 'PineMap', 'NumericMatrix',
-                     'GenericMatrix', 'DrawingRecordStore')
+                     'GenericMatrix', 'DrawingRecordStore', 'OwnedDeque')
 CUSTOM_MAPS = ('PineMap',)
 
 GROW_RE = re.compile(r'(?:\.|->)\s*(' + '|'.join(GROW_OPS) + r')\s*(?:<[^<>;]*>)?\s*\(')

@@ -3,13 +3,15 @@
 // same-bar zero-trade control and checks both sink transports.
 //
 // The bar the heap is held to has two parts. A sink run may hold the ledger's
-// declared read-cache cap (TradeLedger::kSinkCacheRows rows of
-// kLedgerEntryBytes each, read from the engine's own constants) above its
-// zero-trade control, plus the fixed slack below. That excess must not move
-// with the trade count: the populations below pass the cap, their excess over
-// the control agrees within the slack. A retiring run sizes it by retained rows.
+// declared read-cache cap (the provisional byte default's geometry, rows of
+// kLedgerEntryBytes each plus the page pointers, derived independently of the
+// product in ledger_default_cache_rows.hpp) above its zero-trade control, plus
+// the fixed slack below. That excess must not move with the trade count: the
+// populations below pass the cap, their excess over the control agrees within
+// the slack. A retiring run sizes it by retained rows.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
+#include "ledger_default_cache_rows.hpp"
 
 #include "../src/native_execution_consumer.hpp"
 
@@ -53,7 +55,7 @@ constexpr std::size_t kHeapSlack = 2 * report_sink::kScratchWindowBytes + 512 * 
 // The declared read-cache cap of a sink run, in bytes, from the ledger's own
 // constants: the cache allocation never exceeds this however many trades close.
 const std::size_t kSinkCacheCapBytes =
-    TradeLedger::resident_cache_bytes(TradeLedger::kSinkCacheRows);
+    TradeLedger::resident_cache_bytes(ledger_oracle::default_cache_rows());
 
 // What one population leaves above its same-bar control, per transport.
 struct Excess {
@@ -360,8 +362,7 @@ Sample run_sample(const Directory& directory, int population, bool produce_trade
             "logical report trade count differs from the independent population");
     require(result.resident_rows <= TradeLedger::kResidentRows,
             "sink ledger retained more than its descriptor window");
-    require(result.cache_bytes <=
-                TradeLedger::resident_cache_bytes(TradeLedger::kSinkCacheRows),
+    require(result.cache_bytes <= kSinkCacheCapBytes,
             "sink ledger read cache exceeded its fixed budget");
     require(result.checkpoints <= 64, "sink digest checkpoints grew with trades");
     if (result.after_arena.attached) {
@@ -572,9 +573,10 @@ Excess run_population(const Directory& directory, int population) {
 int main() {
     try {
         Directory directory;
-        // 100,000 trades already pass the cache cap's row count (65,536); 200,000
-        // and 1,000,000 go 3x and 15x past it. Zero growth past the cap means
-        // the excess over each population's own control agrees across them.
+        // 100,000 trades already touch every one of the default cache's 53,768
+        // four-way sets, hence every page (215,070 rows); 200,000 and 1,000,000
+        // go 2x and 10x past that. Zero growth past the cap means the excess
+        // over each population's own control agrees across them.
         std::vector<Excess> excess;
         for (const int population : {100000, 200000, 1000000})
             excess.push_back(run_population(directory, population));

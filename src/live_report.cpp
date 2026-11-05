@@ -11,7 +11,7 @@
 #include <stdexcept>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 
 struct LiveReportAccumulator::State {
     const BacktestEngine* owner = nullptr;

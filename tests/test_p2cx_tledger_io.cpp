@@ -289,10 +289,10 @@ void hungpixi_population_field_reads() {
     const auto fixed_bytes = TradeLedger::resident_cache_bytes(1)
         - TradeLedger::kLedgerEntryBytes - sizeof(void*);
     const auto page_table_bytes = (cache_rows + page_rows - 1) / page_rows * sizeof(void*);
-    // Consecutive rows touch ceil(population/256) pages; clip at the row cap.
-    const auto allocated_pages = (population + page_rows - 1) / page_rows;
-    const auto rounded_slots = allocated_pages * page_rows;
-    const auto allocated_slots = rounded_slots < cache_rows ? rounded_slots : cache_rows;
+    // Consecutive rows fill consecutive four-way sets, sixty-four sets to a
+    // page, so they touch ceil(population/64) pages; the last page is clipped
+    // at the row cap (ledger_default_cache_rows.hpp).
+    const auto allocated_slots = ledger_oracle::touched_slots(cache_rows, 0, population);
     CHECK(ledger.cache_resident_bytes()
           == fixed_bytes + page_table_bytes + allocated_slots * TradeLedger::kLedgerEntryBytes);
     CHECK(ledger.cache_resident_bytes() <= TradeLedger::resident_cache_bytes(cache_rows));

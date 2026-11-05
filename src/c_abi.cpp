@@ -30,6 +30,7 @@
  *     strategy_initial_capital, strategy_net_profit_sum,
  *     strategy_report_pointvalue, strategy_set_report_replay_v1,
  *     strategy_script_bars_processed), pf_output_series_limit_set_checked/pf_output_series_limit_failure,
+ *     pf_map_pairs_limit_set_checked,
  *     pf_version_get/pf_version_string,
  *     pf_abi_version, strategy_execution_contract,
  *     strategy_configure_native_v1, strategy_configure_native_fx_curve_v1,
@@ -39,7 +40,7 @@
  *     strategy_set_selected_window_v1, strategy_selected_window_counts_v1,
  *     strategy_set_report_sink_v1, strategy_set_report_sink_fd_v1, strategy_report_sink_receipt_v1,
  *     strategy_set_scratch_tables_v1, strategy_report_sink_summary_v1,
- *     strategy_set_cache_policy_v1,
+ *     strategy_set_cache_policy_v1, strategy_set_scratch_io_policy_v1,
  *     pf_report_scratch_arena_stats, pf_report_cache_stats,
  *     strategy_require_report_scratch_arena_v1,
  *     strategy_report_sink_diagnostics_v1,
@@ -61,6 +62,7 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/map_capacity.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/magnifier.hpp>
@@ -79,9 +81,9 @@
 namespace pineforge {
 void clear_native_c_host_refusal_error(BacktestEngine* engine) noexcept;
 bool native_c_host_in_postrun_hook_frame(BacktestEngine* engine) noexcept;
-inline namespace engine_script_run_v19 { void native_stream_snapshot_report(BacktestEngine* engine, ReportC* out); }
-inline namespace engine_script_run_v19 { bool native_selected_query_closed(const BacktestEngine* engine) noexcept; }
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 { void native_stream_snapshot_report(BacktestEngine* engine, ReportC* out); }
+inline namespace engine_script_run_v20 { bool native_selected_query_closed(const BacktestEngine* engine) noexcept; }
+inline namespace engine_script_run_v20 {
 // The private bridges behind the execution observer and selected-window
 // exports at the end of this file. The native consumer defines them and owns
 // every null, size, version and state check; the exports only delegate.
@@ -1578,7 +1580,16 @@ PF_API int strategy_set_cache_policy_v1(pf_strategy_t s, const pf_cache_policy_v
     });
 }
 
+PF_API int strategy_set_scratch_io_policy_v1(pf_strategy_t s, const pf_scratch_io_policy_v1* policy) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->set_scratch_io_policy_v1(policy);
+    });
+}
+
 PF_API uint32_t strategy_stream_engine_layout_version(void) {
+    static_assert(PF_STREAM_ENGINE_LAYOUT_VERSION == 4u,
+                  "runtime-context live report boundary requires layout stamp 4");
     return PF_STREAM_ENGINE_LAYOUT_VERSION;
 }
 
@@ -1593,5 +1604,10 @@ PF_API int pf_output_series_limit_set_checked(
 
 PF_API int pf_output_series_limit_failure(int64_t* maximum) {
     return pineforge::BacktestEngine::output_series_limit_failure(maximum);
+}
+
+PF_API int pf_map_pairs_limit_set_checked(
+        const int64_t* maximum, char* error, size_t error_capacity) {
+    return pineforge::detail::set_map_pair_limit_checked(maximum, error, error_capacity);
 }
 } // extern "C"

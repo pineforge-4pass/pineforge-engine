@@ -34,8 +34,8 @@ public:
                                 "prepared scalar map changed exact values");
         }
         const auto calls = a5_heap::calls.load() - calls_before_;
-        std::printf("A5MAP prepared bars=%d entries=%d allocation_calls=%zu\n",
-                    PF_A5_BARS, map_.size(), calls);
+        std::printf("A5MAP prepared bars=%d entries=%lld allocation_calls=%zu\n",
+                    PF_A5_BARS, static_cast<long long>(map_.size()), calls);
         a5_fixture::require(calls == 0, "scalar put allocated after preparation");
     }
     void hash_host_extension(BrokerStateHashSink& sink) const override {

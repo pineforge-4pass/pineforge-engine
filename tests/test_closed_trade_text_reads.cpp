@@ -8,6 +8,7 @@
 #include <pineforge/detail/scratch_file.hpp>
 
 #include "global_allocation_replacement.hpp"
+#include "ledger_default_cache_rows.hpp"
 #include "../src/retired_trade_history_read.hpp"
 
 #include <array>
@@ -81,10 +82,12 @@ constexpr Size kTail = TradeLedger::kResidentRows * TradeLedger::kRecordBytes;
 constexpr Size ceil_div(Size n, Size d) { return n / d + (n % d != 0); }
 constexpr Size kPageSlots = 256;
 constexpr Size kPageBytes = kPageSlots * TradeLedger::kLedgerEntryBytes;
-constexpr Size kPages = ceil_div(kPopulation, kPageSlots);
-constexpr Size kTableBytes = ceil_div(TradeLedger::kDefaultCacheRows, kPageSlots) * sizeof(void*);
-static_assert(kPages == 98 && kPopulation <= TradeLedger::kDefaultCacheRows,
-              "25000 contiguous distinct slots touch ceil(25000/256)=98 pages");
+// A default-constructed ledger holds the provisional byte default's geometry
+// (ledger_default_cache_rows.hpp); the legacy 65,536-row one needs set_cache_rows.
+constexpr Size kDefaultRows = ledger_oracle::default_cache_rows();
+constexpr Size kTableBytes = ceil_div(kDefaultRows, kPageSlots) * sizeof(void*);
+static_assert(kPopulation <= kDefaultRows,
+              "25000 contiguous distinct ordinals fit the default cache in distinct sets");
 
 enum class Field { EntryId, ExitId, EntryComment, ExitComment };
 constexpr const char* field_name(Field field) {
@@ -426,11 +429,17 @@ template<Field F> void cache_fit_population(View rhs, const char* label) {
     append_inputs<F>(host, oracle);
     REQUIRE(rhs.size() + 3 <= TradeLedger::kCacheStringBytes); // 96+1+1+1=99<=128.
     warm(host.ledger(), kPopulation);
-    // ceil(25000/256)=98 pages, each 256*312=79,872 bytes, plus
-    // ceil(65536/256) owning pointers. Full-cap allocation fails this equality.
+    // 25000 contiguous ordinals fill sets 0..24999, sixty-four sets to a page of
+    // 256 slots (79,872 bytes): ceil(25000/64)=391 pages, plus ceil(default
+    // rows/256) owning pointers. Full-cap allocation, or a page count that
+    // follows the population in slots, fails this equality.
     const Size fixed = TradeLedger::resident_cache_bytes(1) - TradeLedger::kLedgerEntryBytes - sizeof(void*);
-    EXPECT(host.ledger().cache_resident_bytes() == fixed + kTableBytes + kPages * kPageBytes);
-    // All P contiguous keys occupy distinct slots, so occupied entries=P.
+    EXPECT(host.ledger().cache_resident_bytes()
+           == fixed + kTableBytes
+              + ledger_oracle::touched_slots(kDefaultRows, 0, kPopulation)
+                    * TradeLedger::kLedgerEntryBytes);
+    EXPECT(ledger_oracle::touched_slots(kDefaultRows, 0, kPopulation) == 391 * kPageSlots);
+    // All P contiguous keys occupy distinct sets, so occupied entries=P.
     EXPECT(host.ledger().cache_size() == kPopulation);
     measured_pass<F, false>(host, oracle, rhs, label, kIterations,
                             kPopulation, Order::Traverse, {});

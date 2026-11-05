@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ledger_default_cache_rows.hpp"
 #include "native_current_fixture.hpp"
 #include <pineforge/run_failure.hpp>
 #include <pineforge/trade_ledger.hpp>
@@ -14,6 +15,11 @@ using namespace r4_test;
 inline bool same_bits(double a, double b) {
     return std::memcmp(&a, &b, sizeof(double)) == 0;
 }
+
+// The decoded-entry count an omitted ledger cache setting holds (see
+// ledger_default_cache_rows.hpp); the legacy kDefaultCacheRows geometry is
+// selected only by an explicit row setting.
+using ledger_oracle::default_cache_rows;
 
 inline Trade row(int n) {
     Trade value{};

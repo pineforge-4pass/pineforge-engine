@@ -34,6 +34,7 @@ import re
 import sys
 from collections import Counter
 from collections.abc import Iterable
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -367,13 +368,27 @@ class VerificationResult:
     pnl_deltas: list[float] = field(default_factory=list, repr=False)
     qty_deltas: list[float] = field(default_factory=list, repr=False)
     pnlpct_deltas: list[float] = field(default_factory=list, repr=False)
+    # Applied profile policy; early returns never reach the metric gates.
+    grading_policy: dict | None = field(default=None, repr=False)
 
     @property
     def tier(self) -> str:
         return self.label
 
     def report_row(self) -> dict:
-        """Return the canonical report-facing fields without re-analysis."""
+        """Return the canonical report-facing fields without re-analysis.
+
+        Observation counts describe the effective metric arrays, including
+        any FIFO schedule replacement, rather than a shared trade population.
+        Missing means no eligible metric observations, not missing CSV cells.
+        Legacy p90 fields retain their numeric empty default; p100 is None
+        when unobserved, so an observed zero worst delta remains distinct.
+        """
+        metric_observations = {
+            "entry": len(self.entry_deltas),
+            "exit": len(self.exit_deltas),
+            "pnl": len(self.pnl_deltas),
+        }
         return {
             "slug": self.strategy_dir.name,
             "rel": self.rel,
@@ -386,9 +401,20 @@ class VerificationResult:
             "entry_p90": self.entry_p90,
             "exit_p90": self.exit_p90,
             "pnl_p90": self.pnl_p90,
+            "entry_p100": self.entry_p100 if metric_observations["entry"] else None,
+            "exit_p100": self.exit_p100 if metric_observations["exit"] else None,
+            "pnl_p100": self.pnl_p100 if metric_observations["pnl"] else None,
             "distinct_entry_identity_ok": self.distinct_entry_identity_ok,
             "distinct_entry_mismatches": self.distinct_entry_mismatches,
             "profile": self.profile,
+            "grading_policy": deepcopy(self.grading_policy),
+            "metric_observations": metric_observations,
+            "metric_missing": {
+                metric: count == 0 for metric, count in metric_observations.items()
+            },
+            "tv_exists": self.tv_exists,
+            "eng_exists": self.eng_exists,
+            "no_aligned_trades": self.no_aligned_trades,
             "notes": self.notes,
         }
 
@@ -1222,7 +1248,19 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
 
     # Resolve parity profile (strict vs production) per probe.
     profile = resolve_profile(strategy_dir, meta)
-    thresh = parity_for_profile(profile)
+    # Grade from an owned snapshot, then retain that same configuration for
+    # reporting. A resolver or report consumer cannot change this receipt.
+    thresh = dict(parity_for_profile(profile))
+    grading_policy = {
+        "profile": profile,
+        "thresholds": thresh,
+        "aggregation": "p90",
+        "percentile": 0.90,
+        "scope": "per_probe",
+        "comparison": "<",
+        "count_rule": "exact",
+    }
+    grade_percentile = grading_policy["percentile"]
 
     # Optional interior trim: drop edge / warmup bars from the headline stats.
     trim_bars = int(meta.get("trim_bars", 0) or 0)
@@ -1313,9 +1351,9 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
             continue
         pnl_deltas.append(abs_diff / abs(t.pnl))
 
-    entry_p90 = percentile(entry_deltas, 0.90)
-    exit_p90  = percentile(exit_deltas,  0.90)
-    pnl_p90   = percentile(pnl_deltas,   0.90) if pnl_deltas else 0.0
+    entry_p90 = percentile(entry_deltas, grade_percentile)
+    exit_p90  = percentile(exit_deltas,  grade_percentile)
+    pnl_p90   = percentile(pnl_deltas,   grade_percentile) if pnl_deltas else 0.0
 
     # Fragmented FIFO grids can have exact entry/count parity and exact
     # position-level close events while entry-grouped consolidation smears exit
@@ -1331,12 +1369,12 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     if fragmented_fifo and entry_p90 < 1e-12 and count_delta < STRONG_COUNT_DELTA:
         sched_exit_deltas, sched_pnl_deltas = schedule_exit_metrics(tv_sched_rows, eng_sched_rows)
         if sched_exit_deltas:
-            sched_exit_p90 = percentile(sched_exit_deltas, 0.90)
+            sched_exit_p90 = percentile(sched_exit_deltas, grade_percentile)
             if sched_exit_p90 <= exit_p90:
                 exit_deltas = sched_exit_deltas
                 exit_p90 = sched_exit_p90
         if sched_pnl_deltas:
-            sched_pnl_p90 = percentile(sched_pnl_deltas, 0.90)
+            sched_pnl_p90 = percentile(sched_pnl_deltas, grade_percentile)
             if sched_pnl_p90 <= pnl_p90:
                 pnl_deltas = sched_pnl_deltas
                 pnl_p90 = sched_pnl_p90
@@ -1528,6 +1566,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         pnl_deltas=pnl_deltas,
         qty_deltas=qty_deltas,
         pnlpct_deltas=pnlpct_deltas,
+        grading_policy=grading_policy,
     )
 
 

@@ -199,6 +199,9 @@ public:
     std::string report_json_full(std::optional<std::uint64_t> cursor = std::nullopt,
                                  ReportReadStats* stats = nullptr) const;
     std::optional<CheckpointDiagnostic> checkpoint_diagnostic() const;
+    std::uint64_t input_count() const;
+    std::string report_delta_base_json(std::optional<std::uint64_t> cursor = std::nullopt,
+                                       bool verify_full = false) const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

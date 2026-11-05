@@ -1,6 +1,6 @@
 #pragma once
 #include "na.hpp"
-#include <deque>
+#include "series.hpp"
 
 namespace pineforge {
 
@@ -22,8 +22,8 @@ namespace pineforge {
 //
 // Both users divide S by `length` themselves (ta.sma) or emit S (math.sum).
 class KahanWindowSum {
-    std::deque<double> values_;    // window sources, front = newest
-    std::deque<double> addends_;   // the compensated addends, front = newest
+    OwnedDeque<double> values_;    // window sources, front = newest
+    OwnedDeque<double> addends_;   // the compensated addends, front = newest
     int length_;
     int count_;          // valid sources pushed so far
     double sum_;         // S
@@ -62,6 +62,9 @@ public:
     int length() const { return length_; }
     bool seeded() const { return count_ >= length_; }
     double sum() const { return sum_; }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, values_, addends_);
+    }
 };
 
 } // namespace pineforge
