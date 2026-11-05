@@ -35,10 +35,7 @@ Missing logs, mixed failures, arm64/`gkp-*` jobs, stale attempts and changed run
 refuse the retry; three total attempts are allowed. PRs, manual dispatches and
 release/publish/deploy/promotion workflows are excluded. The controller runs on
 hosted `ubuntu-24.04`, uses its trusted default-branch workflow commit, and never
-prints log bodies. Missing `gh`, `python3` or the log escape flag fails the job.
-The post-merge on-demand amd64 labels are included in the same loss-retry fleet.
-If the on-demand routing is rolled back, land a revert PR for the label commit
-before the next post-merge run.
+prints log bodies. Missing `gh`, `python3` or the log escape flag fails the job. The post-merge on-demand amd64 labels are included in the same loss-retry fleet; if that routing is rolled back, land a revert PR for the label commit before the next post-merge run.
 
 A GitHub-only PR changes at least one path, all under `.github/`, including both sides of a rename.
 `scripts/ci_*.py` changes, alone or mixed with `.github/`, follow the ordinary proof plan.
