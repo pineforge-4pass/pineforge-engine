@@ -1,79 +1,44 @@
 // Selected-capacity script_bars bound.
 //
-// WHAT IT PINS. The caller's script_bars limit counts the script buckets opened by the supplied primary
-// data: every bucket whose first row the stream carries, including pre-roll, pre-T rows and an unsealed
-// final bucket. Each bucket uses the native script interval, anchored to the session when one is set.
-// This is neither the planner's sealed or fed count (S2 and S3) nor a UTC-hour count (S9).
-// used + requested > limit must throw selected_script_bars_limit_exceeded before the crossing record is
-// materialized; used + requested == limit passes. An absent limit means no limit; explicit 0 is finite.
-// Source and auxiliary roles never charge this bound, even when Source carries the same primary bytes.
-// S1 covers full buckets; S2 an unsealed tail; S3 pre-roll trimming; S4 gaps and coarser input; S5 roles;
-// S6 and S6b absence; S7 zero; S8 early stopping; S9 session anchoring; S10 equal input/script timeframes.
-// Each counting scenario admits N opened buckets at limit N, refuses at N-1, accepts an absent bound
-// without refusal, and admits a much larger finite limit. S3 and S10 also test the smaller planner count.
+// The bound counts script buckets opened by supplied Primary rows across all Primary streams in a run.
+// A bucket opens when its native script-bucket key differs from the preceding Primary row's key.
+// Pre-roll, rows later trimmed and an unsealed final bucket all count. Source and Auxiliary rows do not.
+// The product guard under test is observe_script_bars, called through this test's run_driver observer table.
+// A row opening bucket limit + 1 is refused before it reaches the materialization sink. Equality passes;
+// an absent bound imposes no limit, while explicit zero refuses the first bucket.
 //
-// HOW THE EXPECTED VALUES ARE MADE. Every expected count is arithmetic on timestamps written into this
-// file's own CSV text. A row's bucket key is anchor + floor((ts - anchor) / length); a bucket opens when
-// its key differs from the preceding row's. The timestamp helpers and Grid supply the independent counts.
-// The existing planner (plan_selected_primary) only establishes that fixtures are valid selected requests
-// and demonstrates where sealed/fed counts differ from opened counts; it does not supply expected counts.
-// For a refusal at limit L, the crossing bucket is number L + 1, so limit = L, used = L before the
-// attempted increment, and requested = 1. All three arguments are canonical unsigned decimal text, with
-// sorted keys and no whitespace. The typed code name and English message come from the failure catalog.
-// The crossing row's index is computed from the same timestamp keys, independently of driver output.
-// The sink must hold precisely the primary rows preceding that index, in their original order.
+// Expected values come from this test's own oracles over timestamps written into its CSV text.
+// Grid computes keys from the fixture anchor and interval length; opened_buckets counts key changes,
+// and crossing_index locates the first row exceeding the bound, independently of driver output.
+// The planner establishes fixture validity and shows where sealed or fed counts differ from opened counts.
+// Each refusal checks selected_script_bars_limit_exceeded, class resource, non-retryability and the exact
+// catalog English. Arguments are canonical unsigned decimal text: limit and used equal the bound before
+// the attempted reservation, and requested is one. The sink holds exactly the rows before the crossing.
 // CSV records vary every OHLCV field and use exact binary fractions within the reader's valid grammar.
-// In S9, seven session-anchored buckets span eight UTC hours; in S10 each minute row opens one bucket.
 //
-// WHAT IT DOES NOT PIN. Early refusal is observed through the materialization sink: tails of 2, 30 and
-// 200 days must leave exactly the rows before the crossing row in the sink. For the 30- and 200-day tails,
-// S8 also requires the primary stream position when the refusal escapes to be under a tenth of the file.
-// These observations establish that the long tail is not read; they do not measure internal buffers.
-// This test installs no allocation hook and does not exercise the production entry's observer binding.
-// It calls run_driver with an observer table supplied by this test. Unneeded slots remain null.
-// The script_bars slot holds an observer that observes nothing and enforces nothing. It stands for the
-// guard that does not exist yet and must be replaced by that guard's observer when it is implemented,
-// with every assertion unchanged. The stand-in is local to this file and is separate from product symbols.
-// No default observer, weak symbol, registration fallback or stub is supplied through product code.
-// In S6b, a separate inert source_rows observer makes a finite source_rows bound require and read Source
-// while script_bars is absent. It neither counts nor refuses; it only keeps the driver active for that case.
-// The driver invokes an observer only for a present bound, so S6 and S6b test absence through the driver,
-// rather than a branch in the script_bars observer. With all bounds absent, Completed or
-// NotAdmitted / NoRequestedFields is acceptable; neither may refuse, and NoRequestedFields delivers no rows.
+// S1 checks complete buckets and equality at the bound.
+// S2 counts an unsealed final bucket.
+// S3 counts supplied pre-roll buckets even when the planner trims them.
+// S4 counts opened keys across gaps with coarser input.
+// S5 keeps Primary, Source and Auxiliary charges separate using distinct streams.
+// S6 checks absence over many buckets; S6b keeps the driver active with a finite Source bound.
+// S7 checks that explicit zero refuses the first row with an empty sink.
+// S8 checks refusal before the crossing row reaches the sink and before a long tail is read.
+// S9 uses session-anchored script buckets.
+// S10 checks that equal input and script timeframes open one bucket per row.
+// S11 preserves the last bucket across two Primary streams.
+// S12 checks strict-feed hourly buckets.
+// S13 checks strict-feed buckets with equal input and script timeframes.
+// Each counting scenario admits its opened count, refuses one below it, accepts an absent bound and
+// admits a larger finite bound. S3 and S10 also refuse at the planner's smaller fed count.
 //
-// WHAT FAILS IF THE GUARD IS WRONG. Counting sealed buckets accepts S2 at N-1 because its tail is unsealed.
-// Counting fed buckets accepts S3 below N. Counting UTC hours accepts S9 below 8 and refuses its limit 7.
-// Charging Source or auxiliary records refuses S5 at N. Counting rows or elapsed time gives wrong S4 results.
-// Ignoring the limit never refuses. Refusing after delivering the crossing row, or after reading the
-// whole input, fails S8. Treating explicit 0 as absent admits S7 instead of refusing its first record.
-// Assuming several rows per bucket, a timeframe ratio or a nominal slot count instead of the native key
-// fails S10, where input and script timeframes are equal and every row opens a bucket.
-// A refusal with a different typed code, noncanonical arguments or different English fails expect_refused.
-// A setup failure, missing symbol or MissingObserver answer cannot establish enforcement of the limit.
-// The refusal must propagate unchanged out of the driver; returning ObserverFailure instead makes the
-// result NotAdmitted and fails the test. Unrelated typed failures, I/O errors and invariant failures escape.
-// Only Primary records reach the materialization sink; Source and auxiliary records must stay separate.
-// With the stand-in observer, the real reader, native calendar and sink run, but no script_bars limit is
-// enforced: every finite-bound call is admitted and the sink receives every supplied primary row.
-// Each expected refusal therefore fails at CHECK(got.result == seam::Result::Refused) in expect_refused.
-// S1 through S5 and S7 through S10 reach that assertion; S6 also reaches it at limit 299.
-// There are 15 such refusal checks, including the extra smaller-count cases and S8's three tail lengths.
-// Exact-limit, larger-limit and absent-bound calls should still pass with this observer.
-// Failure output identifies the scenario, file, assertion and line; describe() prints the driver's answer
-// and the number of rows received by the sink. A bound violation must fail the refusal assertion,
-// rather than being mistaken for a build, link or setup error.
-// These failures demonstrate that the limit is not enforced by this tree. After the guard is supplied,
-// the same assertions establish its typed refusal and exact arguments, equality behaviour and early stop.
-// Leaving the stand-in in the script_bars slot still fails at the same refusal assertion.
-// The Source observer used by S6b remains inert so that no other capacity check masks script_bars absence.
-// S5 supplies separate stream objects for Primary, Source and Auxiliary, keeping role isolation explicit.
-// S4 counts actual opened keys across gaps rather than deriving a bucket count from row spacing.
-// S8's limit 2 allows the first 120 minute rows; the next row opens the third hourly bucket.
-// Its stream-position assertion runs only after an actual refusal; an admitted result fails earlier.
-// S7's explicit zero expects limit = 0, used = 0 and requested = 1, with an empty sink.
-// S6's 300 one-row buckets test that absence is not an implicit finite default.
-// S10 also refuses at the smaller fed count, proving that trimming does not reduce the charged count.
-// All expected values and assertions are independent of the stand-in's lack of enforcement.
+// S8 observes early stopping through the sink and stream position without measuring internal buffers.
+// This test exercises run_driver with the product guard in its own table, independently of the production
+// entry's observer binding. Other slots remain null except for S6b's inert Source observer, which makes
+// the driver read Source while script_bars is absent. The driver invokes observers only for present bounds.
+// With all bounds absent, Completed or NotAdmitted / NoRequestedFields is acceptable; neither may refuse.
+// NoRequestedFields delivers no rows. Typed failures propagate unchanged; setup and unrelated failures
+// remain distinguishable from a capacity refusal.
 
 #include <pineforge/run_failure.hpp>
 #include <pineforge/selected_window_plan.hpp>
@@ -130,13 +95,7 @@ struct Outcome {
 
 // The observer table supplied by this test to run_driver. Only the slots needed by each call are set:
 // script_bars and, in S6b, source_rows. The driver calls an observer only for a present bound.
-// The callbacks are defined here, separate from the product archive.
-namespace red_form {  // observer for a tree without the script_bars guard
-// This observer observes nothing and enforces nothing: it stands for the guard that does not exist yet.
-// Replace it in the table with that guard's observer when implemented, keeping every assertion unchanged.
-// It is local to this file and has a distinct name from the product's observe_script_bars.
-void pre_guard_observer(sc::State&, const sc::Limits&, const sc::RecordEvent&) {}
-}  // namespace red_form
+// The script_bars slot binds the product guard; the Source callback below only enables S6b's stream read.
 
 namespace carrier {  // inert Source reader for the absent-bound scenario
 // S6b only: an inert source_rows observer. A finite source_rows bound makes the driver require and read a
@@ -148,7 +107,7 @@ void inert_source_rows(sc::State&, const sc::Limits&, const sc::RecordEvent&) {}
 
 sc::ObserverTable table_under_test(bool with_source_rows) {
     sc::ObserverTable table;  // every slot null
-    table.script_bars = &red_form::pre_guard_observer;  // stands for the script_bars guard not yet implemented
+    table.script_bars = &sc::observe_script_bars;
     if (with_source_rows) table.source_rows = &carrier::inert_source_rows;
     return table;
 }
@@ -616,10 +575,8 @@ void s8_refusal_stops_at_the_crossing_record() {
         CHECK(crossing_index(rows, kHourGrid, 2) == 120);  // fixture sanity
         CHECK(plan_of(rows, c.request).status == pineforge::SelectedPlanStatus::Ok);  // fixture validity
         const seam::Outcome got = expect_refused(c, 2);    // sink holds exactly the first 120 rows
-        // The refusal happens AT the crossing record, so a tail of 30 or 200 days is never read: measured on
-        // the stream itself (its position when the refusal escaped), and only on an actual refusal (the
-        // missing guard already fails at expect_refused). A bounded reader has consumed a small fraction of a
-        // file this long, not the file.
+        // On refusal, the stream position shows that only a small fraction of the long tail was read.
+        // expect_refused checks the typed failure and the exact sink prefix before this position check.
         if (got.result == seam::Result::Refused && days >= 30) {
             CHECK(got.consumed_primary_bytes.has_value());
             if (got.consumed_primary_bytes) {
@@ -674,7 +631,9 @@ void s11_one_hour_split_over_two_primary_streams() {
     c.streams.primary_more.push_back(csv_of(second));
     CHECK(opened_buckets(rows, kHourGrid) == 3);
     CHECK(plan_of(rows, request).status == pineforge::SelectedPlanStatus::Ok);
-    // The split must preserve the previous bucket across the Primary stream boundary.
+    // The split must preserve the previous bucket across the Primary stream boundary. csv_of numbers the
+    // records of each stream from zero, so the second stream's OHLCV values restart the pattern of the first;
+    // only the timestamps matter to this scenario.
     ladder(c);
 }
 

@@ -170,6 +170,7 @@ set(PINEFORGE_KERNEL_SOURCES src/array.cpp
     src/selected_capacity_driver.cpp
     src/selected_capacity_primary_rows.cpp
     src/selected_capacity_auxiliary_rows.cpp
+    src/selected_capacity_script_bars.cpp
     src/metrics_spill_curve.cpp
     src/report_scratch.cpp
     src/detail/o1_store.cpp
