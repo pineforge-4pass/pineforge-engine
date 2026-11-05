@@ -115,7 +115,7 @@ transaction's report state before its admission. The input is refused before
 growth if its cached pages plus that margin do not fit. A refused boundary
 input leaves database, WAL and SHM byte-identical, including repeated refusals.
 Charging the cumulative payload to the boundary input is intended
-(`Ledger::commit_input`, `runner/store.cpp:1099`). A boundary input can therefore
+(`Ledger::commit_input`, `runner/store.cpp:1140`). A boundary input can therefore
 hit a storage stop when the input alone would fit, up to the cumulative
 payload's reservation earlier than strictly necessary. This cost buys the
 guarantee that no input commits with a checkpoint admitted without room in its
@@ -142,8 +142,8 @@ Startup and recovery checkpoints also admit their actual cached pages before
 COMMIT, using the configured budget without an input reservation. They are
 optional on refusal and publish the same diagnostic. This is intended for both
 startup and post-replay checkpoints (`Ledger::checkpoint_recovered_report`,
-`runner/store.cpp:1225`; the post-replay call is `checkpoint_recovered_report`,
-`runner/main.cpp:1137`): with a large budget, either can spend most of the
+`runner/store.cpp:1266`; the post-replay call is `checkpoint_recovered_report`,
+`runner/main.cpp:1147`): with a large budget, either can spend most of the
 remaining headroom on an O(report) payload before the first live input. The run
 can stop sooner, never over budget. Opening files already
 over a newly supplied finite budget refuses with `LedgerBudgetExceeded` before
@@ -224,3 +224,49 @@ and prints request, actual growth, limit and admission result. Migration rows
 cover a ledger produced by the previous runner under a finite budget and a
 fixture with 4 MB of historical action payload under 8 MiB of upgrade headroom,
 with brute-force recounts and source-row comparisons.
+
+## Advisory disk observations and indexed delivery
+
+The default allowance remains unlimited. `--ledger-warn-free-fraction F`
+is an advisory operator parameter for `run` and read-only `status`, with
+finite `0 < F <= 1` and default 0.8. The sole source default is
+`kDefaultLedgerWarnFreeFraction` in `runner/ledger_observability.hpp`;
+neither this option nor its measurements are persisted.
+
+Service output adds `metrics.ledger_storage`; `status` adds `ledger_storage`.
+`used_bytes` measures database plus WAL file sizes, excluding SHM.
+`bytes_per_input` divides that actual footprint by the committed input count;
+it includes fixed ledger overhead and is null at cursor zero.
+`free_disk_bytes` uses the filesystem's space available to this process.
+`growth_bytes_per_second` measures positive net footprint growth since recovery
+finished in this invocation, divided by elapsed steady-clock time.
+`seconds_to_disk_exhaustion` divides available free disk by that rate.
+`growth_start_bytes` and `growth_elapsed_seconds` expose the interval.
+Unknown measurements, absent positive growth and a one-shot status query have
+null rate/projection. This is a running observation, not a capacity promise:
+WAL reuse, checkpointing, future row sizes and input rates affect it.
+
+`ledger_storage.state` becomes `WARNING` at
+`used_bytes >= F * free_disk_bytes`; otherwise it is `OK`, or `UNKNOWN` if
+measurement fails. The denominator is currently free disk, not total capacity.
+The warning publishes status immediately and never removes readiness, refuses
+an input, interrupts delivery or changes exit status. Existing explicit byte
+admission and its database + WAL + SHM definition remain as described above.
+There is no new cache, WAL, transaction or ledger limit.
+
+The delivery cursor now seeks `unsent=1` ordinals through the existing partial
+`delivery_state_unsent` index, then joins the selected event and route.
+Acknowledged, journal-only and completed-failure history is excluded from the
+cursor walk. Active retries and explicit persisted redelivery retain their
+existing ownership. This changes a query only, with no index or table change.
+
+`--report-jsonl=delta-v2` also changes behavior without changing the database
+schema. It stores versioned report payloads in the existing report rows and
+keeps ratio freshness outside the cumulative document; every v2 record carries
+`ratios.as_of_input`. Its change-only envelope bounds emitted bytes and
+serialized rows per input on the 10,000/100,000-input work populations.
+Plain/full output and v1 delta retain their bytes and ratio scheduling. See the
+[runner report contract](../runner/README.md#delta-v2-report-stream).
+The current exact default still performs whole-curve ratio work, including
+with v2. Ratio scheduling is a separate later change. This change does not
+claim flat memory or bounded cumulative export.
