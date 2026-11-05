@@ -35,7 +35,7 @@ Missing logs, mixed failures, arm64/`gkp-*` jobs, stale attempts and changed run
 refuse the retry; three total attempts are allowed. PRs, manual dispatches and
 release/publish/deploy/promotion workflows are excluded. The controller runs on
 hosted `ubuntu-24.04`, uses its trusted default-branch workflow commit, and never
-prints log bodies. Missing `gh`, `python3` or the log escape flag fails the job.
+prints log bodies. Missing `gh`, `python3` or the log escape flag fails the job. The post-merge on-demand amd64 labels are included in the same loss-retry fleet; if that routing is rolled back, land a revert PR for the label commit before the next post-merge run.
 
 A GitHub-only PR changes at least one path, all under `.github/`, including both sides of a rename.
 `scripts/ci_*.py` changes, alone or mixed with `.github/`, follow the ordinary proof plan.
@@ -1642,7 +1642,7 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `gke-pr.yml` | `pull_request_target` to `main` | Hosted admission/result; GKE preflight and proof legs; Debug `gke-16cpu-32gb-amd64-128gb`, arm64 `gke-16cpu-32gb-arm64-128gb` |
 | `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: hosted `ubuntu-24.04` |
 | `rerun-preempted.yml` | `workflow_run`: completed `CI post-merge` push/schedule runs on `main` | `rerun`: hosted `ubuntu-24.04` |
-| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Seven light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: Release `gke-32cpu-64gb-amd64`, sanitizers `gke-32cpu-64gb-amd64-256gb`, Debug `gke-16cpu-32gb-amd64-128gb`, kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64-128gb` |
+| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Seven light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: Release `gke-ondemand-32cpu-64gb-amd64`, sanitizers `gke-ondemand-32cpu-64gb-amd64-256gb`, Debug `gke-16cpu-32gb-amd64-128gb`, kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64-128gb` |
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
 | `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; native shards: bare `gke-8cpu-16gb-amd64`; `matrix.runner`: live-sanitizers `gke-16cpu-32gb-amd64-256gb`, live-tsan `gke-16cpu-32gb-amd64-128gb` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz`: scalar `gke-2cpu-4gb-amd64`; credentialed `build`: `gkp-4cpu-8gb-amd64` |

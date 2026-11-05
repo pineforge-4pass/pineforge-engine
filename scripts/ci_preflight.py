@@ -109,6 +109,7 @@ GKE_8_LABEL = 'gke-8cpu-16gb-amd64'
 GKE_ARM_LABEL = 'gke-16cpu-32gb-arm64'
 GKE_2_LABEL = 'gke-2cpu-4gb-amd64'
 GKE_4_LABEL = 'gke-4cpu-8gb-amd64'
+GKE_ONDEMAND_32_LABEL = 'gke-ondemand-32cpu-64gb-amd64'
 GKP_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'notify-hub': RELEASE_RUNNER,
                     'prebuilt': PREBUILT_RUNNER},
@@ -121,7 +122,7 @@ GKP_JOB_ENVIRONMENTS = {
     'release-ruleset-probe.yml': {'probe': 'release'},
     'promote-baseline.yml': {'promote': 'release-bot'},
 }
-GKE_32_256_LABEL = 'gke-32cpu-64gb-amd64-256gb'
+GKE_ONDEMAND_32_256_LABEL = 'gke-ondemand-32cpu-64gb-amd64-256gb'
 GKE_16_128_LABEL = 'gke-16cpu-32gb-amd64-128gb'
 GKE_16_256_LABEL = 'gke-16cpu-32gb-amd64-256gb'
 GKE_ARM_128_LABEL = 'gke-16cpu-32gb-arm64-128gb'
@@ -131,8 +132,8 @@ GKE_JOB_LABELS = {
                    'build-debug': GKE_16_128_LABEL,
                    'corpus-parity-subset': GKE_8_LABEL},
     'ci-post.yml': {'preflight': GKE_8_LABEL, 'preflight-slow': GKE_8_LABEL,
-                    'build': GKE_32_LABEL, 'build-debug': GKE_16_128_LABEL,
-                    'sanitizers': GKE_32_256_LABEL, 'kernel-only': GKE_16_LABEL,
+                    'build': GKE_ONDEMAND_32_LABEL, 'build-debug': GKE_16_128_LABEL,
+                    'sanitizers': GKE_ONDEMAND_32_256_LABEL, 'kernel-only': GKE_16_LABEL,
                     'build-arm': GKE_ARM_128_LABEL},
     'corpus-parity.yml': {'corpus-parity': GKE_16_LABEL, 'corpus-parity-subset': GKE_8_LABEL},
     'native-live.yml': {'native-live': GKE_MATRIX_RUNNER, 'native-live-shards': GKE_8_LABEL},
@@ -2421,7 +2422,7 @@ def _authz_header(name: str) -> str:
 
 _GKE_ROUTE = re.compile(r'(?<![\w.-])gke-[\w.-]+', re.IGNORECASE)
 _GKE_SCALE_LABEL = re.compile(
-    r'(?<![\w.-])gke-\d+cpu-\d+gb-(?:amd64|arm64)(?:-(?:128|256)gb)?(?![\w.-])')
+    r'(?<![\w.-])gke-(?:ondemand-)?\d+cpu-\d+gb-(?:amd64|arm64)(?:-(?:128|256)gb)?(?![\w.-])')
 _GKP_ROUTE = re.compile(r'(?<![\w.-])gkp-[\w.-]+', re.IGNORECASE)
 _GKP_SCALE_LABEL = re.compile(r'gkp-(?:od-)?\d+cpu-\d+gb-amd64(?:-\d+gb)?')
 
@@ -2643,7 +2644,7 @@ def _resolved_runner_values(workflow: str, body: str) -> tuple[list[str], bool]:
 
 # Disk suffixes still require group membership; admitted sizes are pinned separately.
 _RUNNER_GROUP_LABEL = re.compile(
-    r'(?<![\w.-])(?:gke|gkp(?:-od)?)-\d+cpu-\d+gb-[A-Za-z0-9_]+(?:-\d+gb)?(?![\w.-])',
+    r'(?<![\w.-])(?:gke(?:-ondemand)?|gkp(?:-od)?)-\d+cpu-\d+gb-[A-Za-z0-9_]+(?:-\d+gb)?(?![\w.-])',
     re.IGNORECASE)
 _REPOSITORY_ID = r'[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*'
 _RUNNER_GROUP_REFERENCE = re.compile(

@@ -4,7 +4,8 @@
 # gke-16cpu-32gb-amd64-128gb: ci-post.yml, gke-pr.yml, native-live.yml
 # gke-16cpu-32gb-amd64-256gb: native-live.yml
 # gke-16cpu-32gb-arm64-128gb: ci-post.yml, gke-pr.yml
-# gke-32cpu-64gb-amd64-256gb: ci-post.yml
+# gke-ondemand-32cpu-64gb-amd64: ci-post.yml
+# gke-ondemand-32cpu-64gb-amd64-256gb: ci-post.yml
 # This mirror does not verify that the new scale sets belong to group 14.
 pineforge-4pass/pineforge-engine/.github/workflows/ci-post.yml@refs/heads/main
 pineforge-4pass/pineforge-engine/.github/workflows/ci.yml@refs/heads/main
