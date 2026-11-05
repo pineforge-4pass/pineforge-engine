@@ -2733,7 +2733,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             'These light, secret-free jobs need no VM-only tools, mounts or caches.',
             'The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use '
             '`gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.',
-            'Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 37 GKE job instances: '
+            'Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 47 GKE job instances: '
             "the spot amd64 32 CPU label carries 1 job, and the on-demand amd64 32 CPU default/256 GB labels carry 4/8 jobs; amd64 16 CPU default/128/256 GB labels carry 3/3/1, amd64 8/4/2 CPU labels carry 7/5/7, and arm64 16 CPU 128 GB carries 8; each label's static cap is 8.",
             'The amd64 post build shards and the two arm64 post cells use bare scalar',
             'Hosted exceptions cover PR light jobs and the existing hosted release cells; post light jobs use bare scalar GKE names.',
@@ -2745,7 +2745,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             "Promotion's `promote-guard` and docs-post/probe `authz` each use one "
             '`gke-2cpu-4gb-amd64` instance in separate roots; their image must include `gh` for permission lookups.',
             '| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | '
-            'Seven light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: '
+            'Seven light jobs: scalar `gke-2cpu-4gb-amd64`; native x86 Release `build-x86-gcc133` on spot `gke-32cpu-64gb-amd64`; bare GKE scalars: '
             'Release `gke-ondemand-32cpu-64gb-amd64`, sanitizers `gke-ondemand-32cpu-64gb-amd64-256gb`, Debug `gke-16cpu-32gb-amd64-128gb`, kernel `gke-16cpu-32gb-amd64`, '
             'preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64-128gb` |',
             '| `native-live.yml` | Dispatch and post CI callers on `main` | '
