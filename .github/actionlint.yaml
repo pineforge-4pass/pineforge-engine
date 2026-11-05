@@ -7,7 +7,6 @@ self-hosted-runner:
     - gke-2cpu-4gb-amd64
     - gke-4cpu-8gb-amd64
     - gke-32cpu-64gb-amd64
-    - gke-32cpu-64gb-amd64-256gb
     - gke-ondemand-32cpu-64gb-amd64
     - gke-ondemand-32cpu-64gb-amd64-256gb
     - gke-16cpu-32gb-amd64

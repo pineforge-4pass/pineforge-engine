@@ -122,7 +122,6 @@ GKP_JOB_ENVIRONMENTS = {
     'release-ruleset-probe.yml': {'probe': 'release'},
     'promote-baseline.yml': {'promote': 'release-bot'},
 }
-GKE_32_256_LABEL = 'gke-32cpu-64gb-amd64-256gb'
 GKE_ONDEMAND_32_256_LABEL = 'gke-ondemand-32cpu-64gb-amd64-256gb'
 GKE_16_128_LABEL = 'gke-16cpu-32gb-amd64-128gb'
 GKE_16_256_LABEL = 'gke-16cpu-32gb-amd64-256gb'

@@ -182,7 +182,9 @@ class ControllerTests(unittest.TestCase):
 
     def test_plain_and_disk_sized_amd64_labels(self):
         for label in ('gke-8cpu-16gb-amd64', 'gke-32cpu-64gb-amd64',
-                      'gke-32cpu-64gb-amd64-256gb', 'gke-16cpu-32gb-amd64-128gb'):
+                      'gke-ondemand-32cpu-64gb-amd64',
+                      'gke-ondemand-32cpu-64gb-amd64-256gb',
+                      'gke-16cpu-32gb-amd64-128gb'):
             with self.subTest(label=label):
                 job = deepcopy(CUT_JOB)
                 job['labels'] = [label]
