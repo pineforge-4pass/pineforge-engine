@@ -1,9 +1,17 @@
 #include "selected_capacity_internal.hpp"
 
+#include <pineforge/run_failure.hpp>
+
+#include <stdexcept>
+
 namespace pineforge::detail::selected_capacity {
 
 void observe_script_bars(State& state, const Limits& limits, const RecordEvent& event) {
-    if (event.role != Role::Primary || !event.has_script_bucket) return;
+    if (event.role != Role::Primary) return;
+    if (!event.has_script_bucket)
+        throw coded<std::logic_error>(
+            RunFailureCode::engine_invariant, {},
+            "script-bar observer got a Primary row without a script bucket");
     if (state.has_last_primary_bucket
         && state.last_primary_bucket == event.script_bucket_key) return;
 

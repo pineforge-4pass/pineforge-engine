@@ -4,6 +4,7 @@
 // A bucket opens when its native script-bucket key differs from the preceding Primary row's key.
 // Pre-roll, rows later trimmed and an unsealed final bucket all count. Source and Auxiliary rows do not.
 // The product guard under test is observe_script_bars, called through this test's run_driver observer table.
+// S14 calls the observer directly to check its invariant refusal.
 // A row opening bucket limit + 1 is refused before it reaches the materialization sink. Equality passes;
 // an absent bound imposes no limit, while explicit zero refuses the first bucket.
 //
@@ -29,6 +30,7 @@
 // S11 preserves the last bucket across two Primary streams.
 // S12 checks strict-feed hourly buckets.
 // S13 checks strict-feed buckets with equal input and script timeframes.
+// S14 checks typed refusal of a Primary row without a script bucket and unchanged State.
 // Each counting scenario admits its opened count, refuses one below it, accepts an absent bound and
 // admits a larger finite bound. S3 and S10 also refuse at the planner's smaller fed count.
 //
@@ -660,6 +662,104 @@ void s13_strict_feed_equal_timeframes() {
     ladder(c);
 }
 
+void s14_primary_row_without_a_script_bucket_is_refused() {
+    sc::Limits finite;
+    finite.script_bars = sc::Bound{true, 8};
+    sc::Limits absent;
+    sc::State before;
+    before.source_rows = 2;
+    before.primary_rows = 5;
+    before.script_bars = 3;
+    before.auxiliary_rows = 7;
+    before.bytes = 11;
+    before.has_last_primary_bucket = true;
+    before.last_primary_bucket = kBase;
+    sc::RecordEvent event;
+    event.role = sc::Role::Primary;
+    event.timestamp_ms = kBase + 5 * kMin;
+    event.has_script_bucket = false;
+    event.script_bucket_key = kBase + kHour;
+
+    const auto check_unchanged = [](const sc::State& actual, const sc::State& expected) {
+        CHECK(actual.source_rows == expected.source_rows);
+        CHECK(actual.primary_rows == expected.primary_rows);
+        CHECK(actual.script_bars == expected.script_bars);
+        CHECK(actual.auxiliary_rows == expected.auxiliary_rows);
+        CHECK(actual.bytes == expected.bytes);
+        CHECK(actual.has_last_primary_bucket == expected.has_last_primary_bucket);
+        CHECK(actual.last_primary_bucket == expected.last_primary_bucket);
+    };
+    const auto expect_invariant = [&](sc::State& state, const sc::Limits& limits) {
+        const sc::State initial = state;
+        bool refused = false;
+        try {
+            sc::observe_script_bars(state, limits, event);
+        } catch (const pineforge::coded<std::logic_error>& error) {
+            refused = true;
+            const pineforge::RunFailureValue& failure = error.run_failure();
+            CHECK(std::string(pineforge::run_failure_code_name(failure.code)) == "engine_invariant");
+            CHECK(pineforge::run_failure_code_class(failure.code)
+                  == pineforge::RunFailureClass::engine_fault);
+            CHECK(!pineforge::run_failure_code_retryable(failure.code));
+            CHECK((failure.args ? *failure.args : std::string("{}")) == "{}");
+            CHECK(std::string(error.what())
+                  == "script-bar observer got a Primary row without a script bucket");
+        }
+        CHECK(refused && "Primary row without a script bucket must throw a coded logic_error");
+        check_unchanged(state, initial);
+    };
+
+    scenario = "S14 Primary without a script bucket, finite bound";
+    sc::State finite_state = before;
+    expect_invariant(finite_state, finite);
+
+    scenario = "S14 Primary without a script bucket, absent bound";
+    sc::State absent_state = before;
+    expect_invariant(absent_state, absent);
+
+    scenario = "S14 Primary with a script bucket counts once";
+    sc::RecordEvent bucketful = event;
+    bucketful.has_script_bucket = true;
+    sc::State counted = before;
+    sc::observe_script_bars(counted, finite, bucketful);
+    CHECK(counted.script_bars == 4);
+    CHECK(counted.last_primary_bucket == bucketful.script_bucket_key);
+    CHECK(counted.has_last_primary_bucket);
+    CHECK(counted.source_rows == before.source_rows);
+    CHECK(counted.primary_rows == before.primary_rows);
+    CHECK(counted.auxiliary_rows == before.auxiliary_rows);
+    CHECK(counted.bytes == before.bytes);
+
+    scenario = "S14 Primary with a script bucket at saturation";
+    sc::State saturated_before = before;
+    saturated_before.script_bars = 8;
+    sc::State saturated = saturated_before;
+    bool capacity_refused = false;
+    try {
+        sc::observe_script_bars(saturated, finite, bucketful);
+    } catch (const pineforge::coded<std::runtime_error>& error) {
+        capacity_refused = true;
+        const pineforge::RunFailureValue& failure = error.run_failure();
+        CHECK(std::string(pineforge::run_failure_code_name(failure.code))
+              == "selected_script_bars_limit_exceeded");
+    }
+    CHECK(capacity_refused && "A new script bucket at the bound must throw a coded capacity failure");
+    check_unchanged(saturated, saturated_before);
+
+    scenario = "S14 Primary without a script bucket at saturation";
+    expect_invariant(saturated, finite);
+
+    for (const sc::Role role : {sc::Role::Source, sc::Role::Auxiliary}) {
+        scenario = role == sc::Role::Source ? "S14 Source without a script bucket"
+                                          : "S14 Auxiliary without a script bucket";
+        sc::RecordEvent other = event;
+        other.role = role;
+        sc::State unchanged = before;
+        sc::observe_script_bars(unchanged, finite, other);
+        check_unchanged(unchanged, before);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -676,6 +776,7 @@ int main() {
     s11_one_hour_split_over_two_primary_streams();
     s12_strict_feed_hourly();
     s13_strict_feed_equal_timeframes();
+    s14_primary_row_without_a_script_bucket_is_refused();
     if (setup_failures != 0) {
         std::fprintf(stderr, "NEEDS setup %d NotAdmitted answer(s)\n", setup_failures);
         return 2;
