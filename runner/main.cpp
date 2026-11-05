@@ -475,8 +475,15 @@ class Strategy {
                 throw std::runtime_error("native stream extension version mismatch");
             auto engine_layout = optional_symbol<decltype(&strategy_stream_engine_layout_version)>(
                 "strategy_stream_engine_layout_version");
-            has_current_engine_layout =
-                engine_layout && engine_layout() == PF_STREAM_ENGINE_LAYOUT_VERSION;
+            const auto declared_layout = engine_layout ? engine_layout() : 0u;
+            // A nonzero declaration promises a concrete BacktestEngine
+            // layout. Refuse stale promises before creating a strategy or
+            // reading a handle under the runner's compiled C++ layout.
+            if (declared_layout != 0u && declared_layout != PF_STREAM_ENGINE_LAYOUT_VERSION)
+                throw std::runtime_error(
+                    "strategy engine layout mismatch: module=" + std::to_string(declared_layout)
+                    + " runtime=" + std::to_string(PF_STREAM_ENGINE_LAYOUT_VERSION));
+            has_current_engine_layout = declared_layout == PF_STREAM_ENGINE_LAYOUT_VERSION;
             free = symbol<decltype(&strategy_free)>("strategy_free");
             error = symbol<decltype(error)>("strategy_get_last_error");
             tick = symbol<decltype(tick)>("strategy_stream_push_tick");

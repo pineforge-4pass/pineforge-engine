@@ -129,7 +129,9 @@ void bounded(const TradeLedger& ledger) {
 
 void constructor_policy() {
     const TradeLedger defaults;
-    CHECK(defaults.cache_rows() == TradeLedger::kDefaultCacheRows);
+    // An omitted setting holds the provisional byte default's geometry; the
+    // legacy 65,536-row one needs an explicit row setting (see below).
+    CHECK(defaults.cache_rows() == default_cache_rows());
     for (const Size rows : {Size{0}, Size{1}, Size{7}, TradeLedger::kDefaultCacheRows,
                            TradeLedger::kMaxCacheRows}) {
         TradeLedger ledger(rows);
@@ -168,11 +170,14 @@ void inclusive_byte_caps_at_page_edges() {
         const auto cap = fixed + bytes;
         ledger.push_back(row(0));
         same_trade(ledger.read(0), row(0));
-        // Two complete laps exercise clipped pages, fixed modulo mapping,
-        // append fills and collisions at every slot, including the last page.
+        // Two complete laps exercise clipped pages, four-way set placement,
+        // append fills and replacements at every set, including the last page
+        // and a last set of fewer than four ways. A set keeps at most its own
+        // ways, so the occupancy follows the sets (ledger_default_cache_rows.hpp),
+        // not min(rows, cap): a cap that is not a multiple of four fills late.
         for (Size i = 1; i <= 2 * rows; ++i) {
             ledger.push_back(row(static_cast<int>(i)));
-            CHECK(ledger.cache_size() == std::min(i + 1, rows));
+            CHECK(ledger.cache_size() == ledger_oracle::cached_entries(rows, i + 1));
             CHECK(ledger.cache_resident_bytes() <= cap);
             CHECK(ledger.cache_resident_bytes() - fixed <= bytes);
         }
@@ -307,9 +312,16 @@ void workload(Size rows, bool fail_allocation, std::FILE* out) {
         CHECK(ledger.cache_resident_bytes() == fixed && ledger.cache_size() == 0);
     }
 
-    // A real direct-map collision at either selected capacity evicts zero.
-    const Size collision = TradeLedger::kDefaultCacheRows;
-    same_trade(ledger.read(collision), expected(collision));
+    // Real collisions at either selected capacity evict zero. A set has four
+    // ways (one at rows=1), so the four newcomers of zero's own set, ordinals
+    // that are multiples of the set count, replace its oldest way, which is
+    // zero. Fewer would leave zero cached at the larger capacity.
+    const Size sets = std::max<Size>(1, rows / TradeLedger::kCacheWays
+                                        + (rows % TradeLedger::kCacheWays != 0));
+    for (Size k = 1; k <= TradeLedger::kCacheWays; ++k) {
+        const Size collision = k * sets;
+        same_trade(ledger.read(collision), expected(collision));
+    }
     Measure reread_measure;
     same_trade(ledger.read(0), zero);
     const auto reread = reread_measure.finish();

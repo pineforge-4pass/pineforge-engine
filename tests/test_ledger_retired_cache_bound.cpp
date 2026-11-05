@@ -2,6 +2,7 @@
 // of trades it has ever closed: only the retained rows can be read, so the cache
 // allocation stays at the retained window however many trades pass through.
 #include "p2cx_tledger_fixture.hpp"
+#include "ledger_default_cache_rows.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -103,7 +104,7 @@ void sliding_retained_window_releases_pages() {
     }
 }
 
-void retiring_rewind_releases_suffix_pages() {
+void retiring_rewind_releases_every_page() {
     for (const Size cap : {Size{4}, Size{7}, Size{128}, Size{300}, 4 * kPageSlots + 3}) {
         const Size retained = std::min(Size{10}, cap - 1);
         TradeLedger ledger;
@@ -111,7 +112,7 @@ void retiring_rewind_releases_suffix_pages() {
         pineforge::detail::TradeLedgerStorageProbe::retire_history(ledger);
         ledger.set_cache_rows(cap);
         const auto fixed = ledger.cache_resident_bytes();
-        // Fill every page, then rewind to page zero, clipped if cap<256.
+        // Fill every page, then rewind to the first rows, clipped if cap<256.
         // Decrementing by 256 when freeing a clipped suffix fails below.
         for (Size i = 0; i < cap; ++i) ledger.push_back(row(static_cast<int>(i)));
         for (Size i = 0; i < cap; ++i) (void)ledger.entry_price_at(i);
@@ -119,9 +120,16 @@ void retiring_rewind_releases_suffix_pages() {
         CHECK(ledger.cache_resident_bytes() == TradeLedger::resident_cache_bytes(cap));
         ledger.resize(retained);
         CHECK(ledger.cache_size() == 0);
-        CHECK(ledger.cache_resident_bytes() == fixed + table_bytes(cap)
-              + std::min(cap, kPageSlots) * TradeLedger::kLedgerEntryBytes);
+        // Placement is associative: an ordinal belongs to a four-way set, so a
+        // rewound ordinal has no ring slot to give back alone. A rewind releases
+        // every optional page and only the directory stays.
+        CHECK(ledger.cache_resident_bytes() == fixed + table_bytes(cap));
         for (Size i = 0; i < retained; ++i) same_trade(ledger.read(i), row(static_cast<int>(i)));
+        // The retained prefix allocates only the pages its own sets fall in,
+        // each by first touch and the first one clipped when cap<256; keeping
+        // the old suffix pages, or allocating a page whole, fails here.
+        CHECK(ledger.cache_resident_bytes() == fixed + table_bytes(cap)
+              + ledger_oracle::touched_slots(cap, 0, retained) * TradeLedger::kLedgerEntryBytes);
         ledger.push_back(row(9000));
         same_trade(ledger.read(retained), row(9000));
         ledger.seal(retained + 1);
@@ -129,7 +137,7 @@ void retiring_rewind_releases_suffix_pages() {
     }
 }
 
-void retirement_keeps_only_the_clipped_last_page() {
+void retirement_releases_every_page_and_reads_allocate_again() {
     constexpr Size cap = kPageSlots + 44;
     TradeLedger ledger;
     ledger.set_scratch_directory(".");
@@ -140,11 +148,16 @@ void retirement_keeps_only_the_clipped_last_page() {
     for (Size i = 0; i < cap; ++i) (void)ledger.entry_price_at(i);
     CHECK(ledger.cache_resident_bytes() == TradeLedger::resident_cache_bytes(cap));
     ledger.seal(kPageSlots);
-    // Page zero is freed: exactly cap-256=44 slots survive. A page-count
-    // counter charging 256 slots or a missing decrement fails this equality.
-    CHECK(ledger.cache_resident_bytes() == fixed + table_bytes(cap)
-          + (cap - kPageSlots) * TradeLedger::kLedgerEntryBytes);
+    // Retirement releases every optional page, the clipped last one included:
+    // only the directory stays. A page kept, or a page-count counter that is
+    // not decremented, fails this equality.
+    CHECK(ledger.cache_resident_bytes() == fixed + table_bytes(cap));
     for (Size i = kPageSlots; i < cap; ++i) same_trade(ledger.read(i), row(static_cast<int>(i)));
+    // The cap-256=44 retained rows fall in sets 31..74 of 75, which reach both
+    // pages: they are allocated again by touch, the second one clipped to 44.
+    CHECK(ledger.cache_resident_bytes() == fixed + table_bytes(cap)
+          + ledger_oracle::touched_slots(cap, kPageSlots, cap - kPageSlots)
+              * TradeLedger::kLedgerEntryBytes);
     ledger.seal(cap);
     CHECK(ledger.cache_resident_bytes() == fixed + table_bytes(cap));
 }
@@ -155,8 +168,9 @@ int main() {
          retiring_ledger_cache_does_not_follow_the_trade_count);
     test("sliding retained window releases pages across ring laps",
          sliding_retained_window_releases_pages);
-    test("retiring rewind releases suffix pages", retiring_rewind_releases_suffix_pages);
-    test("retirement keeps only the clipped last page", retirement_keeps_only_the_clipped_last_page);
+    test("retiring rewind releases every page", retiring_rewind_releases_every_page);
+    test("retirement releases every page and reads allocate again",
+         retirement_releases_every_page_and_reads_allocate_again);
     std::printf("test_ledger_retired_cache_bound: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -240,7 +240,7 @@ DRIVER_FORWARD = (
 # the consumer translation unit, the only place that owns `hash_spec`, so the
 # digest can never drift from the fields the continuation identity folds for a
 # spec. That is one sibling inline-namespace block inside the consumer's
-# `namespace pineforge`, outside engine_script_run_v19; pin it whole so it stays
+# `namespace pineforge`, outside engine_script_run_v20; pin it whole so it stays
 # exactly the spec fold seeded as continuation_hash() seeds it, and compare
 # epoch ownership as if the allowed block were absent.
 CONSUMER_SPEC_DIGEST = """inline namespace native_run_spec_v3 {
@@ -358,9 +358,9 @@ def consumer_epoch_source(files):
         raise ValueError('context spec digest must preserve its exact v1 bridge')
     epoch = versioned(text.replace(CONSUMER_SPEC_DIGEST, "", 1)
                          .replace(CONSUMER_VIEWS_BRIDGE, "", 1),
-                      "pineforge", "engine_script_run_v19")
+                      "pineforge", "engine_script_run_v20")
     if "native_run_spec_digest" in epoch:
-        raise ValueError("native_run_spec_digest does not belong to engine_script_run_v19")
+        raise ValueError("native_run_spec_digest does not belong to engine_script_run_v20")
     return epoch
 
 
@@ -498,7 +498,7 @@ def authenticate_historical_host_manifests(root=ROOT, providers=PROVIDERS):
     with historical_tempdir(root) as temporary:
         for label, provider in providers.items():
             # v15 is the old source-layer provider, frozen v16 is the
-            # same-epoch L0 pairing control and frozen v18 is the v19 epoch's
+            # same-epoch L0 pairing control and frozen v18 is the v20 epoch's
             # rejection-pair provider. None of them can establish when the
             # current FX value was introduced.
             if provider['engine_epoch'] in ('engine_script_run_v15', 'engine_script_run_v16',
@@ -1185,7 +1185,7 @@ def check_texts(files):
         if token not in consumer_src:
             raise ValueError('native consumer omits staged/intrabar policy token: ' + token)
 
-    host = versioned(files[FILES[8]], "pineforge", "engine_script_run_v19")
+    host = versioned(files[FILES[8]], "pineforge", "engine_script_run_v20")
     require(host, ("NativeStrategyHost", "NativeStateView", "NativeLifecycleKind",
                    "NativeFailure", "NativeFailureContext", "NativeInRunCause",
                    "NativeInRunRecipient", "NativeInRunCursor", "NativeMarketEvent",
@@ -1202,7 +1202,7 @@ def check_texts(files):
                    "NativeCalculationReason", "NativeRiskState",
                    "NativeAnchoredTrigger", "NativeAnchoredLevelView",
                    "NativeOpenLot"),
-            "engine_script_run_v19",
+            "engine_script_run_v20",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     # R5 L7b: the anchored-level view is the read-only fact set the arm hook
     # sees, in this order; the kernel level is the last member so a host
@@ -1264,13 +1264,13 @@ def check_texts(files):
             'boolactivated=false;doublebest_price=0.0;doublecurrent_level=0.0;'
             'std::uint64_tactivation_ordinal=0;'):
         raise ValueError('NativeTrailState must expose the exact read-only A35 facts')
-    require(host, ("NativeCurrentExecutionResult",), "engine_script_run_v19",
+    require(host, ("NativeCurrentExecutionResult",), "engine_script_run_v20",
             r'\busing\s+NAME\s*=')
     require_exact_alias(
         host, "NativeCurrentExecutionResult",
         "std::variant<NativeCurrentRefusal,native_order::ExecutionAppliedEvent,"
         "native_order::NoEffectEvent,native_order::MatchRejectedEvent,"
-        "native_order::CancelledEvent>", "engine_script_run_v19")
+        "native_order::CancelledEvent>", "engine_script_run_v20")
     current_command = body(host, r'struct\s+NativeCurrentExecution\s*\{', 'current command')
     if re.sub(r'\s+', '', current_command) != 'native_order::RequestHandletarget;NativeCurrentPriceRuleprice_rule=NativeCurrentPriceRule::AsPresented;':
         raise ValueError('current command has exactly target and price_rule, no competing selected authority')
@@ -1354,25 +1354,25 @@ def check_texts(files):
     )
     for pattern, name in required_host_methods:
         if len(re.findall(pattern, host)) != 1:
-            raise ValueError(name + " must be a v19 NativeStrategyHost member")
+            raise ValueError(name + " must be a v20 NativeStrategyHost member")
     for name in ('on_native_applied', 'current_execution_point', 'inspect_current_execution',
                  'execute_current', 'cohort_open', 'cohort_add', 'cohort_remove'):
         if name not in host:
             raise ValueError('missing current host contract: ' + name)
     if "native_failure_context_in_run" not in host:
-        raise ValueError("native_failure_context_in_run must belong to engine_script_run_v19")
+        raise ValueError("native_failure_context_in_run must belong to engine_script_run_v20")
     if "native_failed_run_identity" not in host:
-        raise ValueError("native_failed_run_identity must belong to engine_script_run_v19")
+        raise ValueError("native_failed_run_identity must belong to engine_script_run_v20")
     if not re.search(r'\bSubmitResult\s+submit\s*\(\s*const\s+native_order::Request\s*&', host):
-        raise ValueError("general submit must belong to engine_script_run_v19")
+        raise ValueError("general submit must belong to engine_script_run_v20")
     if not re.search(r'\bReplaceResult\s+replace\s*\(\s*const\s+native_order::RequestHandle\s*&',
                      host):
-        raise ValueError("general replace must belong to engine_script_run_v19")
+        raise ValueError("general replace must belong to engine_script_run_v20")
     if "submit_market" not in host or "replace_market" not in host:
-        raise ValueError("market-only submit/replace must remain in engine_script_run_v19")
-    consumer = versioned(files[FILES[9]], "pineforge", "engine_script_run_v19")
+        raise ValueError("market-only submit/replace must remain in engine_script_run_v20")
+    consumer = versioned(files[FILES[9]], "pineforge", "engine_script_run_v20")
     require(consumer, ("NativeExecutionConsumer",),
-            "engine_script_run_v19", r'\bclass\s+NAME\s*')
+            "engine_script_run_v20", r'\bclass\s+NAME\s*')
     consumer_src = consumer_epoch_source(files)
     require(consumer_src,
             ("NativeStrategyHost::configure_native", "NativeStrategyHost::native_state",
@@ -1393,7 +1393,7 @@ def check_texts(files):
              "NativeStrategyHost::native_open_lots",
              "NativeStrategyHost::declare_native_bar_open_hook",
              "NativeStrategyHost::declare_native_precommit_hook"),
-            "engine_script_run_v19", r'\bNAME\s*\(')
+            "engine_script_run_v20", r'\bNAME\s*\(')
 
 
     # These are continuation owners, not redundant physical-book snapshots.
@@ -1482,4 +1482,4 @@ if __name__ == "__main__":
         raise SystemExit(77)
     check()
     print("native_order identity v1 / values v8, native_calendar_v2, native_run_spec_v3, "
-          "native_driver_v5, native_fx_curve_v1 and host engine_script_run_v19 ownership verified")
+          "native_driver_v5, native_fx_curve_v1 and host engine_script_run_v20 ownership verified")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation controls for the aggregate v19 ownership and ABI pair guards."""
+"""Mutation controls for the aggregate v20 ownership and ABI pair guards."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -31,20 +31,20 @@ class AggregateVersions(unittest.TestCase):
     def test_epoch_mutation_rejects(self) -> None:
         root = self.copied_root()
         path = root / "include/pineforge/engine.hpp"
-        path.write_text(path.read_text().replace("engine_script_run_v19", "engine_script_run_v0", 1))
+        path.write_text(path.read_text().replace("engine_script_run_v20", "engine_script_run_v0", 1))
         with self.assertRaises(ValueError):
             checker.check(root)
 
     def test_reopened_epoch_mutation_rejects(self) -> None:
         root = self.copied_root()
         path = root / "include/pineforge/engine.hpp"
-        before = ("inline namespace engine_script_run_v19 {\n"
+        before = ("inline namespace engine_script_run_v20 {\n"
                   "// The fold broker_state_hash() is built on:")
         text = path.read_text()
         self.assertIn(before, text)
         path.write_text(text.replace(
-            before, before.replace("engine_script_run_v19", "engine_script_run_v0"), 1))
-        with self.assertRaisesRegex(ValueError, "BacktestEngine requires engine_script_run_v19"):
+            before, before.replace("engine_script_run_v20", "engine_script_run_v0"), 1))
+        with self.assertRaisesRegex(ValueError, "BacktestEngine requires engine_script_run_v20"):
             checker.check(root)
 
     def test_stream_fold_mutation_rejects(self) -> None:

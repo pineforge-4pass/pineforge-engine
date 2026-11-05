@@ -39,7 +39,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 // The private bridges behind the four C exports, declared exactly as
 // src/c_abi.cpp declares them; the native consumer owns every check.
 int native_set_execution_observer_v1(BacktestEngine*, const pf_execution_observer_v1*) noexcept;
@@ -47,7 +47,7 @@ int native_execution_observation_v1(const BacktestEngine*, pf_execution_observat
 int native_set_selected_window_v1(BacktestEngine*, const pf_selected_window_config_v1*) noexcept;
 int native_selected_window_counts_v1(const BacktestEngine*,
                                      pf_selected_window_counts_v1*) noexcept;
-}  // inline namespace engine_script_run_v19
+}  // inline namespace engine_script_run_v20
 }  // namespace pineforge
 
 using namespace pineforge;

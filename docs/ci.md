@@ -865,8 +865,8 @@ Each profile needs matching providers; a Mac Release archive cannot replace
 a Linux sanitizer build. CTest itself performs no network fetch.
 CTest authenticates all seven prepared receipts against their actual archive and
 header bytes. The executing settlement, script-host, and aggregate controls
-use the authenticated `host-fc7aad6` v18 archive plus the live v19 archive:
-v18 callers link to v18, v19 callers link to v19, and both cross-epoch
+use the authenticated `host-fc7aad6` v18 archive plus the live v20 archive:
+v18 callers link to v18, v20 callers link to v20, and both cross-epoch
 directions must fail at link time with the expected epoch-qualified symbol.
 No ABI caller executable is run. The older receipts remain authenticated
 historical evidence; they are not presented as a live v13/v14/v15/v16 link

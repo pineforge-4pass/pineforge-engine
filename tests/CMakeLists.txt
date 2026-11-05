@@ -6,6 +6,10 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
 endif()
 
 set(TEST_SOURCES
+    test_runtime_context
+    test_runtime_context_failures
+    # Supplied by the concurrent N6 slice before configure, with no fallback.
+    test_runtime_security_cursor
     test_value_invalid_relative_risk
     test_value_invalid_relative_risk_source
     # R4-D L4a native-route behavioral twins.  These retain the legacy
@@ -418,7 +422,16 @@ set(TEST_SOURCES
     test_pointvalue
     test_metrics
     test_drawing
+    test_drawing_bound_status
+    test_drawing_bounded_builtins
+    test_drawing_bounded_creation_failure
     test_drawing_checkpoint
+    test_drawing_id_domain
+    test_drawing_slot_atomicity
+    test_drawing_slot_bound
+    test_drawing_slot_checkpoint
+    test_drawing_slot_defaults
+    test_drawing_slot_reuse
     test_coof_drawing_checkpoint_cost
     test_coof_drawing_rollback_tape
     test_margin_call
@@ -2634,6 +2647,18 @@ add_test(
 )
 
 add_test(
+    NAME test_verify_corpus_count_rule
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_verify_corpus_count_rule.py
+)
+
+add_test(
+    NAME test_regen_validation_report
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_regen_validation_report.py
+)
+
+add_test(
     NAME test_run_strategy_range_end
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/test_run_strategy_range_end.py
@@ -3915,6 +3940,31 @@ foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
 
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    target_link_libraries(test_runtime_context_failures PRIVATE Threads::Threads)
+    target_link_libraries(test_runtime_security_cursor PRIVATE Threads::Threads)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Real production ledger/service, with actual inherited marker channels.
+        # No test timeout, fixture skip, or replacement host protocol.
+        add_test(NAME test_runtime_context_managed_scratch_observation
+            COMMAND ${Python3_EXECUTABLE} -I -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_context_managed.py
+                --mode scratch --binary $<TARGET_FILE:test_runtime_context>)
+        add_test(NAME test_runtime_context_managed_quota_endpoint_observation
+            COMMAND ${Python3_EXECUTABLE} -I -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_context_managed.py
+                --mode endpoint --binary $<TARGET_FILE:test_runtime_context>)
+        add_test(NAME test_runtime_context_managed_endpoint_observer_race
+            COMMAND ${Python3_EXECUTABLE} -I -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_context_managed.py
+                --mode race --binary $<TARGET_FILE:test_runtime_context_failures>)
+        add_test(NAME test_runtime_context_managed_crash_control
+            COMMAND ${Python3_EXECUTABLE} -I -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_context_managed.py
+                --mode crash-control)
+    endif()
+endif()
+
 # Each order runs in its own process, before that process has seeded the
 # timezone-offset cache. These pin native legacy expectations, not TV rows.
 add_test(NAME test_intraday_bucket_dst_characterization_reverse
@@ -4423,6 +4473,59 @@ target_compile_definitions(test_native_sizing_bases PRIVATE
 target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)
 target_link_libraries(test_local_time_lock_free_hit PRIVATE Threads::Threads)
 target_link_libraries(test_native_runtime_ambient PRIVATE Threads::Threads)
+
+# Independent whole-archive modules reproduce sequential process-TZ switches.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
+    foreach(_pf_timezone_module IN ITEMS timezone_module_a timezone_module_b)
+        add_library(${_pf_timezone_module} MODULE timezone_module_fixture.cpp)
+        target_link_libraries(${_pf_timezone_module} PRIVATE pineforge Threads::Threads)
+        if(APPLE)
+            target_link_options(${_pf_timezone_module} PRIVATE
+                "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+        else()
+            target_link_options(${_pf_timezone_module} PRIVATE
+                "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+        endif()
+    endforeach()
+    set(_pf_timezone_test_command)
+    if(PINEFORGE_ENABLE_SANITIZERS)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            set(_pf_timezone_runtime_name libasan.so)
+        elseif(APPLE)
+            set(_pf_timezone_runtime_name libclang_rt.asan_osx_dynamic.dylib)
+        else()
+            set(_pf_timezone_runtime_name "libclang_rt.asan-${CMAKE_SYSTEM_PROCESSOR}.so")
+            foreach(_pf_timezone_module IN ITEMS timezone_module_a timezone_module_b)
+                target_link_options(${_pf_timezone_module} PRIVATE -shared-libasan)
+            endforeach()
+        endif()
+        execute_process(COMMAND ${CMAKE_CXX_COMPILER} "-print-file-name=${_pf_timezone_runtime_name}"
+            OUTPUT_VARIABLE _pf_timezone_sanitizer_runtime OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _pf_timezone_runtime_result)
+        if(NOT _pf_timezone_runtime_result EQUAL 0 OR NOT EXISTS "${_pf_timezone_sanitizer_runtime}")
+            message(FATAL_ERROR "The two-module timezone test requires the compiler's shared ASan runtime")
+        endif()
+        if(APPLE)
+            set(_pf_timezone_runtime_environment "DYLD_INSERT_LIBRARIES=${_pf_timezone_sanitizer_runtime}")
+        else()
+            set(_pf_timezone_runtime_environment "LD_PRELOAD=${_pf_timezone_sanitizer_runtime}")
+        endif()
+        # The interpreter is not instrumented: LeakSanitizer inside it would
+        # report CPython's own exit-time allocations as leaks, so leak
+        # detection is off for this row (the choice the stop-equivalence row
+        # below makes too). The instrumented modules are still checked for
+        # memory errors, and the first one halts the row.
+        list(APPEND _pf_timezone_test_command ${CMAKE_COMMAND} -E env
+            "${_pf_timezone_runtime_environment}"
+            "ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=1"
+            "UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")
+    endif()
+    list(APPEND _pf_timezone_test_command ${Python3_EXECUTABLE} -B
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_timezone_multi_module.py
+        --module-a $<TARGET_FILE:timezone_module_a>
+        --module-b $<TARGET_FILE:timezone_module_b>)
+    add_test(NAME test_timezone_multi_module COMMAND ${_pf_timezone_test_command})
+endif()
 
 # The LIFO row's expectation is the library's build type. The library's
 # NDEBUG, which compiles uninstall_runtime_ambient's order check out, comes
@@ -7664,6 +7767,17 @@ if(PINEFORGE_COHORT_EXPOSURE_FIXTURES)
     endforeach()
 endif()
 
+# Ledger cache policy wrapper fixture.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8
+        AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(run_json_ledger_cache_policy_fixture MODULE run_json_ledger_cache_policy_fixture.cpp)
+    target_link_libraries(run_json_ledger_cache_policy_fixture PRIVATE pineforge)
+    target_compile_options(run_json_ledger_cache_policy_fixture PRIVATE -ffp-contract=off)
+    # Bind the fixture's real pread interposer for this module, including the
+    # linked engine; a Python process's earlier libc binding must not bypass it.
+    target_link_options(run_json_ledger_cache_policy_fixture PRIVATE "-Wl,-Bsymbolic-functions")
+endif()
+
 # These CI-script self-tests are independent of CPU architecture. The arm
 # workflow excludes only this explicit population; amd64 Release runs it all.
 # R4-D L6a's clear resets LABELS on the verifier slices, so keep this APPEND
@@ -8161,6 +8275,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     add_dependencies(test_cache_policy_v1 cache_policy_module)
 endif()
 # --- CR-150 cache-policy-v1 end ---
+
 # --- CR-150 ta-history-cache begin ---
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
     target_link_options(test_ta_history_cache_faults PRIVATE
@@ -8277,6 +8392,25 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
         PINEFORGE_ROSTER_PASS_OBSERVER=1)
 endif()
 # --- CR-150 roster-pass-work end ---
+
+# --- CR-150 cr559-map-capacity begin ---
+if(UNIX)
+    target_link_libraries(test_cr559_map_capacity_limit PRIVATE ${CMAKE_DL_LIBS})
+    if(APPLE)
+        target_link_options(test_cr559_map_capacity_limit PRIVATE "-Wl,-export_dynamic")
+    else()
+        target_link_options(test_cr559_map_capacity_limit PRIVATE "-Wl,--export-dynamic")
+    endif()
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        target_link_libraries(test_cr559_map_capacity_run PRIVATE ${CMAKE_DL_LIBS})
+        if(APPLE)
+            target_link_options(test_cr559_map_capacity_run PRIVATE "-Wl,-export_dynamic")
+        else()
+            target_link_options(test_cr559_map_capacity_run PRIVATE "-Wl,--export-dynamic")
+        endif()
+    endif()
+endif()
+# --- CR-150 cr559-map-capacity end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))

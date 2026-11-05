@@ -7,6 +7,15 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- **Strategy modules built against 1.10.x must be rebuilt.** The C++ script
+  ABI epoch moves from `engine_script_run_v19` to `engine_script_run_v20`
+  (and `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19` to `..._V20`) because
+  `PF_STREAM_ENGINE_LAYOUT_VERSION` moves from 3 to 4 and the layout of
+  `CacheDefaults` changed. This is an explicit exception to the earlier
+  promise of one epoch throughout 1.x, and the existing engine and codegen
+  pairing rule applies. The C API only gains functions; the caller-allocated
+  C report and trade layouts are unchanged, and the state-hash domain tags
+  keep their names.
 - `pineforge-live` status files now report `metrics.feed_idle_ms`, the
   milliseconds since the last feed arrival, or null before the first; the
   consumer owns freshness. HTTP and WebSocket feeds now also default to no

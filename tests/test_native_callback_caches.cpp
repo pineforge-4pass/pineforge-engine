@@ -38,7 +38,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 
 // The lane's caches beside the lookups they replaced. The reference_* bodies
 // are the pre-lane spec_ptr() and label predicates, verbatim, reading the
@@ -79,7 +79,7 @@ struct NativeExecutionConsumerProbe {
     }
 };
 
-}  // inline namespace engine_script_run_v19
+}  // inline namespace engine_script_run_v20
 }  // namespace pineforge
 
 using namespace pineforge;

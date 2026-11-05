@@ -1882,6 +1882,16 @@ std::size_t TimeframeAggregator::native_period_stamps_held() const {
     return native_stamps_.size() + native_group_open_.size();
 }
 
+void TimeframeAggregator::observe_owned_storage(OwnedStorage& out) const noexcept {
+    if (!out.visit(*this)) return;
+    observe_owned_members(out, anchor_tz_, anchor_session_, native_stamps_,
+                          native_group_open_, native_late_opens_);
+    // trade_instants passed to set_native_periods is temporary, not retained.
+    // The source's public hook owns its shared allocation and descendants;
+    // arbitrary shared_ptr/control layouts cannot be inferred here.
+    if (native_source_) pineforge::observe_owned_storage(out, *native_source_);
+}
+
 void TimeframeAggregator::set_native_day_opens(std::vector<int64_t> late_opens) {
     native_late_opens_.clear();
     if (mode_ != Mode::RATIO || target_seconds_ <= 0) return;

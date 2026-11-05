@@ -1,4 +1,5 @@
 #include "native_execution_consumer.hpp"
+#include "native_issued_range_state.hpp"
 #include "engine_internal.hpp"
 #include "engine_value_invalid.hpp"
 #include "engine_settlement_stage.hpp"
@@ -31,7 +32,7 @@
 #include <variant>
 #include "native_cohort_target_work.hpp"
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 namespace {
 
 template<class T>
@@ -1345,6 +1346,12 @@ std::unique_ptr<IExecutionConsumer> make_native_execution_consumer() {
     return std::make_unique<NativeExecutionConsumer>();
 }
 
+detail::NativeHistoryRegistryStats NativeExecutionConsumer::managed_history_registry_stats() const {
+    // All current/retained/nested cores, including UNSUPPLIED registrations
+    // and older context snapshots. Private source facts, not physical fields.
+    return detail::native_history_registry.stats();
+}
+
 bool NativeExecutionConsumer::failed() const noexcept {
     return std::holds_alternative<NativeFailed>(state_);
 }
@@ -1734,11 +1741,11 @@ bool NativeExecutionConsumer::call_execution_observer(BacktestEngine& engine,
 void NativeExecutionConsumer::fail_from_exception(BacktestEngine& engine,
                                                   NativeFailureOperation operation,
                                                   const std::exception& error) {
+    // Every public try enters with no input in flight. History acceptance can
+    // throw on untracked handles too; restore the next entry's nesting state
+    // before applying the selected epoch's existing first-failure policy.
+    processing_input_ = false;
     if (selected_epoch_tracked()) {
-        // processing_input_ is false at every try's entry (admission refuses
-        // otherwise), so a throw that left it set is put back, and the
-        // nesting predicate of the next entry reads true again.
-        processing_input_ = false;
         // The first latched cause stays: its code and text are not overwritten.
         if (failed()) {
             engine.last_run_status_ = 1;
@@ -1841,6 +1848,7 @@ bool NativeExecutionConsumer::prepare_public_begin(
         return false;
     }
     cache_policy_attempt_ = cache_policy_config_;
+    scratch_io_policy_attempt_ = scratch_io_policy_config_;
     struct RestorePolicyPreparation {
         bool& flag;
         bool previous;
@@ -1871,13 +1879,16 @@ bool NativeExecutionConsumer::prepare_public_begin(
     day_labels_.clear();
     begin_bars_ = args.bars;
     begin_n_ = args.n;
-    begin_is_stream_ = args.is_stream;
+    begin_is_stream_ = run_is_stream_ = args.is_stream;
     downcast_engine_ = &engine;
     downcast_host_ = dynamic_cast<NativeStrategyHost*>(&engine);
     auto* host = downcast_host_;
     if (!host) return true;
     preparing_begin_ = true;
     try {
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        const int preparation_bar = 0;
+        detail::MapBarContextScope map_bar(&preparation_bar);
         host->prepare_native_begin(args);
     } catch (const std::exception& e) {
         pending_bar_views_ = {};
@@ -2154,6 +2165,12 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.s(kNativeConsumerSemanticVersion);
     f.s(kNativeDriverSemanticVersion);
     f.s(kNativeCalendarSemanticVersion);
+    // An explicit creation policy changes future callbacks. The unlimited
+    // default adds no bytes to the historical continuation fold.
+    if (map_pair_limit_ != 0) {
+        f.s("map-pair-limit/v1");
+        f.u(map_pair_limit_);
+    }
     f.u(static_cast<uint64_t>(state_.index()));
     if (const auto* running = std::get_if<NativeRunning>(&state_)) {
         f.u(static_cast<uint64_t>(running->phase));
@@ -3066,11 +3083,13 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         return false;
     }
     cache_policy_run_ = cache_policy_attempt_;
+    scratch_io_policy_run_ = scratch_io_policy_attempt_;
     release_run_command_scratch();
     for (auto& run : run_command_scratch_) run.reset();
     dependency_scratch_stats_ = {};
     run_cache_diagnostics_.begin_run();
     engine.reset_run_state();
+    engine.runtime_contexts().reset();
     engine.reset_trade_percent_prefix();
     closed_trade_prefix_ = {};
     closed_trade_seal_bar_.reset();
@@ -3205,8 +3224,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     engine.trades_.set_scratch_directory(engine.report_sink_state_.scratch_dir);
     // Reset above closed the previous generation before its new allowance is
     // applied. Sink and array runs share the same internal default.
-    engine.trades_.set_cache_rows(
-        CacheDefaults::ledger_cache_rows(cache_policy_run_.ledger_rows));
+    cache_policy_run_.apply_ledger_cache(engine.trades_);
     precommit_digest_.reset();
     margin_liquidation_.reset();
     has_margin_path_ = false;
@@ -3264,6 +3282,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         in_callback_ = true;
         in_run_begin_ = true;
         try {
+            detail::MapPairLimitScope map_policy(map_pair_limit_);
+            detail::MapBarContextScope map_bar(&engine.bar_index_);
             host->on_native_run_begin();
         } catch (const std::exception& e) {
             in_callback_ = false;
@@ -8325,6 +8345,8 @@ void NativeExecutionConsumer::invoke_recalculation(
     MatchBookSpillScope candidate_free(*this, true);
     try {
         const NativeDecisionContext presented = callback_context_;
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_recalculate(bar, presented, reason, cause);
     } catch (const std::bad_alloc& e) {
         in_callback_ = false;
@@ -8378,6 +8400,8 @@ void NativeExecutionConsumer::invoke_sub_bar_callback(
     const uint64_t ordinal = callback_context_.coordinate.ordinal;
     try {
         const NativeDecisionContext presented = callback_context_;
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_sub_bar(sub, presented);
     } catch (const std::bad_alloc& e) {
         in_callback_ = false;
@@ -8449,6 +8473,8 @@ void NativeExecutionConsumer::invoke_applied_callback(
         in_callback_ = true;
         callback_phase_ = CallbackPhase::Applied;
         const auto presented = callback_context_;
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_applied(applied, presented);
         // L4: the margin receipt of this same fill, after the ordinary applied
         // notification and with the same cursor.
@@ -8606,6 +8632,8 @@ void NativeExecutionConsumer::invoke_bar_open_callback(
     callback_phase_ = CallbackPhase::PreOpen;
     try {
         const NativeDecisionContext presented = callback_context_;
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_bar_open(open_view, presented);
     } catch (const std::exception& e) {
         in_callback_ = false;
@@ -8646,6 +8674,8 @@ bool NativeExecutionConsumer::invoke_input_callback(
     input_callback_bar_ = bar;
     in_callback_ = true;
     try {
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_input(bar, context);
     } catch (const std::exception& e) {
         in_callback_ = false;
@@ -8688,6 +8718,8 @@ bool NativeExecutionConsumer::invoke_tick_callback(
     in_callback_ = true;
     callback_phase_ = CallbackPhase::Tick;
     try {
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_tick(bar, presented);
     } catch (const std::bad_alloc& e) {
         in_callback_ = false;
@@ -8760,6 +8792,8 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
         const NativeDecisionContext presented = callback_context_;
         // Every calculation routes here; the default recalculation hook
         // forwards to on_native_bar for hosts using the ordinary cadence.
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_recalculate(bar, presented, NativeCalculationReason::BarClose,
                                     nullptr);
     } catch (const std::exception& e) {
@@ -9794,6 +9828,12 @@ bool NativeExecutionConsumer::contribute_input(
     }
     const int64_t script_key = script_interval->open_ms;
     if (!seal_stale_script(engine, script_key)) return false;
+    // Confirmed bars entered the provider before their input callback.
+    // Observed/quiet slots have no input callback; record their accepted
+    // OHLCV here, after the preceding script bar has been sealed.
+    if (kind != InputContribution::ConfirmedBar
+        && engine.runtime_contexts().history_enabled())
+        engine.runtime_contexts().append_live(bar);
     const int64_t source_close = (kind == InputContribution::ConfirmedBar)
         ? std::max(interval.last_traded_close_ms, interval.next_period_open_ms)
         : (last_print_time_ms_ != 0 ? last_print_time_ms_ : interval.last_traded_close_ms);
@@ -10574,6 +10614,8 @@ bool NativeExecutionConsumer::invoke_timeframe_callback(
     if (host == nullptr) return true;
     in_callback_ = true;
     try {
+        detail::MapPairLimitScope map_policy(map_pair_limit_);
+        detail::MapBarContextScope map_bar(&engine.bar_index_);
         host->on_native_timeframe_bar(bucket, context);
     } catch (const std::exception& e) {
         in_callback_ = false;
@@ -10829,6 +10871,12 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
         processing_input_ = false;
         return false;
     }
+    if (engine.runtime_contexts().history_enabled()) {
+        if (run_is_stream_)
+            engine.runtime_contexts().append_live(bar);
+        else
+            engine.runtime_contexts().accept_batch(static_cast<std::uint64_t>(index) + 1);
+    }
     if (!invoke_input_callback(engine, bar, input_context)) {
         processing_input_ = false;
         return false;
@@ -10873,6 +10921,13 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
 }
 
 void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars, int n) {
+    // All synchronous batch entries keep this scope until every callback and
+    // replay reader unwinds. Stream warmup uses the live store instead: its
+    // caller's borrowed warmup array may disappear at stream_begin's exit.
+    if (engine.runtime_contexts().history_enabled()) {
+        if (run_is_stream_)
+            engine.runtime_contexts().begin_live();
+    }
     // Every script bar this pump seals reads the bars around it off this
     // array (present_session_day); the view ends with the call.
     struct PumpView {
@@ -11038,6 +11093,7 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
 void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars, int n) {
     const BacktestEngine::ReportSinkCallScope sink_call(engine);
     const EntryExitGuard exit_scope(*this, engine, false);
+    std::optional<RuntimeBatchLease> runtime_lease;
     if (refuse_dispatch_reentry()) return;
     const BacktestEngine::MetricsStreamingAttemptV1 metrics_attempt(engine);
     const AttemptScope attempt(*this);
@@ -11055,6 +11111,10 @@ void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars
         const int64_t initial = n > 0 ? bars[0].timestamp
                                       : std::numeric_limits<int64_t>::min();
         if (!begin_ready(engine, NativeRunPhase::Batch, initial)) return;
+        if (engine.runtime_contexts().history_enabled()) {
+            runtime_lease.emplace(bars, static_cast<std::size_t>(n));
+            engine.runtime_contexts().bind_batch(*runtime_lease);
+        }
         pump_batch(engine, bars, n);
         if (failed()) return;
         record_open_position_report_rows(engine);
@@ -11080,6 +11140,7 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
                                      MagnifierDistribution magnifier_dist) {
     const BacktestEngine::ReportSinkCallScope sink_call(engine);
     const EntryExitGuard exit_scope(*this, engine, false);
+    std::optional<RuntimeBatchLease> runtime_lease;
     if (refuse_dispatch_reentry()) return;
     const BacktestEngine::MetricsStreamingAttemptV1 metrics_attempt(engine);
     const AttemptScope attempt(*this);
@@ -11110,6 +11171,10 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
         const int64_t initial = n_input > 0 ? input_bars[0].timestamp
                                             : std::numeric_limits<int64_t>::min();
         if (!begin_ready(engine, NativeRunPhase::Batch, initial)) return;
+        if (engine.runtime_contexts().history_enabled()) {
+            runtime_lease.emplace(input_bars, static_cast<std::size_t>(n_input));
+            engine.runtime_contexts().bind_batch(*runtime_lease);
+        }
         pump_batch(engine, input_bars, n_input);
         if (failed()) return;
         record_open_position_report_rows(engine);
@@ -11137,6 +11202,7 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
                                        MagnifierDistribution magnifier_dist) {
     const BacktestEngine::ReportSinkCallScope sink_call(engine);
     const EntryExitGuard exit_scope(*this, engine, false);
+    std::optional<RuntimeBatchLease> runtime_lease;
     if (refuse_dispatch_reentry()) return;
     const BacktestEngine::MetricsStreamingAttemptV1 metrics_attempt(engine);
     const AttemptScope attempt(*this);
@@ -11162,6 +11228,10 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
         const int64_t initial = n_input > 0 ? input_bars[0].timestamp
                                             : std::numeric_limits<int64_t>::min();
         if (!begin_ready(engine, NativeRunPhase::Batch, initial)) return;
+        if (engine.runtime_contexts().history_enabled()) {
+            runtime_lease.emplace(input_bars, static_cast<std::size_t>(n_input));
+            engine.runtime_contexts().bind_batch(*runtime_lease);
+        }
         pump_batch(engine, input_bars, n_input);
         if (failed()) return;
         record_open_position_report_rows(engine);
@@ -11576,6 +11646,8 @@ bool NativeExecutionConsumer::finalize_observed_tick_slot(
             engine.current_bar_ = forming_;
             calculating_bar_ = forming_;
             calculating_bar_has_ = true;
+            if (engine.runtime_contexts().history_enabled())
+                engine.runtime_contexts().append_live(forming_);
             clear_partial();
             invoke_callback(engine, forming_, calc);
             if (failed()) return false;
@@ -14410,7 +14482,7 @@ void BacktestEngine::prepare_scratch_table_run(const detail::ScratchTableConfig&
     scratch_table_run_.slab = std::move(next);
 }
 
-}  // inline namespace engine_script_run_v19
+}  // inline namespace engine_script_run_v20
 
 // The portable run-spec digest lives here, in the one translation unit that
 // owns `hash_spec` (see its definition above, beside the continuation fold),
@@ -14450,7 +14522,7 @@ std::uint64_t native_run_spec_digest(const NativeRunSpec& spec, const NativeBarV
 }  // namespace pineforge
 
 // Dormant matcher helpers preserve eager behavior through a derived price index.
-namespace pineforge::engine_script_run_v19 {
+namespace pineforge::engine_script_run_v20 {
 
 bool NativeExecutionConsumer::dormant_reachable(
         bool ge, double level, double lo, double hi, double delta) noexcept {
@@ -14809,9 +14881,9 @@ void NativeExecutionConsumer::prepare_match_book_scratch() {
     static_cast<DormantBookScratchBacking&>(*run->backing).prepare();
 }
 
-}  // namespace pineforge::engine_script_run_v19
+}  // namespace pineforge::engine_script_run_v20
 
-namespace pineforge::engine_script_run_v19 {
+namespace pineforge::engine_script_run_v20 {
 
 bool NativeExecutionConsumer::cohort_opening_index_current() const noexcept {
     // settlement_generation_ advances before EVERY settlement attempt,
@@ -14895,4 +14967,4 @@ bool NativeExecutionConsumer::read_indexed_cohort_target(
     return true;
 }
 
-}  // namespace pineforge::engine_script_run_v19
+}  // namespace pineforge::engine_script_run_v20

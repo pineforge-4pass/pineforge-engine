@@ -26,7 +26,7 @@
 #include <string>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 
 struct NativeExecutionConsumerProbe {
     static bool same_bytes(const std::string& a, const std::string& b) {
@@ -34,7 +34,7 @@ struct NativeExecutionConsumerProbe {
     }
 };
 
-}  // inline namespace engine_script_run_v19
+}  // inline namespace engine_script_run_v20
 }  // namespace pineforge
 
 namespace {

@@ -22,6 +22,24 @@ namespace pineforge {
 
 using namespace internal;
 
+std::optional<RuntimeSubdivision> runtime_subdivision(
+        const std::string& input_timeframe, const std::string& requested_timeframe) {
+    int ratio = 0, seconds = 0;
+    if (!internal::supports_lower_tf_emulation(
+            input_timeframe, requested_timeframe, &ratio, &seconds)) return std::nullopt;
+    return RuntimeSubdivision{ratio, seconds};
+}
+
+std::vector<Bar> runtime_subdivide(const Bar& bar, RuntimeSubdivision subdivision) {
+    if (subdivision.ratio <= 0 || subdivision.seconds <= 0)
+        throw std::invalid_argument("invalid runtime bar subdivision");
+    return internal::synthesize_lower_tf_bars(bar, subdivision.ratio, subdivision.seconds);
+}
+
+bool BacktestEngine::runtime_context_early_close_completes() const {
+    return session_template_knows_early_close();
+}
+
 
 // --- register_security_eval ---
 void BacktestEngine::register_security_eval(int sec_id, const std::string& requested_tf,

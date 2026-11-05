@@ -29,6 +29,7 @@
 
 namespace pineforge::detail {
 class ScratchSlab;
+class NativeHistoryOwner;
 struct ReadThroughCacheStats;
 }
 // The matcher (src/native_execution_consumer.hpp) is declared in the engine
@@ -36,7 +37,7 @@ struct ReadThroughCacheStats;
 // so the friends below name that one class and no other.
 namespace pineforge {
 struct CacheCapacity;
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 class NativeExecutionConsumer;
 }
 }
@@ -2343,6 +2344,9 @@ public:
 
 private:
     enum class TargetKind { Live, NotWorking, InvalidHandle };
+    // Native-private bridge. The existing opaque journal owns the resource;
+    // this borrow ends at reset/move/destruction, like its other core reads.
+    const detail::NativeHistoryOwner* managed_history_owner() const noexcept;
     friend void bind_journal_codec(WorkingRequestCore&, detail::CommandScratchStore&);
     friend detail::ScratchStatus append_journal_record(WorkingRequestCore&,
         const detail::ScratchByteSource&) noexcept;
@@ -2354,7 +2358,7 @@ private:
     friend class PreparedExecution;
     // The matcher reuses a row it scanned outside the heap through the place
     // its walk found the row at (book_generation, hold_scanned below).
-    friend class ::pineforge::engine_script_run_v19::NativeExecutionConsumer;
+    friend class ::pineforge::engine_script_run_v20::NativeExecutionConsumer;
 
     static void require_identity(const RunIdentity& identity);
     static void require_grid(std::optional<double> quantity_grid);
@@ -2901,7 +2905,7 @@ public:
 
     private:
         friend class LiveView;
-        friend class ::pineforge::engine_script_run_v19::NativeExecutionConsumer;
+        friend class ::pineforge::engine_script_run_v20::NativeExecutionConsumer;
         const_iterator(const WorkingRequestCore* core, BookCursor cursor) noexcept
             : core_(core), cursor_(cursor) {}
         // The spilled table's offset of the row the iterator stands on, 0

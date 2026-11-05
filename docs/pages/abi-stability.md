@@ -112,8 +112,8 @@ the count is positive.
 
 The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
 
-The stable inventory contains 122 compiled-strategy `PF_API` declarations
-(102 implementations in `src/c_abi.cpp` plus twenty generated declarations)
+The stable inventory contains 124 compiled-strategy `PF_API` declarations
+(104 implementations in `src/c_abi.cpp` plus twenty generated declarations)
 and 43 native-host declarations. A module supplies the generated symbols it
 supports; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
@@ -227,7 +227,7 @@ are unchanged. Uncertified hosts and Off requests do not call admission or
 preparation.
 
 Sixteen per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 102 runtime implementations, including the
+functions. The remaining 104 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.
@@ -386,7 +386,7 @@ spelling the default forwards to). N5 landed inside v18 rather than opening an
 epoch, and moved no fingerprint: a host that overrides nothing folds the same
 `"source:none"` marker, and the source host folds the same bytes through the
 generic hook. The v19 value epoch advances the same three to
-`engine_script_run_v19`; the host capability macro is
+`engine_script_run_v19`; the host capability macro is <!-- verified HEAD -->
 `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19`. Its frozen predecessor is
 `host-fc7aad6`, the last epoch-18 `main` commit, and
 `relocation-manifest-v18-v19.json` beside it records that transition: no host
@@ -407,9 +407,19 @@ trigger or the open-bar view is non-default). The margin update also adds
 request values; `RequestOrigin::Host` — every host request — folds nothing,
 so no established continuation hash moves.
 
+The 1.11.0 step from v19 to v20 is an epoch move for a layout change:
+`CacheDefaults` gained `ledger_cache_max_bytes` and the cache policy classes
+(`include/pineforge/cache_policy.hpp`), and `PF_STREAM_ENGINE_LAYOUT_VERSION`
+moved from 3 to 4. It advances the engine, host and
+consumer to `engine_script_run_v20` and the host capability macro to
+`PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V20`; the domain tags and the state-hash
+recipes keep their names. A C++ object built against 1.10.x headers must be
+rebuilt. `tests/test_ledger_cache_epoch_layout.cpp` fails the build when the
+layout of `CacheDefaults` changes under an unchanged epoch.
+
 | Matrix role | Internal identity |
 | --- | --- |
-| Live engine/host library | `engine_script_run_v19` |
+| Live engine/host library | `engine_script_run_v20` |
 | `host-e7cdf05` immutable provider | `engine_script_run_v15` | <!-- verified HEAD -->
 | `host-ab9714b` immutable provider | `engine_script_run_v16` | <!-- verified HEAD -->
 | `host-fc7aad6` immutable provider | `engine_script_run_v18` | <!-- verified HEAD -->
@@ -419,8 +429,8 @@ The verifier prepares seven immutable historical archives with the profile's
 compiler/settings and authenticates every receipt against the real archive and
 header bytes. The active transition control is deliberately narrower and
 executable: callers compiled against `host-fc7aad6` v18 link to its archive,
-callers compiled against live v19 link to the live archive, and both v18→v19
-and v19→v18 links must reject the exact epoch-qualified
+callers compiled against live v20 link to the live archive, and both v18→v20
+and v20→v18 links must reject the exact epoch-qualified
 `BacktestEngine::broker_state_hash` symbol. Settlement, script-host, and
 aggregate controls each exercise that pair; no caller executable is run. The
 `host-ab9714b` v16 archive stays the runtime-budget baseline
