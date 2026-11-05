@@ -2273,6 +2273,21 @@ add_test(NAME test_ci_preflight_slice_8
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py --slice 8/8)
 add_test(NAME test_ci_preflight_slices_cover
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight_split.py)
+# These CI-script self-tests are independent of CPU architecture. The arm
+# workflow excludes only this explicit population; amd64 Release runs it all.
+# Append so the verifier slices retain their existing slow label as well.
+set_property(TEST ${PINEFORGE_CI_VERIFY_SLICES}
+    test_ci_verify_slices_cover test_ci_verify_fetch_lock
+    test_ci_preflight_slice_1
+    test_ci_preflight_slice_2
+    test_ci_preflight_slice_3
+    test_ci_preflight_slice_4
+    test_ci_preflight_slice_5
+    test_ci_preflight_slice_6
+    test_ci_preflight_slice_7
+    test_ci_preflight_slice_8
+    test_ci_preflight_slices_cover
+    APPEND PROPERTY LABELS ci-script)
 # F10's source-only benchmark witnesses require the pinned Git history.
 add_test(NAME test_benchmark_harness
     COMMAND ${Python3_EXECUTABLE} -m unittest discover -s benchmarks/tests)
@@ -8276,23 +8291,6 @@ foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
         set_property(TEST ${_pf_fast_test} APPEND PROPERTY LABELS fast)
     endif()
 endforeach()
-
-# These CI-script self-tests are independent of CPU architecture. The arm
-# workflow excludes only this explicit population; amd64 Release runs it all.
-# R4-D L6a's clear resets LABELS on the verifier slices, so keep this APPEND
-# after every label clear and after the slow/fast loops; the slices retain slow.
-set_property(TEST ${PINEFORGE_CI_VERIFY_SLICES}
-    test_ci_verify_slices_cover test_ci_verify_fetch_lock
-    test_ci_preflight_slice_1
-    test_ci_preflight_slice_2
-    test_ci_preflight_slice_3
-    test_ci_preflight_slice_4
-    test_ci_preflight_slice_5
-    test_ci_preflight_slice_6
-    test_ci_preflight_slice_7
-    test_ci_preflight_slice_8
-    test_ci_preflight_slices_cover
-    APPEND PROPERTY LABELS ci-script)
 get_directory_property(_pf_registered_tests TESTS)
 foreach(_pf_registered_test IN LISTS _pf_registered_tests)
     get_test_property(${_pf_registered_test} LABELS _pf_registered_test_labels)
