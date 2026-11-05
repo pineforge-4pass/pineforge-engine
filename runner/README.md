@@ -1086,7 +1086,7 @@ belongs at the document root; the other arrays belong under `report`.
 Every v2 record carries `ratios.as_of_input`, the cursor where the four
 Sharpe/Sortino values were computed. This control metadata stays outside the
 cumulative document; `ratios.exact` states whether it equals this record's
-cursor, and `ratios.chart_timezone` is constant for the deployment.
+cursor, and `ratios.chart_timezone` is constant for the deployment. An empty chart clock is reported as UTC in this metadata.
 This change delivers the change-only envelope, with bounded emitted bytes and
 serialized rows per input on the 10,000/100,000-input work populations.
 Ratio scheduling is a separate later change. The existing `--ratio-interval`
