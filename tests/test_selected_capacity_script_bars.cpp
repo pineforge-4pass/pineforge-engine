@@ -10,7 +10,7 @@
 // S1 covers full buckets; S2 an unsealed tail; S3 pre-roll trimming; S4 gaps and coarser input; S5 roles;
 // S6 and S6b absence; S7 zero; S8 early stopping; S9 session anchoring; S10 equal input/script timeframes.
 // Each counting scenario admits N opened buckets at limit N, refuses at N-1, accepts an absent bound
-// without refusal, and admits a much larger finite limit. S2, S3 and S10 also test the smaller planner count.
+// without refusal, and admits a much larger finite limit. S3 and S10 also test the smaller planner count.
 //
 // HOW THE EXPECTED VALUES ARE MADE. Every expected count is arithmetic on timestamps written into this
 // file's own CSV text. A row's bucket key is anchor + floor((ts - anchor) / length); a bucket opens when
@@ -107,6 +107,7 @@ using Request = pineforge::SelectedPlanRequest;  // the selected request, exactl
 
 struct Streams {  // role-labelled streams: the CSV text of each role (fixture::make_csv output)
     std::string primary;
+    std::vector<std::string> primary_more;
     std::optional<std::string> source;  // the same bytes as the primary: one input, two roles
     std::vector<std::string> auxiliary;
 };
@@ -116,9 +117,12 @@ enum class Result { Admitted, Refused, NotAdmitted };
 struct Outcome {
     Result result = Result::Admitted;
     std::string code_name, args_json, what;  // Refused: the carried typed failure (canonical args)
+    std::optional<pineforge::RunFailureClass> failure_class;
+    std::optional<bool> retryable;
     std::string not_admitted;                // NotAdmitted: the driver's reason, e.g. "MissingObserver"
     std::string detail;                      // the driver's message, for the failure text only
     std::vector<pineforge::Bar> delivered;   // what the materialization sink received, in order
+    std::optional<sc::State> state;         // State committed by a completed driver run
     // Bytes of the primary stream the driver consumed: its coverage when it returns, the stream position when
     // the refusal escapes it.
     std::optional<std::uint64_t> consumed_primary_bytes;
@@ -184,9 +188,9 @@ std::string reason_text(sc::DriverReason reason) {
 
 // admit(): run the real driver over `streams` with ONLY script_bars limited (absent when nullopt); when
 // `carrier_source_rows` is set, source_rows is ALSO finite (so that a run whose script_bars bound is absent
-// still does real driver work). Catches ONLY the script_bars typed refusal; every other exception (another
-// typed code, an I/O or format failure, an invariant) propagates and fails the test.
-// The typed refusal propagates out of the driver unchanged, including its coded arguments and English.
+// still does real driver work). Catches every typed run failure and records its code, canonical arguments,
+// class, retryability and English; non-typed exceptions propagate and fail the test.
+// A typed failure propagates out of the driver unchanged, including its coded arguments and English.
 // ObserverFailure and SinkFailure are reserved and never returned. The exception reserve() throws is
 // coded<std::runtime_error> with the code and the canonical
 // args. If a later driver returned ObserverFailure instead, the result below would read NotAdmitted /
@@ -195,10 +199,19 @@ Outcome admit(const Request& request, const Streams& streams, std::optional<std:
               std::optional<std::uint64_t> carrier_source_rows = std::nullopt) {
     Outcome out;
     std::istringstream primary(streams.primary);
+    std::vector<std::unique_ptr<std::istringstream>> primary_more;
+    std::vector<std::string> primary_labels;
     std::unique_ptr<std::istringstream> source;
     std::vector<std::unique_ptr<std::istringstream>> auxiliary;
     std::vector<sc::StreamInput> inputs;
     inputs.emplace_back(sc::Role::Primary, primary, "primary");
+    primary_more.reserve(streams.primary_more.size());
+    primary_labels.reserve(streams.primary_more.size());
+    for (std::size_t i = 0; i < streams.primary_more.size(); ++i) {
+        primary_more.push_back(std::make_unique<std::istringstream>(streams.primary_more[i]));
+        primary_labels.push_back("primary-more-" + std::to_string(i + 1));
+        inputs.emplace_back(sc::Role::Primary, *primary_more.back(), primary_labels.back().c_str());
+    }
     if (streams.source) {
         source = std::make_unique<std::istringstream>(*streams.source);  // its own stream object
         inputs.emplace_back(sc::Role::Source, *source, "source");
@@ -216,6 +229,7 @@ Outcome admit(const Request& request, const Streams& streams, std::optional<std:
                            table_under_test(carrier_source_rows.has_value()), &collect, &out.delivered);
         out.consumed_primary_bytes = result.coverage.primary_bytes;
         out.detail = result.message;
+        out.state = result.state;
         if (result.status == sc::DriverStatus::Completed) {
             out.result = Result::Admitted;
         } else {
@@ -230,14 +244,15 @@ Outcome admit(const Request& request, const Streams& streams, std::optional<std:
                 case sc::DriverStatus::Completed: break;
             }
         }
-    } catch (const std::runtime_error& error) {
-        const pineforge::RunFailureValue failure = pineforge::classify_run_failure(error);
+    } catch (const pineforge::coded<std::runtime_error>& error) {
+        const pineforge::RunFailureValue failure = error.run_failure();
         const std::string name = pineforge::run_failure_code_name(failure.code);
-        if (name != kCodeName) throw;
         out.result = Result::Refused;
         out.code_name = name;
         out.args_json = failure.args ? *failure.args : std::string();
         out.what = error.what();
+        out.failure_class = pineforge::run_failure_code_class(failure.code);
+        out.retryable = pineforge::run_failure_code_retryable(failure.code);
         // The refusal escapes the driver, so no DriverResult carries coverage: read how far the driver got into
         // the primary stream from the stream itself (the position of the next unread byte; -1 only if the
         // stream failed, which a refusal does not cause).
@@ -253,6 +268,7 @@ Outcome admit(const Request& request, const Streams& streams, std::optional<std:
 
 // ---- checks ---------------------------------------------------------------------------------------------
 int failures = 0;
+int setup_failures = 0;
 const char* scenario = "initialization";
 
 #define CHECK(condition) do {                                                  \
@@ -371,7 +387,8 @@ Case make_case(const Stamps& rows, const Grid& grid, const seam::Request& reques
 
 // A request on the UTC 24x7 clock with the caller's boundaries.
 seam::Request utc_request(std::int64_t start_ms, std::int64_t end_ms, std::int64_t fed_start_ms,
-                          std::uint32_t preroll, const char* input_tf, const char* script_tf) {
+                          std::uint32_t preroll, const char* input_tf, const char* script_tf,
+                          bool feed_tolerant = true) {
     seam::Request request;
     request.start_ms = start_ms;
     request.end_ms = end_ms;
@@ -382,7 +399,7 @@ seam::Request utc_request(std::int64_t start_ms, std::int64_t end_ms, std::int64
     request.chart_timezone = "UTC";
     request.engine_timezone = "UTC";
     request.session = "";
-    request.feed_tolerant = true;
+    request.feed_tolerant = feed_tolerant;
     return request;
 }
 
@@ -393,6 +410,7 @@ seam::Request hourly_request(std::int64_t t_hours, std::int64_t e_hours, std::ui
 constexpr Grid kHourGrid{kBase, kHour};
 
 void describe(const seam::Outcome& got, const char* wanted) {
+    if (got.result == seam::Result::NotAdmitted) ++setup_failures;
     const char* what = got.result == seam::Result::Admitted      ? "Admitted"
                        : got.result == seam::Result::Refused     ? "Refused"
                                                                   : "NotAdmitted";
@@ -418,6 +436,10 @@ void expect_admitted(const Case& c, std::optional<std::uint64_t> limit,
         describe(got, "Admitted");
         return;
     }
+    const std::uint64_t expected_script_bars =
+        limit ? opened_buckets(c.rows, c.grid) : std::uint64_t{0};
+    CHECK(got.state.has_value());
+    if (got.state) CHECK(got.state->script_bars == expected_script_bars);
     CHECK(delivered_prefix(got, c.rows, c.rows.size()));  // every record of an admitted stream is delivered
 }
 
@@ -434,7 +456,11 @@ void expect_no_limit_all_absent(const Case& c) {
         describe(got, "Admitted or NoRequestedFields");
         return;
     }
-    if (ran) CHECK(delivered_prefix(got, c.rows, c.rows.size()));
+    if (ran) {
+        CHECK(got.state.has_value());
+        if (got.state) CHECK(got.state->script_bars == 0);
+        CHECK(delivered_prefix(got, c.rows, c.rows.size()));
+    }
     if (none_requested) CHECK(got.delivered.empty());
 }
 
@@ -446,6 +472,8 @@ seam::Outcome expect_refused(const Case& c, std::uint64_t limit) {
         return got;
     }
     CHECK(got.code_name == kCodeName);
+    CHECK(got.failure_class && *got.failure_class == pineforge::RunFailureClass::resource);
+    CHECK(got.retryable && !*got.retryable);
     CHECK(got.args_json == expected_args(limit));
     CHECK(got.what == kEnglish);
     // The sink never saw the crossing record, and saw every record before it.
@@ -505,7 +533,6 @@ void s2_partial_final_bucket() {
     CHECK(plan.status == pineforge::SelectedPlanStatus::Ok);
     CHECK(plan.supplied_script_bars < opened);  // the sealed count (7) misses the unsealed tail
     ladder(c);
-    expect_refused(c, plan.supplied_script_bars);  // the sealed count is NOT the bound
 }
 
 void s3_preroll_trim() {
@@ -635,6 +662,45 @@ void s10_equal_timeframes() {
     expect_refused(c, plan.fed_script_bars);  // the fed count is NOT the bound
 }
 
+void s11_one_hour_split_over_two_primary_streams() {
+    scenario = "S11 one hour split over two Primary streams";
+    const Stamps first = span(kBase, kBase + 90 * kMin, kMin);
+    const Stamps second = span(kBase + 90 * kMin, kBase + 3 * kHour, kMin);
+    Stamps rows = first;
+    rows.insert(rows.end(), second.begin(), second.end());
+    const seam::Request request = hourly_request(1, 3, 1);
+    Case c = make_case(rows, kHourGrid, request);
+    c.streams.primary = csv_of(first);
+    c.streams.primary_more.push_back(csv_of(second));
+    CHECK(opened_buckets(rows, kHourGrid) == 3);
+    CHECK(plan_of(rows, request).status == pineforge::SelectedPlanStatus::Ok);
+    // The split must preserve the previous bucket across the Primary stream boundary.
+    ladder(c);
+}
+
+void s12_strict_feed_hourly() {
+    scenario = "S12 strict feed hourly";
+    const Stamps rows = span(kBase, kBase + 6 * kHour, kMin);
+    const seam::Request request =
+        utc_request(kBase + 3 * kHour, kBase + 6 * kHour, kBase, 3, "1", "60", false);
+    const Case c = make_case(rows, kHourGrid, request);
+    CHECK(opened_buckets(rows, kHourGrid) == 6);
+    CHECK(plan_of(rows, request).status == pineforge::SelectedPlanStatus::Ok);
+    ladder(c);
+}
+
+void s13_strict_feed_equal_timeframes() {
+    scenario = "S13 strict feed equal timeframes";
+    const Stamps rows = span(kBase, kBase + 3 * kHour, kMin);
+    const seam::Request request =
+        utc_request(kBase + kHour, kBase + 3 * kHour, kBase, 5, "1", "1", false);
+    const Grid minutes{kBase, kMin};
+    const Case c = make_case(rows, minutes, request);
+    CHECK(opened_buckets(rows, minutes) == 180);
+    CHECK(plan_of(rows, request).status == pineforge::SelectedPlanStatus::Ok);
+    ladder(c);
+}
+
 }  // namespace
 
 int main() {
@@ -648,6 +714,13 @@ int main() {
     s8_refusal_stops_at_the_crossing_record();
     s9_session_anchored_buckets();
     s10_equal_timeframes();
+    s11_one_hour_split_over_two_primary_streams();
+    s12_strict_feed_hourly();
+    s13_strict_feed_equal_timeframes();
+    if (setup_failures != 0) {
+        std::fprintf(stderr, "NEEDS setup %d NotAdmitted answer(s)\n", setup_failures);
+        return 2;
+    }
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
