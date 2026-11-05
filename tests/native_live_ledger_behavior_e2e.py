@@ -117,6 +117,20 @@ class Fixture:
         self.warmup = self.root / "warmup.csv"
         self.warmup.write_text("timestamp,open,high,low,close,volume\n"
                                "1704067200000,100,102,98,101,4\n")
+        self.native_config = self.root / "native.json"
+        self.native_config.write_text(json.dumps({
+            "run": {"session_key": "ledger-behavior", "run_number": 1},
+            "clock": {"input_tf": "1", "script_tf": "1", "timezone": "UTC",
+                      "session": "24x7", "chart_timezone": ""},
+            "instrument": {"ticker": "LEDGER", "tickerid": "TEST:LEDGER", "type": "crypto",
+                           "currency": "USDT", "basecurrency": "ETH", "description": "",
+                           "volumetype": ""},
+            "execution": {"initial_capital": 10000, "point_value": 1, "account_fx": 1,
+                          "price_tick": 0.01, "slippage_ticks": 0, "fee_kind": "CashPerExecution",
+                          "fee_value": 6, "quantity_grid": None, "close_execution": "NextEligiblePoint",
+                          "max_abs_units": None, "max_open_lots": None,
+                          "allowed_open_directions": 3, "initial_margin_fraction": None},
+        }))
         self.serial = 0
         (self.root / "manifest.json").write_text(json.dumps({
             "row": options.row, "inputs": options.inputs, "mode": options.mode,
@@ -134,6 +148,7 @@ class Fixture:
     def command(self, ledger, mode=None, feed="-"):
         command = [self.options.runner, "run", "--strategy", self.options.strategy,
             "--warmup", str(self.warmup), "--script-tf", "1", "--symbol", "TEST:LEDGER",
+            "--native-config", str(self.native_config),
             "--mode", "bars", "--feed", str(feed), "--ledger", str(ledger),
             "--feed-idle-timeout", "300", "--feed-message-timeout", "300"]
         if mode:
