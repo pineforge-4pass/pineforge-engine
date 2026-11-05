@@ -1004,9 +1004,9 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_cache_sweep_position_tail',
     'test_cache_sweep_equity_curve',
     'test_cache_sweep_native_tails',
-    # tests/cr150.d/cache-sweep-ledger-rows.cmake:4 and trade-ledger-cache.cmake:9.
-    'test_cache_sweep_ledger_rows',
-    'test_trade_ledger_cache_sweep',
+    # tests/cr150.d/cache-sweep-ledger-rows.cmake:4, trade-ledger-cache.cmake:9, ledger-cache-bound.cmake:4, ledger-cache-policy-wrapper.cmake:8.
+    'test_cache_sweep_ledger_rows', 'test_trade_ledger_cache_sweep', 'test_run_json_ledger_cache_policy',
+    'test_ledger_cache_bound',
     # tests/cr150.d/p2cx-a5s.cmake:3.
     'test_o1_store',
     # tests/cr150.d/udt-object-graphs.cmake:6.
@@ -1017,6 +1017,8 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_p2_a5_string_1m',
     'test_p2_a5_map_1m',
     'test_p2_a5_map_prepared_1m',
+    # tests/cr150.d/cr559-map-capacity.cmake:23.
+    'test_cr559_map_capacity_resident',
     # tests/cr150.d/p2cx-a5arr.cmake:5.
     'test_array_growth_1m',
     # tests/cr150.d/report-trade-retirement.cmake and report-trade-reference.cmake:

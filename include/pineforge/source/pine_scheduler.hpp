@@ -13,7 +13,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 { class ScriptBucketCursor; }
+inline namespace engine_script_run_v20 { class ScriptBucketCursor; }
 }
 
 namespace pineforge::source {

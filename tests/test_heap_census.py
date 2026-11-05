@@ -59,8 +59,8 @@ class CensusEvidence(unittest.TestCase):
         self.assertEqual(census.owner(copied), ("L3", False))
         subscription = (
             "std::vector<long, std::allocator<long> >::_M_fill_assign(unsigned long, long const&) "
-            "(vector.tcc:278) <- pineforge::engine_script_run_v19::NativeExecutionConsumer::"
-            "begin_timeframe_subscriptions(pineforge::engine_script_run_v19::BacktestEngine&, "
+            "(vector.tcc:278) <- pineforge::engine_script_run_v20::NativeExecutionConsumer::"
+            "begin_timeframe_subscriptions(pineforge::engine_script_run_v20::BacktestEngine&, "
             "pineforge::native_run_spec_v3::NativeRunSpec const&, pineforge::Bar const*, int, bool) "
             "(src/native_execution_consumer.cpp:9313)")
         self.assertEqual(census.owner(subscription), ("L19i (or L3/L4)", False))
@@ -120,25 +120,25 @@ class CensusEvidence(unittest.TestCase):
             ("L7b/L17b", "pineforge::metrics::compute_equity_stats(pf_equity_point_s const*, long, "
              "double, std::__cxx11::basic_string<char> const&, double, double, long, double, long) "
              "(src/engine_metrics.cpp:301)"),
-            ("L8a/L8c/L18", "pineforge::engine_script_run_v19::NativeExecutionConsumer::closed_rows_digest("
+            ("L8a/L8c/L18", "pineforge::engine_script_run_v20::NativeExecutionConsumer::closed_rows_digest("
              "std::vector<pineforge::Trade, std::allocator<pineforge::Trade> > const&) const "
              "(src/native_execution_consumer.cpp:11789)"),
             ("L8a/L8c/L18", "pineforge::source::PineExecutionAdapter::set_exit_phase(unsigned long, "
              "unsigned char) (src/source/pine_adapter.cpp:6437)"),
-            ("L6b-1/L6b-2/L17a", "pineforge::engine_script_run_v19::BacktestEngine::record_equity_point(long) "
+            ("L6b-1/L6b-2/L17a", "pineforge::engine_script_run_v20::BacktestEngine::record_equity_point(long) "
              "(include/pineforge/engine.hpp:1386)"),
-            ("L6b-3", "pineforge::engine_script_run_v19::NativeExecutionConsumer::record_script_report_point("
-             "pineforge::engine_script_run_v19::BacktestEngine&, long) const "
+            ("L6b-3", "pineforge::engine_script_run_v20::NativeExecutionConsumer::record_script_report_point("
+             "pineforge::engine_script_run_v20::BacktestEngine&, long) const "
              "(src/native_execution_consumer.cpp:8852)"),
             ("L6b-3", "pineforge::source::PineStrategyHost::scheduler_record_broker_hash() "
              "(src/source/pine_strategy_host.cpp:2794)"),
-            ("L6b-3", "pineforge::engine_script_run_v19::BacktestEngine::output_bar(long, long) "
+            ("L6b-3", "pineforge::engine_script_run_v20::BacktestEngine::output_bar(long, long) "
              "(src/engine_report.cpp:445)"),
-            ("L6b-3", "pineforge::engine_script_run_v19::BacktestEngine::record_output_event(int, double, "
+            ("L6b-3", "pineforge::engine_script_run_v20::BacktestEngine::record_output_event(int, double, "
              "std::__cxx11::basic_string<char> const*) (src/engine_report.cpp:517)"),
-            ("L6b-3", "pineforge::engine_script_run_v19::BacktestEngine::trace("
+            ("L6b-3", "pineforge::engine_script_run_v20::BacktestEngine::trace("
              "std::__cxx11::basic_string<char> const&, double) (src/engine_report.cpp:37)"),
-            ("L9a/L9s/L17a", "pineforge::engine_script_run_v19::BacktestEngine::fill_metrics_section("
+            ("L9a/L9s/L17a", "pineforge::engine_script_run_v20::BacktestEngine::fill_metrics_section("
              "pineforge::ReportC*) const (src/engine_report.cpp:196)"),
         )
         for lane, frame in frames:

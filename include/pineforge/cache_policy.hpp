@@ -5,9 +5,48 @@
 #include <pineforge/run_failure.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 
 namespace pineforge {
+
+// Successful disk-write traffic between sync/discard boundaries. This is
+// independent of resident cache capacity, logical history and physical RAM.
+// All uint64_t values are supported; zero completes each positive transfer's
+// sync/discard before write/write_some can return success.
+struct ScratchIoPolicy {
+    std::uint64_t write_batch_bytes = 65536;
+};
+
+// Presence is policy, not a special byte value. Keep the familiar byte
+// assignment spelling while recording an explicit finite allowance even
+// when it equals the initial AUTO geometry (or is zero).
+class LedgerCachePolicy {
+public:
+    class CapacityBytes {
+    public:
+        CapacityBytes() = default;
+        explicit CapacityBytes(std::size_t bytes) noexcept
+            : bytes_(bytes), automatic_(false) {}
+        CapacityBytes& operator=(std::size_t bytes) noexcept {
+            bytes_ = bytes;
+            automatic_ = false;
+            return *this;
+        }
+        operator std::size_t() const noexcept { return bytes_; }
+        bool automatic() const noexcept { return automatic_; }
+    private:
+        std::size_t bytes_ = TradeLedger::cache_capacity_bytes(TradeLedger::kDefaultCacheRows);
+        bool automatic_ = true;
+    };
+
+    LedgerCachePolicy() = default;
+    LedgerCachePolicy(CacheCapacity capacity) noexcept : capacity_bytes(capacity.capacity_bytes) {}
+    operator CacheCapacity() const noexcept { return {static_cast<std::size_t>(capacity_bytes)}; }
+    bool automatic() const noexcept { return capacity_bytes.automatic(); }
+
+    CapacityBytes capacity_bytes;
+};
 
 // Per-owner physical policy, copied at admission and never folded into
 // continuation state. Zero bypasses the optional cache. Except for the ledger
@@ -41,8 +80,9 @@ struct CacheDefaults {
         return rows;
     }
 
-    CacheCapacity ledger_rows{
-        TradeLedger::cache_capacity_bytes(TradeLedger::kDefaultCacheRows)};
+    // Omission selects ledger_cache_max_bytes. Assigning CacheCapacity or
+    // capacity_bytes selects the existing explicit finite row-policy route.
+    LedgerCachePolicy ledger_rows;
     CacheCapacity trade_pages = lines(512, 128);
     CacheCapacity dependency_pages = lines(512, 128);
     CacheCapacity exit_pages = platform_command_pages();
@@ -67,6 +107,21 @@ struct CacheDefaults {
     // Run default for tapes installed without an explicit C++ capacity.
     CacheCapacity recorded_series_pages{256 * 1024};
     CacheCapacity projection_exit_pages = lines(512, 128);
+
+    // Inclusive optional ledger hot-cache bytes, including all tags, packed
+    // replacement ranks and page pointers. Provisional source default: 64 MiB;
+    // not measurement-selected/frozen. Valid [0,SIZE_MAX]; tiny values bypass.
+    // Explicit ledger_rows takes precedence, preserving its installed range.
+    std::size_t ledger_cache_max_bytes = TradeLedger::kDefaultLedgerCacheMaxBytes;
+
+    // Native admission must invoke this on its frozen per-run policy copy.
+    // No conversion of an omitted LedgerCachePolicy into a finite row cap.
+    void apply_ledger_cache(TradeLedger& ledger) const {
+        if (ledger_rows.automatic())
+            ledger.set_ledger_cache_max_bytes(ledger_cache_max_bytes);
+        else
+            ledger.set_cache_rows(ledger_cache_rows(ledger_rows));
+    }
 };
 
 } // namespace pineforge

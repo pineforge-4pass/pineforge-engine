@@ -1,12 +1,12 @@
 #pragma once
 #include "na.hpp"
-#include <deque>
+#include "series.hpp"
 
 namespace pineforge {
 
-// TradingView's sliding-window sum -- the arithmetic behind ta.sma and
-// math.sum, fitted bit-for-bit on the round-7 synthetic pins (see the note
-// above its implementation in src/ta_moving_averages.cpp):
+// Legacy sliding-window Kahan arithmetic used by math.sum and biased
+// StdDev, fitted on the historical 2026-09-05 pins (see the note above
+// its implementation in src/ta_moving_averages.cpp):
 //
 //   * a Kahan-compensated running sum S with compensation c;
 //   * the ring stores the COMPENSATED addend y = x - c each source entered
@@ -20,10 +20,11 @@ namespace pineforge {
 //     newest-first over the window's sources, c is reset and the bar's ring
 //     addend is its raw source.
 //
-// Both users divide S by `length` themselves (ta.sma) or emit S (math.sum).
+// SMA retains this state machine but reads correctly_rounded_sum(). Other
+// consumers retain the compensated S exposed by sum()/push()/repush().
 class KahanWindowSum {
-    std::deque<double> values_;    // window sources, front = newest
-    std::deque<double> addends_;   // the compensated addends, front = newest
+    OwnedDeque<double> values_;    // window sources, front = newest
+    OwnedDeque<double> addends_;   // the compensated addends, front = newest
     int length_;
     int count_;          // valid sources pushed so far
     double sum_;         // S
@@ -62,6 +63,13 @@ public:
     int length() const { return length_; }
     bool seeded() const { return count_ >= length_; }
     double sum() const { return sum_; }
+    // Exact sum of the current raw sources, rounded once to binary64,
+    // nearest with ties to even. Reads values_ without changing any state;
+    // legacy sum()/push()/repush() still expose the compensated sum.
+    double correctly_rounded_sum() const;
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, values_, addends_);
+    }
 };
 
 } // namespace pineforge

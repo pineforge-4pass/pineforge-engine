@@ -103,10 +103,26 @@ codes it tested the text alone, so a script stopped by an empty
 
 The tables below list the catalog at this tree.
 
-The catalog contains 79 named failure codes: 38 first released in 1.4.0,
-26 first released in 1.5.0, 5 added in 1.7.0, and 10 added in 1.9.0
-(3 run-quota codes and 7 report-channel codes). One unnamed `none` sentinel
-gives 80 registry entries; existing numbers stay fixed.
+The catalog contains 87 named failure codes: 38 first released in 1.4.0,
+26 first released in 1.5.0, 5 added in 1.7.0, 10 added in 1.9.0
+(3 run-quota codes and 7 report-channel codes), 2 added in 1.10.1, and
+6 added in 1.11.0. One unnamed `none` sentinel gives 88 registry entries;
+existing numbers stay fixed.
+
+The 1.10.1 additions are `runtime_history_budget_exhausted` (class
+`resource`), the refusal of a dynamic runtime context that exceeds its
+explicitly configured history storage budget, and
+`runtime_storage_observation_incomplete` (class `unsupported`), the refusal of
+a hard runtime history budget whose owned-storage observation is incomplete.
+The 1.11.0 additions are `pine_map_capacity_exceeded` (class
+`strategy_limit`), the refusal of a distinct map insertion beyond that map's
+configured pair limit, and five class `resource` refusals of an actual
+reservation beyond a selected capacity bound:
+`selected_primary_rows_limit_exceeded`,
+`selected_auxiliary_rows_limit_exceeded`,
+`selected_source_rows_limit_exceeded`,
+`selected_script_bars_limit_exceeded`, and `selected_bytes_limit_exceeded`.
+Their retryability and typed arguments are listed below.
 
 The run-quota additions are `run_descriptor_limit_exceeded` (74),
 `run_quota_configuration_invalid` (78), and `run_resource_quota_exceeded`
@@ -196,9 +212,10 @@ other `strategy_create_failed` lines omit it.
 | `outputs_rejected` | `input` | no | `reason` (vocab, 3 values) | Recorded outputs were asked of a strategy library that records none, or the recording cannot be honoured as asked. |
 | `pine_array_error` | `strategy` | no | `collection` (vocab, 2 values, optional), `method` (vocab, 12 values, optional), `reason` (vocab, 5 values) | An array call failed: an index out of bounds, an inverted slice, an empty array, an invalid size, or a modified historical collection. |
 | `pine_invalid_argument` | `strategy` | no | `argument` (identifier, optional), `function` (identifier, optional), `rule` (vocab, 6 values) | A built-in refused the value of one of its arguments. |
+| `pine_map_capacity_exceeded` | `strategy_limit` | no | `bar_index` (integer), `code` (identifier), `currSize` (integer), `maxSize` (integer) | A distinct map insertion exceeds that map's configured pair limit. Zero or omitted selects no limit. Counts and bar index are engine-owned context; code is the fixed TradingView identifier RE10070. |
 | `pine_matrix_error` | `strategy` | no | `function` (vocab, 15 values), `reason` (vocab, 10 values) | A matrix built-in refused its arguments (an index, a dimension, a size or an empty matrix). |
 | `pine_na_reference` | `strategy` | no | `object` (vocab, 10 values) | The script called a method on an na reference (an array, matrix, map, drawing or object id). |
-| `pine_runtime_limit` | `strategy_limit` | no | `limit` (vocab, 4 values), `max` (integer, optional) | The script reached a TradingView or PineForge resource limit. |
+| `pine_runtime_limit` | `strategy_limit` | no | `limit` (vocab, 5 values), `max` (integer, optional) | The script reached a TradingView or PineForge resource limit. |
 | `pine_string_error` | `strategy` | no | `reason` (vocab, 2 values) | A string built-in refused its arguments. |
 | `recalc_cap` | `strategy_limit` | no | none | The script's calc_on_order_fills recalculation loop reached its cap. |
 | `recorded_request_missing` | `no_data` | no | none | No recorded series is installed for a request the script reads. |
@@ -228,16 +245,23 @@ other `strategy_create_failed` lines omit it.
 | `run_quota_configuration_invalid` | `input` | no | `reason` (vocab, 8 values), `setting` (vocab, 10 values), `stage` (vocab, 8 values) | The finite host run contract is missing, malformed, overflowing, unauthenticated or unsupported. An unset limit refuses with missing_limit; explicit decimal zero is literal zero capacity. There is no implicit unlimited mode. Limits, extents, deltas and reportable counters must fit 2^53-1. |
 | `run_request_invalid` | `input` | no | `option` (vocab, 25 values) | The harness command line or one of its JSON options is invalid. |
 | `run_resource_quota_exceeded` | `resource` | no | `artifact` (vocab, 14 values), `limit` (integer), `peak` (integer), `requested` (integer), `resource` (vocab, 3 values), `stage` (vocab, 8 values), `used` (integer) | An atomic reservation exceeded a finite run resource allowance before growth. used is committed plus pending before the denied delta; requested is additional capacity, not the desired total; peak is the preceding high water. Produced output is never refunded by deleting an artifact. Counters are host-owned nonnegative integers at most 2^53-1. |
+| `runtime_history_budget_exhausted` | `resource` | no | `configured` (string), `needed` (string), `used` (string) | A reached dynamic runtime context exceeded its explicitly configured history storage budget. configured, used and needed are the typed exception's exact uint64_t byte fields: the configured bound, ownership before the refused operation, and its additional required ownership. Each is a canonical unsigned decimal string from 0 through 18446744073709551615, without a sign, whitespace or leading zeroes except 0 itself. These counters do not use the host run-quota domain. No budget is imposed by the resident spill threshold or by the default absent budget. |
+| `runtime_storage_observation_incomplete` | `unsupported` | no | `backing_bytes_lower_bound` (string), `overflow` (boolean), `resident_metadata_bytes_lower_bound` (string), `resident_payload_bytes_lower_bound` (string), `unsupported_flags` (string) | A hard runtime history budget could not be enforced because the owned storage observation is incomplete. unsupported_flags is the actual uint64_t unsupported bit mask, including unknown bits. resident_metadata_bytes_lower_bound, resident_payload_bytes_lower_bound and backing_bytes_lower_bound are the observed category lower bounds, never an exact or usable total; categories can be saturated when overflow is true. These four uint64_t fields are canonical unsigned decimal strings from 0 through 18446744073709551615, without a sign, whitespace or leading zeroes except 0 itself. overflow is the observation's actual Boolean. No configured, used or needed byte count is inferred from an incomplete observation, even with a UINT64_MAX budget. |
 | `scratch_capacity_exceeded` | `resource` | no | `resource` (vocab, 12 values) | The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying. |
 | `scratch_configuration_invalid` | `input` | no | `reason` (vocab, 3 values), `stage` (vocab, 1 values) | The command-scratch byte cap from the environment or the caller is malformed: not a positive decimal, out of uint64_t range, or zero. |
 | `scratch_io_failed` | `resource` | no | none | The engine could not create, resize, read or write command scratch or the storage of one of its auxiliary tables (the disk id table, the id-pair store or the placement table). Command scratch also raises this code when the default-directory policy fails a directory query or refuses memory-backed default candidates, or when an explicit memory-backed command directory is refused. Native runs create command scratch at begin, so these failures are resource failures before any strategy callback. The run has no successful completion. Report-sink scratch files, the curve writer and the position-tail facade do not raise this code: they raise report_sink_failed with reason scratch_io. |
 | `security_feed_refused` | `input` | no | `reason` (vocab, 11 values) | An auxiliary or native request.security feed was refused. |
+| `selected_auxiliary_rows_limit_exceeded` | `resource` | no | `limit` (string), `requested` (string), `used` (string) | Selected auxiliary-row capacity was exceeded by an actual reservation. limit is the actual limit, used is the actual used-before value, and requested is the actual delta; all are canonical unsigned decimal uint64_t values in domain 0..18446744073709551615. Equality passes. An absent bound imposes no logical limit; explicit 0 is finite 0. |
+| `selected_bytes_limit_exceeded` | `resource` | no | `limit` (string), `requested` (string), `used` (string) | Selected source-and-retained CSV byte capacity was exceeded by an actual reservation. limit is the actual limit, used is the actual used-before value, and requested is the actual delta; all are canonical unsigned decimal uint64_t values in domain 0..18446744073709551615. Equality passes. An absent bound imposes no logical limit; explicit 0 is finite 0. |
+| `selected_primary_rows_limit_exceeded` | `resource` | no | `limit` (string), `requested` (string), `used` (string) | Selected primary-row capacity was exceeded by an actual reservation. limit is the actual limit, used is the actual used-before value, and requested is the actual delta; all are canonical unsigned decimal uint64_t values in domain 0..18446744073709551615. Equality passes. An absent bound imposes no logical limit; explicit 0 is finite 0. |
+| `selected_script_bars_limit_exceeded` | `resource` | no | `limit` (string), `requested` (string), `used` (string) | Selected script-bar capacity was exceeded by an actual reservation. limit is the actual limit, used is the actual used-before value, and requested is the actual delta; all are canonical unsigned decimal uint64_t values in domain 0..18446744073709551615. Equality passes. An absent bound imposes no logical limit; explicit 0 is finite 0. |
+| `selected_source_rows_limit_exceeded` | `resource` | no | `limit` (string), `requested` (string), `used` (string) | Selected source-row capacity was exceeded by an actual reservation. limit is the actual limit, used is the actual used-before value, and requested is the actual delta; all are canonical unsigned decimal uint64_t values in domain 0..18446744073709551615. Equality passes. An absent bound imposes no logical limit; explicit 0 is finite 0. |
 | `setting_rejected` | `input` | no | `entrypoint` (vocab, 4 values, optional), `input` (pine_source, optional), `reason` (vocab, 21 values, optional) | A run setting (an input or a strategy() override) was refused. |
 | `setting_unsupported` | `unsupported` | no | none | A setting this compiled strategy cannot honour. |
 | `strategy_create_failed` | `engine_fault` | no | none | The compiled strategy could not be created. |
 | `strategy_library_incompatible` | `engine_fault` | no | `abi` (integer, optional), `missing` (vocab, 13 values, optional), `reason` (vocab, 8 values) | The compiled strategy library does not match the harness. |
 | `strategy_runtime_error` | `strategy` | no | none | The script stopped itself with runtime.error(); the message, possibly empty, is the text. |
-| `strategy_settings_rejected` | `strategy` | no | `field` (vocab, 30 values) | A strategy() declaration setting (or its override) is not a value the engine accepts. |
+| `strategy_settings_rejected` | `strategy` | no | `field` (vocab, 33 values) | A strategy() declaration setting (or its override) is not a value the engine accepts. |
 | `strategy_value_invalid` | `strategy` | no | `field` (string), `reason` (vocab, 3 values) | The strategy supplied an invalid actionable value (a non-finite number, invalid text or an overflowing finite value) to a declaration, setting or command that needs a valid one. |
 | `stream_input_rejected` | `input` | no | none | A streaming input (bar, tick or auxiliary bar) was refused. |
 | `symbol_feeds_refused` | `symbol_feeds` | no | `field` (vocab, 6 values, optional), `input_tf` (timeframe, optional), `reason` (vocab, 47 values), `script_tf` (timeframe, optional) | Other symbols' bars installed for request.security were refused. |

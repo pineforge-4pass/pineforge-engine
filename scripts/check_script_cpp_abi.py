@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile/link the generated source-host ABI against frozen v18 and live v19."""
+"""Compile/link the generated source-host ABI against frozen v18 and live v20."""
 from __future__ import annotations
 
 import argparse
@@ -57,7 +57,7 @@ def main() -> int:
         raise SystemExit("script C++ ABI: " + str(error))
     args.receipt.parent.mkdir(parents=True, exist_ok=True)
     args.receipt.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
-    print("script C++ ABI: source-host v18/v19 acceptance and bidirectional rejection pairs passed")
+    print("script C++ ABI: source-host v18/v20 acceptance and bidirectional rejection pairs passed")
     return 0
 
 

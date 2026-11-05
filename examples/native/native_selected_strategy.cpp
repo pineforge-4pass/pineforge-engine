@@ -25,7 +25,7 @@
 namespace {
 
 // Keep C++ capability/layout checks with the module that links the runtime.
-static_assert(PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19 == 1,
+static_assert(PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V20 == 1,
               "selected example requires the v19 native host");
 static_assert(sizeof(pf_bar_t) == sizeof(pineforge::Bar),
               "C bar mirror must match the native host bar");

@@ -5,7 +5,7 @@
 #include <memory>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 
 // A runner-owned view of one live stream, never broker or durable run state.
 // Construct a new accumulator when beginning another stream. The first read

@@ -58,7 +58,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 
 // One member of the fold list, perturbed and restored in place.
 struct FoldField {
@@ -393,7 +393,7 @@ struct NativeExecutionConsumerProbe {
     }
 };
 
-}  // inline namespace engine_script_run_v19
+}  // inline namespace engine_script_run_v20
 }  // namespace pineforge
 
 using namespace pineforge;

@@ -95,7 +95,7 @@
 #endif
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 int native_set_execution_observer_v1(BacktestEngine*, const pf_execution_observer_v1*) noexcept;
 }
 }

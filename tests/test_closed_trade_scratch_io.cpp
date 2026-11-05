@@ -12,6 +12,7 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/version.h>
 #include "../src/sha256.hpp"
+#include "ledger_default_cache_rows.hpp"
 
 #include <algorithm>
 #include <array>
@@ -452,6 +453,11 @@ Count same_packed_row(const TradeLedger& ledger, std::size_t i, const Trade& exp
 void memory_fill_controls(const Directory& directory) {
     TradeLedger ledger;
     ledger.set_scratch_directory(directory.path);
+    // One page of 256 slots, 64 four-way sets: the fixed capacity this control
+    // isolates from page growth. The default cache spreads consecutive ordinals
+    // over many pages (sixty-four sets to a page), so appending through it
+    // would allocate a page every sixty-four rows (ledger_default_cache_rows.hpp).
+    ledger.set_cache_rows(TradeLedger::kCachePageSlots);
     const auto fixed_bytes = ledger.cache_resident_bytes();
     // A first reader at 2*64+1 rows touches page zero. Append through its
     // min(256,cap) slots: early new rows leave the 64-record window without
@@ -552,8 +558,10 @@ void scenario(const Directory& directory, bool read_history = false) {
                 ? golden.rows.size() * (golden.rows.size() + 3) / 2 : 0),
             "History wrapper did not visit every closed row on every source bar");
     std::printf("history_per_bar=%s\n", read_history ? "yes" : "no");
+    // An omitted cache setting holds the provisional byte default's geometry,
+    // not the legacy 65,536-row one (ledger_default_cache_rows.hpp).
     require(host.closed_trade_count() < host.cache_rows()
-            && host.cache_rows() == TradeLedger::kDefaultCacheRows,
+            && host.cache_rows() == ledger_oracle::default_cache_rows(),
             "Row population exceeds the declared resident-cache geometry");
     valid(io);
 
@@ -596,7 +604,7 @@ void scenario(const Directory& directory, bool read_history = false) {
     // (c) reads/T <= (T-min(T,cache_rows,cacheable_text_rows))/T = 0:
     // short current rows are resident
     // during execution; src/engine_orders.cpp:412-424,490-493,
-    // :582-599,770-775. T < kDefaultCacheRows, sum(text lengths) <= 128.
+    // :582-599,770-775. T < the default row geometry, sum(text lengths) <= 128.
     // Deliberate cold report/history materialization is OUTSIDE run accounting.
     const Count cold_required = trades - std::min(
         {trades, static_cast<Count>(host.cache_rows()), cacheable_text_rows});

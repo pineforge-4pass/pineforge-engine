@@ -66,16 +66,33 @@ class SettlementAbi(unittest.TestCase):
             _source("engine_script_run_v19", "unknown")
 
     @requires_private_fixtures
-    def test_v18_capability_macro_is_refused(self):
+    def test_capability_macros_of_earlier_epochs_are_refused(self):
+        live = "#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V20 1"
+        for earlier in ("PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18",
+                        "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19"):
+            with self.subTest(earlier=earlier), tempfile.TemporaryDirectory() as directory:
+                include = Path(directory) / "include"
+                shutil.copytree(ROOT / "include", include)
+                path = include / "pineforge/native_host.hpp"
+                text = path.read_text()
+                self.assertIn(live, text)
+                path.write_text(text.replace(live, live + "\n#define " + earlier + " 1", 1))
+                with self.assertRaisesRegex(RuntimeError, "still defines the " + earlier):
+                    checker.verify(include)
+
+    @requires_private_fixtures
+    def test_missing_live_capability_macro_is_refused(self):
+        live = "#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V20 1"
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            include = root / "include"
+            include = Path(directory) / "include"
             shutil.copytree(ROOT / "include", include)
             path = include / "pineforge/native_host.hpp"
-            path.write_text(path.read_text().replace(
-                "#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19 1",
-                "#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18 1", 1))
-            with self.assertRaises(RuntimeError):
+            text = path.read_text()
+            self.assertIn(live, text)
+            path.write_text(text.replace(live, "#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19 1", 1))
+            with self.assertRaisesRegex(
+                    RuntimeError,
+                    "omits its PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V20 capability macro"):
                 checker.verify(include)
 
     def test_current_order_epoch(self):

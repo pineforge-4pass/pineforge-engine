@@ -161,7 +161,7 @@ The carried declaration fields are visible in `PineStrategyConfig` at
 | --- | --- |
 | pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2835`). Do not assume this caps strategy.order or use it as an unconditional H. |
 | calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3016`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:76`. The native point budget is a callback bound, not a total fill bound. |
-| max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:8146`. |
+| max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:8259`. |
 | first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:888`. Count this source path; a native budget of 8 is not Pine's bound. |
 | process_orders_on_close | Adds a matching opportunity after calculation; projection at `src/source/pine_adapter.cpp:3005`. It does not impose an order/trade count. |
 | default_qty, margin, initial capital | Admission/sizing predicates can tighten a separately proved schedule. They provide no universal positive minimum close quantity or minimum loss, hence no universal T. Margin can create additional reductions. |
@@ -347,7 +347,7 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2834`; joined key at `src/source/pine_adapter.cpp:25493` |
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:642` |
 | Ordered consumed-cycle fold | 136*leaves + 2088*branches + 2096*savedPath | `include/pineforge/detail/id_pair_ordered_fold.hpp:161`, `:165`, `:172`, size assertion for `Leaf`, `Branch` and `Snapshot` at `:183` |
-| Successor-root rows | 16*R | `src/native_order.cpp:8220`, row assertion for `Row` at `:8148`, 64-row tail bound `kTailRows` at `:8153` |
+| Successor-root rows | 16*R | `src/native_order.cpp:8220`, row assertion for `Row` at `:8281`, 64-row tail bound `kTailRows` at `:8286` |
 | Frozen external openings | **0 in this certified profile** | Stock source builds owned `BindOpenings` vectors at `src/source/pine_adapter.cpp:7085`, `:7078`, `:9794-9810`; generic external owners are excluded below |
 
 The AVL node is seven uint64 words = 56 bytes, then its value and exact key
@@ -376,7 +376,7 @@ exit_time (8), qty (8), entry_incarnation (8), side (1), margin flag (1)
 and ID length (4), after the ID bytes. This is not sizeof(Row).
 
 Successor rows are two uint64 values. The WorkingRequestCore method `index_committed`
-defined at `src/native_order.cpp:3073` omits kept-handle replacements and appends a
+defined at `src/native_order.cpp:3129` omits kept-handle replacements and appends a
 root only when a newly issued definition has one. The 64-row RAM tail makes
 charging every issued row conservative. Partial closes create one trade
 row per affected lot: `src/engine_execution.cpp:1241`. Bracket definitions
@@ -558,7 +558,7 @@ non-command certificates exactly.
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
 writer (`equity_scratch` append at `src/engine_report.cpp:1563`), and capture transfers that writer as `metric_curve`
-instead of copying its prefix (`src/native_execution_consumer.cpp:13278`).
+instead of copying its prefix (`src/native_execution_consumer.cpp:13350`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
 rounding region.

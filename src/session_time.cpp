@@ -431,7 +431,7 @@ static int64_t calendar_week_open_local_ms(int64_t bar_ms, const std::string& tz
     // Avoiding ScopedTimezone(UTC) here keeps the process TZ from flipping to
     // UTC every bar (which would re-slow the strategy's hour()/minute() zone)
     // — time("W") under UTC alternating with hour(time, tz) defeats
-    // the single-slot g_active_tz cache and pays a tzset->notifyd round trip
+    // the same-zone skip of setenv/tzset and pays a tzset->notifyd round trip
     // per bar.
     if (utc_zone(tz)) {
         time_t secs = static_cast<time_t>(bar_ms / 1000);
