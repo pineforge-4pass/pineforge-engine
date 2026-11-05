@@ -200,7 +200,10 @@ public:
     explicit ReportDeltas(bool retain_document = false, bool delta_v2 = false,
                           std::string chart_timezone = {})
         : document_(retain_document || delta_v2 ? std::make_unique<Json>(Json::object({})) : nullptr),
-          delta_v2_(delta_v2), chart_timezone_(std::move(chart_timezone)) {}
+          delta_v2_(delta_v2),
+          // Native metrics use UTC when the optional chart clock is empty.
+          chart_timezone_(delta_v2 && chart_timezone.empty()
+              ? "UTC" : std::move(chart_timezone)) {}
 
     std::string update(const pf_report_t& report, const std::string& deployment,
                        std::uint64_t cursor, std::uint64_t state_hash,
@@ -357,7 +360,7 @@ public:
         if (delta_v2_) {
             if (!patch.chart_timezone.empty() && patch.chart_timezone != chart_timezone_)
                 throw std::runtime_error("report ratio clock changed");
-            prepare_v2(delta, cursor, patch.chart_timezone.empty() ? cursor : patch.ratios_as_of_input);
+            prepare_v2(delta, cursor, patch.interval_ratios ? patch.ratios_as_of_input : cursor);
         } else if (patch.interval_ratios) {
             delta.members["ratios_as_of_input"] = report_number(patch.ratios_as_of_input);
             // Export needs the same civil-month clock as the live ratio pass.
@@ -368,7 +371,7 @@ public:
         // The engine may have advanced a refused input. Publish every report
         // member only after the callback makes its payload durable.
         if (commit) commit(payload);
-        if (delta_v2_) ratios_cursor_ = patch.chart_timezone.empty() ? cursor : patch.ratios_as_of_input;
+        if (delta_v2_) ratios_cursor_ = patch.interval_ratios ? patch.ratios_as_of_input : cursor;
         array_sizes_["trades"] = patch.trades.logical_length;
         array_sizes_["equity_curve"] = patch.equity.logical_length;
         array_sizes_["security_diag"] = patch.security.logical_length;
