@@ -164,18 +164,18 @@ void incremental_scan_and_migration() {
         std::uint64_t low = 0, visited = 0, steps = 0;
         while (const auto next = ledger.next_delivery_event(low, &steps)) {
             assert(steps < 150);
-            assert(!next->unsent);
+            assert(next->unsent);
             low = next->event.ordinal;
             ++visited;
         }
-        assert(visited == events.size());
+        assert(visited == 0 && low == 0);
         for (unsigned iteration = 0; iteration < 100; ++iteration) {
             assert(!ledger.next_delivery_event(low, &steps));
             assert(steps < 25);
         }
         ledger.commit_input(1, "{}", 2, {{"new", "{}", "main", "new-delivery"}});
         const auto next = ledger.next_delivery_event(low, &steps);
-        assert(next && next->unsent && next->event.ordinal == low + 1 && steps < 150);
+        assert(next && next->unsent && next->event.ordinal == events.size() + 1 && steps < 150);
         assert(!ledger.next_delivery_event(next->event.ordinal, &steps) && steps < 25);
     }
     const auto legacy = std::string(directory) + "/phase-a.sqlite";

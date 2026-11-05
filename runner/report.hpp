@@ -197,8 +197,10 @@ inline Json native_report_json(const pineforge::report::LiveReportPatch& patch) 
 
 class ReportDeltas {
 public:
-    explicit ReportDeltas(bool retain_document = false)
-        : document_(retain_document ? std::make_unique<Json>(Json::object({})) : nullptr) {}
+    explicit ReportDeltas(bool retain_document = false, bool delta_v2 = false,
+                          std::string chart_timezone = {})
+        : document_(retain_document || delta_v2 ? std::make_unique<Json>(Json::object({})) : nullptr),
+          delta_v2_(delta_v2), chart_timezone_(std::move(chart_timezone)) {}
 
     std::string update(const pf_report_t& report, const std::string& deployment,
                        std::uint64_t cursor, std::uint64_t state_hash,
@@ -267,10 +269,12 @@ public:
             {"open_profit", curve.empty() ? Json{} : curve.back().at("open_profit")}, {"report", std::move(fields)}});
         auto delta = Json::object({{"schema_version", Json::string("pineforge-native-report-delta/v1")},
             {"fields", changed_report_fields(scalars_, next)}, {"arrays", std::move(arrays)}});
+        if (delta_v2_) prepare_v2(delta, cursor, cursor);
         auto payload = delta.dump();
         // Match the carried-patch path: a refused commit must leave the
         // retained document and its prefix counters at the committed input.
         if (commit) commit(payload);
+        if (delta_v2_) ratios_cursor_ = cursor;
         closed_trade_high_water_ = closed_trade_high_water;
         closed_trade_visits_ += closed_trade_visits;
         scalars_ = std::move(next);
@@ -350,7 +354,11 @@ public:
             {"report", std::move(fields)}});
         auto delta = Json::object({{"schema_version", Json::string("pineforge-native-report-delta/v1")},
             {"fields", changed_report_fields(scalars_, next)}, {"arrays", std::move(arrays)}});
-        if (patch.interval_ratios) {
+        if (delta_v2_) {
+            if (!patch.chart_timezone.empty() && patch.chart_timezone != chart_timezone_)
+                throw std::runtime_error("report ratio clock changed");
+            prepare_v2(delta, cursor, patch.chart_timezone.empty() ? cursor : patch.ratios_as_of_input);
+        } else if (patch.interval_ratios) {
             delta.members["ratios_as_of_input"] = report_number(patch.ratios_as_of_input);
             // Export needs the same civil-month clock as the live ratio pass.
             delta.members["ratio_context"] = Json::object({
@@ -360,6 +368,7 @@ public:
         // The engine may have advanced a refused input. Publish every report
         // member only after the callback makes its payload durable.
         if (commit) commit(payload);
+        if (delta_v2_) ratios_cursor_ = patch.chart_timezone.empty() ? cursor : patch.ratios_as_of_input;
         array_sizes_["trades"] = patch.trades.logical_length;
         array_sizes_["equity_curve"] = patch.equity.logical_length;
         array_sizes_["security_diag"] = patch.security.logical_length;
@@ -375,6 +384,25 @@ public:
     std::string final_ratio_refresh() {
         if (!document_)
             throw std::runtime_error("cumulative report document was not retained");
+        if (delta_v2_) {
+            const auto cursor = document_->at("input_cursor").integer<std::uint64_t>();
+            if (ratios_cursor_ == cursor) return {};
+            const auto previous = document_->at("report").at("metrics").at("equity");
+            // Terminal only, including a refused advanced engine: use solely
+            // the report that was published after the last successful commit.
+            refresh_report_ratios(*document_, chart_timezone_);
+            Json fields = Json::object({});
+            auto changes = changed_report_fields(previous,
+                document_->at("report").at("metrics").at("equity"));
+            if (!changes.members.empty())
+                fields.members["report"] = Json::object({
+                    {"metrics", Json::object({{"equity", std::move(changes)}})}});
+            ratios_cursor_ = cursor;
+            return Json::object({
+                {"schema_version", Json::string("pineforge-native-report-delta/v2")},
+                {"fields", std::move(fields)}, {"arrays", Json::object({})},
+                {"kind", Json::string("final")}, {"ratios", ratio_metadata(cursor, cursor)}}).dump();
+        }
         const auto* as_of = document_->find("ratios_as_of_input");
         if (!as_of) return {};
         const auto cursor = document_->at("input_cursor").integer<std::uint64_t>();
@@ -409,11 +437,46 @@ public:
     }
     std::size_t closed_trade_visits() const noexcept { return closed_trade_visits_; }
 private:
+    Json ratio_metadata(std::uint64_t cursor, std::uint64_t as_of) const {
+        return Json::object({{"as_of_input", report_number(as_of)},
+            {"chart_timezone", Json::string(chart_timezone_)},
+            {"exact", Json::boolean(cursor == as_of)}});
+    }
+    void prepare_v2(Json& delta, std::uint64_t cursor, std::uint64_t as_of) const {
+        delta.members["schema_version"] = Json::string("pineforge-native-report-delta/v2");
+        delta.members["kind"] = Json::string("input");
+        delta.members["ratios"] = ratio_metadata(cursor, as_of);
+        auto& arrays = delta.members["arrays"].members;
+        for (auto it = arrays.begin(); it != arrays.end();) {
+            const Json* owner = it->first == "closed_trades"
+                ? document_.get() : document_->find("report");
+            const auto* previous = owner ? owner->find(it->first) : nullptr;
+            if (!previous) { ++it; continue; } // Bootstrap includes empty arrays.
+            auto& patch = it->second;
+            auto offset = patch.at("offset").integer<std::size_t>();
+            auto& items = patch.members["items"].items;
+            std::size_t unchanged = 0;
+            while (unchanged < items.size() && offset + unchanged < previous->items.size() &&
+                   items[unchanged].dump() == previous->items[offset + unchanged].dump())
+                ++unchanged;
+            offset += unchanged;
+            items.erase(items.begin(), items.begin() + unchanged);
+            if (items.empty() && offset == previous->items.size())
+                it = arrays.erase(it);
+            else {
+                patch.members["offset"] = report_number(offset);
+                ++it;
+            }
+        }
+    }
     std::unique_ptr<Json> document_;
     Json scalars_ = Json::object({});
     std::map<std::string, std::size_t> array_sizes_;
     std::size_t closed_trade_high_water_ = 0;
     std::size_t closed_trade_visits_ = 0;
+    bool delta_v2_ = false;
+    std::string chart_timezone_;
+    std::uint64_t ratios_cursor_ = 0;
 };
 
 }

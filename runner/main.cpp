@@ -8,6 +8,7 @@
 #include "delivery.hpp"
 #include "report.hpp"
 #include "service.hpp"
+#include "ledger_observability.hpp"
 #include <pineforge/pineforge.h>
 #include <pineforge/native_calendar.hpp>
 #include "../src/native_calendar_memo.hpp"
@@ -44,7 +45,7 @@ static_assert(std::atomic<std::sig_atomic_t>::is_always_lock_free);
 void signal_stop(int) { stopped = 1; }
 constexpr std::size_t MAX_FRAME = 1024 * 1024;
 
-enum class ReportJsonlMode { Off, Delta, Full };
+enum class ReportJsonlMode { Off, Delta, Full, DeltaV2 };
 
 struct Config {
     std::string strategy, warmup, feed = "-", ledger, webhook, mode = "", input_tf, script_tf,
@@ -64,6 +65,7 @@ struct Config {
     std::uint64_t status_interval = 1, max_ledger_bytes = 0, feed_idle_timeout = 15, feed_message_timeout = 15;
     std::uint64_t feed_connect_timeout = 0;
     std::uint64_t ratio_interval = 1;
+    double ledger_warn_fraction = kDefaultLedgerWarnFreeFraction;
     long poll_ms = 1000;
     bool check = false, allow_http = false, ledger_unbounded = false;
     ReportJsonlMode report_jsonl = ReportJsonlMode::Off;
@@ -89,6 +91,7 @@ void help() {
                  "         --check (one HTTP snapshot) --poll-ms 1000\n"
                  "         --report-jsonl[=full] (mirror cumulative reports to stdout)\n"
                  "         --report-jsonl=delta (mirror committed report deltas to stdout)\n"
+                 "         --report-jsonl=delta-v2 (change-only deltas with ratio freshness)\n"
                  "         --ratio-interval K (positive; default 1 keeps exact ratios at every input)\n"
                  "         --status-file PATH --status-interval 1 (seconds, 1..300)\n"
                  "         --feed-connect-timeout S (network seconds; default 0 uses libcurl's largest connect option)\n"
@@ -98,6 +101,8 @@ void help() {
                  "           connect 0 adds no bound: ends on system/peer failure or nonzero --feed-message-timeout (includes connect)\n"
                  "         --control-dir PATH --max-ledger-bytes N (0 disables budget)\n"
                  "         --ledger-unbounded (explicit unlimited service ledger)\n"
+                 "         --ledger-warn-free-fraction F (default " << kDefaultLedgerWarnFreeFraction <<
+                 ", 0 < F <= 1; warning only)\n"
                  "JSONL: {\"type\":\"tick\",\"ts\":60000,\"seq\":1,\"price\":100,\"qty\":1}\n"
                  "       "
                  "{\"type\":\"bar\",\"bar\":{\"ts_open\":60000,\"o\":100,\"h\":102,\"l\":99,\"c\":"
@@ -107,8 +112,8 @@ void help() {
                  "File/HTTP input defaults to the full recorded prefix; --from-input declares\n"
                  "the zero-based start of a resumed tail. HTTP polls use full snapshots.\n"
                  "Usage: pineforge-live actions --ledger L --after N [--follow] [--deployment D]\n"
-                 "       pineforge-live status --ledger L [--deployment D]\n"
-                 "       pineforge-live report --ledger L [--deployment D] [--at-input N] [--verify-full]\n"
+                 "       pineforge-live status --ledger L [--deployment D] [--ledger-warn-free-fraction F]\n"
+                 "       pineforge-live report --ledger L [--deployment D] [--at-input N] [--verify-full] [--delta-base]\n"
                  "       pineforge-live probe --status-file PATH --max-age S [--ready]\n"
                  "       pineforge-live redeliver --ledger L --deployment D --target T [--from N] [--failed-only]\n"
                  "Add --control-dir PATH to redeliver to request resending from a running runner.\n"
@@ -158,6 +163,8 @@ Config args(int argc, char **argv) {
                 c.report_jsonl = ReportJsonlMode::Full;
             else if (a == "--report-jsonl=delta")
                 c.report_jsonl = ReportJsonlMode::Delta;
+            else if (a == "--report-jsonl=delta-v2")
+                c.report_jsonl = ReportJsonlMode::DeltaV2;
             else
                 throw std::runtime_error("unknown option: " + a);
             continue;
@@ -253,6 +260,7 @@ Config args(int argc, char **argv) {
         }
         else if (a == "--feed-idle-timeout") c.feed_idle_timeout = unsigned_arg(v);
         else if (a == "--feed-message-timeout") c.feed_message_timeout = unsigned_arg(v);
+        else if (a == "--ledger-warn-free-fraction") c.ledger_warn_fraction = ledger_warn_free_fraction(v);
         else if (a == "--max-ledger-bytes") {
             c.max_ledger_bytes = unsigned_arg(v);
             if (c.max_ledger_bytes > static_cast<std::uint64_t>(INT64_MAX))
@@ -1056,7 +1064,7 @@ int run(Config c) {
     ledger.bind_routing(c.routing.stored_document());
     // All modes fold the same carried patches. Only cumulative output, legacy
     // verification and checkpoint equality need to serialize the document.
-    ReportDeltas report_deltas(true);
+    ReportDeltas report_deltas(true, c.report_jsonl == ReportJsonlMode::DeltaV2, c.chart_timezone);
     pineforge::LiveReportAccumulator report_accumulator(c.ratio_interval);
     const auto verify_report = [&](std::uint64_t report_cursor,
                                    const std::string& stored = std::string{},
@@ -1113,6 +1121,8 @@ int run(Config c) {
         {"metrics", Json::object({{"committed_input", num(recorded)}, {"last_seq", Json{}},
             {"source_timestamp_ms", Json{}}, {"source_lag_ms", Json{}}, {"feed_idle_ms", Json{}}, {"queue_bytes", num(0)},
             {"ledger_bytes", num(ledger_bytes(c.ledger))}, {"report_cursor", num(ledger.report_cursor())}, {"targets", Json::object({})}})}});
+    recovering.members["metrics"].members["ledger_storage"] =
+        LedgerObservability(c.ledger, c.ledger_warn_fraction, false).sample(recorded);
     service.publish(recovering, true);
     for (std::uint64_t i = 0; i < recorded; ++i) {
         if (stopped)
@@ -1158,8 +1168,10 @@ int run(Config c) {
     // Arrival age includes processing; it is independent of the stdin deadline clock.
     std::optional<std::chrono::steady_clock::time_point> feed_last_input;
     const auto note_feed_input = [&] { feed_last_input = std::chrono::steady_clock::now(); };
+    LedgerObservability ledger_observability(c.ledger, c.ledger_warn_fraction);
     auto last_pulse = std::chrono::steady_clock::time_point{};
     std::string last_state;
+    std::string last_storage_state;
     bool last_ready = false;
     const auto pulse = [&](bool force = false) {
         const bool checkpoint_changed = note_checkpoint_diagnostic(ledger.checkpoint_diagnostic());
@@ -1171,11 +1183,15 @@ int run(Config c) {
         if (!service.enabled()) return;
         const std::string state = storage_stop ? "storage_budget" : stopped ? "draining" : "running";
         const bool ready = prefix_verified && !storage_stop && !stopped;
-        const bool changed = state != last_state || ready != last_ready || checkpoint_changed;
+        auto storage = ledger_observability.sample(ledger.input_count());
+        const auto storage_state = storage.at("state").text();
+        const bool changed = state != last_state || ready != last_ready || checkpoint_changed ||
+            storage_state != last_storage_state;
         if (!force && !changed && clock - last_pulse < std::chrono::seconds(c.status_interval)) return;
         last_pulse = clock;
         last_state = state;
         last_ready = ready;
+        last_storage_state = storage_state;
         const auto now = wall_time_ms();
         auto pending = parse_json(ledger.delivery_metrics_json(now));
         for (const auto& [name, target] : c.routing.targets) {
@@ -1196,6 +1212,7 @@ int run(Config c) {
                 {"feed_idle_ms", feed_last_input ? num(static_cast<std::uint64_t>(
                     std::max<std::chrono::milliseconds::rep>(0, std::chrono::duration_cast<std::chrono::milliseconds>(clock - *feed_last_input).count()))) : Json{}},
                 {"queue_bytes", num(intake_bytes + delivery.queue_bytes())}, {"ledger_bytes", num(c.max_ledger_bytes ? bytes : ledger_bytes(c.ledger))},
+                {"ledger_storage", std::move(storage)},
                 {"control_errors", num(delivery.control_errors())},
                 {"report_cursor", num(ledger.report_cursor())}, {"targets", std::move(pending)}})}}), force || changed);
     };
@@ -1272,7 +1289,8 @@ int run(Config c) {
         // advanced the engine, so only its committed document is usable.
         const auto final_cursor = ledger.input_count();
         if (!strategy.has_current_engine_layout || c.ratio_interval <= 1) return;
-        const auto final_report = storage_stop ? report_deltas.final_ratio_refresh()
+        const auto final_report = storage_stop || c.report_jsonl == ReportJsonlMode::DeltaV2
+            ? report_deltas.final_ratio_refresh()
             : report_accumulator.ratios_as_of_input() != final_cursor
                 ? cumulative_report(strategy, deployment, final_cursor,
                     report_deltas, report_accumulator, {}, true) : std::string{};
@@ -1477,8 +1495,9 @@ int ledger_command(int argc, char** argv) {
     const std::string command = argv[1];
     std::string path, target, deployment, control_dir;
     std::uint64_t after = 0, from = 1, max_ledger_bytes = 0;
+    double ledger_warn_fraction = kDefaultLedgerWarnFreeFraction;
     std::optional<std::uint64_t> at_input;
-    bool follow = false, failed_only = false, verify_full = false;
+    bool follow = false, failed_only = false, verify_full = false, delta_base = false;
     std::set<std::string> seen;
     for (int index = 2; index < argc; ++index) {
         const std::string option = argv[index];
@@ -1486,12 +1505,15 @@ int ledger_command(int argc, char** argv) {
         if (command == "actions" && option == "--follow") { follow = true; continue; }
         if (command == "redeliver" && option == "--failed-only") { failed_only = true; continue; }
         if (command == "report" && option == "--verify-full") { verify_full = true; continue; }
+        if (command == "report" && option == "--delta-base") { delta_base = true; continue; }
         if (index + 1 == argc) throw std::runtime_error("missing option value: " + option);
         const std::string value = argv[++index];
         if (option == "--ledger") path = value;
         else if (option == "--deployment") deployment = value;
         else if (command == "actions" && option == "--after") after = unsigned_arg(value);
         else if (command == "report" && option == "--at-input") at_input = unsigned_arg(value);
+        else if (command == "status" && option == "--ledger-warn-free-fraction")
+            ledger_warn_fraction = ledger_warn_free_fraction(value);
         else if (command == "redeliver" && option == "--from") from = unsigned_arg(value);
         else if (command == "redeliver" && option == "--target") target = value;
         else if (command == "redeliver" && option == "--control-dir") control_dir = value;
@@ -1509,13 +1531,16 @@ int ledger_command(int argc, char** argv) {
     if (!deployment.empty() && deployment != view.identity())
         throw std::runtime_error("ledger deployment identity mismatch");
     if (command == "report") {
-        const auto report = verify_full ? view.report_json_full(at_input) : view.report_json(at_input);
+        const auto report = delta_base ? view.report_delta_base_json(at_input, verify_full)
+            : verify_full ? view.report_json_full(at_input) : view.report_json(at_input);
         log_checkpoint_diagnostic(view.checkpoint_diagnostic());
         std::cout << report << '\n';
         return 0;
     }
     if (command == "status") {
-        std::cout << view.status_json() << '\n';
+        auto status = parse_json(view.status_json());
+        status.members["ledger_storage"] = LedgerObservability(path, ledger_warn_fraction, false).sample(view.input_count());
+        std::cout << status.dump() << '\n';
         return 0;
     }
     if (command == "actions") {

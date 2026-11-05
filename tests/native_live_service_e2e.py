@@ -287,7 +287,7 @@ try:
         wait_for(lambda: status(health)["written_at_ms"] > initial)
         assert all(status(health)["readiness"].values())
         assert set(status(health)["metrics"]) - {"control_errors"} == {"committed_input", "last_seq", "source_timestamp_ms",
-            "source_lag_ms", "feed_idle_ms", "queue_bytes", "ledger_bytes", "report_cursor", "targets"}
+            "source_lag_ms", "feed_idle_ms", "queue_bytes", "ledger_bytes", "ledger_storage", "report_cursor", "targets"}
         assert status(health)["metrics"]["feed_idle_ms"] is None
         duplicate = subprocess.run([runner] + list(map(str, base(ledger) + ["--feed", feed,
             "--status-file", health])), capture_output=True, text=True)
