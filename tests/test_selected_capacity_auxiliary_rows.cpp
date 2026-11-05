@@ -102,11 +102,6 @@ void record_events(sc::State& state, const sc::Limits&, const sc::RecordEvent& e
     }
 }
 
-void count_auxiliary_without_limit(sc::State& state, const sc::Limits&,
-                                   const sc::RecordEvent& event) {
-    if (event.role == Role::Auxiliary) ++state.auxiliary_rows;
-}
-
 void retain_primary(void* context, const pineforge::Bar& bar) {
     static_cast<Observation*>(context)->delivered.push_back(bar);
 }
@@ -161,7 +156,7 @@ ObservedRun execute(sc::Bound auxiliary_bound,
     sc::ObserverTable observers{};
     observers.source_rows = &record_events;
     if (limits.auxiliary_rows.present) {
-        observers.auxiliary_rows = &count_auxiliary_without_limit;
+        observers.auxiliary_rows = &sc::observe_auxiliary_rows;
     }
     ObservationScope scope(result.observation);
     try {

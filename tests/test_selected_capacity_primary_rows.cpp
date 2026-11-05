@@ -111,11 +111,6 @@ void record_events(sc::State& state, const sc::Limits&, const sc::RecordEvent& e
     }
 }
 
-void count_primary_without_limit(sc::State& state, const sc::Limits&,
-                                 const sc::RecordEvent& event) {
-    if (event.role == Role::Primary) ++state.primary_rows;
-}
-
 void retain_primary(void* context, const pineforge::Bar& bar) {
     static_cast<Observation*>(context)->delivered.push_back(bar);
 }
@@ -169,7 +164,7 @@ ObservedRun execute(const std::string& primary_csv, sc::Bound primary_bound,
     sc::ObserverTable observers{};
     observers.source_rows = &record_events;
     if (limits.primary_rows.present) {
-        observers.primary_rows = &count_primary_without_limit;
+        observers.primary_rows = &sc::observe_primary_rows;
     }
     ObservationScope scope(result.observation);
     try {
