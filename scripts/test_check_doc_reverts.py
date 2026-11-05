@@ -44,6 +44,14 @@ KEEP_HANDLE = "A replacement that keeps its handle keeps its lineage and its dep
 _inherited_doc_revert_base: str | None = None
 
 
+def git_environment() -> dict[str, str]:
+    """Keep every fixture git subprocess's diagnostics in the C locale."""
+    env = os.environ.copy()
+    env['LC_ALL'] = 'C.UTF-8'
+    env.pop('LANGUAGE', None)
+    return env
+
+
 def setUpModule() -> None:
     """Fixture repositories cannot resolve the caller's engine base."""
     global _inherited_doc_revert_base
@@ -73,7 +81,7 @@ class Repo:
 
     def git(self, *args: str) -> str:
         return subprocess.run(['git', '-C', str(self.root), *args], capture_output=True,
-                              text=True, check=True).stdout.strip()
+                              text=True, check=True, env=git_environment()).stdout.strip()
 
     def commit(self, text: str, message: str, *, gate: bool = True) -> str:
         self.page.write_text(text)
@@ -348,7 +356,7 @@ class MergeCommits(unittest.TestCase):
     def conflict_with_main(self, r: Repo, lane: str, main: str) -> None:
         result = subprocess.run(
             ['git', '-C', str(r.root), 'merge', '--no-ff', '--no-commit', 'main'],
-            capture_output=True, text=True)
+            capture_output=True, text=True, env=git_environment())
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn('CONFLICT (content)', result.stdout + result.stderr)
         self.assertEqual(r.git('rev-parse', 'HEAD'), lane)
