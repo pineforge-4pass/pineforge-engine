@@ -6,10 +6,10 @@ The current PR admission and post-merge trigger map is:
 | --- | --- | --- | --- |
 | `ci.yml authz` | Hosted authorization context | Hosted authorization context | Not triggered |
 | `gke-pr / admit` | Hosted admission and main-tree rule check | Hosted admission and main-tree rule check | Not triggered |
-| `gke-pr / preflight` | GKE preflight, tiered by the main classifier | GKE github-only preflight | Not triggered |
+| `gke-pr / preflight`, `gke-pr / build-x86-gcc133` | GKE preflight, tiered by the main classifier; native x86 GNU 13.3.0 full Release build | GKE github-only preflight; native x86 GNU 13.3.0 full Release build | Not triggered |
 | `gke-pr / build`, `build-debug`, parity subset | GKE proof legs for code changes | Skipped | Not triggered |
-| `gke-pr / result` | Hosted result with a second classification read | Hosted result with a second classification read | Not triggered |
-| `ci-post.yml` proof jobs | Not triggered | Not triggered | Complete Release, Debug, native, kernel and parity profiles |
+| `gke-pr / result` | Hosted result with a second classification read and required x86 build | Hosted result with a second classification read and required x86 build | Not triggered |
+| `ci-post.yml` proof jobs | Not triggered | Not triggered | Complete Release, Debug, native, kernel and parity profiles plus the required x86 build |
 | `corpus-parity.yml` | Not triggered | Not triggered | Full parity and its post-merge subset |
 | `docs.yml` | Documentation build except `.github/**`-only changes | Skipped by its path filter | Documentation build on its own trigger |
 | `gke-pr / build-arm` | GKE arm64 Debug build and tests when `arm_relevant=true` | Skipped | Not triggered |
@@ -17,10 +17,10 @@ The current PR admission and post-merge trigger map is:
 The admission workflow is defined on `main` and is selected by the protected
 GKE runner group. Its proof legs use the same fixed Release, Debug and parity
 runner sizes as the post workflow; the hosted result is red for refusal,
-failure, cancellation, disagreement or an unanswered class.
+failure, cancellation, disagreement or an unanswered class. The native x86 GNU 13.3.0 job runs for every admitted PR and every post event, including documentation-only and GitHub-only changes: it checks out the exact head, configures a fresh C++17 Release tree with the source layer enabled and optional targets and tests disabled, then invokes the ordinary all-target Unix Makefiles build with the runner's parallelism, and retains the configure and build logs, the compiler identity, CMake cache and compile commands as failure diagnostics.
 
 The nightly CI schedule is 01:30 UTC. The existing docs-only classification
-still skips proof jobs on a documentation-only PR or main push. Both
+still skips the existing code proof jobs on a documentation-only PR or main push; the native x86 build remains required. Both
 preflight tiers together retain the original full stage inventory; the slow
 tier still runs on a docs-only main push. Scheduled and manual runs execute
 every profile. `ci.yml` retains authorization and draft event handling;
@@ -87,7 +87,7 @@ Post Release/Debug/kernel, native shards and post sanitizers use fixed bare GKE 
 The two native-live sanitizer profiles use an exact runner matrix. All GKE jobs run directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
 Hosted `ubuntu-24.04` runs PR `authz`, admission, `legs` and `result` jobs, and `docs.yml`'s `build`; secret-free post guards and aggregates use bare scalar GKE names. These light, secret-free jobs need no VM-only tools, mounts or caches.
 The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use `gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.
-Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 36 GKE job instances: amd64 32 CPU default/256 GB labels carry 4/4 jobs, amd64 16 CPU default/128/256 GB labels carry 3/3/1, amd64 8/4/2 CPU labels carry 7/5/7, and arm64 16 CPU 128 GB carries 2; each label's static cap is 8.
+Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 37 GKE job instances: amd64 32 CPU default/256 GB labels carry 5/4 jobs, amd64 16 CPU default/128/256 GB labels carry 3/3/1, amd64 8/4/2 CPU labels carry 7/5/7, and arm64 16 CPU 128 GB carries 2; each label's static cap is 8.
 
 The manual `release-ruleset-probe.yml` workflow runs `authz` on
 bare scalar `gke-2cpu-4gb-amd64` and `probe` on `gkp-2cpu-4gb-amd64`.

@@ -127,11 +127,15 @@ GKE_16_128_LABEL = 'gke-16cpu-32gb-amd64-128gb'
 GKE_16_256_LABEL = 'gke-16cpu-32gb-amd64-256gb'
 GKE_ARM_128_LABEL = 'gke-16cpu-32gb-arm64-128gb'
 GKE_MATRIX_RUNNER = '${{ matrix.runner }}'
+NATIVE_X86_JOB = 'build-x86-gcc133'
+NATIVE_X86_HELPER = 'scripts/ci_native_x86_release.py'
 GKE_JOB_LABELS = {
     'gke-pr.yml': {'preflight': GKE_8_LABEL, 'build': GKE_32_LABEL,
+                   NATIVE_X86_JOB: GKE_32_LABEL,
                    'build-debug': GKE_16_128_LABEL,
                    'corpus-parity-subset': GKE_8_LABEL},
     'ci-post.yml': {'preflight': GKE_8_LABEL, 'preflight-slow': GKE_8_LABEL,
+                    NATIVE_X86_JOB: GKE_32_LABEL,
                     'build': GKE_ONDEMAND_32_LABEL, 'build-debug': GKE_16_128_LABEL,
                     'sanitizers': GKE_ONDEMAND_32_256_LABEL, 'kernel-only': GKE_16_LABEL,
                     'build-arm': GKE_ARM_128_LABEL},
@@ -311,6 +315,16 @@ NATIVE_EXCLUSION = "${{ matrix.profile == 'native' && inputs.exclude_slow && '--
 # Build and CTest parallelism is the core count of whichever runner took the job.
 CORES = '"$(getconf _NPROCESSORS_ONLN)"'
 VERIFY, PARITY = 'ci_verify.py', 'check_corpus_parity.sh'
+NATIVE_X86_COMMAND = 'ci_native_x86_release.py'
+NATIVE_X86_BUILD_DIR = 'build-x86-gcc133'
+NATIVE_X86_ARTIFACT_DIR = 'ci-native-x86-gcc133'
+NATIVE_X86_UPLOAD = 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
+NATIVE_X86_RUN = (
+    f'| python3 {NATIVE_X86_HELPER} --source . '
+    f'--build-dir {NATIVE_X86_BUILD_DIR} --artifact-dir {NATIVE_X86_ARTIFACT_DIR} '
+    f'--jobs {CORES}')
+NATIVE_X86_BUILD_STEP = '      - name: Build native x86 GNU 13.3.0 Release'
+NATIVE_X86_ARTIFACT_STEP = '      - name: Retain native x86 GNU 13.3.0 build artifacts'
 PARITY_COMMAND = f'JOBS={CORES} ./scripts/{PARITY}'
 # Every inline job in the workflows a CI run starts, and the command that
 # must carry the core count. Fleet choice comes only from the event graph.
@@ -320,11 +334,13 @@ PARITY_COMMAND = f'JOBS={CORES} ./scripts/{PARITY}'
 JOB_COMMANDS = {
     'ci.yml': {'authz': None},
     'gke-pr.yml': {'admit': None, 'preflight': None, 'build': None,
+                   NATIVE_X86_JOB: NATIVE_X86_COMMAND,
                    'build-debug': None, 'corpus-parity-subset': PARITY,
                    'legs': None, 'result': None},
     'ci-post.yml': {'authz': None, 'changes': None, 'preflight': None,
                     'preflight-slow': None, 'build': VERIFY, 'build-arm': VERIFY,
-                    'build-debug': VERIFY, 'sanitizers': VERIFY, 'kernel-only': VERIFY,
+                    'build-debug': VERIFY, NATIVE_X86_JOB: NATIVE_X86_COMMAND,
+                    'sanitizers': VERIFY, 'kernel-only': VERIFY,
                     **dict.fromkeys(POST_LEG_GATES), 'build-gate': None},
     'native-live.yml': {'authz': None, 'native-live': VERIFY, 'native-live-shards': VERIFY,
                         'native-live-native': None, 'native-live-gate': None},
@@ -377,6 +393,8 @@ PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-arm': 'ARM_BUILD_RESULT',
               'sanitizers-gate': 'SANITIZER_GATE_RESULT', 'kernel-only-gate': 'KERNEL_GATE_RESULT',
               'kernel-only': 'KERNEL_RESULT', 'native-live': 'NATIVE_RESULT',
               'corpus-parity-subset': 'PARITY_RESULT', 'corpus-parity': 'FULL_PARITY_RESULT'}
+POST_ALWAYS_JOBS = {NATIVE_X86_JOB: 'X86_GCC133_RESULT'}
+POST_PROOF_JOBS = {**PROOF_JOBS, **POST_ALWAYS_JOBS}
 PR_PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-debug': 'DEBUG_RESULT',
                  'corpus-parity-subset': 'PARITY_RESULT'}
 PR_ARM_PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-debug': 'DEBUG_RESULT',
@@ -411,6 +429,7 @@ ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error \
 GKE_PROOF_IF = ("${{ needs.admit.outputs.allowed == 'true' && "
                 "needs.admit.outputs.docs_only != 'true' && "
                 "needs.admit.outputs.github_only != 'true' }}")
+NATIVE_X86_PR_IF = "${{ needs.admit.outputs.allowed == 'true' }}"
 GKE_ARM_PROOF_IF = GKE_PROOF_IF.replace(
     ' }}', " && needs.admit.outputs.arm_relevant == 'true' }}")
 GKE_PREFLIGHT_TIER = ("${{ (needs.admit.outputs.docs_only == 'true' || "
@@ -457,11 +476,13 @@ GKE_LEGS_STEP = '''      - name: Require every proof leg
         env:
           BUILD_RESULT: ${{ needs.build.result }}
           DEBUG_RESULT: ${{ needs.build-debug.result }}
+          X86_RESULT: ${{ needs.build-x86-gcc133.result }}
           PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
         run: |
           set -euo pipefail
           test "$BUILD_RESULT" = success
           test "$DEBUG_RESULT" = success
+          test "$X86_RESULT" = success
           test "$PARITY_RESULT" = success
 '''
 GKE_RESULT_STEP = '''      - name: Require an independently consistent successful result
@@ -470,6 +491,7 @@ GKE_RESULT_STEP = '''      - name: Require an independently consistent successfu
           ADMIT_RESULT: ${{ needs.admit.result }}
           ALLOWED: ${{ needs.admit.outputs.allowed }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          X86_RESULT: ${{ needs.build-x86-gcc133.result }}
           LEGS_RESULT: ${{ needs.legs.result }}
           ADMIT_DOCS_ONLY: ${{ needs.admit.outputs.docs_only }}
           ADMIT_GITHUB_ONLY: ${{ needs.admit.outputs.github_only }}
@@ -482,6 +504,7 @@ GKE_RESULT_STEP = '''      - name: Require an independently consistent successfu
           test "$ADMIT_RESULT" = success || fail "admission refused"
           test "$ALLOWED" = true || fail "admission did not allow the head"
           test "$PREFLIGHT_RESULT" = success || fail "preflight did not pass"
+          test "$X86_RESULT" = success || fail "native x86 GNU 13.3.0 build did not pass"
           test "$SECOND_DOCS_ONLY" = "$ADMIT_DOCS_ONLY" || fail "docs-only classification changed"
           test "$SECOND_GITHUB_ONLY" = "$ADMIT_GITHUB_ONLY" || fail "github-only classification changed"
           test "$CODE_EXTENSION" != true || {
@@ -500,6 +523,7 @@ GKE_ARM_LEGS_STEP = '''      - name: Require every proof leg
           BUILD_RESULT: ${{ needs.build.result }}
           DEBUG_RESULT: ${{ needs.build-debug.result }}
           ARM_RESULT: ${{ needs.build-arm.result }}
+          X86_RESULT: ${{ needs.build-x86-gcc133.result }}
           ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}
           PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
         run: |
@@ -513,6 +537,7 @@ GKE_ARM_LEGS_STEP = '''      - name: Require every proof leg
           test "$BUILD_RESULT" = success
           test "$DEBUG_RESULT" = success
           arm_passed "$ARM_RELEVANT" "$ARM_RESULT"
+          test "$X86_RESULT" = success
           test "$PARITY_RESULT" = success
 '''
 GKE_ARM_RESULT_STEP = '''      - name: Require an independently consistent successful result
@@ -521,6 +546,7 @@ GKE_ARM_RESULT_STEP = '''      - name: Require an independently consistent succe
           ADMIT_RESULT: ${{ needs.admit.result }}
           ALLOWED: ${{ needs.admit.outputs.allowed }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          X86_RESULT: ${{ needs.build-x86-gcc133.result }}
           LEGS_RESULT: ${{ needs.legs.result }}
           ADMIT_DOCS_ONLY: ${{ needs.admit.outputs.docs_only }}
           ADMIT_GITHUB_ONLY: ${{ needs.admit.outputs.github_only }}
@@ -535,6 +561,7 @@ GKE_ARM_RESULT_STEP = '''      - name: Require an independently consistent succe
           test "$ADMIT_RESULT" = success || fail "admission refused"
           test "$ALLOWED" = true || fail "admission did not allow the head"
           test "$PREFLIGHT_RESULT" = success || fail "preflight did not pass"
+          test "$X86_RESULT" = success || fail "native x86 GNU 13.3.0 build did not pass"
           test "$SECOND_DOCS_ONLY" = "$ADMIT_DOCS_ONLY" || fail "docs-only classification changed"
           test "$SECOND_GITHUB_ONLY" = "$ADMIT_GITHUB_ONLY" || fail "github-only classification changed"
           test "$SECOND_ARM_RELEVANT" = "$ADMIT_ARM_RELEVANT" || fail "arm relevance classification changed"
@@ -991,7 +1018,7 @@ PROMOTE_IF = ("${{ needs.promote-guard.result == 'success' && "
               "needs.promote-guard.outputs.ok == 'true' }}")
 GATE_NEEDS = 'needs: [authz, changes, preflight, build, corpus-parity-subset]'
 POST_GATE_NEEDS = ('needs: [authz, changes, preflight, build, build-arm, sanitizers, native-live, kernel-only, '
-                   'corpus-parity-subset, preflight-slow, corpus-parity]')
+                   'build-x86-gcc133, corpus-parity-subset, preflight-slow, corpus-parity]')
 # The matrix dependency already aggregates the selected cells. Its result must
 # never be excused for the PR-only exclusion: no job was created for that cell.
 # Pin the whole step so a widened passed(), a later override or a missing-result
@@ -1029,6 +1056,7 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
           CHANGES_RESULT: ${{ needs.changes.result }}
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          X86_GCC133_RESULT: ${{ needs.build-x86-gcc133.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           DEBUG_BUILD_RESULT: ${{ needs.build-debug.result }}
           RELEASE_GATE_RESULT: ${{ needs.build-release-gate.result }}
@@ -1045,6 +1073,7 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
         run: |
           printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
             "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
+            "native x86 GNU 13.3.0: $X86_GCC133_RESULT" \
             "debug shards: $DEBUG_BUILD_RESULT" "release aggregate: $RELEASE_GATE_RESULT" "debug aggregate: $DEBUG_GATE_RESULT" \
             "arm64 matrix: $ARM_BUILD_RESULT" \
             "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
@@ -1058,7 +1087,8 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
           if [[ "$CHANGES_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then docs_only=true; fi
           passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
           [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
-            && [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
+            && [[ "$PREFLIGHT_RESULT" == "success" ]] \
+            && [[ "$X86_GCC133_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
             && passed "$DEBUG_BUILD_RESULT" && passed "$RELEASE_GATE_RESULT" && passed "$DEBUG_GATE_RESULT" \
             && passed "$ARM_BUILD_RESULT" \
             && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \
@@ -1080,6 +1110,7 @@ _ON_KEY = re.compile(r'^(?:on|"on"|\'on\')[ \t]*:[ \t]*([^#\n]*)', re.MULTILINE)
 # call of ci_verify itself, as a script or a module.
 _JOBS_FLAG = re.compile(r'(?<![\w-])--j(?:o|ob|obs)?(?=[\s=]|$)')
 _VERIFY_CALL = re.compile(r'\bci_verify\.py\b|-m\s+ci_verify\b')
+_NATIVE_X86_CALL = re.compile(r'\bci_native_x86_release\.py\b')
 _LITERAL_CACHE_HASH = re.compile(
     r'''\$\{\{\s*hashFiles\(\s*(?:'[^'\n]*'|"[^"\n]*")'''
     r'''(?:\s*,\s*(?:'[^'\n]*'|"[^"\n]*"))*\s*\)\s*\}\}-''')
@@ -1753,7 +1784,7 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
     proofs = PR_ARM_PROOF_JOBS if arm_variant else PR_PROOF_JOBS
     legs_step = GKE_ARM_LEGS_STEP if arm_variant else GKE_LEGS_STEP
     result_template = GKE_ARM_RESULT_STEP if arm_variant else GKE_RESULT_STEP
-    required = {'admit', 'preflight', *proofs, 'legs', 'result'}
+    required = {'admit', 'preflight', *proofs, NATIVE_X86_JOB, 'legs', 'result'}
     if not required <= set(jobs):
         findings.append(f'{name}: required jobs are missing')
     if set(jobs) != required:
@@ -1766,8 +1797,8 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
         findings.append(f'{name} result must run always')
     if 'needs.legs.result' not in jobs.get('result', ''):
         findings.append(f'{name} result must test needs.legs.result')
-    if _needs(jobs.get('result', '')) != ['admit', 'preflight', 'legs']:
-        findings.append(f'{name} result must need admit, preflight and legs')
+    if _needs(jobs.get('result', '')) != ['admit', 'preflight', NATIVE_X86_JOB, 'legs']:
+        findings.append(f'{name} result must need admit, preflight, {NATIVE_X86_JOB} and legs')
     if 'workflow_call' in workflow or 'uses: ./.github/workflows/' in workflow:
         findings.append(f'{name}: reusable workflow calls are refused')
     if re.search(r'\b(?:secrets\.(?!GITHUB_TOKEN)|id-token\b|environment\s*:)', workflow):
@@ -1875,15 +1906,18 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
             or _job_values(identity_env, 'HEAD_IS_FORK') != [
                 '${{ toJSON(github.event.pull_request.head.repo.fork) }}']):
         findings.append(f'{name} admit must refuse drafts and stale or unauthorized identities')
-    for job in ('preflight', *proofs):
+    for job in ('preflight', *proofs, NATIVE_X86_JOB):
         body = jobs.get(job, '')
         condition = ("${{ needs.admit.outputs.allowed == 'true' }}"
                      if job == 'preflight' else
+                     NATIVE_X86_PR_IF if job == NATIVE_X86_JOB else
                      GKE_ARM_PROOF_IF if job == 'build-arm' else GKE_PROOF_IF)
-        if (_needs(body) != ['admit'] or _job_values(body, 'if') != [condition]):
+        expected_needs = ['admit']
+        if (_needs(body) != expected_needs or _job_values(body, 'if') != [condition]):
             findings.append(f'{name} {job} must follow admission and keep its path policy')
         if _job_block(body, 'strategy') or _job_values(body, 'strategy'):
             findings.append(f'{name} {job} must remain one fixed proof job')
+    findings += native_x86_job_findings(jobs.get(NATIVE_X86_JOB, ''), name, pr=True)
     preflight = steps.get('preflight', [])
     preflight_run = _step_named(preflight, '      - name: Run the class-specific preflight')
     if (_step_values(preflight_run, 'run') != [
@@ -1951,15 +1985,19 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
         findings.append(f'{name} corpus-parity-subset must run its unconditional inline subset command')
     legs = jobs.get('legs', '')
     legs_if = GKE_PROOF_IF.replace('${{ ', '${{ always() && ', 1)
-    if (_needs(legs) != ['admit', *proofs]
+    legs_needs = ['admit', *proofs]
+    legs_needs.insert(-1, NATIVE_X86_JOB)
+    if (_needs(legs) != legs_needs
             or _job_values(legs, 'if') != [legs_if]
             or [_code(step) for step in steps.get('legs', [])] != [_code(legs_step)]):
         findings.append(f'{name} legs must require every selected proof')
     result_step = _step_named(steps.get('result', []),
                               '      - name: Require an independently consistent successful result')
-    if (_job_values(jobs.get('result', ''), 'if') != ['always()']
+    result_needs = ['admit', 'preflight', NATIVE_X86_JOB, 'legs']
+    if (_needs(jobs.get('result', '')) != result_needs
+            or _job_values(jobs.get('result', ''), 'if') != ['always()']
             or _code(result_step) != _code(result_template)):
-        findings.append(f'{name} result must require admission, preflight and consistent proof results')
+        findings.append(f'{name} result must require admission, preflight, native x86 and consistent proof results')
     if not admit_steps or 'id: allowed' not in admit_steps[-1] \
             or 'allowed=true' not in admit_steps[-1] \
             or any('allowed=true' in step for step in admit_steps[:-1]):
@@ -1976,7 +2014,7 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
                 if (_job_values(inputs, 'repository') != ['${{ github.repository }}']
                         or _job_values(inputs, 'ref') != [ref]):
                     findings.append(f'{name} {job} checkout must use the base tree')
-    for job in ('preflight', *proofs):
+    for job in ('preflight', *proofs, NATIVE_X86_JOB):
         if job not in jobs:
             continue
         checkout_steps = [step for step in steps[job]
@@ -2206,15 +2244,18 @@ def _sized(text: str, command: str | None) -> bool:
     mention is part of the one parity command.
     """
     marks = sorted([(match.start(), 'C') for match in _VERIFY_CALL.finditer(text)]
+                   + [(match.start(), 'N') for match in _NATIVE_X86_CALL.finditer(text)]
                    + [(match.start(), 'F' if text.startswith(
                        (f'--jobs {CORES}', f'--jobs={CORES}'), match.start()) else 'U')
                       for match in _JOBS_FLAG.finditer(text)])
     calls = ''.join(kind for _, kind in marks)
     parity = text.count(PARITY_COMMAND)
-    return (re.fullmatch(r'(?:CF)*', calls) is not None
+    allowed_calls = ({VERIFY: r'(?:CF)*', NATIVE_X86_COMMAND: r'(?:NF)*'}
+                     .get(command, r''))
+    return (re.fullmatch(allowed_calls, calls) is not None
             and len(re.findall(r'\bJOBS\s*[:=]', text)) == parity
             and text.count(PARITY) == parity
-            and (command != VERIFY or bool(calls))
+            and (command not in (VERIFY, NATIVE_X86_COMMAND) or bool(calls))
             and (command != PARITY or parity > 0))
 
 
@@ -3953,6 +3994,79 @@ def _native_profile_job_findings(job: str, name: str, *, sharded: bool) -> list[
     return findings
 
 
+def native_x86_job_findings(job: str, name: str, *, pr: bool) -> list[str]:
+    """Require the ordinary native x86 build job and its failure evidence."""
+    if not job:
+        return [f'{name} {NATIVE_X86_JOB} must contain the required native x86 GNU 13.3.0 job']
+
+    findings = []
+    expected_needs = ['admit'] if pr else ['authz']
+    expected_if = NATIVE_X86_PR_IF if pr else AUTHZ_ALWAYS
+    if (_needs(job) != expected_needs or _job_values(job, 'if') != [expected_if]):
+        findings.append(f'{name} {NATIVE_X86_JOB} must start after its admission gate '
+                        'and run on every admitted path')
+    expected_permissions = ['{contents: read}'] if pr else ['contents: read']
+    if (_job_values(job, 'runs-on') != [GKE_32_LABEL]
+            or _job_values(job, 'permissions') != expected_permissions):
+        findings.append(f'{name} {NATIVE_X86_JOB} must use the bare x86 GKE runner '
+                        'with read-only contents')
+    if (_job_values(job, 'name') or any(_job_values(job, key) for key in (
+            'strategy', 'uses', 'container', 'services', 'environment', 'env',
+            'timeout-minutes'))):
+        findings.append(f'{name} {NATIVE_X86_JOB} must remain one ordinary fixed build job')
+
+    steps = _steps(job)
+    checkout_name = 'Checkout the admitted head' if pr else 'Checkout the exact workflow head'
+    expected_names = ([checkout_name,
+                       NATIVE_X86_BUILD_STEP.removeprefix('      - name: '),
+                       NATIVE_X86_ARTIFACT_STEP.removeprefix('      - name: ')] if pr else [
+                           'Refuse an unauthorised run before anything else',
+                           checkout_name,
+                           NATIVE_X86_BUILD_STEP.removeprefix('      - name: '),
+                           NATIVE_X86_ARTIFACT_STEP.removeprefix('      - name: ')])
+    if [_step_values(step, 'name') for step in steps] != [[name] for name in expected_names]:
+        findings.append(f'{name} {NATIVE_X86_JOB} must keep checkout, real build and '
+                        'failure artifact steps in order')
+
+    if not pr and (not steps or _code(steps[0]) != _code(AUTHZ_REFUSE_STEP)):
+        findings.append(f'{name} {NATIVE_X86_JOB} must refuse an unauthorised run first')
+    checkout = _step_named(steps, f'      - name: {checkout_name}')
+    checkout_inputs = '\n'.join(_step_block(checkout, 'with')[1:])
+    checkout_ref = ('${{ needs.admit.outputs.head_sha }}' if pr
+                    else '${{ github.sha }}')
+    checkout_if = [] if pr else [AUTHZ_SUCCESS]
+    if (_step_values(checkout, 'uses') != [
+            'actions/checkout@11d5960a326750d5838078e36cf38b85af677262']
+            or _step_values(checkout, 'if') != checkout_if
+            or _job_values(checkout_inputs, 'repository') != ['${{ github.repository }}']
+            or _job_values(checkout_inputs, 'ref') != [checkout_ref]
+            or _job_values(checkout_inputs, 'fetch-depth') != ['0']
+            or _job_values(checkout_inputs, 'persist-credentials') != ['false']):
+        findings.append(f'{name} {NATIVE_X86_JOB} must checkout its exact head '
+                        'with persisted credentials disabled')
+
+    build = _step_named(steps, NATIVE_X86_BUILD_STEP)
+    if (_step_values(build, 'run') != [NATIVE_X86_RUN]
+            or _step_values(build, 'if') != ([] if pr else [AUTHZ_SUCCESS])
+            or any(_step_values(build, key) for key in (
+                'uses', 'env', 'shell', 'working-directory', 'continue-on-error',
+                'timeout-minutes'))):
+        findings.append(f'{name} {NATIVE_X86_JOB} must invoke the full native x86 '
+                        'helper with the runner parallelism input')
+
+    artifact = _step_named(steps, NATIVE_X86_ARTIFACT_STEP)
+    artifact_inputs = '\n'.join(_step_block(artifact, 'with')[1:])
+    artifact_name = 'gke-pr-native-x86-gcc133' if pr else 'ci-post-native-x86-gcc133'
+    if (_step_values(artifact, 'if') != ['always()']
+            or _step_values(artifact, 'uses') != [NATIVE_X86_UPLOAD]
+            or _job_values(artifact_inputs, 'name') != [artifact_name]
+            or _job_values(artifact_inputs, 'path') != [NATIVE_X86_ARTIFACT_DIR + '/']
+            or _job_values(artifact_inputs, 'if-no-files-found') != ['warn']):
+        findings.append(f'{name} {NATIVE_X86_JOB} must retain helper logs and evidence '
+                        'after every build result')
+    return list(dict.fromkeys(findings))
+
+
 def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[str]:
     """Pin each pipeline's actual jobs, dependencies, commands and aggregate."""
     findings = authz_workflow_findings(workflow, name, 'build-gate')
@@ -3962,7 +4076,7 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     if pr and _job_block(workflow, 'concurrency') != _code(CI_CONCURRENCY):
         findings.append('ci.yml must keep its exact draft and ready concurrency groups')
     jobs = _jobs(workflow)
-    proofs = PR_PROOF_JOBS if pr else PROOF_JOBS
+    proofs = PR_PROOF_JOBS if pr else POST_PROOF_JOBS
     expected_jobs = {'authz', 'changes', 'preflight', *proofs, 'build-gate'}
     if not pr:
         expected_jobs.add('preflight-slow')
@@ -4019,8 +4133,12 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
             findings.append('preflight-slow must run all deferred stages on full events only')
     for job in proofs.keys() - (set() if pr else POST_LEG_GATES.keys()):
         body = jobs.get(job, '')
-        if (sorted(_needs(body)) != ['authz', 'changes']
-                or _job_values(body, 'if') != [GITHUB_ONLY_SKIP if pr else DOCS_ONLY_SKIP]):
+        always_job = not pr and job in POST_ALWAYS_JOBS
+        expected_needs = ['authz'] if always_job else ['authz', 'changes']
+        expected_if = AUTHZ_ALWAYS if always_job else (
+            GITHUB_ONLY_SKIP if pr else DOCS_ONLY_SKIP)
+        if (sorted(_needs(body)) != expected_needs
+                or _job_values(body, 'if') != [expected_if]):
             findings.append(f'{job} must start alongside preflight, after authz and changes, '
                             'and skip only its classified path policy')
     gate = jobs.get('build-gate', '')
@@ -4041,7 +4159,10 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     if '[[ "$PREFLIGHT_RESULT" == "success" ]]' not in gate or 'passed "$PREFLIGHT_RESULT"' in gate:
         findings.append('build-gate must require preflight success')
     for job, variable in proofs.items():
-        if f'passed "${variable}"' not in gate:
+        if not pr and job in POST_ALWAYS_JOBS:
+            if f'[[ "${variable}" == "success" ]]' not in gate:
+                findings.append(f'build-gate must require {job} success on every event')
+        elif f'passed "${variable}"' not in gate:
             findings.append(f'build-gate must require {job} success or a docs-only skip')
     gate_steps = _steps(gate)
     if pr and (len(gate_steps) != 3 or _code(gate_steps[1]) != _code(GITHUB_ONLY_STEP)
@@ -4050,6 +4171,7 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     if not gate_steps or _code(gate_steps[-1]) != _code(GATE_STEP if pr else POST_GATE_STEP):
         findings.append('build-gate must keep the exact result policy: success or a classified docs-only skip')
     if not pr:
+        findings += native_x86_job_findings(jobs.get(NATIVE_X86_JOB, ''), name, pr=False)
         findings += post_shard_workflow_findings(jobs)
     for job in (('build',) if pr else ('build', 'build-debug', 'build-arm')):
         build = jobs.get(job, '')
@@ -4607,6 +4729,8 @@ def check_commands(source: Path, output: Path | None = None,
         CheckCommand('native-c-surface-tests',
                      [sys.executable, str(source / 'scripts/test_check_native_c_api_surface.py')],
                      parallel=True),
+        ('native-x86-release-tests',
+         [sys.executable, str(source / 'scripts/test_ci_native_x86_release.py')]),
         ('kernel-residuals-tests',
          [sys.executable, str(source / 'scripts/test_check_kernel_residuals.py')]),
         ('corpus-parity-identity-tests',
