@@ -2448,7 +2448,7 @@ class WorkflowPinTests(unittest.TestCase):
             self.assertEqual([value.strip() for value in types[1].split(",")], [build_type])
             platforms = re.findall(r"(?m)^          - os: (\S+)$", matrix[1])
             self.assertEqual(platforms, ["ubuntu-24.04"])
-            self.assert_gke_build(body, {"build": "gke-32cpu-64gb-amd64",
+            self.assert_gke_build(body, {"build": "gke-ondemand-32cpu-64gb-amd64",
                                          "build-debug": "gke-16cpu-32gb-amd64-128gb"}[job_id])
             shards = re.findall(r"(?m)^        shard: \[([0-9, ]+)\]$", matrix[1])
             self.assertEqual(len(shards), 1)
@@ -2515,7 +2515,7 @@ class WorkflowPinTests(unittest.TestCase):
     def test_ci_post_required_build_jobs_reject_runner_or_container_drift(self):
         workflow = (ROOT / ".github/workflows/ci-post.yml").read_text()
         self.ci_post_build_names(_jobs(workflow))
-        for job, label in (("build", "gke-32cpu-64gb-amd64"),
+        for job, label in (("build", "gke-ondemand-32cpu-64gb-amd64"),
                            ("build-debug", "gke-16cpu-32gb-amd64-128gb"),
                            ("build-arm", "gke-16cpu-32gb-arm64-128gb")):
             for before, after, finding in (

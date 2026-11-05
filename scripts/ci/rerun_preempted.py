@@ -37,7 +37,7 @@ ALLOWED_WORKFLOWS = {
 }
 # Bare amd64 GKE scale sets, optionally with the fleet's disk-size suffix.
 # No arm64, gkp pools or operator-dispatched entrypoints are admitted.
-FLEET_LABEL = re.compile(r'gke-(?:2|4|8|16|32)cpu-(?:4|8|16|32|64)gb-amd64(?:-(?:64|128|256|512)gb)?')
+FLEET_LABEL = re.compile(r'gke-(?:ondemand-)?(?:2|4|8|16|32)cpu-(?:4|8|16|32|64)gb-amd64(?:-(?:64|128|256|512)gb)?')
 LOSS_PATTERNS = (
     re.compile(r'The runner has received a shutdown signal\..*', re.I),
     re.compile(r'(?:The runner[: ]+.*?)?lost communication with the server\b.*', re.I),
