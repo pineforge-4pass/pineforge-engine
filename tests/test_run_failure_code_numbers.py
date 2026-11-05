@@ -15,8 +15,7 @@ V170_ADDITIONS = {
     "scratch_configuration_invalid": 68,
     "scratch_io_failed": 69,
 }
-# Every code added after 1.8.0 shares `since` 1.9.0, so the generator numbers
-# the group by name.
+# The 1.9.0 group is numbered by name, after the released prefix.
 V190_ADDITIONS = {
     "diagnostic_budget_exceeded": 70,
     "report_budget_exceeded": 71,
@@ -29,6 +28,25 @@ V190_ADDITIONS = {
     "run_quota_configuration_invalid": 78,
     "run_resource_quota_exceeded": 79,
 }
+# Preserve the current storage-budget ABI group; append the selected new map
+# code after its occupied IDs. These are contract pins, not measured output.
+V1101_ADDITIONS = {
+    "runtime_history_budget_exhausted": 80,
+    "runtime_storage_observation_incomplete": 81,
+}
+V1110_ADDITIONS = {"pine_map_capacity_exceeded": 82}
+# The selected-capacity additions are an independently closed membership list.
+# The generator orders same-release additions by name, so this tuple also pins
+# the contiguous suffix after the released map code without reading the
+# catalog or generated enum to discover its members.
+SELECTED_CAPACITY_ADDITIONS = (
+    "selected_auxiliary_rows_limit_exceeded",
+    "selected_bytes_limit_exceeded",
+    "selected_primary_rows_limit_exceeded",
+    "selected_script_bars_limit_exceeded",
+    "selected_source_rows_limit_exceeded",
+)
+EXPECTED_ENUMERATOR_COUNT = 88
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import check_run_failure_codes as registry
@@ -67,6 +85,12 @@ def released_numbers():
     return released
 
 
+def assert_selected_capacity_suffix(values):
+    first = V1110_ADDITIONS["pine_map_capacity_exceeded"] + 1
+    assert [values.get(name) for name in SELECTED_CAPACITY_ADDITIONS] == list(
+        range(first, first + len(SELECTED_CAPACITY_ADDITIONS)))
+
+
 def test_run_failure_code_numbers_stable():
     released = released_numbers()
     current = numbers((ROOT / HEADER).read_text())
@@ -75,9 +99,13 @@ def test_run_failure_code_numbers_stable():
     assert all(value > 64 for name, value in current.items() if name not in released)
     assert {name: current.get(name) for name in V170_ADDITIONS} == V170_ADDITIONS
     assert {name: current.get(name) for name in V190_ADDITIONS} == V190_ADDITIONS
-    assert set(current.values()) == set(range(80))
+    assert {name: current.get(name) for name in V1101_ADDITIONS} == V1101_ADDITIONS
+    assert {name: current.get(name) for name in V1110_ADDITIONS} == V1110_ADDITIONS
+    assert_selected_capacity_suffix(current)
+    assert set(current.values()) == set(range(EXPECTED_ENUMERATOR_COUNT))
     header = (ROOT / HEADER).read_text()
-    assert re.search(r"kRunFailureCodeCount = ([0-9]+);", header).group(1) == "80"
+    assert re.search(r"kRunFailureCodeCount = ([0-9]+);", header).group(1) == str(
+        EXPECTED_ENUMERATOR_COUNT)
 
 
 def test_run_failure_generator_appends_after_released_numbers():
@@ -87,6 +115,9 @@ def test_run_failure_generator_appends_after_released_numbers():
     assert {name: generated.get(name) for name in released} == released
     assert {name: generated.get(name) for name in V170_ADDITIONS} == V170_ADDITIONS
     assert {name: generated.get(name) for name in V190_ADDITIONS} == V190_ADDITIONS
+    assert {name: generated.get(name) for name in V1101_ADDITIONS} == V1101_ADDITIONS
+    assert {name: generated.get(name) for name in V1110_ADDITIONS} == V1110_ADDITIONS
+    assert_selected_capacity_suffix(generated)
     for path, rendered in registry.generated(catalogue).items():
         assert (ROOT / path).read_text(encoding="utf-8") == rendered, str(path)
     # A future alphabetically earlier addition cannot shift any existing code.
@@ -181,7 +212,16 @@ def test_report_channel_catalog_contract():
         ),
     }
     catalogue, _ = registry.load_catalog(ROOT)
-    assert len(catalogue["codes"]) == 79
+    released = released_numbers()
+    expected_names = (
+        (set(released) - {"none"})
+        | set(V170_ADDITIONS)
+        | set(V190_ADDITIONS)
+        | set(V1101_ADDITIONS)
+        | set(V1110_ADDITIONS)
+        | set(SELECTED_CAPACITY_ADDITIONS)
+    )
+    assert set(catalogue["codes"]) == expected_names
     for name, (cls, args, english) in expected.items():
         entry = catalogue["codes"].get(name)
         assert entry is not None, name
@@ -190,3 +230,17 @@ def test_report_channel_catalog_contract():
         assert entry["since"] == "1.9.0", name
         assert entry["args"] == args, name
         assert entry["english"] == [english], name
+
+
+def test_cr559_map_capacity_catalog_contract():
+    catalogue, _ = registry.load_catalog(ROOT)
+    entry = catalogue["codes"]["pine_map_capacity_exceeded"]
+    assert entry["class"] == "strategy_limit"
+    assert entry["retryable"] is False
+    assert entry["since"] == "1.11.0"
+    assert entry["args"] == {
+        "bar_index": {"kind": "integer"}, "code": {"kind": "identifier"},
+        "maxSize": {"kind": "integer"}, "currSize": {"kind": "integer"}}
+    assert entry["english"] == [
+        "Error on bar {bar_index}: A map cannot have more than {maxSize} "
+        "key-value pairs. The current size is {currSize}."]

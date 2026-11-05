@@ -15,6 +15,19 @@ namespace pineforge::detail {
 struct CachePolicyField {
     std::uint32_t kind;
     CacheCapacity CacheDefaults::* member = nullptr;
+    LedgerCachePolicy CacheDefaults::* ledger_member = nullptr;
+
+    constexpr CachePolicyField(std::uint32_t kind_, CacheCapacity CacheDefaults::* member_)
+        : kind(kind_), member(member_) {}
+    constexpr CachePolicyField(std::uint32_t kind_, LedgerCachePolicy CacheDefaults::* member_)
+        : kind(kind_), ledger_member(member_) {}
+    constexpr CachePolicyField(std::uint32_t kind_, std::nullptr_t) : kind(kind_) {}
+
+    bool active() const noexcept { return member != nullptr || ledger_member != nullptr; }
+    void assign(CacheDefaults& policy, CacheCapacity capacity) const {
+        if (member) policy.*member = capacity;
+        if (ledger_member) policy.*ledger_member = capacity;
+    }
 };
 
 [[noreturn]] inline void reject_cache_policy(const char* reason, const char* message) {
@@ -69,11 +82,11 @@ CacheDefaults copy_cache_policy_v1(
         seen[kind_index] = true;
         std::size_t field = 0;
         while (field != N && fields[field].kind != entry.kind) ++field;
-        if (field != N && fields[field].member != nullptr) {
+        if (field != N && fields[field].active()) {
             const CacheCapacity capacity{static_cast<std::size_t>(entry.capacity_bytes)};
             if (entry.kind == PF_CACHE_KIND_LEDGER_CACHE)
                 (void)CacheDefaults::ledger_cache_rows(capacity);
-            next.*fields[field].member = capacity;
+            fields[field].assign(next, capacity);
         }
     }
     return next;

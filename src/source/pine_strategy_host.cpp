@@ -1853,6 +1853,142 @@ void source::PineStrategyHost::scheduler_prepare_script_run(
     source_last_bar_index_ = last_bar_index_;
 }
 
+thread_local const source::PineStrategyHost* source::PineRuntimeSecurityScope::owner_ = nullptr;
+thread_local source::PineRuntimeSecurityCursor* source::PineRuntimeSecurityScope::cursor_ = nullptr;
+
+source::PineRuntimeSecurityScope::PineRuntimeSecurityScope(
+        const PineStrategyHost& owner, PineRuntimeSecurityCursor& cursor) noexcept
+    : previous_owner_(owner_), previous_cursor_(cursor_) {
+    owner_ = &owner; cursor_ = &cursor;
+}
+source::PineRuntimeSecurityScope::~PineRuntimeSecurityScope() {
+    owner_ = previous_owner_; cursor_ = previous_cursor_;
+}
+const source::PineRuntimeSecurityCursor* source::PineRuntimeSecurityScope::current(
+        const PineStrategyHost& owner) noexcept {
+    return owner_ == &owner ? cursor_ : nullptr;
+}
+std::string source::PineStrategyHost::runtime_security_timeframe(
+        const std::string& selected) const {
+    if (!selected.empty()) return selected;
+    const auto* parent = PineRuntimeSecurityScope::current(*this);
+    return parent ? parent->timeframe : script_tf_;
+}
+
+source::PineRuntimeSecurityCursor source::PineStrategyHost::make_runtime_security_cursor(
+        const std::string& selected, bool lookahead, bool gaps, bool lower_array,
+        bool heikinashi) const {
+    if (input_tf_.empty())
+        throw coded<std::runtime_error>(
+            RunFailureCode::run_options_rejected, {{"option", "input_timeframe"}},
+            "request.security cannot infer input timeframe; pass input_tf explicitly");
+    const std::string timeframe = runtime_security_timeframe(selected);
+    if (!native_calendar::parse_timeframe(timeframe)) {
+        const char* api = lower_array ? "request.security_lower_tf" : "request.security";
+        throw coded<std::runtime_error>(
+            RunFailureCode::request_timeframe_invalid, {{"api", api}},
+            std::string(api) + ": invalid timeframe literal '" + timeframe + "'");
+    }
+    PineRuntimeSecurityCursor cursor;
+    cursor.timeframe = timeframe;
+    const auto* parent = PineRuntimeSecurityScope::current(*this);
+    cursor.chart_timeframe = parent ? parent->timeframe : script_tf_;
+    cursor.timezone = syminfo_.timezone;
+    cursor.session = syminfo_.session;
+    cursor.lookahead_on = lookahead;
+    cursor.gaps_on = gaps;
+    cursor.lower_array = lower_array;
+    cursor.heikinashi = heikinashi;
+    const int requested_seconds = tf_to_seconds(timeframe);
+    const int input_seconds = tf_to_seconds(input_tf_);
+    const int chart_seconds = tf_to_seconds(cursor.chart_timeframe);
+    if (lower_array && chart_seconds <= 0)
+        throw coded<std::runtime_error>(
+            RunFailureCode::request_timeframe_unsupported,
+            {{"reason", "lower_tf_script_unknown"}},
+            "request.security_lower_tf: script timeframe is unknown");
+    if (lower_array && (requested_seconds <= 0 || requested_seconds >= chart_seconds))
+        throw coded<std::runtime_error>(
+            RunFailureCode::request_timeframe_unsupported,
+            {{"reason", "lower_tf_not_finer_than_script"}, {"script_tf", script_tf_}},
+            "request.security_lower_tf: requested timeframe must be finer than the chart timeframe");
+    if (lower_array && chart_seconds % requested_seconds != 0)
+        throw coded<std::runtime_error>(
+            RunFailureCode::request_timeframe_unsupported,
+            {{"reason", "lower_tf_not_divisor_of_script"}, {"script_tf", script_tf_}},
+            "request.security_lower_tf: requested timeframe must evenly divide the chart timeframe");
+    if (requested_seconds > 0 && input_seconds > 0 && requested_seconds < input_seconds) {
+        if (lower_array) {
+            cursor.subdivision = runtime_subdivision(input_tf_, timeframe);
+            if (!cursor.subdivision)
+                throw coded<std::runtime_error>(
+                    RunFailureCode::request_timeframe_unsupported,
+                    {{"reason", "lower_tf_not_divisor_of_input"}, {"input_tf", input_tf_}},
+                    "request.security_lower_tf: requested timeframe is not an integer divisor of input");
+        } else if (chart_seconds == -1 || input_seconds < chart_seconds) {
+            cursor.no_loaded_bars = true;
+        } else {
+            throw coded<std::runtime_error>(
+                RunFailureCode::request_timeframe_unsupported,
+                {{"reason", "finer_than_input"}, {"input_tf", input_tf_}},
+                "request.security: requested timeframe is finer than input; supply finer bars");
+        }
+    }
+    cursor.aggregator = TimeframeAggregator(timeframe, input_tf_,
+                                            cursor.timezone, cursor.session);
+    cursor.aggregator.set_early_close_completes(runtime_context_early_close_completes());
+    return cursor;
+}
+
+std::uint64_t source::PineStrategyHost::runtime_security_frontier() const {
+    const auto& service = runtime_contexts();
+    if (service.active_context().serial) return service.callback_frontier();
+    // A lazy seal may calculate the preceding chart bar after the next input
+    // was admitted. Its timestamp is not part of that chart bar's frontier.
+    return service.frontier_before(chart_time_close());
+}
+
+void source::PineRuntimeSecurityCursor::feed(
+        const RuntimeContextEvent& event, const Delivery& deliver,
+        const std::function<void()>& begin_chart) {
+    if (prior_input == std::numeric_limits<std::int64_t>::min()
+        || tf_change(prior_input, event.bar.timestamp, chart_timeframe, timezone, session)) {
+        chart_open = event.bar.timestamp;
+        sub_bar_index = 0;
+        begin_chart();
+    }
+    prior_input = event.bar.timestamp;
+    if (no_loaded_bars) return;
+    if (subdivision) {
+        for (const auto& sub_bar : runtime_subdivide(event.bar, *subdivision)) {
+            slot_new = true;
+            ++requested_index;
+            ta::BarContextScope context(requested_index, 0);
+            deliver(sub_bar, true);
+            ++sub_bar_index;
+        }
+        return;
+    }
+    auto aggregate = aggregator.feed(event.bar);
+    if (!aggregate.is_complete && (lower_array || !lookahead_on)) return;
+    slot_new = aggregate.bar.timestamp != slot_open;
+    slot_open = aggregate.bar.timestamp;
+    if (slot_new) ++requested_index;
+    if (heikinashi) {
+        const double close = (aggregate.bar.open + aggregate.bar.high
+                              + aggregate.bar.low + aggregate.bar.close) / 4.0;
+        const double open = ha_seeded ? (ha_open + ha_close) / 2.0
+                                      : (aggregate.bar.open + aggregate.bar.close) / 2.0;
+        aggregate.bar.high = std::max(aggregate.bar.high, std::max(open, close));
+        aggregate.bar.low = std::min(aggregate.bar.low, std::min(open, close));
+        aggregate.bar.open = open; aggregate.bar.close = close;
+        if (aggregate.is_complete) { ha_open = open; ha_close = close; ha_seeded = true; }
+    }
+    ta::BarContextScope context(requested_index, 0);
+    deliver(aggregate.bar, aggregate.is_complete);
+    if (lower_array) ++sub_bar_index;
+}
+
 // Live-runtime tail (spec §3.1): the horizon freeze of last_bar_index_ /
 // last_bar_time_. Moved verbatim from src/engine_run.cpp (the source-runtime extraction); the
 // geometry rules are documented on the declaration.

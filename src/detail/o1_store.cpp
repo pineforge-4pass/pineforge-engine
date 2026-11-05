@@ -659,7 +659,10 @@ bool StoreImpl::resize(Id id, std::uint64_t bytes) {
   const std::uint64_t old_chunks = chunk_count(header.size);
   const std::uint64_t new_chunks = chunk_count(bytes);
   ImplicitTx transaction(this);
-  for (std::uint64_t chunk = 0; chunk < new_chunks; ++chunk) {
+  const bool growing = bytes > header.size;
+  const std::uint64_t first_chunk =
+      growing ? header.size / chunk_bytes_ : 0;
+  for (std::uint64_t chunk = first_chunk; chunk < new_chunks; ++chunk) {
     const std::uint64_t target = chunk_length(chunk, bytes);
     const bool exists = chunk < old_chunks;
     const std::uint64_t current = exists ? chunk_length(chunk, header.size) : 0;
@@ -676,18 +679,20 @@ bool StoreImpl::resize(Id id, std::uint64_t bytes) {
     put_chunk(id, chunk, chunk_buffer_.get(),
               prefix + static_cast<std::size_t>(target));
   }
-  for (std::uint64_t chunk = 0; chunk < old_chunks; ++chunk) {
-    if (chunk >= new_chunks) {
-      erase_chunk(id, chunk);
-      continue;
+  if (!growing) {
+    for (std::uint64_t chunk = 0; chunk < old_chunks; ++chunk) {
+      if (chunk >= new_chunks) {
+        erase_chunk(id, chunk);
+        continue;
+      }
+      const std::uint64_t target = chunk_length(chunk, bytes);
+      const std::uint64_t current = chunk_length(chunk, header.size);
+      if (target >= current) continue;
+      const std::size_t prefix = value_prefix(chunk);
+      load_chunk(id, chunk, prefix + static_cast<std::size_t>(current));
+      put_chunk(id, chunk, chunk_buffer_.get(),
+                prefix + static_cast<std::size_t>(target));
     }
-    const std::uint64_t target = chunk_length(chunk, bytes);
-    const std::uint64_t current = chunk_length(chunk, header.size);
-    if (target >= current) continue;
-    const std::size_t prefix = value_prefix(chunk);
-    load_chunk(id, chunk, prefix + static_cast<std::size_t>(current));
-    put_chunk(id, chunk, chunk_buffer_.get(),
-              prefix + static_cast<std::size_t>(target));
   }
   const std::uint64_t first_length = chunk_length(0, bytes);
   load_chunk(id, 0, static_cast<std::size_t>(kHeaderBytes + first_length));

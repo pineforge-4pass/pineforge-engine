@@ -78,6 +78,9 @@ public:
         return *object_;
     }
     bool bound() const { return object_.has_value(); }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_storage(out, object_);
+    }
 
     template <class Make, class... Args>
     decltype(auto) compute(Make&& make, Args&&... args) {
@@ -114,6 +117,9 @@ public:
     double at(long long bar) const;
     WindowCacheCapacity cache_capacity() const { return values_.cache_capacity(); }
     WindowCacheStats cache_stats() const { return values_.cache_stats(); }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        values_.observe_owned_storage(out);
+    }
 
 private:
     void ensure_slots(std::size_t keep);
@@ -169,6 +175,9 @@ public:
     };
     Result update(double src, long long length, bool advance, bool want_max,
                   const char* function);
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        history_.observe_owned_storage(out);
+    }
 
 private:
     struct Cache {
@@ -198,6 +207,9 @@ class SeriesHighest {
 public:
     SeriesHighest() = default;
     explicit SeriesHighest(WindowCacheCapacity cache) : core_(cache) {}
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        core_.observe_owned_storage(out);
+    }
     double compute(double src, double length);
     double recompute(double src, double length);
 };
@@ -208,6 +220,9 @@ class SeriesLowest {
 public:
     SeriesLowest() = default;
     explicit SeriesLowest(WindowCacheCapacity cache) : core_(cache) {}
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        core_.observe_owned_storage(out);
+    }
     double compute(double src, double length);
     double recompute(double src, double length);
 };
@@ -218,6 +233,9 @@ class SeriesHighestBars {
 public:
     SeriesHighestBars() = default;
     explicit SeriesHighestBars(WindowCacheCapacity cache) : core_(cache) {}
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        core_.observe_owned_storage(out);
+    }
     double compute(double src, double length);
     double recompute(double src, double length);
 };
@@ -228,6 +246,9 @@ class SeriesLowestBars {
 public:
     SeriesLowestBars() = default;
     explicit SeriesLowestBars(WindowCacheCapacity cache) : core_(cache) {}
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        core_.observe_owned_storage(out);
+    }
     double compute(double src, double length);
     double recompute(double src, double length);
 };
@@ -252,6 +273,9 @@ public:
                                  double close);
     ta::SupertrendResult recompute(double factor, double atr_period, double high, double low,
                                    double close);
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_storage(out, atr_);
+    }
 
 private:
     struct State {

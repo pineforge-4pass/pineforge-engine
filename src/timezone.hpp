@@ -9,12 +9,13 @@ namespace tz_util {
 
 std::string normalize_timezone_for_posix(const std::string& tz);
 
-// RAII guard: swaps the process ``TZ`` environment to ``tz`` (lazily — a
-// same-zone request skips the setenv/tzset pair) and holds a process-global
-// mutex for the guard's ENTIRE lifetime, so the caller's localtime_r /
-// mktime decomposition inside the scope is safe against concurrent threads
-// running under a different timezone. Do not nest two ScopedTimezone
-// scopes on the same thread — the mutex is non-recursive.
+// RAII guard: swaps the process ``TZ`` environment to the normalized ``tz``
+// unless getenv("TZ") already matches, and holds this engine image's mutex
+// for the guard's ENTIRE lifetime, including localtime_r / mktime calls.
+// Independently linked engine images have separate mutexes; cross-image
+// parallel atomicity remains open. TZ is intentionally not restored.
+// Do not nest two ScopedTimezone scopes on the same thread — the mutex
+// is non-recursive.
 class ScopedTimezone {
 public:
     explicit ScopedTimezone(const std::string& tz);

@@ -1,4 +1,5 @@
 #include <pineforge/detail/run_quota.hpp>
+#include <pineforge/owned_storage.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -577,14 +578,54 @@ QuotaMessage decode_quota_message(const unsigned char* data, std::size_t size) {
 }
 
 struct RunQuotaEndpoint {
+    // The rebound shared allocations retain this ledger through strong/weak
+    // lifetimes. Records are non-owning; neither the ledger nor its records
+    // hold a shared_ptr back to this endpoint or to its retained snapshot.
+    OwnedAllocator<RunQuotaEndpoint> allocation;
     int fd = -1;
     std::uint64_t process = 0;
     QuotaRole role = QuotaRole::worker;
-    std::mutex mutex;
+    mutable std::mutex mutex;
     std::uint64_t sequence = 0;
     std::uint64_t nonce_hi = 0, nonce_lo = 0;
     bool finished = false;
     std::shared_ptr<const QuotaSnapshot> refusal;
+
+    explicit RunQuotaEndpoint(const OwnedAllocator<RunQuotaEndpoint>& owner)
+        : allocation(owner) {}
+
+    // Serialize the retained graph with protocol mutation, including allocation
+    // records and the refusal latch. No attachment, RPC or descriptor query.
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        struct PreserveErrno {
+            int value;
+            ~PreserveErrno() { errno = value; }
+        } preserve_errno{errno};
+        try {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (!out.visit(*this)) return;
+            allocation.observe_owned_storage(out);
+            if (!allocation.contains(this, sizeof(*this))) {
+                out.incomplete(OwnedStorageUnsupported::allocator);
+                out.incomplete(OwnedStorageUnsupported::scratch_quota_endpoint);
+            }
+            if (!refusal) return;
+            if (!allocation.contains(refusal.get(), sizeof(*refusal))) {
+                out.incomplete(OwnedStorageUnsupported::allocator);
+                out.incomplete(OwnedStorageUnsupported::scratch_quota_endpoint);
+            }
+            if (!out.visit(*refusal)) return;
+            // The snapshot's inline RunFailureValue is inside its tracked request.
+            // The failure's public hook adds only the external JSON ownership: a
+            // factory-minted domain is counted once; an unknown control or foreign
+            // pointee stays explicitly incomplete. No other flag is cleared here.
+            refusal->failure.observe_owned_storage(out);
+        } catch (...) {
+            // A failed mutex acquisition establishes no safe graph observation.
+            // Keep noexcept and known lower bounds, without inventing a total.
+            out.incomplete(OwnedStorageUnsupported::scratch_quota_endpoint);
+        }
+    }
 
     ~RunQuotaEndpoint() {
 #if defined(__unix__) || defined(__APPLE__)
@@ -593,7 +634,8 @@ struct RunQuotaEndpoint {
     }
 
     [[noreturn]] void fail(QuotaSnapshot snapshot) {
-        if (!refusal) refusal = std::make_shared<const QuotaSnapshot>(std::move(snapshot));
+        if (!refusal)
+            refusal = std::allocate_shared<const QuotaSnapshot>(allocation, std::move(snapshot));
         throw coded<std::runtime_error>(refusal->failure, "run quota refused");
     }
 
@@ -813,7 +855,8 @@ RunQuota RunQuota::from_fd(int fd, QuotaRole role) {
         }
         return RunQuota(std::move(endpoint));
     }
-    auto endpoint = std::make_shared<RunQuotaEndpoint>();
+    OwnedAllocator<RunQuotaEndpoint> allocation;
+    auto endpoint = std::allocate_shared<RunQuotaEndpoint>(allocation, allocation);
     endpoint->fd = ::fcntl(fd, F_DUPFD_CLOEXEC, 3);
     if (endpoint->fd < 0) {
         record_admission_diagnostic("dup_failed inherited_fd=%d dup_fd=%d errno=%d", fd, endpoint->fd, errno);
@@ -958,6 +1001,14 @@ std::shared_ptr<const QuotaSnapshot> RunQuota::refusal() const {
     if (!endpoint_) return {};
     std::lock_guard<std::mutex> lock(endpoint_->mutex);
     return endpoint_->refusal;
+}
+
+void RunQuota::observe_owned_storage(OwnedStorage& out) const noexcept {
+    if (endpoint_) endpoint_->observe_owned_storage(out);
+}
+
+void QuotaTicket::observe_owned_storage(OwnedStorage& out) const noexcept {
+    if (endpoint_) endpoint_->observe_owned_storage(out);
 }
 
 void RunQuota::check() const {

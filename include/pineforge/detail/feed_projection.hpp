@@ -243,9 +243,11 @@ class ScratchFeedReader final : public FeedReader<Row> {
     static_assert(std::is_trivially_copyable_v<Row>);
     friend class FeedProjectionBuilder<Row>;
 public:
-    explicit ScratchFeedReader(const std::string& directory = {})
+    explicit ScratchFeedReader(const std::string& directory = {},
+                               const ScratchIoPolicy& policy = {})
         : file_(ScratchFile::IoRaiser::auxiliary) {
         file_.bound_cache();
+        file_.set_scratch_io_policy(policy);
         file_.set_directory(directory);
     }
     std::size_t size() const noexcept override { return count_; }
@@ -317,11 +319,12 @@ class FeedProjectionBuilder {
     static constexpr std::size_t kRows = 4096 / sizeof(Row);
 public:
     explicit FeedProjectionBuilder(const std::string& directory = {},
-                                   bool resident_if_single_page = false)
-        : directory_(directory),
+                                   bool resident_if_single_page = false,
+                                   const ScratchIoPolicy& policy = {})
+        : directory_(directory), scratch_io_policy_(policy),
           resident_if_single_page_(resident_if_single_page) {
         if (!resident_if_single_page_)
-            reader_ = std::make_shared<ScratchFeedReader<Row>>(directory_);
+            reader_ = std::make_shared<ScratchFeedReader<Row>>(directory_, scratch_io_policy_);
     }
     FeedProjectionBuilder(const FeedProjectionBuilder&) = delete;
     FeedProjectionBuilder& operator=(const FeedProjectionBuilder&) = delete;
@@ -358,7 +361,7 @@ public:
     }
 private:
     void spill_to_scratch() {
-        reader_ = std::make_shared<ScratchFeedReader<Row>>(directory_);
+        reader_ = std::make_shared<ScratchFeedReader<Row>>(directory_, scratch_io_policy_);
         flush();
     }
 
@@ -372,6 +375,7 @@ private:
         buffered_ = 0;
     }
     std::string directory_;
+    ScratchIoPolicy scratch_io_policy_{};
     bool resident_if_single_page_ = false;
     bool published_ = false;
     std::shared_ptr<ScratchFeedReader<Row>> reader_;

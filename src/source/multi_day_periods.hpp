@@ -95,6 +95,14 @@ struct MultiDayFeeds {
 
 namespace multi_day_detail {
 
+// One ledger for each shared allocation, including the STL's actual rebound
+// object/control request. Its owner keeps a copy of that same allocator.
+template<class T, class... Args>
+std::shared_ptr<T> make_owned(Args&&... args) {
+    OwnedAllocator<T> allocation;
+    return std::allocate_shared<T>(allocation, allocation, std::forward<Args>(args)...);
+}
+
 // A session day a feed holds: its ordinal (days since 1970-01-01 on the
 // session clock) and the stamp of its bar.
 struct HeldDay {
@@ -104,6 +112,23 @@ struct HeldDay {
 
 // What planning learned of the run; immutable once the source exists.
 struct Params {
+    explicit Params(const OwnedAllocator<Params>& allocation) : allocation_(allocation) {}
+
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        if (!out.visit(*this)) return;
+        allocation_.observe_owned_storage(out);
+        if (!allocation_.contains(this, sizeof(*this)))
+            out.incomplete(OwnedStorageUnsupported::allocator);
+        observe_owned_members(out, tz, session, calendar.timezone(), calendar.literal());
+        // SessionWindow owns only its inline minute/flag fields. The public
+        // calendar accessors expose every external owner (two strings and
+        // this vector); use its capacity, not its live window count.
+        const auto& windows = calendar.windows();
+        if (out.claim(windows.data()))
+            out.payload(out.product(windows.capacity(), sizeof(native_calendar::SessionWindow)));
+        // chart/aux are immutable borrowed OHLCV, never copied or charged.
+    }
+
     int days = 0;
     bool exchange_calendar = false;
     bool every_day = false;
@@ -119,6 +144,9 @@ struct Params {
     std::int64_t last = 0;
     std::int64_t first_year = 0;  // the year of the first held day
     std::int64_t last_year = 0;   // the year after the last held day's
+
+private:
+    OwnedAllocator<Params> allocation_;
 };
 
 // The session days one feed's bars fall in, in feed order. An intraday bar
@@ -298,6 +326,11 @@ public:
     // opening at or before the first held day.
     bool failed() const { return failed_; }
 
+    void observe_owned_storage(OwnedStorage&) const noexcept {
+        // Only scalar/inline walk state. params_, and the chart/aux pointers
+        // inside held_, borrow the Params observed by the containing Source.
+    }
+
 private:
     struct Open {
         std::int64_t date = 0;   // the trading date (days since 1970-01-01)
@@ -360,9 +393,11 @@ private:
 // generator that restarts when asked about an instant before them.
 class Source final : public TimeframeAggregator::PeriodSource {
 public:
-    Source(std::shared_ptr<const Params> params, std::int64_t first_stamp,
+    Source(const OwnedAllocator<Source>& allocation,
+           std::shared_ptr<const Params> params, std::int64_t first_stamp,
            std::int64_t last_stamp)
-        : params_(std::move(params)), first_stamp_(first_stamp), last_stamp_(last_stamp) {
+        : allocation_(allocation), params_(std::move(params)),
+          first_stamp_(first_stamp), last_stamp_(last_stamp) {
         recent_.reserve(kBuffered + 1);
     }
 
@@ -381,6 +416,20 @@ public:
     std::int64_t last_stamp() const override { return last_stamp_; }
 
     std::size_t stamps_held() const override { return recent_.size() + (has_next_ ? 1u : 0u); }
+
+    void observe_owned_storage(OwnedStorage& out) const noexcept override {
+        if (!out.visit(*this)) return;
+        allocation_.observe_owned_storage(out);
+        if (!allocation_.contains(this, sizeof(*this)))
+            out.incomplete(OwnedStorageUnsupported::allocator);
+        observe_owned_members(out, *params_, recent_);
+        if (stamps_) {
+            // make_unique<Stamps> requests exactly this complete public
+            // object size; no shared control or private node layout exists.
+            if (out.claim(stamps_.get())) out.metadata(sizeof(*stamps_));
+            pineforge::observe_owned_storage(out, *stamps_);
+        }
+    }
 
 private:
     static constexpr std::size_t kBuffered = kMultiDayWindow - 1;
@@ -409,6 +458,7 @@ private:
         has_next_ = stamps_->next(next_);
     }
 
+    OwnedAllocator<Source> allocation_;
     std::shared_ptr<const Params> params_;
     std::int64_t first_stamp_;
     std::int64_t last_stamp_;
@@ -418,9 +468,9 @@ private:
     bool has_next_ = false;
 };
 
-// Separate fallback classes keep the ordered generator's code, object sizes
-// and allocation path unchanged. A year's slots are the old map restricted
-// to that year, rebuilt from the beginning of both feeds on every reload.
+// Separate fallback classes keep the ordered generator free of rescan arrays.
+// A year's slots are the old map restricted to that year, rebuilt from the
+// beginning of both feeds on every reload.
 class RescannedHeldDays {
 public:
     explicit RescannedHeldDays(const Params& params) : params_(&params) {}
@@ -551,6 +601,11 @@ public:
 
     bool failed() const { return failed_; }
 
+    void observe_owned_storage(OwnedStorage&) const noexcept {
+        // The one-year arrays in held_ are inline in this generator's unique
+        // allocation. All other state is scalar or borrows the source's Params.
+    }
+
 private:
     struct Open {
         std::int64_t date = 0;
@@ -612,9 +667,11 @@ private:
 // generator, without adding a fallback field or dispatch to Source.
 class RescannedSource final : public TimeframeAggregator::PeriodSource {
 public:
-    RescannedSource(std::shared_ptr<const Params> params, std::int64_t first_stamp,
+    RescannedSource(const OwnedAllocator<RescannedSource>& allocation,
+                    std::shared_ptr<const Params> params, std::int64_t first_stamp,
                     std::int64_t last_stamp)
-        : params_(std::move(params)), first_stamp_(first_stamp), last_stamp_(last_stamp) {
+        : allocation_(allocation), params_(std::move(params)),
+          first_stamp_(first_stamp), last_stamp_(last_stamp) {
         recent_.reserve(kBuffered + 1);
     }
 
@@ -633,6 +690,18 @@ public:
     std::int64_t last_stamp() const override { return last_stamp_; }
 
     std::size_t stamps_held() const override { return recent_.size() + (has_next_ ? 1u : 0u); }
+
+    void observe_owned_storage(OwnedStorage& out) const noexcept override {
+        if (!out.visit(*this)) return;
+        allocation_.observe_owned_storage(out);
+        if (!allocation_.contains(this, sizeof(*this)))
+            out.incomplete(OwnedStorageUnsupported::allocator);
+        observe_owned_members(out, *params_, recent_);
+        if (stamps_) {
+            if (out.claim(stamps_.get())) out.metadata(sizeof(*stamps_));
+            pineforge::observe_owned_storage(out, *stamps_);
+        }
+    }
 
 private:
     static constexpr std::size_t kBuffered = kMultiDayWindow - 1;
@@ -657,6 +726,7 @@ private:
         has_next_ = stamps_->next(next_);
     }
 
+    OwnedAllocator<RescannedSource> allocation_;
     std::shared_ptr<const Params> params_;
     std::int64_t first_stamp_;
     std::int64_t last_stamp_;
@@ -703,7 +773,7 @@ inline std::shared_ptr<TimeframeAggregator::PeriodSource> make_rescanned_source(
         }
         if (!have_stamp || stamps->failed()) return nullptr;
     }
-    return std::make_shared<RescannedSource>(std::move(params), first_stamp, last_stamp);
+    return make_owned<RescannedSource>(std::move(params), first_stamp, last_stamp);
 }
 
 }  // namespace multi_day_detail
@@ -723,7 +793,7 @@ inline std::shared_ptr<TimeframeAggregator::PeriodSource> make_multi_day_period_
     NativeDayPartitionScope nominal(nullptr);
     auto calendar = native_calendar::parse_session(feeds.session, feeds.tz);
     if (!calendar) return nullptr;
-    auto params = std::make_shared<detail::Params>();
+    auto params = detail::make_owned<detail::Params>();
     params->days = feeds.days;
     params->exchange_calendar = feeds.exchange_calendar;
     params->every_day = feeds.session.empty() || feeds.session == "24x7";
@@ -764,7 +834,7 @@ inline std::shared_ptr<TimeframeAggregator::PeriodSource> make_multi_day_period_
         }
         if (!any || stamps.failed()) return nullptr;
     }
-    return std::make_shared<detail::Source>(std::move(params), first_stamp, last_stamp);
+    return detail::make_owned<detail::Source>(std::move(params), first_stamp, last_stamp);
 }
 
 }  // namespace pineforge::source

@@ -5,7 +5,7 @@
 #include <pineforge/selected_window.h>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 int native_set_selected_window_v1(
     BacktestEngine*, const pf_selected_window_config_v1*) noexcept;
 int native_set_execution_observer_v1(
