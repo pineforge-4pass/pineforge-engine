@@ -441,15 +441,16 @@ jobs:
           printf '%s\n' "shards: $SHARD_RESULT"
           [[ "$SHARD_RESULT" == "success" ]]
 
-  # GKE arm64 cells run the same verification steps as the amd64 post jobs.
+  # GKE arm64 shards keep engine coverage; Release CI-script self-tests run on amd64.
   build-arm:
-    name: build (ubuntu-24.04-arm, ${{ matrix.build_type }})
+    name: build-shard (ubuntu-24.04-arm, ${{ matrix.build_type }}, ${{ matrix.shard }}/4)
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     strategy:
       fail-fast: false
       matrix:
         build_type: [Release, Debug]
+        shard: [1, 2, 3, 4]
     runs-on: gke-16cpu-32gb-arm64-128gb
 
     steps:
@@ -508,7 +509,7 @@ jobs:
           PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: '0'
         if: ${{ needs.authz.result == 'success' }}
         run: |
-          python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
+          python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/4 ${{ matrix.build_type == 'Release' && '--exclude-label ci-script' || '' }}
 
       - name: Stage and summarize diagnostics
         if: ${{ always() && needs.authz.result == 'success' }}
@@ -518,7 +519,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ci-diagnostics-ubuntu-24.04-arm-${{ matrix.build_type }}
+          name: ci-diagnostics-ubuntu-24.04-arm-${{ matrix.build_type }}-shard-${{ matrix.shard }}-of-4
           path: ci-diagnostics/
           if-no-files-found: warn
 
@@ -529,13 +530,13 @@ jobs:
   # instrumentation propagates into every test binary (CMakeLists.txt option
   # PINEFORGE_ENABLE_SANITIZERS).
   sanitizers:
-    name: sanitizers-shard (${{ matrix.shard }}/4)
+    name: sanitizers-shard (${{ matrix.shard }}/8)
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     runs-on: gke-32cpu-64gb-amd64-256gb
     env:
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
@@ -574,7 +575,7 @@ jobs:
 
       - name: Verify (sanitizers)
         if: ${{ needs.authz.result == 'success' }}
-        run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/4
+        run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/8
 
       - name: Stage and summarize diagnostics
         if: ${{ always() && needs.authz.result == 'success' }}
@@ -584,7 +585,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ci-diagnostics-sanitizers-shard-${{ matrix.shard }}-of-4
+          name: ci-diagnostics-sanitizers-shard-${{ matrix.shard }}-of-8
           path: ci-diagnostics/
           if-no-files-found: warn
 

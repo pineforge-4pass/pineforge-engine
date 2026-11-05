@@ -140,5 +140,23 @@
       "annotation_level": "failure",
       "message": "Process completed with exit code 1."
     }
-  ]
+  ],
+  "log_files": [
+    "job-125518846442.log",
+    "job-125760264898.log"
+  ],
+  "capture": {
+    "job-125518846442.log": [
+      "2026-11-02T20:14:41.3063508Z ##[error]Process completed with exit code 1.\n"
+    ],
+    "job-125760264898.log": [
+      "2026-11-03T06:17:42.1290045Z \u001b[36;1mpython3 -m pip install --disable-pip-version-check --no-input \\\u001b[0m\n",
+      "2026-11-03T06:17:42.1290763Z \u001b[36;1m  --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt\u001b[0m\n",
+      "2026-11-03T06:17:44.4077827Z \u001b[36;1msudo apt-get update\u001b[0m\n",
+      "2026-11-03T06:17:44.4078408Z \u001b[36;1msudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache\u001b[0m\n",
+      "2026-11-03T06:17:50.0756396Z \u001b[36;1mpython3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs \"$(getconf _NPROCESSORS_ONLN)\" --ccache --ctest-shard 4/4\u001b[0m\n",
+      "2026-11-03T06:29:00.0326985Z ##[error]The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.\n",
+      "2026-11-03T06:29:01.0112153Z ##[error]The operation was canceled.\n"
+    ]
+  }
 }

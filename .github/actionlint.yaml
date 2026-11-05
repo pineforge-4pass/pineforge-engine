@@ -18,5 +18,7 @@ self-hosted-runner:
     - gkp-2cpu-4gb-amd64
     - gkp-4cpu-8gb-amd64
     - gkp-16cpu-32gb-amd64-128gb
+    - gkp-od-4cpu-8gb-amd64
+    - gkp-od-16cpu-32gb-amd64-128gb
     - pf-ci-x64
     - pf-ci-x64-16

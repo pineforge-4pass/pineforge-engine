@@ -7664,6 +7664,25 @@ if(PINEFORGE_COHORT_EXPOSURE_FIXTURES)
     endforeach()
 endif()
 
+# These CI-script self-tests are independent of CPU architecture. The arm
+# workflow excludes only this explicit population; amd64 Release runs it all.
+# R4-D L6a's clear resets LABELS on the verifier slices, so keep this APPEND
+# after every label clear and the slow loop (the slices retain slow), and
+# before the CR-150 include block: check_cr150_cmake_d allows only fences
+# after it, and ci_preflight pins the fast-row registration as the tail.
+set_property(TEST ${PINEFORGE_CI_VERIFY_SLICES}
+    test_ci_verify_slices_cover test_ci_verify_fetch_lock
+    test_ci_preflight_slice_1
+    test_ci_preflight_slice_2
+    test_ci_preflight_slice_3
+    test_ci_preflight_slice_4
+    test_ci_preflight_slice_5
+    test_ci_preflight_slice_6
+    test_ci_preflight_slice_7
+    test_ci_preflight_slice_8
+    test_ci_preflight_slices_cover
+    APPEND PROPERTY LABELS ci-script)
+
 # CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
 file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
 list(SORT CR150_LANE_CMAKE)
