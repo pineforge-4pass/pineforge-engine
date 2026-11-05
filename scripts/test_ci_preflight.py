@@ -4164,7 +4164,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.assertCountEqual(self.failures(lines), [
             self.missing('ci-post.yml', label)
             for label in (GKE_2, GKE_8, GKE_16, GKE_16_128,
-                              GKE_ONDEMAND_32, GKE_ONDEMAND_32_256,
+                              GKE_32, GKE_ONDEMAND_32, GKE_ONDEMAND_32_256,
                               GKE_ARM)])
 
     def test_matrix_include_and_axis_resolve_the_runner_in_a_real_workflow(self):
@@ -9821,7 +9821,8 @@ class ActionlintRunnerLabels(unittest.TestCase):
                 (GKP_2, (('release-ruleset-probe.yml', 'probe'), ('promote-baseline.yml', 'promote'))),
                 (GKP_OD_4, (('release.yml', 'release'), ('release.yml', 'notify-hub'))),
                 (GKP_OD_PREBUILT, (('release.yml', 'prebuilt'),)),
-                ('gke-32cpu-64gb-amd64', (('gke-pr.yml', 'build'),)),
+                ('gke-32cpu-64gb-amd64', (('gke-pr.yml', 'build'),
+                                           ('ci-post.yml', NATIVE_X86_JOB))),
                 ('gke-ondemand-32cpu-64gb-amd64', (('ci-post.yml', 'build'),)),
                 ('gke-ondemand-32cpu-64gb-amd64-256gb', (('ci-post.yml', 'sanitizers'),)),
                 ('gke-16cpu-32gb-amd64', (('ci-post.yml', 'kernel-only'), ('corpus-parity.yml', 'corpus-parity'))),
