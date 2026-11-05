@@ -87,7 +87,7 @@ Post Release/Debug/kernel, native shards and post sanitizers use fixed bare GKE 
 The two native-live sanitizer profiles use an exact runner matrix. All GKE jobs run directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
 Hosted `ubuntu-24.04` runs PR `authz`, admission, `legs` and `result` jobs, and `docs.yml`'s `build`; secret-free post guards and aggregates use bare scalar GKE names. These light, secret-free jobs need no VM-only tools, mounts or caches.
 The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use `gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.
-Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 37 GKE job instances: amd64 32 CPU default/256 GB labels carry 5/4 jobs, amd64 16 CPU default/128/256 GB labels carry 3/3/1, amd64 8/4/2 CPU labels carry 7/5/7, and arm64 16 CPU 128 GB carries 2; each label's static cap is 8.
+Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 37 GKE job instances: the spot amd64 32 CPU label carries 3 jobs, and the on-demand amd64 32 CPU default/256 GB labels carry 4/8 jobs; amd64 16 CPU default/128/256 GB labels carry 3/3/1, amd64 8/4/2 CPU labels carry 7/5/7, and arm64 16 CPU 128 GB carries 2; each label's static cap is 8.
 
 The manual `release-ruleset-probe.yml` workflow runs `authz` on
 bare scalar `gke-2cpu-4gb-amd64` and `probe` on `gkp-2cpu-4gb-amd64`.
@@ -1639,7 +1639,7 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | Workflow | Events/callers | Inline jobs' `runs-on` |
 | --- | --- | --- |
 | `ci.yml` | Unfiltered `pull_request` | `authz`: hosted `ubuntu-24.04`; no proof legs |
-| `gke-pr.yml` | `pull_request_target` to `main` | Hosted admission/result; GKE preflight and proof legs; Debug `gke-16cpu-32gb-amd64-128gb`, arm64 `gke-16cpu-32gb-arm64-128gb` |
+| `gke-pr.yml` | `pull_request_target` to `main` | Hosted admission/result; GKE preflight and proof legs; native x86 Release `build-x86-gcc133` on spot `gke-32cpu-64gb-amd64`; Debug `gke-16cpu-32gb-amd64-128gb`, arm64 `gke-16cpu-32gb-arm64-128gb` |
 | `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: hosted `ubuntu-24.04` |
 | `rerun-preempted.yml` | `workflow_run`: completed `CI post-merge` push/schedule runs on `main` | `rerun`: hosted `ubuntu-24.04` |
 | `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Seven light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: Release `gke-ondemand-32cpu-64gb-amd64`, sanitizers `gke-ondemand-32cpu-64gb-amd64-256gb`, Debug `gke-16cpu-32gb-amd64-128gb`, kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64-128gb` |

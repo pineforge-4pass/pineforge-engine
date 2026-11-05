@@ -2734,7 +2734,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             'The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use '
             '`gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.',
             'Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 37 GKE job instances: '
-            "amd64 32 CPU default/256 GB labels carry 5/4 jobs, amd64 16 CPU default/128/256 GB labels carry 3/3/1, amd64 8/4/2 CPU labels carry 7/5/7, and arm64 16 CPU 128 GB carries 2; each label's static cap is 8.",
+            "the spot amd64 32 CPU label carries 3 jobs, and the on-demand amd64 32 CPU default/256 GB labels carry 4/8 jobs; amd64 16 CPU default/128/256 GB labels carry 3/3/1, amd64 8/4/2 CPU labels carry 7/5/7, and arm64 16 CPU 128 GB carries 2; each label's static cap is 8.",
             'The amd64 post build shards and the two arm64 post cells use bare scalar',
             'Hosted exceptions cover PR light jobs and the existing hosted release cells; post light jobs use bare scalar GKE names.',
             '`native-live.yml` runs four `native` shards on `gke-8cpu-16gb-amd64`;\n'
