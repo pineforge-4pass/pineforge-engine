@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pineforge/bar.hpp>
 #include <pineforge/run_failure_codes.hpp>
 
 #include <cstdint>
@@ -48,6 +49,10 @@ struct RecordEvent {
     std::int64_t timestamp_ms = 0;
     bool has_script_bucket = false;
     std::int64_t script_bucket_key = 0;
+    // Borrowed only during observation. The driver always supplies the same
+    // validated Bar that the Primary sink subsequently receives. Callbacks
+    // must not retain this pointer or the tentative State reference.
+    const Bar* bar = nullptr;
 };
 
 void reserve(std::uint64_t& used, const Bound& bound, std::uint64_t requested,
