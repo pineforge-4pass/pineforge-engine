@@ -58,7 +58,8 @@ class ParallelCommand(tuple):
 
 GKE_32 = 'gke-32cpu-64gb-amd64'
 GKE_16 = 'gke-16cpu-32gb-amd64'
-GKE_32_256 = 'gke-32cpu-64gb-amd64-256gb'
+GKE_ONDEMAND_32 = 'gke-ondemand-32cpu-64gb-amd64'
+GKE_ONDEMAND_32_256 = 'gke-ondemand-32cpu-64gb-amd64-256gb'
 GKE_16_128 = 'gke-16cpu-32gb-amd64-128gb'
 GKE_16_256 = 'gke-16cpu-32gb-amd64-256gb'
 GKE_8 = 'gke-8cpu-16gb-amd64'
@@ -100,8 +101,8 @@ EXPECTED_GKE_JOBS = {
                    'build-arm': GKE_ARM,
                    'corpus-parity-subset': GKE_PR_8},
     'ci-post.yml': {'preflight': GKE_8, 'preflight-slow': GKE_8,
-                    'build': GKE_32, 'build-debug': GKE_16_128,
-                    'sanitizers': GKE_32_256, 'kernel-only': GKE_16, 'build-arm': GKE_ARM},
+                    'build': GKE_ONDEMAND_32, 'build-debug': GKE_16_128,
+                    'sanitizers': GKE_ONDEMAND_32_256, 'kernel-only': GKE_16, 'build-arm': GKE_ARM},
     'corpus-parity.yml': {'corpus-parity': GKE_16, 'corpus-parity-subset': GKE_8},
     'native-live.yml': {'native-live': NATIVE_RUNNER, 'native-live-shards': GKE_8},
 }
@@ -228,8 +229,8 @@ LIGHT_JOB_IDS = {
     'release-ruleset-probe.yml': ('authz',),
 }
 HOSTED_SHARD_JOB_LABELS = {
-    'build': GKE_32, 'build-debug': GKE_16_128,
-    'sanitizers': GKE_32_256, 'kernel-only': GKE_16,
+    'build': GKE_ONDEMAND_32, 'build-debug': GKE_16_128,
+    'sanitizers': GKE_ONDEMAND_32_256, 'kernel-only': GKE_16,
 }
 HEAVY_CI_JOBS = ('preflight-slow', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity')
 PREFLIGHT_RUN = 'python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier fast'
@@ -2740,7 +2741,7 @@ class PostFleetRunnerPolicy(unittest.TestCase):
             '`gke-2cpu-4gb-amd64` instance in separate roots; their image must include `gh` for permission lookups.',
             '| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | '
             'Seven light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: '
-            'Release `gke-32cpu-64gb-amd64`, sanitizers `gke-32cpu-64gb-amd64-256gb`, Debug `gke-16cpu-32gb-amd64-128gb`, kernel `gke-16cpu-32gb-amd64`, '
+            'Release `gke-ondemand-32cpu-64gb-amd64`, sanitizers `gke-ondemand-32cpu-64gb-amd64-256gb`, Debug `gke-16cpu-32gb-amd64-128gb`, kernel `gke-16cpu-32gb-amd64`, '
             'preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64-128gb` |',
             '| `native-live.yml` | Dispatch and post CI callers on `main` | '
             '`authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; '
@@ -2785,11 +2786,11 @@ class PostFleetRunnerPolicy(unittest.TestCase):
 
 
 POST_SHARD_CASES = (
-    ('build', 'release', 4, GKE_32, 'build-release-gate',
+    ('build', 'release', 4, GKE_ONDEMAND_32, 'build-release-gate',
      'build (ubuntu-24.04, Release)'),
     ('build-debug', 'debug', 2, GKE_16_128, 'build-debug-gate',
      'build (ubuntu-24.04, Debug)'),
-    ('sanitizers', 'sanitizers', 8, GKE_32_256, 'sanitizers-gate', 'sanitizers'),
+    ('sanitizers', 'sanitizers', 8, GKE_ONDEMAND_32_256, 'sanitizers-gate', 'sanitizers'),
     ('kernel-only', 'kernel', 2, GKE_16, 'kernel-only-gate', 'kernel-only'),
 )
 
@@ -3014,7 +3015,7 @@ class PostLinuxBuildPolicy(unittest.TestCase):
         arm = arm.replace('        platform:\n          - os: ubuntu-24.04\n', '', 1)
         arm = arm.replace('        build_type: [Release]\n',
                           '        build_type: [Release, Debug]\n', 1)
-        arm = arm.replace(f'    runs-on: {GKE_32}\n', f'    runs-on: {GKE_ARM}\n', 1)
+        arm = arm.replace(f'    runs-on: {GKE_ONDEMAND_32}\n', f'    runs-on: {GKE_ARM}\n', 1)
         arm = arm.replace(' --ctest-shard ${{ matrix.shard }}/4\n',
                           ' --ctest-shard ${{ matrix.shard }}/4' + POST_ARM_CTEST_EXCLUSION + '\n', 1)
         arm = arm.replace("    env:\n      PF_CI_LABELS: "
@@ -4158,7 +4159,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.assertCountEqual(self.failures(lines), [
             self.missing('ci-post.yml', label)
             for label in (GKE_2, GKE_8, GKE_16, GKE_16_128,
-                          GKE_32, GKE_32_256, GKE_ARM)])
+                              GKE_ONDEMAND_32, GKE_ONDEMAND_32_256,
+                              GKE_ARM)])
 
     def test_matrix_include_and_axis_resolve_the_runner_in_a_real_workflow(self):
         self.omit('docs-post.yml')
@@ -6564,15 +6566,15 @@ exit "$lookup_exit"
             # Each scoped pool job must keep its canon array without a hosted fallback.
             (6, 'preflight', runner_declaration(GKE_8), runner_declaration('pf-linux-x64-16'),
              f'ci-post.yml job preflight must run on {GKE_8}'),
-            (6, 'sanitizers', runner_declaration(GKE_32_256), runner_declaration('macos-26-xlarge'),
-             f'ci-post.yml job sanitizers must run on {GKE_32_256}'),
+            (6, 'sanitizers', runner_declaration(GKE_ONDEMAND_32_256), runner_declaration('macos-26-xlarge'),
+             f'ci-post.yml job sanitizers must run on {GKE_ONDEMAND_32_256}'),
             (6, 'kernel-only', runner_declaration(GKE_16), runner_declaration('ubuntu-latest'),
              f'ci-post.yml job kernel-only must run on {GKE_16}'),
             # Target runs-on exactly, never an earlier matrix reference or name.
-            (6, 'build', runner_declaration(GKE_32),
-             '    runs-on: macos-26-large\n', f'ci-post.yml job build must run on {GKE_32}'),
-            (6, 'build', runner_declaration(GKE_32),
-             '    runs-on: ${{ matrix.larger_runner }}\n', f'ci-post.yml job build must run on {GKE_32}'),
+            (6, 'build', runner_declaration(GKE_ONDEMAND_32),
+             '    runs-on: macos-26-large\n', f'ci-post.yml job build must run on {GKE_ONDEMAND_32}'),
+            (6, 'build', runner_declaration(GKE_ONDEMAND_32),
+             '    runs-on: ${{ matrix.larger_runner }}\n', f'ci-post.yml job build must run on {GKE_ONDEMAND_32}'),
             (1, 'native-live', runner_declaration(NATIVE_RUNNER), runner_declaration('pf-linux-x64-16'),
              f'native-live.yml job native-live must run on {NATIVE_RUNNER}'),
             (4, 'corpus-parity', runner_declaration(GKE_16), runner_declaration('pf-linux-x64-16'),
@@ -6589,10 +6591,10 @@ exit "$lookup_exit"
             (4, 'corpus-parity', runner_declaration(GKE_16),
              runner_declaration("${{ github.event_name == 'schedule' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}"),
              f'corpus-parity.yml job corpus-parity must run on {GKE_16}'),
-            (6, 'sanitizers', runner_declaration(GKE_32_256),
+            (6, 'sanitizers', runner_declaration(GKE_ONDEMAND_32_256),
              runner_declaration("${{ github.event.pull_request.head.repo.full_name == github.repository "
                                 "&& 'pf-linux-x64-16' || 'ubuntu-24.04' }}"),
-             f'ci-post.yml job sanitizers must run on {GKE_32_256}'),
+             f'ci-post.yml job sanitizers must run on {GKE_ONDEMAND_32_256}'),
             (6, 'native-live', 'uses: ./.github/workflows/native-live.yml',
              'uses: someone/else/.github/workflows/native-live.yml@main',
              'ci-post.yml job native-live calls a workflow the runner contract cannot see; '
@@ -8281,12 +8283,12 @@ finally:
                                 runner_declaration(json.dumps(
                                     ['self-hosted', json.loads(PR_RUNNER)[1], RETIRED_VM_LABELS[0]]))),
                  f'gke-pr.yml job preflight must run on {GKE_PR_8}'),
-                ('ci-post.yml', ('sanitizers', runner_declaration(GKE_32_256),
+                ('ci-post.yml', ('sanitizers', runner_declaration(GKE_ONDEMAND_32_256),
                                 runner_declaration('["self-hosted","pf-gcp-small"]')),
-                 f'ci-post.yml job sanitizers must run on {GKE_32_256}'),
-                ('ci-post.yml', ('sanitizers', runner_declaration(GKE_32_256),
+                 f'ci-post.yml job sanitizers must run on {GKE_ONDEMAND_32_256}'),
+                ('ci-post.yml', ('sanitizers', runner_declaration(GKE_ONDEMAND_32_256),
                                 runner_declaration('pf-linux-x64-16')),
-                 f'ci-post.yml job sanitizers must run on {GKE_32_256}'),
+                 f'ci-post.yml job sanitizers must run on {GKE_ONDEMAND_32_256}'),
                 ('ci-post.yml', ('build-arm', runner_declaration(GKE_ARM),
                                 '    runs-on: macos-26-xlarge\n'),
                  'ci-post.yml must not use larger-runner labels; use the GCP fleet or hosted exceptions'),
@@ -9791,9 +9793,9 @@ class ActionlintRunnerLabels(unittest.TestCase):
                 (GKP_2, (('release-ruleset-probe.yml', 'probe'), ('promote-baseline.yml', 'promote'))),
                 (GKP_OD_4, (('release.yml', 'release'), ('release.yml', 'notify-hub'))),
                 (GKP_OD_PREBUILT, (('release.yml', 'prebuilt'),)),
-                ('gke-32cpu-64gb-amd64', (('gke-pr.yml', 'build'),
-                                         ('ci-post.yml', 'build'))),
-                ('gke-32cpu-64gb-amd64-256gb', (('ci-post.yml', 'sanitizers'),)),
+                ('gke-32cpu-64gb-amd64', (('gke-pr.yml', 'build'),)),
+                ('gke-ondemand-32cpu-64gb-amd64', (('ci-post.yml', 'build'),)),
+                ('gke-ondemand-32cpu-64gb-amd64-256gb', (('ci-post.yml', 'sanitizers'),)),
                 ('gke-16cpu-32gb-amd64', (('ci-post.yml', 'kernel-only'), ('corpus-parity.yml', 'corpus-parity'))),
                 ('gke-16cpu-32gb-amd64-128gb', (('gke-pr.yml', 'build-debug'),
                                                ('ci-post.yml', 'build-debug'), ('native-live.yml', 'native-live'))),

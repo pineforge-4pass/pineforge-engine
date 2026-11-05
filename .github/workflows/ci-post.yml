@@ -258,7 +258,7 @@ jobs:
         shard: [1, 2, 3, 4]
 
     # Four shards divide roughly 15,300 measured CTest row-seconds.
-    runs-on: gke-32cpu-64gb-amd64
+    runs-on: gke-ondemand-32cpu-64gb-amd64
 
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -537,7 +537,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
-    runs-on: gke-32cpu-64gb-amd64-256gb
+    runs-on: gke-ondemand-32cpu-64gb-amd64-256gb
     env:
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
