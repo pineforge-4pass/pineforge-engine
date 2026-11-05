@@ -95,8 +95,13 @@ enum class RunFailureCode : std::uint16_t {
     runtime_history_budget_exhausted = 80,
     runtime_storage_observation_incomplete = 81,
     pine_map_capacity_exceeded = 82,
+    selected_auxiliary_rows_limit_exceeded = 83,
+    selected_bytes_limit_exceeded = 84,
+    selected_primary_rows_limit_exceeded = 85,
+    selected_script_bars_limit_exceeded = 86,
+    selected_source_rows_limit_exceeded = 87,
 };
 
-inline constexpr std::uint16_t kRunFailureCodeCount = 83;
+inline constexpr std::uint16_t kRunFailureCodeCount = 88;
 
 }  // namespace pineforge
