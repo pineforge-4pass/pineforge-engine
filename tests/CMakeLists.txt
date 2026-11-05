@@ -8306,3 +8306,9 @@ endforeach()
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
 endif()
+
+# The default-size query belongs only to the source-host surface.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_default_entry_qty)
+    pineforge_add_unit_test(test_default_entry_qty)
+endif()

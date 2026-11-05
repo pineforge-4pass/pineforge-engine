@@ -3416,6 +3416,21 @@ double PineExecutionAdapter::default_sizing_units(const PineSizingSnapshot& sizi
     return quotient ? default_sizing_lot_floor(*quotient) : 0.0;
 }
 
+double PineStrategyHost::default_entry_qty(double fill_price) const {
+    // The placement leaf uses zero for an unresolvable price. A query must
+    // distinguish an invalid argument from a valid size below one lot.
+    if (!finite_positive(fill_price)) return kNaN;
+    if (adapter_.config_.default_qty_type == static_cast<int>(QtyType::FIXED)) {
+        return floor_quantity_grid(adapter_.config_.default_qty_value,
+                                   adapter_.staged_.quantity_grid);
+    }
+    auto sizing = adapter_.sizing_snapshot();
+    // Keep the calculation's equity and FX facts; only the hypothetical
+    // conversion price changes. It is already a fill, with no tick/slippage.
+    sizing.price = fill_price;
+    return adapter_.default_sizing_units(sizing);
+}
+
 // A typed quantity's units at `price`: the core converts the money the source
 // chose, and reserves a percentage fee out of a percentage's money, exactly as
 // for a default quantity; the source floors the quotient onto its grid, as
