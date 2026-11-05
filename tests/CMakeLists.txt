@@ -2273,21 +2273,6 @@ add_test(NAME test_ci_preflight_slice_8
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py --slice 8/8)
 add_test(NAME test_ci_preflight_slices_cover
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight_split.py)
-# These CI-script self-tests are independent of CPU architecture. The arm
-# workflow excludes only this explicit population; amd64 Release runs it all.
-# Append so the verifier slices retain their existing slow label as well.
-set_property(TEST ${PINEFORGE_CI_VERIFY_SLICES}
-    test_ci_verify_slices_cover test_ci_verify_fetch_lock
-    test_ci_preflight_slice_1
-    test_ci_preflight_slice_2
-    test_ci_preflight_slice_3
-    test_ci_preflight_slice_4
-    test_ci_preflight_slice_5
-    test_ci_preflight_slice_6
-    test_ci_preflight_slice_7
-    test_ci_preflight_slice_8
-    test_ci_preflight_slices_cover
-    APPEND PROPERTY LABELS ci-script)
 # F10's source-only benchmark witnesses require the pinned Git history.
 add_test(NAME test_benchmark_harness
     COMMAND ${Python3_EXECUTABLE} -m unittest discover -s benchmarks/tests)
@@ -7678,6 +7663,25 @@ if(PINEFORGE_COHORT_EXPOSURE_FIXTURES)
             COMPILE_DEFINITIONS PINEFORGE_COHORT_EXPOSURE_FIXTURES)
     endforeach()
 endif()
+
+# These CI-script self-tests are independent of CPU architecture. The arm
+# workflow excludes only this explicit population; amd64 Release runs it all.
+# R4-D L6a's clear resets LABELS on the verifier slices, so keep this APPEND
+# after every label clear and the slow loop (the slices retain slow), and
+# before the CR-150 include block: check_cr150_cmake_d allows only fences
+# after it, and ci_preflight pins the fast-row registration as the tail.
+set_property(TEST ${PINEFORGE_CI_VERIFY_SLICES}
+    test_ci_verify_slices_cover test_ci_verify_fetch_lock
+    test_ci_preflight_slice_1
+    test_ci_preflight_slice_2
+    test_ci_preflight_slice_3
+    test_ci_preflight_slice_4
+    test_ci_preflight_slice_5
+    test_ci_preflight_slice_6
+    test_ci_preflight_slice_7
+    test_ci_preflight_slice_8
+    test_ci_preflight_slices_cover
+    APPEND PROPERTY LABELS ci-script)
 
 # CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
 file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
