@@ -4761,6 +4761,9 @@ def check_commands(source: Path, output: Path | None = None,
         CheckCommand('release-gate-tests',
                      [sys.executable, str(source / 'scripts/test_ci_release_gate.py')],
                      parallel=True),
+        CheckCommand('rerun-preempted-tests',
+                     [sys.executable, str(source / 'scripts/test_ci_rerun_preempted.py')],
+                     parallel=True),
         # The transport uses Bash 4 parameter expansion; Darwin's default
         # Bash 3 cannot run it. Linux retains every transport control.
         *([CheckCommand('prebuilt-bookworm-tests',

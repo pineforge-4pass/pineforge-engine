@@ -728,9 +728,19 @@ class BeforeTests(unittest.TestCase):
     def setUpClass(cls):
         # Pin the actual unchanged controller, so this remains a red witness
         # after the fix is committed. This invokes git only, never gh/network.
-        source = subprocess.run(
-            ['git', 'show', 'cf68f156:scripts/ci/rerun_preempted.py'],
-            cwd=ROOT, capture_output=True, text=True, check=True).stdout
+        try:
+            result = subprocess.run(
+                ['git', 'show', 'cf68f156:scripts/ci/rerun_preempted.py'],
+                cwd=ROOT, capture_output=True, text=True, check=False)
+        except OSError as exc:
+            reason = 'BeforeTests red witness skipped: git show is unavailable'
+            print(reason)
+            raise unittest.SkipTest(reason) from exc
+        if result.returncode != 0:
+            reason = 'BeforeTests red witness skipped: cf68f156 is absent from this checkout'
+            print(reason)
+            raise unittest.SkipTest(reason)
+        source = result.stdout
         cls.before = ModuleType('before')
         exec(compile(source, '<before>', 'exec'), cls.before.__dict__)
 
