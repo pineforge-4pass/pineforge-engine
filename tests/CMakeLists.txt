@@ -1782,6 +1782,9 @@ list(APPEND TEST_SOURCES test_qty_step_mincontract_tapes)
 list(APPEND TEST_SOURCES test_qty_step_qna_rows)
 # Requested-bar grids against TradingView quantities and raw observations.
 list(APPEND TEST_SOURCES test_requested_bar_grid_tapes)
+# Reference-series origin: public host definitions and private EMA tape.
+list(APPEND TEST_SOURCES test_series_origin_host)
+list(APPEND TEST_SOURCES test_series_origin_tailh_tape)
 #   F1's magnified residual on the aggregated chart.
 list(APPEND TEST_SOURCES test_magnified_aggregated_tape)
 #   G2-23 every condition that keeps request.security on the source evaluator.
@@ -2150,6 +2153,7 @@ set(_pf_source_bound_private_rows
     test_samebar_pyramiding_entries_tapes
     test_second_extreme_order_tapes
     test_security_multi_day_buckets_tapes
+    test_series_origin_tailh_tape
     test_session_break_open_bar_tape
     test_session_day_facts_adapter
     test_session_extended_day_tape
@@ -2329,6 +2333,10 @@ add_test(NAME test_run_json_nonfinite_report
 add_test(NAME test_run_json_post_execution
     COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_post_execution.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+add_test(NAME test_series_origin_run_json
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_series_origin_run_json.py
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
 add_test(NAME test_compile_inventory_pipeline
     COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py ${PROJECT_SOURCE_DIR}/tests/test_entrypoint_build_only.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
@@ -3861,6 +3869,7 @@ list(APPEND _pf_private_fixture_rows
     test_same_bar_reissue_tapes
     test_same_point_entries_tapes
     test_samebar_pyramiding_entries_tapes
+    test_series_origin_tailh_tape
     test_session_transition_clock_tapes
     test_short_seed_report_swap
     test_small_money_margin_residual_l4a
@@ -6092,6 +6101,13 @@ elseif(NOT test_requested_bar_grid_tapes IN_LIST _pf_kernel_absent_rows)
     set_tests_properties(test_requested_bar_grid_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
+if(NOT test_series_origin_tailh_tape IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/series_origin/tailh/tv_trades.csv")
+    pineforge_add_unit_test(test_series_origin_tailh_tape)
+elseif(NOT test_series_origin_tailh_tape IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_series_origin_tailh_tape COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/series_origin/tailh/tv_trades.csv")
+    set_tests_properties(test_series_origin_tailh_tape PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
 if(NOT test_color_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/color_tv/w11-color-alpha-eth15/meta.json")
     pineforge_add_unit_test(test_color_tapes)
 elseif(NOT test_color_tapes IN_LIST _pf_kernel_absent_rows)
@@ -6933,6 +6949,7 @@ endif()
 
 # R5 lane H-MEASURE: the rows that read TradingView tapes from the fixture tree.
 foreach(_pf_hm_row IN ITEMS
+        "test_series_origin_tailh_tape|PINEFORGE_SERIES_ORIGIN_FIXTURE_DIR|series_origin"
         "test_pyramiding_count_differential|PINEFORGE_PYRAMIDING_FIXTURE_DIR|pyramiding_count"
         "test_zero_trail_sibling_stop|PINEFORGE_ZERO_TRAIL_FIXTURE_DIR|zero_trail_sibling_stop"
         "test_pending_entry_trail_tapes|PINEFORGE_PENDING_TRAIL_FIXTURE_DIR|pending_entry_trail"
