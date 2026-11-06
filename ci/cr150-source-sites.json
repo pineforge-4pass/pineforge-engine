@@ -30415,17 +30415,6 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
-   "symbol": "window_",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "void PlacementTable :: place ( std :: uint64_t incarnation , std :: unique_ptr < PlacementSnapshot > node ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "window_ . resize ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
    "symbol": "erased_foreign_ids_",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -40606,6 +40595,20 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "old_",
+   "scope": [
+    "namespace pineforge :: source #7",
+    "void PlacementTable :: prepare_place ( std :: uint64_t incarnation ) #1",
+    "else #1",
+    "if ( window_rows_ ! = 0 && ! dense ) #1",
+    "+ + slot ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "old_ . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "index",
    "scope": [
     "namespace pineforge :: source #7",
@@ -40856,6 +40859,28 @@
    ],
    "cls": "assign",
    "spelling": "next = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "window_",
+   "scope": [
+    "namespace pineforge :: source #9",
+    "void PlacementTable :: grow_window ( std :: size_t index ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "window_ . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "old_",
+   "scope": [
+    "namespace pineforge :: source #9",
+    "void PlacementTable :: place_old ( std :: uint64_t incarnation , std :: unique_ptr < PlacementSnapshot > node ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "old_ . emplace ( . . . )",
    "ordinal": 1
   },
   {

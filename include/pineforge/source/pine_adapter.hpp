@@ -691,7 +691,7 @@ public:
         head_ = 0;
         base_ = 1;
         window_rows_ = 0;
-        old_.clear();
+        old_.clear(); reset_storage_work();
         size_ = 0;
         high_water_ = 0;
         erased_rows_ = 0; visited_slots_ = 0;
@@ -911,14 +911,14 @@ private:
     }
 
     PlacementSnapshot* locate(std::uint64_t incarnation) const noexcept {
-        if (incarnation >= base_) {
+        if (!old_only_ && incarnation >= base_) {
             const std::uint64_t offset = incarnation - base_;
             if (offset < window_.size() - head_)
                 return window_[head_ + static_cast<std::size_t>(offset)].get();
             return nullptr;
         }
         const auto found = std::lower_bound(old_.begin(), old_.end(), incarnation,
-            [](const auto& entry, std::uint64_t key) { return entry.first < key; });
+            [this](const auto& entry, std::uint64_t key) { ++lookup_work_; return entry.first < key; });
         return found != old_.end() && found->first == incarnation ? found->second.get()
                                                                   : nullptr;
     }
@@ -939,9 +939,9 @@ private:
         return {0, nullptr};
     }
 
-    void place(std::uint64_t incarnation, std::unique_ptr<PlacementSnapshot> node);
+    void place(std::uint64_t incarnation, std::unique_ptr<PlacementSnapshot> node); void place_old(std::uint64_t, std::unique_ptr<PlacementSnapshot>);
     std::unique_ptr<PlacementSnapshot> take(std::uint64_t incarnation) noexcept;
-    void remember_erased(const PlacementSnapshot& row); void prepare_place(std::uint64_t incarnation);
+    void remember_erased(const PlacementSnapshot& row); void prepare_place(std::uint64_t incarnation); void grow_window(std::size_t); bool compact_old() noexcept; void reset_storage_work() noexcept;
     void change_sequences(std::uint64_t, const PlacementSnapshot*, const PlacementSnapshot*);
     // window_[head_ + i] holds incarnation base_ + i, or null; old_ holds the
     // rows below base_, ascending.
@@ -949,10 +949,10 @@ private:
     std::size_t head_ = 0;
     std::uint64_t base_ = 1;
     std::size_t window_rows_ = 0;
-    std::vector<std::pair<std::uint64_t, std::unique_ptr<PlacementSnapshot>>> old_;
-    std::size_t size_ = 0;
+    std::vector<std::pair<std::uint64_t, std::unique_ptr<PlacementSnapshot>>> old_; bool old_only_ = false;
+    std::size_t size_ = 0; std::uint64_t placement_work_ = 0, removal_work_ = 0;
     std::uint64_t high_water_ = 0;
-    std::uint64_t erased_rows_ = 0; mutable std::uint64_t visited_slots_ = 0;
+    std::uint64_t erased_rows_ = 0; mutable std::uint64_t visited_slots_ = 0, lookup_work_ = 0;
     std::uint64_t erased_digest_ = kFoldBasis;
     mutable std::shared_ptr<SequenceIndex> sequence_index_; mutable std::uint64_t sequence_queries_ = 0, sequence_rows_ = 0;
     // Physical policy only; the derived backing remains lazy and rebuildable.
