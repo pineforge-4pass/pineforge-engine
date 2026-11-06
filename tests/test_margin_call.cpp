@@ -77,7 +77,15 @@ public:
     std::string exit_comment(int i) const { return closed_trade_exit_comment(i); }
     double exit_price(int i) const { return closed_trade_exit_price(i); }
     double entry_price(int i) const { return closed_trade_entry_price(i); }
-    double trade_size(int i) const { return closed_trade_size(i); }
+    // The liquidation budgets, lot-grid checks and sums below use magnitudes.
+    // Validate Pine's signed size against the stored row before projecting it.
+    double trade_size(int i) const {
+        const Trade trade = get_trade(i);
+        const double signed_size = closed_trade_size(i);
+        CHECK(trade.qty >= 0.0);
+        CHECK(signed_size == (trade.is_long ? trade.qty : -trade.qty));
+        return trade.is_long ? signed_size : -signed_size;
+    }
     int entry_bar(int i) const { return closed_trade_entry_bar_index(i); }
     int exit_bar(int i) const { return closed_trade_exit_bar_index(i); }
     double position_size() const { return signed_position_size(); }
