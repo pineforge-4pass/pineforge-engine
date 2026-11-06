@@ -1733,10 +1733,10 @@ class HostedReleaseAdmission(unittest.TestCase):
           archive="pineforge-v1.10.0-${TRIPLE}.tar.gz"
           root="${RUNNER_TEMP}/glibc-baseline-${TRIPLE}"
           mkdir "${root}" "${root}/download" "${root}/tree"
-          gh release download v1.10.0 --repo "${GITHUB_REPOSITORY}" \
+          gh release download v1.10.0 --repo "${GITHUB_REPOSITORY}" \\
             --pattern "${archive}" --dir "${root}/download"
           echo "${digest}  ${root}/download/${archive}" | sha256sum -c -
-          tar -xzf "${root}/download/${archive}" -C "${root}/tree" \
+          tar -xzf "${root}/download/${archive}" -C "${root}/tree" \\
             --no-same-owner --no-same-permissions
           echo "BASELINE_DIR=${root}/tree" >> "${GITHUB_ENV}"
 
