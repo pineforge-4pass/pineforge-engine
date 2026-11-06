@@ -158,8 +158,10 @@ version number follows semantic versioning over the surfaces the
   layout are unchanged.
 - New run option `series_origin_ms`: the open time, in epoch milliseconds, of
   the first bar of the series the reference ran on. The source host takes it
-  as a metadata key and the `--syminfo` document of `docker/run_json.py` as a
-  positive JSON integer (any other value fails with `syminfo_unreadable`).
+  as a metadata key (a value that is not finite or not positive changes
+  nothing) and the `--syminfo` document of `docker/run_json.py` as a positive
+  JSON integer (`0`, a negative number, a float, a string, a boolean, `NaN` or
+  `Infinity` fails with `syminfo_unreadable`; absent or `null` applies nothing).
   Declaring it makes `ta.ema`, and the EMAs inside `ta.macd`, `ta.kc` and
   `ta.tsi`, answer `na` for the first `length - 1` inputs and then start from an
   SMA seed, as TradingView does at the start of its series, and starts

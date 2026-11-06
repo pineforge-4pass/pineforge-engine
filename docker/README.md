@@ -499,7 +499,7 @@ library's `strategy_set_syminfo_*` setters.
   `elapsed_seconds` (and, with `--bench`, the timing samples). `mintick`,
   `pointvalue`, `timezone` and `session` are not recorded.
 
-- In the next release, `series_origin_ms` declares the open time in epoch
+- `series_origin_ms` declares the open time in epoch
   milliseconds of the **first bar of the series the reference ran on**,
   which may differ from the feed start or the report window. It must be a
   positive JSON integer; `0`, negative values, floats, strings, booleans,
