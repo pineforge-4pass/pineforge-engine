@@ -3416,21 +3416,6 @@ double PineExecutionAdapter::default_sizing_units(const PineSizingSnapshot& sizi
     return quotient ? default_sizing_lot_floor(*quotient) : 0.0;
 }
 
-double PineStrategyHost::default_entry_qty(double fill_price) const {
-    // The placement leaf uses zero for an unresolvable price. A query must
-    // distinguish an invalid argument from a valid size below one lot.
-    if (!finite_positive(fill_price)) return kNaN;
-    if (adapter_.config_.default_qty_type == static_cast<int>(QtyType::FIXED)) {
-        return floor_quantity_grid(adapter_.config_.default_qty_value,
-                                   adapter_.staged_.quantity_grid);
-    }
-    auto sizing = adapter_.sizing_snapshot();
-    // Keep the calculation's equity and FX facts; only the hypothetical
-    // conversion price changes. It is already a fill, with no tick/slippage.
-    sizing.price = fill_price;
-    return adapter_.default_sizing_units(sizing);
-}
-
 // A typed quantity's units at `price`: the core converts the money the source
 // chose, and reserves a percentage fee out of a percentage's money, exactly as
 // for a default quantity; the source floors the quotient onto its grid, as
@@ -28807,6 +28792,29 @@ void PineExecutionAdapter::begin_position_tail_summary() {
             position_tail_summary_->open_origin(origin.first, is_long,
                                                 PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
     }
+}
+
+double PineStrategyHost::default_entry_qty(double fill_price) const {
+    // TradingView does not validate this query's hypothetical price before
+    // applying the declared sizing mode: fixed sizing ignores it, while
+    // money sizing returns zero for NaN/zero and a signed grid quantity for
+    // a negative price. Observation only: no order or driver state changes.
+    if (adapter_.config_.default_qty_type == static_cast<int>(QtyType::FIXED)) {
+        return floor_quantity_grid(adapter_.config_.default_qty_value,
+                                   adapter_.staged_.quantity_grid);
+    }
+    auto sizing = adapter_.sizing_snapshot();
+    sizing.price = fill_price;
+    if (!std::isfinite(fill_price) || fill_price == 0.0) return 0.0;
+    if (fill_price > 0.0) return adapter_.default_sizing_units(sizing);
+    sizing.price = -fill_price;
+    const auto sized = adapter_.default_sizing_shape(sizing);
+    if (!sized) return 0.0;
+    const auto units = native_sized_units(
+        *sized, -fill_price, sizing.equity, sizing.fx);
+    // The core computes the positive-magnitude quotient once; apply the source
+    // lot floor before restoring the negative hypothetical price's sign.
+    return units ? -adapter_.default_sizing_lot_floor(*units) : 0.0;
 }
 
 } // namespace pineforge::source

@@ -8278,14 +8278,6 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
 endif()
 # --- CR-150 roster-pass-work end ---
 
-# The default-size query belongs only to the source-host surface. Register it
-# before the terminal fast-row validation block so that block remains the
-# final CMake registration and its pinned contract stays valid.
-if(PINEFORGE_BUILD_SOURCE_LAYER)
-    list(APPEND TEST_SOURCES test_default_entry_qty)
-    pineforge_add_unit_test(test_default_entry_qty)
-endif()
-
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

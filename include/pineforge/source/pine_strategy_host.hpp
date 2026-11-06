@@ -371,13 +371,6 @@ public:
                         const std::string& comment = {},
                         const std::string& oca_name = {}, int oca_type = 0,
                         int qty_type = -1);
-    // During a source calculation, query the configured default entry units
-    // at the supplied fill price, using the current sizing equity, FX, point
-    // value, fee policy and quantity grid. Fixed sizing uses its declared
-    // units and grid. Open positions do not add reversal units. A nonpositive
-    // or nonfinite fill price returns NaN; a valid below-grid size is zero.
-    // Observation only: no order is placed and no driver point advances.
-    double default_entry_qty(double fill_price) const;
     void strategy_close(const std::string& id, const std::string& comment = {},
                         double qty = std::numeric_limits<double>::quiet_NaN(),
                         double qty_percent = std::numeric_limits<double>::quiet_NaN(),
@@ -1363,6 +1356,15 @@ protected:
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     void release_aux_security_chart_ranges();
 #endif
+
+public:
+    // During a source calculation, query the configured default entry units
+    // at the supplied fill price, using the current sizing equity, FX, point
+    // value, fee policy and quantity grid. Fixed sizing ignores the supplied
+    // price; money sizing returns zero for NaN or zero and signed grid units
+    // for a negative price. Observation only: no order is placed and no driver
+    // point advances.
+    double default_entry_qty(double fill_price) const;
 };
 
 using PineNativeHost = PineStrategyHost;

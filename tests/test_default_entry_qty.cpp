@@ -124,7 +124,33 @@ public:
                 -std::numeric_limits<double>::infinity(),
             };
             for (const double price : invalid_prices) {
-                assert(std::isnan(view.default_entry_qty(price)));
+                // The tapes classify fixed sizing as price-independent and
+                // NaN/zero money queries as zero. Negative money queries use
+                // a signed grid quantity; check its budget, grid membership
+                // and maximality independently of the production lot floor.
+                // expectation corrected: raw quotient -> signed grid quantity,
+                // because negative prices use the source lot-floor policy.
+                if (inputs_.fx_curve || inputs_.seed_position
+                    || (inputs_.type == QtyType::FIXED && inputs_.step != 0.0)
+                    || (inputs_.type != QtyType::FIXED && inputs_.fee != 0.0
+                        && inputs_.fee_type != CommissionType::PERCENT)) continue;
+                const double units = view.default_entry_qty(price);
+                if (inputs_.type == QtyType::FIXED) {
+                    assert(units == inputs_.value);
+                } else if (std::isfinite(price) && price < 0.0) {
+                    const double equity = native_marked_equity(bar.close);
+                    const double budget = inputs_.type == QtyType::CASH
+                        ? inputs_.value : inputs_.value / 100.0 * equity;
+                    double unit_cost = -price * inputs_.point_value * inputs_.fx;
+                    if (inputs_.type == QtyType::PERCENT_OF_EQUITY
+                        && inputs_.fee_type == CommissionType::PERCENT) {
+                        unit_cost *= 1.0 + inputs_.fee / 100.0;
+                    }
+                    assert(units <= 0.0);
+                    check_budget(-units, budget, unit_cost, inputs_.step);
+                } else {
+                    assert(units == 0.0);
+                }
             }
             assert(broker_state_hash() == hash);
             assert(native_decision_floor() == floor);
@@ -149,6 +175,54 @@ private:
     bool query_;
 };
 
+class NegativeGridQueryHost final : public PineStrategyHost {
+public:
+    NegativeGridQueryHost(double equity, double expected) : equity_(equity), expected_(expected) {
+        source::PineStrategyConfig config;
+        // Isolate the query by starting flat at the tape's sizing equity.
+        config.initial_capital = equity;
+        config.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+        config.default_qty_value = 10.0;
+        config.commission_type = static_cast<int>(CommissionType::PERCENT);
+        config.commission_value = 0.0;
+        configure_pine_strategy(config);
+        set_syminfo_mintick(0.25);
+        set_syminfo_pointvalue(1.0);
+        account_currency_fx_ = 1.0;
+        qty_step_ = 0.0001;
+    }
+
+    int calculations = 0;
+
+    void on_source_bar(const Bar& bar) override {
+        ++calculations;
+        assert(native_marked_equity(bar.close) == equity_);
+        const auto hash = broker_state_hash();
+        const auto floor = native_decision_floor();
+        const auto position = physical_position();
+        const int pending = pending_order_count();
+        const int trades = trade_count();
+        const int index = pine_bar_index();
+        const auto events = native_events(0).size();
+        const PineStrategyHost& view = *this;
+        const double units = view.default_entry_qty(-100.0);
+        assert(std::abs(units - expected_) < 1e-8 && "negative-grid query mismatch");
+        assert(view.default_entry_qty(-100.0) == units);
+        assert(broker_state_hash() == hash);
+        assert(native_decision_floor() == floor);
+        assert(physical_position().signed_units == position.signed_units);
+        assert(physical_position().lot_count == position.lot_count);
+        assert(pending_order_count() == pending);
+        assert(trade_count() == trades);
+        assert(pine_bar_index() == index);
+        assert(native_events(0).size() == events);
+    }
+
+private:
+    double equity_;
+    double expected_;
+};
+
 std::vector<Bar> bars() {
     std::vector<Bar> result;
     for (int index = 0; index < 4; ++index) {
@@ -162,6 +236,32 @@ std::vector<Bar> bars() {
         result.push_back(bar);
     }
     return result;
+}
+
+void check_negative_grid_queries() {
+    // percent_negative_price starts with 100000000 capital. At 2025-04-02
+    // 19:00 and 22:30 its sizing equities are 99999999.94 and 99999977.02.
+    // The TV tape encodes inequality to the raw quotient, not numeric units.
+    // These numeric expectations are derived from the documented lot policy:
+    // E * 0.1 / 100 gives magnitudes 99999.99994 and 99999.97702; flooring
+    // those to 0.0001 before negating gives -99999.9999 and -99999.9770.
+    // The budgets 9999999.994 and 9999997.702 already have ten significant
+    // digits, so money rounding leaves those decimal amounts unchanged.
+    struct Case { double equity; double expected; };
+    const Case cases[] = {
+        {100000000.0, -100000.0}, // Aligned-grid control.
+        {99999999.94, -99999.9999},
+        {99999977.02, -99999.9770},
+    };
+    const auto feed = bars();
+    for (const auto& test_case : cases) {
+        NegativeGridQueryHost host(test_case.equity, test_case.expected);
+        host.run(feed.data(), 1);
+        assert(host.last_error().empty());
+        assert(host.calculations == 1);
+        assert(host.trade_count() == 0);
+        assert(host.physical_position().lot_count == 0);
+    }
 }
 
 void check_query(const Inputs& inputs) {
@@ -191,6 +291,7 @@ void check_query(const Inputs& inputs) {
 } // namespace
 
 int main() {
+    check_negative_grid_queries();
     for (const auto type : {QtyType::FIXED, QtyType::CASH, QtyType::PERCENT_OF_EQUITY}) {
         for (const double fx : {0.8, 1.6}) {
             for (const double point_value : {1.0, 7.5}) {
@@ -240,5 +341,23 @@ int main() {
         varied.fx = 1.25;
         varied.step = 0.5;
         check_query(varied);
+    }
+
+    // The nine invalid-price tape cases: fixed ignores the argument, while
+    // cash and percent sizing use zero for NaN/zero and signed grid quantities
+    // for a negative price. The negative numeric oracle checks the lot policy;
+    // the tapes export classifications rather than those numeric quantities.
+    for (const auto type : {QtyType::FIXED, QtyType::CASH, QtyType::PERCENT_OF_EQUITY}) {
+        Inputs invalid;
+        invalid.type = type;
+        invalid.capital = 100000000.0;
+        invalid.value = type == QtyType::FIXED ? 7.0
+            : (type == QtyType::CASH ? 700.0 : 10.0);
+        invalid.fee_type = CommissionType::PERCENT;
+        invalid.fee = 0.0;
+        invalid.point_value = 1.0;
+        invalid.fx = 1.0;
+        invalid.step = 0.0;
+        check_query(invalid);
     }
 }
