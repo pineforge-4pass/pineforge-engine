@@ -1735,8 +1735,8 @@ library.
   - **Verifier tests run in parallel shards ([#404]).**
     `scripts/ci_preflight.py` runs `verifier-tests` (`scripts/test_ci_verify.py`)
     across parallel `unittest` subprocess shards with per-shard `TMPDIR`
-    isolation via `scripts/run_unittest_shards.py`
-    (`scripts/test_run_unittest_shards.py`).
+    isolation via `scripts/ci_run_unittest_shards.py`
+    (`scripts/ci_test_run_unittest_shards.py`).
   - **Release-candidate notes link and tag commit ([#405]).**
     The `1.6.1-rc.1` entry links its release and names its tag commit
     `196592dd`.

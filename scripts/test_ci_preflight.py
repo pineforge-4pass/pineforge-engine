@@ -20,7 +20,7 @@ from unittest import mock
 import ci_preflight
 import ci_verify
 from ci_verifier_classes import select_test_ids, verifier_class_tier
-from run_unittest_shards import discover_test_ids
+from ci_run_unittest_shards import discover_test_ids
 from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES,
                           DOCS_ONLY_SKIP, GITHUB_ONLY_SKIP, HEAVY_SKIP, HOSTED_MATRIX_RUNNER, JOB_COMMANDS,
                           PR_RUNNER, POST_RUNNER, MATRIX_LINUX_RUNNER, MATRIX_RUNNER,
@@ -6450,7 +6450,7 @@ exit "$lookup_exit"
                                                          verifier_class_tier(env))), discovered)
                     plan = {name: argv for name, argv in check_commands(ROOT, env=env, tier='slow')}
                     self.assertEqual(plan['verifier-tests'], [
-                        sys.executable, str(ROOT / 'scripts/run_unittest_shards.py'),
+                        sys.executable, str(ROOT / 'scripts/ci_run_unittest_shards.py'),
                         str(ROOT / 'scripts/test_ci_verify.py'), '--log-dir',
                         str(ROOT / 'build-ci-preflight/verifier-tests-shards')])
 
@@ -6478,7 +6478,7 @@ exit "$lookup_exit"
                            '    steps:\n      - run: python3 scripts/ci_verify.py release --exclude-label slow\n'))
 
     def test_verifier_stage_defers_slow_only_for_an_explicit_pr_answer(self):
-        base = [sys.executable, str(ROOT / 'scripts/run_unittest_shards.py'),
+        base = [sys.executable, str(ROOT / 'scripts/ci_run_unittest_shards.py'),
                 str(ROOT / 'scripts/test_ci_verify.py'), '--log-dir',
                 str(ROOT / 'build-ci-preflight/verifier-tests-shards')]
         for answer, expected in (('false', base + ['--class-tier', 'fast']),
@@ -8359,7 +8359,7 @@ finally:
                         ROOT, output, env={'GITHUB_EVENT_NAME': 'pull_request'}, tier=tier)
                     }['preflight-tests']
                     self.assertEqual(argv, [
-                        sys.executable, str(ROOT / 'scripts/run_unittest_shards.py'),
+                        sys.executable, str(ROOT / 'scripts/ci_run_unittest_shards.py'),
                         str(ROOT / 'scripts/test_ci_preflight.py'),
                         '--shards', str(expected),
                         '--log-dir', str(output / 'preflight-tests-shards'),

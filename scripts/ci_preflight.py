@@ -38,7 +38,7 @@ import unicodedata
 from ci_verify import (ROOT, PRIVATE_FIXTURE_SKIP_LITERAL, private_fixtures_overlay,
                        source_guard_commands)
 from ci_verifier_classes import verifier_class_tier
-from run_unittest_shards import default_shard_count
+from ci_run_unittest_shards import default_shard_count
 
 ACTIONLINT_VERSION = '1.7.12'
 # File-only policy needs an identity even in an exported tree with no git remote.
@@ -1098,7 +1098,7 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
 '''
 # No stage of this preflight carries a timeout: the verifier self-tests
 # (test_ci_verify.py) drive the real literal-aware parity, receipt and
-# submodule guards across parallel unittest shards (run_unittest_shards.py),
+# submodule guards across parallel unittest shards (ci_run_unittest_shards.py),
 # and no bound of this file's may fail a run for slowness (owner rule,
 # 2026-10-12). A stage that hangs is caught only by the job's own platform
 # maximum, 360 minutes.
@@ -4713,17 +4713,17 @@ def check_commands(source: Path, output: Path | None = None,
                      [sys.executable, str(source / 'scripts/check_rng_draw_order.py')],
                      parallel=True),
         ('verifier-tests',
-         [sys.executable, str(source / 'scripts/run_unittest_shards.py'),
+         [sys.executable, str(source / 'scripts/ci_run_unittest_shards.py'),
           str(source / 'scripts/test_ci_verify.py'),
           '--log-dir', str(output_dir / 'verifier-tests-shards'), *class_args]),
         CheckCommand('preflight-tests',
-                     [sys.executable, str(source / 'scripts/run_unittest_shards.py'),
+                     [sys.executable, str(source / 'scripts/ci_run_unittest_shards.py'),
                       str(source / 'scripts/test_ci_preflight.py'),
                       '--shards', str(min(8, default_shard_count())),
                       '--log-dir', str(output_dir / 'preflight-tests-shards')],
                      parallel=True),
         ('unittest-shards-tests',
-         [sys.executable, str(source / 'scripts/test_run_unittest_shards.py')]),
+         [sys.executable, str(source / 'scripts/ci_test_run_unittest_shards.py')]),
         ('verifier-paths-tests',
          [sys.executable, str(source / 'scripts/test_ci_verifier_paths.py')]),
         CheckCommand('native-c-surface-tests',

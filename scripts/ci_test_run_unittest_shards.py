@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for scripts/run_unittest_shards.py."""
+"""Unit tests for scripts/ci_run_unittest_shards.py."""
 from __future__ import annotations
 
 import io
@@ -21,12 +21,12 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 
 import ci_preflight  # noqa: E402
 import ci_verifier_classes as verifier_classes  # noqa: E402
-import run_unittest_shards as shards_runner  # noqa: E402
+import ci_run_unittest_shards as shards_runner  # noqa: E402
 # This module is an explicit preflight entry point. Import the regression
 # TestCase so unittest also runs it here, without a second CI registration.
 from test_check_replay_off_golden import ReplayOffGoldenTests  # noqa: E402,F401
 
-SCRIPT = ROOT / 'scripts' / 'run_unittest_shards.py'
+SCRIPT = ROOT / 'scripts' / 'ci_run_unittest_shards.py'
 
 FAKE_MODULE_SOURCE = textwrap.dedent("""
     import os
@@ -512,7 +512,7 @@ class UnittestShardsTests(unittest.TestCase):
                     from pathlib import Path
 
                     sys.path.insert(0, {str(ROOT / 'scripts')!r})
-                    import run_unittest_shards
+                    import ci_run_unittest_shards
 
                     lock_dir = Path({str(lock_dir)!r})
 
@@ -539,7 +539,7 @@ class UnittestShardsTests(unittest.TestCase):
                             time.sleep(0.02)
 
                     threading.Thread(target=_trigger_signal, daemon=True).start()
-                    raise SystemExit(run_unittest_shards.main([{str(sleeping_module)!r}, "--shards", "2"]))
+                    raise SystemExit(ci_run_unittest_shards.main([{str(sleeping_module)!r}, "--shards", "2"]))
                 """)
                 proc = subprocess.Popen(
                     [sys.executable, '-B', '-c', driver_code],
@@ -695,7 +695,7 @@ class UnittestShardsTests(unittest.TestCase):
             verifier_argv,
             [
                 sys.executable,
-                str(ROOT / 'scripts/run_unittest_shards.py'),
+                str(ROOT / 'scripts/ci_run_unittest_shards.py'),
                 str(ROOT / 'scripts/test_ci_verify.py'),
                 '--log-dir',
                 str(out_dir / 'verifier-tests-shards'),
@@ -706,14 +706,14 @@ class UnittestShardsTests(unittest.TestCase):
             default_commands['verifier-tests'],
             [
                 sys.executable,
-                str(ROOT / 'scripts/run_unittest_shards.py'),
+                str(ROOT / 'scripts/ci_run_unittest_shards.py'),
                 str(ROOT / 'scripts/test_ci_verify.py'),
                 '--log-dir',
                 str(ROOT / 'build-ci-preflight' / 'verifier-tests-shards'),
             ],
         )
         registered_scripts = {Path(argv[-1]).name for argv in commands.values() if argv}
-        self.assertIn('test_run_unittest_shards.py', registered_scripts)
+        self.assertIn('ci_test_run_unittest_shards.py', registered_scripts)
         self.assertIn('test_ci_verifier_paths.py', registered_scripts)
 
 
