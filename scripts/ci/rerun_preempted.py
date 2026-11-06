@@ -35,9 +35,11 @@ ALLOWED_WORKFLOWS = {
     '.github/workflows/ci-post.yml': frozenset({'push', 'schedule'}),
     PR_WORKFLOW: frozenset({PR_EVENT}),
 }
-# Bare amd64 GKE scale sets, optionally with the fleet's disk-size suffix.
-# No arm64, gkp pools or operator-dispatched entrypoints are admitted.
-FLEET_LABEL = re.compile(r'gke-(?:ondemand-)?(?:2|4|8|16|32)cpu-(?:4|8|16|32|64)gb-amd64(?:-(?:64|128|256|512)gb)?')
+# The hosted x86 image the proof and post jobs run on, plus the legacy bare amd64
+# GKE scale sets (optionally with the fleet's disk-size suffix) that attempts begun
+# before the hosted migration and the captured evidence still carry.
+# No arm64 (hosted or GKE), gkp pools or operator-dispatched entrypoints are admitted.
+FLEET_LABEL = re.compile(r'ubuntu-24\.04|gke-(?:ondemand-)?(?:2|4|8|16|32)cpu-(?:4|8|16|32|64)gb-amd64(?:-(?:64|128|256|512)gb)?')
 LOSS_PATTERNS = (
     re.compile(r'The runner has received a shutdown signal\..*', re.I),
     re.compile(r'(?:The runner[: ]+.*?)?lost communication with the server\b.*', re.I),

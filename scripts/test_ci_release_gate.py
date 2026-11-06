@@ -1993,24 +1993,22 @@ class RulesetsProbeTests(unittest.TestCase):
     def test_probe_dispatch_branch_and_fleets_are_documented(self):
         docs = (ROOT / "docs/ci.md").read_text()
         requirements = (
-            'admit is hosted, while PR preflight, proof legs and parity use bare GKE scale-set names;\n'
-            'credentialed post work uses exact protected `gkp-*` scale sets in runner group 15.\n'
-            'Post Release/Debug/kernel, native shards and post sanitizers use fixed bare GKE scale-set names.\n'
-            'The two native-live sanitizer profiles use an exact runner matrix. All GKE jobs run directly '
-            'in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
-            "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
-            'bare scalar `gke-2cpu-4gb-amd64` and `probe` on `gkp-2cpu-4gb-amd64`.',
-            "Release and promotion use protected GKE runner group 15:\n"
+            'job runs on a standard hosted image, `ubuntu-24.04` for x86 and `ubuntu-24.04-arm` for arm64.\n'
+            'Only the unchanged `release.yml` keeps its protected `gkp-od-*` scale sets in runner group 15.\n'
+            'The two native-live sanitizer profiles use an exact runner matrix with both rows on `ubuntu-24.04`. '
+            'No job routes by event.',
+            "The manual `release-ruleset-probe.yml` workflow runs `authz` and `probe` on\n"
+            'the hosted `ubuntu-24.04` image; `probe` keeps its `release` environment.',
+            "Release uses protected GKE runner group 15:\n"
             "`release` and `notify-hub` use `gkp-od-4cpu-8gb-amd64`;\n"
-            'Linux x64 `prebuilt` uses `gkp-od-16cpu-32gb-amd64-128gb`; baseline `promote` uses `gkp-2cpu-4gb-amd64`.\n'
-            'The release ruleset probe runs secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64` and\n'
-            '`probe` on `gkp-2cpu-4gb-amd64`.',
+            'Linux x64 `prebuilt` uses `gkp-od-16cpu-32gb-amd64-128gb`; baseline `promote` uses hosted `ubuntu-24.04`.\n'
+            'The release ruleset probe runs `authz` and `probe` on hosted `ubuntu-24.04`.',
             "Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from\n"
             "`main` to check actual ruleset visibility with the same App token mint as\n"
             "`release.yml`. The workflow file must be on the default branch, and the run\n"
             "must use `main`'s copy.\n"
-            'The credentialed probe job runs on `gkp-2cpu-4gb-amd64`, with\n'
-            'secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64`.',
+            'The credentialed probe job runs on hosted `ubuntu-24.04`, with\n'
+            'secret-free `authz` on hosted `ubuntu-24.04`.',
             "Protected runner group 15 admits only allowlisted workflow refs at `refs/heads/main`;\n"
             "the probe keeps its `release` environment and main-ref refusal before App minting.",
             "The dispatch must run from `main`; the workflow itself refuses any other ref\n"
@@ -2423,7 +2421,7 @@ class WorkflowPinTests(unittest.TestCase):
 
     def assert_gke_build(self, body, label):
         self.assertIn("    runs-on: " + label + "\n",
-                      body, "required build jobs must keep GKE routing")
+                      body, "required build jobs must keep hosted routing")
         self.assertNotRegex(body, r'''(?m)^    ['"]?container['"]?\s*:''',
                             "required build jobs must run directly in the runner pod")
 
@@ -2448,8 +2446,8 @@ class WorkflowPinTests(unittest.TestCase):
             self.assertEqual([value.strip() for value in types[1].split(",")], [build_type])
             platforms = re.findall(r"(?m)^          - os: (\S+)$", matrix[1])
             self.assertEqual(platforms, ["ubuntu-24.04"])
-            self.assert_gke_build(body, {"build": "gke-ondemand-32cpu-64gb-amd64",
-                                         "build-debug": "gke-16cpu-32gb-amd64-128gb"}[job_id])
+            self.assert_gke_build(body, {"build": "ubuntu-24.04",
+                                         "build-debug": "ubuntu-24.04"}[job_id])
             shards = re.findall(r"(?m)^        shard: \[([0-9, ]+)\]$", matrix[1])
             self.assertEqual(len(shards), 1)
             self.assertEqual([int(value.strip()) for value in shards[0].split(",")],
@@ -2476,7 +2474,7 @@ class WorkflowPinTests(unittest.TestCase):
         self.assertIsNotNone(types)
         build_types = [value.strip() for value in types[1].split(",")]
         self.assertCountEqual(build_types, ["Release", "Debug"])
-        self.assert_gke_build(body, "gke-16cpu-32gb-arm64-128gb")
+        self.assert_gke_build(body, "ubuntu-24.04-arm")
         shards = re.findall(r"(?m)^        shard: \[([0-9, ]+)\]$", matrix[1])
         self.assertEqual(len(shards), 1)
         indices = [int(value.strip()) for value in shards[0].split(",")]
@@ -2515,12 +2513,12 @@ class WorkflowPinTests(unittest.TestCase):
     def test_ci_post_required_build_jobs_reject_runner_or_container_drift(self):
         workflow = (ROOT / ".github/workflows/ci-post.yml").read_text()
         self.ci_post_build_names(_jobs(workflow))
-        for job, label in (("build", "gke-ondemand-32cpu-64gb-amd64"),
-                           ("build-debug", "gke-16cpu-32gb-amd64-128gb"),
-                           ("build-arm", "gke-16cpu-32gb-arm64-128gb")):
+        for job, label in (("build", "ubuntu-24.04"),
+                           ("build-debug", "ubuntu-24.04"),
+                           ("build-arm", "ubuntu-24.04-arm")):
             for before, after, finding in (
-                    ("    runs-on: " + label, "    runs-on: pf-linux-x64-16",
-                     "required build jobs must keep GKE routing"),
+                    ("    runs-on: " + label + "\n", "    runs-on: pf-linux-x64-16\n",
+                     "required build jobs must keep hosted routing"),
                     ("    steps:\n", "    container:\n      image: ubuntu:24.04\n    steps:\n",
                      "required build jobs must run directly in the runner pod")):
                 with self.subTest(job=job, replacement=after):

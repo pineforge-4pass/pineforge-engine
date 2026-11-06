@@ -79,35 +79,39 @@ GKP_OD_PREBUILT = 'gkp-od-16cpu-32gb-amd64-128gb'
 GKP_BOOKWORM = 'gkp-16cpu-32gb-amd64'
 GKP_ARM64 = 'gkp-16cpu-32gb-arm64'
 RETIRED_VM_LABELS = tuple('pf-gcp-' + suffix for suffix in ('main', 'post'))
+# The GKE_* / GKP_* literals above stay as legacy-label fixtures for the negative
+# routing tests. Every migrated job is pinned to a standard hosted image; only the
+# unchanged release.yml keeps its protected GKP labels.
+HOSTED_X86 = 'ubuntu-24.04'
+HOSTED_ARM = 'ubuntu-24.04-arm'
+# The retired PR fleet array stays a negative fixture: no job may select it.
+LEGACY_PR_RUNNER = '["self-hosted","pf-gcp-pr"]'
 EXPECTED_GKP_JOBS = {
     'release.yml': {'release': GKP_OD_4, 'notify-hub': GKP_OD_4, 'prebuilt': GKP_OD_PREBUILT},
-    'promote-baseline.yml': {'promote': GKP_2},
-    'docs-post.yml': {'build': GKP_4},
-    'release-ruleset-probe.yml': {'probe': GKP_2},
 }
 NATIVE_RUNNER = '${{ matrix.runner }}'
 EXPECTED_LIGHT_GKE_JOBS = {
     'ci-post.yml': dict.fromkeys(
         ('authz', 'changes', 'build-release-gate', 'build-debug-gate',
-         'sanitizers-gate', 'kernel-only-gate', 'build-gate'), GKE_2),
+         'sanitizers-gate', 'kernel-only-gate', 'build-gate'), HOSTED_X86),
     'native-live.yml': dict.fromkeys(
-        ('authz', 'native-live-native', 'native-live-gate'), GKE_4),
-    'corpus-parity.yml': {'authz': GKE_4},
-    'docs-post.yml': {'authz': GKE_2},
-    'release-ruleset-probe.yml': {'authz': GKE_2},
-    'promote-baseline.yml': {'promote-guard': GKE_2},
+        ('authz', 'native-live-native', 'native-live-gate'), HOSTED_X86),
+    'corpus-parity.yml': {'authz': HOSTED_X86},
+    'docs-post.yml': {'authz': HOSTED_X86},
+    'release-ruleset-probe.yml': {'authz': HOSTED_X86},
+    'promote-baseline.yml': {'promote-guard': HOSTED_X86},
 }
 EXPECTED_GKE_JOBS = {
-    'gke-pr.yml': {'preflight': GKE_PR_8, 'build': GKE_PR_32, 'build-debug': GKE_PR_16,
-                   NATIVE_X86_JOB: GKE_PR_32,
-                   'build-arm': GKE_ARM,
-                   'corpus-parity-subset': GKE_PR_8},
-    'ci-post.yml': {'preflight': GKE_8, 'preflight-slow': GKE_8,
-                    NATIVE_X86_JOB: GKE_32,
-                    'build': GKE_ONDEMAND_32, 'build-debug': GKE_16_128,
-                    'sanitizers': GKE_ONDEMAND_32_256, 'kernel-only': GKE_16, 'build-arm': GKE_ARM},
-    'corpus-parity.yml': {'corpus-parity': GKE_16, 'corpus-parity-subset': GKE_8},
-    'native-live.yml': {'native-live': NATIVE_RUNNER, 'native-live-shards': GKE_8},
+    'gke-pr.yml': {'preflight': HOSTED_X86, 'build': HOSTED_X86, 'build-debug': HOSTED_X86,
+                   NATIVE_X86_JOB: HOSTED_X86,
+                   'build-arm': HOSTED_ARM,
+                   'corpus-parity-subset': HOSTED_X86},
+    'ci-post.yml': {'preflight': HOSTED_X86, 'preflight-slow': HOSTED_X86,
+                    NATIVE_X86_JOB: HOSTED_X86,
+                    'build': HOSTED_X86, 'build-debug': HOSTED_X86,
+                    'sanitizers': HOSTED_X86, 'kernel-only': HOSTED_X86, 'build-arm': HOSTED_ARM},
+    'corpus-parity.yml': {'corpus-parity': HOSTED_X86, 'corpus-parity-subset': HOSTED_X86},
+    'native-live.yml': {'native-live': NATIVE_RUNNER, 'native-live-shards': HOSTED_X86},
 }
 PR_SLOW_FLAG = "${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}"
 EXPECTED_PR_SLOW_ROWS = (
@@ -201,9 +205,9 @@ POST_CI_JOB_IDS = ('authz', 'changes', 'preflight', 'preflight-slow', 'build',
                   'sanitizers-gate', 'kernel-only-gate',
                   'build-arm', NATIVE_X86_JOB, 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity-subset',
                   'corpus-parity', 'build-gate')
-NATIVE_HOSTED_RUNNERS = {'authz': GKE_4, 'native-live': NATIVE_RUNNER,
-                         'native-live-shards': GKE_8,
-                         'native-live-native': GKE_4, 'native-live-gate': GKE_4}
+NATIVE_HOSTED_RUNNERS = {'authz': HOSTED_X86, 'native-live': NATIVE_RUNNER,
+                         'native-live-shards': HOSTED_X86,
+                         'native-live-native': HOSTED_X86, 'native-live-gate': HOSTED_X86}
 FLEET_JOB_IDS = {
     'ci.yml': ('authz',),
     'gke-pr.yml': GKE_PR_JOB_IDS,
@@ -232,8 +236,8 @@ LIGHT_JOB_IDS = {
     'release-ruleset-probe.yml': ('authz',),
 }
 HOSTED_SHARD_JOB_LABELS = {
-    'build': GKE_ONDEMAND_32, 'build-debug': GKE_16_128,
-    'sanitizers': GKE_ONDEMAND_32_256, 'kernel-only': GKE_16,
+    'build': HOSTED_X86, 'build-debug': HOSTED_X86,
+    'sanitizers': HOSTED_X86, 'kernel-only': HOSTED_X86,
 }
 HEAVY_CI_JOBS = ('preflight-slow', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity')
 PREFLIGHT_RUN = 'python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier fast'
@@ -256,8 +260,7 @@ jobs:
   authz:
     name: authz
     # Preflight pins executable workflow lines after removing comment-only lines.
-    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses gkp-2cpu-4gb-amd64.
-    runs-on: gke-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -318,7 +321,7 @@ jobs:
 
   probe:
     needs: [authz]
-    runs-on: gkp-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     environment: release
     steps:
       - name: Refuse a dispatch ref other than main
@@ -805,7 +808,8 @@ class ProtectedGkeRunners(unittest.TestCase):
                     changed_body = _jobs(changed)[job]
                     self.assertTrue(ci_preflight._holds_credentials(
                         changed, changed_body, effective_permissions=True))
-                    self.assertIn(f'{name} job {job} must not expose credentials on GKE',
+                    self.assertIn(f'{name} job {job} must not expose credentials '
+                                  'on a pinned verification job',
                                   ci_preflight.runner_findings({**workflows, name: changed}))
 
         for reference in ('secrets.DEPLOY_TOKEN', "secrets['DEPLOY_TOKEN']",
@@ -932,7 +936,7 @@ class ProtectedGkeRunners(unittest.TestCase):
                     changed = in_job(workflows[name], job,
                                      f'    environment: {environment}\n', replacement)
                     self.assertIn(f'{name} job {job} must use environment {environment} '
-                                  'on protected GKE',
+                                  'on its protected release job',
                                   ci_preflight.runner_findings({**workflows, name: changed}))
 
     def test_cred_exempt_needs_exact_gkp(self):
@@ -966,6 +970,32 @@ class ProtectedGkeRunners(unittest.TestCase):
                 self.assertIn('release.yml job prebuilt must keep production credentials '
                               'on a hosted standard runner',
                               ci_preflight.runner_findings({**workflows, 'release.yml': literal}))
+
+    def test_hosted_credentialed_jobs_need_their_exact_hosted_pin(self):
+        # The probe, baseline promotion and docs deployment hold credentials and
+        # now run on the hosted x86 image; any other image is refused at the pin.
+        workflows = self.workflows()
+        self.assertEqual(ci_preflight.runner_findings(workflows), [])
+        credential_finding = 'must keep production credentials on a hosted standard runner'
+        for name, job in (('release-ruleset-probe.yml', 'probe'),
+                          ('promote-baseline.yml', 'promote'),
+                          ('docs-post.yml', 'build')):
+            self.assertEqual(ci_preflight._job_values(
+                _jobs(workflows[name])[job], 'runs-on', unquote=False), [HOSTED_X86])
+            # The probe and promotion jobs compare the runner text exactly, so a quoted
+            # scalar is refused; the docs deployment pin compares the label itself and
+            # YAML quoting does not change it, so that one is not a wrong value there.
+            quoted = [] if name == 'docs-post.yml' else [f'"{HOSTED_X86}"']
+            for wrong in (GKE_2, GKP_2, 'ubuntu-latest', 'ubuntu-22.04',
+                          LEGACY_PR_RUNNER, HOSTED_ARM, *quoted):
+                with self.subTest(workflow=name, job=job, runner=wrong):
+                    changed = in_job(workflows[name], job, runner_declaration(HOSTED_X86),
+                                     runner_declaration(wrong))
+                    self.assertNotEqual(changed, workflows[name])
+                    findings = ci_preflight.runner_findings({**workflows, name: changed})
+                    self.assertIn(f'{name} job {job} must run on {HOSTED_X86} (hosted)', findings)
+                    if wrong in (GKE_2, GKP_2, 'ubuntu-latest', 'ubuntu-22.04', LEGACY_PR_RUNNER):
+                        self.assertIn(f'{name} job {job} {credential_finding}', findings)
 
     def test_retired_vm_labels_refused(self):
         workflows = self.workflows()
@@ -1685,6 +1715,7 @@ class WorkflowEventFleets(unittest.TestCase):
             for job, body in _jobs(workflow).items():
                 if ci_preflight._job_values(body, 'uses'):
                     continue  # The graph check below follows every local call.
+                checked += 1
                 if name == 'native-live.yml':
                     self.assertEqual(ci_preflight._job_values(body, 'runs-on'),
                                      [NATIVE_HOSTED_RUNNERS[job]])
@@ -1700,10 +1731,9 @@ class WorkflowEventFleets(unittest.TestCase):
                     runner = EXPECTED_LIGHT_GKE_JOBS.get(name, {}).get(job, 'ubuntu-24.04')
                     self.assertEqual(ci_preflight._job_values(body, 'runs-on'), [runner])
                     continue
-                checked += 1
+                # Every other post-merge job runs on the hosted x86 image.
                 self.assertEqual(ci_preflight._job_values(body, 'runs-on', unquote=False),
-                                 [EXPECTED_GKP_JOBS[name][job]],
-                                 f'{name} job {job}')
+                                 [HOSTED_X86], f'{name} job {job}')
         self.assertGreater(checked, 0)
         self.assertEqual(ci_preflight.workflow_fleet_findings(workflows), [])
         for event in ('push', 'schedule', 'workflow_dispatch'):
@@ -1713,9 +1743,14 @@ class WorkflowEventFleets(unittest.TestCase):
                      '    steps:\n      - run: "true"\n')
             self.assertIn(f'{name} job inspect may use GKE routing only at its exact pinned job and label',
                           ci_preflight.runner_findings({name: valid}))
-            wrong = valid.replace(runner_declaration(POST_RUNNER), runner_declaration(PR_RUNNER), 1)
-            self.assertNotEqual(wrong, valid)
-            self.assertIn(f'{name} job inspect must run on gke-2cpu-4gb-amd64 for post-merge events',
+            # An unpinned job on the hosted x86 image is accepted; any other image is refused.
+            hosted = valid.replace('    runs-on: gke-2cpu-4gb-amd64\n', runner_declaration(POST_RUNNER), 1)
+            self.assertNotEqual(hosted, valid)
+            self.assertNotIn(f'{name} job inspect must run on {POST_RUNNER} for post-merge events',
+                             ci_preflight.runner_findings({name: hosted}))
+            wrong = hosted.replace(runner_declaration(POST_RUNNER), runner_declaration('ubuntu-22.04'), 1)
+            self.assertNotEqual(wrong, hosted)
+            self.assertIn(f'{name} job inspect must run on {POST_RUNNER} for post-merge events',
                           ci_preflight.runner_findings({name: wrong}))
 
     def test_pull_request_workflows_never_name_post_fleet(self):
@@ -1737,29 +1772,32 @@ class WorkflowEventFleets(unittest.TestCase):
         for suffix in ('.yml', '.yaml'):
             name = 'arbitrary-pr-name' + suffix
             pr = ('on:\n  pull_request:\njobs:\n  inspect:\n'
-                  '    runs-on: ["self-hosted","pf-gcp-pr"]\n'
+                  f'    runs-on: {HOSTED_X86}\n'
                   '    steps:\n      - run: "true"\n')
             self.assertEqual(ci_preflight.runner_findings({name: pr}), [])
-            post = pr.replace(runner_declaration(PR_RUNNER), runner_declaration(POST_RUNNER), 1)
-            # Post jobs now need an exact inventory pin even on a trusted event.
-            unpinned_post = post.replace('  pull_request:', '  push:', 1)
-            self.assertIn(f'{name} job inspect may use GKE routing only at its exact pinned job and label',
-                          ci_preflight.runner_findings({name: unpinned_post}))
-            self.assertNotEqual(post, pr)
-            finding = f'{name} job inspect must run on ["self-hosted","pf-gcp-pr"] for pull_request'
-            self.assertIn(finding, ci_preflight.runner_findings({name: post}))
-            # Renaming a file, adding an if, or hiding the job behind a local
-            # workflow call cannot turn a PR into a post-merge run.
-            guarded = post.replace('    runs-on:', '    if: false\n    runs-on:', 1)
-            self.assertIn(finding, ci_preflight.runner_findings({name: guarded}))
-            caller = ('on:\n  pull_request:\njobs:\n  call:\n'
-                      '    uses: ./.github/workflows/nested.yml\n')
-            nested = ('on:\n  workflow_call:\njobs:\n  call:\n'
-                      '    uses: ./.github/workflows/leaf.yml\n')
-            leaf = post.replace('  pull_request:', '  workflow_call:', 1)
-            self.assertIn('leaf.yml job inspect must run on ["self-hosted","pf-gcp-pr"] for pull_request',
-                          ci_preflight.runner_findings({name: caller, 'nested.yml': nested,
-                                                        'leaf.yml': leaf}))
+            # Neither the retired post-merge GKE label nor the retired self-hosted PR
+            # array may route a pull_request job; only the hosted x86 image does.
+            for retired in (GKE_2, LEGACY_PR_RUNNER):
+                post = pr.replace(runner_declaration(HOSTED_X86), runner_declaration(retired), 1)
+                # Post jobs need an exact inventory pin even on a trusted event.
+                unpinned_post = post.replace('  pull_request:', '  push:', 1)
+                self.assertIn(f'{name} job inspect must run on {HOSTED_X86} for post-merge events',
+                              ci_preflight.runner_findings({name: unpinned_post}))
+                self.assertNotEqual(post, pr)
+                finding = f'{name} job inspect must run on {HOSTED_X86} for pull_request'
+                self.assertIn(finding, ci_preflight.runner_findings({name: post}))
+                # Renaming a file, adding an if, or hiding the job behind a local
+                # workflow call cannot turn a PR into a post-merge run.
+                guarded = post.replace('    runs-on:', '    if: false\n    runs-on:', 1)
+                self.assertIn(finding, ci_preflight.runner_findings({name: guarded}))
+                caller = ('on:\n  pull_request:\njobs:\n  call:\n'
+                          '    uses: ./.github/workflows/nested.yml\n')
+                nested = ('on:\n  workflow_call:\njobs:\n  call:\n'
+                          '    uses: ./.github/workflows/leaf.yml\n')
+                leaf = post.replace('  pull_request:', '  workflow_call:', 1)
+                self.assertIn(f'leaf.yml job inspect must run on {HOSTED_X86} for pull_request',
+                              ci_preflight.runner_findings({name: caller, 'nested.yml': nested,
+                                                            'leaf.yml': leaf}))
 
     def test_release_pool_labels_are_refused_on_real_pull_request_jobs(self):
         workflows = self.workflows()
@@ -1801,7 +1839,7 @@ class WorkflowEventFleets(unittest.TestCase):
         self.assertEqual(ci_preflight._events(original), {'workflow_call'})
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
         for label in ('pf-ci-release', *RETIRED_VM_LABELS):
-            flat = in_job(original, 'corpus-parity-subset', runner_declaration(GKE_PR_8),
+            flat = in_job(original, 'corpus-parity-subset', runner_declaration(HOSTED_X86),
                           runner_declaration(f'["self-hosted","{label}"]'))
             self.assertNotEqual(flat, original)
             finding = ('flat-peak.yml job corpus-parity-subset may use release pool labels '
@@ -1839,11 +1877,11 @@ class WorkflowEventFleets(unittest.TestCase):
         post = workflows['ci-post.yml']
         self.assertIn('build-arm', _jobs(post))
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
-        changed = in_job(post, 'build-arm', runner_declaration(GKE_ARM),
+        changed = in_job(post, 'build-arm', runner_declaration(HOSTED_ARM),
                          f'    runs-on: {POST_RUNNER}\n')
         self.assertNotEqual(changed, post)
         findings = ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed})
-        self.assertIn(f'ci-post.yml job build-arm must run on {GKE_ARM}', findings)
+        self.assertIn(f'ci-post.yml job build-arm must run on {HOSTED_ARM}', findings)
         for scope, before, after in (
                 (None, '\nenv:\n', f"\nenv:\n  PF_CI_LABELS: '{POST_RUNNER}'\n"),
                 ('build-arm', '    steps:\n',
@@ -1851,7 +1889,8 @@ class WorkflowEventFleets(unittest.TestCase):
             with self.subTest(metadata_scope=scope):
                 changed = in_job(post, scope, before, after)
                 self.assertNotEqual(changed, post)
-                self.assertIn('ci-post.yml job build-arm must not set PF_CI_LABELS on a GKE job',
+                self.assertIn('ci-post.yml job build-arm must not set PF_CI_LABELS '
+                              'on a pinned verification job',
                               ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed}))
 
     def test_post_split_preserves_all_matrix_check_names(self):
@@ -1906,10 +1945,10 @@ class WorkflowEventFleets(unittest.TestCase):
 
     def test_post_hosted_exception_refuses_jobs_outside_the_fixed_allowlist(self):
         post = ('on: workflow_dispatch\njobs:\n  build-arm:\n'
-                + runner_declaration(GKE_ARM) + '    steps:\n      - run: "true"\n')
-        # This positive control is red under the old blanket post-fleet rule.
+                + runner_declaration(HOSTED_ARM) + '    steps:\n      - run: "true"\n')
+        # The pinned arm64 image is accepted only at its exact job.
         self.assertEqual(ci_preflight.workflow_fleet_findings({'ci-post.yml': post}), [])
-        for runner in ('ubuntu-latest', 'ubuntu-24.04-arm', 'macos-26'):
+        for runner in ('ubuntu-latest', 'ubuntu-24.04-arm', 'ubuntu-22.04', 'macos-26', GKE_ARM):
             changed = post + ('\n  unexpected:\n    runs-on: ' + runner
                               + '\n    steps:\n      - run: "true"\n')
             self.assertNotEqual(changed, post)
@@ -1917,21 +1956,24 @@ class WorkflowEventFleets(unittest.TestCase):
                           ci_preflight.runner_findings({'ci-post.yml': changed}))
         workflows = self.workflows()
         original = workflows['ci-post.yml']
-        changed = in_job(original, 'build-arm', runner_declaration(GKE_ARM),
-                         '    runs-on: ubuntu-latest\n')
-        self.assertNotEqual(changed, original)
-        self.assertIn(f'ci-post.yml job build-arm must run on {GKE_ARM}',
-                      ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed}))
+        for wrong in ('ubuntu-latest', 'ubuntu-22.04-arm', HOSTED_X86, GKE_ARM):
+            changed = in_job(original, 'build-arm', runner_declaration(HOSTED_ARM),
+                             f'    runs-on: {wrong}\n')
+            self.assertNotEqual(changed, original)
+            self.assertIn(f'ci-post.yml job build-arm must run on {HOSTED_ARM}',
+                          ci_preflight.runner_findings({**workflows, 'ci-post.yml': changed}))
 
     def test_post_hosted_exception_never_applies_to_pull_request(self):
         post = ('on: workflow_dispatch\njobs:\n  build-arm:\n'
-                + runner_declaration(GKE_ARM) + '    steps:\n      - run: "true"\n')
+                + runner_declaration(HOSTED_ARM) + '    steps:\n      - run: "true"\n')
         self.assertEqual(ci_preflight.workflow_fleet_findings({'ci-post.yml': post}), [])
         pr = post.replace('on: workflow_dispatch', 'on: pull_request', 1)
         self.assertNotEqual(pr, post)
+        # The arm64 pin is a post-merge exception: a pull_request-reachable copy of the
+        # job is held to the PR image, so the arm image is refused there.
         finding = f'ci-post.yml job build-arm must run on {PR_RUNNER} for pull_request'
         self.assertIn(finding, ci_preflight.runner_findings({'ci-post.yml': pr}))
-        changed = pr.replace(runner_declaration(GKE_ARM), f'    runs-on: {POST_RUNNER}\n', 1)
+        changed = pr.replace(runner_declaration(HOSTED_ARM), '    runs-on: ubuntu-latest\n', 1)
         self.assertNotEqual(changed, pr)
         self.assertIn(finding, ci_preflight.runner_findings({'ci-post.yml': changed}))
         # Reusable calls must not make the fixed hosted exception PR-reachable.
@@ -1966,6 +2008,18 @@ def runner_declaration(runner):
     return f'    runs-on: {runner}\n'
 
 
+def hosted_suffix(name, job):
+    """Text the checker appends to its `must run on` finding for a hosted pin.
+
+    The exact-pin tables (EXPECTED_GKE_JOBS and EXPECTED_LIGHT_GKE_JOBS, historical
+    names for the hosted per-job pins) report the bare label. A job pinned only
+    through the hosted table (ci.yml authz, the gke-pr admission jobs, docs, the
+    docs-post build and the rerun controller) reports ' (hosted)'.
+    """
+    exact = {**EXPECTED_GKE_JOBS.get(name, {}), **EXPECTED_LIGHT_GKE_JOBS.get(name, {})}
+    return '' if job in exact else ' (hosted)'
+
+
 class LightGkeRunnerPolicy(unittest.TestCase):
     def workflows(self):
         workflows = {path.name: path.read_text()
@@ -1991,11 +2045,13 @@ class LightGkeRunnerPolicy(unittest.TestCase):
                     body = _jobs(workflows[name])[job]
                     self.assertEqual(ci_preflight._job_values(
                         body, 'runs-on', unquote=False), [runner])
-                    for wrong in ('ubuntu-24.04', 'ubuntu-latest', PR_RUNNER,
+                    # Retired GKE labels and the retired self-hosted PR array stay refused.
+                    for wrong in ('ubuntu-latest', 'ubuntu-22.04', 'ubuntu-24.04-arm',
+                                  LEGACY_PR_RUNNER,
                                   f'["{runner}"]', f'"{runner}"',
-                                  f'group: gke-runners labels: {runner}',
+                                  f'group: gke-runners labels: {GKE_2}',
                                   "${{ 'gke-2cpu-4gb-amd64' }}",
-                                  GKE_4 if runner == GKE_2 else GKE_2):
+                                  GKE_2, GKE_4):
                         changed = in_job(workflows[name], job,
                                          runner_declaration(runner),
                                          runner_declaration(wrong))
@@ -2028,13 +2084,15 @@ class LightGkeRunnerPolicy(unittest.TestCase):
             workflows['release-ruleset-probe.yml'], workflows['release.yml']), [])
         guard = '  promote-guard:' + _jobs(workflows['promote-baseline.yml'])['promote-guard']
         self.assertEqual(ci_preflight._code(guard), ci_preflight._code(ci_preflight.PROMOTE_GUARD))
-        old_probe = in_job(workflows['release-ruleset-probe.yml'], 'authz',
-                           runner_declaration(GKE_2), runner_declaration('ubuntu-24.04'))
-        self.assertIn(RULESETS_PROBE_FINDING,
-                      ci_preflight.release_rulesets_probe_workflow_findings(
-                          old_probe, workflows['release.yml']))
+        # The retired GKE label (and any other image) no longer matches the pinned text.
+        for retired in (GKE_2, 'ubuntu-latest', 'ubuntu-22.04'):
+            old_probe = in_job(workflows['release-ruleset-probe.yml'], 'authz',
+                               runner_declaration('ubuntu-24.04'), runner_declaration(retired))
+            self.assertIn(RULESETS_PROBE_FINDING,
+                          ci_preflight.release_rulesets_probe_workflow_findings(
+                              old_probe, workflows['release.yml']))
         old_guard = in_job(workflows['promote-baseline.yml'], 'promote-guard',
-                           runner_declaration(GKE_2), runner_declaration('ubuntu-latest'))
+                           runner_declaration('ubuntu-24.04'), runner_declaration('ubuntu-latest'))
         self.assertNotEqual(ci_preflight._code(
             '  promote-guard:' + _jobs(old_guard)['promote-guard']),
                             ci_preflight._code(ci_preflight.PROMOTE_GUARD))
@@ -2057,30 +2115,43 @@ class LightGkeRunnerPolicy(unittest.TestCase):
                         before, after = '    env:\n', extra
                     changed = in_job(workflows[name], job, before, after)
                     self.assertNotEqual(changed, workflows[name])
-                    self.assertIn(f'{name} job {job} must not expose credentials on GKE',
+                    self.assertIn(f'{name} job {job} must not expose credentials '
+                                  'on a pinned verification job',
                                   ci_preflight.runner_findings({**workflows, name: changed}))
+            # PR reachability: a hosted workflow with a post-merge event may not also
+            # run on pull_request, and a retired GKE route is still refused there.
             direct = workflows[name].replace('on:\n', 'on:\n  pull_request:\n', 1)
             self.assertNotEqual(direct, workflows[name])
-            self.assertIn(f'{name} is reachable from pull_request and must not contain GKE routing',
+            pr_finding = (f'{name} must not admit untrusted caller events to isolated release jobs'
+                          if name in ci_preflight.RELEASE_JOB_RUNNERS else
+                          f'{name} must split pull_request and post-merge events into separate workflows')
+            self.assertIn(pr_finding,
                           ci_preflight.runner_findings({**workflows, name: direct}))
+            first_job, first_runner = next(iter(pins.items()))
+            retired = in_job(direct, first_job, runner_declaration(first_runner),
+                             runner_declaration(GKE_2))
+            self.assertIn(f'{name} is reachable from pull_request and must not contain GKE routing',
+                          ci_preflight.runner_findings({**workflows, name: retired}))
             if 'workflow_call' in ci_preflight._events(workflows[name]):
                 caller = ('on: pull_request\njobs:\n  call:\n'
                           f'    uses: ./.github/workflows/{name}\n')
-                self.assertIn(f'{name} is reachable from pull_request and must not contain GKE routing',
+                self.assertIn(pr_finding,
                               ci_preflight.runner_findings({**workflows, 'pr-caller.yml': caller}))
 
     def test_guard_permission_override_and_inherited_oidc_are_distinct(self):
         workflows = self.workflows()
         name, job = 'promote-baseline.yml', 'promote-guard'
-        self.assertNotIn(f'{name} job {job} must not expose credentials on GKE',
-                         ci_preflight.runner_findings(workflows))
+        credential_finding = (f'{name} job {job} must not expose credentials '
+                              'on a pinned verification job')
+        self.assertNotIn(credential_finding, ci_preflight.runner_findings(workflows))
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
         permission = '    permissions:\n      pull-requests: read\n'
         for replacement in ('', '    permissions: write-all\n',
                             '    permissions:\n      id-token: write\n'):
             changed = in_job(workflows[name], job, permission, replacement)
             self.assertNotEqual(changed, workflows[name])
-            self.assertIn(f'{name} job {job} must not expose credentials on GKE',
+            # Dropping the job override inherits the workflow's id-token scope.
+            self.assertIn(credential_finding,
                           ci_preflight.runner_findings({**workflows, name: changed}))
 
     def test_real_post_light_split_pins_seven_and_five_instances(self):
@@ -2090,26 +2161,32 @@ class LightGkeRunnerPolicy(unittest.TestCase):
                  for body in _jobs(workflows['ci-post.yml']).values()
                  for value in ci_preflight._job_values(body, 'uses')]
         self.assertCountEqual(calls, ['native-live.yml', 'corpus-parity.yml', 'corpus-parity.yml'])
-        counts = {GKE_2: 0, GKE_4: 0}
+        # The light-job population is unchanged: seven inline ci-post jobs plus the
+        # called light jobs (5 instances), all on the hosted x86 image.
+        counts = {'ci-post.yml': 0, 'called': 0}
         for name in names:
             for job, runner in EXPECTED_LIGHT_GKE_JOBS[name].items():
+                self.assertEqual(runner, HOSTED_X86)
                 body = _jobs(workflows[name])[job]
                 self.assertEqual(ci_preflight._job_values(body, 'runs-on', unquote=False), [runner])
                 self.assertEqual(ci_preflight._matrix_rows(body), [{}])
-                counts[runner] += 1 if name == 'ci-post.yml' else calls.count(name)
-        self.assertEqual(counts, {GKE_2: 7, GKE_4: 5})
+                counts['ci-post.yml' if name == 'ci-post.yml' else 'called'] += (
+                    1 if name == 'ci-post.yml' else calls.count(name))
+        self.assertEqual(counts, {'ci-post.yml': 7, 'called': 5})
         self.assertEqual(ci_preflight._gke_cap_findings(workflows), [])
-        for name, label, boundary, overflow in (('ci-post.yml', GKE_2, 2, 3),
-                                                 ('native-live.yml', GKE_4, 4, 5)):
+        # The per-label cap bounds retired GKE scale sets only: replicating a hosted
+        # job past 8 instances is not a GKE cap finding. The GKE-label overflow
+        # controls are test_cap_counts_scalar_and_mapping_instances_together and
+        # the GkeRunnerPolicy cap tests, which build explicit retired-label fixtures.
+        for name, boundary, overflow in (('ci-post.yml', 2, 3), ('native-live.yml', 4, 5),
+                                         ('ci-post.yml', 8, 9)):
             for replicas in (boundary, overflow):
                 matrix = ('    strategy:\n      matrix:\n        replica: ['
                           + ', '.join(str(i) for i in range(replicas)) + ']\n')
                 changed = in_job(workflows[name], 'authz', '    steps:\n',
                                  matrix + '    steps:\n')
-                findings = ci_preflight._gke_cap_findings({**workflows, name: changed})
-                expected = ([] if replicas == boundary else
-                            [f'ci-post.yml GKE label {label} expands to 9 jobs; cap is 8'])
-                self.assertEqual(findings, expected)
+                self.assertNotEqual(changed, workflows[name])
+                self.assertEqual(ci_preflight._gke_cap_findings({**workflows, name: changed}), [])
 
     def test_cap_counts_scalar_and_mapping_instances_together(self):
         workflows = self.workflows()
@@ -2150,16 +2227,24 @@ class GkeRunnerPolicy(unittest.TestCase):
             'on:\n  workflow_call:\n    secrets:\n      DEPLOY_KEY:\n        required: false')
         return {'ci-post.yml': caller, 'corpus-parity.yml': callee}
 
-    def test_exact_gke_route_is_accepted(self):
-        self.assertEqual(ci_preflight.workflow_fleet_findings(
-            {'ci-post.yml': self.fixture()}), [])
+    def test_exact_hosted_route_is_accepted_and_the_retired_gke_route_is_not(self):
+        # The pinned hosted image raises no routing finding; the same job on the
+        # retired bare GKE scale set is refused at its exact pin.
+        hosted = ci_preflight.runner_findings(
+            {'ci-post.yml': self.fixture(runner=HOSTED_X86)})
+        self.assertEqual([finding for finding in hosted
+                          if ' must run on ' in finding or 'GKE' in finding], [])
+        retired = ci_preflight.runner_findings({'ci-post.yml': self.fixture()})
+        self.assertIn('ci-post.yml job preflight may use GKE routing only at its exact '
+                      'pinned job and label', retired)
+        self.assertIn('ci-post.yml job preflight must run on ubuntu-24.04', retired)
 
     def assert_gke_shape_refused(self, runner):
         findings = ci_preflight.runner_findings(
             {'ci-post.yml': self.fixture(runner=runner)})
         self.assertIn('ci-post.yml job preflight must use a bare scalar GKE scale-set name',
                       findings)
-        self.assertIn('ci-post.yml job preflight must run on gke-8cpu-16gb-amd64',
+        self.assertIn('ci-post.yml job preflight must run on ubuntu-24.04',
                       findings)
 
     def test_gke_group_mapping_is_refused(self):
@@ -2195,7 +2280,7 @@ class GkeRunnerPolicy(unittest.TestCase):
             {'ci-post.yml': self.fixture(runner='gke-16cpu-32gb-amd64')})
         self.assertIn('ci-post.yml job preflight may use GKE routing only at its exact pinned job and label',
                       findings)
-        self.assertIn('ci-post.yml job preflight must run on gke-8cpu-16gb-amd64',
+        self.assertIn('ci-post.yml job preflight must run on ubuntu-24.04',
                       findings)
 
     def test_sized_jobs_refuse_default_labels(self):
@@ -2233,9 +2318,9 @@ class GkeRunnerPolicy(unittest.TestCase):
                         finding for finding in ci_preflight.runner_findings({name: bare})
                         if finding.startswith(prefix)
                     ], [])
-                arch = label.split('-')[3]
-                wrong_size = (f'gke-16cpu-32gb-{arch}' if label.startswith('gke-32cpu-')
-                              else f'gke-32cpu-64gb-{arch}')
+                # A different image: the other architecture, an older release, or the
+                # retired GKE scale set of the same architecture.
+                wrong_image = (HOSTED_X86 if label == HOSTED_ARM else HOSTED_ARM)
                 for runner in (
                         f'group: gke-runners labels: {label}',
                         f'{{group: gke-runners, labels: {label}}}',
@@ -2245,7 +2330,8 @@ class GkeRunnerPolicy(unittest.TestCase):
                         f"${{{{ '{label}' }}}}",
                         f"${{{{ inputs.runner || '{label}' }}}}",
                         f"'{label}'", f'"{label}"',
-                        label.upper(), wrong_size):
+                        label.upper(), wrong_image, 'ubuntu-22.04', 'ubuntu-latest',
+                        GKE_8 if label == HOSTED_X86 else GKE_ARM):
                     with self.subTest(workflow=name, job=job, runner=runner):
                         changed = in_job(bare, job, runner_declaration(label),
                                          runner_declaration(runner))
@@ -2403,7 +2489,8 @@ class GkeRunnerPolicy(unittest.TestCase):
                         changed = in_job(workflow, job, '    steps:\n',
                                          declaration + '    steps:\n')
                         self.assertNotEqual(changed, workflow)
-                        self.assertIn(f'{name} job {job} must not declare a job container on GKE',
+                        self.assertIn(f'{name} job {job} must not declare a job container '
+                                      'on a pinned verification job',
                                       ci_preflight.runner_findings({name: changed}))
 
     def test_gke_jobs_refuse_job_services_declarations(self):
@@ -2421,7 +2508,8 @@ class GkeRunnerPolicy(unittest.TestCase):
                         changed = in_job(workflow, job, '    steps:\n',
                                          declaration + '    steps:\n')
                         self.assertNotEqual(changed, workflow)
-                        self.assertIn(f'{name} job {job} must not declare job services on GKE',
+                        self.assertIn(f'{name} job {job} must not declare job services '
+                                      'on a pinned verification job',
                                       ci_preflight.runner_findings({name: changed}))
 
     def test_gke_scale_sets_are_confined_to_exact_jobs(self):
@@ -2532,7 +2620,7 @@ class GkeRunnerPolicy(unittest.TestCase):
                          ci_preflight.runner_findings(
                              {'dispatch.yml': caller, 'hosted.yml': hosted}))
 
-    def test_real_gke_reusable_callers_refuse_credentials(self):
+    def test_real_hosted_reusable_callers_refuse_credentials(self):
         workflows = {path.name: path.read_text()
                      for path in sorted((ROOT / '.github/workflows').iterdir())
                      if path.suffix in ('.yml', '.yaml')}
@@ -2548,10 +2636,15 @@ class GkeRunnerPolicy(unittest.TestCase):
             self.assertEqual(ci_preflight._job_values(body, 'secrets'), [])
             before = f'    uses: ./.github/workflows/{callee}\n'
             for mutation, extra in self.CALLER_CREDENTIALS:
+                if mutation == 'id-token read':
+                    continue  # Reading the OIDC scope mints nothing on a hosted callee.
                 changed = in_job(post, job, before, before + extra)
                 with self.subTest(job=job, mutation=mutation):
                     self.assertNotEqual(changed, post)
-                    self.assertIn(f'ci-post.yml job {job} must not expose credentials on GKE',
+                    # The callees are hosted now, so the hosted rule applies: a call
+                    # that carries credentials must be proven to stay hosted.
+                    self.assertIn(f'ci-post.yml job {job} must prove credential-bearing '
+                                  'reusable workflow calls stay hosted',
                                   ci_preflight.runner_findings(
                                       {**workflows, 'ci-post.yml': changed}))
 
@@ -2682,10 +2775,11 @@ class PostFleetRunnerPolicy(unittest.TestCase):
         workflows = self.post_workflows()
         for name, job, profile in POST_FLEET_CASES:
             expected = EXPECTED_GKE_JOBS[name][job]
-            for runner in (PR_RUNNER, GKP_2, RELEASE_RUNNER, *RETIRED_VM_LABELS,
+            for runner in (LEGACY_PR_RUNNER, GKE_2, GKP_2, RELEASE_RUNNER, *RETIRED_VM_LABELS,
                            *(f'["{label}","self-hosted"]' for label in RETIRED_VM_LABELS),
                            *(f'["self-hosted","{label}","extra"]' for label in RETIRED_VM_LABELS),
-                           "'" + POST_RUNNER + "'", json.dumps(POST_RUNNER)):
+                           'ubuntu-22.04', 'ubuntu-latest',
+                           "'" + expected + "'", json.dumps(expected)):
                 with self.subTest(workflow=name, job=job, profile=profile, runner=runner):
                     changed = in_job(workflows[name], job, runner_declaration(expected),
                                      f'    runs-on: {runner}\n')
@@ -2699,17 +2793,21 @@ class PostFleetRunnerPolicy(unittest.TestCase):
                     if declaration.startswith('    env:') and '    env:\n' in _jobs(workflows[name])[job]:
                         before, after = '    env:\n', declaration
                     changed = in_job(workflows[name], job, before, after)
-                    self.assertIn(f'{name} job {job} must keep production credentials '
-                                  'on a hosted standard runner',
+                    # On the exact pin a credential-bearing verification job is refused as such.
+                    self.assertIn(f'{name} job {job} must not expose credentials '
+                                  'on a pinned verification job',
                                   ci_preflight.runner_findings({**workflows, name: changed}))
+                    # Off the pin it is refused twice: wrong image and credentials off hosted.
                     changed = in_job(changed, job, runner_declaration(expected),
-                                     '    runs-on: ubuntu-24.04\n')
-                    self.assertIn(f'{name} job {job} must run on {expected}',
-                                  ci_preflight.runner_findings({**workflows, name: changed}))
+                                     '    runs-on: ubuntu-22.04\n')
+                    findings = ci_preflight.runner_findings({**workflows, name: changed})
+                    self.assertIn(f'{name} job {job} must run on {expected}', findings)
+                    self.assertIn(f'{name} job {job} must keep production credentials '
+                                  'on a hosted standard runner', findings)
 
     def test_post_fleet_docs_match_runner_policy(self):
         docs = (ROOT / 'docs/ci.md').read_text()
-        self.assertEqual(len(docs.splitlines()), 2063)
+        self.assertEqual(len(docs.splitlines()), 2060)
         # The test-owned job catalog defines the protected label inventory.
         tables = re.findall(
             r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
@@ -2725,45 +2823,41 @@ class PostFleetRunnerPolicy(unittest.TestCase):
                              set(jobs.values()),
                              f'{name} documented protected runner inventory')
         requirements = (
-            'Post Release/Debug/kernel, native shards and post sanitizers use fixed bare GKE scale-set names.\n'
-            'The two native-live sanitizer profiles use an exact runner matrix. All GKE jobs run directly '
-            'in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
-            "Hosted `ubuntu-24.04` runs PR `authz`, admission, `legs` and `result` jobs, and `docs.yml`'s `build`; "
-            'secret-free post guards and aggregates use bare scalar GKE names. '
-            'These light, secret-free jobs need no VM-only tools, mounts or caches.',
-            'The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use '
-            '`gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.',
-            'Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 47 GKE job instances: '
-            "the spot amd64 32 CPU label carries 1 job, and the on-demand amd64 32 CPU default/256 GB labels carry 4/8 jobs; amd64 16 CPU default/128/256 GB labels carry 3/3/1, amd64 8/4/2 CPU labels carry 7/5/7, and arm64 16 CPU 128 GB carries 8; each label's static cap is 8.",
-            'The amd64 post build shards and the two arm64 post cells use bare scalar',
-            'Hosted exceptions cover PR light jobs and the existing hosted release cells; post light jobs use bare scalar GKE names.',
-            '`native-live.yml` runs four `native` shards on `gke-8cpu-16gb-amd64`;\n'
-            '`live-sanitizers` builds once on `gke-16cpu-32gb-amd64-256gb` and `live-tsan` once on `gke-16cpu-32gb-amd64-128gb`, selected by the exact `matrix.runner` include rows.',
+            'Only the unchanged `release.yml` keeps its protected `gkp-od-*` scale sets in runner group 15.\n'
+            'The two native-live sanitizer profiles use an exact runner matrix with both rows on `ubuntu-24.04`. '
+            'No job routes by event.',
+            "Hosted `ubuntu-24.04` runs the PR `authz`, admission, `legs` and `result` jobs, `docs.yml`'s `build`, "
+            'and every light, aggregate and proof job of the migrated workflows. '
+            'These jobs need no VM-only tools, mounts or caches.',
+            'Preflight refuses any `gke-*` or `gkp-*` label in a pull_request-reachable workflow and any migrated job '
+            'off its pinned hosted label; the old per-label GKE cap check stays only as a refusal.',
+            'The amd64 post build shards use the hosted `ubuntu-24.04` image and the two arm64 post cells use\n'
+            '`ubuntu-24.04-arm`; each runs directly on that image.',
+            'Hosted pins cover every PR and post job outside `release.yml`; the existing hosted release cell keeps `ubuntu-22.04-arm`.',
+            '`native-live.yml` runs four `native` shards on `ubuntu-24.04`;\n'
+            '`live-sanitizers` and `live-tsan` each build once on `ubuntu-24.04`, selected by the exact `matrix.runner` include rows.',
             "paid 16-core runners' medians over five runs were 1815, 1812, 1770, 2050",
-            'The four amd64 post legs, arm64 cells, preflight, parity and native verification use fixed GKE scale-set names; '
-            'their aggregates use the light image. '
+            'The four amd64 post legs, arm64 cells, preflight, parity and native verification use the pinned hosted images; '
+            'their aggregates use the hosted x86 image. '
             "Promotion's `promote-guard` and docs-post/probe `authz` each use one "
-            '`gke-2cpu-4gb-amd64` instance in separate roots; their image must include `gh` for permission lookups.',
+            '`ubuntu-24.04` instance in separate roots; their image must include `gh` for permission lookups.',
             '| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | '
-            'Seven light jobs: scalar `gke-2cpu-4gb-amd64`; native x86 Release `build-x86-gcc133` on spot `gke-32cpu-64gb-amd64`; bare GKE scalars: '
-            'Release `gke-ondemand-32cpu-64gb-amd64`, sanitizers `gke-ondemand-32cpu-64gb-amd64-256gb`, Debug `gke-16cpu-32gb-amd64-128gb`, kernel `gke-16cpu-32gb-amd64`, '
-            'preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64-128gb` |',
+            'All jobs hosted: x86 `ubuntu-24.04` for the seven light jobs, native x86 Release `build-x86-gcc133`, '
+            'Release, Debug, sanitizers, kernel and the preflight tiers; arm64 `ubuntu-24.04-arm` |',
             '| `native-live.yml` | Dispatch and post CI callers on `main` | '
-            '`authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; '
-            'native shards: bare `gke-8cpu-16gb-amd64`; `matrix.runner`: live-sanitizers `gke-16cpu-32gb-amd64-256gb`, live-tsan `gke-16cpu-32gb-amd64-128gb` |',
-            'GKE jobs carry no deployment secrets, effective id-token permissions or environment; '
-            'pull_request workflows cannot name GKE routing. '
-            'Runner-group workflow/ref allowlists must admit the post-only workflows '
-            'at refs/heads/main before they can acquire pods. '
-            'GKE jobs start only from gke-pr.yml, ci-post.yml, corpus-parity.yml, native-live.yml, '
-            'docs-post.yml, release-ruleset-probe.yml and promote-baseline.yml '
-            'at refs/heads/main (the runner group lists those workflow refs); '
-            'a dispatch from another ref queues without a runner.',
+            '`authz`, both aggregates and the native shards: `ubuntu-24.04`; '
+            '`matrix.runner`: live-sanitizers and live-tsan both `ubuntu-24.04` |',
+            'Pinned verification jobs carry no deployment secrets, effective id-token permissions or environment '
+            'and declare no job container or services; '
+            'pull_request workflows cannot name `gke-*` or `gkp-*` routing. '
+            'Only `release.yml` still names protected `gkp-od-*` scale sets: '
+            'the runner-group allowlist must list its ref at refs/heads/main before it can acquire a pod, '
+            'and every other workflow runs on a hosted image and needs no allowlist entry.',
             'Retired GCP main/post labels and paid larger-runner labels remain refused.',
             '`build-debug` shards, and kernel two shards; sanitizers uses four, '
-            'all on their fixed GKE sizes.',
-            '`HOSTED_JOB_RUNNERS` pins hosted jobs, exact bare GKE scalars and the native profile runner matrix; `GKP_JOB_RUNNERS` separately '
-            'pins protected jobs and sizes. Every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. PR checks are',
+            'all on the pinned hosted images.',
+            '`HOSTED_JOB_RUNNERS` pins the hosted x86 and arm64 jobs and the native profile runner matrix; `GKP_JOB_RUNNERS` separately '
+            'pins the protected release jobs and sizes. Every pinned job runs directly on its hosted image. PR checks are',
             '`build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.',
             '`build`, `build-debug`, `build-arm`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.',
             'Both matrices keep `fail-fast: false` and build pinned WebSocket curl cold.',
@@ -2776,28 +2870,31 @@ class PostFleetRunnerPolicy(unittest.TestCase):
 
     def test_post_fleet_docs_refuse_same_size_wrong_protected_runner(self):
         docs = (ROOT / 'docs/ci.md').read_text()
+        # release.yml is the only workflow that still documents protected scale sets.
         rows = [line for line in docs.splitlines()
-                if line.startswith('| `docs-post.yml` |')]
+                if line.startswith('| `release.yml` |')]
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0].count(f'`{GKP_4}`'), 1)
-        changed = docs.replace(rows[0], rows[0].replace(GKP_4, GKE_4, 1), 1)
+        self.assertEqual(rows[0].count(f'`{GKP_OD_4}`'), 1)
+        changed = docs.replace(rows[0], rows[0].replace(GKP_OD_4, GKE_4, 1), 1)
         self.assertNotEqual(changed, docs)
         self.assertEqual(len(changed.splitlines()), len(docs.splitlines()))
         with mock.patch.object(Path, 'read_text', return_value=changed) as read_doc:
             with self.assertRaisesRegex(
-                    AssertionError, r'docs-post\.yml documented protected runner inventory'):
+                    AssertionError, r'release\.yml documented protected runner inventory'):
                 self.test_post_fleet_docs_match_runner_policy()
         read_doc.assert_called_once_with()
 
 
 POST_SHARD_CASES = (
-    ('build', 'release', 4, GKE_ONDEMAND_32, 'build-release-gate',
+    ('build', 'release', 4, HOSTED_X86, 'build-release-gate',
      'build (ubuntu-24.04, Release)'),
-    ('build-debug', 'debug', 2, GKE_16_128, 'build-debug-gate',
+    ('build-debug', 'debug', 2, HOSTED_X86, 'build-debug-gate',
      'build (ubuntu-24.04, Debug)'),
-    ('sanitizers', 'sanitizers', 8, GKE_ONDEMAND_32_256, 'sanitizers-gate', 'sanitizers'),
-    ('kernel-only', 'kernel', 2, GKE_16, 'kernel-only-gate', 'kernel-only'),
+    ('sanitizers', 'sanitizers', 8, HOSTED_X86, 'sanitizers-gate', 'sanitizers'),
+    ('kernel-only', 'kernel', 2, HOSTED_X86, 'kernel-only-gate', 'kernel-only'),
 )
+# The retired GKE sizes the shard jobs used before the hosted pins stay negative fixtures.
+RETIRED_SHARD_LABELS = (GKE_ONDEMAND_32, GKE_16_128, GKE_ONDEMAND_32_256, GKE_16)
 
 
 class PostCTestShardPolicy(unittest.TestCase):
@@ -2820,10 +2917,17 @@ class PostCTestShardPolicy(unittest.TestCase):
             with self.subTest(job=job):
                 post = self.shard_workflow(job, profile, count, label)
                 self.assertEqual(ci_preflight.workflow_fleet_findings({'ci-post.yml': post}), [])
+                # A pull_request-reachable copy may not select a retired GKE size.
                 pr = post.replace('on: workflow_dispatch', 'on: pull_request', 1)
-                self.assertIn(f'ci-post.yml job {job} must run on {PR_RUNNER} for pull_request',
-                              ci_preflight.runner_findings({'ci-post.yml': pr}))
-                for wrong in (PR_RUNNER, GKP_2, RELEASE_RUNNER, 'ubuntu-24.04',
+                for retired in RETIRED_SHARD_LABELS:
+                    pr_retired = in_job(pr, job, runner_declaration(label),
+                                        runner_declaration(retired))
+                    findings = ci_preflight.runner_findings({'ci-post.yml': pr_retired})
+                    self.assertIn(f'ci-post.yml job {job} must run on {label}', findings)
+                    self.assertIn('ci-post.yml is reachable from pull_request and must '
+                                  'not contain GKE routing', findings)
+                for wrong in (LEGACY_PR_RUNNER, GKP_2, RELEASE_RUNNER, 'ubuntu-latest',
+                              'ubuntu-22.04', HOSTED_ARM, *RETIRED_SHARD_LABELS,
                               'pf-linux-x64-16', 'pf-linux-x64-32', 'pf-linux-x64-64'):
                     changed = in_job(post, job, runner_declaration(label), runner_declaration(wrong))
                     self.assertIn(f'ci-post.yml job {job} must run on {label}',
@@ -2855,7 +2959,8 @@ class PostCTestShardPolicy(unittest.TestCase):
                                f"    env:\n      PF_CI_LABELS: '{POST_RUNNER}'\n    steps:\n", 1)
                                if scope == 'job' else post.replace('jobs:\n',
                                f"env:\n  PF_CI_LABELS: '{POST_RUNNER}'\njobs:\n", 1))
-                    self.assertIn(f'ci-post.yml job {job} must not set PF_CI_LABELS on a GKE job',
+                    self.assertIn(f'ci-post.yml job {job} must not set PF_CI_LABELS '
+                                  'on a pinned verification job',
                                   ci_preflight.runner_findings({'ci-post.yml': changed}))
 
     def test_shard_matrices_refuse_missing_duplicate_or_extra_indices(self):
@@ -3020,7 +3125,7 @@ class PostLinuxBuildPolicy(unittest.TestCase):
         arm = arm.replace('        platform:\n          - os: ubuntu-24.04\n', '', 1)
         arm = arm.replace('        build_type: [Release]\n',
                           '        build_type: [Release, Debug]\n', 1)
-        arm = arm.replace(f'    runs-on: {GKE_ONDEMAND_32}\n', f'    runs-on: {GKE_ARM}\n', 1)
+        arm = arm.replace(f'    runs-on: {HOSTED_X86}\n', f'    runs-on: {HOSTED_ARM}\n', 1)
         arm = arm.replace(' --ctest-shard ${{ matrix.shard }}/4\n',
                           ' --ctest-shard ${{ matrix.shard }}/4' + POST_ARM_CTEST_EXCLUSION + '\n', 1)
         arm = arm.replace("    env:\n      PF_CI_LABELS: "
@@ -3050,12 +3155,12 @@ class PostLinuxBuildPolicy(unittest.TestCase):
 
     def test_post_arm_refuses_a_non_arm_runner(self):
         post = self.arm_post()
-        for runner in ('ubuntu-24.04', POST_RUNNER, 'ubuntu-latest', 'ubuntu-22.04-arm'):
+        for runner in (HOSTED_X86, 'ubuntu-latest', 'ubuntu-22.04-arm', GKE_ARM):
             with self.subTest(runner=runner):
-                changed = in_job(post, 'build-arm', runner_declaration(GKE_ARM),
+                changed = in_job(post, 'build-arm', runner_declaration(HOSTED_ARM),
                                  f'    runs-on: {runner}\n')
                 self.assertNotEqual(changed, post)
-                self.assertIn(f'ci-post.yml job build-arm must run on {GKE_ARM}',
+                self.assertIn(f'ci-post.yml job build-arm must run on {HOSTED_ARM}',
                               ci_preflight.runner_findings({'ci-post.yml': changed}))
 
     def test_post_arm_requires_both_build_types(self):
@@ -3107,7 +3212,7 @@ class ActionPins(unittest.TestCase):
         steps = ('      - name: External action\n'
                  f'        uses: {value}\n' if named else f'      - uses: {value}\n')
         return ('on: workflow_dispatch\njobs:\n  inspect:\n'
-                '    runs-on: gke-2cpu-4gb-amd64\n'
+                f'    runs-on: {HOSTED_X86}\n'
                 '    steps:\n' + steps)
 
     @staticmethod
@@ -3655,7 +3760,7 @@ class ActionPins(unittest.TestCase):
                     self.finding(self.WORKFLOW, number, 'actions/upload-artifact@main')])
         # Quoted YAML values and comments must not expose apparent flow keys.
         text = ('on: workflow_dispatch\njobs:\n  inspect:\n'
-                '    runs-on: gke-2cpu-4gb-amd64\n    steps:\n'
+                f'    runs-on: {HOSTED_X86}\n    steps:\n'
                 '      - name: "Example, uses: actions/checkout@main"\n'
                 '        run: \'echo "{uses: actions/checkout@main}"\'\n'
                 '      - name: A plain scalar mentioning uses:literal\n'
@@ -4106,7 +4211,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
     def change_docs_runner(self, runner, extra=''):
         path = self.workflows / 'docs-post.yml'
         original = (ROOT / '.github/workflows/docs-post.yml').read_text()
-        changed = in_job(original, 'authz', f'    runs-on: {GKE_2}\n',
+        changed = in_job(original, 'authz', f'    runs-on: {HOSTED_X86}\n',
                          f'    runs-on: {runner}\n' + extra)
         self.assertNotEqual(changed, original)
         path.write_text(changed)
@@ -4117,8 +4222,19 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.assertEqual(code, 1, lines)
 
     def test_incident_docs_post_requires_its_exact_group_reference(self):
-        self.omit('docs-post.yml')
+        # The group-14 mirror is empty and the hosted docs-post names no group label,
+        # so the missing reference is clean; a retired GKE label reintroduced on its
+        # authz job needs the exact reference again, and the exact reference admits it.
+        self.assertEqual(self.entries(), [])
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines), [], lines)
+        self.assertEqual(code, 0, lines)
+        self.change_docs_runner(GKE_2)
         self.assert_incident()
+        self.write_entries([self.reference('docs-post.yml')])
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines), [], lines)
+        self.assertEqual(code, 0, lines)
 
     def test_the_same_real_docs_post_with_its_reference_is_clean(self):
         code, lines = self.run_stage()
@@ -4131,44 +4247,67 @@ class RunnerGroupAllowlist(unittest.TestCase):
         announce_compare_fixture_paths(workflow, self.mirror, *sorted(self.workflows.glob('*')))
         jobs = _jobs(workflow.read_text())
         self.assertIn('build-arm', jobs)
-        self.assertEqual(ci_preflight._job_values(jobs['build-arm'], 'runs-on'), [GKE_ARM])
+        self.assertEqual(ci_preflight._job_values(jobs['build-arm'], 'runs-on'), [HOSTED_ARM])
         code, lines = self.run_stage()
         self.assertEqual(code, 0, lines)
         self.assertEqual(self.failures(lines), [], lines)
-        self.omit('gke-pr.yml')
+        # The hosted arm64 image needs no group-14 entry. The retired arm64 scale set
+        # on the same job needs gke-pr.yml's own reference again.
+        workflow.write_text(in_job(workflow.read_text(), 'build-arm',
+                                   runner_declaration(HOSTED_ARM), runner_declaration(GKE_ARM)))
         code, lines = self.run_stage()
         self.assertEqual(code, 1, lines)
-        self.assertCountEqual(self.failures(lines),
-                              [self.missing('gke-pr.yml', label)
-                               for label in (GKE_PR_32, GKE_PR_16, GKE_PR_8, GKE_ARM)])
+        self.assertEqual(self.failures(lines), [self.missing('gke-pr.yml', GKE_ARM)], lines)
+        self.write_entries([self.reference('gke-pr.yml')])
+        code, lines = self.run_stage()
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.failures(lines), [], lines)
 
     def test_reusable_workflow_needs_its_own_reference_even_when_caller_is_listed(self):
         workflow = (self.workflows / 'native-live.yml').read_text()
         self.assertIn('workflow_call', ci_preflight._events(workflow))
         self.assertIn('uses: ./.github/workflows/native-live.yml',
                       (self.workflows / 'ci-post.yml').read_text())
-        self.omit('native-live.yml')
+        # Its hosted jobs need no mirror line; its caller is listed on its own.
+        self.write_entries([self.reference('ci-post.yml')])
         code, lines = self.run_stage()
-        self.assertCountEqual(self.failures(lines),
-                              [self.missing('native-live.yml', label)
-                               for label in (GKE_4, GKE_16_128, GKE_16_256, GKE_8)])
+        self.assertEqual(self.failures(lines), [], lines)
+        self.assertEqual(code, 0, lines)
+        # A retired scale set on one native job needs native-live.yml's own reference
+        # even though the listed caller already carries one.
+        (self.workflows / 'native-live.yml').write_text(
+            in_job(workflow, 'native-live-shards', runner_declaration(HOSTED_X86),
+                   runner_declaration(GKE_8)))
+        code, lines = self.run_stage()
+        self.assertEqual(self.failures(lines), [self.missing('native-live.yml', GKE_8)], lines)
         self.assertEqual(code, 1, lines)
 
     def test_post_sized_labels_need_exact_ref(self):
         code, lines = self.run_stage()
         self.assertEqual(self.failures(lines), [], lines)
         self.assertEqual(code, 0, lines)
-        self.omit('ci-post.yml')
+        # Every ci-post job is hosted, so the empty mirror is clean. Each retired
+        # scale set reintroduced on its former job needs ci-post.yml's reference.
+        path = self.workflows / 'ci-post.yml'
+        changed = path.read_text()
+        retired = ((('authz', HOSTED_X86), GKE_2), (('preflight', HOSTED_X86), GKE_8),
+                   (('kernel-only', HOSTED_X86), GKE_16), (('build-debug', HOSTED_X86), GKE_16_128),
+                   ((NATIVE_X86_JOB, HOSTED_X86), GKE_32), (('build', HOSTED_X86), GKE_ONDEMAND_32),
+                   (('sanitizers', HOSTED_X86), GKE_ONDEMAND_32_256),
+                   (('build-arm', HOSTED_ARM), GKE_ARM))
+        for (job, hosted), label in retired:
+            changed = in_job(changed, job, runner_declaration(hosted), runner_declaration(label))
+        path.write_text(changed)
         code, lines = self.run_stage()
         self.assertEqual(code, 1, lines)
         self.assertCountEqual(self.failures(lines), [
-            self.missing('ci-post.yml', label)
-            for label in (GKE_2, GKE_8, GKE_16, GKE_16_128,
-                              GKE_32, GKE_ONDEMAND_32, GKE_ONDEMAND_32_256,
-                              GKE_ARM)])
+            self.missing('ci-post.yml', label) for _, label in retired])
+        self.write_entries([self.reference('ci-post.yml')])
+        code, lines = self.run_stage()
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.failures(lines), [], lines)
 
     def test_matrix_include_and_axis_resolve_the_runner_in_a_real_workflow(self):
-        self.omit('docs-post.yml')
         label = 'gke-7cpu-14gb-arm64'
         for runner, matrix in (
                 ('${{ matrix.runner }}',
@@ -4192,8 +4331,9 @@ class RunnerGroupAllowlist(unittest.TestCase):
                 self.assertEqual(code, 1, lines)
 
     def test_runner_sequences_expressions_and_environment_cannot_hide_labels(self):
+        # The group-15 mirror lists only release.yml, so docs-post.yml has no reference.
         reference = self.reference('docs-post.yml')
-        self.protected_mirror.write_text(self.protected_mirror.read_text().replace(reference + '\n', ''))
+        self.assertNotIn(reference, self.protected_mirror.read_text())
         label = 'gkp-7cpu-14gb-arm64'
         for runner, extra in (
                 (label, ''),
@@ -4224,12 +4364,13 @@ class RunnerGroupAllowlist(unittest.TestCase):
             with self.subTest(runner=runner):
                 self.change_docs_runner(runner, extra)
                 code, lines = self.run_stage()
+                # Only the hidden label needs the missing reference: the hosted docs-post
+                # `build` job names no protected scale set of its own any more.
                 self.assertCountEqual(self.failures(lines),
-                                      [self.missing('docs-post.yml', label), self.missing('docs-post.yml', GKP_4)], lines)
+                                      [self.missing('docs-post.yml', label)], lines)
                 self.assertEqual(code, 1, lines)
 
     def test_excluded_matrix_runners_do_not_require_membership(self):
-        self.omit('docs-post.yml')
         label = 'gke-7cpu-14gb-amd64'
         self.change_docs_runner(
             '${{ matrix.runner }}',
@@ -4241,7 +4382,6 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.assertEqual(code, 0, lines)
 
     def test_workflow_environment_and_job_override_resolve_from_real_files(self):
-        self.omit('docs-post.yml')
         label = 'gke-7cpu-14gb-amd64'
         self.change_docs_runner('${{ env.RUNNER }}')
         path = self.workflows / 'docs-post.yml'
@@ -4260,6 +4400,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.assertEqual(code, 0, lines)
 
     def test_unresolved_runner_is_refused_even_with_a_mirror_entry(self):
+        self.write_entries([self.reference('docs-post.yml')])
         self.change_docs_runner('${{ needs.choose.outputs.runner }}')
         code, lines = self.run_stage()
         self.assertIn('docs-post.yml: job authz runs-on cannot be resolved from literal '
@@ -4267,7 +4408,6 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.assertEqual(code, 1, lines)
 
     def test_unused_environment_and_matrix_values_are_not_runner_labels(self):
-        self.omit('ci.yml')
         path = self.workflows / 'ci.yml'
         original = path.read_text()
         changed = in_job(original, 'authz', '    steps:\n',
@@ -4281,10 +4421,10 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.assertEqual(code, 0, lines)
 
     def test_hosted_and_pf_gcp_workflows_need_no_mirror_entry(self):
-        self.omit('ci.yml')
         path = self.workflows / 'ci.yml'
         original = path.read_text()
-        for runner in ('ubuntu-24.04', PR_RUNNER):
+        self.assertNotIn(self.reference('ci.yml'), self.mirror.read_text())
+        for runner in ('ubuntu-24.04', LEGACY_PR_RUNNER):
             with self.subTest(runner=runner):
                 path.write_text(in_job(original, 'authz', '    runs-on: ubuntu-24.04\n',
                                        f'    runs-on: {runner}\n'))
@@ -4292,15 +4432,34 @@ class RunnerGroupAllowlist(unittest.TestCase):
                 self.assertEqual(self.failures(lines), [], lines)
                 self.assertEqual(code, 0, lines)
 
-    def test_real_tree_mirror_preserves_the_live_group_and_only_two_advisories(self):
-        expected_names = ('ci-post.yml', 'ci.yml', 'corpus-parity-subset.yml',
-                          'corpus-parity.yml', 'docs-post.yml', 'gke-pr.yml',
-                          'native-live.yml', 'promote-baseline.yml', 'release-ruleset-probe.yml')
-        self.assertEqual(self.entries(), [self.reference(name) for name in expected_names])
+    def test_real_tree_mirrors_hold_only_the_unchanged_release_workflow(self):
+        # Every migrated workflow runs on a hosted image, so the group-14 mirror is
+        # empty; release.yml keeps the only protected scale sets, so group 15 lists it.
+        self.assertEqual(self.entries(), [])
+        self.assertEqual([line for line in self.protected_mirror.read_text().splitlines()
+                          if line.strip() and not line.lstrip().startswith('#')],
+                         [self.reference('release.yml')])
         code, lines = self.run_stage(repository=None)
         self.assertEqual(code, 0, lines)
         self.assertEqual(self.failures(lines), [], lines)
         self.assertEqual(ci_preflight.RUNNER_ALLOWLIST_REPOSITORY, self.REPOSITORY)
+        self.assertEqual([line for line in lines if line.startswith('advisory:')], [])
+        # Dropping release.yml's group-15 line is refused for each of its protected labels.
+        self.protected_mirror.write_text('# Group 15 without its release reference.\n')
+        code, lines = self.run_stage()
+        self.assertEqual(code, 1, lines)
+        self.assertCountEqual(self.failures(lines), [
+            self.missing('release.yml', label)
+            for label in (GKP_OD_4, GKP_OD_PREBUILT)])
+
+    def test_stray_mirror_lines_are_only_advisories(self):
+        # A listed workflow with no group label, and a listed file that is gone, are
+        # advisory only: they never fail the stage, but each is reported by name.
+        self.write_entries(sorted([self.reference('ci.yml'),
+                                   self.reference('corpus-parity-subset.yml')]))
+        code, lines = self.run_stage()
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.failures(lines), [], lines)
         self.assertEqual([line for line in lines if line.startswith('advisory:')], [
             f'advisory: ci.yml: mirror line "{self.reference("ci.yml")}" has no gke/gkp job',
             'advisory: corpus-parity-subset.yml: mirror line "'
@@ -4324,8 +4483,9 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.assertEqual(code, 1, lines)
 
     def test_duplicate_mirror_line_is_its_own_finding(self):
+        # The real group-14 mirror is empty, so the duplicate is written explicitly.
         line = self.reference('docs-post.yml')
-        self.write_entries(sorted([*self.entries(), line]))
+        self.write_entries([line, line])
         code, lines = self.run_stage()
         self.assertEqual(self.failures(lines),
                          [f'{self.MIRROR}: duplicate mirror line "{line}"'], lines)
@@ -4340,7 +4500,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.assertEqual(code, 1, lines)
 
     def test_unsorted_mirror_is_its_own_finding(self):
-        self.write_entries(list(reversed(self.entries())))
+        # Two valid lines in reverse order: the real mirror is empty, so none exists to reverse.
+        self.write_entries([self.reference('native-live.yml'), self.reference('ci-post.yml')])
         code, lines = self.run_stage()
         self.assertEqual(self.failures(lines),
                          [f'{self.MIRROR}: mirror entries must be sorted'], lines)
@@ -4353,7 +4514,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.assertEqual(code, 1, lines)
 
     def test_comments_and_blank_lines_do_not_affect_mirror_order(self):
-        self.mirror.write_text('# Live group entries\n\n' + '\n\n'.join(self.entries()) + '\n')
+        entries = [self.reference('ci-post.yml'), self.reference('native-live.yml')]
+        self.mirror.write_text('# Live group entries\n\n' + '\n\n# next\n'.join(entries) + '\n')
         code, lines = self.run_stage()
         self.assertEqual(self.failures(lines), [], lines)
         self.assertEqual(code, 0, lines)
@@ -4367,6 +4529,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
                                   '(expected owner/repo)'
                                   for mirror in (self.MIRROR, self.PROTECTED_MIRROR)], lines)
                 self.assertEqual(code, 1, lines)
+        self.write_entries([self.reference('ci-post.yml')])
         entries = self.entries()
         self.write_entries([line.replace(self.REPOSITORY + '/', 'other/engine/', 1)
                             for line in entries])
@@ -4377,8 +4540,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.assertEqual(code, 0, lines)
 
     def test_workflow_file_reference_matching_is_case_sensitive(self):
-        self.omit('docs-post.yml')
-        self.write_entries(sorted([*self.entries(), self.reference('DOCS-POST.yml')]))
+        self.change_docs_runner(GKE_2)
+        self.write_entries([self.reference('DOCS-POST.yml')])
         self.assert_incident()
 
     def mutant(self, before, after):
@@ -4390,7 +4553,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
         return namespace['runner_allowlist_findings']
 
     def test_removing_the_missing_reference_check_breaks_the_incident_control(self):
-        self.omit('docs-post.yml')
+        self.change_docs_runner(GKE_2)
         self.assert_incident()
         mutant = self.mutant('if reference not in entries:', 'if False:')
         with mock.patch.object(ci_preflight, 'runner_allowlist_findings', mutant):
@@ -4398,8 +4561,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
                 self.assert_incident()
 
     def test_case_insensitive_reference_matching_breaks_the_case_control(self):
-        self.omit('docs-post.yml')
-        self.write_entries(sorted([*self.entries(), self.reference('DOCS-POST.yml')]))
+        self.change_docs_runner(GKE_2)
+        self.write_entries([self.reference('DOCS-POST.yml')])
         self.assert_incident()
         mutant = self.mutant(
             'if reference not in entries:',
@@ -4418,9 +4581,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
         with mock.patch.object(ci_preflight, 'runner_allowlist_findings', mutant):
             with self.assertRaises(AssertionError):
                 code, lines = self.run_stage()
-                self.assertCountEqual(self.failures(lines),
-                                      [self.missing('native-live.yml', label)
-                                       for label in (GKE_4, GKE_16_128, GKE_16_256, GKE_8)])
+                self.assertEqual(self.failures(lines),
+                                 [self.missing('native-live.yml', GKE_8)], lines)
                 self.assertEqual(code, 1, lines)
 
     def test_stage_is_binding_fast_parallel_and_its_real_result_is_in_the_summary(self):
@@ -4442,7 +4604,9 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.assertEqual([(row['name'], row['status'], row['exitCode'], row['advisory'])
                           for row in summary['stages']],
                          [('runner-allowlist', 'passed', 0, False)])
-        self.assertIn('advisory: ci.yml:', (output / 'runner-allowlist.log').read_text())
+        log = (output / 'runner-allowlist.log').read_text()
+        self.assertIn('runner allowlist: all gke/gkp workflow references declared', log)
+        self.assertNotIn('advisory:', log)
 
     def test_complete_stage_inventory_and_tier_counts(self):
         expected = [
@@ -4648,7 +4812,8 @@ class PreflightFailures(unittest.TestCase):
         for name, jobs in LIGHT_JOB_IDS.items():
             for job in jobs:
                 expected = EXPECTED_LIGHT_GKE_JOBS.get(name, {}).get(job, 'ubuntu-24.04')
-                for runner in (PR_RUNNER, POST_RUNNER, GKP_2, RELEASE_RUNNER, 'ubuntu-latest',
+                for runner in (LEGACY_PR_RUNNER, GKE_2, GKE_4, GKP_2, RELEASE_RUNNER, HOSTED_ARM,
+                               'ubuntu-latest',
                                'ubuntu-22.04', 'macos-26', 'ubuntu-22.04-arm', 'pf-linux-x64-16',
                                '["ubuntu-24.04"]', "'[\"ubuntu-24.04\"]'",
                                '["self-hosted","pf-ci","pf-ci-x64"]',
@@ -4662,8 +4827,8 @@ class PreflightFailures(unittest.TestCase):
                                          f'    runs-on: {runner}\n')
                         self.assertNotEqual(changed, workflows[name])
                         findings = ci_preflight.runner_findings({**workflows, name: changed})
-                        suffix = ' (hosted)' if expected == 'ubuntu-24.04' else ''
-                        self.assertIn(f'{name} job {job} must run on {expected}{suffix}', findings)
+                        self.assertIn(f'{name} job {job} must run on {expected}'
+                                      f'{hosted_suffix(name, job)}', findings)
 
     def test_light_job_metadata_cannot_replace_the_hosted_pin(self):
         workflows = self.light_workflows()
@@ -4673,16 +4838,18 @@ class PreflightFailures(unittest.TestCase):
                 expected = EXPECTED_LIGHT_GKE_JOBS.get(name, {}).get(job, 'ubuntu-24.04')
                 env = ci_preflight._job_block(_jobs(workflows[name])[job], 'env')
                 marker, = [line + '\n' for line in env if 'PF_CI_LABELS:' in line]
-                for replacement in ('', f"      PF_CI_LABELS: '{PR_RUNNER}'\n",
+                for replacement in ('', f"      PF_CI_LABELS: '{LEGACY_PR_RUNNER}'\n",
                                     f"      PF_CI_LABELS: '{GKP_2}'\n",
                                     f"      PF_CI_LABELS: '{RELEASE_RUNNER}'\n"):
                     with self.subTest(workflow=name, job=job, metadata=replacement):
                         changed = in_job(workflows[name], job, marker, replacement)
                         self.assertEqual(ci_preflight.runner_findings({**workflows, name: changed}), [])
+                        # The routing metadata is not a scheduler input: a retired runner
+                        # on the job is refused whatever the metadata says.
                         changed = in_job(changed, job, f'    runs-on: {expected}\n',
-                                         f'    runs-on: {PR_RUNNER}\n')
-                        suffix = ' (hosted)' if expected == 'ubuntu-24.04' else ''
-                        self.assertIn(f'{name} job {job} must run on {expected}{suffix}',
+                                         f'    runs-on: {GKE_2}\n')
+                        self.assertIn(f'{name} job {job} must run on {expected}'
+                                      f'{hosted_suffix(name, job)}',
                                       ci_preflight.runner_findings({**workflows, name: changed}))
 
     def gcp_sites(self):
@@ -4700,19 +4867,21 @@ class PreflightFailures(unittest.TestCase):
                 if (not gke and not gkp and job in ci_preflight.HOSTED_JOB_RUNNERS.get(name, {})
                         or ci_preflight.RELEASE_JOB_RUNNERS.get(name, {}).get(job) == 'ubuntu-24.04'):
                     continue  # Hosted jobs have independent literal pins and mutation controls.
-                # Per-job pins retain the canon PR fleet or the dispatch post fleet.
+                # A site is an exact-pinned job: the hosted per-job pins (class 'gke', the
+                # historical table name) or release.yml's protected pins (class 'gkp').
+                # PR_RUNNER and POST_RUNNER are the same hosted image now, so the old
+                # pr/post classes cannot tell a site apart and are no longer derived here.
                 fixed_runner = ci_preflight.RELEASE_JOB_RUNNERS.get(name, {}).get(job)
-                fleet = ('gke' if gke else 'gkp' if gkp else
-                         {PR_RUNNER: 'pr', POST_RUNNER: 'post'}.get(fixed_runner, workflow_fleet))
+                fleet = 'gke' if gke else 'gkp' if gkp else workflow_fleet
                 runner = site_runner(name, job, fleet)
                 if (name, job) == ('release.yml', 'prebuilt'):
                     yield name, job, fleet, f'            runner: {PREBUILT_RUNNER}\n', RELEASE_MATRIX_FINDING
                     continue
                 value, = ci_preflight._job_values(body, 'runs-on', unquote=False)
                 finding = f'{name} job {job} must run on {runner}'
-                if fixed_runner == POST_RUNNER:
-                    finding += ' (post fleet)'
-                elif fixed_runner is not None and fixed_runner != PR_RUNNER:
+                if fixed_runner is not None:
+                    # Only release.yml still pins a fixed isolated runner here: the
+                    # probe and promotion jobs are hosted and skipped above.
                     finding += ' (isolated release)'
                 yield name, job, fleet, runner_declaration(value), finding
 
@@ -4768,21 +4937,28 @@ class PreflightFailures(unittest.TestCase):
                 marker = runner_declaration(actual)
                 pinned_runner = EXPECTED_GKE_JOBS.get(name, {}).get(
                     job, EXPECTED_GKP_JOBS.get(name, {}).get(job, runner))
-                finding = f'{name} job {job} must run on {pinned_runner}'
-                for replacement in ('ubuntu-24.04', 'ubuntu-latest',
+                finding = f'{name} job {job} must run on {pinned_runner}{hosted_suffix(name, job)}'
+                # A job pinned only through the hosted table accepts a quoted scalar:
+                # YAML quoting does not change its label. The exact-pin jobs refuse it.
+                quoted = [] if hosted_suffix(name, job) else ["'" + pinned_runner + "'"]
+                for replacement in ('ubuntu-24.04', 'ubuntu-latest', 'ubuntu-22.04',
+                                    GKE_ONDEMAND_32, LEGACY_PR_RUNNER,
                                     'pf-linux-x64-64' if actual == 'pf-linux-x64-16' else 'pf-linux-x64-16',
-                                    "'" + (PR_RUNNER if job == 'build' else runner) + "'",
-                                    "${{ fromJSON('" + PR_RUNNER + "') || 'ubuntu-24.04' }}"):
+                                    *quoted,
+                                    "${{ fromJSON('" + pinned_runner + "') || 'ubuntu-24.04' }}"):
+                    if replacement == actual:
+                        continue  # The pin itself is not a mutation.
                     with self.subTest(workflow=name, job=job, runner=replacement):
                         findings = self.mutated_file_findings(index, job, marker,
                                                               runner_declaration(replacement))
                         self.assertIn(finding, findings)
         for replacement in ("'ubuntu-24.04'", "'" + '["ubuntu-24.04"]' + "'",
-                            "${{ fromJSON('" + PR_RUNNER + "') || 'ubuntu-24.04' }}"):
+                            "${{ fromJSON('ubuntu-24.04') || 'ubuntu-24.04' }}",
+                            GKE_PR_32, LEGACY_PR_RUNNER, HOSTED_ARM):
             with self.subTest(matrix_runner=replacement):
                 findings = self.gke_mutated_findings(
-                    'build', runner_declaration(GKE_PR_32), runner_declaration(replacement))
-                self.assertIn(f'gke-pr.yml job build must run on {GKE_PR_32}', findings)
+                    'build', runner_declaration(HOSTED_X86), runner_declaration(replacement))
+                self.assertIn(f'gke-pr.yml job build must run on {HOSTED_X86}', findings)
 
     def test_authz_and_every_dependency_are_required_from_mutated_files(self):
         original = self.ci_sources()
@@ -5135,7 +5311,7 @@ class PreflightFailures(unittest.TestCase):
 
     def test_documented_slow_row_counts_match_literal_population(self):
         text = (ROOT / 'docs/ci.md').read_text()
-        self.assertEqual(len(text.splitlines()), 2063)
+        self.assertEqual(len(text.splitlines()), 2060)
         slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
                        if name.startswith('test_ci_verify_slice_'))
         self.assertTrue(slices, 'verifier slice inventory must not be empty')
@@ -5322,8 +5498,12 @@ class PreflightFailures(unittest.TestCase):
              '    continue-on-error: true\n    steps:\n', guard_finding),
             ('promote-guard', '        run: |\n',
              '        continue-on-error: true\n        run: |\n', guard_finding),
-            ('promote-guard', '    runs-on: gke-2cpu-4gb-amd64\n',
-             '    runs-on: ubuntu-24.04\n', guard_finding),
+            # The pinned guard block now carries the hosted image; the retired GKE
+            # label and any other image change the verbatim block.
+            ('promote-guard', '    runs-on: ubuntu-24.04\n',
+             f'    runs-on: {GKE_2}\n', guard_finding),
+            ('promote-guard', '    runs-on: ubuntu-24.04\n',
+             '    runs-on: ubuntu-latest\n', guard_finding),
             ('promote-guard',
              '          # and the org\'s own GitHub App bot logins by name (space-separated), nothing else.\n',
              '', guard_finding),
@@ -5449,10 +5629,11 @@ class PreflightFailures(unittest.TestCase):
                 self.assertNotEqual(changed[2], original[2])
                 self.assertEqual(_jobs(changed[2]), _jobs(original[2]))
                 # promote-guard runs on a GKE pod: a workflow-level secret reaches it too.
+                # promote-guard is a pinned hosted verification job: a workflow-level
+                # secret reaches it too, and the exact-pin rule refuses that once.
                 credentials = [] if 'secrets.' not in setting else [
-                    'promote-baseline.yml job promote-guard must not expose credentials on GKE',
-                    'promote-baseline.yml job promote-guard must keep production credentials '
-                    'on a hosted standard runner',
+                    'promote-baseline.yml job promote-guard must not expose credentials '
+                    'on a pinned verification job',
                 ]
                 # ci_workflow_findings reports runner findings first, then the
                 # action-pin lint, then the App-token environment finding, then
@@ -6253,8 +6434,7 @@ exit "$lookup_exit"
                                    ('live-tsan', 'build-live-tsan')):
             block = f'          - profile: {profile}\n            build_dir: {build_dir}\n'
             if profile != 'native':
-                label = GKE_16_256 if profile == 'live-sanitizers' else GKE_16_128
-                block += f'            runner: {label}\n'
+                block += f'            runner: {HOSTED_X86}\n'
             job = 'native-live-shards' if profile == 'native' else 'native-live'
             findings = self.mutated_file_findings(1, job, block, '')
             finding = ('native-live-shards must run exactly native shards 1..4 with fail-fast false'
@@ -6516,12 +6696,20 @@ exit "$lookup_exit"
 
     def test_ci_contract_pins_spot_runners_time_limits_and_parallelism(self):
         original, others = self.ci_sources(), self.other_sources()
-        self.assertEqual(PR_RUNNER, '["self-hosted","pf-gcp-pr"]')
-        self.assertEqual(json.loads(PR_RUNNER), ['self-hosted', 'pf-gcp-pr'])
-        self.assertEqual(MATRIX_LINUX_RUNNER, '\'["self-hosted","pf-gcp-pr"]\'')
+        # Every pinned job below runs on the hosted x86 image now. The mutation rows
+        # keep the old size names for the job they pin, so shadow them with that pin.
+        GKE_2 = GKE_8 = GKE_16 = GKE_ONDEMAND_32 = GKE_ONDEMAND_32_256 = HOSTED_X86
+        GKP_2 = HOSTED_X86
+        # Every unpinned PR or post job defaults to the hosted x86 image; the retired
+        # self-hosted PR array is only a negative fixture (LEGACY_PR_RUNNER).
+        self.assertEqual(PR_RUNNER, HOSTED_X86)
+        self.assertEqual(POST_RUNNER, HOSTED_X86)
+        self.assertEqual(ci_preflight.HOSTED_ARM_RUNNER, HOSTED_ARM)
+        self.assertEqual(json.loads(LEGACY_PR_RUNNER), ['self-hosted', 'pf-gcp-pr'])
+        self.assertEqual(MATRIX_LINUX_RUNNER, "'ubuntu-24.04'")
         self.assertEqual(MATRIX_RUNNER, '${{ fromJSON(matrix.platform.runner) }}')
         self.assertEqual(HOSTED_MATRIX_RUNNER, '${{ matrix.runner }}')
-        self.assertEqual(ci_preflight.PROTECTED_RUNNER, GKP_2)
+        self.assertEqual(ci_preflight.PROTECTED_RUNNER, HOSTED_X86)
         self.assertEqual(RELEASE_RUNNER, GKP_OD_4)
         self.assertEqual(PREBUILT_RUNNER, GKP_OD_PREBUILT)
         self.assertEqual(ci_preflight.PREBUILT_ARM_RUNNER, 'ubuntu-22.04-arm')
@@ -6531,24 +6719,24 @@ exit "$lookup_exit"
                                          'result': 'ubuntu-24.04',
                                          **{job: label for job, label in EXPECTED_GKE_JOBS['gke-pr.yml'].items()
                                             if job != 'build-arm'}},
-                          'ci-post.yml': {'authz': GKE_2, 'changes': GKE_2,
-                                          'build-release-gate': GKE_2,
-                                          'build-debug-gate': GKE_2,
-                                          'sanitizers-gate': GKE_2,
-                                          'kernel-only-gate': GKE_2,
+                          'ci-post.yml': {'authz': HOSTED_X86, 'changes': HOSTED_X86,
+                                          'build-release-gate': HOSTED_X86,
+                                          'build-debug-gate': HOSTED_X86,
+                                          'sanitizers-gate': HOSTED_X86,
+                                          'kernel-only-gate': HOSTED_X86,
                                           **EXPECTED_GKE_JOBS['ci-post.yml'],
-                                          'build-gate': GKE_2},
-                          'corpus-parity.yml': {'authz': GKE_4,
+                                          'build-gate': HOSTED_X86},
+                          'corpus-parity.yml': {'authz': HOSTED_X86,
                                                  **EXPECTED_GKE_JOBS['corpus-parity.yml']},
                           'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
                           'rerun-preempted.yml': {'rerun': 'ubuntu-24.04'},
-                          'docs-post.yml': {'authz': GKE_2, 'build': GKP_4},
-                          'native-live.yml': {'authz': GKE_4,
+                          'docs-post.yml': {'authz': HOSTED_X86, 'build': HOSTED_X86},
+                          'native-live.yml': {'authz': HOSTED_X86,
                                               **EXPECTED_GKE_JOBS['native-live.yml'],
-                                              'native-live-native': GKE_4,
-                                              'native-live-gate': GKE_4},
-                          'promote-baseline.yml': {'promote-guard': GKE_2},
-                          'release-ruleset-probe.yml': {'authz': GKE_2}})
+                                              'native-live-native': HOSTED_X86,
+                                              'native-live-gate': HOSTED_X86},
+                          'promote-baseline.yml': {'promote-guard': HOSTED_X86},
+                          'release-ruleset-probe.yml': {'authz': HOSTED_X86}})
         self.assertEqual(ci_preflight.GKE_PR_ARM_JOB_LABELS, EXPECTED_GKE_JOBS['gke-pr.yml'])
         self.assertEqual(ci_preflight.GKE_PR_ARM_JOB_COMMANDS,
                          {**JOB_COMMANDS['gke-pr.yml'], 'build-arm': ci_preflight.VERIFY})
@@ -6566,9 +6754,9 @@ exit "$lookup_exit"
                 'prebuilt': '${{ matrix.runner }}',
                 'notify-hub': 'gkp-od-4cpu-8gb-amd64'},
             'release-ruleset-probe.yml': {
-                'probe': 'gkp-2cpu-4gb-amd64'},
+                'probe': HOSTED_X86},
             'promote-baseline.yml': {
-                'promote': 'gkp-2cpu-4gb-amd64'},
+                'promote': HOSTED_X86},
         })
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
         mutations = (
@@ -6624,7 +6812,7 @@ exit "$lookup_exit"
              '    runs-on:\n      group: pineforge-ci-large\n',
              'docs.yml job build must run on ubuntu-24.04'),
             (2, 'promote', f'    runs-on: {GKP_2}\n', '    runs-on:\n      - macos-26-xlarge\n',
-             f'promote-baseline.yml job promote must run on {GKP_2} (isolated release)'),
+             f'promote-baseline.yml job promote must run on {GKP_2} (hosted)'),
             (0, None, '  authz:\n', '  extra:\n    runs-on:\n      group: pineforge-ci-large\n'
              '    steps:\n      - run: "true"\n\n  authz:\n', 'ci.yml job extra needs a pinned runner and time limit'),
             (0, None, '  authz:\n', '  extra:\n    "runs-on": pf-linux-x64-16\n'
@@ -6634,7 +6822,7 @@ exit "$lookup_exit"
             (5, 'build', '    runs-on: ubuntu-24.04\n', '    runs-on : macos-26-xlarge\n',
              'docs.yml job build must run on ubuntu-24.04'),
             (2, 'promote', f'    runs-on: {GKP_2}\n', "    'runs-on': macos-26-xlarge\n",
-             f'promote-baseline.yml job promote must run on {GKP_2} (isolated release)'),
+             f'promote-baseline.yml job promote must run on {GKP_2} (hosted)'),
             (5, 'build', '    runs-on: ubuntu-24.04\n', '',
              'docs.yml job build must run on ubuntu-24.04'),
             (5, None, '\njobs:\n', '\njobs:\n  pre_build:\n    runs-on: macos-26-xlarge\n    steps:\n'
@@ -6649,7 +6837,7 @@ exit "$lookup_exit"
             (5, 'build', '    runs-on: ubuntu-24.04\n', '    runs-on: pf-linux-x64-16\n',
              'docs.yml job build must run on ubuntu-24.04'),
             (2, 'promote', f'    runs-on: {GKP_2}\n', '    runs-on: macos-26-xlarge\n',
-             f'promote-baseline.yml job promote must run on {GKP_2} (isolated release)'),
+             f'promote-baseline.yml job promote must run on {GKP_2} (hosted)'),
             (0, None, '  authz:\n', '  extra:\n    runs-on: ubuntu-24.04\n    steps:\n'
              '      - run: "true"\n\n  authz:\n', 'ci.yml job extra needs a pinned runner and time limit'),
             # No job or step may declare timeout-minutes (owner #827,
@@ -6794,42 +6982,52 @@ exit "$lookup_exit"
     def test_gcp_sites_reject_cross_class_routes(self):
         sites = list(self.gcp_sites())
         # Admitted PR 5 + post preflight/shards/arm 7 + native-live 2 + native x86 2
-        # + parity 2 + docs 1 + release 3 + probe 1 + promotion 1; the dispatch canary
-        # is a separate synthetic input.
-        # expectation corrected:22 ->24 because the PR and post native x86 jobs each add one declared GKE route
-        self.assertEqual(len(sites), 24)
+        # + parity 2 + release 3; the dispatch canary is a separate synthetic input.
+        # expectation corrected: 24 -> 21, because docs deployment, the ruleset probe and baseline
+        # promotion moved to hosted pins and keep their own exact-pin controls instead of a site row
+        self.assertEqual(len(sites), 21)
         self.assertCountEqual([(name, job) for name, job, *_ in sites],
                               [(name, job) for name, jobs in FLEET_JOB_IDS.items()
                                for job in jobs if job not in LIGHT_JOB_IDS.get(name, ())
+                               and ci_preflight.RELEASE_JOB_RUNNERS.get(name, {}).get(job) != HOSTED_X86
                                and (job not in ci_preflight.HOSTED_JOB_RUNNERS.get(name, {})
                                     or job in EXPECTED_GKE_JOBS.get(name, {})
                                     or job in EXPECTED_GKP_JOBS.get(name, {}))])
         self.assertEqual(ci_preflight.runner_findings(self.workflow_sources()), [])
         for name, job, fleet, before, finding in sites:
             correct = site_runner(name, job, fleet)
-            for runner in {PR_RUNNER, POST_RUNNER, GKP_2, RELEASE_RUNNER} - {correct}:
+            for runner in {LEGACY_PR_RUNNER, GKE_2, PR_RUNNER, POST_RUNNER, GKP_2,
+                           RELEASE_RUNNER, HOSTED_ARM} - {correct}:
                 with self.subTest(workflow=name, job=job, wrong_fleet=runner):
                     findings = self.routed_file_findings(name, job, before, routed_line(before, runner))
                     self.assertIn(finding, findings)
 
     def test_gcp_sites_pin_probe_to_the_dispatch_fleet(self):
+        # The probe is a hosted release-only job now, not a protected GKE site: it has
+        # its own exact-pin controls (test_probe_refuses_bad_runners and the hosted
+        # credentialed-job test) instead of a gcp site row.
         sites = [site for site in self.gcp_sites() if site[0] == 'release-ruleset-probe.yml']
-        self.assertEqual([(job, fleet) for _, job, fleet, *_ in sites],
-                         [('probe', 'gkp')])
-        self.assertEqual(sites[0][-1],
-                         f'release-ruleset-probe.yml job probe must run on {GKP_2} '
-                         '(isolated release)')
+        self.assertEqual(sites, [])
+        self.assertEqual(ci_preflight.RELEASE_JOB_RUNNERS['release-ruleset-probe.yml'],
+                         {'probe': HOSTED_X86})
+        self.assertEqual(ci_preflight.GKP_JOB_RUNNERS.get('release-ruleset-probe.yml'), None)
 
     def test_dispatch_only_job_keeps_the_post_fleet(self):
         name, job = 'dispatch-inspection.yml', 'inspect'
+        # An unpinned dispatch-only job runs on the hosted x86 image: the retired
+        # post-merge GKE label and any other image are refused.
         workflow = ('on: workflow_dispatch\njobs:\n  inspect:\n'
-                    + runner_declaration(POST_RUNNER)
+                    + runner_declaration(GKE_2)
                     + '    steps:\n      - run: git --version\n')
         self.assertIn(f'{name} job {job} may use GKE routing only at its exact pinned job and label',
                       ci_preflight.runner_findings({name: workflow}))
-        changed = in_job(workflow, job, runner_declaration(POST_RUNNER),
-                         runner_declaration(PR_RUNNER))
-        self.assertNotEqual(changed, workflow)
+        hosted = in_job(workflow, job, runner_declaration(GKE_2), runner_declaration(POST_RUNNER))
+        self.assertNotEqual(hosted, workflow)
+        self.assertNotIn(f'{name} job {job} must run on {POST_RUNNER} for post-merge events',
+                         ci_preflight.runner_findings({name: hosted}))
+        changed = in_job(hosted, job, runner_declaration(POST_RUNNER),
+                         runner_declaration('ubuntu-22.04'))
+        self.assertNotEqual(changed, hosted)
         self.assertIn(f'{name} job {job} must run on {POST_RUNNER} for post-merge events',
                       ci_preflight.runner_findings({name: changed}))
 
@@ -6848,7 +7046,7 @@ exit "$lookup_exit"
             for value in ('["self-hosted","pf-ci","pf-ci-x64"]',
                           '["self-hosted","pf-ci","pf-ci-x64-16"]',
                           '["self-hosted","pf-ci","pf-ci-release"]',
-                          *(json.dumps(['self-hosted', json.loads(PR_RUNNER)[1], label])
+                          *(json.dumps(['self-hosted', json.loads(LEGACY_PR_RUNNER)[1], label])
                             for label in RETIRED_VM_LABELS)):
                 with self.subTest(workflow=name, job=job, runner=value):
                     findings = self.routed_file_findings(name, job, before, routed_line(before, value))
@@ -6857,8 +7055,14 @@ exit "$lookup_exit"
     def test_gcp_sites_reject_hosted_fallbacks(self):
         for name, job, fleet, before, finding in self.gcp_sites():
             runner = site_runner(name, job, fleet)
-            for value in ('ubuntu-24.04', 'ubuntu-latest',
-                          "${{ fromJSON('" + runner + "') || 'ubuntu-24.04' }}"):
+            # The hosted x86 image is the exact pin of most sites now, so it is only a
+            # wrong value where the pin is another image (the arm64 job, the native
+            # matrix and release.yml's protected scale sets).
+            for value in ('ubuntu-24.04', 'ubuntu-latest', 'ubuntu-22.04', HOSTED_ARM,
+                          "${{ fromJSON('" + runner + "') || 'ubuntu-24.04' }}",
+                          "${{ inputs.runner || '" + runner + "' }}"):
+                if value == runner:
+                    continue  # The exact pin itself is not a mutation.
                 with self.subTest(workflow=name, job=job, runner=value):
                     findings = self.routed_file_findings(name, job, before, routed_line(before, value))
                     self.assertIn(finding, findings)
@@ -6900,9 +7104,14 @@ exit "$lookup_exit"
                               ('          set -eu\n', '          set +eu\n'),
                               ('          set -eu\n', '')]
             else:
-                mutations += [(comment, comment.replace('fixed', 'dynamic')),
-                              (comment, comment.replace('credentials', 'jobs')),
-                              (comment, '')]
+                # The scoped headers are bound byte for byte and now carry no comment:
+                # the retired fleet comment, altered copies of it and any other comment
+                # line inserted into the header are all refused.
+                header_name = '    name: authz\n'
+                mutations += [(header_name, header_name + comment),
+                              (header_name, header_name + comment.replace('fixed', 'dynamic')),
+                              (header_name, header_name + comment.replace('credentials', 'jobs')),
+                              (header_name, header_name + '    # A different header comment.\n')]
             for before, after in mutations:
                 with self.subTest(workflow=name, replacement=after):
                     findings = self.mutated_file_findings(index, 'authz', before, after)
@@ -6968,16 +7177,16 @@ exit "$lookup_exit"
                         findings = ci_preflight.runner_findings(dict(workflows, **{name: routed}))
                         self.assertIn(finding, findings)
         # A step-level declaration also cannot stand in for the actual runner.
-        before = runner_declaration(GKE_PR_8)
+        before = runner_declaration(HOSTED_X86)
         for job in ('preflight', 'corpus-parity-subset'):
             with self.subTest(inline_job=job):
                 changed = in_job(workflows['gke-pr.yml'], job, before,
                                  routed_line(before, GKP_2))
                 changed = in_job(changed, job, '      - name: Checkout the admitted head\n',
                                  '      - name: Checkout the admitted head\n        env:\n'
-                                 f"          PF_CI_LABELS: '{PR_RUNNER}'\n")
+                                 f"          PF_CI_LABELS: '{LEGACY_PR_RUNNER}'\n")
                 findings = ci_preflight.runner_findings(dict(workflows, **{'gke-pr.yml': changed}))
-                self.assertIn(f'gke-pr.yml job {job} must run on {GKE_PR_8}', findings)
+                self.assertIn(f'gke-pr.yml job {job} must run on {HOSTED_X86}', findings)
 
     def test_ci_contract_pins_the_docs_only_skip(self):
         """Keep each pipeline's path policy and dependencies; PR suite jobs
@@ -7737,8 +7946,8 @@ finally:
                  f'kernel --build-dir build-kernel --jobs {CORES} --ccache '
                  '--curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" '
                  '--ctest-shard ${{ matrix.shard }}/2'),
-                (2, 'promote', f'    runs-on: {GKP_2}\n',
-                 f'    runs-on: {GKP_2}  # isolated release\n'),
+                (2, 'promote', f'    runs-on: {HOSTED_X86}\n',
+                 f'    runs-on: {HOSTED_X86}  # hosted release-bot job\n'),
                 (6, None, '\n  preflight:\n', '\n  preflight:  # the fast gate\n'))
         # Each edit alone, then every one that composes (a line one edit
         # rewrites is left to the edit that came first).
@@ -7791,8 +8000,12 @@ finally:
             if name == 'release.yml':
                 self.assertEqual(baseline, [])
             else:
-                self.assertIn('lint.yml job lint may use GKE routing only at its exact pinned job and label',
-                              baseline)
+                # The unlisted workflow runs on the hosted image: no routing or paid-label
+                # finding is raised until a mutation below introduces one.
+                self.assertNotIn('lint.yml job lint may use GKE routing only at its exact '
+                                 'pinned job and label', baseline)
+                self.assertEqual([finding for finding in baseline
+                                  if finding.startswith('lint.yml must not')], [])
             for replacement, finding in mutations:
                 with self.subTest(name=name, replacement=replacement):
                     changed = in_job(workflow, job, before, replacement.replace(spot, before))
@@ -7822,8 +8035,8 @@ finally:
                 self.assertIn('release.yml must retain workflow_dispatch only '
                               'for protected release jobs', findings)
         for job in ('release', 'notify-hub'):
-            for runner in ('ubuntu-latest', 'ubuntu-24.04', PR_RUNNER, GKP_2, GKP_4,
-                           GKP_OD_PREBUILT,
+            for runner in ('ubuntu-latest', 'ubuntu-24.04', HOSTED_ARM, GKE_2, LEGACY_PR_RUNNER,
+                           GKP_2, GKP_4, GKP_OD_PREBUILT,
                            f"${{{{ fromJSON('{GKP_2}') || 'ubuntu-latest' }}}}",
                            f"${{{{ fromJSON('{RELEASE_RUNNER}') || 'ubuntu-latest' }}}}"):
                 with self.subTest(job=job, runner=runner):
@@ -7865,16 +8078,19 @@ finally:
         original, others = self.ci_sources(), self.other_sources()
         promote = original[2]
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
-        for runner in ('ubuntu-latest', 'ubuntu-24.04', PR_RUNNER, RELEASE_RUNNER, PREBUILT_RUNNER,
+        # Promotion runs on the hosted x86 image; any other image, the retired
+        # protected scale sets and the retired pool labels are refused at the pin.
+        for runner in ('ubuntu-latest', 'ubuntu-22.04', HOSTED_ARM, GKE_2, GKP_2, LEGACY_PR_RUNNER,
+                       RELEASE_RUNNER, PREBUILT_RUNNER,
                        '["self-hosted","pf-ci","pf-ci-release"]',
-                       f"${{{{ fromJSON('{GKP_2}') || 'ubuntu-latest' }}}}"):
+                       f"${{{{ fromJSON('{HOSTED_X86}') || 'ubuntu-latest' }}}}"):
             with self.subTest(runner=runner):
                 changed = original.copy()
-                changed[2] = in_job(promote, 'promote', f'    runs-on: {GKP_2}\n',
+                changed[2] = in_job(promote, 'promote', f'    runs-on: {HOSTED_X86}\n',
                                     f'    runs-on: {runner}\n')
                 findings = ci_workflow_findings(*changed, others=others)
-                self.assertIn(f'promote-baseline.yml job promote must run on {GKP_2} '
-                              '(isolated release)', findings)
+                self.assertIn(f'promote-baseline.yml job promote must run on {HOSTED_X86} '
+                              '(hosted)', findings)
         event_finding = ('promote-baseline.yml must retain push and '
                          'workflow_dispatch only for protected baseline promotion')
         for event in ('pull_request', 'pull_request_target', 'workflow_run'):
@@ -8026,7 +8242,12 @@ finally:
         self.assertIn('lint.yml must split pull_request and post-merge events into separate workflows',
                       ci_workflow_findings(*original, others=dict(others, **{'lint.yml': mixed})))
         for event in ('push', 'schedule', 'workflow_dispatch'):
-            post = new.format(on='[' + event + ']', runner=POST_RUNNER)
+            # An unregistered post job on the hosted x86 image is accepted; the retired
+            # post-merge GKE label has no exact pin and is refused as GKE routing.
+            hosted_post = new.format(on='[' + event + ']', runner=POST_RUNNER)
+            self.assertNotIn('lint.yml job lint may use GKE routing only at its exact pinned job and label',
+                             ci_workflow_findings(*original, others=dict(others, **{'lint.yml': hosted_post})))
+            post = new.format(on='[' + event + ']', runner=GKE_2)
             self.assertIn('lint.yml job lint may use GKE routing only at its exact pinned job and label',
                           ci_workflow_findings(*original, others=dict(others, **{'lint.yml': post})))
         for on, condition in (('pull_request_target', ''),
@@ -8068,10 +8289,13 @@ finally:
             hosted = in_job(hosted, 'deploy', '    steps:\n', job + '    steps:\n')
             with self.subTest(reason=reason, hosted=True):
                 findings = ci_workflow_findings(*original, others=dict(others, **{'deploy.yml': hosted}))
-                self.assertIn(f'deploy.yml job deploy must run on {POST_RUNNER} for post-merge events', findings)
+                # The hosted x86 image is the required post-merge runner, so credentials on it
+                # raise neither a routing nor a credential finding.
+                self.assertNotIn(f'deploy.yml job deploy must run on {POST_RUNNER} for post-merge events',
+                                 findings)
                 self.assertNotIn('deploy.yml job deploy must keep production credentials on a hosted standard runner',
                                  findings)
-            for runner in (PR_RUNNER, POST_RUNNER, GKP_2, RELEASE_RUNNER):
+            for runner in (LEGACY_PR_RUNNER, GKE_2, GKP_2, RELEASE_RUNNER):
                 pool = in_job(hosted, 'deploy', '    runs-on: ubuntu-24.04\n',
                               f'    runs-on: {runner}\n')
                 marker = f"      PF_CI_LABELS: '{runner}'\n"
@@ -8085,12 +8309,14 @@ finally:
                                   'on a hosted standard runner', findings)
 
     def github_token_pool_workflow(self, reference):
+        # The retired post-merge GKE label stands for a non-hosted pool: credentials are
+        # refused there, so a GITHUB_TOKEN-only job can show it is never mistaken for one.
         return ('name: token\non: workflow_dispatch\npermissions:\n  contents: write\n'
                         'jobs:\n  token:\n'
-                        f'    runs-on: {POST_RUNNER}\n'
+                        f'    runs-on: {GKE_2}\n'
                         '    # secrets.DEPLOY_KEY, id-token: write, environment: production\n'
                         '    env:\n'
-                        f"      PF_CI_LABELS: '{POST_RUNNER}'\n"
+                        f"      PF_CI_LABELS: '{GKE_2}'\n"
                         f'      TOKEN: ${{{{ {reference} }}}}\n'
                         '    steps:\n      - run: "true"\n')
 
@@ -8100,18 +8326,28 @@ finally:
         for reference in ('secrets.GITHUB_TOKEN', "secrets['GITHUB_TOKEN']"):
             workflow = self.github_token_pool_workflow(reference)
             with self.subTest(reference=reference):
-                # An arbitrary token job is unregistered: its sole refusal is
-                # the independent exact-job pin policy, never credentials.
+                # An arbitrary token job is unregistered: it is refused by the exact-job pin
+                # policy and the hosted-image requirement, never for credentials.
+                findings = ci_workflow_findings(
+                    *original, others=dict(others, **{'token.yml': workflow}))
+                self.assertEqual(findings, [
+                    f'token.yml job token must run on {POST_RUNNER} for post-merge events',
+                    'token.yml job token may use GKE routing only at its exact pinned job and label',
+                    f'token.yml job token must run on {POST_RUNNER}'])
+                self.assertNotIn('token.yml job token must not expose credentials on GKE', findings)
+                self.assertNotIn('token.yml job token must keep production credentials '
+                                 'on a hosted standard runner', findings)
+                # The same token job on the hosted x86 image raises no finding at all.
                 self.assertEqual(ci_workflow_findings(
-                    *original, others=dict(others, **{'token.yml': workflow})), [
-                        'token.yml job token may use GKE routing only at its exact pinned job and label'])
+                    *original, others=dict(others, **{
+                        'token.yml': workflow.replace(GKE_2, HOSTED_X86)})), [])
             with self.subTest(reference=reference, route='registered corpus job'):
                 pinned = in_job(original[4], 'corpus-parity', '    env:\n',
                                 '    # secrets.DEPLOY_KEY, id-token: write, environment: production\n'
                                 '    env:\n' + f'      TOKEN: ${{{{ {reference} }}}}\n')
                 self.assertNotEqual(pinned, original[4])
                 self.assertEqual(ci_preflight._job_values(_jobs(pinned)['corpus-parity'], 'runs-on'),
-                                 [GKE_16])
+                                 [HOSTED_X86])
                 changed = [*original]
                 changed[4] = pinned
                 self.assertEqual(ci_workflow_findings(*changed, others=others), [])
@@ -8142,7 +8378,8 @@ finally:
             ({'reference': 'secrets.GITHUB_TOKEN'},
              'token.yml job token must not expose credentials on GKE'),
             ({'reference': 'secrets.GITHUB_TOKEN', 'route': 'registered corpus job'},
-             'corpus-parity.yml job corpus-parity must not expose credentials on GKE'),
+             'corpus-parity.yml job corpus-parity must not expose credentials '
+             'on a pinned verification job'),
             ({'reference': "secrets['GITHUB_TOKEN']"}, None),
             ({'reference': "secrets['GITHUB_TOKEN']", 'route': 'registered corpus job'}, None),
         )
@@ -8171,17 +8408,19 @@ finally:
         for name, jobs in (('docs.yml', ('build',)), ('promote-baseline.yml', ('promote-guard', 'promote')),
                            ('release.yml', ('release', 'prebuilt', 'notify-hub'))):
             for job in jobs:
+                # docs.yml and the promotion jobs are hosted pins now; only release.yml
+                # keeps its isolated protected scale sets.
                 before = (HOSTED_MATRIX_RUNNER if job == 'prebuilt' else
-                          GKE_2 if job == 'promote-guard' else
-                          GKP_2 if name == 'promote-baseline.yml' else
-                          'ubuntu-24.04' if name == 'docs.yml' else RELEASE_RUNNER)
-                after = 'ubuntu-latest' if name == 'docs.yml' else PR_RUNNER
+                          HOSTED_X86 if name in ('promote-baseline.yml', 'docs.yml') else
+                          RELEASE_RUNNER)
+                after = 'ubuntu-latest' if name in ('docs.yml', 'promote-baseline.yml') else PR_RUNNER
                 pool = in_job(workflows[name], job, f'    runs-on: {before}\n',
                               f'    runs-on: {after}\n')
                 findings = ci_preflight.runner_findings(dict(
                     {'ci.yml': original[0], **workflows}, **{name: pool}))
                 finding = (f'{name} job {job} must run on ubuntu-24.04 (hosted)' if name == 'docs.yml' else
-                           f'{name} job {job} must run on {GKE_2}' if job == 'promote-guard' else
+                           f'{name} job {job} must run on {HOSTED_X86}' if job == 'promote-guard' else
+                           f'{name} job {job} must run on {HOSTED_X86} (hosted)' if job == 'promote' else
                            f'{name} job {job} must run on {before} (isolated release)')
                 self.assertIn(finding, findings)
                 marker = f"      PF_CI_LABELS: '{PR_RUNNER}'\n"
@@ -8198,7 +8437,8 @@ finally:
                 findings = ci_preflight.runner_findings(dict(
                     {'ci.yml': original[0], **workflows}, **{name: hosted}))
                 route = ('a hosted job' if name == 'docs.yml' else
-                         'a GKE job' if job == 'promote-guard' else 'an isolated release job')
+                         'a pinned verification job' if job == 'promote-guard' else
+                         'an isolated release job')
                 self.assertIn(f'{name} job {job} must not set PF_CI_LABELS on {route}', findings)
 
     def test_release_dry_run_never_reaches_the_hub_dispatch(self):
@@ -8295,29 +8535,29 @@ finally:
         self.assertEqual(code, 0, output)
         self.assertIn('runners and time limits OK', output)
         for name, mutation, finding in (
-                ('gke-pr.yml', ('preflight', runner_declaration(GKE_PR_8), runner_declaration('ubuntu-latest')),
-                 f'gke-pr.yml job preflight must run on {GKE_PR_8}'),
+                ('gke-pr.yml', ('preflight', runner_declaration(HOSTED_X86), runner_declaration('ubuntu-latest')),
+                 f'gke-pr.yml job preflight must run on {HOSTED_X86}'),
                 ('gke-pr.yml', ('preflight', '    steps:\n',
                   '    environment: production\n    steps:\n'),
-                 'gke-pr.yml job preflight must keep production credentials on a hosted standard runner'),
-                ('gke-pr.yml', ('preflight', runner_declaration(GKE_PR_8),
+                 'gke-pr.yml job preflight must not expose credentials on a pinned verification job'),
+                ('gke-pr.yml', ('preflight', runner_declaration(HOSTED_X86),
                   runner_declaration("${{ fromJSON('" + PR_RUNNER + "') || 'ubuntu-24.04' }}")),
-                 f'gke-pr.yml job preflight must run on {GKE_PR_8}'),
-                ('gke-pr.yml', ('preflight', runner_declaration(GKE_PR_8), runner_declaration(RELEASE_RUNNER)),
-                 f'gke-pr.yml job preflight must run on {GKE_PR_8}'),
-                ('gke-pr.yml', ('preflight', runner_declaration(GKE_PR_8), runner_declaration(GKP_2)),
-                 f'gke-pr.yml job preflight must run on {GKE_PR_8}'),
-                ('gke-pr.yml', ('preflight', runner_declaration(GKE_PR_8),
+                 f'gke-pr.yml job preflight must run on {HOSTED_X86}'),
+                ('gke-pr.yml', ('preflight', runner_declaration(HOSTED_X86), runner_declaration(RELEASE_RUNNER)),
+                 f'gke-pr.yml job preflight must run on {HOSTED_X86}'),
+                ('gke-pr.yml', ('preflight', runner_declaration(HOSTED_X86), runner_declaration(GKP_2)),
+                 f'gke-pr.yml job preflight must run on {HOSTED_X86}'),
+                ('gke-pr.yml', ('preflight', runner_declaration(HOSTED_X86),
                                 runner_declaration(json.dumps(
-                                    ['self-hosted', json.loads(PR_RUNNER)[1], RETIRED_VM_LABELS[0]]))),
-                 f'gke-pr.yml job preflight must run on {GKE_PR_8}'),
-                ('ci-post.yml', ('sanitizers', runner_declaration(GKE_ONDEMAND_32_256),
+                                    ['self-hosted', json.loads(LEGACY_PR_RUNNER)[1], RETIRED_VM_LABELS[0]]))),
+                 f'gke-pr.yml job preflight must run on {HOSTED_X86}'),
+                ('ci-post.yml', ('sanitizers', runner_declaration(HOSTED_X86),
                                 runner_declaration('["self-hosted","pf-gcp-small"]')),
-                 f'ci-post.yml job sanitizers must run on {GKE_ONDEMAND_32_256}'),
-                ('ci-post.yml', ('sanitizers', runner_declaration(GKE_ONDEMAND_32_256),
+                 f'ci-post.yml job sanitizers must run on {HOSTED_X86}'),
+                ('ci-post.yml', ('sanitizers', runner_declaration(HOSTED_X86),
                                 runner_declaration('pf-linux-x64-16')),
-                 f'ci-post.yml job sanitizers must run on {GKE_ONDEMAND_32_256}'),
-                ('ci-post.yml', ('build-arm', runner_declaration(GKE_ARM),
+                 f'ci-post.yml job sanitizers must run on {HOSTED_X86}'),
+                ('ci-post.yml', ('build-arm', runner_declaration(HOSTED_ARM),
                                 '    runs-on: macos-26-xlarge\n'),
                  'ci-post.yml must not use larger-runner labels; use the GCP fleet or hosted exceptions'),
                 ('ci-post.yml', ('build', '        build_type: [Release]\n',
@@ -8693,8 +8933,8 @@ finally:
         self.assertEqual(ci_preflight._code(path.read_text()),
                          ci_preflight._code(RULESETS_PROBE_WORKFLOW))
         self.assertEqual(ci_preflight.RELEASE_JOB_RUNNERS.get(path.name),
-                         {'probe': GKP_2})
-        self.assertEqual(ci_preflight.HOSTED_JOB_RUNNERS.get(path.name), {'authz': GKE_2})
+                         {'probe': HOSTED_X86})
+        self.assertEqual(ci_preflight.HOSTED_JOB_RUNNERS.get(path.name), {'authz': HOSTED_X86})
         probe_app = ci_preflight._step_named(ci_preflight._steps(_jobs(path.read_text())['probe']),
                                              '      - name: Mint org App token')
         release_app = ci_preflight._step_named(
@@ -8711,12 +8951,13 @@ finally:
 
     def test_probe_refuses_bad_runners(self):
         original, others = self.ci_sources(), self.other_sources()
-        finding = (f'release-ruleset-probe.yml job probe must run on {GKP_2} '
-                   '(isolated release)')
-        for runner in (POST_RUNNER, PR_RUNNER, GKP_4, GKP_OD_4, PREBUILT_RUNNER):
+        finding = (f'release-ruleset-probe.yml job probe must run on {HOSTED_X86} '
+                   '(hosted)')
+        for runner in (GKE_2, LEGACY_PR_RUNNER, GKP_2, GKP_4, GKP_OD_4, PREBUILT_RUNNER,
+                       'ubuntu-latest', 'ubuntu-22.04', HOSTED_ARM):
             with self.subTest(runner=runner):
                 changed = in_job(RULESETS_PROBE_WORKFLOW, 'probe',
-                                 f'    runs-on: {GKP_2}\n',
+                                 f'    runs-on: {HOSTED_X86}\n',
                                  f'    runs-on: {runner}\n')
                 self.assertNotEqual(changed, RULESETS_PROBE_WORKFLOW)
                 self.assertIn(finding, ci_preflight.runner_findings(
@@ -8828,16 +9069,16 @@ finally:
     def test_release_ruleset_probe_comments_describe_the_actual_pin_scope(self):
         source = (ROOT / 'scripts/ci_preflight.py').read_text()
         workflow = (ROOT / '.github/workflows/release-ruleset-probe.yml').read_text()
+        # Both jobs run on the hosted image, so the header comment no longer names a fleet.
         header = (
-            '    # Preflight pins executable workflow lines after removing comment-only lines.\n'
-            '    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses gkp-2cpu-4gb-amd64.\n')
+            '    # Preflight pins executable workflow lines after removing comment-only lines.\n')
         requirements = (
             (source,
-             '# Scoped CI workflows bind this canon header byte for byte, including its\n'
-             '# fleet comment and comma spacing. The release probe pins executable lines.\n'),
+             '# Scoped CI workflows bind this canon header byte for byte, including the\n'
+             '# hosted runner line and comma spacing. The release probe pins executable lines.\n'),
             (source,
-             '                    # Normalize the runner array here; the probe workflow pin below\n'
-             '                    # compares nonblank lines after removing comment-only lines.\n'),
+             '                # The probe workflow pin below compares nonblank lines after\n'
+             '                # removing comment-only lines; the runner label is exact.\n'),
             (source, header),
             (RULESETS_PROBE_WORKFLOW, header),
             (workflow, header),
@@ -8892,8 +9133,11 @@ finally:
                  'fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }',
                  'fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; :; }'),
                 ('authz permissions', '    permissions: {}', '    permissions: {contents: read}'),
-                ('authz runner', '    runs-on: gke-2cpu-4gb-amd64',
-                 '    runs-on: gkp-2cpu-4gb-amd64'),
+                # Both jobs run on the hosted image; each row anchors on its own job's keys.
+                ('authz runner', '    runs-on: ubuntu-24.04\n    permissions: {}',
+                 f'    runs-on: {GKE_2}\n    permissions: {{}}'),
+                ('authz runner image', '    runs-on: ubuntu-24.04\n    permissions: {}',
+                 '    runs-on: ubuntu-latest\n    permissions: {}'),
                 ('checkout guard', '      - name: Checkout\n'
                  "        if: ${{ needs.authz.result == 'success' }}\n",
                  '      - name: Checkout\n'),
@@ -8907,8 +9151,12 @@ finally:
                 ('extra scope', '  contents: read', '  contents: read\n  actions: read'),
                 ('job permissions', '  probe:\n', '  probe:\n    permissions:\n      contents: write\n'),
                 # Full runner lines exclude the routing comment's label mention.
-                ('runner', f'    runs-on: {GKP_2}\n', f'    runs-on: {GKP_4}\n'),
-                ('PR runner', f'    runs-on: {GKP_2}\n', f'    runs-on: {PR_RUNNER}\n'),
+                ('runner', '    runs-on: ubuntu-24.04\n    environment: release\n',
+                 '    runs-on: ubuntu-latest\n    environment: release\n'),
+                ('retired protected runner', '    runs-on: ubuntu-24.04\n    environment: release\n',
+                 f'    runs-on: {GKP_2}\n    environment: release\n'),
+                ('PR runner', '    runs-on: ubuntu-24.04\n    environment: release\n',
+                 f'    runs-on: {LEGACY_PR_RUNNER}\n    environment: release\n'),
                 ('app action', 'actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547',
                  'actions/create-github-app-token@v2'),
                 ('app output', '        id: app', '        id: other'),
@@ -9720,7 +9968,9 @@ class ActionlintRunnerLabels(unittest.TestCase):
         self.assertIn('build-arm', _jobs(original))
         code, output = self.runner_labels()
         self.assertEqual(code, 0, output)
-        changed = in_job(original, 'build-arm', runner_declaration(GKE_ARM),
+        # The hosted arm64 image needs no declaration; an unlisted custom label does.
+        self.assertNotIn(f'    - {HOSTED_ARM}\n', self.config.read_text())
+        changed = in_job(original, 'build-arm', runner_declaration(HOSTED_ARM),
                          runner_declaration('gke-unlisted-arm64'))
         self.assertNotEqual(changed, original)
         workflow.write_text(changed)
@@ -9730,23 +9980,28 @@ class ActionlintRunnerLabels(unittest.TestCase):
             'gke-pr.yml job build-arm: label "gke-unlisted-arm64" is not declared '
             'in .github/actionlint.yaml', output.splitlines())
 
-    def test_light_scalar_runner_labels_are_declared_and_required(self):
+    def test_retired_light_scalar_labels_are_undeclared_and_hosted_needs_none(self):
+        # The light GKE labels left the declaration list with the hosted migration:
+        # a workflow naming one is refused, while the hosted image needs no entry.
         original = self.config.read_text()
+        workflow = self.tree / '.github/workflows/light-label.yml'
         for label in (GKE_2, GKE_4):
             with self.subTest(label=label):
-                self.assertIn(f'    - {label}\n', original)
-                workflow = self.tree / '.github/workflows/light-label.yml'
+                self.assertNotIn(f'    - {label}\n', original)
                 workflow.write_text(
                     'on: workflow_dispatch\njobs:\n  inspect:\n'
                     + runner_declaration(label) + '    steps:\n      - run: git --version\n')
-                self.config.write_text(original)
-                code, output = self.runner_labels()
-                self.assertEqual(code, 0, output)
-                self.config.write_text(original.replace(f'    - {label}\n', '', 1))
                 code, output = self.runner_labels()
                 self.assertEqual(code, 1, output)
                 self.assertIn(f'light-label.yml job inspect: label "{label}" is not declared '
                               'in .github/actionlint.yaml', output.splitlines())
+        for label in (HOSTED_X86, HOSTED_ARM):
+            with self.subTest(label=label):
+                workflow.write_text(
+                    'on: workflow_dispatch\njobs:\n  inspect:\n'
+                    + runner_declaration(label) + '    steps:\n      - run: git --version\n')
+                code, output = self.runner_labels()
+                self.assertEqual(code, 0, output)
         self.config.write_text(original)
 
     def test_actionlint_runner_labels_accepts_retained_fleets_and_refuses_retired_pr_route(self):
@@ -9755,8 +10010,12 @@ class ActionlintRunnerLabels(unittest.TestCase):
             self.tree / 'scripts/ci_preflight.py', self.config, workflow,
             *sorted((self.tree / '.github/workflows').glob('*')))
         original_config = self.config.read_text()
-        for label in (GKP_2, GKP_4, GKP_PREBUILT, GKP_OD_4, GKP_OD_PREBUILT):
+        # Only release.yml's two protected labels stay declared; every other retired
+        # label of the old fleets is undeclared and refused where a workflow names it.
+        for label in (GKP_OD_4, GKP_OD_PREBUILT):
             self.assertIn(f'    - {label}\n', original_config)
+        for label in (GKP_2, GKP_4, GKP_PREBUILT, GKE_2):
+            self.assertNotIn(f'    - {label}\n', original_config)
         workflow.write_text(
             'on: workflow_dispatch\njobs:\n  post:\n'
             '    runs-on: gke-2cpu-4gb-amd64\n'
@@ -9768,17 +10027,30 @@ class ActionlintRunnerLabels(unittest.TestCase):
             '    runs-on: gkp-16cpu-32gb-amd64-128gb\n'
             '    steps:\n      - run: "true"\n')
         code, output = self.runner_labels()
+        self.assertEqual(code, 1, output)
+        for job, label in (('post', GKE_2), ('main', GKP_2), ('prebuilt', GKP_PREBUILT)):
+            self.assertIn(f'gcp-labels.yml job {job}: label "{label}" is not declared '
+                          'in .github/actionlint.yaml', output.splitlines())
+        # The two retained labels pass, and removing one is refused again.
+        workflow.write_text(
+            'on: workflow_dispatch\njobs:\n  main:\n'
+            f'    runs-on: {GKP_OD_4}\n'
+            '    steps:\n      - run: "true"\n'
+            '  prebuilt:\n'
+            f'    runs-on: {GKP_OD_PREBUILT}\n'
+            '    steps:\n      - run: "true"\n')
+        code, output = self.runner_labels()
         self.assertEqual(code, 0, output)
-        self.config.write_text(original_config.replace(f'    - {GKP_PREBUILT}\n', '', 1))
+        self.config.write_text(original_config.replace(f'    - {GKP_OD_PREBUILT}\n', '', 1))
         code, output = self.runner_labels()
         self.assertEqual(code, 1, output)
-        self.assertIn(f'gcp-labels.yml job prebuilt: label "{GKP_PREBUILT}" is not declared '
+        self.assertIn(f'gcp-labels.yml job prebuilt: label "{GKP_OD_PREBUILT}" is not declared '
                       'in .github/actionlint.yaml', output.splitlines())
         self.config.write_text(original_config)
         admitted = self.tree / '.github/workflows/gke-pr.yml'
         original = admitted.read_text()
-        changed = in_job(original, 'corpus-parity-subset', runner_declaration(GKE_PR_8),
-                         runner_declaration(PR_RUNNER))
+        changed = in_job(original, 'corpus-parity-subset', runner_declaration(HOSTED_X86),
+                         runner_declaration(LEGACY_PR_RUNNER))
         self.assertNotEqual(changed, original)
         admitted.write_text(changed)
         code, output = self.runner_labels()
@@ -9816,23 +10088,16 @@ class ActionlintRunnerLabels(unittest.TestCase):
 
     def test_actionlint_runner_labels_rejects_removed_label(self):
         original = self.config.read_text()
+        # Only release.yml's two protected labels are still declared and used; every
+        # other label of the retired fleets is absent from the declaration list.
+        for label in (GKP_4, GKP_2, 'gke-32cpu-64gb-amd64', 'gke-ondemand-32cpu-64gb-amd64',
+                      'gke-ondemand-32cpu-64gb-amd64-256gb', 'gke-16cpu-32gb-amd64',
+                      'gke-16cpu-32gb-amd64-128gb', 'gke-16cpu-32gb-amd64-256gb',
+                      'gke-8cpu-16gb-amd64', 'gke-16cpu-32gb-arm64-128gb'):
+            self.assertNotIn(f'    - {label}\n', original)
         for label, sites in (
-                (GKP_4, (('docs-post.yml', 'build'),)),
-                (GKP_2, (('release-ruleset-probe.yml', 'probe'), ('promote-baseline.yml', 'promote'))),
                 (GKP_OD_4, (('release.yml', 'release'), ('release.yml', 'notify-hub'))),
-                (GKP_OD_PREBUILT, (('release.yml', 'prebuilt'),)),
-                ('gke-32cpu-64gb-amd64', (('gke-pr.yml', 'build'),
-                                           ('ci-post.yml', NATIVE_X86_JOB))),
-                ('gke-ondemand-32cpu-64gb-amd64', (('ci-post.yml', 'build'),)),
-                ('gke-ondemand-32cpu-64gb-amd64-256gb', (('ci-post.yml', 'sanitizers'),)),
-                ('gke-16cpu-32gb-amd64', (('ci-post.yml', 'kernel-only'), ('corpus-parity.yml', 'corpus-parity'))),
-                ('gke-16cpu-32gb-amd64-128gb', (('gke-pr.yml', 'build-debug'),
-                                               ('ci-post.yml', 'build-debug'), ('native-live.yml', 'native-live'))),
-                ('gke-16cpu-32gb-amd64-256gb', (('native-live.yml', 'native-live'),)),
-                ('gke-8cpu-16gb-amd64', (('gke-pr.yml', 'preflight'), ('gke-pr.yml', 'corpus-parity-subset'),
-                                        ('ci-post.yml', 'preflight'), ('ci-post.yml', 'preflight-slow'),
-                                        ('native-live.yml', 'native-live-shards'), ('corpus-parity.yml', 'corpus-parity-subset'))),
-                ('gke-16cpu-32gb-arm64-128gb', (('gke-pr.yml', 'build-arm'), ('ci-post.yml', 'build-arm')))):
+                (GKP_OD_PREBUILT, (('release.yml', 'prebuilt'),))):
             with self.subTest(label=label):
                 changed = original.replace(f'    - {label}\n', '', 1)
                 self.assertNotEqual(changed, original)
@@ -9963,9 +10228,9 @@ class HostedNativeProfiles(unittest.TestCase):
         job = _jobs(native)['native-live']
         rows = [
             {'profile': 'live-sanitizers', 'build_dir': 'build-live-sanitizers',
-             'runner': 'gke-16cpu-32gb-amd64-256gb'},
+             'runner': HOSTED_X86},
             {'profile': 'live-tsan', 'build_dir': 'build-live-tsan',
-             'runner': 'gke-16cpu-32gb-amd64-128gb'},
+             'runner': HOSTED_X86},
         ]
         self.assertEqual(ci_preflight._job_values(job, 'runs-on', unquote=False), [NATIVE_RUNNER])
         self.assertEqual(ci_preflight._matrix_rows(job), rows)
@@ -9979,12 +10244,15 @@ class HostedNativeProfiles(unittest.TestCase):
             runner = f"            runner: {row['runner']}\n"
             block = (f"          - profile: {row['profile']}\n"
                      f"            build_dir: {row['build_dir']}\n" + runner)
-            mutations.extend(((block, ''), (block, block * 2), (runner, '')))
-            for wrong in (GKE_16, GKE_ARM, 'ubuntu-24.04',
+            # Both rows carry the same hosted runner line, so every runner mutation is
+            # anchored on its own row's block instead of the first matching line.
+            mutations.extend(((block, ''), (block, block * 2),
+                              (block, block.replace(runner, ''))))
+            for wrong in (GKE_16, GKE_ARM, HOSTED_ARM, 'ubuntu-latest', 'ubuntu-22.04',
                           GKE_16_128 if row['profile'] == 'live-sanitizers' else GKE_16_256,
                           'gke-16cpu-32gb-amd64-512gb', '${{ inputs.runner }}',
                           f"'{row['runner']}'", f"[{row['runner']}]"):
-                mutations.append((runner, f'            runner: {wrong}\n'))
+                mutations.append((block, block.replace(runner, f'            runner: {wrong}\n')))
         mutations.extend((
             ('      matrix:\n', '      matrix:\n        replica: [1, 2]\n'),
             ('build_dir: build-live-tsan', 'build_dir: build-live-sanitizers'),
@@ -10025,20 +10293,20 @@ class HostedNativeProfiles(unittest.TestCase):
                 self.assertTrue(ci_preflight.runner_findings({Path(name).name: workflow}))
 
     def test_native_sized_labels_counted(self):
+        # The native profile rows run on the hosted image, so replicating the native
+        # call never adds to a GKE label count. A retired GKE label on a direct job is
+        # still counted, with the same cap of 8 instances per label.
         leaf = 'on: workflow_call\njobs:\n  native-live:' + _jobs(self.workflow())['native-live']
         for count in (8, 9):
             caller = ('on: workflow_dispatch\njobs:\n  native-live:\n'
                       '    strategy:\n      matrix:\n        replica: ['
                       + ', '.join(str(i) for i in range(count)) + ']\n'
                       '    uses: ./.github/workflows/native-live.yml\n')
-            expected = ([] if count == 8 else [
-                f'ci-post.yml GKE label {label} expands to 9 jobs; cap is 8'
-                for label in (GKE_16_128, GKE_16_256)])
             with self.subTest(replicas=count):
                 self.assertEqual(ci_preflight._gke_cap_findings(
-                    {'ci-post.yml': caller, 'native-live.yml': leaf}), expected)
+                    {'ci-post.yml': caller, 'native-live.yml': leaf}), [])
         for label in (GKE_16_128, GKE_16_256):
-            for count in (7, 8):
+            for count in (8, 9):
                 caller = ('on: workflow_dispatch\njobs:\n  direct:\n'
                           + runner_declaration(label)
                           + '    strategy:\n      matrix:\n        replica: ['
@@ -10048,7 +10316,7 @@ class HostedNativeProfiles(unittest.TestCase):
                 with self.subTest(label=label, direct=count):
                     self.assertEqual(ci_preflight._gke_cap_findings(
                         {'ci-post.yml': caller, 'native-live.yml': leaf}),
-                        [] if count == 7 else [
+                        [] if count == 8 else [
                             f'ci-post.yml GKE label {label} expands to 9 jobs; cap is 8'])
 
     def test_native_jobs_have_exact_hosted_pins_without_fleet_metadata(self):
@@ -10061,9 +10329,11 @@ class HostedNativeProfiles(unittest.TestCase):
             with self.subTest(job=job):
                 self.assertEqual(ci_preflight._job_values(jobs.get(job, ''), 'runs-on'), [label])
                 self.assertNotIn('PF_CI_LABELS', jobs.get(job, ''))
-                for replacement in (PR_RUNNER, GKP_2, RELEASE_RUNNER, 'pf-linux-x64-16',
-                                    'pf-linux-x64-32', 'pf-linux-x64-64',
-                                    'ubuntu-24.04'):
+                for replacement in (LEGACY_PR_RUNNER, GKE_8, GKE_4, GKE_16_128, GKP_2, RELEASE_RUNNER,
+                                    'pf-linux-x64-16', 'pf-linux-x64-32', 'pf-linux-x64-64',
+                                    'ubuntu-24.04', 'ubuntu-latest', 'ubuntu-22.04', HOSTED_ARM):
+                    if replacement == label:
+                        continue  # The exact pin itself is not a mutation.
                     changed = in_job(native, job, runner_declaration(label),
                                      f'    runs-on: {replacement}\n')
                     self.assertNotEqual(changed, native)
@@ -10082,7 +10352,7 @@ class HostedNativeProfiles(unittest.TestCase):
                                          f"    env:\n      PF_CI_LABELS: '{POST_RUNNER}'\n    steps:\n")
                     self.assertNotEqual(changed, native)
                     self.assertIn(f'native-live.yml job {job} must not set PF_CI_LABELS '
-                                  'on a GKE job',
+                                  'on a pinned verification job',
                                   ci_preflight.runner_findings({'native-live.yml': changed}))
 
     def test_native_shard_matrix_matches_the_command_denominator(self):
@@ -10742,7 +11012,7 @@ class GkePrArmProofTests(unittest.TestCase):
         arm = jobs['build-arm']
         self.assertEqual(ci_preflight._needs(arm), ['admit'])
         self.assertEqual(ci_preflight._job_values(arm, 'runs-on', unquote=False),
-                         ['gke-16cpu-32gb-arm64-128gb'])
+                         [HOSTED_ARM])
         self.assertEqual(ci_preflight._job_values(arm, 'if'), [
             "${{ needs.admit.outputs.allowed == 'true' && "
             "needs.admit.outputs.docs_only != 'true' && "
@@ -10891,15 +11161,23 @@ class GkePrArmProofTests(unittest.TestCase):
                              ci_preflight.runner_allowlist_findings(
                                  workflows, original, repository)))
         reference = f'{repository}/.github/workflows/gke-pr.yml@refs/heads/main'
-        self.assertIn(reference, original.splitlines())
-        changed = '\n'.join(line for line in original.splitlines() if line != reference) + '\n'
+        # The hosted arm64 image needs no group-14 reference, so the real mirror is empty.
+        self.assertNotIn(reference, original.splitlines())
+        # The retired arm64 scale set on the same job needs the reference again, and the
+        # exact reference admits it.
+        retired = in_job(self.workflow, 'build-arm', runner_declaration(HOSTED_ARM),
+                         runner_declaration(GKE_ARM))
         self.assertIn(
             f'gke-pr.yml: label "{GKE_ARM}" requires mirror line "{reference}"; '
             'the org runner group must contain it before merge',
-            ci_preflight.runner_allowlist_findings(workflows, changed, repository))
-        unlisted = in_job(self.workflow, 'build-arm', runner_declaration(GKE_ARM),
+            ci_preflight.runner_allowlist_findings({'gke-pr.yml': retired}, original, repository))
+        listed = original.rstrip('\n') + '\n' + reference + '\n'
+        self.assertFalse(any(not line.startswith('advisory:') for line in
+                             ci_preflight.runner_allowlist_findings(
+                                 {'gke-pr.yml': retired}, listed, repository)))
+        unlisted = in_job(self.workflow, 'build-arm', runner_declaration(HOSTED_ARM),
                           runner_declaration('gke-unlisted-arm64'))
-        self.assertIn(f'gke-pr.yml job build-arm must run on {GKE_ARM}',
+        self.assertIn(f'gke-pr.yml job build-arm must run on {HOSTED_ARM}',
                       ci_preflight.runner_findings({'gke-pr.yml': unlisted}))
 
 
@@ -10907,11 +11185,12 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
     """Run real rules over main and the complete, independently built #701 hunk."""
 
     WORKFLOW = ROOT / '.github/workflows/gke-pr.yml'
-    # Job from #701, with the 128 GB disk pin.
+    # Job from #701. Only its runner line differs from that hunk: it now names the
+    # hosted arm64 image instead of the retired 128 GB GKE arm64 scale set.
     ARM_JOB = r'''  build-arm:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' && needs.admit.outputs.arm_relevant == 'true' }}
-    runs-on: gke-16cpu-32gb-arm64-128gb
+    runs-on: ubuntu-24.04-arm
     permissions: {contents: read}
     steps:
       - name: Require the arm64 machine
@@ -11088,7 +11367,7 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
 
     def test_extra_unnamed_job_is_refused_in_each_variant(self) -> None:
         extra = ('\n  extra-proof:\n'
-                 '    runs-on: ["self-hosted","pf-gcp-pr"]\n'
+                 f'    runs-on: {HOSTED_X86}\n'
                  '    permissions: {contents: read}\n'
                  '    steps:\n      - run: "true"\n')
         for variant, original in (('OLD', self.original), ('NEW', self.workflow)):
@@ -11210,7 +11489,7 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
         # The plain-key job reader folds this job into build-debug and selects OLD.
         shape = [
             'gke-pr.yml job build-debug must keep its read-only permissions',
-            'gke-pr.yml job build-debug must use gke-16cpu-32gb-amd64-128gb',
+            f'gke-pr.yml job build-debug must use {HOSTED_X86}',
             'gke-pr.yml admit must publish only the base classifier outputs',
             'gke-pr.yml build-debug must follow admission and keep its path policy',
             'gke-pr.yml build-debug must run its complete fast Debug smoke',
@@ -11221,9 +11500,9 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
         ]
         runner = [
             'gke-pr.yml has jobs lines the runner contract cannot read',
-            'gke-pr.yml job build-debug must use a bare scalar GKE scale-set name',
-            'gke-pr.yml job build-debug may use GKE routing only at its exact pinned job and label',
-            'gke-pr.yml job build-debug must run on gke-16cpu-32gb-amd64-128gb',
+            # Both runs-on lines of the folded body are now hosted labels, so the
+            # GKE scalar and routing rules no longer fire; the exact pin still refuses.
+            f'gke-pr.yml job build-debug must run on {HOSTED_X86}',
             # The source runner contract checks each parsed job's parallelism;
             # the folded ARM body therefore also exposes build-debug's size check.
             'gke-pr.yml job build-debug must size its parallelism to the runner',
@@ -11273,28 +11552,36 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
 
     def test_unknown_second_arm_job_is_refused(self) -> None:
         extra = self.ARM_JOB.replace('  build-arm:\n', '  build-arm-extra:\n', 1)
+        # The extra job is hosted arm64, which an unpinned job may use, so the contract
+        # refuses it for having no pin rather than for its label.
         self.assert_arm_refused(self.workflow + extra, [
-            'gke-pr.yml job build-arm-extra may use GKE routing only at its exact pinned job and label',
             'gke-pr.yml job build-arm-extra needs a pinned runner and time limit',
-            'gke-pr.yml job build-arm-extra must run on ["self-hosted","pf-gcp-pr"]',
         ], shape=('gke-pr.yml must keep only its admitted PR jobs',))
 
     def test_wrong_architecture_or_arm_size_is_refused(self) -> None:
-        for label in ('gke-16cpu-32gb-amd64', 'gke-8cpu-16gb-arm64'):
+        # The arm64 job is pinned to the hosted arm64 image: the hosted x86 image, an older
+        # arm64 release and the retired GKE scale sets are all refused at that pin. Only
+        # the retired scale sets also trip the GKE routing rule.
+        for label, retired in ((HOSTED_X86, False), ('ubuntu-22.04-arm', False),
+                               ('gke-16cpu-32gb-amd64', True), ('gke-8cpu-16gb-arm64', True),
+                               (GKE_ARM, True)):
             with self.subTest(label=label):
-                changed = in_job(self.workflow, 'build-arm', runner_declaration(GKE_ARM),
+                changed = in_job(self.workflow, 'build-arm', runner_declaration(HOSTED_ARM),
                                  runner_declaration(label))
-                self.assert_arm_refused(changed, [
-                    'gke-pr.yml job build-arm may use GKE routing only at its exact pinned job and label',
-                    'gke-pr.yml job build-arm must run on gke-16cpu-32gb-arm64-128gb',
-                ], shape=('gke-pr.yml job build-arm must use gke-16cpu-32gb-arm64-128gb',))
+                runner = (['gke-pr.yml job build-arm may use GKE routing only at its exact '
+                           'pinned job and label'] if retired else [])
+                runner.append(f'gke-pr.yml job build-arm must run on {HOSTED_ARM}')
+                self.assert_arm_refused(changed, runner,
+                                        shape=(f'gke-pr.yml job build-arm must use {HOSTED_ARM}',))
 
     def test_job_container_and_services_are_refused(self) -> None:
         for declaration, finding in (
                 ('    container: ubuntu:24.04\n',
-                 'gke-pr.yml job build-arm must not declare a job container on GKE'),
+                 'gke-pr.yml job build-arm must not declare a job container '
+                 'on a pinned verification job'),
                 ('    services:\n      redis:\n        image: redis:7\n',
-                 'gke-pr.yml job build-arm must not declare job services on GKE')):
+                 'gke-pr.yml job build-arm must not declare job services '
+                 'on a pinned verification job')):
             with self.subTest(declaration=declaration):
                 changed = in_job(self.workflow, 'build-arm', '    steps:\n',
                                  declaration + '    steps:\n')
@@ -11309,10 +11596,11 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
                 changed = in_job(self.workflow, 'build-arm',
                                  '    permissions: {contents: read}\n',
                                  f'    permissions: {permissions}\n')
-                runner = ['gke-pr.yml job build-arm must not expose credentials on GKE']
-                if credentials:
-                    runner.append('gke-pr.yml job build-arm must keep production credentials '
-                                  'on a hosted standard runner')
+                # Any id-token mention (even read) and every credential-bearing scope
+                # is refused once on the pinned hosted job; the standard hosted image
+                # carries no second, credential-class finding any more.
+                runner = ['gke-pr.yml job build-arm must not expose credentials '
+                          'on a pinned verification job']
                 shape = []
                 if 'id-token' in permissions:
                     shape.append('gke-pr.yml: secrets, id-token and environment are refused')
@@ -11327,8 +11615,7 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
                 changed = in_job(self.workflow, 'build-arm', '    steps:\n',
                                  declaration + '    steps:\n')
                 self.assert_arm_refused(changed, [
-                    'gke-pr.yml job build-arm must not expose credentials on GKE',
-                    'gke-pr.yml job build-arm must keep production credentials on a hosted standard runner',
+                    'gke-pr.yml job build-arm must not expose credentials on a pinned verification job',
                 ], shape=('gke-pr.yml: secrets, id-token and environment are refused',))
 
     def test_absent_timeouts_are_required_and_added_timeouts_are_refused(self) -> None:
@@ -11350,42 +11637,44 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
                         'gke-pr.yml job build-arm must declare no timeout-minutes (owner #827)'])
 
     def test_arm_job_in_another_workflow_is_refused(self) -> None:
+        # The admit job runs on the hosted x86 image, the required post-merge runner of an
+        # unlisted workflow; only the hosted arm64 job is outside its exact pin.
         other = ('on: workflow_dispatch\npermissions: {}\njobs:\n  admit:\n'
-                 '    runs-on: gke-2cpu-4gb-amd64\n'
+                 f'    runs-on: {HOSTED_X86}\n'
                  '    permissions: {}\n    steps:\n      - run: true\n\n' + self.ARM_JOB)
         expected = [
-            'other-gke.yml job build-arm must run on gke-2cpu-4gb-amd64 for post-merge events',
-            'other-gke.yml job admit may use GKE routing only at its exact pinned job and label',
-            'other-gke.yml job build-arm may use GKE routing only at its exact pinned job and label',
-            'other-gke.yml job build-arm must run on gke-2cpu-4gb-amd64',
+            f'other-gke.yml job build-arm must run on {POST_RUNNER} for post-merge events',
         ]
         self.assertEqual(ci_preflight.runner_findings({'other-gke.yml': other}), expected)
         self.assertEqual(self.admission_findings(
             self.original, others={'other-gke.yml': other}), expected)
 
     def test_non_bare_scalar_runner_forms_are_refused(self) -> None:
-        for runner in (f"'{GKE_ARM}'", f'[{GKE_ARM}]',
-                       f'["self-hosted","{GKE_ARM}"]',
-                       f'{{group: gke-runners, labels: {GKE_ARM}}}',
-                       f"${{{{ '{GKE_ARM}' }}}}"):
+        # Only the group mapping names a gke-* group, so only it also trips the GKE
+        # scalar and routing rules; every other non-bare form fails the exact hosted pin.
+        for runner, names_gke in ((f"'{HOSTED_ARM}'", False), (f'[{HOSTED_ARM}]', False),
+                                  (f'["self-hosted","{HOSTED_ARM}"]', False),
+                                  (f'{{group: gke-runners, labels: {HOSTED_ARM}}}', True),
+                                  (f"${{{{ '{HOSTED_ARM}' }}}}", False)):
             with self.subTest(runner=runner):
-                changed = in_job(self.workflow, 'build-arm', runner_declaration(GKE_ARM),
+                changed = in_job(self.workflow, 'build-arm', runner_declaration(HOSTED_ARM),
                                  runner_declaration(runner))
-                findings = ['gke-pr.yml job build-arm must use a bare scalar GKE scale-set name']
-                if runner != f"'{GKE_ARM}'":
-                    findings.append('gke-pr.yml job build-arm may use GKE routing '
-                                    'only at its exact pinned job and label')
-                findings.append('gke-pr.yml job build-arm must run on gke-16cpu-32gb-arm64-128gb')
+                findings = []
+                if names_gke:
+                    findings += ['gke-pr.yml job build-arm must use a bare scalar GKE scale-set name',
+                                 'gke-pr.yml job build-arm may use GKE routing '
+                                 'only at its exact pinned job and label']
+                findings.append(f'gke-pr.yml job build-arm must run on {HOSTED_ARM}')
                 # Expressions and group mappings have their own YAML whitelist
                 # refusal; direct runner results isolate the scalar/pin contract.
                 self.assertNotEqual(changed, self.workflow)
                 self.assertEqual(ci_preflight.runner_findings({'gke-pr.yml': changed}), findings)
                 self.assertEqual(gke_admit_workflow_findings(changed), [
-                    'gke-pr.yml job build-arm must use gke-16cpu-32gb-arm64-128gb'])
-                if runner in (f"'{GKE_ARM}'", f'[{GKE_ARM}]',
-                              f'["self-hosted","{GKE_ARM}"]'):
+                    f'gke-pr.yml job build-arm must use {HOSTED_ARM}'])
+                if runner in (f"'{HOSTED_ARM}'", f'[{HOSTED_ARM}]',
+                              f'["self-hosted","{HOSTED_ARM}"]'):
                     self.assertEqual(self.admission_findings(changed), [
-                        'gke-pr.yml job build-arm must use gke-16cpu-32gb-arm64-128gb', *findings])
+                        f'gke-pr.yml job build-arm must use {HOSTED_ARM}', *findings])
 
 
 class GkeAdmissionRuleTests(unittest.TestCase):
@@ -11432,8 +11721,7 @@ class GkeAdmissionRuleTests(unittest.TestCase):
                 f"'{label}'",
                 label.upper(),
                 # Swap architectures so the arm job also receives a real mutation.
-                (label.replace('amd64', 'arm64') if 'amd64' in label
-                 else label.replace('arm64', 'amd64')),
+                HOSTED_ARM if label == HOSTED_X86 else HOSTED_X86,
                 GKE_PR_16 if label != GKE_PR_16 else GKE_PR_32,
             )
             for runner in runners:
