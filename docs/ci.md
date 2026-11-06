@@ -113,7 +113,7 @@ Python refuse a system-wide install (PEP 668), and `.venv/` is ignored. The
 and fails, never skips, without it.
 
 Actionlint only accepts declared custom self-hosted runner labels; preflight
-checks the declarations in `.github/actionlint.yaml`, which now declare only the two protected `gkp-od-*` labels of `release.yml`, including its x86_64 release matrix cell. Hosted workflows declare nothing. Before a workflow moves onto a `gke-*` label, add its ref to `.github/runner-group-allowlist.txt` (group 14, currently empty because no workflow uses one); protected `gkp-*` refs belong in `.github/runner-group-15-allowlist.txt` (group 15, currently only `release.yml`). Both mirrors are binding; the supervisor must confirm the corresponding live org workflow/ref entries before enabling the routes.
+checks the declarations in `.github/actionlint.yaml`, which now declare only the two protected `gkp-od-*` labels of `release.yml`, including its x86_64 release matrix cell. Hosted workflows declare nothing. Before a workflow moves onto a `gke-*` label, add its ref to `.github/runner-group-allowlist.txt` (group 14, currently empty because no workflow uses one); protected `gkp-*` refs belong in `.github/runner-group-15-allowlist.txt` (group 15, currently only `release.yml`). Both mirrors are binding; a maintainer must confirm the corresponding live org workflow/ref entries before enabling the routes.
 
 ORG-ACTIONPINS is enforced by preflight's `ci-workflow-contract`: every
 third-party `uses:` in `.github/workflows/*.yml` (also `.yaml`) and nested
