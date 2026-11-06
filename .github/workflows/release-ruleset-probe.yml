@@ -12,8 +12,7 @@ jobs:
   authz:
     name: authz
     # Preflight pins executable workflow lines after removing comment-only lines.
-    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses gkp-2cpu-4gb-amd64.
-    runs-on: gke-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -74,7 +73,7 @@ jobs:
 
   probe:
     needs: [authz]
-    runs-on: gkp-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     environment: release
     steps:
       - name: Refuse a dispatch ref other than main
