@@ -15,10 +15,10 @@
 // test_coof_drawing_checkpoint_cost).
 //
 // What this test claims is no per-record work in the bound, not O(changes): the first
-// write after a checkpoint still copies the state's directory and order (one 8-byte
-// integer per occupant), and deleting the oldest occupant moves the directory's entries.
-// That is O(bound) in integers, with no record and no text copied, and the rows below
-// count records and heap blocks, so they do not see it.
+// write after a checkpoint still copies the state's directory and order (a directory
+// entry and an order index per occupant), and deleting the oldest occupant moves the
+// directory's entries. That is O(bound) in integers, with no record and no text copied,
+// and the rows below count records and heap blocks, so they do not see it.
 //
 // The shape is a script with a bounded set of live levels (the strategy that exposed
 // it keeps up to five hundred lines and labels alive and, on every bar, sets two
