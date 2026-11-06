@@ -1,5 +1,7 @@
 # Placement storage: sparse placement work and representation equivalence.
-list(APPEND TEST_SOURCES test_placement_order_scaling)
-pineforge_add_unit_test(test_placement_order_scaling)
-list(APPEND TEST_SOURCES test_placement_table_differential)
-pineforge_add_unit_test(test_placement_table_differential)
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_placement_order_scaling)
+    pineforge_add_unit_test(test_placement_order_scaling)
+    list(APPEND TEST_SOURCES test_placement_table_differential)
+    pineforge_add_unit_test(test_placement_table_differential)
+endif()
