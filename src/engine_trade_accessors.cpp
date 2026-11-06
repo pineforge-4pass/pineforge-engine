@@ -90,7 +90,8 @@ int64_t BacktestEngine::open_trade_entry_time(int idx) const {
 double BacktestEngine::open_trade_size(int idx) const {
     if (position_side_ == PositionSide::FLAT || idx < 0 || idx >= (int)pyramid_entries_.size())
         return na<double>();
-    return pyramid_entries_[(size_t)idx].qty;
+    const double qty = pyramid_entries_[(size_t)idx].qty;
+    return position_side_ == PositionSide::LONG ? qty : -qty;
 }
 
 // pe.max_drawdown / pe.max_runup are tracked in price-points × qty (the
