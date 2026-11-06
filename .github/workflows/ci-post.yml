@@ -744,7 +744,63 @@ jobs:
         if: ${{ needs.authz.result == 'success' }}
         env:
           TMPDIR: /mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/tmp
-        run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/8
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_root="/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/build-asan"
+          tmp_root="/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/tmp"
+          cache_root="/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/.ccache"
+          footprint_log="$RUNNER_TEMP/pineforge-sanitizer-footprint-${{ matrix.shard }}.log"
+          monitor_pid=""
+          stop_monitor() {
+            if [[ -n "$monitor_pid" ]]; then
+              kill "$monitor_pid" 2>/dev/null || true
+              wait "$monitor_pid" 2>/dev/null || true
+            fi
+          }
+          trap stop_monitor EXIT
+          (
+            set -u
+            peak=0
+            while :; do
+              now="$(date -u +%FT%TZ)"
+              total="$(du -x -B1 -s "$build_root" "$tmp_root" "$cache_root" 2>/dev/null | awk '{sum += $1} END {print sum + 0}')"
+              if [[ "$total" -gt "$peak" ]]; then
+                peak="$total"
+                {
+                  printf 'PEAK timestamp=%s total_bytes=%s\n' "$now" "$total"
+                  df -B1 -P / /mnt
+                  printf '%s\n' 'DU depth=2 (build, tmp, ccache)'
+                  du -x -B1 --max-depth=2 "$build_root" "$tmp_root" "$cache_root"
+                  printf '%s\n' 'CATEGORY object_bytes'
+                  find "$build_root" -xdev -type f -name '*.o' -printf '%s\n' | awk '{sum += $1} END {print sum + 0}'
+                  printf '%s\n' 'CATEGORY archive_bytes'
+                  find "$build_root" -xdev -type f -name '*.a' -printf '%s\n' | awk '{sum += $1} END {print sum + 0}'
+                  printf '%s\n' 'CATEGORY test_binary_bytes'
+                  if [[ -d "$build_root/bin" ]]; then
+                    find "$build_root/bin" -xdev -type f -printf '%s\n' | awk '{sum += $1} END {print sum + 0}'
+                  else
+                    printf '%s\n' 0
+                  fi
+                  printf '%s\n' 'TOP_FILES build (bytes path)'
+                  find "$build_root" -xdev -type f -printf '%s\t%p\n' | sort -nr | head -20
+                  printf '%s\n' 'TOP_FILES tmp (bytes path)'
+                  find "$tmp_root" -xdev -type f -printf '%s\t%p\n' | sort -nr | head -20
+                } >> "$footprint_log"
+              fi
+              sleep 15
+            done
+          ) > "$footprint_log" 2>&1 &
+          monitor_pid=$!
+          set +e
+          python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/8
+          verify_rc=$?
+          set -e
+          stop_monitor
+          trap - EXIT
+          mkdir -p ci-diagnostics
+          cp "$footprint_log" "ci-diagnostics/sanitizer-footprint-${{ matrix.shard }}.log"
+          exit "$verify_rc"
 
       - name: Measure sanitizer disk space after verification
         if: ${{ always() && needs.authz.result == 'success' }}
