@@ -55,7 +55,7 @@ codegen:
   tree: absent
   # The codegen checkout is not in this tree, so its emitter source is NOT
   # scanned. These are the container shapes the pinned emitter is documented
-  # (docs/coverage.md:58, :895-896) and observed (tutorial/**/generated*.cpp) to
+  # (docs/coverage.md:58, :900-901) and observed (tutorial/**/generated*.cpp) to
   # emit. All OPEN: a bound for generated user state needs a codegen-side proof.
   emitter_templates:
     - {id: "T01", emits: "Pine array<T> as std::vector<T>", owner: "generated-cpp", phase: "bar", state: "pending-flat-memory", grows_with: ["bars", "events"], inventory: "U01"}
