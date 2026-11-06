@@ -1789,8 +1789,7 @@ protected:
     }
     double closed_trade_size(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
-        const double qty = trades_.qty_at(idx);
-        return trades_.is_long_at(idx) ? qty : -qty;
+        return trades_.is_long_at(idx) ? trades_.qty_at(idx) : -trades_.qty_at(idx);
     }
     double closed_trade_max_runup(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
