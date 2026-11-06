@@ -36040,12 +36040,47 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "global_pending",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: materialize_relative_exits ( PlacementSnapshot opening , const native_order :: ExecutionAppliedEvent & event ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < PendingRelativeExit >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "pending",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: materialize_relative_exits ( PlacementSnapshot opening , const native_order :: ExecutionAppliedEvent & event ) #1",
     ") #1",
     "if ( it -> from_entry = = opening . source_id ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "pending . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "global_pending",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: materialize_relative_exits ( PlacementSnapshot opening , const native_order :: ExecutionAppliedEvent & event ) #1",
+    ") #1",
+    "else if ( market_opening && it -> from_entry . empty ( ) && ! it -> void_global ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "global_pending . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "pending",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: materialize_relative_exits ( PlacementSnapshot opening , const native_order :: ExecutionAppliedEvent & event ) #1"
    ],
    "cls": "grow",
    "spelling": "pending . push_back ( . . . )",

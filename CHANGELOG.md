@@ -7,6 +7,8 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- An exit given in ticks and without `from_entry` that follows a market entry in
+  the same execution now takes effect when that entry fills, as a named exit does.
 - **Strategy modules built against 1.10.x must be rebuilt.** The C++ script
   ABI epoch moves from `engine_script_run_v19` to `engine_script_run_v20`
   (and `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19` to `..._V20`) because

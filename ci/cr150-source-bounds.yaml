@@ -87,7 +87,7 @@ ceilings:
   # --emit-seed, 4 stale entries removed): the bounded drawings, the owned
   # storage and runtime context service, the ledger cache
   # and the selected-capacity driver, reader and core. None is bounded.
-  unreviewed: 1403
+  unreviewed: 1404
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1730,3 +1730,4 @@ entries:
   - {id: "U1720", file: "src/selected_capacity_driver.hpp", symbol: "option", ops: ["decl"], container: "std::string", owner: "selected-capacity", phase: "unclassified", state: "unreviewed", line: 126}
   - {id: "U1721", file: "src/source/multi_day_periods.hpp", symbol: "allocate_shared", ops: ["alloc"], container: "unresolved by the index: allocate_shared", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 103}
   - {id: "U1722", file: "src/source/pine_strategy_host.cpp", symbol: "timeframe", ops: ["assign", "decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1885}
+  - {id: "U1726", file: "src/source/pine_adapter.cpp", symbol: "global_pending", ops: ["decl", "grow"], container: "std::vector<PendingRelativeExit>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "A local list of materialize_relative_exits: the unnamed relative exit definitions taken from pending_relative_exits_ (one definition per exit id and from_entry pair) when a market entry fills, one push_back each in the loop over pending_relative_exits_, then moved into the local pending list of the same call; it lives for one call. OPEN.", line: 14587}

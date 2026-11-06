@@ -71,7 +71,7 @@ does not call the broker hash; explicit broker/stream hash queries still do.
 Each broker hash reaches `hash_host_extension`
 (`src/engine_state_hash.cpp:129`); the adapter's `hash_state`
 (`src/source/pine_state_hash.cpp:315`) calls exactly one `fold_sorted`
-(`src/source/pine_state_hash.cpp:570`). A full-table lazy rebuild per dirty
+(`src/source/pine_state_hash.cpp:572`). A full-table lazy rebuild per dirty
 bar is therefore unsuitable.
 
 `IdPairSlabFold` (`include/pineforge/detail/id_pair_slab_fold.hpp:21`)
