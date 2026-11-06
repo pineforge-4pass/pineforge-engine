@@ -2909,16 +2909,17 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             notify_runner = _job_values(jobs.get('notify-hub', ''), 'runs-on',
                                         unquote=False)
             if release_runner and notify_runner:
-                release_form = (
-                    release_runner == [RELEASE_RUNNER],
-                    release_runner == [HOSTED_X86_RUNNER])
-                notify_form = (
-                    notify_runner == [RELEASE_RUNNER],
-                    notify_runner == [HOSTED_X86_RUNNER])
-                if release_form != notify_form:
+                release_hosted = release_runner == [HOSTED_X86_RUNNER]
+                notify_hosted = notify_runner == [HOSTED_X86_RUNNER]
+                if release_hosted != notify_hosted:
                     findings.append(
                         'release.yml release and notify-hub must use the same '
                         'hosted or isolated runner form')
+            hosted_release_form = (
+                release_runner == [HOSTED_X86_RUNNER]
+                and notify_runner == [HOSTED_X86_RUNNER])
+        else:
+            hosted_release_form = False
         if (name == 'promote-baseline.yml'
                 and _events(workflow) != {'push', 'workflow_dispatch'}):
             findings.append(f'{name} must retain push and workflow_dispatch '
@@ -3018,7 +3019,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 actual = _job_values(body, 'runs-on', unquote=False)
                 expected = [fixed_release[job]]
                 hosted_expected = hosted_release_pins.get(job)
-                hosted = hosted_expected is not None and actual == [hosted_expected]
+                hosted = hosted_release_form and hosted_expected is not None and actual == [hosted_expected]
                 if actual != expected and not hosted:
                     # The probe and promotion jobs run on the hosted image; the
                     # legacy release jobs keep their isolated GKP labels. The
@@ -3583,9 +3584,12 @@ def release_prebuilt_workflow_findings(workflow: str) -> list[str]:
         findings.append('release.yml prebuilt must not use a reusable workflow')
     if ([_code(step) for step in _steps(prebuilt)]
             != [_code(step) for step in _steps(reviewed_steps)]):
-        findings.append('release.yml prebuilt must retain the credential-free Bookworm build, '
-                        'ARM Eigen setup, all-library glibc gate and packed-archive consumer '
-                        'before upload; the hosted form also pins its released-archive comparison')
+        finding = ('release.yml prebuilt must retain the credential-free Bookworm build, '
+                   'ARM Eigen setup, all-library glibc gate and packed-archive consumer '
+                   'before upload')
+        if hosted_release:
+            finding += '; the hosted form also pins its released-archive comparison'
+        findings.append(finding)
     marker = "      - name: Check every staged library's glibc floor"
     gate = _step_named(_steps(prebuilt), marker)
     required_gate = _step_named(_steps(reviewed_steps), marker)
