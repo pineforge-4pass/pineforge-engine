@@ -7,6 +7,10 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- `ta.percentile_nearest_rank` now accepts a series length at runtime. Each
+  call site retains its own appended source history and computes the
+  nearest-rank percentile over the requested recent values, within the
+  documented historical limit.
 - **Strategy modules built against 1.10.x must be rebuilt.** The C++ script
   ABI epoch moves from `engine_script_run_v19` to `engine_script_run_v20`
   (and `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19` to `..._V20`) because

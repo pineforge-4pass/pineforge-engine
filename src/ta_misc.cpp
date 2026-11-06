@@ -211,8 +211,6 @@ const std::vector<double>* PercentileWindow::repush(double src) {
     return push(src);
 }
 
-namespace {
-
 // Element ceil(pct/100 * n) - 1 of the ranked window, clamped to its ends.
 double nearest_rank_of(const std::vector<double>* ranked, double percentage) {
     if (ranked == nullptr) return na<double>();
@@ -221,6 +219,8 @@ double nearest_rank_of(const std::vector<double>* ranked, double percentage) {
     if (std::isnan(rank)) return na<double>();
     return (*ranked)[static_cast<int>(std::min(std::max(rank, 1.0), static_cast<double>(n))) - 1];
 }
+
+namespace {
 
 // The ranked window read at k = pct/100 * n - 0.5, clamped to [0, n - 1]:
 // the two elements around k weighted by its fraction (an na one makes the
