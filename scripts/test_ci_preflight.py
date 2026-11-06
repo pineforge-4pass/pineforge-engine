@@ -1712,7 +1712,7 @@ class HostedReleaseAdmission(unittest.TestCase):
           if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
             checker_rc=0
           else checker_rc=$?; fi
-          printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
+          printf '%s\\n' "${checker_rc}" > "${log}/exitcode.txt"
           cat "${log}/stdout.jsonl"
           cat "${log}/stderr.txt" >&2
           exit "${checker_rc}"'''
@@ -1753,7 +1753,7 @@ class HostedReleaseAdmission(unittest.TestCase):
           if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" --baseline-root "${BASELINE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
             checker_rc=0
           else checker_rc=$?; fi
-          printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
+          printf '%s\\n' "${checker_rc}" > "${log}/exitcode.txt"
           cat "${log}/stdout.jsonl"
           cat "${log}/stderr.txt" >&2
           exit "${checker_rc}"'''
