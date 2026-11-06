@@ -136,6 +136,8 @@ public:
     std::string x_comment(int i) const { return closed_trade_exit_comment(i); }
     std::string x_id(int i) const { return closed_trade_exit_id(i); }
     double x_price(int i) const { return closed_trade_exit_price(i); }
+    // expectation corrected: 47.0588235294/52.9411764706 -> their negatives,
+    // because both margin and bracket slices close ShortMcProbe's short.
     double t_size(int i) const { return closed_trade_size(i); }
     int x_bar(int i) const { return closed_trade_exit_bar_index(i); }
     using BacktestEngine::position_qty_;
@@ -302,11 +304,11 @@ static void test_revive_B_margin_call_partial_revives() {
     CHECK(p.trade_count() == 2);
     if (p.trade_count() == 2) {
         CHECK(p.x_comment(0) == std::string("Margin call"));
-        CHECK_NEAR(p.t_size(0), 47.0588235294, 1e-6);
+        CHECK_NEAR(p.t_size(0), -47.0588235294, 1e-6);
         CHECK_NEAR(p.x_price(0), 170.0, 1e-9);
         CHECK(p.x_bar(0) == 3);
         CHECK(p.x_id(1) == std::string("X"));         // revived bracket fill
-        CHECK_NEAR(p.t_size(1), 52.9411764706, 1e-6);
+        CHECK_NEAR(p.t_size(1), -52.9411764706, 1e-6);
         CHECK_NEAR(p.x_price(1), 180.0, 1e-9);        // ORIGINAL armed price
         CHECK(p.x_bar(1) == 4);
     }
@@ -325,12 +327,12 @@ static void test_cascade_marketable_revived_stop() {
     CHECK(p.trade_count() == 2);
     if (p.trade_count() == 2) {
         CHECK(p.x_comment(0) == std::string("Margin call"));
-        CHECK_NEAR(p.t_size(0), 47.0588235294, 1e-6);
+        CHECK_NEAR(p.t_size(0), -47.0588235294, 1e-6);
         CHECK_NEAR(p.x_price(0), 170.0, 1e-9);        // NOT the 165 open
         CHECK(p.x_bar(0) == 3);
         CHECK(p.x_id(1) == std::string("X"));
         CHECK(p.x_comment(1) != std::string("Margin call"));
-        CHECK_NEAR(p.t_size(1), 52.9411764706, 1e-6);
+        CHECK_NEAR(p.t_size(1), -52.9411764706, 1e-6);
         CHECK_NEAR(p.x_price(1), 170.0, 1e-9);        // MC event price
         CHECK(p.x_bar(1) == 3);                       // same bar as the slice
     }

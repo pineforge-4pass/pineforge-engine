@@ -424,7 +424,7 @@ struct OpenEntry {
     std::int64_t time = 0;
     int bar_index = -1;
     double price = 0.0;
-    double size = 0.0;
+    double size = 0.0;  // Magnitude for make_row(); direction is stored separately.
     double commission = 0.0;
 };
 
@@ -467,7 +467,11 @@ public:
             entry.time = open_trade_entry_time(i);
             entry.bar_index = open_trade_entry_bar_index(i);
             entry.price = open_trade_entry_price(i);
-            entry.size = open_trade_size(i);
+            const double signed_size = open_trade_size(i);
+            CHECK(entry.direction == "long" || entry.direction == "short");
+            CHECK(entry.direction == "long" ? signed_size > 0.0 : signed_size < 0.0);
+            // The replay/tape row model takes magnitude plus a separate side.
+            entry.size = entry.direction == "long" ? signed_size : -signed_size;
             entry.commission = open_trade_commission(i);
             s.open.push_back(std::move(entry));
         }

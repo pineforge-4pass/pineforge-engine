@@ -330,7 +330,7 @@ void check_row(const Row& row) {
     CHECK(host.physical_position().signed_units == -expected_short);
     CHECK(host.physical_position().lot_count == 1);
     CHECK(host.open_trade_entry_id(0) == "X");
-    CHECK(host.open_trade_size(0) == expected_short);
+    CHECK(host.open_trade_size(0) == -expected_short);
     CHECK(host.open_trade_entry_price(0) == 100.0);
     CHECK(host.trade_count() == 1);
     if (host.trade_count() == 1) {
@@ -515,7 +515,8 @@ int open_id_count(const ScopeProbeHost& host, const char* id) {
     return count;
 }
 
-double open_id_units(const ScopeProbeHost& host, const char* id) {
+// Signed units for the matching live lots, as in physical_position().
+double open_id_signed_units(const ScopeProbeHost& host, const char* id) {
     double units = 0.0;
     for (std::size_t index = 0; index < host.physical_position().lot_count; ++index) {
         if (host.open_trade_entry_id(static_cast<int>(index)) == id)
@@ -597,7 +598,7 @@ void ScopeProbeHost::stage_reversal_close_all_capture() {
     CHECK(physical_position().signed_units == seed_units);
     CHECK(physical_position().lot_count == 1);
     CHECK(open_id_count(*this, "L") == 1);
-    CHECK(open_id_units(*this, "L") == seed_units);
+    CHECK(open_id_signed_units(*this, "L") == seed_units);
     CHECK(fill_id_count(*this, "S") == 0);
 
     // Exactly the three order commands of script bar 190. Observations
@@ -686,7 +687,7 @@ void ScopeProbeHost::check_reversal_close_all_release() {
     CHECK(s_lots == 1);
     CHECK(physical_position().lot_count == 1);
     CHECK(physical_position().signed_units == -seed_units);
-    CHECK(open_id_units(*this, "S") == seed_units);
+    CHECK(open_id_signed_units(*this, "S") == -seed_units);
     CHECK(open_id_count(*this, "L") == 0);
     CHECK(fill_id_count(*this, "__close__") == 1);
     CHECK(trade_count() == 1);
@@ -874,8 +875,8 @@ void check_scope_row(const ScopeRow& row) {
         CHECK(host.physical_position().lot_count == 2);
         CHECK(open_id_count(host, "X") == 1);
         CHECK(open_id_count(host, "Y") == 1);
-        CHECK(open_id_units(host, "X") == seed_units);
-        CHECK(open_id_units(host, "Y") == seed_units);
+        CHECK(open_id_signed_units(host, "X") == -seed_units);
+        CHECK(open_id_signed_units(host, "Y") == -seed_units);
         CHECK(fill_id_count(host, "X") == 1);
         CHECK(fill_id_count(host, "Y") == 1);
     } else if (row.scenario == ScopeCase::QueuedReplacement) {
@@ -893,7 +894,7 @@ void check_scope_row(const ScopeRow& row) {
         CHECK(host.physical_position().signed_units == -reissue_units);
         CHECK(host.physical_position().lot_count == 1);
         CHECK(open_id_count(host, "X") == 1);
-        CHECK(open_id_units(host, "X") == reissue_units);
+        CHECK(open_id_signed_units(host, "X") == -reissue_units);
         CHECK(fill_id_count(host, "X") == 1);
     }
     CHECK(strategy_pending_orders_len(&host) == 0);

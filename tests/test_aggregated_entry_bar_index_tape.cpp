@@ -366,7 +366,8 @@ void test_tape_rows() {
                 && r.entry_ms == tv.entry_ms && r.exit_ms == tv.exit_ms
                 && same_price(r.entry_price, tv.entry_price)
                 && same_price(r.exit_price, tv.exit_price)
-                && r.qty == tv.qty
+                // Tape quantities are magnitudes with an independent side.
+                && r.qty == (tv.is_long ? tv.qty : -tv.qty)
                 && r.entry_id == tv.entry_signal && r.exit_comment == tv.exit_signal
                 && cents(r.profit, tv.net_pnl)
                 && (mag || (cents(r.runup, tv.favorable) && cents(-r.drawdown, tv.adverse)))
