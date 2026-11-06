@@ -207,16 +207,16 @@ The launcher observes the engine's own exit status. The engine step returns
 completed; 1 means a failed run, harness fault or report that could not be
 written whole; 2 means argparse refused the command line or explicit request
 validation failed. The module describes failures and incomplete publication
-at `docker/run_json.py:114` and `docker/run_json.py:133`; `main()` describes
-its status contract at `docker/run_json.py:5280` and propagates typed failure
-statuses at `docker/run_json.py:5302` and `docker/run_json.py:5311`.
-The argparse error exits 2 at `docker/run_json.py:4551`; explicit sink-option
-refusals also use 2 at `docker/run_json.py:6005`. The standalone `csv2bin`
-refusal returns 2 at `docker/run_json.py:5270`, but the entrypoint never
+at `docker/run_json.py:117` and `docker/run_json.py:136`; `main()` describes
+its status contract at `docker/run_json.py:5314` and propagates typed failure
+statuses at `docker/run_json.py:5336` and `docker/run_json.py:5345`.
+The argparse error exits 2 at `docker/run_json.py:4583`; explicit sink-option
+refusals also use 2 at `docker/run_json.py:6040`. The standalone `csv2bin`
+refusal returns 2 at `docker/run_json.py:5304`, but the entrypoint never
 selects that subcommand. `_host_main()` returns 1 on report-channel setup
-failure at `docker/run_json.py:8683`, propagates the run status at
-`docker/run_json.py:8716`, and the process exits through
-`sys.exit(_host_main())` at `docker/run_json.py:9547`.
+failure at `docker/run_json.py:8718`, propagates the run status at
+`docker/run_json.py:8751`, and the process exits through
+`sys.exit(_host_main())` at `docker/run_json.py:9582`.
 
 Statuses 3 (compile or bind failure) and 5 (transpile failure) are
 build-phase-only; the engine step never returns them. Status 4 is only the
