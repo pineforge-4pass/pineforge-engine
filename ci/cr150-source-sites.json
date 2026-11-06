@@ -2844,7 +2844,7 @@
     "namespace pineforge #1",
     "namespace detail #2",
     "template < class Rec > struct BoundDrawingState #1",
-    "explicit BoundDrawingState ( DrawingBoundConfig config ) : slots ( storage_slots ( config ) ) , slot_bound ( config . slot_bound ) , pending_creation_slots ( config . pending_creation_slots ) #1"
+    "explicit BoundDrawingState ( DrawingBoundConfig config ) : slot_bound ( config . slot_bound ) , pending_creation_slots ( config . pending_creation_slots ) #1"
    ],
    "cls": "grow",
    "spelling": "directory . reserve ( . . . )",
@@ -2856,10 +2856,49 @@
    "scope": [
     "namespace pineforge #1",
     "namespace detail #2",
+    "template < class Rec > struct BoundDrawingState #1",
+    "explicit BoundDrawingState ( DrawingBoundConfig config ) : slot_bound ( config . slot_bound ) , pending_creation_slots ( config . pending_creation_slots ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "slots . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "directory",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #2",
+    "template < class Rec > struct BoundDrawingState #1",
+    "BoundDrawingState ( const BoundDrawingState & other ) : slots ( other . slots ) , order ( other . order ) , next_id ( other . next_id ) , slot_bound ( other . slot_bound ) , pending_creation_slots ( other . pending_creation_slots ) , free_from ( other . free_from ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "directory . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "directory",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #2",
+    "template < class Rec > struct BoundDrawingState #1",
+    "BoundDrawingState ( const BoundDrawingState & other ) : slots ( other . slots ) , order ( other . order ) , next_id ( other . next_id ) , slot_bound ( other . slot_bound ) , pending_creation_slots ( other . pending_creation_slots ) , free_from ( other . free_from ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "directory . assign ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "slots",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #2",
     "template < class Rec > struct BoundDrawingState #1"
    ],
    "cls": "decl",
-   "spelling": "std :: vector < Slot >",
+   "spelling": "DrawingRecordStore < Slot >",
    "ordinal": 1
   },
   {
@@ -2915,18 +2954,6 @@
     "namespace pineforge #1",
     "template < class Rec > class DrawingArena #1",
     "void ensure_bound_unique ( ) #1"
-   ],
-   "cls": "alloc",
-   "spelling": "make_shared",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/drawing.hpp",
-   "symbol": "candidate",
-   "scope": [
-    "namespace pineforge #1",
-    "template < class Rec > class DrawingArena #1",
-    "template < class Edit > void bound_edit ( int32_t id , Edit && edit ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
@@ -3011,7 +3038,7 @@
   },
   {
    "file": "include/pineforge/drawing.hpp",
-   "symbol": "make_shared",
+   "symbol": "bound_",
    "scope": [
     "namespace pineforge #1",
     "template < class Rec > class DrawingArena #1",
@@ -3023,15 +3050,27 @@
   },
   {
    "file": "include/pineforge/drawing.hpp",
-   "symbol": "make_shared",
+   "symbol": "directory",
    "scope": [
     "namespace pineforge #1",
     "template < class Rec > class DrawingArena #1",
     "[ [ nodiscard ] ] DrawingAllocationResult try_alloc ( Rec r ) #1"
    ],
-   "cls": "alloc",
-   "spelling": "make_shared",
-   "ordinal": 2
+   "cls": "grow",
+   "spelling": "directory . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "order",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "[ [ nodiscard ] ] DrawingAllocationResult try_alloc ( Rec r ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "order . push_back ( . . . )",
+   "ordinal": 1
   },
   {
    "file": "include/pineforge/drawing.hpp",
@@ -3059,18 +3098,6 @@
   },
   {
    "file": "include/pineforge/drawing.hpp",
-   "symbol": "order",
-   "scope": [
-    "namespace pineforge #1",
-    "template < class Rec > class DrawingArena #1",
-    "[ [ nodiscard ] ] DrawingAllocationResult try_alloc ( Rec r ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "order . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/drawing.hpp",
    "symbol": "recs_",
    "scope": [
     "namespace pineforge #1",
@@ -3091,19 +3118,6 @@
    ],
    "cls": "grow",
    "spelling": "order_ . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "include/pineforge/drawing.hpp",
-   "symbol": "candidate",
-   "scope": [
-    "namespace pineforge #1",
-    "template < class Rec > class DrawingArena #1",
-    "void erase ( int32_t id ) #1",
-    "if ( bound_ ) #1"
-   ],
-   "cls": "alloc",
-   "spelling": "make_shared",
    "ordinal": 1
   },
   {
