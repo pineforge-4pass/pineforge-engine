@@ -28794,6 +28794,29 @@ void PineExecutionAdapter::begin_position_tail_summary() {
     }
 }
 
+double PineStrategyHost::default_entry_qty(double fill_price) const {
+    // TradingView does not validate this query's hypothetical price before
+    // applying the declared sizing mode: fixed sizing ignores it, while
+    // money sizing returns zero for NaN/zero and a signed grid quantity for
+    // a negative price. Observation only: no order or driver state changes.
+    if (adapter_.config_.default_qty_type == static_cast<int>(QtyType::FIXED)) {
+        return floor_quantity_grid(adapter_.config_.default_qty_value,
+                                   adapter_.staged_.quantity_grid);
+    }
+    auto sizing = adapter_.sizing_snapshot();
+    sizing.price = fill_price;
+    if (!std::isfinite(fill_price) || fill_price == 0.0) return 0.0;
+    if (fill_price > 0.0) return adapter_.default_sizing_units(sizing);
+    sizing.price = -fill_price;
+    const auto sized = adapter_.default_sizing_shape(sizing);
+    if (!sized) return 0.0;
+    const auto units = native_sized_units(
+        *sized, -fill_price, sizing.equity, sizing.fx);
+    // The core computes the positive-magnitude quotient once; apply the source
+    // lot floor before restoring the negative hypothetical price's sign.
+    return units ? -adapter_.default_sizing_lot_floor(*units) : 0.0;
+}
+
 } // namespace pineforge::source
 
 #include "exit_payload_codec.inc"

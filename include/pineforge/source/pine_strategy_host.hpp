@@ -1399,6 +1399,15 @@ protected:
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     void release_aux_security_chart_ranges();
 #endif
+
+public:
+    // During a source calculation, query the configured default entry units
+    // at the supplied fill price, using the current sizing equity, FX, point
+    // value, fee policy and quantity grid. Fixed sizing ignores the supplied
+    // price; money sizing returns zero for NaN or zero and signed grid units
+    // for a negative price. Observation only: no order is placed and no driver
+    // point advances.
+    double default_entry_qty(double fill_price) const;
 };
 
 using PineNativeHost = PineStrategyHost;
