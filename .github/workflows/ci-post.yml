@@ -198,6 +198,13 @@ jobs:
         run: |
           echo "::error::authz did not pass; nothing of this run's code is checked out or run"
           exit 1
+      - name: Measure hosted image disk space at job start
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h /
+          du -xh --max-depth=2 /usr/share /usr/local /opt 2>/dev/null
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: ${{ needs.authz.result == 'success' }}
         with:
@@ -585,7 +592,11 @@ jobs:
 
       - name: Measure sanitizer disk space before preparation
         if: ${{ needs.authz.result == 'success' }}
-        run: df -h / /mnt
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h / /mnt
+          du -xh --max-depth=2 "$GITHUB_WORKSPACE" /tmp "$HOME/.cache"
 
       - name: Prepare sanitizer build storage
         if: ${{ needs.authz.result == 'success' }}
@@ -750,6 +761,8 @@ jobs:
           build_root="/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/build-asan"
           tmp_root="/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/tmp"
           cache_root="/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/.ccache"
+          workspace_root="$GITHUB_WORKSPACE"
+          home_cache="$HOME/.cache"
           footprint_log="$RUNNER_TEMP/pineforge-sanitizer-footprint-${{ matrix.shard }}.log"
           monitor_pid=""
           stop_monitor() {
@@ -764,14 +777,18 @@ jobs:
             peak=0
             while :; do
               now="$(date -u +%FT%TZ)"
-              total="$(du -x -B1 -s "$build_root" "$tmp_root" "$cache_root" 2>/dev/null | awk '{sum += $1} END {print sum + 0}')"
+              total="$(du -x -B1 -s "$build_root" "$workspace_root" "$tmp_root" "$cache_root" "$home_cache" 2>/dev/null | awk '{sum += $1} END {print sum + 0}')"
+              {
+                printf 'SAMPLE timestamp=%s total_bytes=%s\n' "$now" "$total"
+                df -B1 -P / /mnt
+                du -x -B1 -s "$build_root" "$workspace_root" "$tmp_root" "$cache_root" "$home_cache"
+              } >> "$footprint_log"
               if [[ "$total" -gt "$peak" ]]; then
                 peak="$total"
                 {
                   printf 'PEAK timestamp=%s total_bytes=%s\n' "$now" "$total"
-                  df -B1 -P / /mnt
-                  printf '%s\n' 'DU depth=2 (build, tmp, ccache)'
-                  du -x -B1 --max-depth=2 "$build_root" "$tmp_root" "$cache_root"
+                  printf '%s\n' 'DU depth=2 (build, workspace, tmp, ccache, home-cache)'
+                  du -x -B1 --max-depth=2 "$build_root" "$workspace_root" "$tmp_root" "$cache_root" "$home_cache"
                   printf '%s\n' 'CATEGORY object_bytes'
                   find "$build_root" -xdev -type f -name '*.o' -printf '%s\n' | awk '{sum += $1} END {print sum + 0}'
                   printf '%s\n' 'CATEGORY archive_bytes'
@@ -788,7 +805,7 @@ jobs:
                   find "$tmp_root" -xdev -type f -printf '%s\t%p\n' | sort -nr | head -20
                 } >> "$footprint_log"
               fi
-              sleep 15
+              sleep 30
             done
           ) > "$footprint_log" 2>&1 &
           monitor_pid=$!
@@ -801,6 +818,17 @@ jobs:
           mkdir -p ci-diagnostics
           cp "$footprint_log" "ci-diagnostics/sanitizer-footprint-${{ matrix.shard }}.log"
           exit "$verify_rc"
+
+      - name: Measure sanitizer failure footprint
+        if: ${{ always() && failure() && needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -B1 -P / /mnt
+          du -x -B1 --max-depth=2 "$GITHUB_WORKSPACE" /tmp "$HOME/.cache" \
+            "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/build-asan" \
+            "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/tmp" \
+            "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/.ccache"
 
       - name: Measure sanitizer disk space after verification
         if: ${{ always() && needs.authz.result == 'success' }}
