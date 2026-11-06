@@ -77,7 +77,7 @@ env:
 
 jobs:
   release:
-    runs-on: gkp-od-4cpu-8gb-amd64
+    runs-on: ubuntu-24.04
     environment: release
 
     outputs:
@@ -485,7 +485,32 @@ jobs:
           python3 scripts/release_version.py check-install \
             --prefix "${STAGE_DIR}" --expect "${NEXT}"
 
-      # Both dry-run and publication inspect every installed .a/.so/.so.*.
+      # The glibc comparison baseline is this triple's archive from the v1.10.0
+      # release: the real released bytes, pinned by sha256 and unpacked here.
+      # The checker below only reads the unpacked libraries.
+      - name: Fetch the v1.10.0 baseline archive for the glibc comparison
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          case "${TRIPLE}" in
+            linux-x86_64) digest=cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543 ;;
+            linux-aarch64) digest=982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bb ;;
+            *) echo "::error::no v1.10.0 baseline archive for ${TRIPLE}" >&2; exit 1 ;;
+          esac
+          archive="pineforge-v1.10.0-${TRIPLE}.tar.gz"
+          root="${RUNNER_TEMP}/glibc-baseline-${TRIPLE}"
+          mkdir "${root}" "${root}/download" "${root}/tree"
+          gh release download v1.10.0 --repo "${GITHUB_REPOSITORY}" \
+            --pattern "${archive}" --dir "${root}/download"
+          echo "${digest}  ${root}/download/${archive}" | sha256sum -c -
+          tar -xzf "${root}/download/${archive}" -C "${root}/tree" \
+            --no-same-owner --no-same-permissions
+          echo "BASELINE_DIR=${root}/tree" >> "${GITHUB_ENV}"
+
+      # Both dry-run and publication inspect every installed .a/.so/.so.* and
+      # compare their highest glibc tag with the baseline fetched above.
       # Keep raw checker output and its actual exit status, including setup errors.
       - name: Check every staged library's glibc floor
         env:
@@ -494,7 +519,7 @@ jobs:
           set -euo pipefail
           log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
           mkdir -p "${log}"
-          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" --baseline-root "${BASELINE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
             checker_rc=0
           else checker_rc=$?; fi
           printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
@@ -565,7 +590,7 @@ jobs:
   notify-hub:
     needs: [release, prebuilt]
     if: ${{ !inputs.dry_run }}
-    runs-on: gkp-od-4cpu-8gb-amd64
+    runs-on: ubuntu-24.04
     environment: release
     steps:
       - name: Mint org App token (hub dispatch)

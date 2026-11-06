@@ -96,21 +96,20 @@ PR_SLOW_ROWS = (
 PR_FAST_ROWS_SHA256 = '0509b2219786efb6878b193639344c299ff8075ba4532dbe09e80e6e97b60a9a'
 # Every migrated job runs on a standard hosted Ubuntu image: x86 on
 # ubuntu-24.04 and arm64 on ubuntu-24.04-arm. An unpinned job in a migrated
-# workflow must use the x86 image. Only release.yml, which is unchanged here,
-# keeps its protected GKP labels and its Bookworm old-glibc path.
+# workflow must use the x86 image. Only release.yml keeps a protected GKP label,
+# on its x86_64 prebuilt cell with its Bookworm old-glibc path.
 HOSTED_X86_RUNNER = 'ubuntu-24.04'
 HOSTED_ARM_RUNNER = 'ubuntu-24.04-arm'
 PR_RUNNER = HOSTED_X86_RUNNER
 POST_RUNNER = HOSTED_X86_RUNNER
-# The probe and promotion jobs keep their release-only events and environments.
+# The release, notify-hub, probe and promotion jobs keep their release-only
+# events and environments, on the hosted x86 image.
 PROTECTED_RUNNER = HOSTED_X86_RUNNER
-RELEASE_RUNNER = 'gkp-od-4cpu-8gb-amd64'
 PREBUILT_RUNNER = 'gkp-od-16cpu-32gb-amd64-128gb'
 PREBUILT_ARM_RUNNER = 'ubuntu-22.04-arm'
-# Only release.yml may still name a GKP label: its two protected scale sets.
+# Only release.yml may still name a GKP label: its x86_64 prebuilt scale set.
 GKP_JOB_RUNNERS = {
-    'release.yml': {'release': RELEASE_RUNNER, 'notify-hub': RELEASE_RUNNER,
-                    'prebuilt': PREBUILT_RUNNER},
+    'release.yml': {'prebuilt': PREBUILT_RUNNER},
 }
 GKP_JOB_ENVIRONMENTS = {
     'release.yml': {'release': 'release', 'notify-hub': 'release'},
@@ -361,8 +360,8 @@ HOSTED_JOB_RUNNERS = {
 }
 # Release/probe credential pins and ARM strategies remain isolated.
 RELEASE_JOB_RUNNERS = {
-    'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
-                    'notify-hub': RELEASE_RUNNER},
+    'release.yml': {'release': PROTECTED_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
+                    'notify-hub': PROTECTED_RUNNER},
     'release-ruleset-probe.yml': {'probe': PROTECTED_RUNNER},
     'promote-baseline.yml': {'promote': PROTECTED_RUNNER},
 }
@@ -2904,6 +2903,15 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             if protected_environment and _job_values(body, 'environment') != [protected_environment]:
                 findings.append(f'{name} job {job} must use environment {protected_environment} '
                                 'on its protected release job')
+            if protected_environment:
+                # The release App credential stays on the runner itself: the protected
+                # scale-set route refused these, and the hosted pin must not drop that.
+                if _job_values(body, 'container'):
+                    findings.append(f'{name} job {job} must not declare a job container '
+                                    'on its protected release job')
+                if _job_values(body, 'services'):
+                    findings.append(f'{name} job {job} must not declare job services '
+                                    'on its protected release job')
             native_matrix = _native_runner_matrix(name, job, body)
             if gke_pin == GKE_MATRIX_RUNNER and not native_matrix:
                 findings.append(f'{name} job {job} must keep exactly '
@@ -3218,8 +3226,9 @@ RELEASE_EIGEN_ASSERT_STEP = r'''      - name: Assert Eigen3 3.4.0 on the protect
           echo "Eigen3 3.4.0 present at $(dirname "$(dirname "$hdr")")"
 '''
 
-# Exact reviewed steps: ARM host commands, x86 transport, identity, all-library
-# inspection and publication order form one contract. Extra steps fail closed.
+# Exact reviewed steps: ARM host commands, x86 transport, identity, the pinned
+# v1.10.0 baseline, all-library inspection and publication order form one
+# contract. Extra steps fail closed.
 RELEASE_PREBUILT_STEPS = r'''
       # A dry run has no tag yet: it builds the dispatched commit.
       - name: Checkout release commit
@@ -3334,7 +3343,32 @@ RELEASE_PREBUILT_STEPS = r'''
           python3 scripts/release_version.py check-install \
             --prefix "${STAGE_DIR}" --expect "${NEXT}"
 
-      # Both dry-run and publication inspect every installed .a/.so/.so.*.
+      # The glibc comparison baseline is this triple's archive from the v1.10.0
+      # release: the real released bytes, pinned by sha256 and unpacked here.
+      # The checker below only reads the unpacked libraries.
+      - name: Fetch the v1.10.0 baseline archive for the glibc comparison
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          case "${TRIPLE}" in
+            linux-x86_64) digest=cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543 ;;
+            linux-aarch64) digest=982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bb ;;
+            *) echo "::error::no v1.10.0 baseline archive for ${TRIPLE}" >&2; exit 1 ;;
+          esac
+          archive="pineforge-v1.10.0-${TRIPLE}.tar.gz"
+          root="${RUNNER_TEMP}/glibc-baseline-${TRIPLE}"
+          mkdir "${root}" "${root}/download" "${root}/tree"
+          gh release download v1.10.0 --repo "${GITHUB_REPOSITORY}" \
+            --pattern "${archive}" --dir "${root}/download"
+          echo "${digest}  ${root}/download/${archive}" | sha256sum -c -
+          tar -xzf "${root}/download/${archive}" -C "${root}/tree" \
+            --no-same-owner --no-same-permissions
+          echo "BASELINE_DIR=${root}/tree" >> "${GITHUB_ENV}"
+
+      # Both dry-run and publication inspect every installed .a/.so/.so.* and
+      # compare their highest glibc tag with the baseline fetched above.
       # Keep raw checker output and its actual exit status, including setup errors.
       - name: Check every staged library's glibc floor
         env:
@@ -3343,7 +3377,7 @@ RELEASE_PREBUILT_STEPS = r'''
           set -euo pipefail
           log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
           mkdir -p "${log}"
-          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" --baseline-root "${BASELINE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
             checker_rc=0
           else checker_rc=$?; fi
           printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
