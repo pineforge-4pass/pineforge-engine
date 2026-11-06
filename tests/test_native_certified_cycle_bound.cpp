@@ -48,7 +48,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 
 struct NativeExecutionConsumerProbe {
     // What certify_cycle answers for an instant, copied out of the ring entry.
@@ -98,7 +98,7 @@ struct NativeExecutionConsumerProbe {
     }
 };
 
-}  // inline namespace engine_script_run_v19
+}  // inline namespace engine_script_run_v20
 }  // namespace pineforge
 
 using namespace pineforge;

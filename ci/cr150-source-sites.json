@@ -1303,7 +1303,7 @@
    "scope": [
     "namespace pineforge :: detail #1",
     "template < class Row > class FeedProjectionBuilder #1",
-    ", bool resident_if_single_page = false ) : directory_ ( directory ) , resident_if_single_page_ ( resident_if_single_page ) #1"
+    ") : directory_ ( directory ) , scratch_io_policy_ ( policy ) , resident_if_single_page_ ( resident_if_single_page ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
@@ -2563,6 +2563,45 @@
   },
   {
    "file": "include/pineforge/drawing.hpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "struct pine_drawing_id_exhausted : pine_drawing_error #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "template < class Rec > inline Rec drawing_missing_value ( ) noexcept #1",
+    "else if constexpr ( std :: is_same_v < Rec , LabelRec > ) #1",
+    "return #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "template < class Rec > struct DrawingStaleSink < Rec , true > #1",
+    "void reset ( ) const noexcept #1",
+    "else if constexpr ( std :: is_same_v < Rec , LabelRec > ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
    "symbol": "<temp:DrawingRecordStore>",
    "scope": [
     "namespace pineforge #1",
@@ -2800,6 +2839,55 @@
   },
   {
    "file": "include/pineforge/drawing.hpp",
+   "symbol": "directory",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #2",
+    "template < class Rec > struct BoundDrawingState #1",
+    "explicit BoundDrawingState ( DrawingBoundConfig config ) : slots ( storage_slots ( config ) ) , slot_bound ( config . slot_bound ) , pending_creation_slots ( config . pending_creation_slots ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "directory . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "slots",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #2",
+    "template < class Rec > struct BoundDrawingState #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < Slot >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "directory",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #2",
+    "template < class Rec > struct BoundDrawingState #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < DirectoryEntry >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "order",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #2",
+    "template < class Rec > struct BoundDrawingState #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: deque < std :: int32_t >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
    "symbol": "recs_",
    "scope": [
     "namespace pineforge #1",
@@ -2818,6 +2906,81 @@
    ],
    "cls": "decl",
    "spelling": "std :: deque < int32_t >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "bound_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "void ensure_bound_unique ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "candidate",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "template < class Edit > void bound_edit ( int32_t id , Edit && edit ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "bound_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "explicit DrawingArena ( DrawingBoundConfig config ) : cap_ ( 50 ) , bound_config_ ( config ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "records",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "DrawingArena & operator = ( const DrawingArena & other ) #1",
+    "if ( this ! = & other ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "detail :: DrawingRecordStore < Rec >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "order",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "DrawingArena & operator = ( const DrawingArena & other ) #1",
+    "if ( this ! = & other ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "order = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "recs_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "DrawingArena & operator = ( const DrawingArena & other ) #1",
+    "if ( this ! = & other ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "recs_ = . . .",
    "ordinal": 1
   },
   {
@@ -2848,6 +3011,66 @@
   },
   {
    "file": "include/pineforge/drawing.hpp",
+   "symbol": "make_shared",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "[ [ nodiscard ] ] DrawingAllocationResult try_alloc ( Rec r ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "make_shared",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "[ [ nodiscard ] ] DrawingAllocationResult try_alloc ( Rec r ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "value",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "[ [ nodiscard ] ] DrawingAllocationResult try_alloc ( Rec r ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "value . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "directory",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "[ [ nodiscard ] ] DrawingAllocationResult try_alloc ( Rec r ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "directory . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "order",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "[ [ nodiscard ] ] DrawingAllocationResult try_alloc ( Rec r ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "order . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
    "symbol": "recs_",
    "scope": [
     "namespace pineforge #1",
@@ -2868,6 +3091,19 @@
    ],
    "cls": "grow",
    "spelling": "order_ . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/drawing.hpp",
+   "symbol": "candidate",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Rec > class DrawingArena #1",
+    "void erase ( int32_t id ) #1",
+    "if ( bound_ ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
    "ordinal": 1
   },
   {
@@ -2915,7 +3151,8 @@
    "symbol": "text",
    "scope": [
     "namespace pineforge #1",
-    "inline void pf_label_set_text ( DrawingArena < LabelRec > & a , Label h , std :: string text ) #1"
+    "inline void pf_label_set_text ( DrawingArena < LabelRec > & a , Label h , std :: string text ) #1",
+    "detail :: DrawingBuiltinAccess :: edit ( a , h , [ & ] ( LabelRec & r ) #1"
    ],
    "cls": "assign",
    "spelling": "text = . . .",
@@ -3014,7 +3251,7 @@
    "symbol": "synthetic_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class OpenReportRowSource #1",
     "void push_back ( const Trade & row ) #1"
    ],
@@ -3027,7 +3264,7 @@
    "symbol": "synthetic_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class OpenReportRowSource #1",
     "void push_back ( Trade && row ) #1"
    ],
@@ -3040,7 +3277,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class OpenReportRowSource #1"
    ],
    "cls": "temp",
@@ -3052,7 +3289,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class OpenReportRowSource #1",
     "class const_iterator #1"
    ],
@@ -3065,7 +3302,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class OpenReportRowSource #1",
     "class const_iterator #1"
    ],
@@ -3078,7 +3315,7 @@
    "symbol": "begin",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class OpenReportRowSource #1"
    ],
    "cls": "decl",
@@ -3090,7 +3327,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class OpenReportRowSource #1",
     "const_iterator begin ( ) const #1"
    ],
@@ -3103,7 +3340,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class OpenReportRowSource #1"
    ],
    "cls": "decl",
@@ -3115,7 +3352,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class OpenReportRowSource #1",
     "const_iterator end ( ) const #1"
    ],
@@ -3128,7 +3365,7 @@
    "symbol": "materialized_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class OpenReportRowSource #1"
    ],
    "cls": "decl",
@@ -3140,7 +3377,7 @@
    "symbol": "synthetic_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class OpenReportRowSource #1"
    ],
    "cls": "decl",
@@ -3251,7 +3488,7 @@
    "symbol": "pyramid_entries_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3263,7 +3500,7 @@
    "symbol": "account_currency_fx_timestamps_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3275,7 +3512,7 @@
    "symbol": "account_currency_fx_rates_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3287,7 +3524,7 @@
    "symbol": "chart_timezone_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3299,7 +3536,7 @@
    "symbol": "inputs_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3311,7 +3548,7 @@
    "symbol": "syminfo_metadata_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3323,7 +3560,7 @@
    "symbol": "get_input_string",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3335,7 +3572,7 @@
    "symbol": "equity_curve_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3347,7 +3584,7 @@
    "symbol": "broker_state_hashes_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3359,7 +3596,7 @@
    "symbol": "input_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3371,7 +3608,7 @@
    "symbol": "script_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3383,7 +3620,7 @@
    "symbol": "stream_order_actions_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3395,7 +3632,7 @@
    "symbol": "tf",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "struct SecurityEvalState #1"
    ],
@@ -3408,7 +3645,7 @@
    "symbol": "native_bars_by_label",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "struct SecurityEvalState #1"
    ],
@@ -3421,7 +3658,7 @@
    "symbol": "security_eval_states_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3433,7 +3670,7 @@
    "symbol": "security_input_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3445,7 +3682,7 @@
    "symbol": "tf",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "struct NativeSecurityFeed #1"
    ],
@@ -3458,7 +3695,7 @@
    "symbol": "bars",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "struct NativeSecurityFeed #1"
    ],
@@ -3471,7 +3708,7 @@
    "symbol": "native_security_feeds_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3483,7 +3720,7 @@
    "symbol": "trace_buffer_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3495,7 +3732,7 @@
    "symbol": "trace_names_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3507,7 +3744,7 @@
    "symbol": "trace_name_index_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3519,7 +3756,7 @@
    "symbol": "last_error_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3531,7 +3768,7 @@
    "symbol": "equity_curve_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "void record_equity_point ( int64_t script_bar_ts ) #1",
     "if ( summary ) #1"
@@ -3545,7 +3782,7 @@
    "symbol": "fold",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "void record_equity_point ( int64_t script_bar_ts ) #1",
     "if ( metrics_streaming_ . fold ) #1"
@@ -3559,7 +3796,7 @@
    "symbol": "closed_trade_entry_comment",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3571,7 +3808,7 @@
    "symbol": "<temp:string>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "std :: string closed_trade_entry_comment ( int idx ) const #1"
    ],
@@ -3584,7 +3821,7 @@
    "symbol": "closed_trade_exit_comment",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3596,7 +3833,7 @@
    "symbol": "<temp:string>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "std :: string closed_trade_exit_comment ( int idx ) const #1"
    ],
@@ -3609,7 +3846,7 @@
    "symbol": "closed_trade_entry_id",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3621,7 +3858,7 @@
    "symbol": "<temp:string>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "std :: string closed_trade_entry_id ( int idx ) const #1"
    ],
@@ -3634,7 +3871,7 @@
    "symbol": "closed_trade_exit_id",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3646,7 +3883,7 @@
    "symbol": "<temp:string>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "std :: string closed_trade_exit_id ( int idx ) const #1"
    ],
@@ -3659,7 +3896,7 @@
    "symbol": "closed_trade_direction",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3671,7 +3908,7 @@
    "symbol": "open_trade_direction",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3683,7 +3920,7 @@
    "symbol": "open_trade_entry_comment",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3695,7 +3932,7 @@
    "symbol": "open_trade_entry_id",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3707,7 +3944,7 @@
    "symbol": "position_entry_name",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3719,7 +3956,7 @@
    "symbol": "quote_execution_commissions",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3731,7 +3968,7 @@
    "symbol": "inputs_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "void set_input ( const std :: string & key , const std :: string & value ) #1"
    ],
@@ -3744,7 +3981,7 @@
    "symbol": "chart_timezone_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "void set_chart_timezone ( const std :: string & tz ) #1"
    ],
@@ -3757,7 +3994,7 @@
    "symbol": "timezone",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "void set_syminfo_timezone ( const std :: string & tz ) #1"
    ],
@@ -3770,7 +4007,7 @@
    "symbol": "session",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "void set_syminfo_session ( const std :: string & s ) #1"
    ],
@@ -3783,7 +4020,7 @@
    "symbol": "type",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "void set_syminfo_type ( const std :: string & t ) #1"
    ],
@@ -3796,7 +4033,7 @@
    "symbol": "type",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "bool set_syminfo_string ( const std :: string & key , const std :: string & value ) #1",
     "if ( key = = ) #1"
@@ -3810,7 +4047,7 @@
    "symbol": "ticker",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "bool set_syminfo_string ( const std :: string & key , const std :: string & value ) #1",
     "if ( key = = ) #2"
@@ -3824,7 +4061,7 @@
    "symbol": "tickerid",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "bool set_syminfo_string ( const std :: string & key , const std :: string & value ) #1",
     "if ( key = = ) #3"
@@ -3838,7 +4075,7 @@
    "symbol": "currency",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "bool set_syminfo_string ( const std :: string & key , const std :: string & value ) #1",
     "if ( key = = ) #4"
@@ -3852,7 +4089,7 @@
    "symbol": "basecurrency",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "bool set_syminfo_string ( const std :: string & key , const std :: string & value ) #1",
     "if ( key = = ) #5"
@@ -3866,7 +4103,7 @@
    "symbol": "description",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "bool set_syminfo_string ( const std :: string & key , const std :: string & value ) #1",
     "if ( key = = ) #6"
@@ -3880,7 +4117,7 @@
    "symbol": "volumetype",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "bool set_syminfo_string ( const std :: string & key , const std :: string & value ) #1",
     "if ( key = = ) #7"
@@ -3894,7 +4131,7 @@
    "symbol": "message",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "public : struct OutputEvent #1"
    ],
@@ -3907,7 +4144,7 @@
    "symbol": "output_series_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3919,7 +4156,7 @@
    "symbol": "output_open_ms_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3931,7 +4168,7 @@
    "symbol": "output_close_ms_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3943,7 +4180,7 @@
    "symbol": "output_events_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3955,7 +4192,7 @@
    "symbol": "output_ordinals_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3967,7 +4204,7 @@
    "symbol": "output_constants_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3979,7 +4216,7 @@
    "symbol": "output_constant_written_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1"
    ],
    "cls": "decl",
@@ -3991,7 +4228,7 @@
    "symbol": "path",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #2",
+    "inline namespace engine_script_run_v20 #2",
     "class BacktestEngine #1",
     "struct ReportSinkState #1"
    ],
@@ -5634,11 +5871,22 @@
   },
   {
    "file": "include/pineforge/map.hpp",
+   "symbol": "new_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1"
+   ],
+   "cls": "decl",
+   "spelling": "PineMap",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/map.hpp",
    "symbol": "storage",
    "scope": [
     "namespace pineforge #1",
     "template < typename Key , typename Value > class PineMap #1",
-    "[ [ nodiscard ] ] static PineMap new_ ( ) #1"
+    "[ [ nodiscard ] ] static PineMap new_ ( std :: uint64_t maximum ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
@@ -5650,7 +5898,7 @@
    "scope": [
     "namespace pineforge #1",
     "template < typename Key , typename Value > class PineMap #1",
-    "[ [ nodiscard ] ] static PineMap new_ ( ) #1"
+    "[ [ nodiscard ] ] static PineMap new_ ( std :: uint64_t maximum ) #1"
    ],
    "cls": "temp",
    "spelling": "PineMap",
@@ -5792,11 +6040,23 @@
   },
   {
    "file": "include/pineforge/map.hpp",
+   "symbol": "store",
+   "scope": [
+    "namespace pineforge #1",
+    "template < typename Key , typename Value > class PineMap #1",
+    "static void resize_exact ( Storage & storage , StoreId id , std :: uint64_t bytes ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "store . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/map.hpp",
    "symbol": "heap_values",
    "scope": [
     "namespace pineforge #1",
     "template < typename Key , typename Value > class PineMap #1",
-    "static void set_heap_value ( Storage & storage , std :: uint32_t slot , Value && value ) #1"
+    "static void set_heap_value ( Storage & storage , std :: uint64_t slot , Value && value ) #1"
    ],
    "cls": "grow",
    "spelling": "heap_values . resize ( . . . )",
@@ -6335,7 +6595,7 @@
    "symbol": "entry_label",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct NativeOpenLot #1"
    ],
    "cls": "decl",
@@ -6347,7 +6607,7 @@
    "symbol": "entry_comment",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct NativeOpenLot #1"
    ],
    "cls": "decl",
@@ -6359,7 +6619,7 @@
    "symbol": "closed_row_pnl",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct NativePrecommitView #1"
    ],
    "cls": "decl",
@@ -6371,7 +6631,7 @@
    "symbol": "closed_row_pnl",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct NativeCurrentExecutionPreview #1"
    ],
    "cls": "decl",
@@ -6383,7 +6643,7 @@
    "symbol": "input_tf",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct NativeBeginArgs #1"
    ],
    "cls": "decl",
@@ -6395,7 +6655,7 @@
    "symbol": "script_tf",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct NativeBeginArgs #1"
    ],
    "cls": "decl",
@@ -6407,7 +6667,7 @@
    "symbol": "subscriptions",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeStrategyHost : public BacktestEngine #1"
    ],
    "cls": "decl",
@@ -6419,7 +6679,7 @@
    "symbol": "subscriptions",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeStrategyHost : public BacktestEngine #1"
    ],
    "cls": "decl",
@@ -6431,7 +6691,7 @@
    "symbol": "native_working_requests",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeStrategyHost : public BacktestEngine #1"
    ],
    "cls": "decl",
@@ -6443,7 +6703,7 @@
    "symbol": "native_open_lots",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeStrategyHost : public BacktestEngine #1"
    ],
    "cls": "decl",
@@ -6455,7 +6715,7 @@
    "symbol": "native_events",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeStrategyHost : public BacktestEngine #1"
    ],
    "cls": "decl",
@@ -7844,6 +8104,208 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "identities_",
+   "scope": [
+    "namespace pineforge #1",
+    "class OwnedStorage #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < Identity >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "identities_",
+   "scope": [
+    "namespace pineforge #1",
+    "class OwnedStorage #1",
+    "bool claim_identity ( const void * address , const void * kind ) noexcept #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "identities_ . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "allocations",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "struct OwnedAllocationLedger #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < OwnedAllocation >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "ledger_",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T , class Element = T > class OwnedAllocator #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new detail :: OwnedAllocationLedger",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "allocations",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T , class Element = T > class OwnedAllocator #1",
+    "T * allocate ( std :: size_t count ) #1",
+    "try #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "allocations . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "<temp:deque>",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: deque < T , OwnedAllocator < T > >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "<temp:OwnedDeque>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class OwnedDeque : public std :: deque < T , OwnedAllocator < T > > #1"
+   ],
+   "cls": "temp",
+   "spelling": "OwnedDeque",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "<temp:OwnedDeque>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class OwnedDeque : public std :: deque < T , OwnedAllocator < T > > #1"
+   ],
+   "cls": "temp",
+   "spelling": "OwnedDeque",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "<temp:Base>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class OwnedDeque : public std :: deque < T , OwnedAllocator < T > > #1"
+   ],
+   "cls": "temp",
+   "spelling": "Base",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "<temp:OwnedDeque>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class OwnedDeque : public std :: deque < T , OwnedAllocator < T > > #1"
+   ],
+   "cls": "temp",
+   "spelling": "OwnedDeque",
+   "ordinal": 3
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "<temp:Base>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class OwnedDeque : public std :: deque < T , OwnedAllocator < T > > #1"
+   ],
+   "cls": "temp",
+   "spelling": "Base",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "<temp:OwnedDeque>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class OwnedDeque : public std :: deque < T , OwnedAllocator < T > > #1"
+   ],
+   "cls": "temp",
+   "spelling": "OwnedDeque",
+   "ordinal": 4
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "<temp:Base>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class OwnedDeque : public std :: deque < T , OwnedAllocator < T > > #1"
+   ],
+   "cls": "temp",
+   "spelling": "Base",
+   "ordinal": 3
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "<temp:OwnedDeque>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class OwnedDeque : public std :: deque < T , OwnedAllocator < T > > #1"
+   ],
+   "cls": "temp",
+   "spelling": "OwnedDeque",
+   "ordinal": 5
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "<temp:Base>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class T > class OwnedDeque : public std :: deque < T , OwnedAllocator < T > > #1"
+   ],
+   "cls": "temp",
+   "spelling": "Base",
+   "ordinal": 4
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "<temp:unordered_map>",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: unordered_map < K , V , std :: hash < K > , std :: equal_to < K > , OwnedAllocator < std :: pair < const K , V > > >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "<temp:Base>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class K , class V > class OwnedUnorderedMap : public std :: unordered_map < K , V , std :: hash < K > , std :: equal_to < K > , OwnedAllocator < std :: pair < const K , V > > > #1"
+   ],
+   "cls": "temp",
+   "spelling": "Base",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/owned_storage.hpp",
+   "symbol": "<temp:Base>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class K , class V > class OwnedUnorderedMap : public std :: unordered_map < K , V , std :: hash < K > , std :: equal_to < K > , OwnedAllocator < std :: pair < const K , V > > > #1"
+   ],
+   "cls": "temp",
+   "spelling": "Base",
+   "ordinal": 2
+  },
+  {
    "file": "include/pineforge/position_close_obligation.hpp",
    "symbol": "comment",
    "scope": [
@@ -7908,6 +8370,61 @@
    "cls": "decl",
    "spelling": "std :: shared_ptr < const std :: string >",
    "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/run_failure.hpp",
+   "symbol": "<temp:Base>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Base > class coded : public Base , public RunFailureInfo #1"
+   ],
+   "cls": "temp",
+   "spelling": "Base",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/run_failure.hpp",
+   "symbol": "<temp:Base>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Base > class coded : public Base , public RunFailureInfo #1"
+   ],
+   "cls": "temp",
+   "spelling": "Base",
+   "ordinal": 2
+  },
+  {
+   "file": "include/pineforge/run_failure.hpp",
+   "symbol": "<temp:Base>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Base > class coded : public Base , public RunFailureInfo #1"
+   ],
+   "cls": "temp",
+   "spelling": "Base",
+   "ordinal": 3
+  },
+  {
+   "file": "include/pineforge/run_failure.hpp",
+   "symbol": "<temp:Base>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Base > class coded : public Base , public RunFailureInfo #1"
+   ],
+   "cls": "temp",
+   "spelling": "Base",
+   "ordinal": 4
+  },
+  {
+   "file": "include/pineforge/run_failure.hpp",
+   "symbol": "<temp:Base>",
+   "scope": [
+    "namespace pineforge #1",
+    "template < class Base > class coded : public Base , public RunFailureInfo #1"
+   ],
+   "cls": "temp",
+   "spelling": "Base",
+   "ordinal": 5
   },
   {
    "file": "include/pineforge/run_failure.hpp",
@@ -8046,6 +8563,49 @@
    ],
    "cls": "grow",
    "spelling": "args . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/runtime_context.hpp",
+   "symbol": "runtime_subdivide",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < Bar >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/runtime_context.hpp",
+   "symbol": "state_",
+   "scope": [
+    "namespace pineforge #1",
+    "class RuntimeBatchLease #1"
+   ],
+   "cls": "assign",
+   "spelling": "state_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/runtime_context.hpp",
+   "symbol": "runtimeHistorySpillDirectory",
+   "scope": [
+    "namespace pineforge #1",
+    "struct RuntimeHistoryOptions #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/runtime_context.hpp",
+   "symbol": "semantic_arguments",
+   "scope": [
+    "namespace pineforge #1",
+    "struct RuntimeContextKey #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
    "ordinal": 1
   },
   {
@@ -8220,10 +8780,11 @@
     "namespace detail #1",
     "template < class T > class WindowValues #1",
     "void write ( std :: size_t index , T value ) #1",
-    "if ( ! spilled_ ) #1"
+    "if ( ! spilled_ ) #1",
+    "if ( ! stored ) #1"
    ],
    "cls": "alloc",
-   "spelling": "make_shared",
+   "spelling": "allocate_shared",
    "ordinal": 1
   },
   {
@@ -8234,11 +8795,12 @@
     "namespace detail #1",
     "template < class T > class WindowValues #1",
     "void write ( std :: size_t index , T value ) #1",
-    "if ( ! spilled_ ) #1"
+    "if ( ! spilled_ ) #1",
+    "else if ( ! stored . unique ( ) ) #1"
    ],
    "cls": "alloc",
-   "spelling": "make_shared",
-   "ordinal": 2
+   "spelling": "allocate_shared",
+   "ordinal": 1
   },
   {
    "file": "include/pineforge/series.hpp",
@@ -8276,7 +8838,7 @@
     "void make_writable_backing ( ) #1"
    ],
    "cls": "alloc",
-   "spelling": "make_shared",
+   "spelling": "allocate_shared",
    "ordinal": 1
   },
   {
@@ -11185,6 +11747,17 @@
   },
   {
    "file": "include/pineforge/source/pine_strategy_host.hpp",
+   "symbol": "timeframe",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "struct PineRuntimeSecurityCursor #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_strategy_host.hpp",
    "symbol": "canonical",
    "scope": [
     "namespace pineforge :: source #1",
@@ -11269,6 +11842,17 @@
    ],
    "cls": "decl",
    "spelling": "std :: vector < DeferredAuxBar >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/source/pine_strategy_host.hpp",
+   "symbol": "runtime_security_timeframe",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "class PineStrategyHost : public NativeStrategyHost , public BrokerStateHashProvider #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
    "ordinal": 1
   },
   {
@@ -11770,7 +12354,7 @@
     "class Change #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -11794,7 +12378,7 @@
     "class StdDev #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -11806,7 +12390,7 @@
     "class PivotHigh #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -11818,7 +12402,7 @@
     "class PivotLow #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -11830,7 +12414,7 @@
     "class Linreg #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -11842,7 +12426,7 @@
     "class PercentRank #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -11854,7 +12438,7 @@
     "class VWMA #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -11866,7 +12450,7 @@
     "class VWMA #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -11878,7 +12462,7 @@
     "class Mom #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -11890,7 +12474,7 @@
     "class ROC #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -11902,7 +12486,7 @@
     "class Rising #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -11914,7 +12498,7 @@
     "class Falling #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -11926,7 +12510,7 @@
     "class CCI #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -11938,7 +12522,7 @@
     "class RCI #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -11986,7 +12570,7 @@
     "class Variance #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -11998,7 +12582,7 @@
     "class Median #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -12022,7 +12606,7 @@
     "class ALMA #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -12046,7 +12630,7 @@
     "class SWMA #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -12106,7 +12690,7 @@
     "class COG #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -12118,7 +12702,7 @@
     "class ValueWhen #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -12130,7 +12714,7 @@
     "class ValueWhen #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -12142,7 +12726,7 @@
     "class Correlation #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -12154,7 +12738,7 @@
     "class PercentileWindow #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -12178,7 +12762,7 @@
     "class Mode #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -12202,7 +12786,7 @@
     "class Dev #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -12455,7 +13039,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class TradeLedger #1"
    ],
    "cls": "temp",
@@ -12467,7 +13051,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class TradeLedger #1",
     "class const_iterator #1"
    ],
@@ -12480,7 +13064,7 @@
    "symbol": "<temp:const_iterator>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class TradeLedger #1",
     "class const_iterator #1"
    ],
@@ -12493,7 +13077,7 @@
    "symbol": "entry_id_at",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class TradeLedger #1"
    ],
    "cls": "decl",
@@ -12505,7 +13089,7 @@
    "symbol": "entry_comment_at",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class TradeLedger #1"
    ],
    "cls": "decl",
@@ -12517,7 +13101,7 @@
    "symbol": "exit_comment_at",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class TradeLedger #1"
    ],
    "cls": "decl",
@@ -12529,7 +13113,7 @@
    "symbol": "exit_id_at",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class TradeLedger #1"
    ],
    "cls": "decl",
@@ -12541,7 +13125,7 @@
    "symbol": "begin",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class TradeLedger #1"
    ],
    "cls": "decl",
@@ -12553,7 +13137,7 @@
    "symbol": "end",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class TradeLedger #1"
    ],
    "cls": "decl",
@@ -12568,7 +13152,7 @@
     "class KahanWindowSum #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -12579,7 +13163,7 @@
     "class KahanWindowSum #1"
    ],
    "cls": "decl",
-   "spelling": "std :: deque < double >",
+   "spelling": "OwnedDeque < double >",
    "ordinal": 1
   },
   {
@@ -12742,7 +13326,7 @@
    "symbol": "v",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "inline void hash_str_double_map ( BrokerStateHashSink & f , const std :: unordered_map < std :: string , double > & m ) #1"
    ],
    "cls": "decl",
@@ -12754,7 +13338,7 @@
    "symbol": "keys",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "inline void hash_token_owned_map ( BrokerStateHashSink & f , const std :: unordered_map < uint64_t , std :: unordered_map < std :: string , double > > & m ) #1"
    ],
    "cls": "decl",
@@ -12766,7 +13350,7 @@
    "symbol": "keys",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "inline void hash_token_owned_map ( BrokerStateHashSink & f , const std :: unordered_map < uint64_t , std :: unordered_map < std :: string , double > > & m ) #1"
    ],
    "cls": "grow",
@@ -12778,7 +13362,7 @@
    "symbol": "keys",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "inline void hash_token_owned_map ( BrokerStateHashSink & f , const std :: unordered_map < uint64_t , std :: unordered_map < std :: string , double > > & m ) #1"
    ],
    "cls": "grow",
@@ -12790,7 +13374,7 @@
    "symbol": "v",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "inline void hash_str_set ( BrokerStateHashSink & f , const std :: unordered_set < std :: string > & s ) #1"
    ],
    "cls": "decl",
@@ -13284,6 +13868,19 @@
    "cls": "temp",
    "spelling": "std :: string",
    "ordinal": 2
+  },
+  {
+   "file": "src/cache_policy_validation.hpp",
+   "symbol": "fields",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < std :: size_t N > CacheDefaults copy_cache_policy_v1 ( const pf_cache_policy_v1 * descriptor , const std :: array < CachePolicyField , N > & fields ) #1",
+    "+ + i ) #1",
+    "if ( field ! = N && fields [ field ] . active ( ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "fields . assign ( . . . )",
+   "ordinal": 1
   },
   {
    "file": "src/command_scratch_cache.cpp",
@@ -13897,7 +14494,7 @@
    "symbol": "syminfo_metadata_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void BacktestEngine :: set_syminfo_metadata ( const std :: string & key , double value ) #1"
    ],
    "cls": "subscript",
@@ -14588,10 +15185,25 @@
   },
   {
    "file": "src/engine_orders.cpp",
+   "symbol": "result",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "struct TradeLedger :: State #1",
+    "struct HistoryBacking #1",
+    "void transfer ( bool write , std :: uint64_t offset , void * data , size_type length ) const #1",
+    ") #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_orders.cpp",
    "symbol": "directory",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct TradeLedger :: State #1"
    ],
    "cls": "decl",
@@ -14603,7 +15215,7 @@
    "symbol": "materialized",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct TradeLedger :: State #1"
    ],
    "cls": "decl",
@@ -14612,10 +15224,36 @@
   },
   {
    "file": "src/engine_orders.cpp",
-   "symbol": "reset",
+   "symbol": "result",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
+    "struct TradeLedger :: State #1",
+    "void * allocate_cache_storage ( size_type bytes ) const noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "result = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_orders.cpp",
+   "symbol": "operator new",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "struct TradeLedger :: State #1",
+    "void * allocate_cache_storage ( size_type bytes ) const noexcept #1"
+   ],
+   "cls": "alloc",
+   "spelling": "operator new",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_orders.cpp",
+   "symbol": "new:?",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct TradeLedger :: State #1",
     "bool ensure_cache ( ) const noexcept #1",
     "if ( ! cache ) #1"
@@ -14626,10 +15264,10 @@
   },
   {
    "file": "src/engine_orders.cpp",
-   "symbol": "reset",
+   "symbol": "new:?",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct TradeLedger :: State #1",
     "CacheEntry * ensure_cache_entry ( size_type global ) const noexcept #1",
     "if ( ! page ) #1"
@@ -14643,7 +15281,7 @@
    "symbol": "string_field",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct TradeLedger :: State #1"
    ],
    "cls": "decl",
@@ -14655,7 +15293,7 @@
    "symbol": "<temp:string>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct TradeLedger :: State #1",
     "template < StringExtent Record :: * Member > std :: string string_field ( size_type global ) const #1"
    ],
@@ -14668,7 +15306,7 @@
    "symbol": "get_string",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct TradeLedger :: State #1"
    ],
    "cls": "decl",
@@ -14680,7 +15318,7 @@
    "symbol": "result",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct TradeLedger :: State #1",
     "std :: string get_string ( StringExtent text ) const #1"
    ],
@@ -14690,10 +15328,38 @@
   },
   {
    "file": "src/engine_orders.cpp",
+   "symbol": "values",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "struct TradeLedger :: State #1",
+    "Record store ( size_type global , const Trade & row , const Record * previous = nullptr ) #1",
+    "if ( history . bound ( ) ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: array < const std :: string * , 4 >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_orders.cpp",
+   "symbol": "history",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "struct TradeLedger :: State #1",
+    "Record store ( size_type global , const Trade & row , const Record * previous = nullptr ) #1",
+    "if ( history . bound ( ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "history . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_orders.cpp",
    "symbol": "texts",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct TradeLedger :: State #1",
     "static Trade decode_cached ( const CacheEntry & entry ) #1"
    ],
@@ -14706,7 +15372,7 @@
    "symbol": "texts",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct TradeLedger :: State #1",
     "static Trade decode_cached ( const CacheEntry & entry ) #1",
     "+ + i ) #1"
@@ -14720,7 +15386,7 @@
    "symbol": "state_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1"
+    "inline namespace engine_script_run_v20 #1"
    ],
    "cls": "alloc",
    "spelling": "make_unique",
@@ -14731,7 +15397,7 @@
    "symbol": "next",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void TradeLedger :: clear ( ) #1"
    ],
    "cls": "alloc",
@@ -14743,7 +15409,7 @@
    "symbol": "directory",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void TradeLedger :: clear ( ) #1"
    ],
    "cls": "assign",
@@ -14755,7 +15421,7 @@
    "symbol": "directory",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void TradeLedger :: set_scratch_directory ( const std :: string & directory ) #1"
    ],
    "cls": "assign",
@@ -14767,11 +15433,23 @@
    "symbol": "materialized",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "const Trade & TradeLedger :: materialize ( size_type global ) const #1"
    ],
    "cls": "grow",
    "spelling": "materialized . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_orders.cpp",
+   "symbol": "make_unique",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "std :: unique_ptr < report :: TradeSourceV1 > TradeLedger :: retained_trade_source ( ) const #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
    "ordinal": 1
   },
   {
@@ -15437,6 +16115,16 @@
   },
   {
    "file": "src/engine_security.cpp",
+   "symbol": "runtime_subdivide",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < Bar >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/engine_security.cpp",
    "symbol": "security_eval_states_",
    "scope": [
     "namespace pineforge #1",
@@ -15572,7 +16260,7 @@
    "symbol": "curve",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct LiveReportAccumulator :: State #1"
    ],
    "cls": "decl",
@@ -15584,7 +16272,7 @@
    "symbol": "trade_rows",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct LiveReportAccumulator :: State #1"
    ],
    "cls": "decl",
@@ -15596,7 +16284,7 @@
    "symbol": "ratio_curve",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct LiveReportAccumulator :: State #1"
    ],
    "cls": "decl",
@@ -15608,7 +16296,7 @@
    "symbol": "state_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1"
+    "inline namespace engine_script_run_v20 #1"
    ],
    "cls": "alloc",
    "spelling": "make_unique",
@@ -15619,7 +16307,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
     "const auto fallback = [ & ] #1",
     "const auto suffix = [ ] ( auto & to , const auto * rows , std :: size_t n , std :: size_t start , std :: uint64_t & counter ) #1",
@@ -15634,7 +16322,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
     "const auto fallback = [ & ] #1",
     "+ + i ) #1"
@@ -15648,7 +16336,7 @@
    "symbol": "all",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
     "if ( ! state . owner ) #1"
    ],
@@ -15661,7 +16349,7 @@
    "symbol": "longs",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
     "if ( ! state . owner ) #1"
    ],
@@ -15674,7 +16362,7 @@
    "symbol": "shorts",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
     "if ( ! state . owner ) #1"
    ],
@@ -15687,7 +16375,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1"
    ],
    "cls": "grow",
@@ -15699,7 +16387,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
     "+ + i ) #1"
    ],
@@ -15712,7 +16400,7 @@
    "symbol": "curve",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
     "+ + i ) #2",
     "else #1"
@@ -15726,7 +16414,7 @@
    "symbol": "ratio_curve",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
     "+ + i ) #2",
     "else #1"
@@ -15740,7 +16428,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
     "+ + i ) #2"
    ],
@@ -15753,7 +16441,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
     "for ( const auto & row : rows ) #1"
    ],
@@ -15766,7 +16454,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
     "for ( const auto & s : engine . security_eval_states_ ) #1"
    ],
@@ -15779,7 +16467,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
     "+ + i ) #4"
    ],
@@ -15792,7 +16480,7 @@
    "symbol": "rows",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "report :: LiveReportPatch NativeExecutionConsumer :: fill_live_report_patch ( const BacktestEngine & engine , LiveReportAccumulator & accumulator , std :: uint64_t input_index , bool final_input ) try #1",
     "+ + i ) #5"
    ],
@@ -16500,7 +17188,7 @@
    "symbol": "calc_group_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: calc_group_enable ( ) noexcept #1"
    ],
    "cls": "grow",
@@ -17788,7 +18476,7 @@
    "symbol": "values",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "namespace #1",
     "template < class T > void reserve_next ( std :: vector < T > & values ) #1"
    ],
@@ -17801,7 +18489,7 @@
    "symbol": "store",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "struct NativeExecutionConsumer :: RunCommandScratch #1"
    ],
    "cls": "alloc",
@@ -17813,7 +18501,7 @@
    "symbol": "run",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: provision_run_command_scratch ( CommandScratchBinding binding , detail :: ScratchKeyOrder order , detail :: CommandScratchStore * & borrower ) #1"
    ],
    "cls": "alloc",
@@ -17825,7 +18513,7 @@
    "symbol": "make_unique",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: unique_ptr < IExecutionConsumer > make_native_execution_consumer ( ) #1"
    ],
    "cls": "alloc",
@@ -17837,7 +18525,7 @@
    "symbol": "state_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: latch_failure ( NativeFailure failure ) noexcept #1"
    ],
    "cls": "grow",
@@ -17849,7 +18537,7 @@
    "symbol": "last_error_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: store_rendered ( BacktestEngine & engine , const char * text , RunFailureValue value ) const #1"
    ],
    "cls": "assign",
@@ -17861,7 +18549,7 @@
    "symbol": "text",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: store_rendered ( BacktestEngine & engine , const char * text , RunFailureValue value ) const #1"
    ],
    "cls": "assign",
@@ -17873,7 +18561,7 @@
    "symbol": "text",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1"
+    "inline namespace engine_script_run_v20 #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -17884,7 +18572,7 @@
    "symbol": "last_error_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: note_failure_record ( BacktestEngine & engine , std :: string text , RunFailureValue value ) #1"
    ],
    "cls": "assign",
@@ -17896,7 +18584,7 @@
    "symbol": "text",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: note_failure_record ( BacktestEngine & engine , std :: string text , RunFailureValue value ) #1"
    ],
    "cls": "assign",
@@ -17908,7 +18596,7 @@
    "symbol": "text",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: prepare_public_begin ( BacktestEngine & engine , const NativeBeginArgs & args ) #1",
     "if ( preparing_begin_ || in_callback_ || processing_input_ || std :: holds_alternative < NativeRunning > ( state_ ) ) #1"
    ],
@@ -17921,7 +18609,7 @@
    "symbol": "<temp:string>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: refuse_source_mutation ( const char * operation ) #1"
    ],
    "cls": "temp",
@@ -17933,7 +18621,7 @@
    "symbol": "descriptors",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: stage_instrument_feed_views ( const NativeInstrumentFeedView * const * views , std :: size_t count ) #1"
    ],
    "cls": "decl",
@@ -17945,7 +18633,7 @@
    "symbol": "slots",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: stage_instrument_feed_views ( const NativeInstrumentFeedView * const * views , std :: size_t count ) #1"
    ],
    "cls": "decl",
@@ -17957,7 +18645,7 @@
    "symbol": "replacement",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: stage_account_currency_fx_series ( const std :: vector < std :: int64_t > & timestamps , const std :: vector < double > & rates ) #1",
     "try #2"
    ],
@@ -17970,7 +18658,7 @@
    "symbol": "subscriptions",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "const NativeExecutionConsumer :: SpecBarDigests & NativeExecutionConsumer :: spec_bar_digests ( const NativeRunSpec & spec ) const noexcept #1",
     "if ( ! spec_bar_digests_ ) #1"
    ],
@@ -17983,7 +18671,7 @@
    "symbol": "day_labels_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: prepare_day_labels ( const BacktestEngine & engine , const Bar * input_bars , int n_input ) #1",
     "for ( const Bar & bar : * daily ) #1"
    ],
@@ -17996,7 +18684,7 @@
    "symbol": "account_currency_fx_timestamps_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: apply_spec ( BacktestEngine & engine , const NativeRunSpec & spec ) #1",
     "if ( staged_fx_curve_ ) #1"
    ],
@@ -18009,7 +18697,7 @@
    "symbol": "account_currency_fx_rates_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: apply_spec ( BacktestEngine & engine , const NativeRunSpec & spec ) #1",
     "if ( staged_fx_curve_ ) #1"
    ],
@@ -18022,7 +18710,7 @@
    "symbol": "chart_timezone_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: apply_spec ( BacktestEngine & engine , const NativeRunSpec & spec ) #1"
    ],
    "cls": "assign",
@@ -18034,7 +18722,7 @@
    "symbol": "input_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: apply_spec ( BacktestEngine & engine , const NativeRunSpec & spec ) #1",
     "if ( ! spec . timeframe_undetected ) #1"
    ],
@@ -18047,7 +18735,7 @@
    "symbol": "script_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: apply_spec ( BacktestEngine & engine , const NativeRunSpec & spec ) #1",
     "if ( ! spec . timeframe_undetected ) #1"
    ],
@@ -18060,7 +18748,7 @@
    "symbol": "input_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: apply_spec ( BacktestEngine & engine , const NativeRunSpec & spec ) #1",
     "else #2"
    ],
@@ -18073,7 +18761,7 @@
    "symbol": "script_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: apply_spec ( BacktestEngine & engine , const NativeRunSpec & spec ) #1",
     "else #2"
    ],
@@ -18086,7 +18774,7 @@
    "symbol": "copied",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeSetupResult NativeExecutionConsumer :: configure_spec ( BacktestEngine & engine , const NativeRunSpec * borrowed , NativeRunSpec * owned ) #1"
    ],
    "cls": "grow",
@@ -18098,7 +18786,7 @@
    "symbol": "input_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeSetupResult NativeExecutionConsumer :: configure_spec ( BacktestEngine & engine , const NativeRunSpec * borrowed , NativeRunSpec * owned ) #1",
     "if ( ! candidate . timeframe_undetected ) #1"
    ],
@@ -18111,7 +18799,7 @@
    "symbol": "script_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeSetupResult NativeExecutionConsumer :: configure_spec ( BacktestEngine & engine , const NativeRunSpec * borrowed , NativeRunSpec * owned ) #1",
     "if ( ! candidate . timeframe_undetected ) #1"
    ],
@@ -18124,7 +18812,7 @@
    "symbol": "input_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeSetupResult NativeExecutionConsumer :: configure_spec ( BacktestEngine & engine , const NativeRunSpec * borrowed , NativeRunSpec * owned ) #1",
     "else #1"
    ],
@@ -18137,7 +18825,7 @@
    "symbol": "script_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeSetupResult NativeExecutionConsumer :: configure_spec ( BacktestEngine & engine , const NativeRunSpec * borrowed , NativeRunSpec * owned ) #1",
     "else #1"
    ],
@@ -18150,7 +18838,7 @@
    "symbol": "state_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeSetupResult NativeExecutionConsumer :: configure_spec ( BacktestEngine & engine , const NativeRunSpec * borrowed , NativeRunSpec * owned ) #1"
    ],
    "cls": "assign",
@@ -18162,7 +18850,7 @@
    "symbol": "replacement",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeFxCurveSetupResult NativeExecutionConsumer :: configure_fx_curve ( const NativeFxCurve & curve ) #1",
     "try #1"
    ],
@@ -18175,7 +18863,7 @@
    "symbol": "bound_session_key_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: begin_ready ( BacktestEngine & engine , NativeRunPhase phase , int64_t initial_floor_ms ) #1"
    ],
    "cls": "assign",
@@ -18187,7 +18875,7 @@
    "symbol": "<temp:vector>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: begin_ready ( BacktestEngine & engine , NativeRunPhase phase , int64_t initial_floor_ms ) #1",
     "if ( kept ! = NativeEventRetention :: Full ) #1"
    ],
@@ -18200,7 +18888,7 @@
    "symbol": "<temp:vector>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: begin_ready ( BacktestEngine & engine , NativeRunPhase phase , int64_t initial_floor_ms ) #1",
     "if ( kept = = NativeEventRetention :: Window ) #1"
    ],
@@ -18213,7 +18901,7 @@
    "symbol": "closed_trade_report_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: begin_ready ( BacktestEngine & engine , NativeRunPhase phase , int64_t initial_floor_ms ) #1",
     "if ( streams_closed_rows ( engine ) ) #1"
    ],
@@ -18226,7 +18914,7 @@
    "symbol": "state_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: begin_ready ( BacktestEngine & engine , NativeRunPhase phase , int64_t initial_floor_ms ) #1"
    ],
    "cls": "assign",
@@ -18238,7 +18926,7 @@
    "symbol": "message",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: preflight_bars ( BacktestEngine & engine , const Bar * bars , int n , bool stream , bool preserve_status ) #1",
     "const auto indexed = [ & ] ( const char * field , const char * detail , const char * reason ) #1"
    ],
@@ -18251,7 +18939,7 @@
    "symbol": "std::to_string",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: preflight_bars ( BacktestEngine & engine , const Bar * bars , int n , bool stream , bool preserve_status ) #1",
     "const auto indexed = [ & ] ( const char * field , const char * detail , const char * reason ) #1"
    ],
@@ -18264,7 +18952,7 @@
    "symbol": "message",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: preflight_bars ( BacktestEngine & engine , const Bar * bars , int n , bool stream , bool preserve_status ) #1",
     "const auto indexed = [ & ] ( const char * field , const char * detail , const char * reason ) #1"
    ],
@@ -18277,7 +18965,7 @@
    "symbol": "message",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: preflight_bars ( BacktestEngine & engine , const Bar * bars , int n , bool stream , bool preserve_status ) #1",
     "switch ( result . error ) #1",
     "case NativeInputPreflightError :: StructuralInvalid : if ( bars ! = nullptr && result . index > = 0 && result . index < n ) #1",
@@ -18292,7 +18980,7 @@
    "symbol": "std::to_string",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: preflight_bars ( BacktestEngine & engine , const Bar * bars , int n , bool stream , bool preserve_status ) #1",
     "switch ( result . error ) #1",
     "case NativeInputPreflightError :: StructuralInvalid : if ( bars ! = nullptr && result . index > = 0 && result . index < n ) #1",
@@ -18307,7 +18995,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: preflight_intrabar_path ( BacktestEngine & engine ) #1",
     "NativeRunSpec path_spec = [ & ] #1",
     "struct Aside #1"
@@ -18321,7 +19009,7 @@
    "symbol": "driver_log_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: record_driver ( const NativeDriverPoint & point ) #1"
    ],
    "cls": "grow",
@@ -18333,7 +19021,7 @@
    "symbol": "driver_log_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: reserve_driver_log ( std :: size_t expected_points ) #1"
    ],
    "cls": "grow",
@@ -18345,7 +19033,7 @@
    "symbol": "handles",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "native_order :: TargetObservation NativeExecutionConsumer :: read_target ( const BacktestEngine & engine , const native_order :: LiveRequest * live ) const #1"
    ],
    "cls": "decl",
@@ -18357,7 +19045,7 @@
    "symbol": "handles",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: read_target_into ( const BacktestEngine & engine , const native_order :: LiveRequest * live , native_order :: TargetObservation & out , std :: vector < native_order :: RequestHandle > & handles ) const #1",
     "else if ( const auto * cohort = std :: get_if < native_order :: CohortClose > ( & live -> authority ) ) #1"
    ],
@@ -18370,7 +19058,7 @@
    "symbol": "handles",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: read_target_into ( const BacktestEngine & engine , const native_order :: LiveRequest * live , native_order :: TargetObservation & out , std :: vector < native_order :: RequestHandle > & handles ) const #1",
     "else if ( const auto * cohort = std :: get_if < native_order :: CohortClose > ( & live -> authority ) ) #1",
     "for ( const auto & lot : engine . pyramid_entries_ ) #1",
@@ -18385,7 +19073,7 @@
    "symbol": "reason",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: admit_opening_inspect ( const BacktestEngine & engine , double resolved_price , double fx , const execution :: SettlementInspection & inspect , bool skip_initial_margin , native_order :: MatchRejectReason * reason ) const #1",
     "if ( risk_blocked ( ) ) #1"
    ],
@@ -18398,7 +19086,7 @@
    "symbol": "reason",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: admit_opening_inspect ( const BacktestEngine & engine , double resolved_price , double fx , const execution :: SettlementInspection & inspect , bool skip_initial_margin , native_order :: MatchRejectReason * reason ) const #1",
     "if ( inspect . incoming_short && ( mask & 2 u ) = = 0 ) #1"
    ],
@@ -18411,7 +19099,7 @@
    "symbol": "reason",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: admit_opening_inspect ( const BacktestEngine & engine , double resolved_price , double fx , const execution :: SettlementInspection & inspect , bool skip_initial_margin , native_order :: MatchRejectReason * reason ) const #1",
     "if ( ! inspect . incoming_short && ( mask & 1 u ) = = 0 ) #1"
    ],
@@ -18424,7 +19112,7 @@
    "symbol": "reason",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: admit_opening_inspect ( const BacktestEngine & engine , double resolved_price , double fx , const execution :: SettlementInspection & inspect , bool skip_initial_margin , native_order :: MatchRejectReason * reason ) const #1",
     "if ( spec -> max_abs_units && inspect . resulting_abs_units > * spec -> max_abs_units ) #1"
    ],
@@ -18437,7 +19125,7 @@
    "symbol": "reason",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: admit_opening_inspect ( const BacktestEngine & engine , double resolved_price , double fx , const execution :: SettlementInspection & inspect , bool skip_initial_margin , native_order :: MatchRejectReason * reason ) const #1",
     "if ( spec -> max_open_lots && inspect . resulting_lot_count > * spec -> max_open_lots ) #1"
    ],
@@ -18450,7 +19138,7 @@
    "symbol": "reason",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: admit_opening_inspect ( const BacktestEngine & engine , double resolved_price , double fx , const execution :: SettlementInspection & inspect , bool skip_initial_margin , native_order :: MatchRejectReason * reason ) const #1",
     "if ( ! skip_initial_margin && fraction > 0 . 0 ) #1",
     "if ( ! std :: isfinite ( equity ) || ! std :: isfinite ( required ) || required > equity ) #1"
@@ -18464,7 +19152,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: optional < double > NativeExecutionConsumer :: margin_call_units ( const BacktestEngine & engine , double mark , const native_order :: MatchCursor & cursor , NativeMarginCheckKind kind , double * out_equity , double * out_required ) const #1"
    ],
    "cls": "assign",
@@ -18476,7 +19164,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: kernel_submit_liquidation ( BacktestEngine & engine , double level , double units , std :: int64_t decision_time_ms , native_order :: RequestHandle * out_handle , native_order :: RequestOrigin origin , const char * label , const char * comment ) #1"
    ],
    "cls": "assign",
@@ -18488,7 +19176,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: risk_fire ( BacktestEngine & engine , native_order :: RiskLimitKind kind , double limit , double observed , const NativeCurrentPointView & point , CallbackPhase phase , bool owns_frame ) #1"
    ],
    "cls": "assign",
@@ -18500,7 +19188,7 @@
    "symbol": "seeds",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: drain_parent_terminal ( BacktestEngine & engine , const native_order :: EventId & cause , const native_order :: RequestHandle & parent , NativeFailureOperation operation ) #1"
    ],
    "cls": "decl",
@@ -18512,7 +19200,7 @@
    "symbol": "seeds",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: drain_parent_terminal ( BacktestEngine & engine , const native_order :: EventId & cause , const native_order :: RequestHandle & parent , NativeFailureOperation operation ) #1",
     "try #1"
    ],
@@ -18525,7 +19213,7 @@
    "symbol": "seeds",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: drain_after_applied ( BacktestEngine & engine , const native_order :: EventId & applied , const native_order :: RequestHandle & filler ) #1",
     "try #1"
    ],
@@ -18538,7 +19226,7 @@
    "symbol": "seeds",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: drain_after_applied ( BacktestEngine & engine , const native_order :: EventId & applied , const native_order :: RequestHandle & filler ) #1",
     "try #1",
     "auto note_absent = [ & ] ( const native_order :: RequestHandle & parent ) #1"
@@ -18552,7 +19240,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: drain_after_applied ( BacktestEngine & engine , const native_order :: EventId & applied , const native_order :: RequestHandle & filler ) #1",
     "try #1",
     "for ( const auto & handle : bound ) #1"
@@ -18566,7 +19254,7 @@
    "symbol": "seeds",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: drain_after_applied ( BacktestEngine & engine , const native_order :: EventId & applied , const native_order :: RequestHandle & filler ) #1",
     "try #1"
    ],
@@ -18579,7 +19267,7 @@
    "symbol": "handles",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: observe_trails ( BacktestEngine & engine , const NativeDriverPoint & point , const native_order :: MatchCursor & cursor , bool continuous , double price ) #1"
    ],
    "cls": "assign",
@@ -18591,7 +19279,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: observe_trails ( BacktestEngine & engine , const NativeDriverPoint & point , const native_order :: MatchCursor & cursor , bool continuous , double price ) #1",
     "for ( const auto & handle : handles ) #1"
    ],
@@ -18604,7 +19292,7 @@
    "symbol": "pre_open_births_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: record_pre_open_birth ( const native_order :: Request & request , const native_order :: RequestHandle & handle ) #1",
     "if ( std :: find ( pre_open_births_ . begin ( ) , pre_open_births_ . end ( ) , handle ) = = pre_open_births_ . end ( ) ) #1"
    ],
@@ -18617,7 +19305,7 @@
    "symbol": "activation_births_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: record_activation_birth ( BacktestEngine & engine , const native_order :: RequestHandle & handle ) #1",
     "try #1"
    ],
@@ -18630,7 +19318,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: vector < native_order :: OpeningObservation > NativeExecutionConsumer :: read_openings ( const BacktestEngine & engine , const std :: vector < native_order :: RequestHandle > & handles , int64_t cycle ) const #1"
    ],
    "cls": "decl",
@@ -18642,7 +19330,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: read_openings_into ( const BacktestEngine & engine , const std :: vector < native_order :: RequestHandle > & handles , int64_t cycle , std :: vector < native_order :: OpeningObservation > & out ) const #1"
    ],
    "cls": "grow",
@@ -18654,7 +19342,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: read_openings_into ( const BacktestEngine & engine , const std :: vector < native_order :: RequestHandle > & handles , int64_t cycle , std :: vector < native_order :: OpeningObservation > & out ) const #1",
     "for ( const auto & handle : handles ) #1"
    ],
@@ -18667,7 +19355,7 @@
    "symbol": "incarnations",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeExecutionTermsFacts NativeExecutionConsumer :: build_terms_facts ( const BacktestEngine & engine , const native_order :: LiveRequest & live , const native_order :: EvaluationContext & evaluation , native_order :: NativeCandidatePriceKind price_kind , NativeCurrentPriceRule price_rule , double raw_price , double default_resolved_price , bool shared_cursor_collision ) const #1",
     "else if ( const auto * openings = std :: get_if < native_order :: OpeningsClose > ( & live . authority ) ) #1",
     "for ( const auto & row : target . openings ) #1"
@@ -18681,7 +19369,7 @@
    "symbol": "incarnations",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeExecutionTermsFacts NativeExecutionConsumer :: build_terms_facts ( const BacktestEngine & engine , const native_order :: LiveRequest & live , const native_order :: EvaluationContext & evaluation , native_order :: NativeCandidatePriceKind price_kind , NativeCurrentPriceRule price_rule , double raw_price , double default_resolved_price , bool shared_cursor_collision ) const #1",
     "else if ( std :: holds_alternative < native_order :: CohortClose > ( live . authority ) ) #1",
     "for ( const auto & row : target . openings ) #1"
@@ -18695,7 +19383,7 @@
    "symbol": "incarnations",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeExecutionConsumer :: ResolvedCandidate NativeExecutionConsumer :: inspect_candidate ( const BacktestEngine & engine , const native_order :: LiveRequest & live , const native_order :: MatchCursor & cursor , double resolved , double fx , const native_order :: ExecutionPlan * plan_override ) const #1",
     "else if ( const auto * openings = std :: get_if < native_order :: OpeningsClose > ( & live . authority ) ) #1"
    ],
@@ -18708,7 +19396,7 @@
    "symbol": "incarnations",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeExecutionConsumer :: ResolvedCandidate NativeExecutionConsumer :: inspect_candidate ( const BacktestEngine & engine , const native_order :: LiveRequest & live , const native_order :: MatchCursor & cursor , double resolved , double fx , const native_order :: ExecutionPlan * plan_override ) const #1",
     "else if ( const auto * openings = std :: get_if < native_order :: OpeningsClose > ( & live . authority ) ) #1",
     "for ( const auto & row : candidate . target . openings ) #1"
@@ -18722,7 +19410,7 @@
    "symbol": "incarnations",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeExecutionConsumer :: ResolvedCandidate NativeExecutionConsumer :: inspect_candidate ( const BacktestEngine & engine , const native_order :: LiveRequest & live , const native_order :: MatchCursor & cursor , double resolved , double fx , const native_order :: ExecutionPlan * plan_override ) const #1",
     "else if ( std :: holds_alternative < native_order :: CohortClose > ( live . authority ) ) #1"
    ],
@@ -18735,7 +19423,7 @@
    "symbol": "incarnations",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeExecutionConsumer :: ResolvedCandidate NativeExecutionConsumer :: inspect_candidate ( const BacktestEngine & engine , const native_order :: LiveRequest & live , const native_order :: MatchCursor & cursor , double resolved , double fx , const native_order :: ExecutionPlan * plan_override ) const #1",
     "else if ( std :: holds_alternative < native_order :: CohortClose > ( live . authority ) ) #1",
     "for ( const auto & row : candidate . target . openings ) #1"
@@ -18749,7 +19437,7 @@
    "symbol": "incarnations",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: optional < double > NativeExecutionConsumer :: placement_scope_units ( const BacktestEngine & engine , const native_order :: Request & request ) const #1",
     "const auto sum_incarnations = [ & ] ( const std :: vector < native_order :: OpeningObservation > & rows ) #1"
    ],
@@ -18762,7 +19450,7 @@
    "symbol": "incarnations",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: optional < double > NativeExecutionConsumer :: placement_scope_units ( const BacktestEngine & engine , const native_order :: Request & request ) const #1",
     "const auto sum_incarnations = [ & ] ( const std :: vector < native_order :: OpeningObservation > & rows ) #1"
    ],
@@ -18775,7 +19463,7 @@
    "symbol": "incarnations",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: optional < double > NativeExecutionConsumer :: placement_scope_units ( const BacktestEngine & engine , const native_order :: Request & request ) const #1",
     "const auto sum_incarnations = [ & ] ( const std :: vector < native_order :: OpeningObservation > & rows ) #1",
     "for ( const auto & row : rows ) #1"
@@ -18789,7 +19477,7 @@
    "symbol": "handles",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: optional < double > NativeExecutionConsumer :: placement_scope_units ( const BacktestEngine & engine , const native_order :: Request & request ) const #1",
     "else if ( const auto * bind = std :: get_if < native_order :: BindCohort > ( & request . owner ) ) #1"
    ],
@@ -18802,7 +19490,7 @@
    "symbol": "handles",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: optional < double > NativeExecutionConsumer :: placement_scope_units ( const BacktestEngine & engine , const native_order :: Request & request ) const #1",
     "else if ( const auto * bind = std :: get_if < native_order :: BindCohort > ( & request . owner ) ) #1"
    ],
@@ -18815,7 +19503,7 @@
    "symbol": "handles",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: optional < double > NativeExecutionConsumer :: placement_scope_units ( const BacktestEngine & engine , const native_order :: Request & request ) const #1",
     "else if ( const auto * bind = std :: get_if < native_order :: BindCohort > ( & request . owner ) ) #1",
     "for ( const auto & lot : engine . pyramid_entries_ ) #1"
@@ -18829,7 +19517,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: optional < NativeCurrentExecutionResult > NativeExecutionConsumer :: consume_matched_request ( BacktestEngine & engine , const native_order :: RequestHandle & handle , const native_order :: EvaluationContext & evaluation , double raw_price , double default_resolved_price , const NativeCurrentPointView & notification_point , native_order :: NativeCandidatePriceKind price_kind , NativeCurrentPriceRule price_rule , bool shared_cursor_collision ) #1",
     "try #1"
    ],
@@ -18842,7 +19530,7 @@
    "symbol": "token",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: optional < NativeCurrentExecutionResult > NativeExecutionConsumer :: consume_matched_request ( BacktestEngine & engine , const native_order :: RequestHandle & handle , const native_order :: EvaluationContext & evaluation , double raw_price , double default_resolved_price , const NativeCurrentPointView & notification_point , native_order :: NativeCandidatePriceKind price_kind , NativeCurrentPriceRule price_rule , bool shared_cursor_collision ) #1",
     "try #1",
     "else #1",
@@ -18857,7 +19545,7 @@
    "symbol": "account_log_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: optional < NativeCurrentExecutionResult > NativeExecutionConsumer :: consume_matched_request ( BacktestEngine & engine , const native_order :: RequestHandle & handle , const native_order :: EvaluationContext & evaluation , double raw_price , double default_resolved_price , const NativeCurrentPointView & notification_point , native_order :: NativeCandidatePriceKind price_kind , NativeCurrentPriceRule price_rule , bool shared_cursor_collision ) #1",
     "try #1"
    ],
@@ -18870,7 +19558,7 @@
    "symbol": "rows_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: MatchRows :: keep ( const MatchCandidate & row ) #1",
     "if ( ascending_ ) #1",
     "if ( head_ = = rows_ . size ( ) || ! precedes ( row , rows_ . back ( ) ) ) #1"
@@ -18884,7 +19572,7 @@
    "symbol": "rows_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: MatchRows :: keep ( const MatchCandidate & row ) #1"
    ],
    "cls": "grow",
@@ -18896,7 +19584,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: match_path ( BacktestEngine & engine , const NativeDriverPoint & point , bool continuous , double from_price , double to_price ) #1",
     "auto provenance_still_matches = [ & ] ( const CandidateProvenance & row ) #1"
    ],
@@ -18909,7 +19597,7 @@
    "symbol": "skipped",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: match_path ( BacktestEngine & engine , const NativeDriverPoint & point , bool continuous , double from_price , double to_price ) #1",
     "auto skip = [ & ] ( const std :: pair < uint64_t , std :: uint8_t > & key ) #1"
    ],
@@ -18922,7 +19610,7 @@
    "symbol": "candidate_provenance",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: match_path ( BacktestEngine & engine , const NativeDriverPoint & point , bool continuous , double from_price , double to_price ) #1",
     "while ( ! failed ( ) ) #1",
     "+ + snapshot_index ) #1",
@@ -18937,7 +19625,7 @@
    "symbol": "candidate_provenance",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: match_path ( BacktestEngine & engine , const NativeDriverPoint & point , bool continuous , double from_price , double to_price ) #1",
     "while ( ! failed ( ) ) #1",
     "if ( winner -> kind ! = Kind :: Fill ) #1",
@@ -18953,7 +19641,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: optional < NativeTrailState > NativeExecutionConsumer :: trail_state ( const BacktestEngine & engine , const native_order :: RequestHandle & target ) const #1"
    ],
    "cls": "assign",
@@ -18965,7 +19653,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeCurrentExecutionPreview NativeExecutionConsumer :: inspect_current_execution ( const BacktestEngine & engine , const NativeCurrentExecution & command ) const #1"
    ],
    "cls": "assign",
@@ -18977,7 +19665,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeCurrentExecutionResult NativeExecutionConsumer :: execute_current ( BacktestEngine & engine , const NativeCurrentExecution & command ) #1",
     "try #1"
    ],
@@ -18990,7 +19678,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeCurrentExecutionResult NativeExecutionConsumer :: execute_current ( BacktestEngine & engine , const NativeCurrentExecution & command ) #1",
     "try #1"
    ],
@@ -19003,7 +19691,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: optional < NativeCurrentRefusal > NativeExecutionConsumer :: activate_current_stop_limit ( BacktestEngine & engine , const native_order :: RequestHandle & target ) #1",
     "try #1"
    ],
@@ -19016,7 +19704,7 @@
    "symbol": "applied_notifications_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: enqueue_applied_notification ( AppliedNotification notification ) #1"
    ],
    "cls": "grow",
@@ -19028,7 +19716,7 @@
    "symbol": "current_frame_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: invoke_applied_callback ( BacktestEngine & engine , const AppliedNotification & notification ) #1",
     "try #1"
    ],
@@ -19041,7 +19729,7 @@
    "symbol": "current_frame_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: invoke_bar_open_callback ( BacktestEngine & engine , const Bar & bar , const NativeDriverPoint & point ) #1"
    ],
    "cls": "grow",
@@ -19053,7 +19741,7 @@
    "symbol": "current_frame_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: invoke_tick_callback ( BacktestEngine & engine , const Bar & bar , const NativeTickContext & context ) #1"
    ],
    "cls": "grow",
@@ -19065,7 +19753,7 @@
    "symbol": "current_frame_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: invoke_callback ( BacktestEngine & engine , const Bar & bar , const NativeCoordinate & coordinate ) #1"
    ],
    "cls": "grow",
@@ -19077,7 +19765,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: present_session_day ( NativeDecisionContext & context , int64_t label ) const #1"
    ],
    "cls": "assign",
@@ -19089,7 +19777,7 @@
    "symbol": "spans",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "[ [ gnu :: noinline ] ] const NativeExecutionConsumer :: CertifiedCycle * NativeExecutionConsumer :: certify_cycle ( int64_t ms ) const #1",
     "try #1"
    ],
@@ -19102,7 +19790,7 @@
    "symbol": "spans",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "[ [ gnu :: noinline ] ] const NativeExecutionConsumer :: CertifiedCycle * NativeExecutionConsumer :: certify_cycle ( int64_t ms ) const #1",
     "try #1",
     "if ( certificate ) #1"
@@ -19116,7 +19804,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeExecutionConsumer :: SessionPoint NativeExecutionConsumer :: session_point_resolved ( int64_t ms ) const #1"
    ],
    "cls": "assign",
@@ -19128,7 +19816,7 @@
    "symbol": "sub_bars",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: deliver_intrabar_script ( BacktestEngine & engine , const Bar & bar , const NativeCoordinate & base ) #1",
     "if ( lower ) #1",
     "if ( active_bar_views_ . lower_path ! = nullptr ) #1"
@@ -19142,7 +19830,7 @@
    "symbol": "sub_bars",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: deliver_intrabar_script ( BacktestEngine & engine , const Bar & bar , const NativeCoordinate & base ) #1",
     "if ( lower ) #1",
     "else #1",
@@ -19157,7 +19845,7 @@
    "symbol": "sub_bars",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: deliver_intrabar_script ( BacktestEngine & engine , const Bar & bar , const NativeCoordinate & base ) #1",
     "else #1"
    ],
@@ -19170,7 +19858,7 @@
    "symbol": "samples",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: deliver_intrabar_script ( BacktestEngine & engine , const Bar & bar , const NativeCoordinate & base ) #1",
     "+ + sub_index ) #1",
     "if ( ! distribution_samples || direct_sub_bar_corners ) #1",
@@ -19185,7 +19873,7 @@
    "symbol": "samples",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: deliver_intrabar_script ( BacktestEngine & engine , const Bar & bar , const NativeCoordinate & base ) #1",
     "+ + sub_index ) #1",
     "if ( ! distribution_samples || direct_sub_bar_corners ) #1",
@@ -19200,7 +19888,7 @@
    "symbol": "broker_state_hashes_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: record_script_report_point ( BacktestEngine & engine , int64_t script_open_ms ) const #1",
     "if ( engine . broker_state_hash_recording_ ) #1"
    ],
@@ -19213,7 +19901,7 @@
    "symbol": "completes",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: script_bucket_completions ( const Bar * bars , std :: size_t n , std :: vector < unsigned char > & completes , std :: vector < unsigned char > & boundary_completes ) const #1"
    ],
    "cls": "grow",
@@ -19225,7 +19913,7 @@
    "symbol": "boundary_completes",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: script_bucket_completions ( const Bar * bars , std :: size_t n , std :: vector < unsigned char > & completes , std :: vector < unsigned char > & boundary_completes ) const #1"
    ],
    "cls": "grow",
@@ -19237,7 +19925,7 @@
    "symbol": "security_input_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: begin_timeframe_subscriptions ( BacktestEngine & engine , const NativeRunSpec & spec , const Bar * input_bars , int n_input , bool is_stream ) #1",
     "try #1"
    ],
@@ -19250,7 +19938,7 @@
    "symbol": "subscriptions_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: begin_timeframe_subscriptions ( BacktestEngine & engine , const NativeRunSpec & spec , const Bar * input_bars , int n_input , bool is_stream ) #1",
     "try #1"
    ],
@@ -19263,7 +19951,7 @@
    "symbol": "declared",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: begin_timeframe_subscriptions ( BacktestEngine & engine , const NativeRunSpec & spec , const Bar * input_bars , int n_input , bool is_stream ) #1",
     "try #1",
     "+ + i ) #1"
@@ -19277,7 +19965,7 @@
    "symbol": "subscriptions_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: begin_timeframe_subscriptions ( BacktestEngine & engine , const NativeRunSpec & spec , const Bar * input_bars , int n_input , bool is_stream ) #1",
     "try #1",
     "+ + i ) #1",
@@ -19292,7 +19980,7 @@
    "symbol": "subscriptions_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: begin_timeframe_subscriptions ( BacktestEngine & engine , const NativeRunSpec & spec , const Bar * input_bars , int n_input , bool is_stream ) #1",
     "try #1",
     "+ + i ) #1"
@@ -19306,7 +19994,7 @@
    "symbol": "security_input_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: begin_timeframe_subscriptions ( BacktestEngine & engine , const NativeRunSpec & spec , const Bar * input_bars , int n_input , bool is_stream ) #1",
     "try #1",
     "+ + i ) #1"
@@ -19320,7 +20008,7 @@
    "symbol": "security_input_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: begin_timeframe_subscriptions ( BacktestEngine & engine , const NativeRunSpec & spec , const Bar * input_bars , int n_input , bool is_stream ) #1",
     "try #1",
     "+ + i ) #1"
@@ -19334,7 +20022,7 @@
    "symbol": "reason",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: begin_timeframe_subscriptions ( BacktestEngine & engine , const NativeRunSpec & spec , const Bar * input_bars , int n_input , bool is_stream ) #1",
     "try #1",
     "+ + i ) #1",
@@ -19349,7 +20037,7 @@
    "symbol": "<temp:string>",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: begin_timeframe_subscriptions ( BacktestEngine & engine , const NativeRunSpec & spec , const Bar * input_bars , int n_input , bool is_stream ) #1",
     "try #1",
     "+ + i ) #1",
@@ -19364,7 +20052,7 @@
    "symbol": "subscription_feed_tfs_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: begin_timeframe_subscriptions ( BacktestEngine & engine , const NativeRunSpec & spec , const Bar * input_bars , int n_input , bool is_stream ) #1",
     "try #1",
     "+ + i ) #1",
@@ -19379,7 +20067,7 @@
    "symbol": "declared",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1"
+    "inline namespace engine_script_run_v20 #1"
    ],
    "cls": "decl",
    "spelling": "std :: vector < NativeTimeframeSubscription >",
@@ -19390,7 +20078,7 @@
    "symbol": "subscriptions",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeSetupResult NativeExecutionConsumer :: declare_timeframe_subscriptions ( std :: vector < NativeTimeframeSubscription > declared ) #1"
    ],
    "cls": "assign",
@@ -19402,7 +20090,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeAuxiliaryAppendResult NativeExecutionConsumer :: append_auxiliary_bars ( BacktestEngine & engine , const Bar * bars , std :: size_t n ) #1"
    ],
    "cls": "assign",
@@ -19414,7 +20102,7 @@
    "symbol": "auxiliary_appended_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeAuxiliaryAppendResult NativeExecutionConsumer :: append_auxiliary_bars ( BacktestEngine & engine , const Bar * bars , std :: size_t n ) #1",
     "try #1"
    ],
@@ -19427,7 +20115,7 @@
    "symbol": "declared",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: size_t NativeExecutionConsumer :: auxiliary_bar_count ( ) const noexcept #1"
    ],
    "cls": "assign",
@@ -19439,7 +20127,7 @@
    "symbol": "declared",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "const Bar & NativeExecutionConsumer :: auxiliary_bar ( std :: size_t at ) const noexcept #1"
    ],
    "cls": "assign",
@@ -19451,7 +20139,7 @@
    "symbol": "projected_bars",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
     "if ( subscription . auxiliary ) #1",
     "+ + i ) #1",
@@ -19466,7 +20154,7 @@
    "symbol": "projected_first_index",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
     "if ( subscription . auxiliary ) #1",
     "+ + i ) #1",
@@ -19481,7 +20169,7 @@
    "symbol": "projected_first_ms",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
     "if ( subscription . auxiliary ) #1",
     "+ + i ) #1",
@@ -19496,7 +20184,7 @@
    "symbol": "projected_completion",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
     "if ( subscription . auxiliary ) #1",
     "+ + i ) #1",
@@ -19511,7 +20199,7 @@
    "symbol": "projected_bars",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
     "+ + i ) #1"
    ],
@@ -19524,7 +20212,7 @@
    "symbol": "projected_first_index",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
     "+ + i ) #1"
    ],
@@ -19537,7 +20225,7 @@
    "symbol": "projected_first_ms",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
     "+ + i ) #1"
    ],
@@ -19550,7 +20238,7 @@
    "symbol": "projected_completion",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: project_timeframe_subscription ( BacktestEngine & engine , TimeframeSubscription & subscription , const Bar * input_bars , int n_input ) #1",
     "+ + i ) #1"
    ],
@@ -19563,7 +20251,7 @@
    "symbol": "requests_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: pump_batch ( BacktestEngine & engine , const Bar * bars , int n ) #1",
     "const auto presize_logs = [ & ] ( std :: size_t consumed_inputs ) #1",
     "if ( const std :: size_t events = presize ( history_base , history . size ( ) , history . capacity ( ) , consumed , history . max_size ( ) ) ) #1",
@@ -19575,10 +20263,24 @@
   },
   {
    "file": "src/native_execution_consumer.cpp",
+   "symbol": "runtime_lease",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: run_simple ( BacktestEngine & engine , const Bar * bars , int n ) #1",
+    "try #1",
+    "if ( engine . runtime_contexts ( ) . history_enabled ( ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "runtime_lease . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
    "symbol": "state_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: run_simple ( BacktestEngine & engine , const Bar * bars , int n ) #1",
     "try #1"
    ],
@@ -19588,10 +20290,24 @@
   },
   {
    "file": "src/native_execution_consumer.cpp",
+   "symbol": "runtime_lease",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: run_tf ( BacktestEngine & engine , const Bar * input_bars , int n_input , const std :: string & input_tf , const std :: string & script_tf , bool bar_magnifier , int magnifier_samples , MagnifierDistribution magnifier_dist ) #1",
+    "try #1",
+    "if ( engine . runtime_contexts ( ) . history_enabled ( ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "runtime_lease . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
    "symbol": "state_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: run_tf ( BacktestEngine & engine , const Bar * input_bars , int n_input , const std :: string & input_tf , const std :: string & script_tf , bool bar_magnifier , int magnifier_samples , MagnifierDistribution magnifier_dist ) #1",
     "try #1"
    ],
@@ -19601,10 +20317,24 @@
   },
   {
    "file": "src/native_execution_consumer.cpp",
+   "symbol": "runtime_lease",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: run_rich ( BacktestEngine & engine , const Bar * input_bars , int n_input , const std :: string & input_tf , const std :: string & script_tf , const std :: unordered_map < std :: string , std :: string > & inputs , const SymInfo & syminfo , const void * overrides , bool bar_magnifier , int magnifier_samples , MagnifierDistribution magnifier_dist ) #1",
+    "try #1",
+    "if ( engine . runtime_contexts ( ) . history_enabled ( ) ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "runtime_lease . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
    "symbol": "state_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: run_rich ( BacktestEngine & engine , const Bar * input_bars , int n_input , const std :: string & input_tf , const std :: string & script_tf , const std :: unordered_map < std :: string , std :: string > & inputs , const SymInfo & syminfo , const void * overrides , bool bar_magnifier , int magnifier_samples , MagnifierDistribution magnifier_dist ) #1",
     "try #1"
    ],
@@ -19617,7 +20347,7 @@
    "symbol": "state_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: stream_end ( BacktestEngine & engine , bool finalize_partial_input_bar ) #1",
     "try #1"
    ],
@@ -19630,7 +20360,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: vector < NativeWorkingRequest > NativeExecutionConsumer :: working_requests ( ) const #1"
    ],
    "cls": "decl",
@@ -19642,7 +20372,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: vector < NativeWorkingRequest > NativeExecutionConsumer :: working_requests ( ) const #1"
    ],
    "cls": "grow",
@@ -19654,7 +20384,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: vector < NativeWorkingRequest > NativeExecutionConsumer :: working_requests ( ) const #1",
     "for ( const auto & live : requests_ . live ( ) ) #1"
    ],
@@ -19667,7 +20397,7 @@
    "symbol": "handles",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: size_t NativeExecutionConsumer :: cancel_all ( BacktestEngine & engine ) #1"
    ],
    "cls": "decl",
@@ -19679,7 +20409,7 @@
    "symbol": "handles",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: size_t NativeExecutionConsumer :: cancel_all ( BacktestEngine & engine ) #1"
    ],
    "cls": "grow",
@@ -19691,7 +20421,7 @@
    "symbol": "handles",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: size_t NativeExecutionConsumer :: cancel_all ( BacktestEngine & engine ) #1"
    ],
    "cls": "grow",
@@ -19703,7 +20433,7 @@
    "symbol": "handles",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: size_t NativeExecutionConsumer :: cancel_where ( BacktestEngine & engine , std :: string_view text , NativeRequestField field ) #1"
    ],
    "cls": "decl",
@@ -19715,7 +20445,7 @@
    "symbol": "handles",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: size_t NativeExecutionConsumer :: cancel_where ( BacktestEngine & engine , std :: string_view text , NativeRequestField field ) #1",
     "for ( const auto & live : requests_ . live ( ) ) #1"
    ],
@@ -19728,7 +20458,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: vector < NativeMarketEvent > NativeExecutionConsumer :: events_after ( uint64_t after_ordinal ) const #1"
    ],
    "cls": "decl",
@@ -19740,7 +20470,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: vector < NativeMarketEvent > NativeExecutionConsumer :: events_after ( uint64_t after_ordinal ) const #1"
    ],
    "cls": "grow",
@@ -19752,7 +20482,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: vector < NativeMarketEvent > NativeExecutionConsumer :: events_after ( uint64_t after_ordinal ) const #1",
     "+ + it ) #1"
    ],
@@ -19765,7 +20495,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: vector < NativeMarketEvent > NativeExecutionConsumer :: events_after ( uint64_t after_ordinal ) const #1",
     "+ + it ) #2"
    ],
@@ -19778,7 +20508,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: vector < NativeMarketEvent > NativeExecutionConsumer :: events_after ( uint64_t after_ordinal ) const #1",
     "+ + it ) #3"
    ],
@@ -19791,7 +20521,7 @@
    "symbol": "closed_row_prefix_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "uint64_t NativeExecutionConsumer :: closed_rows_digest ( const TradeLedger & rows ) const #1",
     "+ + index ) #1"
    ],
@@ -19804,7 +20534,7 @@
    "symbol": "closed_row_prefix_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: rewind_closed_rows ( std :: size_t first ) const #1",
     "if ( first > checkpoint_base ) #1"
    ],
@@ -19817,7 +20547,7 @@
    "symbol": "subscriptions",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1"
+    "inline namespace engine_script_run_v20 #1"
    ],
    "cls": "decl",
    "spelling": "std :: vector < NativeTimeframeSubscription >",
@@ -19828,7 +20558,7 @@
    "symbol": "subscriptions",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1"
+    "inline namespace engine_script_run_v20 #1"
    ],
    "cls": "decl",
    "spelling": "std :: vector < NativeTimeframeSubscription >",
@@ -19839,7 +20569,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: vector < NativeOpenLot > NativeExecutionConsumer :: open_lots ( const BacktestEngine & engine , double mark ) const #1"
    ],
    "cls": "decl",
@@ -19851,7 +20581,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: vector < NativeOpenLot > NativeExecutionConsumer :: open_lots ( const BacktestEngine & engine , double mark ) const #1"
    ],
    "cls": "grow",
@@ -19863,7 +20593,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "std :: vector < NativeOpenLot > NativeExecutionConsumer :: open_lots ( const BacktestEngine & engine , double mark ) const #1",
     "+ + i ) #1"
    ],
@@ -19876,7 +20606,7 @@
    "symbol": "reason",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "NativeRiskState NativeExecutionConsumer :: risk_state ( ) const #1"
    ],
    "cls": "assign",
@@ -19888,7 +20618,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: capture_presentation ( BacktestEngine & engine ) #1",
     "try #1",
     "if ( selected_epoch_ . admitted_selected ) #1",
@@ -19903,7 +20633,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: capture_presentation ( BacktestEngine & engine ) #1",
     "try #1",
     "if ( selected_epoch_ . admitted_selected ) #1",
@@ -19919,7 +20649,7 @@
    "symbol": "metric_curve",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: capture_presentation ( BacktestEngine & engine ) #1",
     "try #1",
     "if ( selected_epoch_ . admitted_selected ) #1",
@@ -19935,7 +20665,7 @@
    "symbol": "metric_curve",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: capture_presentation ( BacktestEngine & engine ) #1",
     "try #1",
     "if ( selected_epoch_ . admitted_selected ) #1",
@@ -19953,7 +20683,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: capture_presentation ( BacktestEngine & engine ) #1",
     "try #1",
     "else if ( engine . report_sink_state_ . equity_scratch ) #1"
@@ -19967,7 +20697,7 @@
    "symbol": "new:pf_equity_point_t",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: capture_presentation ( BacktestEngine & engine ) #1",
     "try #1",
     "else if ( engine . report_sink_state_ . equity_scratch ) #1"
@@ -19981,7 +20711,7 @@
    "symbol": "equity_curve",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: capture_presentation ( BacktestEngine & engine ) #1",
     "try #1",
     "else #1",
@@ -19996,7 +20726,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: capture_presentation ( BacktestEngine & engine ) #1",
     "try #1",
     "if ( sink_window ) #1",
@@ -20011,7 +20741,7 @@
    "symbol": "metric_curve",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: capture_presentation ( BacktestEngine & engine ) #1",
     "try #1",
     "if ( sink_window ) #1",
@@ -20027,7 +20757,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: refuse_report_in_dispatch ( const BacktestEngine & engine , ReportC * out ) noexcept #1"
    ],
    "cls": "assign",
@@ -20039,7 +20769,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: fill_selected_report ( const BacktestEngine & engine , ReportC * out ) #1",
     "if ( consumer = = nullptr || ! consumer -> capture_readable ( ) ) #1"
    ],
@@ -20052,7 +20782,7 @@
    "symbol": "trades",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: fill_selected_report ( const BacktestEngine & engine , ReportC * out ) #1",
     "try #1",
     "else if ( captured . trades ! = nullptr && captured . trades_len > 0 ) #1",
@@ -20067,7 +20797,7 @@
    "symbol": "equity_curve",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: fill_selected_report ( const BacktestEngine & engine , ReportC * out ) #1",
     "try #1",
     "if ( captured . equity_curve ! = nullptr && equity_storage_len > 0 && ! sink_equity && ! ordinary_sink ) #1"
@@ -20081,7 +20811,7 @@
    "symbol": "equity_curve",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: fill_selected_report ( const BacktestEngine & engine , ReportC * out ) #1",
     "try #1",
     "if ( scratch_equity && ! sink_equity && equity_storage_len > 0 ) #1"
@@ -20095,7 +20825,7 @@
    "symbol": "new:uint64_t",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: fill_selected_report ( const BacktestEngine & engine , ReportC * out ) #1",
     "try #1"
    ],
@@ -20108,7 +20838,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: fill_selected_report ( const BacktestEngine & engine , ReportC * out ) #1"
    ],
    "cls": "assign",
@@ -20120,7 +20850,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "int NativeExecutionConsumer :: gate_selected_setter ( BacktestEngine * engine , bool bind_missing , NativeExecutionConsumer * * out ) noexcept #1"
    ],
    "cls": "assign",
@@ -20132,7 +20862,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "int NativeExecutionConsumer :: gate_selected_setter ( BacktestEngine * engine , bool bind_missing , NativeExecutionConsumer * * out ) noexcept #1"
    ],
    "cls": "assign",
@@ -20144,7 +20874,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "int NativeExecutionConsumer :: execution_observation_v1 ( const BacktestEngine * engine , pf_execution_observation_v1 * out ) noexcept #1"
    ],
    "cls": "assign",
@@ -20156,7 +20886,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "int NativeExecutionConsumer :: selected_window_counts_v1 ( const BacktestEngine * engine , pf_selected_window_counts_v1 * out ) noexcept #1"
    ],
    "cls": "assign",
@@ -20168,7 +20898,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: selected_window_pending ( const BacktestEngine & engine , pf_selected_window_config_v1 * out ) noexcept #1"
    ],
    "cls": "assign",
@@ -20180,7 +20910,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: selected_window_admitted ( const BacktestEngine & engine , pf_selected_window_config_v1 * out ) noexcept #1"
    ],
    "cls": "assign",
@@ -20192,7 +20922,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "metrics :: MetricsStreamingStatusV1 BacktestEngine :: admit_metrics_plain_v1 ( const MetricsPlainInputsV1 & inputs , const metrics :: MetricsExtentPlanV1 & plan , metrics :: MetricsExtentReceiptV1 * out ) #1"
    ],
    "cls": "assign",
@@ -20204,7 +20934,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: restore_report_sink_equity_curve ( BacktestEngine & engine ) #1"
    ],
    "cls": "assign",
@@ -20216,7 +20946,7 @@
    "symbol": "restored",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: restore_report_sink_equity_curve ( BacktestEngine & engine ) #1"
    ],
    "cls": "decl",
@@ -20228,7 +20958,7 @@
    "symbol": "captured_curve",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: restore_report_sink_equity_curve ( BacktestEngine & engine ) #1",
     "if ( captured ) #1",
     "if ( count > 0 ) #1"
@@ -20242,7 +20972,7 @@
    "symbol": "equity_curve_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void BacktestEngine :: store_equity_point ( const pf_equity_point_t & point ) #1"
    ],
    "cls": "grow",
@@ -20254,7 +20984,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "bool BacktestEngine :: prepare_equity_point ( ) #1"
    ],
    "cls": "assign",
@@ -20266,7 +20996,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void BacktestEngine :: refold_equity_tail ( ) #1",
     "if ( report_sink_state_ . enabled && ( last_equity_point ( ) || report_sink_state_ . equity_scratch ) ) #1"
    ],
@@ -20279,7 +21009,7 @@
    "symbol": "held",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void BacktestEngine :: refold_equity_tail ( ) #1",
     "if ( report_sink_state_ . enabled && ( last_equity_point ( ) || report_sink_state_ . equity_scratch ) ) #1",
     "if ( report_sink_state_ . selected_equity_stream ) #1"
@@ -20293,7 +21023,7 @@
    "symbol": "out",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: fill_streamed_report ( const BacktestEngine & engine , ReportC * out ) const #1"
    ],
    "cls": "assign",
@@ -20305,7 +21035,7 @@
    "symbol": "next",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "void BacktestEngine :: prepare_scratch_table_run ( const detail :: ScratchTableConfig & config ) #1",
     "switch ( config . backend ) #1"
    ],
@@ -20329,7 +21059,7 @@
    "file": "src/native_execution_consumer.cpp",
    "symbol": "resident_",
    "scope": [
-    "namespace pineforge :: engine_script_run_v19 #1",
+    "namespace pineforge :: engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: MatchDormantPoint :: scan ( ) #1",
     "if ( fast_ ) #1"
    ],
@@ -20341,7 +21071,7 @@
    "file": "src/native_execution_consumer.cpp",
    "symbol": "handles",
    "scope": [
-    "namespace pineforge :: engine_script_run_v19 #1",
+    "namespace pineforge :: engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: collect_match_trails ( const NativeDriverPoint & point , const native_order :: MatchCursor & cursor , bool continuous ) #1"
    ],
    "cls": "assign",
@@ -20352,7 +21082,7 @@
    "file": "src/native_execution_consumer.cpp",
    "symbol": "handles",
    "scope": [
-    "namespace pineforge :: engine_script_run_v19 #1",
+    "namespace pineforge :: engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: collect_match_trails ( const NativeDriverPoint & point , const native_order :: MatchCursor & cursor , bool continuous ) #1",
     "if ( resident_only ) #1"
    ],
@@ -20364,7 +21094,7 @@
    "file": "src/native_execution_consumer.cpp",
    "symbol": "handles",
    "scope": [
-    "namespace pineforge :: engine_script_run_v19 #1",
+    "namespace pineforge :: engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: collect_match_trails ( const NativeDriverPoint & point , const native_order :: MatchCursor & cursor , bool continuous ) #1",
     "if ( resident_only ) #1",
     "+ + i ) #2"
@@ -20377,7 +21107,7 @@
    "file": "src/native_execution_consumer.cpp",
    "symbol": "handles",
    "scope": [
-    "namespace pineforge :: engine_script_run_v19 #1",
+    "namespace pineforge :: engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: collect_match_trails ( const NativeDriverPoint & point , const native_order :: MatchCursor & cursor , bool continuous ) #1",
     "else #1"
    ],
@@ -20389,7 +21119,7 @@
    "file": "src/native_execution_consumer.cpp",
    "symbol": "handles",
    "scope": [
-    "namespace pineforge :: engine_script_run_v19 #1",
+    "namespace pineforge :: engine_script_run_v20 #1",
     "bool NativeExecutionConsumer :: collect_match_trails ( const NativeDriverPoint & point , const native_order :: MatchCursor & cursor , bool continuous ) #1",
     "else #1"
    ],
@@ -20401,7 +21131,7 @@
    "file": "src/native_execution_consumer.cpp",
    "symbol": "make_unique",
    "scope": [
-    "namespace pineforge :: engine_script_run_v19 #1",
+    "namespace pineforge :: engine_script_run_v20 #1",
     "namespace #1",
     "std :: unique_ptr < detail :: ScratchBacking > make_book_scratch_backing ( std :: size_t page_size , CacheCapacity capacity ) #1"
    ],
@@ -20413,7 +21143,7 @@
    "file": "src/native_execution_consumer.cpp",
    "symbol": "cohort_opening_index_",
    "scope": [
-    "namespace pineforge :: engine_script_run_v19 #2",
+    "namespace pineforge :: engine_script_run_v20 #2",
     "bool NativeExecutionConsumer :: read_indexed_cohort_target ( const BacktestEngine & engine , native_order :: CohortHandle cohort , const native_order :: PositionNonflat & position , std :: vector < native_order :: OpeningObservation > & out ) const #1",
     "if ( ! cohort_opening_index_current ( ) ) #1",
     "try #1"
@@ -20426,7 +21156,7 @@
    "file": "src/native_execution_consumer.cpp",
    "symbol": "cohort_opening_index_",
    "scope": [
-    "namespace pineforge :: engine_script_run_v19 #2",
+    "namespace pineforge :: engine_script_run_v20 #2",
     "bool NativeExecutionConsumer :: read_indexed_cohort_target ( const BacktestEngine & engine , native_order :: CohortHandle cohort , const native_order :: PositionNonflat & position , std :: vector < native_order :: OpeningObservation > & out ) const #1",
     "if ( ! cohort_opening_index_current ( ) ) #1",
     "for ( const auto & lot : engine . pyramid_entries_ ) #1"
@@ -20439,7 +21169,7 @@
    "file": "src/native_execution_consumer.cpp",
    "symbol": "out",
    "scope": [
-    "namespace pineforge :: engine_script_run_v19 #2",
+    "namespace pineforge :: engine_script_run_v20 #2",
     "bool NativeExecutionConsumer :: read_indexed_cohort_target ( const BacktestEngine & engine , native_order :: CohortHandle cohort , const native_order :: PositionNonflat & position , std :: vector < native_order :: OpeningObservation > & out ) const #1",
     "for ( const auto & origin : roster -> second . origins ) #1",
     "+ + it ) #1"
@@ -20453,7 +21183,7 @@
    "symbol": "working_requests",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20465,7 +21195,7 @@
    "symbol": "open_lots",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20477,7 +21207,7 @@
    "symbol": "text",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20489,7 +21219,7 @@
    "symbol": "events_after",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20501,7 +21231,7 @@
    "symbol": "declared",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20513,7 +21243,7 @@
    "symbol": "read_openings",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20525,7 +21255,7 @@
    "symbol": "tf_literal",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1",
     "struct TimeframeSubscription #1"
    ],
@@ -20538,7 +21268,7 @@
    "symbol": "projected_bars",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1",
     "struct TimeframeSubscription #1"
    ],
@@ -20551,7 +21281,7 @@
    "symbol": "projected_first_index",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1",
     "struct TimeframeSubscription #1"
    ],
@@ -20564,7 +21294,7 @@
    "symbol": "projected_first_ms",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1",
     "struct TimeframeSubscription #1"
    ],
@@ -20577,7 +21307,7 @@
    "symbol": "projected_completion",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1",
     "struct TimeframeSubscription #1"
    ],
@@ -20590,7 +21320,7 @@
    "symbol": "rows_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1",
     "class MatchRows #1"
    ],
@@ -20603,7 +21333,7 @@
    "symbol": "args",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "assign",
@@ -20615,7 +21345,7 @@
    "symbol": "args",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1",
     "struct RunFailureRecord #1"
    ],
@@ -20628,7 +21358,7 @@
    "symbol": "text",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1",
     "struct RunFailureRecord #1"
    ],
@@ -20641,7 +21371,7 @@
    "symbol": "day_labels_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20653,7 +21383,7 @@
    "symbol": "spans",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1",
     "struct CertifiedCycle #1"
    ],
@@ -20666,7 +21396,7 @@
    "symbol": "args",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "assign",
@@ -20678,7 +21408,7 @@
    "symbol": "bound_session_key_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20690,7 +21420,7 @@
    "symbol": "descriptors",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1",
     "struct BarViewBinding #1"
    ],
@@ -20703,7 +21433,7 @@
    "symbol": "slots",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1",
     "struct BarViewBinding #1"
    ],
@@ -20716,7 +21446,7 @@
    "symbol": "pre_open_births_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20728,7 +21458,7 @@
    "symbol": "activation_births_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20740,7 +21470,7 @@
    "symbol": "applied_notifications_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20752,7 +21482,7 @@
    "symbol": "subscriptions_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20764,7 +21494,7 @@
    "symbol": "subscription_feed_tfs_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20776,7 +21506,7 @@
    "symbol": "auxiliary_appended_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20788,7 +21518,7 @@
    "symbol": "driver_log_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20800,7 +21530,7 @@
    "symbol": "account_log_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20812,7 +21542,7 @@
    "symbol": "closed_row_prefix_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20824,7 +21554,7 @@
    "symbol": "values",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1",
     "mutable std :: vector < std :: uint64_t > closed_row_prefix_ = [ ] #1"
    ],
@@ -20837,7 +21567,7 @@
    "symbol": "values",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1",
     "mutable std :: vector < std :: uint64_t > closed_row_prefix_ = [ ] #1"
    ],
@@ -20850,7 +21580,7 @@
    "symbol": "match_provenance_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20862,7 +21592,7 @@
    "symbol": "match_skipped_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20874,7 +21604,7 @@
    "symbol": "match_trail_handles_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20886,7 +21616,7 @@
    "symbol": "match_target_handles_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20898,7 +21628,7 @@
    "symbol": "intrabar_sub_bars_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20910,7 +21640,7 @@
    "symbol": "intrabar_samples_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20922,7 +21652,7 @@
    "symbol": "drain_handles_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20934,7 +21664,7 @@
    "symbol": "drain_seeds_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20946,7 +21676,7 @@
    "symbol": "cohort_opening_index_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class NativeExecutionConsumer final : public IExecutionConsumer #1"
    ],
    "cls": "decl",
@@ -20958,7 +21688,7 @@
    "symbol": "script_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class ScriptBucketCursor #1"
    ],
    "cls": "decl",
@@ -20970,7 +21700,7 @@
    "symbol": "input_tf_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class ScriptBucketCursor #1"
    ],
    "cls": "decl",
@@ -20982,7 +21712,7 @@
    "symbol": "timezone_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class ScriptBucketCursor #1"
    ],
    "cls": "decl",
@@ -20994,11 +21724,22 @@
    "symbol": "session_",
    "scope": [
     "namespace pineforge #1",
-    "inline namespace engine_script_run_v19 #1",
+    "inline namespace engine_script_run_v20 #1",
     "class ScriptBucketCursor #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_issued_range_state.hpp",
+   "symbol": "new:NativeHistoryOwner",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "inline std :: unique_ptr < NativeHistoryOwner > NativeHistoryContext :: acquire ( const native_order :: RunIdentity & identity ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new NativeHistoryOwner",
    "ordinal": 1
   },
   {
@@ -21126,6 +21867,19 @@
    ],
    "cls": "decl",
    "spelling": "value_type",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "canonical",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "namespace #1",
+    "class CoreHistoryRecord final : public detail :: ScratchByteSource #1"
+   ],
+   "cls": "assign",
+   "spelling": "canonical = . . .",
    "ordinal": 1
   },
   {
@@ -21495,7 +22249,7 @@
     "namespace pineforge :: native_order #1",
     "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
-    "JournalStore ( ) #1"
+    "explicit JournalStore ( const RunIdentity & identity ) : core_registration ( identity ) #1"
    ],
    "cls": "grow",
    "spelling": "chunks . reserve ( . . . )",
@@ -22005,12 +22759,25 @@
   },
   {
    "file": "src/native_order.cpp",
+   "symbol": "history_candidate",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "void WorkingRequestCore :: cohort_add ( CohortHandle cohort , RequestHandle origin ) #1",
+    "if ( journal_ -> managed_history ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "history_candidate . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
    "symbol": "cohorts_",
    "scope": [
     "namespace pineforge :: native_order #1",
     "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: cohort_add ( CohortHandle cohort , RequestHandle origin ) #1",
-    "else if ( const auto canonical = canonical_cohort_origin ( origin ) ) #1",
+    "if ( receipt . status = = CohortReceiptStatus :: Applied ) #1",
     "if ( found = = cohorts_ . end ( ) ) #1"
    ],
    "cls": "grow",
@@ -22024,7 +22791,7 @@
     "namespace pineforge :: native_order #1",
     "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: cohort_add ( CohortHandle cohort , RequestHandle origin ) #1",
-    "else if ( const auto canonical = canonical_cohort_origin ( origin ) ) #1",
+    "if ( receipt . status = = CohortReceiptStatus :: Applied ) #1",
     "else #1"
    ],
    "cls": "assign",
@@ -22038,7 +22805,7 @@
     "namespace pineforge :: native_order #1",
     "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: cohort_add ( CohortHandle cohort , RequestHandle origin ) #1",
-    "else if ( const auto canonical = canonical_cohort_origin ( origin ) ) #1",
+    "if ( receipt . status = = CohortReceiptStatus :: Applied ) #1",
     "else #1"
    ],
    "cls": "grow",
@@ -22071,12 +22838,25 @@
   },
   {
    "file": "src/native_order.cpp",
+   "symbol": "history_candidate",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "void WorkingRequestCore :: cohort_remove ( CohortHandle cohort , RequestHandle origin ) #1",
+    "if ( journal_ -> managed_history ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "history_candidate . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
    "symbol": "where",
    "scope": [
     "namespace pineforge :: native_order #1",
     "inline namespace native_order_v8 #1",
     "void WorkingRequestCore :: cohort_remove ( CohortHandle cohort , RequestHandle origin ) #1",
-    "else if ( const auto canonical = canonical_cohort_origin ( origin ) ) #1",
+    "if ( receipt . status = = CohortReceiptStatus :: Applied ) #1",
     "if ( found ! = cohorts_ . end ( ) ) #1"
    ],
    "cls": "assign",
@@ -22755,6 +23535,19 @@
   },
   {
    "file": "src/native_order.cpp",
+   "symbol": "history_candidate",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "CommandInstalled < SubmitResult > WorkingRequestCore :: apply_submit ( const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , RequestOrigin origin ) #1",
+    "if ( journal_ -> managed_history ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "history_candidate . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
@@ -22805,6 +23598,20 @@
   },
   {
    "file": "src/native_order.cpp",
+   "symbol": "history_candidate",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "template < bool Kept > CommandInstalled < ReplaceResult > WorkingRequestCore :: apply_replace_as ( const RequestHandle & target , const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , ReplaceOptions options ) #1",
+    "if constexpr ( Kept ) #1",
+    "if ( ! options . keep_handle && journal_ -> managed_history ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "history_candidate . emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
    "symbol": "first",
    "scope": [
     "namespace pineforge :: native_order #1",
@@ -22827,6 +23634,20 @@
    ],
    "cls": "alloc",
    "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "history_candidate",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "template < bool Kept > CommandInstalled < ReplaceResult > WorkingRequestCore :: apply_replace_as ( const RequestHandle & target , const Request & request , const CommandContext & context , uint64_t & next_order_incarnation , uint64_t & next_timeline_ordinal , ReplaceOptions options ) #1",
+    "else #1",
+    "if ( journal_ -> managed_history ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "history_candidate . emplace ( . . . )",
    "ordinal": 1
   },
   {
@@ -23637,6 +24458,20 @@
    ],
    "cls": "assign",
    "spelling": "first = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "history_candidate",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "void WorkingRequestCore :: reserve_plan ( const MutationPlan & plan ) #1",
+    "if ( plan . consume_incarnation ) #1",
+    "if ( journal_ -> managed_history && plan . live_row . handle ( ) . incarnation = = plan . incarnation_used ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "history_candidate . emplace ( . . . )",
    "ordinal": 1
   },
   {
@@ -26149,6 +26984,53 @@
   },
   {
    "file": "src/run_failure.cpp",
+   "symbol": "own_json",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: shared_ptr < const std :: string >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_failure.cpp",
+   "symbol": "new:?",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #1",
+    "std :: shared_ptr < const std :: string > own_json ( std :: string && text ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_failure.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #1",
+    "std :: shared_ptr < const std :: string > own_json ( std :: string && text ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_failure.cpp",
+   "symbol": "<temp:shared_ptr>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #1",
+    "std :: shared_ptr < const std :: string > own_json ( std :: string && text ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: shared_ptr < const std :: string >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_failure.cpp",
    "symbol": "matched",
    "scope": [
     "namespace pineforge #1",
@@ -26232,8 +27114,8 @@
     "RunFailureValue make_run_failure ( RunFailureCode code , const RunFailureArgs & args ) noexcept #1",
     "try #1"
    ],
-   "cls": "alloc",
-   "spelling": "make_shared",
+   "cls": "decl",
+   "spelling": "std :: string",
    "ordinal": 1
   },
   {
@@ -26276,6 +27158,20 @@
   },
   {
    "file": "src/run_failure.cpp",
+   "symbol": "json",
+   "scope": [
+    "namespace pineforge #1",
+    "RunFailureValue make_run_failure ( RunFailureCode code , const RunFailureArgs & args ) noexcept #1",
+    "try #1",
+    "for ( const auto & [ declared , arg ] : matched ) #1",
+    "switch ( arg -> type ) #1"
+   ],
+   "cls": "append",
+   "spelling": "json + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_failure.cpp",
    "symbol": "std::to_string",
    "scope": [
     "namespace pineforge #1",
@@ -26287,6 +27183,50 @@
    "cls": "temp",
    "spelling": "std :: to_string ( . . . )",
    "ordinal": 1
+  },
+  {
+   "file": "src/run_failure.cpp",
+   "symbol": "json",
+   "scope": [
+    "namespace pineforge #1",
+    "RunFailureValue make_run_failure ( RunFailureCode code , const RunFailureArgs & args ) noexcept #1",
+    "try #1",
+    "for ( const auto & [ declared , arg ] : matched ) #1",
+    "switch ( arg -> type ) #1",
+    "case RunFailureArg :: Type :: boolean : if ( arg -> integer ! = 0 ) #1"
+   ],
+   "cls": "append",
+   "spelling": "json + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_failure.cpp",
+   "symbol": "json",
+   "scope": [
+    "namespace pineforge #1",
+    "RunFailureValue make_run_failure ( RunFailureCode code , const RunFailureArgs & args ) noexcept #1",
+    "try #1",
+    "for ( const auto & [ declared , arg ] : matched ) #1",
+    "switch ( arg -> type ) #1",
+    "else #1"
+   ],
+   "cls": "append",
+   "spelling": "json + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_failure.cpp",
+   "symbol": "json",
+   "scope": [
+    "namespace pineforge #1",
+    "RunFailureValue make_run_failure ( RunFailureCode code , const RunFailureArgs & args ) noexcept #1",
+    "try #1",
+    "for ( const auto & [ declared , arg ] : matched ) #1",
+    "switch ( arg -> type ) #1"
+   ],
+   "cls": "append",
+   "spelling": "json + = . . .",
+   "ordinal": 2
   },
   {
    "file": "src/run_failure.cpp",
@@ -26552,7 +27492,7 @@
     "[ [ noreturn ] ] void fail ( QuotaSnapshot snapshot ) #1"
    ],
    "cls": "alloc",
-   "spelling": "make_shared",
+   "spelling": "allocate_shared",
    "ordinal": 1
   },
   {
@@ -26574,7 +27514,190 @@
     "RunQuota RunQuota :: from_fd ( int fd , QuotaRole role ) #1"
    ],
    "cls": "alloc",
-   "spelling": "make_shared",
+   "spelling": "allocate_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "state_",
+   "scope": [
+    "namespace pineforge #1",
+    "RuntimeBatchLease :: RuntimeBatchLease ( const Bar * bars , std :: size_t count ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "state_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "state_",
+   "scope": [
+    "namespace pineforge #1",
+    "RuntimeBatchLease :: RuntimeBatchLease ( const Bar * bars , std :: size_t count ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new State",
+   "ordinal": 1
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 3
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "RuntimeHistoryBudgetExhausted :: RuntimeHistoryBudgetExhausted ( std :: uint64_t configured_ , std :: uint64_t used_ , std :: uint64_t needed_ ) : std :: runtime_error ( + std :: to_string ( configured_ ) + + std :: to_string ( used_ ) + + std :: to_string ( needed_ ) ) , RunFailureInfo ( RunFailureCode :: runtime_history_budget_exhausted , #1",
+    "<block> #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "RuntimeHistoryBudgetExhausted :: RuntimeHistoryBudgetExhausted ( std :: uint64_t configured_ , std :: uint64_t used_ , std :: uint64_t needed_ ) : std :: runtime_error ( + std :: to_string ( configured_ ) + + std :: to_string ( used_ ) + + std :: to_string ( needed_ ) ) , RunFailureInfo ( RunFailureCode :: runtime_history_budget_exhausted , #1",
+    ", #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "RuntimeHistoryBudgetExhausted :: RuntimeHistoryBudgetExhausted ( std :: uint64_t configured_ , std :: uint64_t used_ , std :: uint64_t needed_ ) : std :: runtime_error ( + std :: to_string ( configured_ ) + + std :: to_string ( used_ ) + + std :: to_string ( needed_ ) ) , RunFailureInfo ( RunFailureCode :: runtime_history_budget_exhausted , #1",
+    ", #2"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "RuntimeStorageObservationIncomplete :: RuntimeStorageObservationIncomplete ( OwnedStorageUsage usage ) : std :: runtime_error ( ) , RunFailureInfo ( RunFailureCode :: runtime_storage_observation_incomplete , #1",
+    "<block> #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "RuntimeStorageObservationIncomplete :: RuntimeStorageObservationIncomplete ( OwnedStorageUsage usage ) : std :: runtime_error ( ) , RunFailureInfo ( RunFailureCode :: runtime_storage_observation_incomplete , #1",
+    ", #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "RuntimeStorageObservationIncomplete :: RuntimeStorageObservationIncomplete ( OwnedStorageUsage usage ) : std :: runtime_error ( ) , RunFailureInfo ( RunFailureCode :: runtime_storage_observation_incomplete , #1",
+    ", #2"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "RuntimeStorageObservationIncomplete :: RuntimeStorageObservationIncomplete ( OwnedStorageUsage usage ) : std :: runtime_error ( ) , RunFailureInfo ( RunFailureCode :: runtime_storage_observation_incomplete , #1",
+    ", #3"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "new:Bar",
+   "scope": [
+    "namespace pineforge #1",
+    "struct RuntimeContextService :: Impl #1",
+    "void append ( const Bar & bar ) #1",
+    "if ( spool < 0 && accepted < threshold ) #1",
+    "if ( ! resident ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "new Bar",
+   "ordinal": 1
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "impl_",
+   "scope": [
+    "namespace pineforge #1",
+    "RuntimeContextService :: Impl & RuntimeContextService :: impl ( ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "p",
+   "scope": [
+    "namespace pineforge #1",
+    "void RuntimeContextService :: append_live ( const Bar & bar ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "p . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/runtime_context.cpp",
+   "symbol": "candidate",
+   "scope": [
+    "namespace pineforge #1",
+    "RuntimeContextHandle RuntimeContextService :: get_or_create ( const RuntimeContextKey & key , const Factory & factory ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
    "ordinal": 1
   },
   {
@@ -26720,6 +27843,36 @@
    "ordinal": 1
   },
   {
+   "file": "src/script_store.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/script_store.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/script_store.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 3
+  },
+  {
    "file": "src/script_string.cpp",
    "symbol": "replacement",
    "scope": [
@@ -26764,6 +27917,117 @@
    ],
    "cls": "grow",
    "spelling": "result . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/selected_capacity_core.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: detail :: selected_capacity #1",
+    "void reserve ( std :: uint64_t & used , const Bound & bound , std :: uint64_t requested , RunFailureCode code , const char * english ) #1",
+    "if ( bound . present && ( used > bound . value || requested > bound . value - used ) ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "RunFailureArgs",
+   "ordinal": 1
+  },
+  {
+   "file": "src/selected_capacity_core.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge :: detail :: selected_capacity #1",
+    "void reserve ( std :: uint64_t & used , const Bound & bound , std :: uint64_t requested , RunFailureCode code , const char * english ) #1",
+    "if ( bound . present && ( used > bound . value || requested > bound . value - used ) ) #1",
+    "RunFailureArgs args #1",
+    "<block> #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/selected_capacity_core.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge :: detail :: selected_capacity #1",
+    "void reserve ( std :: uint64_t & used , const Bound & bound , std :: uint64_t requested , RunFailureCode code , const char * english ) #1",
+    "if ( bound . present && ( used > bound . value || requested > bound . value - used ) ) #1",
+    "RunFailureArgs args #1",
+    ", #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/selected_capacity_core.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge :: detail :: selected_capacity #1",
+    "void reserve ( std :: uint64_t & used , const Bound & bound , std :: uint64_t requested , RunFailureCode code , const char * english ) #1",
+    "if ( bound . present && ( used > bound . value || requested > bound . value - used ) ) #1",
+    "RunFailureArgs args #1",
+    ", #2"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/selected_capacity_csv_reader.cpp",
+   "symbol": "text",
+   "scope": [
+    "namespace pineforge :: detail :: selected_capacity #1",
+    "namespace #1",
+    "bool number_text ( std :: string & text , CsvRead & result ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "text . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/selected_capacity_csv_reader.cpp",
+   "symbol": "field_",
+   "scope": [
+    "namespace pineforge :: detail :: selected_capacity #1",
+    "bool CsvReader :: read_field ( int & value , CsvRead & result ) #1",
+    ") #1"
+   ],
+   "cls": "grow",
+   "spelling": "field_ . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/selected_capacity_csv_reader.hpp",
+   "symbol": "field_",
+   "scope": [
+    "namespace pineforge :: detail :: selected_capacity #1",
+    "class CsvReader #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/selected_capacity_driver.hpp",
+   "symbol": "option",
+   "scope": [
+    "namespace pineforge :: detail :: selected_capacity #1",
+    "struct DriverResult #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/selected_capacity_driver.hpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: detail :: selected_capacity #1",
+    "struct DriverResult #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
    "ordinal": 1
   },
   {
@@ -28878,6 +30142,18 @@
   },
   {
    "file": "src/source/multi_day_periods.hpp",
+   "symbol": "allocate_shared",
+   "scope": [
+    "namespace pineforge :: source #1",
+    "namespace multi_day_detail #1",
+    "template < class T , class . . . Args > std :: shared_ptr < T > make_owned ( Args && . . . args ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "allocate_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/multi_day_periods.hpp",
    "symbol": "tz",
    "scope": [
     "namespace pineforge :: source #1",
@@ -28907,7 +30183,7 @@
     "namespace pineforge :: source #1",
     "namespace multi_day_detail #1",
     "class Source final : public TimeframeAggregator :: PeriodSource #1",
-    "public : Source ( std :: shared_ptr < const Params > params , std :: int64_t first_stamp , std :: int64_t last_stamp ) : params_ ( std :: move ( params ) ) , first_stamp_ ( first_stamp ) , last_stamp_ ( last_stamp ) #1"
+    "public : Source ( const OwnedAllocator < Source > & allocation , std :: shared_ptr < const Params > params , std :: int64_t first_stamp , std :: int64_t last_stamp ) : allocation_ ( allocation ) , params_ ( std :: move ( params ) ) , first_stamp_ ( first_stamp ) , last_stamp_ ( last_stamp ) #1"
    ],
    "cls": "grow",
    "spelling": "recent_ . reserve ( . . . )",
@@ -28971,7 +30247,7 @@
     "namespace pineforge :: source #1",
     "namespace multi_day_detail #1",
     "class RescannedSource final : public TimeframeAggregator :: PeriodSource #1",
-    "public : RescannedSource ( std :: shared_ptr < const Params > params , std :: int64_t first_stamp , std :: int64_t last_stamp ) : params_ ( std :: move ( params ) ) , first_stamp_ ( first_stamp ) , last_stamp_ ( last_stamp ) #1"
+    "public : RescannedSource ( const OwnedAllocator < RescannedSource > & allocation , std :: shared_ptr < const Params > params , std :: int64_t first_stamp , std :: int64_t last_stamp ) : allocation_ ( allocation ) , params_ ( std :: move ( params ) ) , first_stamp_ ( first_stamp ) , last_stamp_ ( last_stamp ) #1"
    ],
    "cls": "grow",
    "spelling": "recent_ . reserve ( . . . )",
@@ -29043,29 +30319,6 @@
   },
   {
    "file": "src/source/multi_day_periods.hpp",
-   "symbol": "make_shared",
-   "scope": [
-    "namespace pineforge :: source #1",
-    "namespace multi_day_detail #1",
-    "inline std :: shared_ptr < TimeframeAggregator :: PeriodSource > make_rescanned_source ( std :: shared_ptr < Params > params ) #1"
-   ],
-   "cls": "alloc",
-   "spelling": "make_shared",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/multi_day_periods.hpp",
-   "symbol": "params",
-   "scope": [
-    "namespace pineforge :: source #1",
-    "inline std :: shared_ptr < TimeframeAggregator :: PeriodSource > make_multi_day_period_source ( const MultiDayFeeds & feeds ) #1"
-   ],
-   "cls": "alloc",
-   "spelling": "make_shared",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/multi_day_periods.hpp",
    "symbol": "tz",
    "scope": [
     "namespace pineforge :: source #1",
@@ -29084,17 +30337,6 @@
    ],
    "cls": "assign",
    "spelling": "session = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/multi_day_periods.hpp",
-   "symbol": "make_shared",
-   "scope": [
-    "namespace pineforge :: source #1",
-    "inline std :: shared_ptr < TimeframeAggregator :: PeriodSource > make_multi_day_period_source ( const MultiDayFeeds & feeds ) #1"
-   ],
-   "cls": "alloc",
-   "spelling": "make_shared",
    "ordinal": 1
   },
   {
@@ -40618,6 +41860,19 @@
   },
   {
    "file": "src/source/pine_security_eval.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #1",
+    "int request_timeframe_seconds ( const std :: string & tf , bool lower_tf_array_requested ) #1",
+    "if ( requested_seconds < = 0 && ! is_calendar_month ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_security_eval.cpp",
    "symbol": "pine_security_states_",
    "scope": [
     "namespace pineforge #1",
@@ -40625,19 +41880,6 @@
    ],
    "cls": "subscript",
    "spelling": "pine_security_states_ [ . . . ]",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_security_eval.cpp",
-   "symbol": "<temp:string>",
-   "scope": [
-    "namespace pineforge #1",
-    "void source :: PineStrategyHost :: validate_security_timeframes ( const std :: string & input_tf ) #1",
-    "for ( auto & state : security_eval_states_ ) #1",
-    "if ( requested_seconds < = 0 && ! is_calendar_month ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "std :: string",
    "ordinal": 1
   },
   {
@@ -42245,6 +43487,40 @@
    ],
    "cls": "assign",
    "spelling": "script_tf_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_strategy_host.cpp",
+   "symbol": "timeframe",
+   "scope": [
+    "namespace pineforge #1",
+    "source :: PineRuntimeSecurityCursor source :: PineStrategyHost :: make_runtime_security_cursor ( const std :: string & selected , bool lookahead , bool gaps , bool lower_array , bool heikinashi ) const #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_strategy_host.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "source :: PineRuntimeSecurityCursor source :: PineStrategyHost :: make_runtime_security_cursor ( const std :: string & selected , bool lookahead , bool gaps , bool lower_array , bool heikinashi ) const #1",
+    "if ( ! native_calendar :: parse_timeframe ( timeframe ) ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_strategy_host.cpp",
+   "symbol": "timeframe",
+   "scope": [
+    "namespace pineforge #1",
+    "source :: PineRuntimeSecurityCursor source :: PineStrategyHost :: make_runtime_security_cursor ( const std :: string & selected , bool lookahead , bool gaps , bool lower_array , bool heikinashi ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "timeframe = . . .",
    "ordinal": 1
   },
   {
@@ -45098,18 +46374,6 @@
   },
   {
    "file": "src/timezone.cpp",
-   "symbol": "g_active_tz",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace tz_util #1",
-    "namespace #1"
-   ],
-   "cls": "decl",
-   "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/timezone.cpp",
    "symbol": "normalize_timezone_for_posix",
    "scope": [
     "namespace pineforge #1",
@@ -45280,18 +46544,6 @@
    ],
    "cls": "decl",
    "spelling": "std :: string",
-   "ordinal": 1
-  },
-  {
-   "file": "src/timezone.cpp",
-   "symbol": "g_active_tz",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace tz_util #1",
-    "ScopedTimezone :: ScopedTimezone ( const std :: string & tz ) : lock_ ( timezone_mutex ( ) ) #1"
-   ],
-   "cls": "assign",
-   "spelling": "g_active_tz = . . .",
    "ordinal": 1
   },
   {

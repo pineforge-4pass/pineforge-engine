@@ -26,6 +26,44 @@
 
 namespace pineforge::source {
 
+class PineStrategyHost;
+// Language publication policy for one runtime context. The generic engine
+// owns its history/handle; the source adapter owns only this request's clock.
+// Late/live/nested language acceptance remains subject to the #310 A-D tapes.
+struct PineRuntimeSecurityCursor {
+    TimeframeAggregator aggregator;
+    std::string timeframe, chart_timeframe, timezone, session;
+    bool lookahead_on = false, gaps_on = false, lower_array = false;
+    bool heikinashi = false, ha_seeded = false;
+    bool no_loaded_bars = false;
+    std::optional<RuntimeSubdivision> subdivision;
+    double ha_open = 0, ha_close = 0;
+    bool slot_new = true;
+    int sub_bar_index = 0;
+    std::int64_t requested_index = -1;
+    std::int64_t slot_open = std::numeric_limits<std::int64_t>::min();
+    std::int64_t chart_open = std::numeric_limits<std::int64_t>::min();
+    std::int64_t prior_input = std::numeric_limits<std::int64_t>::min();
+    using Delivery = std::function<void(const Bar&, bool)>;
+    void feed(const RuntimeContextEvent&, const Delivery&, const std::function<void()>& begin_chart);
+};
+
+// Language context metadata only. No result is published through this scope;
+// it lets an empty nested timeframe inherit the enclosing requested clock.
+class PineRuntimeSecurityScope {
+public:
+    PineRuntimeSecurityScope(const PineStrategyHost&, PineRuntimeSecurityCursor&) noexcept;
+    ~PineRuntimeSecurityScope();
+    PineRuntimeSecurityScope(const PineRuntimeSecurityScope&) = delete;
+    PineRuntimeSecurityScope& operator=(const PineRuntimeSecurityScope&) = delete;
+    static const PineRuntimeSecurityCursor* current(const PineStrategyHost&) noexcept;
+private:
+    static thread_local const PineStrategyHost* owner_;
+    static thread_local PineRuntimeSecurityCursor* cursor_;
+    const PineStrategyHost* previous_owner_;
+    PineRuntimeSecurityCursor* previous_cursor_;
+};
+
 // Hash domain of the per-site request.security semantics below. Folded into
 // the source extension only when a site is registered, so a run without
 // request.security hashes exactly as before; bumped whenever the folded
@@ -406,6 +444,11 @@ public:
     bool is_last_tick() const noexcept;
     bool history_advances_new_bar() const noexcept;
     bool security_series_slot_is_new(int) const noexcept;
+    PineRuntimeSecurityCursor make_runtime_security_cursor(
+        const std::string& timeframe, bool lookahead, bool gaps, bool lower_array,
+        bool heikinashi = false) const;
+    std::uint64_t runtime_security_frontier() const;
+    std::string runtime_security_timeframe(const std::string& selected) const;
     int last_bar_dual_entry_path() const;
     double live_position_size() const override;
     int pending_order_count() const;

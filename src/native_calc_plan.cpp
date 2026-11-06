@@ -219,7 +219,7 @@ std::uint64_t combine(std::uint64_t legacy, std::uint64_t group) noexcept {
 }  // namespace pineforge::native_calc
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 
 // The consumer's schedule group. It is opt-in and per run: the group belongs to
 // the run generation it was enabled in (the high-water the next begin must
@@ -285,5 +285,5 @@ std::uint64_t NativeExecutionConsumer::calc_continuation_hash() const noexcept {
     return native_calc::combine(legacy, native_calc::digest(calc_group_->state));
 }
 
-}  // inline namespace engine_script_run_v19
+}  // inline namespace engine_script_run_v20
 }  // namespace pineforge

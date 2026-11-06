@@ -41,8 +41,8 @@ V16_FROZEN_TREE = '8c75db9858e63e019a31dd90230eff7f16ce24eb'
 V18_FROZEN_COMMIT = 'fc7aad6219e4ed752e290abb553b1c597acec2c3'
 V18_FROZEN_TREE = '41c5a16ce254f0a25064ddfc07e7a64f02a9bae1'
 PROVIDERS = {
-    # The v19 value epoch freezes the last epoch-18 main commit. It is the
-    # active rejection-pair provider of the live v19 archive (both
+    # The v19 value epoch froze the last epoch-18 main commit. It is the
+    # active rejection-pair provider of the live v20 archive (both
     # directions); the v16 provider stays the runtime-budget baseline and a
     # historical input.
     'v18-frozen': {'commit': V18_FROZEN_COMMIT, 'tree': V18_FROZEN_TREE,

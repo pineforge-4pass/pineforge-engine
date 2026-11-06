@@ -9,6 +9,7 @@
 #include <pineforge/run_failure.hpp>
 #include <pineforge/native_bar_views.hpp>
 #include <pineforge/metrics_stream.hpp>
+#include <pineforge/map_capacity.hpp>
 #include "native_calendar_memo.hpp"
 #include "native_selected_epoch.hpp"
 #include "runtime_ambient.hpp"
@@ -26,10 +27,11 @@
 #include <vector>
 #include "report_scratch.hpp"
 namespace pineforge::report { struct LiveReportPatch; }
+namespace pineforge::detail { struct NativeHistoryRegistryStats; }
 #define PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1 1
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 class LiveReportAccumulator;
 // Lookup state a host derives from its own bookkeeping and cannot keep in its
 // own object -- a generated script's ABI fixes that object's layout -- parked
@@ -95,6 +97,9 @@ class NativeExecutionConsumer final : public IExecutionConsumer {
     // Declared first so embedded cache registrations detach before this sink
     // dies. Its destructor also detaches the engine's longer-lived ledger.
     detail::RunCacheDiagnostics run_cache_diagnostics_;
+    // Creation-time run policy, captured before the derived host constructs
+    // script state. A run reset never adopts another host's thread default.
+    std::uint64_t map_pair_limit_ = detail::map_pair_limit();
 public:
     static int report_cache_stats(const BacktestEngine& engine,
                                   std::uint64_t* resident_bytes,
@@ -212,6 +217,19 @@ public:
     }
     void set_cache_policy_config(const CacheDefaults& policy) noexcept {
         cache_policy_config_ = policy;
+    }
+    const ScratchIoPolicy& scratch_io_policy_config() const noexcept {
+        return scratch_io_policy_config_;
+    }
+    const ScratchIoPolicy& scratch_io_policy_for_run() const noexcept {
+        return cache_policy_preparing_ ? scratch_io_policy_attempt_ : scratch_io_policy_run_;
+    }
+    void set_scratch_io_policy_config(const ScratchIoPolicy& policy) noexcept {
+        scratch_io_policy_config_ = policy;
+    }
+    bool scratch_io_policy_setter_busy() const noexcept {
+        return preparing_begin_ || cache_policy_preparing_ || in_callback_
+            || processing_input_ || in_attempt_call_ || running();
     }
     // Whether the configured spec's script bars are buckets gathered from its
     // input under the resolved pairing (native_aggregates_input_bars).
@@ -626,6 +644,12 @@ public:
     // index V19-B keeps in the core -- against an oracle folded over the whole
     // journal. No host reaches it.
     const native_order::WorkingRequestCore& request_core() const noexcept { return requests_; }
+    // Private-header bridge for the host integration stage. No Pine-specific
+    // adapter dependency or installed/public provider setter is introduced.
+    const detail::NativeHistoryOwner* managed_history_owner() const noexcept {
+        return requests_.managed_history_owner();
+    }
+    detail::NativeHistoryRegistryStats managed_history_registry_stats() const;
 
     // The host's parked lookup cache (NativeHostCache), or null. A host adopts
     // one per run and it lives until the next run begin or the next adoption.
@@ -1823,6 +1847,9 @@ private:
     CacheDefaults cache_policy_config_{};
     CacheDefaults cache_policy_attempt_{};
     CacheDefaults cache_policy_run_{};
+    ScratchIoPolicy scratch_io_policy_config_{};
+    ScratchIoPolicy scratch_io_policy_attempt_{};
+    ScratchIoPolicy scratch_io_policy_run_{};
     bool cache_policy_preparing_ = false;
     void leave_running() noexcept { running_spec_ = nullptr; }
     // The caches beside the lookups they replace, compared bit for bit by
@@ -1942,7 +1969,7 @@ private:
     // Borrowed begin arguments, valid only inside one public begin call.
     const Bar* begin_bars_ = nullptr;
     int begin_n_ = 0;
-    bool begin_is_stream_ = false;
+    bool begin_is_stream_ = false, run_is_stream_ = false;  // run_is_stream_ lasts the whole run
     // The input array pump_batch is consuming, borrowed for that call alone:
     // the bars a script bar's session-day facts read before and after it
     // (present_session_day). Input, not state, like the subscription view.
@@ -2535,6 +2562,7 @@ private:
                 c_.close_open_epoch_at_exit(engine_, std::uncaught_exceptions() > uncaught_,
                                             allow_live_);
             if (!allow_live_ || !c_.running()) {
+                engine_.runtime_contexts().end_run();
                 if (c_.batch_input_release_)
                     c_.batch_input_release_(c_.batch_input_owner_);
                 c_.detach_bar_views();
@@ -2598,12 +2626,12 @@ private:
     // the closed generation never reports success.
     void close_open_epoch_at_exit(BacktestEngine& engine, bool unwinding,
                                   bool allow_live) noexcept;
-    // The tracked catch arms of the nine entries. A tracked handle restores
-    // processing_input_ (false at every try's entry) and keeps a failure that is
-    // already latched -- its code and text stay -- where an untracked handle runs
-    // the two statements it always ran. fail_unclassified is the catch (...) arm
-    // for a tracked handle: engine_unclassified_error. An untracked handle's
-    // catch (...) rethrows.
+    // The std::exception catch arms of the nine entries restore processing_input_
+    // (false at every try's entry) for tracked and untracked handles. A tracked
+    // handle keeps an already latched failure's code and text; an untracked
+    // handle runs the existing fail/render statements. fail_unclassified is the
+    // catch (...) arm for a tracked handle: engine_unclassified_error. An
+    // untracked handle's catch (...) rethrows.
     void fail_from_exception(BacktestEngine& engine, NativeFailureOperation operation,
                              const std::exception& error);
     void fail_unclassified(BacktestEngine& engine, NativeFailureOperation operation);
@@ -2968,7 +2996,7 @@ private:
     Flags last_{};
 };
 
-}  // inline namespace engine_script_run_v19
+}  // inline namespace engine_script_run_v20
 }  // namespace pineforge
 
 // Runtime-private selected metric entry points. The two sources

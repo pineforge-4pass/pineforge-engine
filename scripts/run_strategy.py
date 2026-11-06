@@ -797,6 +797,7 @@ def _session_calendar_provenance(metadata) -> dict | None:
 class CachePolicyEntryC(ctypes.Structure):
     """Native C alignment; mirrors pf_cache_policy_entry_v1."""
     _fields_ = [("kind", ctypes.c_uint32),
+                ("reserved", ctypes.c_uint32),
                 ("capacity_bytes", ctypes.c_uint64)]
 
 
@@ -805,7 +806,40 @@ class CachePolicyC(ctypes.Structure):
     _fields_ = [("struct_size", ctypes.c_uint32),
                 ("version", ctypes.c_uint32),
                 ("entry_count", ctypes.c_uint64),
-                ("entries", ctypes.POINTER(CachePolicyEntryC))]
+                ("entries", ctypes.POINTER(CachePolicyEntryC)),
+                ("reserved", ctypes.c_uint32 * 2)]
+
+
+def apply_ledger_cache_policy(lib, state, capacity_bytes: int | None = None) -> None:
+    """Replace policy with omitted/AUTO ledger or explicit finite byte entry.
+
+    Other kinds use runtime defaults; no default-size literal is projected.
+    Every request requires the runtime setter, including omission/AUTO.
+    """
+    if capacity_bytes is not None:
+        if type(capacity_bytes) is not int:
+            raise TypeError("ledger cache capacity must be integer bytes or None")
+        if not 0 <= capacity_bytes <= (1 << 64) - 1:
+            raise ValueError("ledger cache capacity is outside uint64")
+    setter = getattr(lib, "strategy_set_cache_policy_v1", None)
+    if setter is None:
+        raise RuntimeError("ledger cache policy requires strategy_set_cache_policy_v1")
+    setter.argtypes = [ctypes.c_void_p, ctypes.POINTER(CachePolicyC)]
+    setter.restype = ctypes.c_int
+    entries = ((CachePolicyEntryC * 1)(CachePolicyEntryC(
+        kind=1, reserved=0, capacity_bytes=capacity_bytes))
+        if capacity_bytes is not None else None)
+    policy = CachePolicyC(struct_size=ctypes.sizeof(CachePolicyC), version=1,
+                          entry_count=1 if entries is not None else 0, entries=entries)
+    if setter(state, ctypes.byref(policy)) != 0:
+        details = []
+        for name in ("strategy_get_last_error_code", "strategy_get_last_error_args"):
+            getter = getattr(lib, name, None)
+            if getter is not None:
+                getter.argtypes = [ctypes.c_void_p]
+                getter.restype = ctypes.c_char_p
+                details.append((getter(state) or b"").decode("utf-8", errors="replace"))
+        raise RuntimeError("cache policy rejected: " + " ".join(details))
 
 
 class BarC(ctypes.Structure):

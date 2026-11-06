@@ -4,18 +4,22 @@
 #include <cstdint>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
 
 namespace pineforge {
 struct CacheCapacity;
+class LedgerCachePolicy;
 
 struct Trade;
 namespace detail { struct TradeLedgerStorageProbe; }
+namespace report { class TradeSourceV1; }
 
-// The engine-side additions stay in this existing epoch (DESIGN 6:1344-1347).
-inline namespace engine_script_run_v19 {
+// The 1.11 public layout change updates the shared engine epoch once.
+// This SIDE source deliberately does not perform a separate local bump.
+inline namespace engine_script_run_v20 {
 
 // Exact global row space. base() is the publication/fold boundary; an
 // unsealed exit-time group can have arbitrary length and cannot be retired.
@@ -23,8 +27,10 @@ inline namespace engine_script_run_v19 {
 // the string payload stay in memory. All four string payloads and all older
 // mutable/sealed descriptors use the existing run-owned positional scratch
 // files. A separate, budgeted read cache retains numeric records and up to
-// kCacheStringBytes of decoded string bytes per row. Wider rows retain their
-// numeric records in the cache and use scratch only for string reads.
+// kCacheStringBytes of decoded string bytes per row. The default uses a fixed
+// byte allowance and associative eviction, independent of retained history.
+// Wider rows retain their numeric records in the cache and use scratch only
+// for string reads.
 // Owning Trade values still belong to readers.
 //
 // Reads own their values. No reference or contiguous pointer into an
@@ -40,10 +46,11 @@ public:
     // storage type is complete.
     static constexpr size_type kRecordBytes = 168;
     static constexpr size_type kResidentRows = 64;
-    // One knob for this cache kind: ledger_rows. Each entry contains a
+    // ledger_cache_max_bytes bounds optional hot storage. Each entry contains a
     // 168-byte numeric/extent record, a global key and generation/flags,
     // and exactly 128 inline string bytes (all four strings combined).
-    // The string-validity flag uses the generation word. On 64-bit targets:
+    // String validity, short-ID length and replacement rank share the generation
+    // word; no separate replacement directory exists. On 64-bit targets:
     // 168 + 16 + 128 = 312 bytes, with no additional alignment padding.
     // Byte allowances include both entries and the private page directory.
     // No per-entry heap allocation or growing offset/string directory.
@@ -51,17 +58,28 @@ public:
     static constexpr size_type kLedgerEntryBytes =
         kRecordBytes + 2 * sizeof(size_type) + kCacheStringBytes;
     static constexpr size_type kCachePageSlots = 256;
+    static constexpr size_type kCacheWays = 4;
+    // Provisional source candidate; measurement/disposition must freeze it.
+    static constexpr size_type kDefaultLedgerCacheMaxBytes = 67108864;
+    // Existing explicit row-setting geometry/range, not the default byte cap.
     static constexpr size_type kDefaultCacheRows = 65536;
     static constexpr size_type kMaxCacheRows = 1048576;
     static constexpr size_type cache_capacity_bytes(size_type rows) noexcept {
         return rows * kLedgerEntryBytes
             + (rows / kCachePageSlots + (rows % kCachePageSlots != 0)) * sizeof(void*);
     }
+    // Retry arithmetic is shared by directory/page failures. A failure at zero
+    // first becomes eligible at one; an unrepresentable doubling never retries.
+    static constexpr bool cache_retry_population_reached(
+            size_type failed, size_type population) noexcept {
+        return failed == 0 ? population != 0
+            : failed <= std::numeric_limits<size_type>::max() / 2
+                && population >= failed * 2;
+    }
     // Sole byte-to-row conversion, shared by the host and standalone setters.
     static size_type cache_rows_for_capacity(CacheCapacity capacity) noexcept;
-    // A report-sink run has the same declared constant cap as the default:
-    // 20,447,232 entry bytes + 2,048 table bytes + sizeof(TradeLedger)+sizeof(State).
-    // Pages allocate lazily up to this cap, clipping the final page to fit.
+    // Compatibility constant for an explicitly selected legacy sink row cap.
+    // Omitted sink/array policies both use kDefaultLedgerCacheMaxBytes instead.
     static constexpr size_type kSinkCacheRows = kDefaultCacheRows;
     using Visitor = std::function<bool(size_type, const Trade&)>;
 
@@ -92,6 +110,8 @@ public:
     TradeLedger();
     explicit TradeLedger(size_type cache_rows);
     explicit TradeLedger(CacheCapacity capacity);
+    // Preserve omission intent instead of implicitly converting AUTO to bytes.
+    explicit TradeLedger(const LedgerCachePolicy& policy);
     ~TradeLedger();
     TradeLedger(const TradeLedger&);
     TradeLedger& operator=(const TradeLedger&);
@@ -101,15 +121,28 @@ public:
     // Bind before the first spill. No mapping or in-memory offset directory.
     void set_scratch_directory(const std::string&);
     const std::string& scratch_directory() const;
-    // Configure before the first append/spill; clear() preserves the budget.
-    // The constructor accepts the same optional row budget. Zero bypasses
+    // Configure before the first append/spill; clear() preserves policy intent.
+    // Compatibility spelling: select the provisional fixed default byte cap.
+    // No history-sized AUTO allocation or reindex remains.
+    void set_cache_auto();
+    // Inclusive bytes for entry payload, tags, packed replacement ranks and
+    // the directory. All size_type values [0,SIZE_MAX] are valid. Zero or less
+    // than one complete entry+pointer bypasses; otherwise round down to the
+    // largest fitting row geometry. There is no legacy row ceiling here.
+    // Geometry is fixed until clear/reconfiguration; pages allocate lazily.
+    // Failed optional allocations retain old hits and retry only after the
+    // retained population doubles since the failed attempt. No value/history
+    // limit is introduced. Configuration is frozen after append/spill.
+    void set_ledger_cache_max_bytes(size_type bytes);
+    size_type ledger_cache_max_bytes() const;
+    // The row constructor/setter always select a finite budget. Zero bypasses
     // the decoded cache. Optional table/page allocation failure selects
     // backing reads for this ledger without retrying the failed allocation.
     // Valid rows: [0,1048576]; invalid/late settings throw a coded
     // std::invalid_argument (setting_rejected, reason value_above_maximum
-    // or frozen). Default: 65,536 rows; maximum: 1,048,576 rows.
+    // or frozen). Legacy initial geometry: 65,536; maximum: 1,048,576.
     // On 64-bit targets, entries plus the page directory cost 20,449,280 B
-    // at default and 327,188,480 B at maximum, plus the fixed base.
+    // at 65,536 rows and 327,188,480 B at maximum, plus the fixed base.
     void set_cache_rows(size_type rows);
     // Standalone inclusive byte allowance for entries plus owning pointers.
     // Selects the largest row cap that fits, without the legacy row ceiling;
@@ -125,8 +158,9 @@ public:
     static size_type resident_cache_bytes(size_type rows);
     // Actual allocation: fixed base + ceil(cache_rows()/256) owning pointers
     // after first read + min(256,cache_rows()-256*p)*kLedgerEntryBytes per page p.
-    // Slot mapping stays fixed; page growth preserves entries. Writes only
-    // fill an existing cache; retirement frees pages outside retained rows.
+    // Four-way sets (a final partial set is permitted) use bounded rank
+    // replacement. Writes only fill an existing cache. No rebuild/coexisting
+    // replacement allocation occurs. Retirement may release every hot page.
     // The fixed base includes the zero-row read workspace. The directory
     // and allocated entry pages each enter the common cache accounting once.
     size_type cache_resident_bytes() const;
@@ -134,9 +168,20 @@ public:
     struct CacheStats {
         std::uint64_t allocation_bypass_count = 0;
         CacheBypassReason bypass_reason = CacheBypassReason::none;
+        std::uint64_t allocation_attempt_count = 0;
+        std::uint64_t hot_hit_count = 0, cold_miss_count = 0;
+        std::uint64_t lookup_probe_count = 0;
+        std::uint64_t descriptor_read_count = 0, descriptor_read_bytes = 0;
+        std::uint64_t string_read_count = 0, string_read_bytes = 0;
+        size_type failed_population = 0;
+        bool allocation_retry_blocked = false;
     };
-    // One allocation failure is reported once and remains sticky through
-    // reads, appends, replacements and policy changes. clear() starts afresh.
+    // Every real failed optional allocation increments the failure count and
+    // diagnostics sink; every attempt is separately observable. Counters
+    // saturate at UINT64_MAX. Representability does not fabricate a failure.
+    // Explicit finite legacy policies retain sticky allocation bypass.
+    // The byte-bound/default path retries on population doubling. Rewind does
+    // not reset that threshold. Copy starts fresh; clear starts fresh.
     bool cache_allocation_failed() const noexcept;
     CacheStats read_cache_stats() const noexcept;
     // Occupied decoded entries only; separate from resident_size()'s legacy
@@ -157,8 +202,10 @@ public:
     // base() with a coded std::logic_error (engine_invariant).
     // Writers still reject sealed rows below the publication boundary.
     // Hits allocate only the owning strings already required by read().
-    // Direct-mapped eviction above cache_rows(), or oversized strings, retains
-    // the existing scratch path; a history loop can still cost O(T).
+    // A miss reads at most one direct-addressed ordinal descriptor and the
+    // requested text bytes, with at most 128 B of packed small-text prefetch.
+    // Associative eviction never scans/rebuilds history.
+    // A caller's history loop still costs O(T), plus its requested text bytes.
     Trade read(size_type global) const;
     Trade operator[](size_type global) const;
     Trade at(size_type global) const;
@@ -247,10 +294,23 @@ private:
     // installed object's layout or the logical trade/hash representation.
     void set_history_retirement(bool);
     void check_history_read(size_type) const;
+    // Legacy file/arena extents; a retained capability's fstat extent enters
+    // the first slot once, with zero in the second. Never RSS/charge/blocks.
     std::array<std::uint64_t, 2> scratch_storage_bytes() const;
+    // Private composition proposal, not a shipping resource/config default.
+    // The supplier transfers one exclusively owned O_RDWR/CLOEXEC capability
+    // of exactly extent bytes; copies/clear require a fresh distinct resource.
+    // Extent and decoded-cache capacity are independent. No fallback or resize.
+    using HistoryFactory = std::function<int(std::uint64_t)>;
+    void bind_retained_history(HistoryFactory, std::uint64_t extent);
+    // {declared extent, index bytes, payload bytes, pending/committed high water}.
+    // Logical/reservation facts only; none is a resident-memory observation.
+    std::array<std::uint64_t, 4> retained_history_bytes() const;
+    std::unique_ptr<report::TradeSourceV1> retained_trade_source() const;
+    class Source;
     struct State;
     std::unique_ptr<State> state_;
 };
 
-} // inline namespace engine_script_run_v19
+} // inline namespace engine_script_run_v20
 } // namespace pineforge

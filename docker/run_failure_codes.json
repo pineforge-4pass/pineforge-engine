@@ -667,6 +667,29 @@
    "retryable": false,
    "since": "1.4.0"
   },
+  "pine_map_capacity_exceeded": {
+   "args": {
+    "bar_index": {
+     "kind": "integer"
+    },
+    "code": {
+     "kind": "identifier"
+    },
+    "currSize": {
+     "kind": "integer"
+    },
+    "maxSize": {
+     "kind": "integer"
+    }
+   },
+   "class": "strategy_limit",
+   "description": "A distinct map insertion exceeds that map's configured pair limit. Zero or omitted selects no limit. Counts and bar index are engine-owned context; code is the fixed TradingView identifier RE10070.",
+   "english": [
+    "Error on bar {bar_index}: A map cannot have more than {maxSize} key-value pairs. The current size is {currSize}."
+   ],
+   "retryable": false,
+   "since": "1.11.0"
+  },
   "pine_matrix_error": {
    "args": {
     "function": {
@@ -778,7 +801,8 @@
       "map_pairs",
       "max_bars_back",
       "matrix_elements",
-      "udt_objects"
+      "udt_objects",
+      "drawing_ids"
      ]
     },
     "max": {
@@ -793,7 +817,12 @@
     "map cannot contain more than 50000 key-value pairs",
     "matrix.elements_count: total exceeds int range",
     "matrix.reshape: dimension overflow",
-    "{bar_prefix}The script attempts to reference historical data that is too far from the current bar ({bars_back} bars back). The historical buffer's limit is {limit} bars."
+    "{bar_prefix}The script attempts to reference historical data that is too far from the current bar ({bars_back} bars back). The historical buffer's limit is {limit} bars.",
+    "line drawing ID domain exhausted",
+    "box drawing ID domain exhausted",
+    "label drawing ID domain exhausted",
+    "linefill drawing ID domain exhausted",
+    "generic drawing ID domain exhausted"
    ],
    "retryable": false,
    "since": "1.4.0"
@@ -1615,6 +1644,52 @@
    "retryable": false,
    "since": "1.9.0"
   },
+  "runtime_history_budget_exhausted": {
+   "args": {
+    "configured": {
+     "kind": "string"
+    },
+    "needed": {
+     "kind": "string"
+    },
+    "used": {
+     "kind": "string"
+    }
+   },
+   "class": "resource",
+   "description": "A reached dynamic runtime context exceeded its explicitly configured history storage budget. configured, used and needed are the typed exception's exact uint64_t byte fields: the configured bound, ownership before the refused operation, and its additional required ownership. Each is a canonical unsigned decimal string from 0 through 18446744073709551615, without a sign, whitespace or leading zeroes except 0 itself. These counters do not use the host run-quota domain. No budget is imposed by the resident spill threshold or by the default absent budget.",
+   "english": [
+    "runtime_history_budget_exhausted: configured={configured} used={used} needed={needed}"
+   ],
+   "retryable": false,
+   "since": "1.10.1"
+  },
+  "runtime_storage_observation_incomplete": {
+   "args": {
+    "backing_bytes_lower_bound": {
+     "kind": "string"
+    },
+    "overflow": {
+     "kind": "boolean"
+    },
+    "resident_metadata_bytes_lower_bound": {
+     "kind": "string"
+    },
+    "resident_payload_bytes_lower_bound": {
+     "kind": "string"
+    },
+    "unsupported_flags": {
+     "kind": "string"
+    }
+   },
+   "class": "unsupported",
+   "description": "A hard runtime history budget could not be enforced because the owned storage observation is incomplete. unsupported_flags is the actual uint64_t unsupported bit mask, including unknown bits. resident_metadata_bytes_lower_bound, resident_payload_bytes_lower_bound and backing_bytes_lower_bound are the observed category lower bounds, never an exact or usable total; categories can be saturated when overflow is true. These four uint64_t fields are canonical unsigned decimal strings from 0 through 18446744073709551615, without a sign, whitespace or leading zeroes except 0 itself. overflow is the observation's actual Boolean. No configured, used or needed byte count is inferred from an incomplete observation, even with a UINT64_MAX budget.",
+   "english": [
+    "runtime context owned storage observation is incomplete"
+   ],
+   "retryable": false,
+   "since": "1.10.1"
+  },
   "scratch_capacity_exceeded": {
    "args": {
     "resource": {
@@ -1720,6 +1795,106 @@
    ],
    "retryable": false,
    "since": "1.4.0"
+  },
+  "selected_auxiliary_rows_limit_exceeded": {
+   "args": {
+    "limit": {
+     "kind": "string"
+    },
+    "requested": {
+     "kind": "string"
+    },
+    "used": {
+     "kind": "string"
+    }
+   },
+   "class": "resource",
+   "description": "Selected auxiliary-row capacity was exceeded by an actual reservation. limit is the actual limit, used is the actual used-before value, and requested is the actual delta; all are canonical unsigned decimal uint64_t values in domain 0..18446744073709551615. Equality passes. An absent bound imposes no logical limit; explicit 0 is finite 0.",
+   "english": [
+    "Selected auxiliary-row capacity exceeded."
+   ],
+   "retryable": false,
+   "since": "1.11.0"
+  },
+  "selected_bytes_limit_exceeded": {
+   "args": {
+    "limit": {
+     "kind": "string"
+    },
+    "requested": {
+     "kind": "string"
+    },
+    "used": {
+     "kind": "string"
+    }
+   },
+   "class": "resource",
+   "description": "Selected source-and-retained CSV byte capacity was exceeded by an actual reservation. limit is the actual limit, used is the actual used-before value, and requested is the actual delta; all are canonical unsigned decimal uint64_t values in domain 0..18446744073709551615. Equality passes. An absent bound imposes no logical limit; explicit 0 is finite 0.",
+   "english": [
+    "Selected source-and-retained CSV byte capacity exceeded."
+   ],
+   "retryable": false,
+   "since": "1.11.0"
+  },
+  "selected_primary_rows_limit_exceeded": {
+   "args": {
+    "limit": {
+     "kind": "string"
+    },
+    "requested": {
+     "kind": "string"
+    },
+    "used": {
+     "kind": "string"
+    }
+   },
+   "class": "resource",
+   "description": "Selected primary-row capacity was exceeded by an actual reservation. limit is the actual limit, used is the actual used-before value, and requested is the actual delta; all are canonical unsigned decimal uint64_t values in domain 0..18446744073709551615. Equality passes. An absent bound imposes no logical limit; explicit 0 is finite 0.",
+   "english": [
+    "Selected primary-row capacity exceeded."
+   ],
+   "retryable": false,
+   "since": "1.11.0"
+  },
+  "selected_script_bars_limit_exceeded": {
+   "args": {
+    "limit": {
+     "kind": "string"
+    },
+    "requested": {
+     "kind": "string"
+    },
+    "used": {
+     "kind": "string"
+    }
+   },
+   "class": "resource",
+   "description": "Selected script-bar capacity was exceeded by an actual reservation. limit is the actual limit, used is the actual used-before value, and requested is the actual delta; all are canonical unsigned decimal uint64_t values in domain 0..18446744073709551615. Equality passes. An absent bound imposes no logical limit; explicit 0 is finite 0.",
+   "english": [
+    "Selected script-bar capacity exceeded."
+   ],
+   "retryable": false,
+   "since": "1.11.0"
+  },
+  "selected_source_rows_limit_exceeded": {
+   "args": {
+    "limit": {
+     "kind": "string"
+    },
+    "requested": {
+     "kind": "string"
+    },
+    "used": {
+     "kind": "string"
+    }
+   },
+   "class": "resource",
+   "description": "Selected source-row capacity was exceeded by an actual reservation. limit is the actual limit, used is the actual used-before value, and requested is the actual delta; all are canonical unsigned decimal uint64_t values in domain 0..18446744073709551615. Equality passes. An absent bound imposes no logical limit; explicit 0 is finite 0.",
+   "english": [
+    "Selected source-row capacity exceeded."
+   ],
+   "retryable": false,
+   "since": "1.11.0"
   },
   "setting_rejected": {
    "args": {
@@ -1924,14 +2099,18 @@
       "risk_fills_per_day",
       "risk_day_basis",
       "risk_action",
-      "quantity_tolerance"
+      "quantity_tolerance",
+      "max_lines_count",
+      "max_boxes_count",
+      "max_labels_count"
      ]
     }
    },
    "class": "strategy",
    "description": "A strategy() declaration setting (or its override) is not a value the engine accepts.",
    "english": [
-    "Pine adapter produced invalid native run spec field {field}"
+    "Pine adapter produced invalid native run spec field {field}",
+    "drawing declared count is outside the int32 domain"
    ],
    "retryable": false,
    "since": "1.4.0"

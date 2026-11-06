@@ -84,11 +84,14 @@ these rows through the selected cursor into byte-identical canonical report JSON
 
 The accumulator and ratio-interval scheduling described below apply only to
 modules whose optional `strategy_stream_engine_layout_version()` export matches
-`PF_STREAM_ENGINE_LAYOUT_VERSION`. A module without a matching stamp keeps the
-public-report path: full `strategy_stream_fill_report` snapshots and exact
+`PF_STREAM_ENGINE_LAYOUT_VERSION`. A module omitting the stamp or returning 0
+keeps the public-report path: full `strategy_stream_fill_report` snapshots and exact
 ratios at every input, even for K > 1. It adds neither `ratios_as_of_input` nor
 `ratio_context` and emits no terminal interval refresh. The runner prints no
-warning about a missing or mismatched stamp.
+warning about a missing stamp. A nonzero mismatched stamp is refused during
+module admission, before `strategy_create` or any C++ handle read. Runtime
+contexts require stamp 4; modules declaring stamp 3 must be rebuilt with the
+exact paired engine and its script-run epoch.
 
 The runner-owned accumulator carries trade-stat folds and the equity series
 needed for exact ratios. For modules with the matching stamp, every mode,

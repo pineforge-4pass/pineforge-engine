@@ -40,7 +40,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 
 // The pre-lane lifecycle probes, verbatim, reading the consumer's own state.
 struct NativeExecutionConsumerProbe {
@@ -88,7 +88,7 @@ struct NativeExecutionConsumerProbe {
     }
 };
 
-}  // inline namespace engine_script_run_v19
+}  // inline namespace engine_script_run_v20
 }  // namespace pineforge
 
 using namespace pineforge;

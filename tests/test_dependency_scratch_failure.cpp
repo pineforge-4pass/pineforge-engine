@@ -19,7 +19,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 struct NativeExecutionConsumerProbe {
     static const detail::CommandScratchStore* dependency(const NativeExecutionConsumer& consumer) {
         return consumer.dependency_scratch_;
@@ -28,7 +28,7 @@ struct NativeExecutionConsumerProbe {
         return consumer.dependency_scratch_stats_.queued_rows;
     }
 };
-} // inline namespace engine_script_run_v19
+} // inline namespace engine_script_run_v20
 } // namespace pineforge
 
 namespace {

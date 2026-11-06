@@ -6,6 +6,7 @@ checks; delta-v2 also compares observed ratio work with v1 on the same feeds.
 """
 import argparse
 import copy
+from fractions import Fraction
 import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,6 +14,7 @@ import json
 import math
 import os
 from pathlib import Path
+import shutil
 import signal
 import sqlite3
 import struct
@@ -58,6 +60,99 @@ def footprint(path):
 def free_disk(path):
     disk = os.statvfs(path.parent)
     return disk.f_bavail * disk.f_frsize
+
+
+def force_write(directory, count):
+    """Simulate another process writing the same filesystem between two samples."""
+    path = Path(directory) / "forced-write.bin"
+    try:
+        with path.open("wb") as output:
+            remaining = count
+            while remaining > 0:
+                chunk = os.urandom(min(1 << 20, remaining))
+                remaining -= output.write(chunk)
+            output.flush()
+            os.fsync(output.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return path
+
+
+def check_free_disk_report(reported, low, high, fragment, capacity):
+    values = (f"free_disk_bytes={reported!r}, observed=[{low}, {high}], "
+              f"fragment={fragment}, capacity={capacity}")
+    assert type(reported) is int, values
+    assert reported % fragment == 0, values
+    assert 0 < reported <= capacity, values
+    assert low <= reported <= high, values
+
+
+def check_state_report(used, warn_fraction, free, state):
+    expected = "WARNING" if Fraction(used) >= Fraction(warn_fraction) * free else "OK"
+    assert state == expected, (f"state={state!r}, expected={expected!r}, used_bytes={used!r}, "
+                              f"warn_free_fraction={warn_fraction!r}, free_disk_bytes={free!r}")
+
+
+def check_exhaustion_report(free, growth, seconds):
+    values = (f"free_disk_bytes={free!r}, growth_bytes_per_second={growth!r}, "
+              f"seconds_to_disk_exhaustion={seconds!r}")
+    assert type(free) is int, values
+    assert 0 < free <= 2 ** 53, values
+    assert growth > 0, values
+    expected = float(free) / float(growth)
+    assert seconds == expected, f"{values}, expected={expected!r}"
+
+
+class FreeSpaceEnvelope:
+    # Two endpoint samples only contain the runner's value when free space
+    # moves in one direction. A temporary file can appear and disappear while
+    # the runner samples, leaving both endpoints above its value. Sample
+    # throughout the window and keep the smallest and largest values observed,
+    # so the report must match a free-space level the filesystem really had.
+    def __init__(self, sample):
+        self.sample = sample
+        self.low = None
+        self.high = None
+        self.count = 0
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._sample_loop, daemon=True)
+
+    def record(self, value):
+        self.low = value if self.low is None else min(self.low, value)
+        self.high = value if self.high is None else max(self.high, value)
+        self.count += 1
+
+    def _sample_loop(self):
+        while not self.stop.is_set():
+            # statvfs releases the interpreter lock; keep the sample gap short.
+            self.record(self.sample())
+
+    def __enter__(self):
+        self.record(self.sample())
+        self.thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.stop.set()
+        self.thread.join()
+        self.record(self.sample())
+
+
+def bracketed_document(status, child, ledger, between=None):
+    with FreeSpaceEnvelope(lambda: free_disk(ledger)) as envelope:
+        start = time.time_ns()
+        # The runner samples and publishes in the same pulse. The first
+        # publication after start might have been sampled just before start;
+        # the second publication was sampled inside this window.
+        first = wait_for(lambda: (mtime if (mtime := status.stat().st_mtime_ns) > start
+                                  else None), child)
+        document = wait_for(lambda: json.loads(status.read_text())
+                            if status.stat().st_mtime_ns > first else None, child)
+        assert document["metrics"]["committed_input"] == 24, document["metrics"]
+        if between is not None:
+            between()
+    return document, envelope.low, envelope.high
 
 
 def file_hash(path):
@@ -327,67 +422,204 @@ def delivery_pending_tail_work(f):
         receiver.close()
 
 
+def ledger_observability_check_selftest():
+    def accept(name, check, *args):
+        check(*args)
+        print("CHECK", name, "accepted", flush=True)
+
+    def reject(name, check, *args):
+        try:
+            check(*args)
+        except AssertionError:
+            print("CHECK", name, "rejected", flush=True)
+        else:
+            raise AssertionError(f"{name}: helper accepted the invalid values {args!r}")
+
+    fragment = 4096
+    capacity = 4 * 1024 ** 4
+    low = 10 ** 12
+    high = low + 4 * fragment
+    reported = low + 2 * fragment
+    accept("free-constant", check_free_disk_report, low, low, low, fragment, capacity)
+    accept("free-interior", check_free_disk_report, reported, low, high, fragment, capacity)
+    accept("free-low-edge", check_free_disk_report, low, low, high, fragment, capacity)
+    accept("free-high-edge", check_free_disk_report, high, low, high, fragment, capacity)
+    accept("free-write-decrease", check_free_disk_report,
+           low - 4 * fragment, low - 8 * fragment, low, fragment, capacity)
+    accept("free-delete-increase", check_free_disk_report,
+           low + 4 * fragment, low, low + 8 * fragment, fragment, capacity)
+    accept("free-temp-dip", check_free_disk_report,
+           low - 8192, low - 8192, low, fragment, capacity)
+    accept("state-ok", check_state_report, fragment, 0.5, low, "OK")
+    accept("state-warning", check_state_report, fragment, 1e-15, low, "WARNING")
+    growth = 1234.5
+    expected = float(low) / float(growth)
+    accept("exhaustion-exact", check_exhaustion_report, low, growth, expected)
+
+    reject("free-above-high", check_free_disk_report,
+           high + fragment, low, high, fragment, capacity)
+    reject("free-below-low", check_free_disk_report,
+           low - fragment, low, high, fragment, capacity)
+    reject("free-outside-point", check_free_disk_report,
+           low + fragment, low, low, fragment, capacity)
+    reject("free-wrong-units", check_free_disk_report,
+           reported // 1024, low, high, fragment, capacity)
+    reject("free-capacity-outside", check_free_disk_report,
+           capacity, low, high, fragment, capacity)
+    reject("free-other-filesystem", check_free_disk_report,
+           high + 10 * 1024 ** 3, low, high, fragment, capacity)
+    for name, value in (("float", float(reported)), ("str", str(reported)), ("bool", True)):
+        reject(f"free-type-{name}", check_free_disk_report, value, low, high, fragment, capacity)
+    reject("free-zero", check_free_disk_report, 0, 0, high, fragment, capacity)
+    reject("free-above-capacity", check_free_disk_report,
+           capacity + fragment, capacity, capacity + fragment, fragment, capacity)
+    reject("exhaustion-ulp-up", check_exhaustion_report,
+           low, growth, math.nextafter(expected, math.inf))
+    reject("exhaustion-ulp-down", check_exhaustion_report,
+           low, growth, math.nextafter(expected, -math.inf))
+    reject("state-flipped-warning", check_state_report, fragment, 0.5, low, "WARNING")
+    reject("state-flipped-ok", check_state_report, fragment, 1e-15, low, "OK")
+    too_large = 2 ** 53 + 1
+    reject("exhaustion-free-too-large", check_exhaustion_report,
+           too_large, growth, float(too_large) / float(growth))
+    reject("exhaustion-zero-growth", check_exhaustion_report, low, 0, expected)
+    reject("exhaustion-negative-growth", check_exhaustion_report, low, -1, expected)
+    for name, value in (("float", float(low)), ("str", str(low)), ("bool", True)):
+        reject(f"exhaustion-free-type-{name}", check_exhaustion_report,
+               value, growth, float(value) / float(growth))
+    reject("exhaustion-zero-free", check_exhaustion_report, 0, growth, 0.0)
+
+    sequences = (
+        ("envelope-constant", (low, low, low), low, low),
+        ("envelope-decrease", (high, reported, low), low, high),
+        ("envelope-increase", (low, reported, high), low, high),
+        ("envelope-temp-dip", (low, low - 8192, low), low - 8192, low),
+        ("envelope-first-only", (low,), low, low),
+    )
+    for name, values, expected_low, expected_high in sequences:
+        envelope = FreeSpaceEnvelope(lambda: low)
+        for value in values:
+            envelope.record(value)
+        assert envelope.low == expected_low, (name, values, envelope.low, expected_low)
+        assert envelope.high == expected_high, (name, values, envelope.high, expected_high)
+        assert envelope.count == len(values), (name, envelope.count, len(values))
+        print("CHECK", name, "recorded", flush=True)
+
+    with FreeSpaceEnvelope(lambda: low) as envelope:
+        assert envelope.low == envelope.high == low, (envelope.low, envelope.high, low)
+    assert envelope.count >= 2, envelope.count
+    assert envelope.low == envelope.high == low, (envelope.low, envelope.high, low)
+    assert not envelope.thread.is_alive(), "free-space sampler still running after exit"
+    print("CHECK envelope-context stopped", flush=True)
+
+    failure = RuntimeError("envelope body failure")
+    try:
+        with FreeSpaceEnvelope(lambda: low) as envelope:
+            raise failure
+    except RuntimeError as error:
+        assert error is failure, error
+    else:
+        raise AssertionError("free-space envelope suppressed the body exception")
+    assert envelope.count >= 2, envelope.count
+    assert envelope.low == envelope.high == low, (envelope.low, envelope.high, low)
+    assert not envelope.thread.is_alive(), "free-space sampler still running after body exception"
+    print("CHECK envelope-exception stopped", flush=True)
+
+
 def ledger_observability_status(f):
-    for fraction in (None, "1e-15", "1"):
-        ledger = f.root / f"observe-{fraction}.sqlite"
-        status = f.root / f"observe-{fraction}.status.json"
-        command = f.command(ledger) + ["--status-file", str(status),
-                                      "--status-interval", str(f.options.status_interval)]
-        if fraction is not None:
-            command += ["--ledger-warn-free-fraction", fraction]
-        with (f.root / f"observe-{fraction}.stdout").open("w") as out, (
-                f.root / f"observe-{fraction}.stderr").open("w") as err:
-            started = time.time()
-            child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=out, stderr=err,
-                                     text=True, env=test_environment())
-            try:
-                initial = wait_for(lambda: (value if (value := json.loads(status.read_text()))
-                    ["metrics"]["committed_input"] == 0 and value["ready"] else None), child)
-                initial_bytes = footprint(ledger)
-                initial_time = time.time()
-                assert initial["metrics"]["ledger_storage"]["used_bytes"] == initial_bytes
-                assert initial["metrics"]["ledger_storage"]["bytes_per_input"] is None
-                child.stdin.write("".join(json.dumps(row) + "\n" for row in f.bars(24)))
-                child.stdin.flush()
-                document = wait_for(lambda: (value if (value := json.loads(status.read_text()))
-                    ["metrics"]["committed_input"] == 24 and value["ready"] else None), child)
-                used = footprint(ledger)
-                storage = document["metrics"]["ledger_storage"]
-                assert storage["used_bytes"] == used, (storage, used)
-                assert math.isclose(storage["bytes_per_input"], used / 24, rel_tol=1e-12)
-                effective = 0.8 if fraction is None else float(fraction)
-                assert storage["warn_free_fraction"] == effective
-                free = free_disk(ledger)
-                # Other host activity may consume a few pages between samples.
-                tolerance = f.options.disk_sample_tolerance_bytes
-                assert abs(storage["free_disk_bytes"] - free) <= tolerance
-                expected_warning = used >= effective * free
-                assert storage["state"] == ("WARNING" if expected_warning else "OK")
-                assert document["ready"] is True and document["readiness"]["storage_below_budget"] is True
-                # Independent file extents and host timestamps bound the rate.
-                # Sampling precedes publication by at most one configured
-                # writer interval; the baseline precedes our first ready read.
-                # The additional 50 ms permits timestamp/publication skew.
-                publication_skew = f.options.status_interval + 0.05
-                elapsed_lower = max(0.001, status.stat().st_mtime - initial_time - publication_skew)
-                elapsed_upper = time.time() - started + 0.05
-                growth_lower = (used - initial_bytes) / elapsed_upper
-                growth_upper = (used - initial_bytes) / elapsed_lower
-                assert growth_lower > 0
-                assert growth_lower <= storage["growth_bytes_per_second"] <= growth_upper
-                assert max(0, free - tolerance) / growth_upper <= storage["seconds_to_disk_exhaustion"] \
-                    <= (free + tolerance) / growth_lower
-                f.run([f.options.runner, "probe", "--status-file", status, "--max-age", "300", "--ready"])
-                offline, _ = f.run([f.options.runner, "status", "--ledger", ledger])
-                offline_storage = json.loads(offline.stdout)["ledger_storage"]
-                assert offline_storage["used_bytes"] == used
-                assert offline_storage["seconds_to_disk_exhaustion"] is None
-                stdout, stderr = child.communicate()
-                assert child.returncode == 0, (stdout, stderr)
-            finally:
-                if child.poll() is None:
-                    child.kill()
-                    child.communicate()
+    shared = Path(tempfile.mkdtemp(prefix="ledger-observe-", dir="/dev/shm"))
+    try:
+        for variant, fraction in (("disk", None), ("disk", "1e-15"), ("disk", "1"),
+                                  ("tmpfs", None)):
+            name = f"observe-{variant}-{fraction}"
+            ledger_directory = (f.root if variant == "disk" else shared) / name
+            ledger_directory.mkdir()
+            output_directory = shared if variant == "disk" else f.root
+            ledger = ledger_directory / "ledger.sqlite"
+            status = output_directory / f"{name}.status.json"
+            assert os.stat(ledger.parent).st_dev != os.stat(status.parent).st_dev, \
+                "/dev/shm must be a different filesystem than the artifacts directory; this row must not skip"
+            filesystem = os.statvfs(ledger.parent)
+            fragment = filesystem.f_frsize
+            capacity = filesystem.f_blocks * filesystem.f_frsize
+            command = f.command(ledger) + ["--status-file", str(status),
+                                          "--status-interval", str(f.options.status_interval)]
+            if fraction is not None:
+                command += ["--ledger-warn-free-fraction", fraction]
+            with (output_directory / f"{name}.stdout").open("w") as out, (
+                    output_directory / f"{name}.stderr").open("w") as err:
+                started = time.time()
+                child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=out, stderr=err,
+                                         text=True, env=test_environment())
+                forced = None
+                try:
+                    initial = wait_for(lambda: (value if (value := json.loads(status.read_text()))
+                        ["metrics"]["committed_input"] == 0 and value["ready"] else None), child)
+                    initial_bytes = footprint(ledger)
+                    initial_time = time.time()
+                    assert initial["metrics"]["ledger_storage"]["used_bytes"] == initial_bytes
+                    assert initial["metrics"]["ledger_storage"]["bytes_per_input"] is None
+                    child.stdin.write("".join(json.dumps(row) + "\n" for row in f.bars(24)))
+                    child.stdin.flush()
+                    document = wait_for(lambda: (value if (value := json.loads(status.read_text()))
+                        ["metrics"]["committed_input"] == 24 and value["ready"] else None), child)
+                    used = footprint(ledger)
+                    storage = document["metrics"]["ledger_storage"]
+                    assert storage["used_bytes"] == used, (storage, used)
+                    assert math.isclose(storage["bytes_per_input"], used / 24, rel_tol=1e-12)
+                    effective = 0.8 if fraction is None else float(fraction)
+                    assert storage["warn_free_fraction"] == effective
+                    check_state_report(used, storage["warn_free_fraction"],
+                                       storage["free_disk_bytes"], storage["state"])
+                    assert document["ready"] is True and document["readiness"]["storage_below_budget"] is True
+                    # Independent file extents and host timestamps bound the rate.
+                    # Sampling precedes publication by at most one configured
+                    # writer interval; the baseline precedes our first ready read.
+                    # The additional 50 ms permits timestamp/publication skew.
+                    publication_skew = f.options.status_interval + 0.05
+                    elapsed_lower = max(0.001, status.stat().st_mtime - initial_time - publication_skew)
+                    elapsed_upper = time.time() - started + 0.05
+                    growth_lower = (used - initial_bytes) / elapsed_upper
+                    growth_upper = (used - initial_bytes) / elapsed_lower
+                    assert growth_lower > 0
+                    assert growth_lower <= storage["growth_bytes_per_second"] <= growth_upper
+                    check_exhaustion_report(storage["free_disk_bytes"], storage["growth_bytes_per_second"],
+                                            storage["seconds_to_disk_exhaustion"])
+                    between = None
+                    if variant == "disk" and f.options.force_write_between_samples_bytes > 0:
+                        count = f.options.force_write_between_samples_bytes
+
+                        def between():
+                            nonlocal forced
+                            forced = force_write(ledger.parent, count)
+                            written = forced.stat()
+                            assert written.st_size == count, ("forced write size", written.st_size, count)
+                            assert written.st_blocks * 512 >= count, \
+                                ("forced write allocated bytes", written.st_blocks * 512, count)
+
+                    bracket, low, high = bracketed_document(status, child, ledger, between=between)
+                    bracket_storage = bracket["metrics"]["ledger_storage"]
+                    check_free_disk_report(bracket_storage["free_disk_bytes"], low, high, fragment, capacity)
+                    check_state_report(used, bracket_storage["warn_free_fraction"],
+                                       bracket_storage["free_disk_bytes"], bracket_storage["state"])
+                    check_exhaustion_report(bracket_storage["free_disk_bytes"],
+                                            bracket_storage["growth_bytes_per_second"],
+                                            bracket_storage["seconds_to_disk_exhaustion"])
+                    f.run([f.options.runner, "probe", "--status-file", status, "--max-age", "300", "--ready"])
+                    offline, _ = f.run([f.options.runner, "status", "--ledger", ledger])
+                    offline_storage = json.loads(offline.stdout)["ledger_storage"]
+                    assert offline_storage["used_bytes"] == used
+                    assert offline_storage["seconds_to_disk_exhaustion"] is None
+                    stdout, stderr = child.communicate()
+                    assert child.returncode == 0, (stdout, stderr)
+                finally:
+                    if forced is not None:
+                        forced.unlink(missing_ok=True)
+                    if child.poll() is None:
+                        child.kill()
+                        child.communicate()
+    finally:
+        shutil.rmtree(shared, ignore_errors=True)
     for invalid in ("0", "-0.1", "1.00001", "nan", "inf", "word", "", "1e999"):
         ledger = f.root / "invalid.sqlite"
         result, _ = f.run(f.command(ledger) + ["--ledger-warn-free-fraction", invalid], expected=1)
@@ -559,18 +791,27 @@ def report_jsonl_delta_v2_contract(f):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("row", choices=["delivery_pending_tail_work", "ledger_observability_status",
-        "report_default_delta_work", "report_jsonl_delta_v2_contract"])
-    parser.add_argument("--runner", required=True)
-    parser.add_argument("--strategy", required=True)
-    parser.add_argument("--fixture-writer", required=True)
+        "ledger_observability_check_selftest", "report_default_delta_work",
+        "report_jsonl_delta_v2_contract"])
+    parser.add_argument("--runner")
+    parser.add_argument("--strategy")
+    parser.add_argument("--fixture-writer")
     parser.add_argument("--inputs", type=int, default=10000)
-    parser.add_argument("--disk-sample-tolerance-bytes", type=int, default=64 * 1024 * 1024)
+    parser.add_argument("--force-write-between-samples-bytes", type=int, default=0)
     parser.add_argument("--status-interval", type=int, default=1)
     parser.add_argument("--storage-stop-bytes", type=int, default=2 * 1024 * 1024)
     parser.add_argument("--storage-stop-inputs", type=int, default=4096)
     parser.add_argument("--mode", choices=["delta-v2", "delta"], default="delta-v2")
-    parser.add_argument("--artifacts", required=True)
+    parser.add_argument("--artifacts")
     options = parser.parse_args()
+    if options.row == "ledger_observability_check_selftest":
+        ledger_observability_check_selftest()
+        return
+    missing = ["--" + name.replace("_", "-")
+               for name in ("runner", "strategy", "fixture_writer", "artifacts")
+               if getattr(options, name) is None]
+    if missing:
+        parser.error("the following arguments are required for this row: " + ", ".join(missing))
     Path(options.artifacts).mkdir(parents=True, exist_ok=True)
     globals()[options.row](Fixture(options))
 
