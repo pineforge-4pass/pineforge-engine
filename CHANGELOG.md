@@ -163,9 +163,12 @@ version number follows semantic versioning over the surfaces the
   whole state with a deep copy, so a script that moved a few of its live
   drawings on every bar paid time proportional to the bound on every call, and
   the first write after each script-state checkpoint paid it again; they now
-  copy only the blocks of 32 records they write. The bound, the typed
-  overflow outcome, the slot reuse order, the stale-handle behaviour and every
-  value a script reads are unchanged.
+  copy only the blocks of 32 records they write, so they do no per-record work
+  in the bound (the first write after a checkpoint still copies the slot
+  directory and the creation order, one 8-byte integer per occupant, and
+  deleting the oldest drawing moves the directory's entries). The bound, the
+  typed overflow outcome, the slot reuse order, the stale-handle behaviour and
+  every value a script reads are unchanged.
 
 ## 1.9.1 — 2026-10-31
 

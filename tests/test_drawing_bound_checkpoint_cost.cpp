@@ -1,4 +1,5 @@
-// K-DRAWBOUND: a bounded drawing arena's edits and checkpoints cost O(changes), not O(bound).
+// K-DRAWBOUND: a bounded drawing arena's edits and checkpoints do no per-record work in
+// the bound.
 //
 // A bounded arena (DrawingArena built from a DrawingBoundConfig: what the generated
 // code constructs from a script's declared max_lines_count, max_boxes_count and
@@ -6,11 +7,18 @@
 // copies share. Every create, every delete and every setter used to replace that
 // state with a deep copy of the whole of it -- every slot, the text of every label,
 // the directory and the order -- whether or not a checkpoint still shared it. A
-// script that moves a few of its live drawings on every bar therefore paid O(bound)
-// per call, and the first write after each checkpoint paid it once more. The unbound
-// arena was already O(changes): its records live in blocks of 32 that copies share,
-// and a write clones only the blocks it reaches (DrawingRecordStore, K-DRAWSNAP; the
-// unbound twin of this test is test_coof_drawing_checkpoint_cost).
+// script that moves a few of its live drawings on every bar therefore paid time
+// proportional to the bound per call, and the first write after each checkpoint paid it
+// once more. The unbound arena already did no per-record work in the bound: its records
+// live in blocks of 32 that copies share, and a write clones only the blocks it reaches
+// (DrawingRecordStore, K-DRAWSNAP; the unbound twin of this test is
+// test_coof_drawing_checkpoint_cost).
+//
+// What this test claims is no per-record work in the bound, not O(changes): the first
+// write after a checkpoint still copies the state's directory and order (one 8-byte
+// integer per occupant), and deleting the oldest occupant moves the directory's entries.
+// That is O(bound) in integers, with no record and no text copied, and the rows below
+// count records and heap blocks, so they do not see it.
 //
 // The shape is a script with a bounded set of live levels (the strategy that exposed
 // it keeps up to five hundred lines and labels alive and, on every bar, sets two
@@ -43,7 +51,7 @@
 //              operations (size, order, and every field of every live record), so the
 //              cheaper copy changes no value.
 //   unchanged  checkpointing an arena nobody wrote allocates the same at bound 1,000 as
-//              at bound 100: sharing is O(1) in the bound.
+//              at bound 100: sharing the state costs the same at every bound.
 //
 // Under AddressSanitizer (whose fake stack makes every call dear) the cost row runs a
 // third of its executions.
@@ -216,8 +224,8 @@ Cost run(int bound, int executions) {
     return cost;
 }
 
-void test_edits_and_checkpoints_cost_o_changes() {
-    std::printf("test_edits_and_checkpoints_cost_o_changes\n");
+void test_edits_and_checkpoints_do_no_per_record_work() {
+    std::printf("test_edits_and_checkpoints_do_no_per_record_work\n");
     const int executions = 150 / kExecutionDivisor;
     const int bounds[] = {100, 1000};
     for (const int bound : bounds) {
@@ -275,7 +283,7 @@ void test_unchanged_checkpoint_allocates_nothing_that_grows() {
 }  // namespace
 
 int main() {
-    test_edits_and_checkpoints_cost_o_changes();
+    test_edits_and_checkpoints_do_no_per_record_work();
     test_unchanged_checkpoint_allocates_nothing_that_grows();
     std::printf("\nbounded drawing cost tests: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
