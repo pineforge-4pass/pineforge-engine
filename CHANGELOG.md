@@ -156,6 +156,16 @@ version number follows semantic versioning over the surfaces the
   Ratio scheduling is a separate later change; whole-curve passes remain.
   Plain/full and v1 delta bytes are preserved. Ledger tables and checkpoint
   layout are unchanged.
+- New run option `series_origin_ms`: the open time, in epoch milliseconds, of
+  the first bar of the series the reference ran on. The source host takes it
+  as a metadata key and the `--syminfo` document of `docker/run_json.py` as a
+  positive JSON integer (any other value fails with `syminfo_unreadable`).
+  Declaring it makes `ta.ema`, and the EMAs inside `ta.macd`, `ta.kc` and
+  `ta.tsi`, answer `na` for the first `length - 1` inputs and then start from an
+  SMA seed, as TradingView does at the start of its series, and starts
+  `request.security` at the first whole bucket opening at or after the origin.
+  A run that does not declare it is unchanged. The option has no defined
+  meaning in a live run. See `docker/README.md`.
 
 ## 1.9.1 — 2026-10-31
 
