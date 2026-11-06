@@ -96,18 +96,21 @@ PR_SLOW_ROWS = (
 PR_FAST_ROWS_SHA256 = '0509b2219786efb6878b193639344c299ff8075ba4532dbe09e80e6e97b60a9a'
 # Every migrated job runs on a standard hosted Ubuntu image: x86 on
 # ubuntu-24.04 and arm64 on ubuntu-24.04-arm. An unpinned job in a migrated
-# workflow must use the x86 image. Only release.yml, which is unchanged here,
-# keeps its protected GKP labels and its Bookworm old-glibc path.
+# workflow must use the x86 image. The legacy release form keeps its protected
+# GKP labels and its Bookworm old-glibc path; the hosted release form uses the
+# standard x86 image and the reviewed released-archive comparison.
 HOSTED_X86_RUNNER = 'ubuntu-24.04'
 HOSTED_ARM_RUNNER = 'ubuntu-24.04-arm'
 PR_RUNNER = HOSTED_X86_RUNNER
 POST_RUNNER = HOSTED_X86_RUNNER
-# The probe and promotion jobs keep their release-only events and environments.
+# The probe, promotion and both release forms keep their release-only events
+# and environments.
 PROTECTED_RUNNER = HOSTED_X86_RUNNER
 RELEASE_RUNNER = 'gkp-od-4cpu-8gb-amd64'
 PREBUILT_RUNNER = 'gkp-od-16cpu-32gb-amd64-128gb'
 PREBUILT_ARM_RUNNER = 'ubuntu-22.04-arm'
-# Only release.yml may still name a GKP label: its two protected scale sets.
+# Only release.yml may name GKP labels. The legacy form retains both protected
+# release labels; the hosted form has only the protected prebuilt cell.
 GKP_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'notify-hub': RELEASE_RUNNER,
                     'prebuilt': PREBUILT_RUNNER},
@@ -365,6 +368,12 @@ RELEASE_JOB_RUNNERS = {
                     'notify-hub': RELEASE_RUNNER},
     'release-ruleset-probe.yml': {'probe': PROTECTED_RUNNER},
     'promote-baseline.yml': {'promote': PROTECTED_RUNNER},
+}
+# Issue #768 moves only release and notify-hub to the standard hosted image. Keep
+# this separate from RELEASE_JOB_RUNNERS so the old isolated form remains a
+# valid, exact contract.
+HOSTED_RELEASE_JOB_RUNNERS = {
+    'release.yml': {'release': HOSTED_X86_RUNNER, 'notify-hub': HOSTED_X86_RUNNER},
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
 # standard hosted labels. Existing hosted exceptions above are pinned separately.
@@ -2370,6 +2379,38 @@ def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool 
     return False
 
 
+def _job_environment_is(body: str, expected: str) -> bool:
+    """Recognize one exact literal environment name, including mapping form."""
+    if not _literal_job_environment(body):
+        return False
+    values = _job_values(body, 'environment', unquote=False)
+    block = _job_block(body, 'environment')
+    if block:
+        values = _job_values('\n'.join(block[1:]), 'name', unquote=False)
+    if len(values) != 1:
+        return False
+    code, _, _ = _action_yaml_visible(values[0])
+    if _ACTION_YAML_QUOTED.fullmatch(code):
+        code = code[1:-1]
+    return code == expected
+
+
+def release_credential_findings(workflow: str, name: str = 'release.yml') -> list[str]:
+    """Keep the protected release environment and App credential surface isolated."""
+    findings = []
+    for job, body in _jobs(workflow).items():
+        if job in ('release', 'notify-hub'):
+            continue
+        # strict=True admits the existing GITHUB_TOKEN-only prebuilt surface,
+        # while refusing any other secret, inherited environment, OIDC write,
+        # App mint or private-key handoff.
+        if _job_environment_is(body, 'release') or _holds_credentials(
+                workflow, body, strict=True):
+            findings.append(f'{name} job {job} must not receive the protected release '
+                            'environment or release credentials')
+    return findings
+
+
 def _runner_value(value: str) -> str | list[str]:
     """Compare literal runner arrays as arrays; expressions remain exact pins."""
     try:
@@ -2828,7 +2869,7 @@ def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
 
 
 def runner_findings(workflows: dict[str, str]) -> list[str]:
-    """Enforce event-derived fleets, isolated releases and command/core pins."""
+    """Enforce event-derived fleets, release forms and command/core pins."""
     findings = workflow_fleet_findings(workflows) + _gke_cap_findings(workflows)
     routes = workflow_event_routes(workflows)
     for name, workflow in workflows.items():
@@ -2845,6 +2886,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         gke_pins = GKE_PR_ARM_JOB_LABELS if arm_variant else GKE_JOB_RUNNERS.get(name, {})
         gkp_pins = GKP_JOB_RUNNERS.get(name, {})
         hosted_pins = HOSTED_JOB_RUNNERS.get(name, {})
+        hosted_release_pins = HOSTED_RELEASE_JOB_RUNNERS.get(name, {})
         if arm_variant:
             hosted_pins = {**hosted_pins, **gke_pins}
         fixed_hosted = {job: label for job, label in hosted_pins.items()
@@ -2860,6 +2902,23 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         if (fixed_release and name != 'promote-baseline.yml'
                 and _events(workflow) != {'workflow_dispatch'}):
             findings.append(f'{name} must retain workflow_dispatch only for protected release jobs')
+        if name == 'release.yml':
+            findings += release_credential_findings(workflow, name)
+            release_runner = _job_values(jobs.get('release', ''), 'runs-on',
+                                         unquote=False)
+            notify_runner = _job_values(jobs.get('notify-hub', ''), 'runs-on',
+                                        unquote=False)
+            if release_runner and notify_runner:
+                release_form = (
+                    release_runner == [RELEASE_RUNNER],
+                    release_runner == [HOSTED_X86_RUNNER])
+                notify_form = (
+                    notify_runner == [RELEASE_RUNNER],
+                    notify_runner == [HOSTED_X86_RUNNER])
+                if release_form != notify_form:
+                    findings.append(
+                        'release.yml release and notify-hub must use the same '
+                        'hosted or isolated runner form')
         if (name == 'promote-baseline.yml'
                 and _events(workflow) != {'push', 'workflow_dispatch'}):
             findings.append(f'{name} must retain push and workflow_dispatch '
@@ -2958,15 +3017,19 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 # removing comment-only lines; the runner label is exact.
                 actual = _job_values(body, 'runs-on', unquote=False)
                 expected = [fixed_release[job]]
-                if actual != expected:
+                hosted_expected = hosted_release_pins.get(job)
+                hosted = hosted_expected is not None and actual == [hosted_expected]
+                if actual != expected and not hosted:
                     # The probe and promotion jobs run on the hosted image; the
-                    # unchanged release jobs keep their isolated GKP labels.
-                    suffix = ' (hosted)' if fixed_release[job] in STANDARD_RUNNERS else ' (isolated release)'
+                    # legacy release jobs keep their isolated GKP labels. The
+                    # hosted release form has its own exact standard pin.
+                    suffix = (' (hosted)' if fixed_release[job] in STANDARD_RUNNERS
+                              else ' (isolated release)')
                     findings.append(f'{name} job {job} must run on {fixed_release[job]}{suffix}')
                 environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
-                    findings.append(f'{name} job {job} must not set PF_CI_LABELS '
-                                    'on an isolated release job')
+                    route = 'a hosted release job' if hosted else 'an isolated release job'
+                    findings.append(f'{name} job {job} must not set PF_CI_LABELS on {route}')
             elif gkp_pin and job in fixed_hosted:
                 if raw_runners != [gkp_pin]:
                     findings.append(f'{name} job {job} must run on {gkp_pin}')
@@ -3218,9 +3281,10 @@ RELEASE_EIGEN_ASSERT_STEP = r'''      - name: Assert Eigen3 3.4.0 on the protect
           echo "Eigen3 3.4.0 present at $(dirname "$(dirname "$hdr")")"
 '''
 
-# Exact reviewed steps: ARM host commands, x86 transport, identity, all-library
-# inspection and publication order form one contract. Extra steps fail closed.
-RELEASE_PREBUILT_STEPS = r'''
+# The legacy isolated form retains this exact step list. The hosted form below
+# replaces only the glibc check with the reviewed released-archive comparison;
+# both lists remain closed to extra or reordered steps.
+RELEASE_PREBUILT_LEGACY_STEPS = r'''
       # A dry run has no tag yet: it builds the dispatched commit.
       - name: Checkout release commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -3408,6 +3472,70 @@ RELEASE_PREBUILT_STEPS = r'''
 '''
 
 
+RELEASE_PREBUILT_LEGACY_GLIBC_STEP = r'''      # Both dry-run and publication inspect every installed .a/.so/.so.*.
+      # Keep raw checker output and its actual exit status, including setup errors.
+      - name: Check every staged library's glibc floor
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
+          mkdir -p "${log}"
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+            checker_rc=0
+          else checker_rc=$?; fi
+          printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
+          cat "${log}/stdout.jsonl"
+          cat "${log}/stderr.txt" >&2
+          exit "${checker_rc}"'''
+
+RELEASE_PREBUILT_ARCHIVE_GLIBC_STEPS = r'''      # The glibc comparison baseline is this triple's archive from the v1.10.0
+      # release: the real released bytes, pinned by sha256 and unpacked here.
+      # The checker below only reads the unpacked libraries.
+      - name: Fetch the v1.10.0 baseline archive for the glibc comparison
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          case "${TRIPLE}" in
+            linux-x86_64) digest=cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543 ;;
+            linux-aarch64) digest=982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bb ;;
+            *) echo "::error::no v1.10.0 baseline archive for ${TRIPLE}" >&2; exit 1 ;;
+          esac
+          archive="pineforge-v1.10.0-${TRIPLE}.tar.gz"
+          root="${RUNNER_TEMP}/glibc-baseline-${TRIPLE}"
+          mkdir "${root}" "${root}/download" "${root}/tree"
+          gh release download v1.10.0 --repo "${GITHUB_REPOSITORY}" \
+            --pattern "${archive}" --dir "${root}/download"
+          echo "${digest}  ${root}/download/${archive}" | sha256sum -c -
+          tar -xzf "${root}/download/${archive}" -C "${root}/tree" \
+            --no-same-owner --no-same-permissions
+          echo "BASELINE_DIR=${root}/tree" >> "${GITHUB_ENV}"
+
+      # Both dry-run and publication inspect every installed .a/.so/.so.* and
+      # compare their highest glibc tag with the baseline fetched above.
+      # Keep raw checker output and its actual exit status, including setup errors.
+      - name: Check every staged library's glibc floor
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
+          mkdir -p "${log}"
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" --baseline-root "${BASELINE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+            checker_rc=0
+          else checker_rc=$?; fi
+          printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
+          cat "${log}/stdout.jsonl"
+          cat "${log}/stderr.txt" >&2
+          exit "${checker_rc}"'''
+
+# The new hosted release form is one exact, reviewed real-archive contract.
+RELEASE_PREBUILT_STEPS = RELEASE_PREBUILT_LEGACY_STEPS.replace(
+    RELEASE_PREBUILT_LEGACY_GLIBC_STEP, RELEASE_PREBUILT_ARCHIVE_GLIBC_STEPS)
+
+
 # Git blob identity of the transport, including build and archive-consumer launch.
 # A changed helper requires reviewing its source and controls before repinning.
 # This is a source contract, never an engine/build/glibc verdict.
@@ -3438,6 +3566,12 @@ def release_prebuilt_consumer_findings(source: str) -> list[str]:
 def release_prebuilt_workflow_findings(workflow: str) -> list[str]:
     """Pin artifact structure and its token-only admission surface."""
     prebuilt = _jobs(workflow).get('prebuilt', '')
+    release = _jobs(workflow).get('release', '')
+    notify = _jobs(workflow).get('notify-hub', '')
+    hosted_release = (
+        _job_values(release, 'runs-on', unquote=False) == [HOSTED_X86_RUNNER]
+        and _job_values(notify, 'runs-on', unquote=False) == [HOSTED_X86_RUNNER])
+    reviewed_steps = RELEASE_PREBUILT_STEPS if hosted_release else RELEASE_PREBUILT_LEGACY_STEPS
     findings = []
     if _job_values(prebuilt, 'needs') != ['release']:
         findings.append('release.yml prebuilt must retain needs: release before build')
@@ -3448,12 +3582,13 @@ def release_prebuilt_workflow_findings(workflow: str) -> list[str]:
     if _job_values(prebuilt, 'uses'):
         findings.append('release.yml prebuilt must not use a reusable workflow')
     if ([_code(step) for step in _steps(prebuilt)]
-            != [_code(step) for step in _steps(RELEASE_PREBUILT_STEPS)]):
+            != [_code(step) for step in _steps(reviewed_steps)]):
         findings.append('release.yml prebuilt must retain the credential-free Bookworm build, '
-                        'ARM Eigen setup, all-library glibc gate and packed-archive consumer before upload')
+                        'ARM Eigen setup, all-library glibc gate and packed-archive consumer '
+                        'before upload; the hosted form also pins its released-archive comparison')
     marker = "      - name: Check every staged library's glibc floor"
     gate = _step_named(_steps(prebuilt), marker)
-    required_gate = _step_named(_steps(RELEASE_PREBUILT_STEPS), marker)
+    required_gate = _step_named(_steps(reviewed_steps), marker)
     # Compare raw physical lines in the named step. Removing blank/comment
     # lines before comparison can turn a disabled shell continuation into proof.
     if gate.rstrip('\n') != required_gate.rstrip('\n'):
