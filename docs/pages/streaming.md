@@ -244,3 +244,25 @@ separate surfaces and are not implied by using this lifecycle.
 
 See [Lifecycle](@ref lifecycle) for handle ownership and
 [FFI from Python](@ref ffi_python) for the complete POD mirrors.
+
+## Native runner report channel
+
+The optional native runner mirrors reports after input commit. Plain
+`--report-jsonl` and `--report-jsonl=full` emit full cumulative documents;
+`--report-jsonl=delta` retains the v1 delta stream. The explicit new
+`--report-jsonl=delta-v2` emits change-only fields and array replacement
+suffixes, plus `kind` and ratio freshness outside the reconstructed document.
+Every v2 record carries `ratios.as_of_input`. Every input record starts with
+`input_cursor`; no warmup/replay record is emitted. A stale terminal cursor
+can receive one ratio-only `final` record, followed by the operational summary.
+
+Use `report --delta-base --ledger PATH --at-input C` to bootstrap a v2
+consumer with the raw cumulative document and its ratio metadata, then apply
+cursor C+1. Ordinary `report` refreshes exact ratios. The change-only envelope
+bounds emitted bytes and serialized rows per input on the 10,000/100,000-input
+work populations. Ratio scheduling is a separate later change; v2 retains
+the existing ratio interval policy and whole-curve passes. The envelope does
+not bound report memory. The complete wire contract and compatibility
+notes are in the [native runner guide](../../runner/README.md#delta-v2-report-stream).
+The runner also reports advisory disk usage and exhaustion projections;
+`--ledger-warn-free-fraction F` defaults to 0.8 and never removes readiness.

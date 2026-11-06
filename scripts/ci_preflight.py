@@ -38,7 +38,7 @@ import unicodedata
 from ci_verify import (ROOT, PRIVATE_FIXTURE_SKIP_LITERAL, private_fixtures_overlay,
                        source_guard_commands)
 from ci_verifier_classes import verifier_class_tier
-from run_unittest_shards import default_shard_count
+from ci_run_unittest_shards import default_shard_count
 
 ACTIONLINT_VERSION = '1.7.12'
 # File-only policy needs an identity even in an exported tree with no git remote.
@@ -94,63 +94,64 @@ PR_SLOW_ROWS = (
     'test_native_settlement_carry',
 )
 PR_FAST_ROWS_SHA256 = '0509b2219786efb6878b193639344c299ff8075ba4532dbe09e80e6e97b60a9a'
-# Admitted PR jobs and secret-free post jobs use fixed GKE sizes.
-# Credentialed jobs use a separate, exact protected GKE inventory.
-PR_RUNNER = '["self-hosted","pf-gcp-pr"]'
-# There is no general post fleet: an unpinned job on this label is refused.
-POST_RUNNER = 'gke-2cpu-4gb-amd64'
-PROTECTED_RUNNER = 'gkp-2cpu-4gb-amd64'
+# Every migrated job runs on a standard hosted Ubuntu image: x86 on
+# ubuntu-24.04 and arm64 on ubuntu-24.04-arm. An unpinned job in a migrated
+# workflow must use the x86 image. Only release.yml, which is unchanged here,
+# keeps its protected GKP labels and its Bookworm old-glibc path.
+HOSTED_X86_RUNNER = 'ubuntu-24.04'
+HOSTED_ARM_RUNNER = 'ubuntu-24.04-arm'
+PR_RUNNER = HOSTED_X86_RUNNER
+POST_RUNNER = HOSTED_X86_RUNNER
+# The probe and promotion jobs keep their release-only events and environments.
+PROTECTED_RUNNER = HOSTED_X86_RUNNER
 RELEASE_RUNNER = 'gkp-od-4cpu-8gb-amd64'
 PREBUILT_RUNNER = 'gkp-od-16cpu-32gb-amd64-128gb'
-GKE_32_LABEL = 'gke-32cpu-64gb-amd64'
-GKE_16_LABEL = 'gke-16cpu-32gb-amd64'
-GKE_8_LABEL = 'gke-8cpu-16gb-amd64'
-GKE_ARM_LABEL = 'gke-16cpu-32gb-arm64'
-GKE_2_LABEL = 'gke-2cpu-4gb-amd64'
-GKE_4_LABEL = 'gke-4cpu-8gb-amd64'
+PREBUILT_ARM_RUNNER = 'ubuntu-22.04-arm'
+# Only release.yml may still name a GKP label: its two protected scale sets.
 GKP_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'notify-hub': RELEASE_RUNNER,
                     'prebuilt': PREBUILT_RUNNER},
-    'promote-baseline.yml': {'promote': PROTECTED_RUNNER},
-    'docs-post.yml': {'build': 'gkp-4cpu-8gb-amd64'},
-    'release-ruleset-probe.yml': {'probe': PROTECTED_RUNNER},
 }
 GKP_JOB_ENVIRONMENTS = {
     'release.yml': {'release': 'release', 'notify-hub': 'release'},
     'release-ruleset-probe.yml': {'probe': 'release'},
     'promote-baseline.yml': {'promote': 'release-bot'},
 }
-GKE_32_256_LABEL = 'gke-32cpu-64gb-amd64-256gb'
-GKE_16_128_LABEL = 'gke-16cpu-32gb-amd64-128gb'
-GKE_16_256_LABEL = 'gke-16cpu-32gb-amd64-256gb'
-GKE_ARM_128_LABEL = 'gke-16cpu-32gb-arm64-128gb'
 GKE_MATRIX_RUNNER = '${{ matrix.runner }}'
+NATIVE_X86_JOB = 'build-x86-gcc133'
+NATIVE_X86_HELPER = 'scripts/ci_native_x86_release.py'
+# Historical table names: the *_JOB_LABELS / *_JOB_RUNNERS tables below now pin
+# the standard hosted images, one exact label per job (the native profile job
+# keeps its two-row matrix, both rows on the x86 image).
 GKE_JOB_LABELS = {
-    'gke-pr.yml': {'preflight': GKE_8_LABEL, 'build': GKE_32_LABEL,
-                   'build-debug': GKE_16_128_LABEL,
-                   'corpus-parity-subset': GKE_8_LABEL},
-    'ci-post.yml': {'preflight': GKE_8_LABEL, 'preflight-slow': GKE_8_LABEL,
-                    'build': GKE_32_LABEL, 'build-debug': GKE_16_128_LABEL,
-                    'sanitizers': GKE_32_256_LABEL, 'kernel-only': GKE_16_LABEL,
-                    'build-arm': GKE_ARM_128_LABEL},
-    'corpus-parity.yml': {'corpus-parity': GKE_16_LABEL, 'corpus-parity-subset': GKE_8_LABEL},
-    'native-live.yml': {'native-live': GKE_MATRIX_RUNNER, 'native-live-shards': GKE_8_LABEL},
+    'gke-pr.yml': {'preflight': HOSTED_X86_RUNNER, 'build': HOSTED_X86_RUNNER,
+                   NATIVE_X86_JOB: HOSTED_X86_RUNNER,
+                   'build-debug': HOSTED_X86_RUNNER,
+                   'corpus-parity-subset': HOSTED_X86_RUNNER},
+    'ci-post.yml': {'preflight': HOSTED_X86_RUNNER, 'preflight-slow': HOSTED_X86_RUNNER,
+                    NATIVE_X86_JOB: HOSTED_X86_RUNNER,
+                    'build': HOSTED_X86_RUNNER, 'build-debug': HOSTED_X86_RUNNER,
+                    'sanitizers': HOSTED_X86_RUNNER, 'kernel-only': HOSTED_X86_RUNNER,
+                    'build-arm': HOSTED_ARM_RUNNER},
+    'corpus-parity.yml': {'corpus-parity': HOSTED_X86_RUNNER,
+                          'corpus-parity-subset': HOSTED_X86_RUNNER},
+    'native-live.yml': {'native-live': GKE_MATRIX_RUNNER,
+                        'native-live-shards': HOSTED_X86_RUNNER},
 }
 # The arm admission variant has its own exact inventory; main keeps the old one.
-GKE_PR_ARM_JOB_LABELS = {**GKE_JOB_LABELS['gke-pr.yml'], 'build-arm': GKE_ARM_128_LABEL}
+GKE_PR_ARM_JOB_LABELS = {**GKE_JOB_LABELS['gke-pr.yml'], 'build-arm': HOSTED_ARM_RUNNER}
 GKE_LIGHT_JOB_RUNNERS = {
     'ci-post.yml': dict.fromkeys(
         ('authz', 'changes', 'build-release-gate', 'build-debug-gate',
-         'sanitizers-gate', 'kernel-only-gate', 'build-gate'), GKE_2_LABEL),
-    # Separate called-workflow guards to keep each static label count <= 8.
+         'sanitizers-gate', 'kernel-only-gate', 'build-gate'), HOSTED_X86_RUNNER),
     'native-live.yml': dict.fromkeys(
-        ('authz', 'native-live-native', 'native-live-gate'), GKE_4_LABEL),
-    'corpus-parity.yml': {'authz': GKE_4_LABEL},
-    'docs-post.yml': {'authz': GKE_2_LABEL},
-    'release-ruleset-probe.yml': {'authz': GKE_2_LABEL},
-    'promote-baseline.yml': {'promote-guard': GKE_2_LABEL},
+        ('authz', 'native-live-native', 'native-live-gate'), HOSTED_X86_RUNNER),
+    'corpus-parity.yml': {'authz': HOSTED_X86_RUNNER},
+    'docs-post.yml': {'authz': HOSTED_X86_RUNNER},
+    'release-ruleset-probe.yml': {'authz': HOSTED_X86_RUNNER},
+    'promote-baseline.yml': {'promote-guard': HOSTED_X86_RUNNER},
 }
-# Admitted PR and post jobs use bare GKE names or the exact native profile matrix.
+# Admitted PR and post jobs use the hosted label or the exact native profile matrix.
 GKE_JOB_RUNNERS = {
     name: {**GKE_JOB_LABELS.get(name, {}),
            **GKE_LIGHT_JOB_RUNNERS.get(name, {})}
@@ -201,10 +202,14 @@ POST_DEBUG_BUILD_STRATEGY = POST_BUILD_STRATEGY.replace(
 POST_ARM_BUILD_STRATEGY = ('    strategy:\n'
                           '      fail-fast: false\n'
                           '      matrix:\n'
-                          '        build_type: [Release, Debug]\n')
+                          '        build_type: [Release, Debug]\n'
+                          '        shard: [1, 2, 3, 4]\n')
 BUILD_NAME = 'build (${{ matrix.platform.os }}, ${{ matrix.build_type }})'
-POST_ARM_BUILD_NAME = 'build (ubuntu-24.04-arm, ${{ matrix.build_type }})'
-POST_SHARDS = {'build': 4, 'build-debug': 2, 'sanitizers': 4, 'kernel-only': 2}
+POST_ARM_BUILD_NAME = ('build-shard (ubuntu-24.04-arm, ${{ matrix.build_type }}, '
+                       '${{ matrix.shard }}/4)')
+POST_ARM_CTEST_EXCLUSION = (
+    " ${{ matrix.build_type == 'Release' && '--exclude-label ci-script' || '' }}")
+POST_SHARDS = {'build': 4, 'build-debug': 2, 'build-arm': 4, 'sanitizers': 8, 'kernel-only': 2}
 POST_LEG_GATES = {
     'build-release-gate': ('build', 'build (ubuntu-24.04, Release)'),
     'build-debug-gate': ('build-debug', 'build (ubuntu-24.04, Debug)'),
@@ -225,17 +230,17 @@ RELEASE_STRATEGY = ('    strategy:\n'
                     '          - triple: linux-x86_64\n'
                     f'            runner: {PREBUILT_RUNNER}\n'
                     '          - triple: linux-aarch64\n'
-                    '            runner: ubuntu-22.04-arm\n')
+                    f'            runner: {PREBUILT_ARM_RUNNER}\n')
 NATIVE_STRATEGY = f'''    strategy:
       fail-fast: false
       matrix:
         include:
           - profile: live-sanitizers
             build_dir: build-live-sanitizers
-            runner: {GKE_16_256_LABEL}
+            runner: {HOSTED_X86_RUNNER}
           - profile: live-tsan
             build_dir: build-live-tsan
-            runner: {GKE_16_128_LABEL}
+            runner: {HOSTED_X86_RUNNER}
 '''
 NATIVE_SHARD_STRATEGY = '''    strategy:
       fail-fast: false
@@ -305,6 +310,16 @@ NATIVE_EXCLUSION = "${{ matrix.profile == 'native' && inputs.exclude_slow && '--
 # Build and CTest parallelism is the core count of whichever runner took the job.
 CORES = '"$(getconf _NPROCESSORS_ONLN)"'
 VERIFY, PARITY = 'ci_verify.py', 'check_corpus_parity.sh'
+NATIVE_X86_COMMAND = 'ci_native_x86_release.py'
+NATIVE_X86_BUILD_DIR = 'build-x86-gcc133'
+NATIVE_X86_ARTIFACT_DIR = 'ci-native-x86-gcc133'
+NATIVE_X86_UPLOAD = 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
+NATIVE_X86_RUN = (
+    f'| python3 {NATIVE_X86_HELPER} --source . '
+    f'--build-dir {NATIVE_X86_BUILD_DIR} --artifact-dir {NATIVE_X86_ARTIFACT_DIR} '
+    f'--jobs {CORES}')
+NATIVE_X86_BUILD_STEP = '      - name: Build native x86 GNU 13.3.0 Release'
+NATIVE_X86_ARTIFACT_STEP = '      - name: Retain native x86 GNU 13.3.0 build artifacts'
 PARITY_COMMAND = f'JOBS={CORES} ./scripts/{PARITY}'
 # Every inline job in the workflows a CI run starts, and the command that
 # must carry the core count. Fleet choice comes only from the event graph.
@@ -314,11 +329,13 @@ PARITY_COMMAND = f'JOBS={CORES} ./scripts/{PARITY}'
 JOB_COMMANDS = {
     'ci.yml': {'authz': None},
     'gke-pr.yml': {'admit': None, 'preflight': None, 'build': None,
+                   NATIVE_X86_JOB: NATIVE_X86_COMMAND,
                    'build-debug': None, 'corpus-parity-subset': PARITY,
                    'legs': None, 'result': None},
     'ci-post.yml': {'authz': None, 'changes': None, 'preflight': None,
                     'preflight-slow': None, 'build': VERIFY, 'build-arm': VERIFY,
-                    'build-debug': VERIFY, 'sanitizers': VERIFY, 'kernel-only': VERIFY,
+                    'build-debug': VERIFY, NATIVE_X86_JOB: NATIVE_X86_COMMAND,
+                    'sanitizers': VERIFY, 'kernel-only': VERIFY,
                     **dict.fromkeys(POST_LEG_GATES), 'build-gate': None},
     'native-live.yml': {'authz': None, 'native-live': VERIFY, 'native-live-shards': VERIFY,
                         'native-live-native': None, 'native-live-gate': None},
@@ -327,14 +344,14 @@ JOB_COMMANDS = {
     'docs-post.yml': {'authz': None, 'build': None},
 }
 GKE_PR_ARM_JOB_COMMANDS = {**JOB_COMMANDS['gke-pr.yml'], 'build-arm': VERIFY}
-# Exact hosted pins and GKE scalar or native matrix pins, checked per job.
-# Historical name: this table also holds the exact GKE pins.
+# Exact hosted pins (x86 ubuntu-24.04, arm64 ubuntu-24.04-arm) and the native
+# matrix pin, checked per job.
 HOSTED_JOB_RUNNERS = {
     'ci.yml': {'authz': 'ubuntu-24.04'},
     'gke-pr.yml': {**dict.fromkeys(('admit', 'legs', 'result'), 'ubuntu-24.04'),
                    **GKE_JOB_RUNNERS['gke-pr.yml']},
     'ci-post.yml': GKE_JOB_RUNNERS['ci-post.yml'],
-    'docs-post.yml': {**GKE_JOB_RUNNERS['docs-post.yml'], **GKP_JOB_RUNNERS['docs-post.yml']},
+    'docs-post.yml': {**GKE_JOB_RUNNERS['docs-post.yml'], 'build': HOSTED_X86_RUNNER},
     'native-live.yml': GKE_JOB_RUNNERS['native-live.yml'],
     'corpus-parity.yml': GKE_JOB_RUNNERS['corpus-parity.yml'],
     'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
@@ -351,7 +368,7 @@ RELEASE_JOB_RUNNERS = {
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
 # standard hosted labels. Existing hosted exceptions above are pinned separately.
-STANDARD_RUNNERS = ('ubuntu-24.04',)
+STANDARD_RUNNERS = ('ubuntu-24.04', 'ubuntu-24.04-arm')
 # Refuse paid labels everywhere, including pinned jobs, metadata and release matrices.
 _LARGER_RUNNER_LABEL = re.compile(
     r'(?<![\w.-])(?:pf-linux-(?:x64|arm64)-\d+|[\w.-]+-(?:larger|xlarge|large))(?![\w.-])')
@@ -371,6 +388,8 @@ PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-arm': 'ARM_BUILD_RESULT',
               'sanitizers-gate': 'SANITIZER_GATE_RESULT', 'kernel-only-gate': 'KERNEL_GATE_RESULT',
               'kernel-only': 'KERNEL_RESULT', 'native-live': 'NATIVE_RESULT',
               'corpus-parity-subset': 'PARITY_RESULT', 'corpus-parity': 'FULL_PARITY_RESULT'}
+POST_ALWAYS_JOBS = {NATIVE_X86_JOB: 'X86_GCC133_RESULT'}
+POST_PROOF_JOBS = {**PROOF_JOBS, **POST_ALWAYS_JOBS}
 PR_PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-debug': 'DEBUG_RESULT',
                  'corpus-parity-subset': 'PARITY_RESULT'}
 PR_ARM_PROOF_JOBS = {'build': 'BUILD_RESULT', 'build-debug': 'DEBUG_RESULT',
@@ -405,6 +424,7 @@ ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error \
 GKE_PROOF_IF = ("${{ needs.admit.outputs.allowed == 'true' && "
                 "needs.admit.outputs.docs_only != 'true' && "
                 "needs.admit.outputs.github_only != 'true' }}")
+NATIVE_X86_PR_IF = "${{ needs.admit.outputs.allowed == 'true' }}"
 GKE_ARM_PROOF_IF = GKE_PROOF_IF.replace(
     ' }}', " && needs.admit.outputs.arm_relevant == 'true' }}")
 GKE_PREFLIGHT_TIER = ("${{ (needs.admit.outputs.docs_only == 'true' || "
@@ -451,11 +471,13 @@ GKE_LEGS_STEP = '''      - name: Require every proof leg
         env:
           BUILD_RESULT: ${{ needs.build.result }}
           DEBUG_RESULT: ${{ needs.build-debug.result }}
+          X86_RESULT: ${{ needs.build-x86-gcc133.result }}
           PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
         run: |
           set -euo pipefail
           test "$BUILD_RESULT" = success
           test "$DEBUG_RESULT" = success
+          test "$X86_RESULT" = success
           test "$PARITY_RESULT" = success
 '''
 GKE_RESULT_STEP = '''      - name: Require an independently consistent successful result
@@ -464,6 +486,7 @@ GKE_RESULT_STEP = '''      - name: Require an independently consistent successfu
           ADMIT_RESULT: ${{ needs.admit.result }}
           ALLOWED: ${{ needs.admit.outputs.allowed }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          X86_RESULT: ${{ needs.build-x86-gcc133.result }}
           LEGS_RESULT: ${{ needs.legs.result }}
           ADMIT_DOCS_ONLY: ${{ needs.admit.outputs.docs_only }}
           ADMIT_GITHUB_ONLY: ${{ needs.admit.outputs.github_only }}
@@ -476,6 +499,7 @@ GKE_RESULT_STEP = '''      - name: Require an independently consistent successfu
           test "$ADMIT_RESULT" = success || fail "admission refused"
           test "$ALLOWED" = true || fail "admission did not allow the head"
           test "$PREFLIGHT_RESULT" = success || fail "preflight did not pass"
+          test "$X86_RESULT" = success || fail "native x86 GNU 13.3.0 build did not pass"
           test "$SECOND_DOCS_ONLY" = "$ADMIT_DOCS_ONLY" || fail "docs-only classification changed"
           test "$SECOND_GITHUB_ONLY" = "$ADMIT_GITHUB_ONLY" || fail "github-only classification changed"
           test "$CODE_EXTENSION" != true || {
@@ -494,6 +518,7 @@ GKE_ARM_LEGS_STEP = '''      - name: Require every proof leg
           BUILD_RESULT: ${{ needs.build.result }}
           DEBUG_RESULT: ${{ needs.build-debug.result }}
           ARM_RESULT: ${{ needs.build-arm.result }}
+          X86_RESULT: ${{ needs.build-x86-gcc133.result }}
           ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}
           PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
         run: |
@@ -507,6 +532,7 @@ GKE_ARM_LEGS_STEP = '''      - name: Require every proof leg
           test "$BUILD_RESULT" = success
           test "$DEBUG_RESULT" = success
           arm_passed "$ARM_RELEVANT" "$ARM_RESULT"
+          test "$X86_RESULT" = success
           test "$PARITY_RESULT" = success
 '''
 GKE_ARM_RESULT_STEP = '''      - name: Require an independently consistent successful result
@@ -515,6 +541,7 @@ GKE_ARM_RESULT_STEP = '''      - name: Require an independently consistent succe
           ADMIT_RESULT: ${{ needs.admit.result }}
           ALLOWED: ${{ needs.admit.outputs.allowed }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          X86_RESULT: ${{ needs.build-x86-gcc133.result }}
           LEGS_RESULT: ${{ needs.legs.result }}
           ADMIT_DOCS_ONLY: ${{ needs.admit.outputs.docs_only }}
           ADMIT_GITHUB_ONLY: ${{ needs.admit.outputs.github_only }}
@@ -529,6 +556,7 @@ GKE_ARM_RESULT_STEP = '''      - name: Require an independently consistent succe
           test "$ADMIT_RESULT" = success || fail "admission refused"
           test "$ALLOWED" = true || fail "admission did not allow the head"
           test "$PREFLIGHT_RESULT" = success || fail "preflight did not pass"
+          test "$X86_RESULT" = success || fail "native x86 GNU 13.3.0 build did not pass"
           test "$SECOND_DOCS_ONLY" = "$ADMIT_DOCS_ONLY" || fail "docs-only classification changed"
           test "$SECOND_GITHUB_ONLY" = "$ADMIT_GITHUB_ONLY" || fail "github-only classification changed"
           test "$SECOND_ARM_RELEVANT" = "$ADMIT_ARM_RELEVANT" || fail "arm relevance classification changed"
@@ -652,10 +680,9 @@ endif()
 # PR-only ALLOWED_BOTS is dependabot[bot] and pineforge-app[bot]. No local canon
 # file is needed on CI runners. Changing the script requires a new canon pin.
 AUTHZ_STEP_SHA256 = '94bf3afefe4588bc33dad5fd4d8fa3d2a104cc45743ad59286c756fa3a17baa6'
-# Scoped CI workflows bind this canon header byte for byte, including its
-# fleet comment and comma spacing. The release probe pins executable lines.
+# Scoped CI workflows bind this canon header byte for byte, including the
+# hosted runner line and comma spacing. The release probe pins executable lines.
 AUTHZ_JOB_HEADER = '''    name: authz
-    # Fleet routing is fixed per job; credentials use protected GKE runners.
     runs-on: ubuntu-24.04
     permissions: {}
 '''
@@ -782,7 +809,7 @@ _CONTINUE_ON_ERROR = re.compile(r'\s*(?:-\s+)?["\']?continue-on-error["\']?\s*:'
 # the codegen and campaign pins must carry this same literal, without repo edits.
 PROMOTE_GUARD = r'''  promote-guard:
     name: promote-guard
-    runs-on: gke-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     # Resolution needs read access in private repos; no secrets or OIDC here.
     permissions:
       pull-requests: read
@@ -985,7 +1012,7 @@ PROMOTE_IF = ("${{ needs.promote-guard.result == 'success' && "
               "needs.promote-guard.outputs.ok == 'true' }}")
 GATE_NEEDS = 'needs: [authz, changes, preflight, build, corpus-parity-subset]'
 POST_GATE_NEEDS = ('needs: [authz, changes, preflight, build, build-arm, sanitizers, native-live, kernel-only, '
-                   'corpus-parity-subset, preflight-slow, corpus-parity]')
+                   'build-x86-gcc133, corpus-parity-subset, preflight-slow, corpus-parity]')
 # The matrix dependency already aggregates the selected cells. Its result must
 # never be excused for the PR-only exclusion: no job was created for that cell.
 # Pin the whole step so a widened passed(), a later override or a missing-result
@@ -1023,6 +1050,7 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
           CHANGES_RESULT: ${{ needs.changes.result }}
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          X86_GCC133_RESULT: ${{ needs.build-x86-gcc133.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           DEBUG_BUILD_RESULT: ${{ needs.build-debug.result }}
           RELEASE_GATE_RESULT: ${{ needs.build-release-gate.result }}
@@ -1039,6 +1067,7 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
         run: |
           printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
             "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
+            "native x86 GNU 13.3.0: $X86_GCC133_RESULT" \
             "debug shards: $DEBUG_BUILD_RESULT" "release aggregate: $RELEASE_GATE_RESULT" "debug aggregate: $DEBUG_GATE_RESULT" \
             "arm64 matrix: $ARM_BUILD_RESULT" \
             "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
@@ -1052,7 +1081,8 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
           if [[ "$CHANGES_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then docs_only=true; fi
           passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
           [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
-            && [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
+            && [[ "$PREFLIGHT_RESULT" == "success" ]] \
+            && [[ "$X86_GCC133_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
             && passed "$DEBUG_BUILD_RESULT" && passed "$RELEASE_GATE_RESULT" && passed "$DEBUG_GATE_RESULT" \
             && passed "$ARM_BUILD_RESULT" \
             && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \
@@ -1062,7 +1092,7 @@ POST_GATE_STEP = r'''      - name: Require every verification lane to have passe
 '''
 # No stage of this preflight carries a timeout: the verifier self-tests
 # (test_ci_verify.py) drive the real literal-aware parity, receipt and
-# submodule guards across parallel unittest shards (run_unittest_shards.py),
+# submodule guards across parallel unittest shards (ci_run_unittest_shards.py),
 # and no bound of this file's may fail a run for slowness (owner rule,
 # 2026-10-12). A stage that hangs is caught only by the job's own platform
 # maximum, 360 minutes.
@@ -1074,6 +1104,7 @@ _ON_KEY = re.compile(r'^(?:on|"on"|\'on\')[ \t]*:[ \t]*([^#\n]*)', re.MULTILINE)
 # call of ci_verify itself, as a script or a module.
 _JOBS_FLAG = re.compile(r'(?<![\w-])--j(?:o|ob|obs)?(?=[\s=]|$)')
 _VERIFY_CALL = re.compile(r'\bci_verify\.py\b|-m\s+ci_verify\b')
+_NATIVE_X86_CALL = re.compile(r'\bci_native_x86_release\.py\b')
 _LITERAL_CACHE_HASH = re.compile(
     r'''\$\{\{\s*hashFiles\(\s*(?:'[^'\n]*'|"[^"\n]*")'''
     r'''(?:\s*,\s*(?:'[^'\n]*'|"[^"\n]*"))*\s*\)\s*\}\}-''')
@@ -1747,7 +1778,7 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
     proofs = PR_ARM_PROOF_JOBS if arm_variant else PR_PROOF_JOBS
     legs_step = GKE_ARM_LEGS_STEP if arm_variant else GKE_LEGS_STEP
     result_template = GKE_ARM_RESULT_STEP if arm_variant else GKE_RESULT_STEP
-    required = {'admit', 'preflight', *proofs, 'legs', 'result'}
+    required = {'admit', 'preflight', *proofs, NATIVE_X86_JOB, 'legs', 'result'}
     if not required <= set(jobs):
         findings.append(f'{name}: required jobs are missing')
     if set(jobs) != required:
@@ -1760,8 +1791,8 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
         findings.append(f'{name} result must run always')
     if 'needs.legs.result' not in jobs.get('result', ''):
         findings.append(f'{name} result must test needs.legs.result')
-    if _needs(jobs.get('result', '')) != ['admit', 'preflight', 'legs']:
-        findings.append(f'{name} result must need admit, preflight and legs')
+    if _needs(jobs.get('result', '')) != ['admit', 'preflight', NATIVE_X86_JOB, 'legs']:
+        findings.append(f'{name} result must need admit, preflight, {NATIVE_X86_JOB} and legs')
     if 'workflow_call' in workflow or 'uses: ./.github/workflows/' in workflow:
         findings.append(f'{name}: reusable workflow calls are refused')
     if re.search(r'\b(?:secrets\.(?!GITHUB_TOKEN)|id-token\b|environment\s*:)', workflow):
@@ -1869,15 +1900,18 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
             or _job_values(identity_env, 'HEAD_IS_FORK') != [
                 '${{ toJSON(github.event.pull_request.head.repo.fork) }}']):
         findings.append(f'{name} admit must refuse drafts and stale or unauthorized identities')
-    for job in ('preflight', *proofs):
+    for job in ('preflight', *proofs, NATIVE_X86_JOB):
         body = jobs.get(job, '')
         condition = ("${{ needs.admit.outputs.allowed == 'true' }}"
                      if job == 'preflight' else
+                     NATIVE_X86_PR_IF if job == NATIVE_X86_JOB else
                      GKE_ARM_PROOF_IF if job == 'build-arm' else GKE_PROOF_IF)
-        if (_needs(body) != ['admit'] or _job_values(body, 'if') != [condition]):
+        expected_needs = ['admit']
+        if (_needs(body) != expected_needs or _job_values(body, 'if') != [condition]):
             findings.append(f'{name} {job} must follow admission and keep its path policy')
         if _job_block(body, 'strategy') or _job_values(body, 'strategy'):
             findings.append(f'{name} {job} must remain one fixed proof job')
+    findings += native_x86_job_findings(jobs.get(NATIVE_X86_JOB, ''), name, pr=True)
     preflight = steps.get('preflight', [])
     preflight_run = _step_named(preflight, '      - name: Run the class-specific preflight')
     if (_step_values(preflight_run, 'run') != [
@@ -1945,15 +1979,19 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
         findings.append(f'{name} corpus-parity-subset must run its unconditional inline subset command')
     legs = jobs.get('legs', '')
     legs_if = GKE_PROOF_IF.replace('${{ ', '${{ always() && ', 1)
-    if (_needs(legs) != ['admit', *proofs]
+    legs_needs = ['admit', *proofs]
+    legs_needs.insert(-1, NATIVE_X86_JOB)
+    if (_needs(legs) != legs_needs
             or _job_values(legs, 'if') != [legs_if]
             or [_code(step) for step in steps.get('legs', [])] != [_code(legs_step)]):
         findings.append(f'{name} legs must require every selected proof')
     result_step = _step_named(steps.get('result', []),
                               '      - name: Require an independently consistent successful result')
-    if (_job_values(jobs.get('result', ''), 'if') != ['always()']
+    result_needs = ['admit', 'preflight', NATIVE_X86_JOB, 'legs']
+    if (_needs(jobs.get('result', '')) != result_needs
+            or _job_values(jobs.get('result', ''), 'if') != ['always()']
             or _code(result_step) != _code(result_template)):
-        findings.append(f'{name} result must require admission, preflight and consistent proof results')
+        findings.append(f'{name} result must require admission, preflight, native x86 and consistent proof results')
     if not admit_steps or 'id: allowed' not in admit_steps[-1] \
             or 'allowed=true' not in admit_steps[-1] \
             or any('allowed=true' in step for step in admit_steps[:-1]):
@@ -1970,7 +2008,7 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
                 if (_job_values(inputs, 'repository') != ['${{ github.repository }}']
                         or _job_values(inputs, 'ref') != [ref]):
                     findings.append(f'{name} {job} checkout must use the base tree')
-    for job in ('preflight', *proofs):
+    for job in ('preflight', *proofs, NATIVE_X86_JOB):
         if job not in jobs:
             continue
         checkout_steps = [step for step in steps[job]
@@ -2150,6 +2188,18 @@ def _private_key_handoff(text: str) -> bool:
     return False
 
 
+def _uses_app_token(workflow: str, body: str) -> bool:
+    """Share the visible App mint/private-key indicators between both guards."""
+    references = (reference for _, _, reference, _ in
+                  action_uses({'workflow': body}, findings=[]))
+    action_mint = any(reference.partition('@')[0].casefold()
+                      in {'actions/create-github-app-token', 'tibdex/github-app-token'}
+                      for reference in references)
+    text = '\n'.join(_job_values(workflow, 'env')) + '\n' + body
+    return bool(action_mint or _private_key_handoff(text)
+                or _APP_MINT_SCRIPT.search('\n'.join(_code(text))))
+
+
 def app_token_environment_findings(workflows: dict[str, str]) -> list[str]:
     """Require an environment for every visible App mint/private-key handoff.
 
@@ -2161,17 +2211,8 @@ def app_token_environment_findings(workflows: dict[str, str]) -> list[str]:
     """
     findings = []
     for name, workflow in workflows.items():
-        inherited_env = '\n'.join(_job_values(workflow, 'env'))
         for job, body in _jobs(workflow).items():
-            references = (reference for _, _, reference, _ in
-                          action_uses({name: body}, findings=[]))
-            action_mint = any(reference.partition('@')[0].casefold()
-                              in {'actions/create-github-app-token',
-                                  'tibdex/github-app-token'}
-                              for reference in references)
-            text = inherited_env + '\n' + body
-            if not (action_mint or _private_key_handoff(text)
-                    or _APP_MINT_SCRIPT.search('\n'.join(_code(text)))):
+            if not _uses_app_token(workflow, body):
                 continue
             if not _literal_job_environment(body):
                 findings.append(
@@ -2197,15 +2238,18 @@ def _sized(text: str, command: str | None) -> bool:
     mention is part of the one parity command.
     """
     marks = sorted([(match.start(), 'C') for match in _VERIFY_CALL.finditer(text)]
+                   + [(match.start(), 'N') for match in _NATIVE_X86_CALL.finditer(text)]
                    + [(match.start(), 'F' if text.startswith(
                        (f'--jobs {CORES}', f'--jobs={CORES}'), match.start()) else 'U')
                       for match in _JOBS_FLAG.finditer(text)])
     calls = ''.join(kind for _, kind in marks)
     parity = text.count(PARITY_COMMAND)
-    return (re.fullmatch(r'(?:CF)*', calls) is not None
+    allowed_calls = ({VERIFY: r'(?:CF)*', NATIVE_X86_COMMAND: r'(?:NF)*'}
+                     .get(command, r''))
+    return (re.fullmatch(allowed_calls, calls) is not None
             and len(re.findall(r'\bJOBS\s*[:=]', text)) == parity
             and text.count(PARITY) == parity
-            and (command != VERIFY or bool(calls))
+            and (command not in (VERIFY, NATIVE_X86_COMMAND) or bool(calls))
             and (command != PARITY or parity > 0))
 
 
@@ -2236,14 +2280,43 @@ def _effective_permissions(workflow: str, body: str) -> list[str]:
     return _job_values(body, 'permissions') or _job_values(workflow, 'permissions')
 
 
-def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool = False) -> bool:
+def _private_key_inputs(text: str) -> bool:
+    """Recognize key inputs/material in env, action inputs and run scopes."""
+    scopes: list[tuple[int, str]] = []
+    for raw in _code(text):
+        line = _action_yaml_visible(raw)[0]
+        depth = _indent(raw)
+        while scopes and depth <= scopes[-1][0]:
+            scopes.pop()
+        key = re.match(r'''(?:-\s+)?(["']?)([A-Za-z_][\w-]*)\1[ \t]*:(?:[ \t]|$)''',
+                       line.strip())
+        if (key and scopes and scopes[-1][1] in {'env', 'with'}
+                and _PRIVATE_KEY_WORD.search(key.group(2))):
+            return True
+        if key:
+            scopes.append((depth, key.group(2)))
+        if (any(scope == 'run' for _, scope in scopes)
+                and re.search(r'(?<![\w-])--private[-_]?key(?:=|\s)', line,
+                              re.IGNORECASE)):
+            return True
+        if (any(scope in {'env', 'with', 'run'} for _, scope in scopes)
+                and re.search(r'-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----', line)):
+            return True
+    return False
+
+
+def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool = False,
+                       strict: bool = False) -> bool:
     """L6: non-GITHUB_TOKEN secrets, OIDC writes or a deployment environment.
 
     Existing VM checks conservatively include workflow permissions. GKE checks
     use the job's effective scopes. Bracket/dynamic secret access and inherited
-    reusable-workflow secrets must not bypass either rule.
+    reusable-workflow secrets must not bypass either rule. ``strict`` is
+    reserved for the token-only prebuilt artifact job; other callers retain
+    the main workflow's comment-stripped credential scan.
     """
-    if _job_values(body, 'environment') or _job_values(body, 'secrets') == ['inherit']:
+    if (_job_values(body, 'environment')
+            or _job_values(body, 'secrets') == ['inherit']):
         return True
     permissions = (_effective_permissions(workflow, body) if effective_permissions else
                    _job_values(workflow, 'permissions') + _job_values(body, 'permissions'))
@@ -2251,10 +2324,44 @@ def _holds_credentials(workflow: str, body: str, *, effective_permissions: bool 
     if any(value == 'write-all' or re.search(oidc_write, value, re.IGNORECASE)
            for value in permissions):
         return True
-    text = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(body))
-    text += '\n' + '\n'.join(_job_values(workflow, 'env'))
-    for match in re.finditer(r'\bsecrets\s*(?:\.\s*([A-Za-z_]\w*)|\[([^\]]+)\])',
-                             text, re.IGNORECASE):
+
+    if strict:
+        # Expressions expand even in script comments; retain every raw byte.
+        # Other jobs' App credentials are not inherited by the artifact job.
+        header = _JOBS_KEY.split(workflow, maxsplit=1)[0]
+        inherited_env = []
+        in_env = False
+        for line in workflow.split('\n'):
+            if line.strip() and _indent(line) == 0 and not line.startswith('#'):
+                in_env = _key_value(line, 'env') is not None
+            if in_env:
+                inherited_env.append(line)
+        text = header + '\n' + body + '\n' + '\n'.join(inherited_env)
+        if (_uses_app_token(workflow, body)
+                or _private_key_inputs(body + '\n' + '\n'.join(inherited_env))):
+            return True
+        # A whole/dynamic secrets context cannot prove GITHUB_TOKEN-only use.
+        # Prose may mention secrets; inspect expressions without cutting hashes
+        # or treating a quoted }} (including doubled quotes) as their end.
+        for expression in re.finditer(r'\$\{\{', text):
+            end, in_string = expression.end(), False
+            while end < len(text):
+                if text[end] == "'":
+                    if in_string and text.startswith("''", end):
+                        end += 2
+                        continue
+                    in_string = not in_string
+                elif not in_string and text.startswith('}}', end):
+                    break
+                end += 1
+            value = text[expression.end():end]
+            if any(_SECRET_REFERENCE.match(value, context.start()) is None
+                   for context in re.finditer(r'\bsecrets\b', value, re.IGNORECASE)):
+                return True
+    else:
+        text = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(body))
+        text += '\n' + '\n'.join(_job_values(workflow, 'env'))
+    for match in _SECRET_REFERENCE.finditer(text):
         if match.group(1) is not None:
             if match.group(1).upper() != 'GITHUB_TOKEN':
                 return True
@@ -2314,7 +2421,7 @@ def workflow_fleet_findings(workflows: dict[str, str]) -> list[str]:
         runner = POST_RUNNER if reachable & POST_EVENTS else PR_RUNNER
         event_class = 'post-merge events' if reachable & POST_EVENTS else 'pull_request'
         fixed_hosted = {job: label for job, label in HOSTED_JOB_RUNNERS.get(name, {}).items()
-                        if label == 'ubuntu-24.04' or (reachable & POST_EVENTS and 'pull_request' not in reachable)}
+                        if label == HOSTED_X86_RUNNER or (reachable & POST_EVENTS and 'pull_request' not in reachable)}
         if not reachable:
             findings.append(f'{name} must have a reachable event for fleet routing')
         for job, body in _jobs(workflow).items():
@@ -2343,14 +2450,15 @@ def _workflow_runner(workflow: str) -> str:
 
 
 def _authz_header(name: str) -> str:
-    # Only the runner varies; the canon step hash and all header keys stay pinned.
-    runner = GKE_LIGHT_JOB_RUNNERS.get(name, {}).get('authz', 'ubuntu-24.04')
+    # Every scoped workflow's authz job runs on the hosted x86 image; the canon
+    # step hash and all header keys stay pinned, so no per-workflow variance remains.
+    runner = GKE_LIGHT_JOB_RUNNERS.get(name, {}).get('authz', HOSTED_X86_RUNNER)
     return AUTHZ_JOB_HEADER.replace('runs-on: ubuntu-24.04', f'runs-on: {runner}')
 
 
 _GKE_ROUTE = re.compile(r'(?<![\w.-])gke-[\w.-]+', re.IGNORECASE)
 _GKE_SCALE_LABEL = re.compile(
-    r'(?<![\w.-])gke-\d+cpu-\d+gb-(?:amd64|arm64)(?:-(?:128|256)gb)?(?![\w.-])')
+    r'(?<![\w.-])gke-(?:ondemand-)?\d+cpu-\d+gb-(?:amd64|arm64)(?:-(?:128|256)gb)?(?![\w.-])')
 _GKP_ROUTE = re.compile(r'(?<![\w.-])gkp-[\w.-]+', re.IGNORECASE)
 _GKP_SCALE_LABEL = re.compile(r'gkp-(?:od-)?\d+cpu-\d+gb-amd64(?:-\d+gb)?')
 
@@ -2572,7 +2680,7 @@ def _resolved_runner_values(workflow: str, body: str) -> tuple[list[str], bool]:
 
 # Disk suffixes still require group membership; admitted sizes are pinned separately.
 _RUNNER_GROUP_LABEL = re.compile(
-    r'(?<![\w.-])(?:gke|gkp(?:-od)?)-\d+cpu-\d+gb-[A-Za-z0-9_]+(?:-\d+gb)?(?![\w.-])',
+    r'(?<![\w.-])(?:gke(?:-ondemand)?|gkp(?:-od)?)-\d+cpu-\d+gb-[A-Za-z0-9_]+(?:-\d+gb)?(?![\w.-])',
     re.IGNORECASE)
 _REPOSITORY_ID = r'[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*'
 _RUNNER_GROUP_REFERENCE = re.compile(
@@ -2665,9 +2773,9 @@ def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
                           for value in _job_values(body, 'uses')
                           if value.startswith('./.github/workflows/')]
              for name, jobs in workflow_jobs.items() for job, body in jobs.items()}
+    # Only a literal gke-* route is GKE; the native profile matrix is hosted.
     gke_workflows = {name for name, jobs in workflow_jobs.items()
                      if any(_GKE_ROUTE.search(' '.join(_job_values(body, 'runs-on')))
-                            or _native_runner_matrix(name, job, body)
                             for job, body in jobs.items())}
     # Credentials follow all calls, independent of input conditions or matrix rows.
     while True:
@@ -2694,22 +2802,16 @@ def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
             runners = ' '.join(_job_values(body, 'runs-on'))
             labels = [label.lower() for label in _GKE_ROUTE.findall(runners)
                       if label.lower() != 'gke-runners']
-            native_matrix = _native_runner_matrix(name, job, body)
             callees = calls[(name, job)]
-            if not labels and not callees and not native_matrix:
+            if not labels and not callees:
                 continue
             rows = _matrix_rows(body)
             if rows is None:
                 findings.append(f'{name} job {job} must use a readable static matrix for the GKE cap')
                 continue
             instances = multiplier * len(rows)
-            if native_matrix:
-                for row in rows:
-                    label = row['runner']
-                    counts[label] = counts.get(label, 0) + multiplier
-            else:
-                for label in set(labels):
-                    counts[label] = counts.get(label, 0) + instances
+            for label in set(labels):
+                counts[label] = counts.get(label, 0) + instances
             arguments = '\n'.join(_job_block(body, 'with')[1:])
             keys = re.findall(r'^\s+([A-Za-z_]\w*):', arguments, re.MULTILINE)
             passed = {key: values[0] for key in keys
@@ -2746,7 +2848,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         if arm_variant:
             hosted_pins = {**hosted_pins, **gke_pins}
         fixed_hosted = {job: label for job, label in hosted_pins.items()
-                        if label == 'ubuntu-24.04' or name == 'gke-pr.yml'
+                        if label == HOSTED_X86_RUNNER or name == 'gke-pr.yml'
                         or (routes[name] & POST_EVENTS and 'pull_request' not in routes[name])}
         if _LARGER_RUNNER_LABEL.search(code):
             findings.append(f'{name} must not use larger-runner labels; use the GCP fleet or hosted exceptions')
@@ -2776,6 +2878,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                      if job not in jobs]
         for job, body in jobs.items():
             runs_on, uses = _job_values(body, 'runs-on'), _job_values(body, 'uses')
+            strict_prebuilt = (name, job) == ('release.yml', 'prebuilt')
             gke_pin = gke_pins.get(job)
             resolved_runners, _ = _resolved_runner_values(workflow, body)
             has_gke = bool(_GKE_ROUTE.search(' '.join(runs_on + resolved_runners)))
@@ -2800,7 +2903,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             protected_environment = GKP_JOB_ENVIRONMENTS.get(name, {}).get(job)
             if protected_environment and _job_values(body, 'environment') != [protected_environment]:
                 findings.append(f'{name} job {job} must use environment {protected_environment} '
-                                'on protected GKE')
+                                'on its protected release job')
             native_matrix = _native_runner_matrix(name, job, body)
             if gke_pin == GKE_MATRIX_RUNNER and not native_matrix:
                 findings.append(f'{name} job {job} must keep exactly '
@@ -2816,7 +2919,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 findings.append(f'{name} job {job} must not declare job services on GKE')
             if has_gke:
                 permissions = _effective_permissions(workflow, body)
-                if (_holds_credentials(workflow, body, effective_permissions=True)
+                if (_holds_credentials(workflow, body, effective_permissions=True,
+                                       strict=strict_prebuilt)
                         or any(re.search(r'\bid-token\b', value) for value in permissions)):
                     findings.append(f'{name} job {job} must not expose credentials on GKE')
             runner_text = ' '.join(runs_on + _job_block(body, 'strategy'))
@@ -2831,7 +2935,9 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             # Only an exact admitted GKE pin may use effective token scopes.
             # Other jobs retain the conservative workflow-plus-job credential check.
             exact_gke_runner = bool(gke_pin and job in fixed_hosted and raw_runners == [gke_pin])
-            credentials = _holds_credentials(workflow, body, effective_permissions=exact_gke_runner)
+            credentials = _holds_credentials(
+                workflow, body, effective_permissions=exact_gke_runner,
+                strict=strict_prebuilt)
             if job not in pinned:
                 if pinned and runs_on:
                     findings.append(f'{name} job {job} needs a pinned runner and time limit')
@@ -2848,16 +2954,14 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                                bool(re.fullmatch(r'ubuntu-(?:\d{2}\.\d{2}|latest)-arm', runs_on[0])))
             if job in fixed_release:
                 # A quoted JSON scalar does not select a YAML label array.
+                # The probe workflow pin below compares nonblank lines after
+                # removing comment-only lines; the runner label is exact.
                 actual = _job_values(body, 'runs-on', unquote=False)
                 expected = [fixed_release[job]]
-                if fixed_release[job] == PR_RUNNER:
-                    # Normalize the runner array here; the probe workflow pin below
-                    # compares nonblank lines after removing comment-only lines.
-                    actual = [_runner_value(value) for value in actual]
-                    expected = [_runner_value(value) for value in expected]
                 if actual != expected:
-                    suffix = {PR_RUNNER: '', POST_RUNNER: ' (post fleet)', 'ubuntu-24.04': ' (hosted)'}.get(
-                        fixed_release[job], ' (isolated release)')
+                    # The probe and promotion jobs run on the hosted image; the
+                    # unchanged release jobs keep their isolated GKP labels.
+                    suffix = ' (hosted)' if fixed_release[job] in STANDARD_RUNNERS else ' (isolated release)'
                     findings.append(f'{name} job {job} must run on {fixed_release[job]}{suffix}')
                 environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
@@ -2872,27 +2976,30 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             elif gke_pin and job in fixed_hosted:
                 if _job_values(body, 'runs-on', unquote=False) != [gke_pin]:
                     findings.append(f'{name} job {job} must run on {gke_pin}')
-                if credentials:
-                    findings.append(f'{name} job {job} must keep production credentials '
-                                    'on a hosted standard runner')
+                # The verification, guard and aggregate jobs hold no production
+                # credentials; the pin is the hosted image, not a credential exemption.
+                # Any id-token mention in the effective scopes stays refused, as it
+                # was for these jobs before the hosted migration.
+                if credentials or any(re.search(r'\bid-token\b', value)
+                                      for value in _effective_permissions(workflow, body)):
+                    findings.append(f'{name} job {job} must not expose credentials '
+                                    'on a pinned verification job')
+                # The pinned image is the environment under test: no job container
+                # or service may replace it (the old GKE rule, kept for the hosted pin).
+                if _job_values(body, 'container'):
+                    findings.append(f'{name} job {job} must not declare a job container '
+                                    'on a pinned verification job')
+                if _job_values(body, 'services'):
+                    findings.append(f'{name} job {job} must not declare job services '
+                                    'on a pinned verification job')
                 if (name == 'native-live.yml'
                         or name == 'promote-baseline.yml'
                         or name == 'ci-post.yml' and job not in (
                             'preflight', 'preflight-slow', 'changes', 'build-gate')):
                     environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                     if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
-                        findings.append(f'{name} job {job} must not set PF_CI_LABELS on a GKE job')
-            elif fixed_hosted.get(job) == POST_RUNNER:
-                actual = _job_values(body, 'runs-on', unquote=False)
-                if [_runner_value(value) for value in actual] != [_runner_value(POST_RUNNER)]:
-                    findings.append(f'{name} job {job} must run on {POST_RUNNER}')
-                if credentials:
-                    findings.append(f'{name} job {job} must keep production credentials '
-                                    'on a hosted standard runner')
-                environments = _job_values(workflow, 'env') + _job_values(body, 'env')
-                if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
-                    findings.append(f'{name} job {job} must not set PF_CI_LABELS '
-                                    'on a post fleet job')
+                        findings.append(f'{name} job {job} must not set PF_CI_LABELS '
+                                        'on a pinned verification job')
             elif (job in fixed_hosted
                   or (credentials and (name, job) != ('docs-post.yml', 'build'))
                   or (job not in pinned and hosted_platform)):
@@ -2958,7 +3065,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             ('ci-post.yml', 'build-debug', POST_DEBUG_BUILD_STRATEGY, post_build_name(2),
              'only Ubuntu Debug shards on full events'),
             ('ci-post.yml', 'build-arm', POST_ARM_BUILD_STRATEGY, POST_ARM_BUILD_NAME,
-             'only Linux arm64 Release/Debug cells on full events')):
+             'only Linux arm64 Release/Debug shards on full events')):
         if name not in workflows:
             continue
         build = _jobs(workflows[name]).get(job, '')
@@ -2972,6 +3079,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             body = jobs.get(job, '')
             strategy = (POST_BUILD_STRATEGY if job == 'build' else
                         POST_DEBUG_BUILD_STRATEGY if job == 'build-debug' else
+                        POST_ARM_BUILD_STRATEGY if job == 'build-arm' else
                         '    strategy:\n      fail-fast: false\n      matrix:\n'
                         '        shard: [' + ', '.join(str(i) for i in range(1, count + 1)) + ']\n')
             if _job_block(body, 'strategy') != _code(strategy):
@@ -2989,7 +3097,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                     findings.append(f'ci-post.yml {job} legs must keep their names: {display}')
     if 'release.yml' in workflows:
         prebuilt = _jobs(workflows['release.yml']).get('prebuilt', '')
-        if _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY):
+        if (len(_job_values(prebuilt, 'strategy')) != 1
+                or _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY)):
             findings.append('release.yml prebuilt must use exactly the isolated Linux x64 '
                             'and hosted ARM matrix')
         prebuilt_steps = _steps(prebuilt)
@@ -3003,6 +3112,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                         < prebuilt_steps.index(configure))):
             findings.append('release.yml prebuilt must install Eigen and assert exactly 3.4.0 '
                             'before configuring')
+        findings += release_prebuilt_workflow_findings(workflows['release.yml'])
         if any(re.search(r'macos|darwin|CMAKE_OSX_', '\n'.join(_code(step)), re.IGNORECASE)
                for step in _steps(prebuilt)):
             findings.append('release.yml prebuilt must not contain macOS build steps')
@@ -3108,6 +3218,265 @@ RELEASE_EIGEN_ASSERT_STEP = r'''      - name: Assert Eigen3 3.4.0 on the protect
           echo "Eigen3 3.4.0 present at $(dirname "$(dirname "$hdr")")"
 '''
 
+# Exact reviewed steps: ARM host commands, x86 transport, identity, all-library
+# inspection and publication order form one contract. Extra steps fail closed.
+RELEASE_PREBUILT_STEPS = r'''
+      # A dry run has no tag yet: it builds the dispatched commit.
+      - name: Checkout release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
+          fetch-depth: 0   # the version helper still observes the git sha
+          persist-credentials: false
+
+      - name: Assert tag still names the emitted release commit
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          SHA: ${{ needs.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::invalid emitted release sha: ${SHA}" >&2
+            exit 1
+          fi
+          test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${SHA}"
+
+      - name: Write the dry run's VERSION
+        if: ${{ inputs.dry_run }}
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: printf '%s\n' "${NEXT}" > VERSION
+
+      # The x86_64 build uses only the preloaded immutable Bookworm toolchain.
+      - name: Build x86_64 in preloaded Bookworm
+        if: matrix.triple == 'linux-x86_64'
+        env:
+          ENGINE_TOOLCHAIN_IMAGE: ${{ vars.ENGINE_TOOLCHAIN_IMAGE }}
+          SOURCE_SHA: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
+          NEXT: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          bash scripts/build_prebuilt_bookworm.sh \
+            "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" "${SOURCE_SHA}" "${NEXT}" "${TAG}" "${DRY_RUN}"
+
+      - name: Install Eigen3 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev
+
+      - name: Assert Eigen3 3.4.0 on the protected Linux x86_64 slice
+        if: runner.os == 'Linux' && matrix.triple == 'linux-x86_64'
+        run: |
+          set -euo pipefail
+          hdr=""
+          for p in /usr/include/eigen3/Eigen/Core /usr/local/include/eigen3/Eigen/Core; do
+            if [ -f "$p" ]; then hdr="$p"; break; fi
+          done
+          if [ -z "$hdr" ]; then
+            echo "::error::Eigen3 headers not found on the protected GKE runner"
+            exit 1
+          fi
+          macros="$(dirname "$hdr")/src/Core/util/Macros.h"
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "$macros"
+          echo "Eigen3 3.4.0 present at $(dirname "$(dirname "$hdr")")"
+
+      # The ARM build checks the exact Eigen headers that CMake will consume.
+      - name: Assert Eigen3 3.4.0 on ARM
+        if: runner.os == 'Linux' && matrix.triple == 'linux-aarch64'
+        run: |
+          set -euo pipefail
+          macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "${macros}"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "${macros}"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "${macros}"
+
+      - name: Configure
+        if: matrix.triple == 'linux-aarch64'
+        env:
+          TAG:         ${{ needs.release.outputs.tag }}
+          TRIPLE:      ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          stage="stage/pineforge-${TAG}-${TRIPLE}"
+          echo "STAGE_DIR=${stage}" >> "$GITHUB_ENV"
+          # FILE: the version identity is the VERSION file exactly, -rc.N
+          # included, however the checkout's tags describe it; a dry run's
+          # VERSION has no tag at all.
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DEigen3_DIR=/usr/share/eigen3/cmake \
+            -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+            -DPINEFORGE_BUILD_TESTS=OFF \
+            -DPINEFORGE_BUILD_TUTORIAL=OFF \
+            -DPINEFORGE_VERSION_SOURCE=FILE \
+            -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}"
+          grep -Fx 'Eigen3_DIR:PATH=/usr/share/eigen3/cmake' build/CMakeCache.txt
+
+      - name: Build
+        if: matrix.triple == 'linux-aarch64'
+        run: cmake --build build -j 4
+
+      - name: Install to staging
+        if: matrix.triple == 'linux-aarch64'
+        run: cmake --install build
+
+      # The generated version.h and the CMake package files must carry the
+      # full version, -rc.N included, and its numeric X.Y.Z.
+      - name: Verify the staged version
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: |
+          python3 scripts/release_version.py check-install \
+            --prefix "${STAGE_DIR}" --expect "${NEXT}"
+
+      # Both dry-run and publication inspect every installed .a/.so/.so.*.
+      # Keep raw checker output and its actual exit status, including setup errors.
+      - name: Check every staged library's glibc floor
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
+          mkdir -p "${log}"
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+            checker_rc=0
+          else checker_rc=$?; fi
+          printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
+          cat "${log}/stdout.jsonl"
+          cat "${log}/stderr.txt" >&2
+          exit "${checker_rc}"
+
+      - name: Bundle docs into tarball root
+        run: |
+          set -euo pipefail
+          cp LICENSE NOTICE VERSION "${STAGE_DIR}/"
+
+      - name: Pack tarball + sha256
+        id: pack
+        env:
+          TAG:    ${{ needs.release.outputs.tag }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          base="pineforge-${TAG}-${TRIPLE}"
+          tarball="${base}.tar.gz"
+          tar -czf "${tarball}" -C "$(dirname "${STAGE_DIR}")" "${base}"
+          sha256sum "${tarball}" > "${tarball}.sha256"
+          echo "tarball=${tarball}"           >> "$GITHUB_OUTPUT"
+          echo "sha256=${tarball}.sha256"     >> "$GITHUB_OUTPUT"
+
+      # The x86_64 release path must consume the bytes it is about to upload.
+      # The helper checks the sidecar, unpacks the archive, and runs the
+      # existing native host against the shipped full archive in Bookworm.
+      - name: Consume packed x86_64 archive
+        if: matrix.triple == 'linux-x86_64'
+        env:
+          ENGINE_TOOLCHAIN_IMAGE: ${{ vars.ENGINE_TOOLCHAIN_IMAGE }}
+          TARBALL:  ${{ steps.pack.outputs.tarball }}
+          SHASUM:   ${{ steps.pack.outputs.sha256 }}
+          TAG:      ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          bash scripts/build_prebuilt_bookworm.sh \
+            --consume "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" \
+            "${TARBALL}" "${SHASUM}" "${TAG}"
+
+      - name: Upload to release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:     ${{ needs.release.outputs.tag }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          SHASUM:  ${{ steps.pack.outputs.sha256 }}
+        run: |
+          gh release upload "${TAG}" "${TARBALL}" "${SHASUM}" --clobber
+
+      - name: Keep the dry run's tarball as a workflow artifact
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.pack.outputs.tarball }}
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.sha256 }}
+          retention-days: 7
+'''
+
+
+# Git blob identity of the transport, including build and archive-consumer launch.
+# A changed helper requires reviewing its source and controls before repinning.
+# This is a source contract, never an engine/build/glibc verdict.
+RELEASE_BOOKWORM_HELPER_BLOB = 'daaf2fe0541b5d0f8aab0746b35dcf069862afa3'
+# The helper delegates the shipped-archive execution to this exact consumer.
+# This is a source contract, never a native-runtime verdict.
+RELEASE_BOOKWORM_CONSUMER_BLOB = 'd066968913c0d4ff7358e6fd4dde2a794e1be600'
+
+
+def release_prebuilt_helper_findings(source: str) -> list[str]:
+    payload = source.encode('utf-8')
+    actual = hashlib.sha1(b'blob ' + str(len(payload)).encode('ascii') + b'\0' + payload).hexdigest()
+    if actual != RELEASE_BOOKWORM_HELPER_BLOB:
+        return ['release prebuilt Bookworm helper differs from the reviewed immutable-image, '
+                'bounded-mount, inside-build and no-fallback source contract']
+    return []
+
+
+def release_prebuilt_consumer_findings(source: str) -> list[str]:
+    payload = source.encode('utf-8')
+    actual = hashlib.sha1(b'blob ' + str(len(payload)).encode('ascii') + b'\0' + payload).hexdigest()
+    if actual != RELEASE_BOOKWORM_CONSUMER_BLOB:
+        return ['release prebuilt archive consumer differs from the reviewed full-library '
+                'native consumer source contract']
+    return []
+
+
+def release_prebuilt_workflow_findings(workflow: str) -> list[str]:
+    """Pin artifact structure and its token-only admission surface."""
+    prebuilt = _jobs(workflow).get('prebuilt', '')
+    findings = []
+    if _job_values(prebuilt, 'needs') != ['release']:
+        findings.append('release.yml prebuilt must retain needs: release before build')
+    if _job_values(workflow, 'permissions') != ['contents: write']:
+        findings.append('release.yml prebuilt must retain workflow permissions: contents: write')
+    if _job_values(prebuilt, 'permissions') != ['contents: write']:
+        findings.append('release.yml prebuilt must retain job permissions: contents: write')
+    if _job_values(prebuilt, 'uses'):
+        findings.append('release.yml prebuilt must not use a reusable workflow')
+    if ([_code(step) for step in _steps(prebuilt)]
+            != [_code(step) for step in _steps(RELEASE_PREBUILT_STEPS)]):
+        findings.append('release.yml prebuilt must retain the credential-free Bookworm build, '
+                        'ARM Eigen setup, all-library glibc gate and packed-archive consumer before upload')
+    marker = "      - name: Check every staged library's glibc floor"
+    gate = _step_named(_steps(prebuilt), marker)
+    required_gate = _step_named(_steps(RELEASE_PREBUILT_STEPS), marker)
+    # Compare raw physical lines in the named step. Removing blank/comment
+    # lines before comparison can turn a disabled shell continuation into proof.
+    if gate.rstrip('\n') != required_gate.rstrip('\n'):
+        findings.append('release.yml prebuilt must retain the raw single-line all-library '
+                        'glibc checker invocation and its run context')
+    if (any(_job_values(prebuilt, key) for key in ('if', 'continue-on-error', 'defaults'))
+            or _job_values(workflow, 'defaults')):
+        findings.append('release.yml prebuilt must keep default success/failure and shell behavior')
+    for scope in (workflow, prebuilt):
+        values = _job_values(scope, 'env')
+        block = _job_block(scope, 'env')
+        # The mapping header `env:` is not a shell ENV binding. Inspect only
+        # its children; duplicate, flow or expression mappings fail closed.
+        if (len(values) > 1 or (values and not block)
+                or re.search(r'''(?mi)^\s*['"]?(?:BASH_ENV|ENV|PATH|DOCKER_\w+|CMAKE_\w+|CC|CXX|'''
+                             r'''CFLAGS|CXXFLAGS|LDFLAGS|GITHUB_\w+|RUNNER_\w+|STAGE_DIR|'''
+                             r'''SOURCE_SHA|TRIPLE|ENGINE_TOOLCHAIN_IMAGE)['"]?\s*:''',
+                             '\n'.join(block[1:]))):
+            findings.append('release.yml prebuilt must not override toolchain, Docker or shared-path inputs')
+            break
+    return findings
+
+
 # ci_release_gate.py's phase-1 exemption is bounded by this exact writer.
 RELEASE_BUMP_PUBLISH_STEP = r'''      - name: Write bumped VERSION, commit, tag, push
         id: publish
@@ -3160,8 +3529,7 @@ jobs:
   authz:
     name: authz
     # Preflight pins executable workflow lines after removing comment-only lines.
-    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses gkp-2cpu-4gb-amd64.
-    runs-on: gke-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -3222,7 +3590,7 @@ jobs:
 
   probe:
     needs: [authz]
-    runs-on: gkp-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     environment: release
     steps:
       - name: Refuse a dispatch ref other than main
@@ -3564,6 +3932,7 @@ def post_shard_workflow_findings(jobs: dict[str, str]) -> list[str]:
         upload = _step_named(steps, '      - name: Retain CI diagnostics')
         diagnostic = ('${{ matrix.platform.os }}-${{ matrix.build_type }}'
                       if job in ('build', 'build-debug') else
+                      'ubuntu-24.04-arm-${{ matrix.build_type }}' if job == 'build-arm' else
                       'kernel' if job == 'kernel-only' else 'sanitizers')
         if ('          name: ci-diagnostics-' + diagnostic
                 + '-shard-${{ matrix.shard }}-of-' + str(count) not in _code(upload)
@@ -3614,6 +3983,79 @@ def _native_profile_job_findings(job: str, name: str, *, sharded: bool) -> list[
     return findings
 
 
+def native_x86_job_findings(job: str, name: str, *, pr: bool) -> list[str]:
+    """Require the ordinary native x86 build job and its failure evidence."""
+    if not job:
+        return [f'{name} {NATIVE_X86_JOB} must contain the required native x86 GNU 13.3.0 job']
+
+    findings = []
+    expected_needs = ['admit'] if pr else ['authz']
+    expected_if = NATIVE_X86_PR_IF if pr else AUTHZ_ALWAYS
+    if (_needs(job) != expected_needs or _job_values(job, 'if') != [expected_if]):
+        findings.append(f'{name} {NATIVE_X86_JOB} must start after its admission gate '
+                        'and run on every admitted path')
+    expected_permissions = ['{contents: read}'] if pr else ['contents: read']
+    if (_job_values(job, 'runs-on') != [HOSTED_X86_RUNNER]
+            or _job_values(job, 'permissions') != expected_permissions):
+        findings.append(f'{name} {NATIVE_X86_JOB} must use the hosted x86 runner '
+                        'with read-only contents')
+    if (_job_values(job, 'name') or any(_job_values(job, key) for key in (
+            'strategy', 'uses', 'container', 'services', 'environment', 'env',
+            'timeout-minutes'))):
+        findings.append(f'{name} {NATIVE_X86_JOB} must remain one ordinary fixed build job')
+
+    steps = _steps(job)
+    checkout_name = 'Checkout the admitted head' if pr else 'Checkout the exact workflow head'
+    expected_names = ([checkout_name,
+                       NATIVE_X86_BUILD_STEP.removeprefix('      - name: '),
+                       NATIVE_X86_ARTIFACT_STEP.removeprefix('      - name: ')] if pr else [
+                           'Refuse an unauthorised run before anything else',
+                           checkout_name,
+                           NATIVE_X86_BUILD_STEP.removeprefix('      - name: '),
+                           NATIVE_X86_ARTIFACT_STEP.removeprefix('      - name: ')])
+    if [_step_values(step, 'name') for step in steps] != [[name] for name in expected_names]:
+        findings.append(f'{name} {NATIVE_X86_JOB} must keep checkout, real build and '
+                        'failure artifact steps in order')
+
+    if not pr and (not steps or _code(steps[0]) != _code(AUTHZ_REFUSE_STEP)):
+        findings.append(f'{name} {NATIVE_X86_JOB} must refuse an unauthorised run first')
+    checkout = _step_named(steps, f'      - name: {checkout_name}')
+    checkout_inputs = '\n'.join(_step_block(checkout, 'with')[1:])
+    checkout_ref = ('${{ needs.admit.outputs.head_sha }}' if pr
+                    else '${{ github.sha }}')
+    checkout_if = [] if pr else [AUTHZ_SUCCESS]
+    if (_step_values(checkout, 'uses') != [
+            'actions/checkout@11d5960a326750d5838078e36cf38b85af677262']
+            or _step_values(checkout, 'if') != checkout_if
+            or _job_values(checkout_inputs, 'repository') != ['${{ github.repository }}']
+            or _job_values(checkout_inputs, 'ref') != [checkout_ref]
+            or _job_values(checkout_inputs, 'fetch-depth') != ['0']
+            or _job_values(checkout_inputs, 'persist-credentials') != ['false']):
+        findings.append(f'{name} {NATIVE_X86_JOB} must checkout its exact head '
+                        'with persisted credentials disabled')
+
+    build = _step_named(steps, NATIVE_X86_BUILD_STEP)
+    if (_step_values(build, 'run') != [NATIVE_X86_RUN]
+            or _step_values(build, 'if') != ([] if pr else [AUTHZ_SUCCESS])
+            or any(_step_values(build, key) for key in (
+                'uses', 'env', 'shell', 'working-directory', 'continue-on-error',
+                'timeout-minutes'))):
+        findings.append(f'{name} {NATIVE_X86_JOB} must invoke the full native x86 '
+                        'helper with the runner parallelism input')
+
+    artifact = _step_named(steps, NATIVE_X86_ARTIFACT_STEP)
+    artifact_inputs = '\n'.join(_step_block(artifact, 'with')[1:])
+    artifact_name = 'gke-pr-native-x86-gcc133' if pr else 'ci-post-native-x86-gcc133'
+    if (_step_values(artifact, 'if') != ['always()']
+            or _step_values(artifact, 'uses') != [NATIVE_X86_UPLOAD]
+            or _job_values(artifact_inputs, 'name') != [artifact_name]
+            or _job_values(artifact_inputs, 'path') != [NATIVE_X86_ARTIFACT_DIR + '/']
+            or _job_values(artifact_inputs, 'if-no-files-found') != ['warn']):
+        findings.append(f'{name} {NATIVE_X86_JOB} must retain helper logs and evidence '
+                        'after every build result')
+    return list(dict.fromkeys(findings))
+
+
 def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[str]:
     """Pin each pipeline's actual jobs, dependencies, commands and aggregate."""
     findings = authz_workflow_findings(workflow, name, 'build-gate')
@@ -3623,7 +4065,7 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     if pr and _job_block(workflow, 'concurrency') != _code(CI_CONCURRENCY):
         findings.append('ci.yml must keep its exact draft and ready concurrency groups')
     jobs = _jobs(workflow)
-    proofs = PR_PROOF_JOBS if pr else PROOF_JOBS
+    proofs = PR_PROOF_JOBS if pr else POST_PROOF_JOBS
     expected_jobs = {'authz', 'changes', 'preflight', *proofs, 'build-gate'}
     if not pr:
         expected_jobs.add('preflight-slow')
@@ -3680,8 +4122,12 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
             findings.append('preflight-slow must run all deferred stages on full events only')
     for job in proofs.keys() - (set() if pr else POST_LEG_GATES.keys()):
         body = jobs.get(job, '')
-        if (sorted(_needs(body)) != ['authz', 'changes']
-                or _job_values(body, 'if') != [GITHUB_ONLY_SKIP if pr else DOCS_ONLY_SKIP]):
+        always_job = not pr and job in POST_ALWAYS_JOBS
+        expected_needs = ['authz'] if always_job else ['authz', 'changes']
+        expected_if = AUTHZ_ALWAYS if always_job else (
+            GITHUB_ONLY_SKIP if pr else DOCS_ONLY_SKIP)
+        if (sorted(_needs(body)) != expected_needs
+                or _job_values(body, 'if') != [expected_if]):
             findings.append(f'{job} must start alongside preflight, after authz and changes, '
                             'and skip only its classified path policy')
     gate = jobs.get('build-gate', '')
@@ -3702,7 +4148,10 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     if '[[ "$PREFLIGHT_RESULT" == "success" ]]' not in gate or 'passed "$PREFLIGHT_RESULT"' in gate:
         findings.append('build-gate must require preflight success')
     for job, variable in proofs.items():
-        if f'passed "${variable}"' not in gate:
+        if not pr and job in POST_ALWAYS_JOBS:
+            if f'[[ "${variable}" == "success" ]]' not in gate:
+                findings.append(f'build-gate must require {job} success on every event')
+        elif f'passed "${variable}"' not in gate:
             findings.append(f'build-gate must require {job} success or a docs-only skip')
     gate_steps = _steps(gate)
     if pr and (len(gate_steps) != 3 or _code(gate_steps[1]) != _code(GITHUB_ONLY_STEP)
@@ -3711,14 +4160,16 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     if not gate_steps or _code(gate_steps[-1]) != _code(GATE_STEP if pr else POST_GATE_STEP):
         findings.append('build-gate must keep the exact result policy: success or a classified docs-only skip')
     if not pr:
+        findings += native_x86_job_findings(jobs.get(NATIVE_X86_JOB, ''), name, pr=False)
         findings += post_shard_workflow_findings(jobs)
     for job in (('build',) if pr else ('build', 'build-debug', 'build-arm')):
         build = jobs.get(job, '')
         build_step = _step_named(_steps(build), '      - name: Verify (${{ matrix.build_type }})')
         shard_flag = (' --ctest-shard ${{ matrix.shard }}/' + str(POST_SHARDS[job])
                       if not pr and job in POST_SHARDS else '')
+        exclusion = POST_ARM_CTEST_EXCLUSION if not pr and job == 'build-arm' else ''
         if (_step_values(build_step, 'run') != [
-                BUILD_VERIFY_RUN if pr else POST_BUILD_VERIFY_RUN + shard_flag]
+                BUILD_VERIFY_RUN if pr else POST_BUILD_VERIFY_RUN + shard_flag + exclusion]
                 or _step_values(build_step, 'if') != [AUTHZ_SUCCESS]
                 or _counted_text(build).count('scripts/ci_verify.py') != (0 if pr else 1)
                 or _counted_text(build).count('ctest --test-dir') != (1 if pr else 0)):
@@ -3742,8 +4193,11 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
                 if _step_values(step, 'name') == ['Require the requested platform']
                 else _code(step.replace('ci-diagnostics-${{ matrix.platform.os }}-',
                                         'ci-diagnostics-ubuntu-24.04-arm-')
-                               .replace(' --ctest-shard ${{ matrix.shard }}/' + str(count), '')
-                               .replace('-shard-${{ matrix.shard }}-of-' + str(count), '')
+                               .replace(' --ctest-shard ${{ matrix.shard }}/' + str(count),
+                                        ' --ctest-shard ${{ matrix.shard }}/4'
+                                        + POST_ARM_CTEST_EXCLUSION)
+                               .replace('-shard-${{ matrix.shard }}-of-' + str(count),
+                                        '-shard-${{ matrix.shard }}-of-4')
                                .replace(SHARD_CACHE_SAVE, BUILD_CACHE_SAVE))
                 for step in _steps(jobs.get(job, ''))]
             if [_code(step) for step in _steps(jobs.get('build-arm', ''))] != expected_steps:
@@ -3763,7 +4217,11 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
                     or _step_values(step, 'if') != [AUTHZ_SUCCESS]):
                 findings.append(f'{job} must run its full profile on every shard')
     for job, body in jobs.items():
-        if any(flag in body for flag in ('--exclude-label', '--include-label', '--class-tier')):
+        # The exact arm Verify command and mirrored steps bind this Release-only
+        # exception. Remove it once; every other population filter still fails.
+        population = (body.replace(POST_ARM_CTEST_EXCLUSION, '', 1)
+                      if not pr and job == 'build-arm' else body)
+        if any(flag in population for flag in ('--exclude-label', '--include-label', '--class-tier')):
             findings.append(f'{job} must keep its full population')
     if not pr:
         if ('      exclude_slow: false' not in _code(jobs.get('native-live', ''))
@@ -4086,10 +4544,9 @@ def ci_authz_only_findings(workflow: str) -> list[str]:
     if set(jobs) != {'authz'}:
         findings.append('ci.yml must retain only its authz job after PR legs move to gke-pr')
     authz = jobs.get('authz', '')
-    # The probe's authz job runs on a pod; ci.yml's copy is the same job on the
-    # hosted image, so only the runner line differs (and is pinned just below).
-    canon = _jobs(RELEASE_RULESETS_PROBE_WORKFLOW)['authz'].replace(
-        f'runs-on: {GKE_2_LABEL}', 'runs-on: ubuntu-24.04', 1)
+    # The probe's authz job and ci.yml's copy both run on the hosted image, so the
+    # canon is the probe's authz job as pinned (the runner line is pinned just below).
+    canon = _jobs(RELEASE_RULESETS_PROBE_WORKFLOW)['authz']
     if (_unparsed(workflow) or _code(authz) != _code(canon)):
         findings.append('ci.yml must start with the verbatim canon authz job')
     if (_job_values(authz, 'runs-on') != ['ubuntu-24.04']
@@ -4244,22 +4701,24 @@ def check_commands(source: Path, output: Path | None = None,
                      [sys.executable, str(source / 'scripts/check_rng_draw_order.py')],
                      parallel=True),
         ('verifier-tests',
-         [sys.executable, str(source / 'scripts/run_unittest_shards.py'),
+         [sys.executable, str(source / 'scripts/ci_run_unittest_shards.py'),
           str(source / 'scripts/test_ci_verify.py'),
           '--log-dir', str(output_dir / 'verifier-tests-shards'), *class_args]),
         CheckCommand('preflight-tests',
-                     [sys.executable, str(source / 'scripts/run_unittest_shards.py'),
+                     [sys.executable, str(source / 'scripts/ci_run_unittest_shards.py'),
                       str(source / 'scripts/test_ci_preflight.py'),
                       '--shards', str(min(8, default_shard_count())),
                       '--log-dir', str(output_dir / 'preflight-tests-shards')],
                      parallel=True),
         ('unittest-shards-tests',
-         [sys.executable, str(source / 'scripts/test_run_unittest_shards.py')]),
+         [sys.executable, str(source / 'scripts/ci_test_run_unittest_shards.py')]),
         ('verifier-paths-tests',
          [sys.executable, str(source / 'scripts/test_ci_verifier_paths.py')]),
         CheckCommand('native-c-surface-tests',
                      [sys.executable, str(source / 'scripts/test_check_native_c_api_surface.py')],
                      parallel=True),
+        ('native-x86-release-tests',
+         [sys.executable, str(source / 'scripts/test_ci_native_x86_release.py')]),
         ('kernel-residuals-tests',
          [sys.executable, str(source / 'scripts/test_check_kernel_residuals.py')]),
         ('corpus-parity-identity-tests',
@@ -4290,6 +4749,21 @@ def check_commands(source: Path, output: Path | None = None,
         CheckCommand('release-gate-tests',
                      [sys.executable, str(source / 'scripts/test_ci_release_gate.py')],
                      parallel=True),
+        # The transport uses Bash 4 parameter expansion; Darwin's default
+        # Bash 3 cannot run it. Linux retains every transport control.
+        *([CheckCommand('prebuilt-bookworm-tests',
+                       [sys.executable, str(source / 'scripts/test_build_prebuilt_bookworm.py'),
+                        '--scratch-root', str(output_dir)],
+                       parallel=True)]
+          if sys.platform.startswith('linux') else []),
+        # All real ELF/archive rows and their mutations require Linux cc,
+        # GNU ar/readelf; missing tools fail in setUpClass. Darwin's compiler
+        # emits Mach-O. run_checks creates this owned output/scratch root
+        # before invoking any stage; keep the complete suite unfiltered.
+        *([('prebuilt-glibc-tests',
+            [sys.executable, '-B', str(source / 'scripts/test_check_prebuilt_glibc.py'),
+             '--scratch-root', str(output_dir), '-v'])]
+          if sys.platform.startswith('linux') else []),
         # R5 run-failure codes: the catalog diff release.yml stamps is a tested
         # script, and the code tables of docs/pages/run-failure-codes.md are
         # generated from the catalog it diffs.
@@ -4560,6 +5034,22 @@ def main() -> int:
              if path.suffix in ('.yml', '.yaml') and path.name not in named},
             curl_action=read_ci_text(ROOT / '.github/actions/setup-live-curl/action.yml', findings),
             actions=actions)
+        helper_path = ROOT / 'scripts/build_prebuilt_bookworm.sh'
+        if helper_path.parent.is_symlink() or helper_path.is_symlink() or not helper_path.is_file():
+            findings.append('release prebuilt Bookworm helper must be a regular source file')
+        else:
+            checked += release_prebuilt_helper_findings(read_ci_text(helper_path, findings))
+        consumer_path = ROOT / 'scripts/check_shipped_archive_runtime.sh'
+        if (consumer_path.parent.is_symlink() or consumer_path.is_symlink()
+                or not consumer_path.is_file()):
+            findings.append('release prebuilt archive consumer must be a regular source file')
+        else:
+            try:
+                consumer = read_ci_text(consumer_path, findings, ROOT)
+            except OSError as error:
+                findings.append(f'release prebuilt archive consumer cannot be read: {error}')
+            else:
+                checked += release_prebuilt_consumer_findings(consumer)
         findings = list(dict.fromkeys(findings + checked))
         for finding in findings:
             print(finding)

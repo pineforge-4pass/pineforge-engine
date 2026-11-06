@@ -6,7 +6,7 @@
 #include <cstdint>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 
 // The numbers pf_execution_observation_v1 carries (execution_observer.h), named
 // once for the lifecycle that writes them. The phase is the generation's own;
@@ -83,5 +83,5 @@ struct NativeSelectedEpoch {
     }
 };
 
-}  // inline namespace engine_script_run_v19
+}  // inline namespace engine_script_run_v20
 }  // namespace pineforge

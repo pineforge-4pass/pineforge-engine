@@ -8,6 +8,7 @@
 #include <pineforge/selected_window.h>
 
 #include "../src/native_execution_consumer.hpp"
+#include "ledger_default_cache_rows.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -213,7 +214,9 @@ void sink_scan(const Directory& directory) {
 
     baseline.run(bars.data(), static_cast<int>(bars.size()));
     CHECK(baseline.native_state().kind == NativeLifecycleKind::Completed);
-    CHECK(baseline.cache_rows() == TradeLedger::kDefaultCacheRows);
+    // An omitted cache setting holds the provisional byte default's geometry,
+    // not the legacy 65,536-row one (ledger_default_cache_rows.hpp).
+    CHECK(baseline.cache_rows() == ledger_oracle::default_cache_rows());
     CHECK(baseline.scans == kScans);
     CHECK(baseline.values.size() == kTrades * kScans);
     streamed.oracle = &baseline.values;
@@ -229,7 +232,7 @@ void sink_scan(const Directory& directory) {
     // The 128-row run must fail HERE, with the observed total above. All
     // later scans share this one budget, rather than a per-row/per-bar limit.
     CHECK(streamed.warm_reads < kTrades + 64);
-    CHECK(streamed.cache_rows() == TradeLedger::kSinkCacheRows);
+    CHECK(streamed.cache_rows() == ledger_oracle::default_cache_rows());
     CHECK(baseline.warm_reads == 0);
     CHECK(baseline.presentations == 1 && streamed.presentations == 1);
     CHECK(baseline.capture_hash == streamed.capture_hash);
@@ -253,7 +256,7 @@ void sink_scan(const Directory& directory) {
 
     // The late sink in test_selected_metrics_l17b checks summary reads, not file publication. Produce
     // an independent file with a sink installed BEFORE this separate run.
-    // On the fixed tree the measured sink uses the 65,536-row default;
+    // On the fixed tree the measured sink uses the default byte-cap geometry;
     // forcing this oracle to 128 proves cache size cannot change wire bytes.
     Host small;
     small.force_small_cache = true;

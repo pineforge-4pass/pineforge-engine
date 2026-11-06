@@ -29,12 +29,13 @@ from ci_docs_only import is_documentation
 
 
 CONTEXTS = ("pineforge/verify", "pineforge/parity")
-# ci-post.yml's build and build-arm matrix names; the workflow pin test
+# ci-post.yml's amd64 leg aggregates and arm shard names; the workflow pin test
 # expands their displayed names independently and checks this required-name tuple.
-CI_POST_BUILD_JOBS = tuple(
-    f"build ({platform}, {build_type})"
-    for platform in ("ubuntu-24.04", "ubuntu-24.04-arm")
-    for build_type in ("Debug", "Release"))
+CI_POST_BUILD_JOBS = (
+    *(f"build (ubuntu-24.04, {build_type})" for build_type in ("Debug", "Release")),
+    *(f"build-shard (ubuntu-24.04-arm, {build_type}, {shard}/4)"
+      for build_type in ("Debug", "Release") for shard in range(1, 5)),
+)
 CI_POST_FAILURES = ("failure", "cancelled", "timed_out")
 CI_POST_RUN_LIMIT = 10
 DOCS_ONLY_WALK_LIMIT = 20
@@ -725,9 +726,9 @@ def _require_ci_post(api: API, repo: str, sha: str, history: History) -> str:
         conclusion = run.get("conclusion")
         # Fail closed for a run that does not prove (the newer-run table). Past the
         # failed-build check above, a non-proving run may be passed over for an
-        # older proof only when it is a run-level success whose four legs are all
+        # older proof only when it is a run-level success whose required jobs are all
         # present and each success or skipped, or a run-level skipped run whose
-        # four legs are all skipped. Every other conclusion refuses, and so does a
+        # required jobs are all skipped. Every other conclusion refuses, and so does a
         # leg that is neutral, null, unknown or missing while an older run exists.
         leg_values = [value for rows in required.values() for value in rows]
         leg_problems = []

@@ -131,11 +131,13 @@ set(PINEFORGE_KERNEL_SOURCES src/array.cpp
     src/reservation_expansion.cpp
     src/engine_run.cpp
     src/engine_security.cpp
+    src/runtime_context.cpp
     src/engine_state_hash.cpp
     src/engine_stream.cpp
     src/engine_trade_accessors.cpp
     src/pending_order_mirror.cpp
     src/native_order.cpp
+
     src/native_journal_codec.cpp
     src/engine_consumer.cpp
     src/market_driver.cpp
@@ -163,6 +165,12 @@ set(PINEFORGE_KERNEL_SOURCES src/array.cpp
     src/native_bar_views.cpp
     src/selected_report_view.cpp
     src/selected_window_plan.cpp
+    src/selected_capacity_core.cpp
+    src/selected_capacity_csv_reader.cpp
+    src/selected_capacity_driver.cpp
+    src/selected_capacity_primary_rows.cpp
+    src/selected_capacity_auxiliary_rows.cpp
+    src/selected_capacity_script_bars.cpp
     src/metrics_spill_curve.cpp
     src/report_scratch.cpp
     src/detail/o1_store.cpp

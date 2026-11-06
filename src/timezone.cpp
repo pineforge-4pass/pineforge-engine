@@ -15,10 +15,6 @@ std::mutex& timezone_mutex() {
     return mutex;
 }
 
-// Last TZ written into the process environment. Guarded by timezone_mutex();
-// lets a same-TZ scope skip the setenv/tzset syscall pair (lazy caching).
-std::string g_active_tz = "NOT_SET";
-
 // std::stoi of a UTC offset's hours or minutes. A timezone the script builds
 // at run time can fail it (too many digits): the same exception type and text
 // as ever, coded pine_invalid_argument. Valid input takes exactly the path it
@@ -105,32 +101,30 @@ std::string normalize_timezone_for_posix(const std::string& tz) {
     return out.str();
 }
 
-// Acquire the process-global TZ mutex and keep it locked for the lifetime
-// of this object. The caller's localtime_r / mktime decomposition runs
-// inside the scope, so concurrent harness threads on different chart
-// timezones cannot corrupt each other's wall time — this is the guarantee
-// documented on strategy_set_chart_timezone in pineforge.h.
+// Hold this engine image's TZ mutex for the lifetime of the guard, including
+// the caller's localtime_r / mktime decomposition. Independently linked engine
+// images have separate mutexes; cross-image parallel atomicity remains open.
 //
-// The lazy-TZ cache is preserved: when the requested zone is already the
-// active one we skip the setenv/tzset pair entirely, but the lock is held
-// either way so the environment stays stable for the whole scope.
+// Compare with the actual process environment so a preceding TZ switch by
+// another engine image cannot leave an image-local last-zone cache stale.
+// Skip setenv/tzset only when TZ already equals the normalized target.
 ScopedTimezone::ScopedTimezone(const std::string& tz)
     : lock_(timezone_mutex()) {
 
     std::string target = normalize_timezone_for_posix(tz);
 
-    if (g_active_tz == target) {
+    const char* active_tz = std::getenv("TZ");
+    if (active_tz != nullptr && target == active_tz) {
         return;  // lock stays held until destruction
     }
 
     ::setenv("TZ", target.c_str(), 1);
     ::tzset();
-    g_active_tz = target;
 }
 
 ScopedTimezone::~ScopedTimezone() {
     // lock_ releases the mutex here. TZ is intentionally NOT restored —
-    // g_active_tz caches it so the next same-zone scope skips setenv/tzset.
+    // the next scope checks the process environment before skipping setenv/tzset.
 }
 
 }  // namespace tz_util

@@ -73,6 +73,50 @@ def _fmt_pct(x: float) -> str:
     return f"{x*100:.4f}%"
 
 
+def _fmt_metric(row: dict, metric: str, statistic: str) -> str:
+    key = f"{metric}_{statistic}"
+    if key not in row:
+        return "not reported"
+    observations = row.get("metric_observations", {}).get(metric)
+    missing = row.get("metric_missing", {}).get(metric)
+    if row[key] is None or observations == 0 or missing is True:
+        return "no eligible observations"
+    return _fmt_pct(row[key])
+
+
+def _fmt_observations(row: dict, metric: str) -> str:
+    count = row.get("metric_observations", {}).get(metric)
+    return "not reported" if count is None else str(count)
+
+
+def _fmt_policy(row: dict) -> str:
+    """Display the applied snapshot; never reconstruct it from a profile."""
+    policy = row.get("grading_policy")
+    if not policy:
+        return "not recorded"
+    fields = [
+        f"{key}={policy.get(key, 'not recorded')}"
+        for key in ("profile", "aggregation", "scope", "count_rule", "comparison")
+    ]
+    percentile = policy.get("percentile")
+    if (
+        isinstance(percentile, (int, float))
+        and not isinstance(percentile, bool)
+        and 0 <= percentile <= 1
+    ):
+        fields.append(f"percentile={percentile * 100:g}%")
+    else:
+        fields.append("percentile=not recorded")
+    thresholds = policy.get("thresholds")
+    fields.append(
+        "thresholds: " + ", ".join(
+            f"{metric}={_fmt_pct(value) if value is not None else 'not recorded'}"
+            for metric, value in thresholds.items()
+        ) if thresholds else "thresholds: not recorded"
+    )
+    return "; ".join(fields)
+
+
 CORPUS_REPO_BLOB = (
     "https://github.com/pineforge-4pass/pineforge-corpus/tree/main"
 )
@@ -138,7 +182,7 @@ def _emit(rows: list[dict], engine_sha: str, corpus_sha: str,
             link = _probe_link(r['slug'], blob_url)
             lines.append(
                 f"| **{r['tier']}** | {link} | {r['tv']} | {r['eng']} | "
-                f"{_fmt_pct(r['count_delta'])} | {_fmt_pct(r['pnl_p90'])} | "
+                f"{_fmt_pct(r['count_delta'])} | {_fmt_metric(r, 'pnl', 'p90')} | "
                 f"{r['notes']} |"
             )
     lines.append("")
@@ -164,19 +208,32 @@ def _emit(rows: list[dict], engine_sha: str, corpus_sha: str,
     lines.append("## Per-Strategy Detail")
     lines.append("")
     lines.append("Sorted by category, then slug. `count Δ` is `|tv-eng|/max(tv,eng)`;")
-    lines.append("`entry/exit/pnl p90` are 90th-percentile relative deltas across matched")
-    lines.append("trades (PnL excludes scratch trades with `|tv_pnl| < $0.01`).")
+    lines.append("`entry/exit/pnl p90` are 90th-percentile relative deltas across eligible,")
+    lines.append("effective metric observations; `p100` is each metric's effective worst delta.")
+    lines.append("Observation counts are per metric and can differ from matched trades and")
+    lines.append("from each other after eligibility filtering or FIFO schedule replacement.")
+    lines.append("PnL excludes scratch trades with `|tv_pnl| < $0.01`.")
+    lines.append("`no eligible observations` means a null metric or a recorded empty population;")
+    lines.append("`not reported` means a field is absent from a legacy row.")
+    lines.append("Applied grading policy is the recorded per-probe configuration; an absent")
+    lines.append("policy is `not recorded`. Profile reflects the resolved configuration.")
+    lines.append("The p100 columns are report-only and do not change the recorded tier.")
     lines.append("")
-    lines.append("| Slug | Category | Tier | Profile | TV | Engine | Matched | Count Δ | Entry p90 | Exit p90 | PnL p90 |")
-    lines.append("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| Slug | Category | Tier | Applied grading policy | Profile | TV | Engine | Matched | Count Δ | Entry p90 | Exit p90 | PnL p90 | Entry p100 | Exit p100 | PnL p100 | Entry observations | Exit observations | PnL observations |")
+    lines.append("|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for r in sorted(rows, key=lambda x: (_category_of(x["slug"]), x["slug"])):
         link = _probe_link(r['slug'], blob_url)
         lines.append(
             f"| {link} | `{_category_of(r['slug'])}` | {r['tier']} | "
+            f"{_fmt_policy(r)} | "
             f"`{r.get('profile','strict')}` | "
             f"{r['tv']} | {r['eng']} | {r['matched']} | "
-            f"{_fmt_pct(r['count_delta'])} | {_fmt_pct(r['entry_p90'])} | "
-            f"{_fmt_pct(r['exit_p90'])} | {_fmt_pct(r['pnl_p90'])} |"
+            f"{_fmt_pct(r['count_delta'])} | {_fmt_metric(r, 'entry', 'p90')} | "
+            f"{_fmt_metric(r, 'exit', 'p90')} | {_fmt_metric(r, 'pnl', 'p90')} | "
+            f"{_fmt_metric(r, 'entry', 'p100')} | {_fmt_metric(r, 'exit', 'p100')} | "
+            f"{_fmt_metric(r, 'pnl', 'p100')} | "
+            f"{_fmt_observations(r, 'entry')} | {_fmt_observations(r, 'exit')} | "
+            f"{_fmt_observations(r, 'pnl')} |"
         )
     lines.append("")
 

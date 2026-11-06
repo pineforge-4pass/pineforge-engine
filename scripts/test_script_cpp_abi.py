@@ -30,7 +30,7 @@ class ScriptAbi(unittest.TestCase):
 
     def test_epoch_header_accepts_a_reopened_epoch(self) -> None:
         self.assertEqual(epoch_from_headers(self.epoch_header(
-            "engine_script_run_v19", "engine_script_run_v19")), "engine_script_run_v19")
+            "engine_script_run_v20", "engine_script_run_v20")), "engine_script_run_v20")
         self.assertEqual(epoch_from_headers(self.epoch_header(
             "engine_script_run_v7", "engine_script_run_v7", "engine_script_run_v7")),
             "engine_script_run_v7")
@@ -40,7 +40,7 @@ class ScriptAbi(unittest.TestCase):
 
     def test_epoch_header_refuses_two_different_epochs_or_none(self) -> None:
         with self.assertRaisesRegex(PairingError, "exactly one epoch"):
-            epoch_from_headers(self.epoch_header("engine_script_run_v19", "engine_script_run_v18"))
+            epoch_from_headers(self.epoch_header("engine_script_run_v20", "engine_script_run_v18"))
         with self.assertRaisesRegex(PairingError, "exactly one epoch"):
             epoch_from_headers(self.epoch_header())
 

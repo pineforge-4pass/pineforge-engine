@@ -27,7 +27,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 // Only observation and fault injection use friendship. All admitted orders,
 // replacements, fills and closes enter through NativeStrategyHost.
 struct NativeExecutionConsumerProbe {
@@ -92,7 +92,7 @@ struct NativeExecutionConsumerProbe {
         return c.settlement_generation_;
     }
 };
-}  // inline namespace engine_script_run_v19
+}  // inline namespace engine_script_run_v20
 }  // namespace pineforge
 
 namespace cohort_target_test {

@@ -7,6 +7,15 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- **Strategy modules built against 1.10.x must be rebuilt.** The C++ script
+  ABI epoch moves from `engine_script_run_v19` to `engine_script_run_v20`
+  (and `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19` to `..._V20`) because
+  `PF_STREAM_ENGINE_LAYOUT_VERSION` moves from 3 to 4 and the layout of
+  `CacheDefaults` changed. This is an explicit exception to the earlier
+  promise of one epoch throughout 1.x, and the existing engine and codegen
+  pairing rule applies. The C API only gains functions; the caller-allocated
+  C report and trade layouts are unchanged, and the state-hash domain tags
+  keep their names.
 - `pineforge-live` status files now report `metrics.feed_idle_ms`, the
   milliseconds since the last feed arrival, or null before the first; the
   consumer owns freshness. HTTP and WebSocket feeds now also default to no
@@ -132,6 +141,21 @@ version number follows semantic versioning over the surfaces the
   `copy`, `snapshot` or `restore`) instead of at creation, with the same typed failure
   `report_sink_failed` and `reason: arena_exhausted`. Scripts that create maps
   they never fill can now run where they used to fail at `map.new`.
+- The native runner seeks the next unsent delivery through the existing
+  partial index, excluding delivered, journal-only and completed-failure
+  history from the scheduler's cursor walk.
+- Native runner status reports database + WAL bytes, measured bytes per
+  committed input, available disk and a growth-based exhaustion projection.
+  `--ledger-warn-free-fraction F` (default 0.8) reports an advisory `WARNING`
+  without changing readiness or exit status. The default allowance stays
+  unlimited.
+- `--report-jsonl=delta-v2` adds versioned change-only report records with
+  `ratios.as_of_input` on every record, outside the cumulative document, and
+  a raw `--delta-base` bootstrap. The envelope bounds emitted bytes and rows
+  serialized per input on the 10,000/100,000-input work populations.
+  Ratio scheduling is a separate later change; whole-curve passes remain.
+  Plain/full and v1 delta bytes are preserved. Ledger tables and checkpoint
+  layout are unchanged.
 
 ## 1.9.1 — 2026-10-31
 
@@ -1711,8 +1735,8 @@ library.
   - **Verifier tests run in parallel shards ([#404]).**
     `scripts/ci_preflight.py` runs `verifier-tests` (`scripts/test_ci_verify.py`)
     across parallel `unittest` subprocess shards with per-shard `TMPDIR`
-    isolation via `scripts/run_unittest_shards.py`
-    (`scripts/test_run_unittest_shards.py`).
+    isolation via `scripts/ci_run_unittest_shards.py`
+    (`scripts/ci_test_run_unittest_shards.py`).
   - **Release-candidate notes link and tag commit ([#405]).**
     The `1.6.1-rc.1` entry links its release and names its tag commit
     `196592dd`.

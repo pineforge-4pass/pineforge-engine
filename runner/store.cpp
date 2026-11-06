@@ -257,7 +257,8 @@ Json verify_checkpoint(sqlite3* database, const CheckpointRow& checkpoint,
 void apply_report_snapshot(Json& document, const std::string& bytes) {
     auto payload = parse_json(bytes);
     if (payload.members.count("schema_version") &&
-        payload.at("schema_version").text() == "pineforge-native-report-delta/v1")
+        (payload.at("schema_version").text() == "pineforge-native-report-delta/v1" ||
+         payload.at("schema_version").text() == "pineforge-native-report-delta/v2"))
         apply_report_delta(document, payload);
     else
         document = std::move(payload);
@@ -392,6 +393,16 @@ std::string export_report(sqlite3* database, std::optional<std::uint64_t> cursor
     if (document.find("ratios_as_of_input")) {
         refresh_report_ratios(document, document.at("ratio_context").at("chart_timezone").text());
         document.members["ratios_as_of_input"] = Json::number(std::to_string(target));
+    } else {
+        Statement snapshot(database, "SELECT payload FROM report_snapshots WHERE input_cursor=?");
+        snapshot.bind(1, target);
+        if (!snapshot.row()) database_error();
+        const auto payload = parse_json(snapshot.text(0));
+        const auto* schema = payload.find("schema_version");
+        if (schema && schema->text() == "pineforge-native-report-delta/v2")
+            if (const auto& ratios = report_v2_ratios(payload, target);
+                ratios.at("as_of_input").integer<std::uint64_t>() != target)
+                refresh_report_ratios(document, ratios.at("chart_timezone").text());
     }
     return document.dump();
 }
@@ -1363,8 +1374,8 @@ std::optional<DeliveryScan> Ledger::next_delivery_event(std::uint64_t after,
                                                        std::uint64_t* steps) const {
     std::lock_guard<std::recursive_mutex> lock(impl_->mutex);
     Statement query(impl_->db, "SELECT e.ordinal,e.event_id,e.payload,e.attempts,r.target_id,r.delivery_id,s.unsent "
-        "FROM events e CROSS JOIN event_routes r ON r.ordinal=e.ordinal CROSS JOIN delivery_state s ON s.ordinal=e.ordinal "
-        "WHERE e.ordinal>? ORDER BY e.ordinal LIMIT 1");
+        "FROM delivery_state s INDEXED BY delivery_state_unsent CROSS JOIN events e ON e.ordinal=s.ordinal CROSS JOIN event_routes r ON r.ordinal=s.ordinal "
+        "WHERE s.unsent=1 AND s.ordinal>? ORDER BY s.ordinal LIMIT 1");
     query.bind(1, after);
     const bool found = query.row();
     if (steps) *steps = query.steps();
@@ -1652,6 +1663,38 @@ std::string LedgerView::status_json(std::uint64_t* steps) const {
     while (unsent.row()) initialize(unsent.text(0)).members["unsent"] = Json::number(std::to_string(unsent.integer(1)));
     return Json::object({{"schema_version", Json::number("1")}, {"targets", std::move(targets)},
         {"actions", Json::number(std::to_string(scalar(impl_->db, "SELECT COUNT(*) FROM events")))}}).dump();
+}
+
+std::uint64_t LedgerView::input_count() const {
+    return scalar(impl_->db, "SELECT COALESCE(MAX(input_index)+1,0) FROM inputs");
+}
+
+std::string LedgerView::report_delta_base_json(std::optional<std::uint64_t> cursor,
+                                               bool verify_full) const {
+    exec(impl_->db, "BEGIN");
+    struct ReadEnd {
+        sqlite3* database;
+        ~ReadEnd() { sqlite3_exec(database, "ROLLBACK", nullptr, nullptr, nullptr); }
+    } read_end{impl_->db};
+    const auto target = cursor.value_or(input_count());
+    impl_->checkpoint_failure.reset();
+    Json document;
+    try {
+        document = read_report_document(impl_->db, target, !verify_full, impl_->checkpoints, nullptr);
+    } catch (const CheckpointFailure& failure) {
+        impl_->checkpoint_failure = CheckpointDiagnostic{
+            failure.code(), failure.cursor(), failure.what()};
+        document = read_report_document(impl_->db, target, false, impl_->checkpoints, nullptr);
+    }
+    Statement snapshot(impl_->db, "SELECT payload FROM report_snapshots WHERE input_cursor=?");
+    snapshot.bind(1, target);
+    if (!snapshot.row()) database_error();
+    const auto payload = parse_json(snapshot.text(0));
+    if (payload.at("schema_version").text() != "pineforge-native-report-delta/v2")
+        throw std::runtime_error("delta-base requires delta-v2 report rows with a recorded ratio clock");
+    auto base = Json::object({{"document", std::move(document)}, {"ratios", report_v2_ratios(payload, target)},
+        {"schema_version", Json::string("pineforge-native-report-base/v2")}}).dump();
+    return "{\"input_cursor\":" + std::to_string(target) + ',' + base.substr(1);
 }
 
 } // namespace pineforge::live

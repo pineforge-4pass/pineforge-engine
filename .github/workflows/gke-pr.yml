@@ -248,7 +248,7 @@ jobs:
   preflight:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' }}
-    runs-on: gke-8cpu-16gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {contents: read}
     steps:
       - name: Checkout the admitted head
@@ -282,10 +282,34 @@ jobs:
           TIER: ${{ (needs.admit.outputs.docs_only == 'true' || needs.admit.outputs.github_only == 'true') && 'github-only' || 'fast' }}
         run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier "$TIER"
 
+  build-x86-gcc133:
+    needs: [admit]
+    if: ${{ needs.admit.outputs.allowed == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions: {contents: read}
+    steps:
+      - name: Checkout the admitted head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ needs.admit.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build native x86 GNU 13.3.0 Release
+        run: |
+          python3 scripts/ci_native_x86_release.py --source . --build-dir build-x86-gcc133 --artifact-dir ci-native-x86-gcc133 --jobs "$(getconf _NPROCESSORS_ONLN)"
+      - name: Retain native x86 GNU 13.3.0 build artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gke-pr-native-x86-gcc133
+          path: ci-native-x86-gcc133/
+          if-no-files-found: warn
+
   build:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' }}
-    runs-on: gke-32cpu-64gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {contents: read}
     steps:
       - name: Checkout the admitted head
@@ -319,7 +343,7 @@ jobs:
   build-debug:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' }}
-    runs-on: gke-16cpu-32gb-amd64-128gb
+    runs-on: ubuntu-24.04
     permissions: {contents: read}
     steps:
       - name: Checkout the admitted head
@@ -353,7 +377,7 @@ jobs:
   build-arm:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' && needs.admit.outputs.arm_relevant == 'true' }}
-    runs-on: gke-16cpu-32gb-arm64-128gb
+    runs-on: ubuntu-24.04-arm
     permissions: {contents: read}
     steps:
       - name: Require the arm64 machine
@@ -385,7 +409,7 @@ jobs:
   corpus-parity-subset:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' }}
-    runs-on: gke-8cpu-16gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {contents: read}
     steps:
       - name: Checkout the admitted head
@@ -425,7 +449,7 @@ jobs:
           if-no-files-found: warn
 
   legs:
-    needs: [admit, build, build-debug, build-arm, corpus-parity-subset]
+    needs: [admit, build, build-debug, build-arm, build-x86-gcc133, corpus-parity-subset]
     if: ${{ always() && needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' }}
     runs-on: ubuntu-24.04
     permissions: {}
@@ -435,6 +459,7 @@ jobs:
           BUILD_RESULT: ${{ needs.build.result }}
           DEBUG_RESULT: ${{ needs.build-debug.result }}
           ARM_RESULT: ${{ needs.build-arm.result }}
+          X86_RESULT: ${{ needs.build-x86-gcc133.result }}
           ARM_RELEVANT: ${{ needs.admit.outputs.arm_relevant }}
           PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
         run: |
@@ -448,10 +473,11 @@ jobs:
           test "$BUILD_RESULT" = success
           test "$DEBUG_RESULT" = success
           arm_passed "$ARM_RELEVANT" "$ARM_RESULT"
+          test "$X86_RESULT" = success
           test "$PARITY_RESULT" = success
 
   result:
-    needs: [admit, preflight, legs]
+    needs: [admit, preflight, build-x86-gcc133, legs]
     if: always()
     runs-on: ubuntu-24.04
     permissions: {contents: read}
@@ -542,6 +568,7 @@ jobs:
           ADMIT_RESULT: ${{ needs.admit.result }}
           ALLOWED: ${{ needs.admit.outputs.allowed }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          X86_RESULT: ${{ needs.build-x86-gcc133.result }}
           LEGS_RESULT: ${{ needs.legs.result }}
           ADMIT_DOCS_ONLY: ${{ needs.admit.outputs.docs_only }}
           ADMIT_GITHUB_ONLY: ${{ needs.admit.outputs.github_only }}
@@ -556,6 +583,7 @@ jobs:
           test "$ADMIT_RESULT" = success || fail "admission refused"
           test "$ALLOWED" = true || fail "admission did not allow the head"
           test "$PREFLIGHT_RESULT" = success || fail "preflight did not pass"
+          test "$X86_RESULT" = success || fail "native x86 GNU 13.3.0 build did not pass"
           test "$SECOND_DOCS_ONLY" = "$ADMIT_DOCS_ONLY" || fail "docs-only classification changed"
           test "$SECOND_GITHUB_ONLY" = "$ADMIT_GITHUB_ONLY" || fail "github-only classification changed"
           test "$SECOND_ARM_RELEVANT" = "$ADMIT_ARM_RELEVANT" || fail "arm relevance classification changed"

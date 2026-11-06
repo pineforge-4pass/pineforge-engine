@@ -119,10 +119,32 @@ public:
     const std::deque<int32_t>& order() const { return order_; }
 };
 
-// The reference pf_* bodies, as drawing.hpp spelled them before this lane.
+// Independent missing values for builtin reads. The reference store itself
+// retains every unbound raw record, including its original deleted fields.
+template <class Rec> Rec ref_missing();
+template <> LineRec ref_missing<LineRec>() {
+    return {INT64_MIN, INT64_MIN, na<double>(), na<double>(),
+            static_cast<XLoc>(-1), false, false, false};
+}
+template <> BoxRec ref_missing<BoxRec>() {
+    return {INT64_MIN, INT64_MIN, na<double>(), na<double>(), static_cast<XLoc>(-1), false};
+}
+template <> LabelRec ref_missing<LabelRec>() {
+    return {INT64_MIN, na<double>(), static_cast<XLoc>(-1), static_cast<YLoc>(-1), {}, false};
+}
+
 template <class Rec, class Handle>
 Rec& ref_require(RefArena<Rec>& a, Handle h) {
     if (h.id < 0 || h.id >= a.size()) throw pine_drawing_error("drawing access on na handle");
+    if constexpr (!std::is_same_v<Rec, LinefillRec>) {
+        if (!a.alive(h.id)) {
+            // Setter effects on this scratch value are discarded on the next
+            // reference operation, never copied into the reference store.
+            static Rec missing = ref_missing<Rec>();
+            missing = ref_missing<Rec>();
+            return missing;
+        }
+    }
     return a.at(h.id);
 }
 
@@ -304,6 +326,7 @@ bool random_op(Rng& r, DrawingArena<LineRec>& a, RefArena<LineRec>& b, std::vect
                           if (h.id < 0 || h.id >= b.size())
                               throw pine_drawing_error("drawing access on na handle");
                           const LineRec& q = b.at(h.id);
+                          if (!q.alive) { w = na<double>(); return; }
                           if (q.xloc == XLoc::bar_time)
                               throw pine_drawing_error("line.get_price requires xloc.bar_index");
                           w = q.x1 == q.x2 ? na<double>()
@@ -697,7 +720,7 @@ void execute(LA& lines, LB& labels, Script& s, int bar, int execution,
         for (int i = 0; i < 4; ++i)
             s.burst.push_back(label_new(labels, bar, i, "burst " + std::to_string(execution)));
         if (s.burst.size() > 9) {
-            // an evicted (dead) label stays writable
+            // Setters on removed labels must leave the reference store alone.
             label_set_text(labels, s.burst[s.burst.size() - 9], "dead edit " + std::to_string(bar));
             label_del(labels, s.burst[s.burst.size() - 5]);
         }
@@ -826,7 +849,7 @@ void test_deep_trie_writes_after_checkpoint() {
     const RefArena<LineRec> ref_checkpoint = ref;
     // Write every 97th record, dead or live, across the whole trie.
     for (int id = 0; id < 40000; id += 97) {
-        pf_line_set_y1(a, Line{id}, -1.0 * id);
+        a.at(id).y1 = -1.0 * id; // exercise the unchanged unbound raw-reference API
         ref.at(id).y1 = -1.0 * id;
     }
     for (int i = 0; i < 77; ++i) {
@@ -838,7 +861,8 @@ void test_deep_trie_writes_after_checkpoint() {
     a = checkpoint;                                   // roll back
     CHECK(same_arena(a, ref_checkpoint));
     CHECK(a.size() == 40000);
-    CHECK(pf_line_get_y1(a, Line{97}) == 48.5);
+    CHECK(std::as_const(a).at(97).y1 == 48.5);
+    CHECK(is_na(pf_line_get_y1(a, Line{97})));
     CHECK(!a.alive(0) && a.alive(39999));
 }
 
@@ -869,7 +893,8 @@ void test_moved_from_arena() {
     DrawingArena<LabelRec>& blocks_alias = blocks;
     blocks = std::move(blocks_alias);
     CHECK(blocks.size() == 70 && blocks.order() == order && sharing.size() == 70);
-    CHECK(pf_label_get_text(blocks, Label{3}) == "t");
+    CHECK(std::as_const(blocks).at(3).text == "t");
+    CHECK(pf_label_get_text(blocks, Label{3}).empty());
 }
 
 // ---- 4. cost: records copied by checkpointing -------------------------------

@@ -913,6 +913,17 @@ def permitted_exclusion_skips(pinned: frozenset[str], host_platform: str) -> fro
         if may_skip(host_platform))
 
 
+# Only these architecture-independent orchestration self-tests may carry the
+# arm workflow's exclusion label. Engine feature rows must never join it.
+CI_SCRIPT_LABEL = 'ci-script'
+PINNED_CI_SCRIPT_TEST_ROWS = frozenset((
+    *(f'test_ci_verify_slice_{index}' for index in range(1, 9)),
+    'test_ci_verify_slices_cover',
+    'test_ci_verify_fetch_lock',
+    *(f'test_ci_preflight_slice_{index}' for index in range(1, 9)),
+    'test_ci_preflight_slices_cover',
+))
+
 # Static slow-label policy: the 43-name CMake loop plus 18
 # direct LABELS assignments. Never derive this bound from the run's registry.
 # Conditional registration may omit pins; every discovered slow name must
@@ -993,9 +1004,9 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_cache_sweep_position_tail',
     'test_cache_sweep_equity_curve',
     'test_cache_sweep_native_tails',
-    # tests/cr150.d/cache-sweep-ledger-rows.cmake:4 and trade-ledger-cache.cmake:9.
-    'test_cache_sweep_ledger_rows',
-    'test_trade_ledger_cache_sweep',
+    # tests/cr150.d/cache-sweep-ledger-rows.cmake:4, trade-ledger-cache.cmake:9, ledger-cache-bound.cmake:4, ledger-cache-policy-wrapper.cmake:8.
+    'test_cache_sweep_ledger_rows', 'test_trade_ledger_cache_sweep', 'test_run_json_ledger_cache_policy',
+    'test_ledger_cache_bound',
     # tests/cr150.d/p2cx-a5s.cmake:3.
     'test_o1_store',
     # tests/cr150.d/udt-object-graphs.cmake:6.
@@ -1006,6 +1017,8 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_p2_a5_string_1m',
     'test_p2_a5_map_1m',
     'test_p2_a5_map_prepared_1m',
+    # tests/cr150.d/cr559-map-capacity.cmake:23.
+    'test_cr559_map_capacity_resident',
     # tests/cr150.d/p2cx-a5arr.cmake:5.
     'test_array_growth_1m',
     # tests/cr150.d/report-trade-retirement.cmake and report-trade-reference.cmake:
@@ -1275,9 +1288,12 @@ def validate_ctest_shard_union(
         raise ValueError('invalid CTest registry names')
     digest = ctest_registry_sha256(registry)
     exclude_label = PROFILE[profile].exclude_label
+    if profile == 'release' and first.get('excludeLabel') == CI_SCRIPT_LABEL:
+        exclude_label = CI_SCRIPT_LABEL
     excluded = first.get('ctestExcludedNames')
     if (not names_valid(excluded) or excluded != sorted(set(excluded))
             or not set(excluded) <= set(registry)
+            or (exclude_label == CI_SCRIPT_LABEL and set(excluded) != PINNED_CI_SCRIPT_TEST_ROWS)
             or (exclude_label is None and excluded)):
         raise ValueError('invalid CTest excluded names')
     expected_selection = sorted(set(registry) - set(excluded))
@@ -1705,7 +1721,8 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
                              'CTest discovery with and without -LE; default: slow '
                              'for Debug build types except runner-only profiles '
                              '(currently debug and sanitizers); otherwise no exclusion; '
-                             'slow names must belong to PINNED_SLOW_TEST_ROWS')
+                             'slow names must belong to PINNED_SLOW_TEST_ROWS; '
+                             'release shards also permit the pinned ci-script label')
     parser.add_argument('--ctest-shard', type=parse_ctest_shard, default=None, metavar='I/N',
                         help='run deterministic CTest shard I of N (1 <= I <= N <= 8); '
                              'all shards are required for a full verification')
@@ -1753,9 +1770,11 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
         if args.profile not in CTEST_SHARD_PROFILES:
             raise ConfigError('--ctest-shard with N > 1 requires release, debug, sanitizers, kernel, '
                               'native, live-sanitizers or live-tsan')
-        if exclude_label is not None and exclude_label != PROFILE[args.profile].exclude_label:
+        if (exclude_label is not None and exclude_label != PROFILE[args.profile].exclude_label
+                and not (args.profile == 'release' and exclude_label == CI_SCRIPT_LABEL)):
             raise ConfigError('--ctest-shard with N > 1 only permits the declared '
-                              'Debug-build-type exclusion of label slow')
+                              'Debug-build-type exclusion of label slow or the pinned '
+                              'release ci-script exclusion')
         minimum = profile_min_tests(PROFILE[args.profile], source)
         if minimum is not None and args.min_tests is not None and args.min_tests < minimum:
             raise ConfigError('--ctest-shard must not lower the undivided profile floor '
@@ -2183,9 +2202,12 @@ class Driver:
                 raise ValueError('label-selected CTest names are outside the registry')
             shard = self.cfg.ctest_shard
             if (shard.count > 1 and self.cfg.exclude_label is not None
-                    and self.cfg.exclude_label != self.cfg.profile.exclude_label):
+                    and self.cfg.exclude_label != self.cfg.profile.exclude_label
+                    and not (self.cfg.profile.name == 'release'
+                             and self.cfg.exclude_label == CI_SCRIPT_LABEL)):
                 raise ValueError('ctest-shard-union/v1 only permits the declared '
-                                 'Debug-build-type exclusion')
+                                 'Debug-build-type exclusion or the pinned '
+                                 'release ci-script exclusion')
             excluded = ()
             if self.cfg.exclude_label:
                 labelled = self.invoke(
@@ -2199,6 +2221,9 @@ class Driver:
             if (not set(excluded) <= set(registry)
                     or set(selection) != set(registry) - set(excluded)):
                 raise ValueError('CTest selection must equal the registry minus labelled exclusions')
+            if (self.cfg.exclude_label == CI_SCRIPT_LABEL
+                    and set(excluded) != PINNED_CI_SCRIPT_TEST_ROWS):
+                raise ValueError('CTest ci-script exclusions must equal the pinned CI-script rows')
             if shard.count > 1 and self.cfg.exclude_label == 'slow':
                 unpinned = sorted(set(excluded) - PINNED_SLOW_TEST_ROWS)
                 if unpinned:

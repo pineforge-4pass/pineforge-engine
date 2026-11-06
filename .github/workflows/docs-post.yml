@@ -26,8 +26,7 @@ concurrency:
 jobs:
   authz:
     name: authz
-    # Fleet routing is fixed per job; credentials use protected GKE runners.
-    runs-on: gke-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -88,7 +87,7 @@ jobs:
 
   build:
     needs: [authz]
-    runs-on: gkp-4cpu-8gb-amd64
+    runs-on: ubuntu-24.04
     env:
       CF_PROJECT: ${{ vars.CF_PAGES_PROJECT || 'pineforge-docs' }}
       DEPLOY_BRANCH: ${{ github.ref_name }}
@@ -137,8 +136,8 @@ jobs:
           SAFE="$(printf '%s' "$DEPLOY_BRANCH" | tr -c 'A-Za-z0-9._/-' '-')"
           echo "branch=$SAFE" >> "$GITHUB_OUTPUT"
 
-      # The protected GKE runner image has no system Node; wrangler-action installs
-      # wrangler with npm, so pin Node here (the same setup-node pin as promote-baseline).
+      # Pin Node before wrangler-action installs wrangler with npm
+      # (the same setup-node pin as promote-baseline).
       - name: Set up Node for wrangler
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

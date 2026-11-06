@@ -6,21 +6,21 @@ The current PR admission and post-merge trigger map is:
 | --- | --- | --- | --- |
 | `ci.yml authz` | Hosted authorization context | Hosted authorization context | Not triggered |
 | `gke-pr / admit` | Hosted admission and main-tree rule check | Hosted admission and main-tree rule check | Not triggered |
-| `gke-pr / preflight` | GKE preflight, tiered by the main classifier | GKE github-only preflight | Not triggered |
-| `gke-pr / build`, `build-debug`, parity subset | GKE proof legs for code changes | Skipped | Not triggered |
-| `gke-pr / result` | Hosted result with a second classification read | Hosted result with a second classification read | Not triggered |
-| `ci-post.yml` proof jobs | Not triggered | Not triggered | Complete Release, Debug, native, kernel and parity profiles |
+| `gke-pr / preflight`, `gke-pr / build-x86-gcc133` | Hosted preflight, tiered by the main classifier; native x86 GNU 13.3.0 full Release build | Hosted github-only preflight; native x86 GNU 13.3.0 full Release build | Not triggered |
+| `gke-pr / build`, `build-debug`, parity subset | Hosted proof legs for code changes | Skipped | Not triggered |
+| `gke-pr / result` | Hosted result with a second classification read and required x86 build | Hosted result with a second classification read and required x86 build | Not triggered |
+| `ci-post.yml` proof jobs | Not triggered | Not triggered | Complete Release, Debug, native, kernel and parity profiles plus the required x86 build |
 | `corpus-parity.yml` | Not triggered | Not triggered | Full parity and its post-merge subset |
 | `docs.yml` | Documentation build except `.github/**`-only changes | Skipped by its path filter | Documentation build on its own trigger |
-| `gke-pr / build-arm` | GKE arm64 Debug build and tests when `arm_relevant=true` | Skipped | Not triggered |
+| `gke-pr / build-arm` | Hosted arm64 Debug build and tests when `arm_relevant=true` | Skipped | Not triggered |
 
-The admission workflow is defined on `main` and is selected by the protected
-GKE runner group. Its proof legs use the same fixed Release, Debug and parity
-runner sizes as the post workflow; the hosted result is red for refusal,
-failure, cancellation, disagreement or an unanswered class.
+The admission workflow is defined on `main` and runs on hosted `ubuntu-24.04`
+runners with no runner-group allowlist entry. Its proof legs use the same hosted
+Release, Debug and parity images as the post workflow; the hosted result is red for refusal,
+failure, cancellation, disagreement or an unanswered class. The native x86 GNU 13.3.0 job runs for every admitted PR and every post event, including documentation-only and GitHub-only changes: it checks out the exact head, configures a fresh C++17 Release tree with the source layer enabled and optional targets and tests disabled, then invokes the ordinary all-target Unix Makefiles build with the runner's parallelism, and retains the configure and build logs, the compiler identity, CMake cache and compile commands as failure diagnostics.
 
 The nightly CI schedule is 01:30 UTC. The existing docs-only classification
-still skips proof jobs on a documentation-only PR or main push. Both
+still skips the existing code proof jobs on a documentation-only PR or main push; the native x86 build remains required. Both
 preflight tiers together retain the original full stage inventory; the slow
 tier still runs on a docs-only main push. Scheduled and manual runs execute
 every profile. `ci.yml` retains authorization and draft event handling;
@@ -35,7 +35,7 @@ Missing logs, mixed failures, arm64/`gkp-*` jobs, stale attempts and changed run
 refuse the retry; three total attempts are allowed. PRs, manual dispatches and
 release/publish/deploy/promotion workflows are excluded. The controller runs on
 hosted `ubuntu-24.04`, uses its trusted default-branch workflow commit, and never
-prints log bodies. Missing `gh`, `python3` or the log escape flag fails the job.
+prints log bodies. Missing `gh`, `python3` or the log escape flag fails the job. The post-merge on-demand amd64 labels are included in the same loss-retry fleet; if that routing is rolled back, land a revert PR for the label commit before the next post-merge run.
 
 A GitHub-only PR changes at least one path, all under `.github/`, including both sides of a rename.
 `scripts/ci_*.py` changes, alone or mixed with `.github/`, follow the ordinary proof plan.
@@ -54,7 +54,7 @@ unreadable or malformed change lists also require it; established docs-only
 and `.github/`-only PRs set it false and skip the leg. The PR workflow now publishes this output. The base classifier
 computes it on both compare reads. When it is true, the existing `legs` and
 `result` gates require arm success and reject a skip, failure or cancellation.
-The job uses `gke-16cpu-32gb-arm64-128gb`, installs the post-arm dependencies and
+The job uses `ubuntu-24.04-arm`, installs the post-arm dependencies and
 runs the complete `ci_verify.py debug` profile, building every Debug test
 target and running that profile's CTest selection before merge. An irrelevant arm leg may skip while the other proof legs still run.
 
@@ -80,22 +80,20 @@ or `slow` rows. The target rebuilds those executables with their library.
 PR proof legs build cold; trusted post workflows also build cold and contain
 no Actions cache restore or save.
 
-Verification jobs keep exact runner pins at the workflow boundary: GKE PR
-admit is hosted, while PR preflight, proof legs and parity use bare GKE scale-set names;
-credentialed post work uses exact protected `gkp-*` scale sets in runner group 15.
-Post Release/Debug/kernel, native shards and post sanitizers use fixed bare GKE scale-set names.
-The two native-live sanitizer profiles use an exact runner matrix. All GKE jobs run directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.
-Hosted `ubuntu-24.04` runs PR `authz`, admission, `legs` and `result` jobs, and `docs.yml`'s `build`; secret-free post guards and aggregates use bare scalar GKE names. These light, secret-free jobs need no VM-only tools, mounts or caches.
-The seven `ci-post.yml` light jobs use `gke-2cpu-4gb-amd64`; called parity/native light jobs use `gke-4cpu-8gb-amd64` to satisfy the per-label cap, without a weight claim.
-Local reusable calls cannot mix PR and GKE jobs. The full post call graph expands to 36 GKE job instances: amd64 32 CPU default/256 GB labels carry 4/4 jobs, amd64 16 CPU default/128/256 GB labels carry 3/3/1, amd64 8/4/2 CPU labels carry 7/5/7, and arm64 16 CPU 128 GB carries 2; each label's static cap is 8.
+Verification jobs keep exact runner pins at the workflow boundary: Every migrated
+job runs on a standard hosted image, `ubuntu-24.04` for x86 and `ubuntu-24.04-arm` for arm64.
+Only the unchanged `release.yml` keeps its protected `gkp-od-*` scale sets in runner group 15.
+The two native-live sanitizer profiles use an exact runner matrix with both rows on `ubuntu-24.04`. No job routes by event.
+Hosted `ubuntu-24.04` runs the PR `authz`, admission, `legs` and `result` jobs, `docs.yml`'s `build`, and every light, aggregate and proof job of the migrated workflows. These jobs need no VM-only tools, mounts or caches.
+Preflight refuses any `gke-*` or `gkp-*` label in a pull_request-reachable workflow and any migrated job off its pinned hosted label; the old per-label GKE cap check stays only as a refusal.
 
-The manual `release-ruleset-probe.yml` workflow runs `authz` on
-bare scalar `gke-2cpu-4gb-amd64` and `probe` on `gkp-2cpu-4gb-amd64`.
+The manual `release-ruleset-probe.yml` workflow runs `authz` and `probe` on
+the hosted `ubuntu-24.04` image; `probe` keeps its `release` environment.
 
 `docs.yml` retains the PR build name and `.github/**` exclusion.
 `docs-post.yml` builds and deploys on main pushes and manual dispatch.
 Tag pushes no longer trigger docs: the post fleet admits only engine `main`.
-Release and baseline promotion use exact protected GKE pins in runner group 15.
+Release keeps its exact protected GKE pins in runner group 15; baseline promotion runs on hosted `ubuntu-24.04`.
 
 Human-dispatched App-token jobs (`release.yml`'s `release` and `notify-hub`, and `release-ruleset-probe.yml`'s `probe`) are bound to `release` (main only). Automatic `promote-baseline.yml`'s `promote` uses `release-bot` (main only, no reviewer), including manual re-fires. Preflight requires a literal, non-empty environment for visible App minting or private-key secret handoffs. Same-named environment secrets shadow repository secrets. Rollback reverts this preflight guard and its probe pin and removes the `environment:` lines; repository secret copies remain until the owner deletes them after dry runs.
 
@@ -115,7 +113,7 @@ Python refuse a system-wide install (PEP 668), and `.venv/` is ignored. The
 and fails, never skips, without it.
 
 Actionlint only accepts declared custom self-hosted runner labels; preflight
-checks the declarations in `.github/actionlint.yaml`, including the x86_64 release matrix cell. Before a workflow moves onto a `gke-*` label, add its ref to `.github/runner-group-allowlist.txt` (group 14); protected `gkp-*` refs belong in `.github/runner-group-15-allowlist.txt` (group 15). The original mirror models group 14 only. Both mirrors are binding; the supervisor must confirm the corresponding live org workflow/ref entries before enabling the routes.
+checks the declarations in `.github/actionlint.yaml`, which now declare only the two protected `gkp-od-*` labels of `release.yml`, including its x86_64 release matrix cell. Hosted workflows declare nothing. Before a workflow moves onto a `gke-*` label, add its ref to `.github/runner-group-allowlist.txt` (group 14, currently empty because no workflow uses one); protected `gkp-*` refs belong in `.github/runner-group-15-allowlist.txt` (group 15, currently only `release.yml`). Both mirrors are binding; a maintainer must confirm the corresponding live org workflow/ref entries before enabling the routes.
 
 ORG-ACTIONPINS is enforced by preflight's `ci-workflow-contract`: every
 third-party `uses:` in `.github/workflows/*.yml` (also `.yaml`) and nested
@@ -198,9 +196,9 @@ source-only header trees, and compile the native public roots and examples;
 the preflight source guard rejects those includes before a build.
 
 CI uses Ubuntu 24.04 amd64 and arm64 cells and selects Python 3.12 explicitly.
-The amd64 post build shards and the two arm64 post cells use bare scalar
-architecture/size scale-set names and run directly in runner pods carrying the engine toolchain image and sudo. All three build jobs refuse an OS mismatch.
-Hosted exceptions cover PR light jobs and the existing hosted release cells; post light jobs use bare scalar GKE names.
+The amd64 post build shards use the hosted `ubuntu-24.04` image and the two arm64 post cells use
+`ubuntu-24.04-arm`; each runs directly on that image. All three build jobs refuse an OS mismatch.
+Hosted pins cover every PR and post job outside `release.yml`; the existing hosted release cell keeps `ubuntu-22.04-arm`.
 The runner-loss controller has its own exact hosted `ubuntu-24.04` pin.
 CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
@@ -633,8 +631,8 @@ requires the WebSocket test.
 The runner's curl version floor still applies at configure time.
 `live-tsan` runs the same inventory in a separate ThreadSanitizer build,
 checks every runner compile unit for instrumentation, and stops on a race.
-`native-live.yml` runs four `native` shards on `gke-8cpu-16gb-amd64`;
-`live-sanitizers` builds once on `gke-16cpu-32gb-amd64-256gb` and `live-tsan` once on `gke-16cpu-32gb-amd64-128gb`, selected by the exact `matrix.runner` include rows.
+`native-live.yml` runs four `native` shards on `ubuntu-24.04`;
+`live-sanitizers` and `live-tsan` each build once on `ubuntu-24.04`, selected by the exact `matrix.runner` include rows.
 Both matrices keep `fail-fast: false` and build pinned WebSocket curl cold. A failed cell does not cancel its peers.
 Native diagnostic artifacts carry the shard index; compiler and curl installations have no Actions cache.
 The `native-live (native)` aggregate requires all four successful summary proofs;
@@ -816,7 +814,7 @@ only examples or tests include fails no profile. A database without the
 archive's compiles fails the stage.
 
 Pass `--ccache` when ccache is installed; it is an empty local directory on
-the GKE proof and trusted post jobs. Actions cache restore and save steps were
+the hosted proof and trusted post jobs. Actions cache restore and save steps were
 removed from those jobs, so no PR run can plant an object that a trusted job
 later restores. The native curl action remains a separate dependency path and
 is an outstanding allow-list deviation for this change.
@@ -865,8 +863,8 @@ Each profile needs matching providers; a Mac Release archive cannot replace
 a Linux sanitizer build. CTest itself performs no network fetch.
 CTest authenticates all seven prepared receipts against their actual archive and
 header bytes. The executing settlement, script-host, and aggregate controls
-use the authenticated `host-fc7aad6` v18 archive plus the live v19 archive:
-v18 callers link to v18, v19 callers link to v19, and both cross-epoch
+use the authenticated `host-fc7aad6` v18 archive plus the live v20 archive:
+v18 callers link to v18, v20 callers link to v20, and both cross-epoch
 directions must fail at link time with the expected epoch-qualified symbol.
 No ABI caller executable is run. The older receipts remain authenticated
 historical evidence; they are not presented as a live v13/v14/v15/v16 link
@@ -1632,70 +1630,69 @@ runs, and this page does not claim either target as met.
 
 ## Runners and time limits
 
-Credentialed work uses protected GKE runner group 15; secret-free post Linux jobs run directly in group 14 GKE runner pods carrying the engine toolchain image and sudo.
-The four amd64 post legs, arm64 cells, preflight, parity and native verification use fixed GKE scale-set names; their aggregates use the light image. Promotion's `promote-guard` and docs-post/probe `authz` each use one `gke-2cpu-4gb-amd64` instance in separate roots; their image must include `gh` for permission lookups.
+Credentialed release work keeps protected GKE runner group 15; every other job runs directly on a standard hosted image, `ubuntu-24.04` for x86 and `ubuntu-24.04-arm` for arm64.
+The four amd64 post legs, arm64 cells, preflight, parity and native verification use the pinned hosted images; their aggregates use the hosted x86 image. Promotion's `promote-guard` and docs-post/probe `authz` each use one `ubuntu-24.04` instance in separate roots; their image must include `gh` for permission lookups.
 The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job or pinned native profile row:
 
 | Workflow | Events/callers | Inline jobs' `runs-on` |
 | --- | --- | --- |
 | `ci.yml` | Unfiltered `pull_request` | `authz`: hosted `ubuntu-24.04`; no proof legs |
-| `gke-pr.yml` | `pull_request_target` to `main` | Hosted admission/result; GKE preflight and proof legs; Debug `gke-16cpu-32gb-amd64-128gb`, arm64 `gke-16cpu-32gb-arm64-128gb` |
+| `gke-pr.yml` | `pull_request_target` to `main` | All jobs hosted: x86 `ubuntu-24.04` for admission, result, preflight, native x86 Release `build-x86-gcc133`, Release `build`, Debug and the parity subset; arm64 `ubuntu-24.04-arm` |
 | `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: hosted `ubuntu-24.04` |
 | `rerun-preempted.yml` | `workflow_run`: completed `CI post-merge` push/schedule runs on `main` | `rerun`: hosted `ubuntu-24.04` |
-| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | Seven light jobs: scalar `gke-2cpu-4gb-amd64`; bare GKE scalars: Release `gke-32cpu-64gb-amd64`, sanitizers `gke-32cpu-64gb-amd64-256gb`, Debug `gke-16cpu-32gb-amd64-128gb`, kernel `gke-16cpu-32gb-amd64`, preflight tiers `gke-8cpu-16gb-amd64`, arm64 `gke-16cpu-32gb-arm64-128gb` |
-| `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`: scalar `gke-4cpu-8gb-amd64`; bare GKE scalars: full parity `gke-16cpu-32gb-amd64`, subset `gke-8cpu-16gb-amd64` |
-| `native-live.yml` | Dispatch and post CI callers on `main` | `authz` and both aggregates: scalar `gke-4cpu-8gb-amd64`; native shards: bare `gke-8cpu-16gb-amd64`; `matrix.runner`: live-sanitizers `gke-16cpu-32gb-amd64-256gb`, live-tsan `gke-16cpu-32gb-amd64-128gb` |
-| `docs-post.yml` | Push to `main`, dispatch | `authz`: scalar `gke-2cpu-4gb-amd64`; credentialed `build`: `gkp-4cpu-8gb-amd64` |
-| `release.yml` | Dispatch from `main` | `release` and `notify-hub`: `gkp-2cpu-4gb-amd64`; x86_64 `prebuilt`: `gkp-16cpu-32gb-amd64-128gb`; arm64 `prebuilt`: hosted `ubuntu-22.04-arm` |
-| `promote-baseline.yml` | Push to `main`, dispatch from `main` | `promote-guard`: `gke-2cpu-4gb-amd64`; `promote`: `gkp-2cpu-4gb-amd64` |
-| `release-ruleset-probe.yml` | Dispatch from `main` | `authz`: `gke-2cpu-4gb-amd64`; `probe`: `gkp-2cpu-4gb-amd64` |
+| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | All jobs hosted: x86 `ubuntu-24.04` for the seven light jobs, native x86 Release `build-x86-gcc133`, Release, Debug, sanitizers, kernel and the preflight tiers; arm64 `ubuntu-24.04-arm` |
+| `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`, full parity and subset: `ubuntu-24.04` |
+| `native-live.yml` | Dispatch and post CI callers on `main` | `authz`, both aggregates and the native shards: `ubuntu-24.04`; `matrix.runner`: live-sanitizers and live-tsan both `ubuntu-24.04` |
+| `docs-post.yml` | Push to `main`, dispatch | `authz` and credentialed `build`: `ubuntu-24.04` |
+| `release.yml` | Dispatch from `main` | `release` and `notify-hub`: `gkp-od-4cpu-8gb-amd64`; x86_64 `prebuilt`: `gkp-od-16cpu-32gb-amd64-128gb`; arm64 `prebuilt`: hosted `ubuntu-22.04-arm` |
+| `promote-baseline.yml` | Push to `main`, dispatch from `main` | `promote-guard` and `promote`: `ubuntu-24.04` |
+| `release-ruleset-probe.yml` | Dispatch from `main` | `authz` and `probe`: `ubuntu-24.04` |
 
-Post CI starts on push to `main`, schedule and dispatch; its GKE routing checker
+Post CI starts on push to `main`, schedule and dispatch; its routing checker
 refuses all PR events. Reusable workflows inherit their caller's event.
 `workflow_event_routes` and `workflow_fleet_findings` in `scripts/ci_preflight.py`
 follow local calls to a fixed point, refuse mixed event classes and require
-exact bare scalar GKE scale-set names or the exact native profile runner matrix outside hosted pins; job conditions cannot excuse routing.
+the exact hosted image of each pinned job or the exact native profile runner matrix; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
-Unprotected GKE jobs carry no deployment secrets, effective id-token permissions or environment; pull_request workflows cannot name GKE routing. Runner-group workflow/ref allowlists must admit the post-only workflows at refs/heads/main before they can acquire pods. GKE jobs start only from gke-pr.yml, ci-post.yml, corpus-parity.yml, native-live.yml, docs-post.yml, release-ruleset-probe.yml and promote-baseline.yml at refs/heads/main (the runner group lists those workflow refs); a dispatch from another ref queues without a runner.
+Pinned verification jobs carry no deployment secrets, effective id-token permissions or environment and declare no job container or services; pull_request workflows cannot name `gke-*` or `gkp-*` routing. Only `release.yml` still names protected `gkp-od-*` scale sets: the runner-group allowlist must list its ref at refs/heads/main before it can acquire a pod, and every other workflow runs on a hosted image and needs no allowlist entry.
 Retired GCP main/post labels and paid larger-runner labels remain refused.
 
 The four full build checks are `build (ubuntu-24.04, Release)`,
 `build (ubuntu-24.04, Debug)`, `build (ubuntu-24.04-arm, Release)` and
 `build (ubuntu-24.04-arm, Debug)`. Release uses four `build` shards, Debug two
-`build-debug` shards, and kernel two shards; sanitizers uses four, all on their fixed GKE sizes.
+`build-debug` shards, and kernel two shards; sanitizers uses four, all on the pinned hosted images.
 Every shard builds the full tree and runs `--ctest-shard I/N` at the runner's core count. Each build refuses an OS mismatch before checkout.
-Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on `gke-16cpu-32gb-arm64-128gb`. All three build jobs use the same verification steps and profiles.
+Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on `ubuntu-24.04-arm`. All three build jobs use the same verification steps and profiles.
 Shard jobs and leg aggregates skip together only on classified docs-only changes.
 Trusted post workflows and PR proof legs build cold; no trusted job restores an Actions cache.
-`HOSTED_JOB_RUNNERS` pins hosted jobs, exact bare GKE scalars and the native profile runner matrix; `GKP_JOB_RUNNERS` separately pins protected jobs and sizes. Every GKE job runs directly in a runner pod carrying the engine toolchain image and sudo. PR checks are
+`HOSTED_JOB_RUNNERS` pins the hosted x86 and arm64 jobs and the native profile runner matrix; `GKP_JOB_RUNNERS` separately pins the protected release jobs and sizes. Every pinned job runs directly on its hosted image. PR checks are
 `build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`. With the arm leg, the full set is `build`, `build-debug`, `build-arm`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.
 
-Release and promotion use protected GKE runner group 15:
-`release`, `notify-hub` and baseline `promote` use `gkp-2cpu-4gb-amd64`;
-Linux x64 `prebuilt` uses `gkp-16cpu-32gb-amd64-128gb`.
-The release ruleset probe runs secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64` and
-`probe` on `gkp-2cpu-4gb-amd64`.
-Release's Linux arm64 artifact cell keeps its hosted `ubuntu-22.04-arm` pin;
+Release uses protected GKE runner group 15:
+`release` and `notify-hub` use `gkp-od-4cpu-8gb-amd64`;
+Linux x64 `prebuilt` uses `gkp-od-16cpu-32gb-amd64-128gb`; baseline `promote` uses hosted `ubuntu-24.04`.
+The release ruleset probe runs `authz` and `probe` on hosted `ubuntu-24.04`.
+Release's ARM artifact cell retains hosted `ubuntu-22.04-arm`;
 1.8.0 has no macOS test or artifact cells, and
 promotion runs on a push to `main` plus manual dispatch from `main`.
 
-The protected 2 CPU/4 GB set fits each orchestration job: release computes versions,
-stamps JSON catalogs and publishes with git/gh; notify-hub only mints an App token
-and dispatches an API request; promotion runs API/tree checks, Node campaign tooling
-and a Cloud SQL proxy; the probe reads rulesets with Python/gh. Docs uses the
-4 CPU/8 GB set for Doxygen and Graphviz over the full public header set before
-uploading the site to Pages. The x86_64 prebuilt set reserves 16 CPU/32 GB and
-128 GB disk for compiling, staging and packing the static library.
-Both Linux artifact cells install `libeigen3-dev` with `sudo apt-get update` and
-`sudo apt-get install -y libeigen3-dev`; Eigen is not baked into the protected image.
-Before CMake, x86_64 must read `Eigen/src/Core/util/Macros.h` and match exactly
+Release and notify-hub use the on-demand 4 CPU/8 GB set to prevent preemption after tag push.
+Release computes versions, stamps JSON catalogs and publishes with git/gh; notify-hub
+mints an App token and dispatches an API request. The protected 2 CPU/4 GB set
+runs promotion's API/tree checks, Node campaign tooling and Cloud SQL proxy; the
+probe reads rulesets with Python/gh. Docs uses 4 CPU/8 GB for Doxygen and Graphviz
+over the full public header set before Pages upload. The x86_64 prebuilt requires
+16 CPU/32 GB and 128 GB storage, plus the preloaded immutable Bookworm Docker image.
+ARM installs `libeigen3-dev` from Ubuntu; x86_64 requires Bookworm's `3.4.0-4`.
+Before CMake, both builds must read the consumed `Eigen/src/Core/util/Macros.h`,
+pin `Eigen3_DIR=/usr/share/eigen3/cmake`, disable FetchContent, and match exactly
 `EIGEN_WORLD_VERSION=3`, `EIGEN_MAJOR_VERSION=4`, `EIGEN_MINOR_VERSION=0` (3.4.0).
 Missing headers or any other version fail the job. Preflight pins these steps and
 their order, the exact protected job/label inventory, and the App environments.
 Protected routing cannot be used by another job, PR caller, container or service.
 The group 15 mirror lists only docs-post, promote-baseline, release-ruleset-probe
-and release at `refs/heads/main`; live membership and a release dry run remain
-supervisor checks. The secret-free `gke-*` credential ban stays binding.
+and release at `refs/heads/main`; label catalog/live membership, Docker versions,
+preload, shared `/home/runner/_work` and UID:GID `1001:123` still require operational confirmation; checks fail closed. The secret-free `gke-*` credential ban stays binding.
 
 Every split workflow retains the canon authz step and its digest. All other
 jobs need authz; CI/native aggregates always run and refuse failed authz
@@ -1710,9 +1707,9 @@ default excludes `slow` from Debug and sanitizer runs on every event,
 including non-PR events; Release, kernel and native retain every row.
 PR CI keeps the Release smoke selected by CTest label `fast`.
 
-Baseline promotion uses `gkp-2cpu-4gb-amd64` for its GitHub App
-secrets and inherited `id-token: write` permission. Protected runner group 15 admits
-this allowlisted workflow at `refs/heads/main`; WIF pins its
+Baseline promotion uses hosted `ubuntu-24.04` for its GitHub App
+secrets and inherited `id-token: write` permission, behind its `release-bot` environment
+and `refs/heads/main` restriction; WIF pins its
 `job_workflow_ref` and run ref to main without restricting the event.
 The pushed SHA must resolve to exactly one merged PR before authorization,
 tree equality and head-status checks admit promotion. A shared
@@ -1739,8 +1736,8 @@ No job or step declares `timeout-minutes`, and no proof continues on error.
 Every paid larger-runner label is refused in every workflow, including pinned jobs;
 `larger_runner` keys stay refused. GitHub's platform maximum remains the only time bound.
 
-The read-only `promote-guard` uses bare scalar `gke-2cpu-4gb-amd64`; the credential
-job uses main's protected `gkp-2cpu-4gb-amd64` runner. Preflight pins the complete guard
+The read-only `promote-guard` uses hosted `ubuntu-24.04`; the credential
+job also uses hosted `ubuntu-24.04`, behind its environment. Preflight pins the complete guard
 block, including its sole `pull-requests: read` scope, API resolution, identity bindings,
 refusal script, authorization output and separator. It also pins the
 credential job's dependency and successful-authorization condition.
@@ -1921,8 +1918,8 @@ Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from
 `main` to check actual ruleset visibility with the same App token mint as
 `release.yml`. The workflow file must be on the default branch, and the run
 must use `main`'s copy.
-The credentialed probe job runs on `gkp-2cpu-4gb-amd64`, with
-secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64`.
+The credentialed probe job runs on hosted `ubuntu-24.04`, with
+secret-free `authz` on hosted `ubuntu-24.04`.
 Protected runner group 15 admits only allowlisted workflow refs at `refs/heads/main`;
 the probe keeps its `release` environment and main-ref refusal before App minting.
 The dispatch must run from `main`; the workflow itself refuses any other ref
@@ -1965,12 +1962,12 @@ sleeping or retrying; empty or unparseable evidence also refuses. An empty JSON
 array is a valid list response; each caller refuses if its required PR or
 context evidence is absent. An empty single-object payload still refuses.
 
-Prebuilt jobs build the commit sha emitted after the release job's atomic
-push, and assert that the release tag still resolves to that sha before
-building. A missing or malformed sha or a changed tag fails the job. Dry runs
-build `github.sha` and skip the tag assertion because no tag exists. A
-separate tag ruleset forbids updates and deletion of `v*` tags; see "Release
-tag immutability and recovery" below.
+Prebuilt jobs build the sha emitted after the release job's atomic push and assert that the release tag still resolves to it before building.
+A missing/malformed sha or changed tag fails. Dry runs build `github.sha` and skip the tag assertion because no tag exists.
+A separate tag ruleset forbids updates and deletion of `v*` tags; see "Release tag immutability and recovery" below.
+After packing, x86_64 checks the emitted tarball's SHA-256 sidecar and unpacks those exact bytes in the pinned Bookworm environment before upload.
+It compiles and runs unchanged `examples/native/hello_kernel.cpp` against the extracted headers and full `libpineforge.a`; configure, link and run diagnostics retain their actual exit status.
+This archive consumer does not establish an arm64 support-floor result.
 
 #### Release tag immutability and recovery
 
@@ -2035,7 +2032,7 @@ A workflow change that needs a loosened rule must therefore use two changes.
 
 Rule and table changes land first while existing workflows pass; workflow changes follow, so one PR cannot change both sides of admission.
 `gke-pr.yml` admits exactly two variants: OLD is the shape without the arm job, kept so earlier workflow files still pass; defining the `build-arm` job selects all NEW checks together.
-NEW requires the exact arm classifier output, fixed Debug job on bare `gke-16cpu-32gb-arm64-128gb`, arm-aware `legs` needs/check and independent `result` check.
+NEW requires the exact arm classifier output, fixed Debug job on `ubuntu-24.04-arm`, arm-aware `legs` needs/check and independent `result` check.
 Hybrids and extra jobs, outputs, needs or arm steps are refused; OLD retains its original exact rules and templates for a workflow without the arm job.
 The github-only class still runs the full workflow policy preflight.
 The proof legs are the only jobs skipped for the two documentation classes.
@@ -2049,12 +2046,12 @@ PR pods also build cold, so their runtime cache credential has no trusted reader
 No trusted job consumes an artifact from the admission workflow.
 The runner group accepts only the main branch admission workflow definition.
 The merge gate reads the workflow run path, event and bound display title.
-These controls keep hosted authorization separate from GKE proof execution.
+These controls keep hosted authorization separate from hosted proof execution.
 This reference is kept beside the operational workflow table above.
 The same order applies when a runner label or parser rule changes.
 The compare file is never placed in a shell word list.
 Names remain opaque data through both classification reads.
-The head checkout is immutable for every GKE proof leg.
+The head checkout is immutable for every hosted proof leg.
 The base checkout remains the source of admission policy.
 Result checks are based on job outcomes rather than job names alone.
 Skipped proof legs are accepted only for an agreed documentation class, or for the arm leg when `arm_relevant` is false.

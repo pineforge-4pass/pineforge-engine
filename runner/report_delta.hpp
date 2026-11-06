@@ -25,11 +25,31 @@ inline Json changed_report_fields(const Json& previous, const Json& next) {
     return changes;
 }
 
+inline const Json& report_v2_ratios(const Json& delta, std::uint64_t cursor) {
+    const auto& ratios = delta.at("ratios");
+    only_fields(ratios, {"as_of_input", "chart_timezone", "exact"});
+    const auto as_of = ratios.at("as_of_input").integer<std::uint64_t>();
+    const auto& exact = ratios.at("exact");
+    if (as_of > cursor || exact.kind != Json::Kind::Bool ||
+        (exact.value == "true") != (as_of == cursor) ||
+        ratios.at("chart_timezone").text().empty())
+        throw std::runtime_error("invalid cumulative report ratio metadata");
+    return ratios;
+}
+
 inline void apply_report_delta(Json& document, const Json& delta) {
-    if (delta.at("schema_version").text() != "pineforge-native-report-delta/v1")
+    const bool v2 = delta.at("schema_version").text() == "pineforge-native-report-delta/v2";
+    if (!v2 && delta.at("schema_version").text() != "pineforge-native-report-delta/v1")
         throw std::runtime_error("unsupported cumulative report delta");
     merge_report_fields(document, delta.at("fields"));
-    if (const auto* as_of = delta.find("ratios_as_of_input")) {
+    if (v2) {
+        const auto cursor = document.at("input_cursor").integer<std::uint64_t>();
+        report_v2_ratios(delta, cursor);
+        const auto kind = delta.at("kind").text();
+        if ((kind != "input" && kind != "final") ||
+            (kind == "final" && !delta.at("arrays").members.empty()))
+            throw std::runtime_error("invalid cumulative report delta kind");
+    } else if (const auto* as_of = delta.find("ratios_as_of_input")) {
         if (as_of->integer<std::uint64_t>() > document.at("input_cursor").integer<std::uint64_t>())
             throw std::runtime_error("invalid interval report ratio cursor");
         const auto& context = delta.at("ratio_context");
@@ -41,6 +61,10 @@ inline void apply_report_delta(Json& document, const Json& delta) {
         document.members["ratio_context"] = context;
     }
     for (const auto& [name, patch] : delta.at("arrays").members) {
+        if (v2 && name != "closed_trades" && name != "trades" && name != "equity_curve" &&
+            name != "security_diag" && name != "trace" && name != "trace_names" && name != "broker_state_hash")
+            throw std::runtime_error("invalid cumulative report array name");
+        if (v2) only_fields(patch, {"offset", "items"});
         auto& owner = name == "closed_trades" ? document : document.members["report"];
         owner.kind = Json::Kind::Object;
         auto& values = owner.members[name];
@@ -84,6 +108,9 @@ inline std::optional<std::uint64_t> stored_report_ratio_cursor(
     // tokens keep the previous parser/accessor semantics, including its errors
     // and frame limit. Rows below a verified checkpoint always take this path.
     const auto payload = parse_json(stored);
+    if (const auto* schema = payload.find("schema_version"))
+        if (schema->kind == Json::Kind::String && schema->text() == "pineforge-native-report-delta/v2")
+            return payload.at("ratios").at("as_of_input").integer<std::uint64_t>();
     if (const auto* as_of = payload.find("ratios_as_of_input"))
         return as_of->integer<std::uint64_t>();
     return std::nullopt;

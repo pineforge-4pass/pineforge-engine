@@ -19,7 +19,6 @@ concurrency:
 jobs:
   authz:
     name: authz
-    # Fleet routing is fixed per job; credentials use protected GKE runners.
     runs-on: ubuntu-24.04
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).

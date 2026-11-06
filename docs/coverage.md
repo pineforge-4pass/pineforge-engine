@@ -54,7 +54,7 @@
 | Color                       | Supported                                                                  | `pine_color` constants plus `new_color`, `r`, `g`, `b`, `t` helpers.                                                                                                                                                                                                                                                                                                |
 | `na` / `is_na`              | Supported                                                                  | Generic `na<T>()` and `is_na(...)` for double / integer / bool, plus null-ID detection for `PineMap<K,V>`.                                                                                                                                                                                                                                                           |
 | Logging / runtime errors    | Supported                                                                  | `pine_log_info / warning / error`, `pine_runtime_error` (throws).                                                                                                                                                                                                                                                                                                   |
-| Maps                        | Supported within explicit codegen boundaries                               | `map.hpp` provides ordered `PineMap<K,V>` handles, Pine alias/copy/null semantics, typed missing values, the 50,000-pair limit, and primitive-only rollback snapshots. Generated strategies use this runtime for supported string-key/primitive-value maps; unsupported map history, nested map-bearing matrices, and ambiguous specializations fail closed. |
+| Maps                        | Supported within explicit codegen boundaries                               | `map.hpp` provides ordered `PineMap<K,V>` handles, Pine alias/copy/null semantics, typed missing values, unlimited default pair capacity with a per-map parameter, and primitive-only rollback snapshots. Select 50,000 pairs explicitly for TV parity. Generated strategies use this runtime for supported string-key/primitive-value maps; unsupported map history, nested map-bearing matrices, and ambiguous specializations fail closed. |
 | Arrays / UDTs               | **No runtime module** (Pine surface still supported via consumer compiler) | Pine arrays and UDTs work through transpiler-emitted `std::vector<T>` and generated C++ structs. Recursive snapshotting for UDTs or collections containing map/reference handles remains a codegen/type-system responsibility.                                                                                                                                        |
 | Drawing / plotting / alerts | Drawings as data; no plotting or alert module | `drawing.hpp` keeps `line` / `box` / `label` / `linefill` / `chart.point` geometry as data that trading logic reads back; visual setters are accepted no-ops. Plots, tables, polylines and alerts: PineForge's transpiler parses-and-skips these so the strategy still compiles and runs, but no visual side-effects are emitted.                                                                                                                                                                            |
 
@@ -62,7 +62,7 @@
 ## Public C ABI
 
 `<pineforge/pineforge.h>` is the **single canonical consumer header**. It has
-exactly 111 public `PF_API` declarations: 91 of the 102 runtime implementations (the other eleven are declared in `execution_observer.h`, `selected_window.h` and `report_sink.h`) and twenty
+exactly 113 public `PF_API` declarations: 93 of the 104 runtime implementations (the other eleven are declared in `execution_observer.h`, `selected_window.h` and `report_sink.h`) and twenty
 per-strategy generated exports. Every compiled PineForge strategy `.so` exports
 that public set, except that `strategy_declares_bar_magnifier` is exported only
 by a script that declares `use_bar_magnifier = true` and the three [outputs](outputs.md) exports only by a module that records outputs; older modules lack the six
@@ -132,7 +132,7 @@ single `.hpp`):
 
 | Module             | Header                   | Source                                                                                                                                                                                                                                   | Pine-facing role                                                                                                                                              |
 | ------------------ | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                                       | 111 public `PF_API` declarations: 91 of the 102 runtime implementations plus twenty per-strategy generated exports. `strategy_configure_native_fx_curve_v1` stages the additive native FX curve. `strategy_set_scratch_tables_v1` selects the scratch-table backend. `strategy_set_cache_policy_v1` selects optional resident cache allowances. `report_sink.h` adds the T-summary query `strategy_report_sink_summary_v1`. `pf_report_cache_stats` reads run-wide command-cache and ledger diagnostics. `pf_output_series_limit_set_checked` and `pf_output_series_limit_failure` configure and report the creation-time recorded-series limit. |
+| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                                       | 113 public `PF_API` declarations: 93 of the 104 runtime implementations plus twenty per-strategy generated exports. `strategy_configure_native_fx_curve_v1` stages the additive native FX curve. `strategy_set_scratch_tables_v1` selects the scratch-table backend. `strategy_set_cache_policy_v1` selects optional resident cache allowances. `report_sink.h` adds the T-summary query `strategy_report_sink_summary_v1`. `pf_report_cache_stats` reads run-wide command-cache and ledger diagnostics. `pf_output_series_limit_set_checked` and `pf_output_series_limit_failure` configure and report the creation-time recorded-series limit. |
 | Engine             | `engine.hpp`             | `engine_run.cpp`, `engine_stream.cpp`, `engine_execution.cpp`, `engine_orders.cpp`, `engine_path_resolve.cpp`, `engine_trade_accessors.cpp`, `engine_security.cpp`, `engine_lower_tf.cpp`, `engine_report.cpp`, `native_execution_consumer.cpp` | One-shot and continuous lifecycle, native request matching/settlement, orders, reports, inputs / syminfo, magnifier, TF aggregation, and `request.security` plumbing.                  |
 | Engine internals   | `engine_internal.hpp`    | (private cross-TU header)                                                                                                                                                                                                                | `pineforge::internal::*` types and helpers shared between engine `.cpp` partitions; not part of the public ABI.                                               |
 | Technical analysis | `ta.hpp`                 | `ta_moving_averages.cpp`, `ta_oscillators.cpp`, `ta_volatility_trend.cpp`, `ta_extremes_volume.cpp`, `ta_misc.cpp`                                                                                                                       | Official `ta.*` functions and series variables backed by stateful runtime classes with `compute` / `recompute`, plus `pivot_point_levels(...)` free function. |
@@ -140,11 +140,11 @@ single `.hpp`):
 | Strings            | `str_utils.hpp`          | `str_utils.cpp`                                                                                                                                                                                                                          | Format, format-time, regex match, split, and numeric-to-string helpers.                                                                                       |
 | Timeframe          | `timeframe.hpp`          | `timeframe.cpp`                                                                                                                                                                                                                          | TF string parsing, ratio computation, calendar detection, `TimeframeAggregator`.                                                                              |
 | Session / time     | `session_time.hpp`       | `session_time.cpp`                                                                                                                                                                                                                       | `pine_time(...)`, `pine_time_close(...)` with session and timezone gating.                                                                                    |
-| Timezone           | (private) `timezone.hpp` | `timezone.cpp`                                                                                                                                                                                                                           | `tz_util::ScopedTimezone` — mutex-guarded `TZ` env-var swap for thread-safe formatting. Internal; not in public include path.                                 |
+| Timezone           | (private) `timezone.hpp` | `timezone.cpp` | `tz_util::ScopedTimezone` — `TZ` env-var swap guarded by a per-image mutex for formatting and calendar conversion. Internal; not in public include path. |
 | Bar magnifier      | `magnifier.hpp`          | `magnifier.cpp`                                                                                                                                                                                                                          | OHLC price-path sampling with six distribution modes; optional volume-weighted sample density.                                                                |
 | Matrices           | `matrix.hpp`             | `matrix.cpp`                                                                                                                                                                                                                             | Eigen-backed `PineMatrix`.                                                                                                                                    |
 | Generic matrices   | `generic_matrix.hpp`     | header-only                                                                                                                                                                                                                              | Template `PineGenericMatrix<T>` over `std::vector<std::vector<T>>` (T=bool specialized to `vector<vector<char>>`) for non-double element types.               |
-| Maps               | `map.hpp`                | header-only                                                                                                                                                                                                                              | `PineMap<K,V>` handle runtime with insertion ordering, Pine-aware primitive keys, null IDs, 50,000-pair cap, explicit container copy, and primitive-value snapshot/restore. The transpiler emits this runtime for its supported map boundary. |
+| Maps               | `map.hpp`                | template runtime plus creation policy in `script_store.cpp`                                                                                                                                                                                | `PineMap<K,V>` handle runtime with insertion ordering, Pine-aware primitive keys, null IDs, a per-map pair limit defaulting to unlimited, explicit container copy, and primitive-value snapshot/restore. The transpiler emits this runtime for its supported map boundary. |
 | Drawings           | `drawing.hpp`            | header-only | `line` / `box` / `label` / `linefill` handles in per-type arenas, and `chart.point`: geometry as data, no rendering. |
 | Series history     | `series.hpp`             | header-only                                                                                                                                                                                                                              | Generic `Series<T>` deque with `push` / `update` / `[k]` indexing.                                                                                            |
 | `na`               | `na.hpp`, `map.hpp`      | header-only                                                                                                                                                                                                                              | `na<T>()` generators and `is_na(...)` checks, including the null-ID overload for `PineMap<K,V>`.                                                             |
@@ -799,13 +799,21 @@ A 24-hour session's day in a zone with daylight saving runs from one
 wall-clock open to the next, 23 or 25 hours across a switch
 (the private fixture set `dst_day_close`).
 
-`tz_util::ScopedTimezone(tz)` is RAII — it grabs a process-wide mutex,
-swaps `TZ` (lazily: a same-zone request skips the `setenv` / `tzset`
-pair), and holds the mutex until the guard is destroyed, so the caller's
-`localtime_r` / `mktime` decomposition inside the scope runs under a
-stable `TZ`. This is the only reason `pine_str_format_time` and the
-session helpers are safe to call from a multi-strategy harness (see
-`tests/test_timezone_concurrency.cpp`).
+`tz_util::ScopedTimezone(tz)` holds a per-image mutex for its entire RAII
+scope, including the caller's `localtime_r` / `mktime` decomposition.
+Under that lock it compares the normalized target with the actual
+`getenv("TZ")` value, skipping `setenv` / `tzset` only when they match.
+`TZ` is intentionally left in place when the guard ends. Reading the actual
+environment fixes sequential timezone switches between independently linked
+engine images: one image observes the preceding image's switch before its
+next conversion. Valid per-zone interval cache hits still avoid libc and
+the lock.
+
+The mutex serializes guarded conversions within one engine image (covered
+by `tests/test_timezone_concurrency.cpp`). Independently linked images have
+separate mutexes, so atomicity of parallel conversions across images
+remains an open product issue. `tests/test_timezone_multi_module.py` covers
+the sequential two-image sequence and its same-image control.
 
 ## Matrices
 
@@ -874,10 +882,13 @@ supports it via the consumer compiler's emitted code*.
 
 ### Runtime present — consumer compiler owns conservative boundaries
 
-- Pine `map<K,V>` has a dedicated header-only `PineMap<K,V>` runtime in
+- Pine `map<K,V>` has a dedicated `PineMap<K,V>` template runtime in
   `map.hpp`. It implements map-ID aliasing, `map.copy()` container separation,
   insertion-ordered keys/values, typed missing results, null IDs, Pine-aware
-  primitive keys, and the 50,000-pair limit. The transpiler now emits this
+  primitive keys, and a per-map pair-limit parameter defaulting to unlimited.
+  Arenas grow in fixed steps and bucket tables scale with capacity; use
+  `--limit-map-pairs 50000` for TV parity, including typed RE10070 refusal.
+  The transpiler now emits this
   runtime for supported string-key/primitive-value maps, including typed and
   inferred `na`, UDF/UDT parameter and return propagation, once-only receiver
   evaluation, pair iteration, and supported checkpoint alias/rebind behavior.
@@ -992,11 +1003,40 @@ this runtime delivers the surface listed above. Run
 against `libpineforge.a` and diff each probe's `engine_trades.csv`
 against the TradingView export shipped beside it;
 `python3 scripts/verify_corpus.py --all` grades the shipped trade lists by
-the canonical rubric. Its strict profile gates count + entry-price +
+the canonical rubric. Its strict profile declares limits for count + entry-price +
 exit-price + P&L within `1.0% / 0.01% / 0.01% / 1.0%`; a strategy whose
-`strategy.exit` uses a `trail_*` parameter gets the production profile, with
+source assigns `trail_points`, `trail_offset` or `trail_price` (outside
+comments) gets the production profile, with
 the same count and entry limits, exit within 0.02%, and P&L within 1%.
-The exit and P&L gates are graded per strategy at the 90th percentile, not every trade.
+The entry, exit and P&L gates are graded per strategy at the 90th percentile, not every trade.
+
+### Grading profiles and sweep limits
+
+The declared profile limits in
+[`scripts/verify_corpus.py`](../scripts/verify_corpus.py) are:
+
+| Profile | Count delta (declared) | Entry-price p90 | Exit-price p90 | P&L p90 |
+| ------- | ---------------------- | --------------- | -------------- | ------- |
+| Strict | 1.0% | < 0.01% | < 0.01% | < 1.0% |
+| Trail / production | 1.0% | < 0.01% | < 0.02% | < 1.0% |
+
+For both profiles, an `excellent` grade requires exact gated trade-count
+parity; the declared 1.0% count limit does not permit missing or extra
+trades for that grade. The entry, exit and P&L gates require each strategy's
+90th-percentile (p90) delta to be strictly below the corresponding limit.
+The verifier computes p90 by sorting the deltas and linearly interpolating
+at index `(n - 1) * 0.90`. Exit and P&L are per-strategy gates, not
+requirements that every trade pass; P&L deltas include the verifier's
+near-zero, rounding, quantity-normalization and exit-drift adjustments.
+
+For the sweep, each probe's profile is selected automatically from its
+strategy source by `detect_parity_profile`: after comments are removed,
+a `trail_points`, `trail_offset` or `trail_price` assignment selects
+production; otherwise it selects strict. The standalone verifier also
+supports an explicit `parity_profile` override in `inputs.json`.
+The sweep applies trail / production limits to 341 of its 7,989 probes
+(58 distinct strategies) and strict limits to
+the other 7,648 probes.
 
 One probe, `corpus/validation/anomaly-equity-mirror-strategy-equity-01`,
 declares `expected_tier: anomaly` in its `inputs.json`: it pins the 1× equity

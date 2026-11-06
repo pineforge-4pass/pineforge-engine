@@ -897,7 +897,7 @@ PoocCloseFillViewSwitches& pooc_close_fill_view_switches() noexcept {
 }  // namespace detail
 
 // The retired-row compaction: the placement table's storage.
-void PlacementTable::place(std::uint64_t incarnation, std::unique_ptr<PlacementSnapshot> node) {
+void PlacementTable::place(std::uint64_t incarnation, std::unique_ptr<PlacementSnapshot> node) { if (old_only_) return place_old(incarnation, std::move(node));
     if (window_rows_ == 0 && (old_.empty() || incarnation > old_.back().first)) {
         // An empty window restarts at the new row, above every older row.
         window_.clear();
@@ -909,28 +909,28 @@ void PlacementTable::place(std::uint64_t incarnation, std::unique_ptr<PlacementS
         // window starts at, remembered only now): among the older rows.
         const auto at = std::lower_bound(old_.begin(), old_.end(), incarnation,
             [](const auto& entry, std::uint64_t key) { return entry.first < key; });
-        old_.emplace(at, incarnation, std::move(node));
+        placement_work_ += static_cast<std::uint64_t>(old_.end() - at) + 1U; old_.emplace(at, incarnation, std::move(node));
         return;
     }
     const auto index = head_ + static_cast<std::size_t>(incarnation - base_);
-    if (index >= window_.size()) window_.resize(index + 1U);
-    window_[index] = std::move(node);
+    if (index >= window_.size()) grow_window(index);
+    ++placement_work_; window_[index] = std::move(node);
     ++window_rows_;
 }
 
 std::unique_ptr<PlacementSnapshot> PlacementTable::take(std::uint64_t incarnation) noexcept {
-    if (incarnation >= base_) {
+    if (!old_only_ && incarnation >= base_) {
         const std::uint64_t offset = incarnation - base_;
         if (offset >= window_.size() - head_) return nullptr;
         auto& slot = window_[head_ + static_cast<std::size_t>(offset)];
-        if (slot) --window_rows_;
+        if (slot) { --window_rows_; ++removal_work_; }
         return std::move(slot);
     }
     const auto found = std::lower_bound(old_.begin(), old_.end(), incarnation,
-        [](const auto& entry, std::uint64_t key) { return entry.first < key; });
+        [this](const auto& entry, std::uint64_t key) { ++lookup_work_; return entry.first < key; });
     if (found == old_.end() || found->first != incarnation) return nullptr;
     auto node = std::move(found->second);
-    old_.erase(found);
+    removal_work_ += static_cast<std::uint64_t>(old_.end() - found); old_.erase(found);
     return node;
 }
 
@@ -952,7 +952,7 @@ void PlacementTable::remember_erased(const PlacementSnapshot& row) {
                                 sizeof row.command_sequence);
 }
 
-void PlacementTable::compact() {
+void PlacementTable::compact() { if (compact_old()) return;
     constexpr std::size_t kDenseFloor = 64;
     for (;;) {
         while (head_ < window_.size() && !window_[head_]) {
@@ -28794,6 +28794,29 @@ void PineExecutionAdapter::begin_position_tail_summary() {
     }
 }
 
+double PineStrategyHost::default_entry_qty(double fill_price) const {
+    // TradingView does not validate this query's hypothetical price before
+    // applying the declared sizing mode: fixed sizing ignores it, while
+    // money sizing returns zero for NaN/zero and a signed grid quantity for
+    // a negative price. Observation only: no order or driver state changes.
+    if (adapter_.config_.default_qty_type == static_cast<int>(QtyType::FIXED)) {
+        return floor_quantity_grid(adapter_.config_.default_qty_value,
+                                   adapter_.staged_.quantity_grid);
+    }
+    auto sizing = adapter_.sizing_snapshot();
+    sizing.price = fill_price;
+    if (!std::isfinite(fill_price) || fill_price == 0.0) return 0.0;
+    if (fill_price > 0.0) return adapter_.default_sizing_units(sizing);
+    sizing.price = -fill_price;
+    const auto sized = adapter_.default_sizing_shape(sizing);
+    if (!sized) return 0.0;
+    const auto units = native_sized_units(
+        *sized, -fill_price, sizing.equity, sizing.fx);
+    // The core computes the positive-magnitude quotient once; apply the source
+    // lot floor before restoring the negative hypothetical price's sign.
+    return units ? -adapter_.default_sizing_lot_floor(*units) : 0.0;
+}
+
 } // namespace pineforge::source
 
 #include "exit_payload_codec.inc"
@@ -29937,12 +29960,36 @@ void PlacementTable::prepare_place(std::uint64_t incarnation) {
             + std::min(rows.capacity(), rows.max_size() - rows.capacity());
         rows.reserve(std::max(required, grown));
     };
+    if (old_only_) {
+        reserve(old_, old_.size() + 1U);
+        return;
+    }
     if (window_rows_ == 0 && (old_.empty() || incarnation > old_.back().first)) {
         reserve(window_, 1);
     } else if (incarnation < base_) {
         reserve(old_, old_.size() + 1);
     } else {
         const auto index = head_ + static_cast<std::size_t>(incarnation - base_);
+        constexpr std::size_t kDenseFloor = 64;
+        const auto span = std::max(window_.size() - head_,
+                                   static_cast<std::size_t>(incarnation - base_) + 1U);
+        const bool dense = span <= kDenseFloor || span <= 4U * window_rows_;
+        if (window_rows_ != 0 && !dense) {
+            reserve(old_, old_.size() + window_rows_ + 1U);
+            for (std::size_t slot = head_; slot < window_.size(); ++slot) {
+                if (!window_[slot]) continue;
+                old_.emplace_back(
+                    base_ + static_cast<std::uint64_t>(slot - head_),
+                    std::move(window_[slot]));
+                ++placement_work_;
+            }
+            window_.clear();
+            head_ = 0;
+            window_rows_ = 0;
+            base_ = std::numeric_limits<std::uint64_t>::max();
+            old_only_ = true;
+            return;
+        }
         if (index >= window_.size()) reserve(window_, index + 1);
     }
 }
@@ -30545,3 +30592,45 @@ LookupIndexCounts probe_lookup_index(const NativeHostCache* cache) noexcept {
 }
 
 } // namespace pineforge::source::detail
+
+namespace pineforge::source {
+
+// Storage policy and work counters are derived observers, outside broker
+// state. Keep these bodies after the adapter's cited implementation regions.
+void PlacementTable::reset_storage_work() noexcept {
+    old_only_ = false;
+    placement_work_ = 0;
+    lookup_work_ = 0;
+    removal_work_ = 0;
+}
+
+void PlacementTable::grow_window(std::size_t index) {
+    placement_work_ += static_cast<std::uint64_t>(index + 1U - window_.size());
+    window_.resize(index + 1U);
+}
+
+void PlacementTable::place_old(std::uint64_t incarnation,
+                               std::unique_ptr<PlacementSnapshot> node) {
+    // Monotone incarnations append; an earlier incarnation still uses the
+    // same sorted representation and shifts only the rows above it.
+    const auto at = old_.empty() || incarnation > old_.back().first
+        ? old_.end()
+        : std::lower_bound(old_.begin(), old_.end(), incarnation,
+            [this](const auto& entry, std::uint64_t key) {
+                ++lookup_work_;
+                return entry.first < key;
+            });
+    placement_work_ += static_cast<std::uint64_t>(old_.end() - at) + 1U;
+    old_.emplace(at, incarnation, std::move(node));
+}
+
+bool PlacementTable::compact_old() noexcept {
+    if (!old_only_) return false;
+    if (old_.empty()) {
+        old_only_ = false;
+        base_ = high_water_ + 1U;
+    }
+    return true;
+}
+
+} // namespace pineforge::source

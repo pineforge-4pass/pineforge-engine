@@ -81,15 +81,19 @@ def verify(include: Path) -> dict:
             "from": "engine_script_run_v18", "to": "engine_script_run_v19"}:
         raise RuntimeError("v18-v19 relocation transition drift")
     if "inline namespace " + CURRENT_EPOCH not in engine:
-        raise RuntimeError("current engine epoch is not v19")
+        raise RuntimeError("current engine epoch is not " + CURRENT_EPOCH)
     capability = manifest.get("hostCapability") or {}
     if capability != {"from": "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V18",
                       "to": "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19"}:
         raise RuntimeError("v18-v19 host capability transition drift")
-    if "#define " + capability["to"] + " 1" not in native:
-        raise RuntimeError("current native host omits its v19 capability macro")
-    if capability["from"] in native:
-        raise RuntimeError("current native host still defines the v18 capability macro")
+    # The recorded transition ends at v19; the live host announces its own epoch.
+    live_macro = "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V" + CURRENT_EPOCH.rsplit("_v", 1)[1]
+    if "#define " + live_macro + " 1" not in native:
+        raise RuntimeError("current native host omits its " + live_macro + " capability macro")
+    for recorded in (capability["from"], capability["to"]):
+        if recorded in native:
+            raise RuntimeError("current native host still defines the " + recorded
+                               + " capability macro of an earlier epoch")
     # Keep the historical v18/v19 relocation authenticated as it was recorded.
     # The live order value epoch has since advanced independently of the host.
     current_order_epoch = verify_order_epoch(include)
@@ -463,7 +467,7 @@ def main() -> int:
     args.receipt.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     summary = result["summary"]
     print(f"settlement C++ ABI: {summary['compiled']} callers compiled; "
-          f"{summary['linked']} positive links; {summary['rejected']} v18/v19 rejections; "
+          f"{summary['linked']} positive links; {summary['rejected']} v18/v20 rejections; "
           "no executable run")
     return 0
 
