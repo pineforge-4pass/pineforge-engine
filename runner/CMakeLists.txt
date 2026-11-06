@@ -601,6 +601,10 @@ target_link_libraries(pineforge_live_startup PUBLIC pineforge_live_report)
 target_compile_options(pineforge_live_support PRIVATE -ffp-contract=off)
 
 if(PINEFORGE_BUILD_TESTS)
+    add_test(NAME ledger_observability_check_selftest COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/native_live_ledger_behavior_e2e.py ledger_observability_check_selftest)
+    set_tests_properties(ledger_observability_check_selftest PROPERTIES
+        LABELS "live_ledger" TIMEOUT 120)
     target_compile_options(pineforge_live_legacy_test_support PRIVATE -ffp-contract=off)
     add_executable(test_live_report ${PROJECT_SOURCE_DIR}/tests/test_live_report.cpp)
     target_include_directories(test_live_report PRIVATE
@@ -740,6 +744,15 @@ if(PINEFORGE_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
             --artifacts ${PROJECT_BINARY_DIR}/ledger-behavior-artifacts)
         set_tests_properties(${_pf_ledger_row} PROPERTIES LABELS "slow;live_ledger" TIMEOUT 7200)
     endforeach()
+    add_test(NAME ledger_observability_status_concurrent_write COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/native_live_ledger_behavior_e2e.py ledger_observability_status
+        --runner $<TARGET_FILE:pineforge-live-observed>
+        --strategy $<TARGET_FILE:native_live_ledger_work_strategy>
+        --fixture-writer $<TARGET_FILE:native_live_ledger_fixture_writer>
+        --artifacts ${PROJECT_BINARY_DIR}/ledger-behavior-artifacts
+        --force-write-between-samples-bytes 201326592)
+    set_tests_properties(ledger_observability_status_concurrent_write PROPERTIES
+        LABELS "slow;live_ledger" TIMEOUT 7200 RUN_SERIAL TRUE)
     add_test(NAME native_live_ledger_behavior_e2e COMMAND ${Python3_EXECUTABLE}
         ${PROJECT_SOURCE_DIR}/tests/native_live_ledger_behavior_e2e.py report_jsonl_delta_v2_contract
         --runner $<TARGET_FILE:pineforge-live-observed>
