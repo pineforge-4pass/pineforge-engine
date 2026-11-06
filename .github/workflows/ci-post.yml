@@ -746,6 +746,10 @@ jobs:
           TMPDIR: /mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/tmp
         run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/8
 
+      - name: Measure sanitizer disk space after verification
+        if: ${{ always() && needs.authz.result == 'success' }}
+        run: df -h / /mnt
+
       - name: Stage and summarize diagnostics
         if: ${{ always() && needs.authz.result == 'success' }}
         run: python3 scripts/collect_ci_diagnostics.py --build-dir build-asan --profile sanitizers
