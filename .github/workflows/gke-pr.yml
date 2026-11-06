@@ -248,7 +248,7 @@ jobs:
   preflight:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' }}
-    runs-on: gke-8cpu-16gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {contents: read}
     steps:
       - name: Checkout the admitted head
@@ -285,7 +285,7 @@ jobs:
   build-x86-gcc133:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' }}
-    runs-on: gke-32cpu-64gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {contents: read}
     steps:
       - name: Checkout the admitted head
@@ -309,7 +309,7 @@ jobs:
   build:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' }}
-    runs-on: gke-32cpu-64gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {contents: read}
     steps:
       - name: Checkout the admitted head
@@ -343,7 +343,7 @@ jobs:
   build-debug:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' }}
-    runs-on: gke-16cpu-32gb-amd64-128gb
+    runs-on: ubuntu-24.04
     permissions: {contents: read}
     steps:
       - name: Checkout the admitted head
@@ -377,7 +377,7 @@ jobs:
   build-arm:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' && needs.admit.outputs.arm_relevant == 'true' }}
-    runs-on: gke-16cpu-32gb-arm64-128gb
+    runs-on: ubuntu-24.04-arm
     permissions: {contents: read}
     steps:
       - name: Require the arm64 machine
@@ -409,7 +409,7 @@ jobs:
   corpus-parity-subset:
     needs: [admit]
     if: ${{ needs.admit.outputs.allowed == 'true' && needs.admit.outputs.docs_only != 'true' && needs.admit.outputs.github_only != 'true' }}
-    runs-on: gke-8cpu-16gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {contents: read}
     steps:
       - name: Checkout the admitted head

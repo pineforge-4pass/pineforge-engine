@@ -94,69 +94,64 @@ PR_SLOW_ROWS = (
     'test_native_settlement_carry',
 )
 PR_FAST_ROWS_SHA256 = '0509b2219786efb6878b193639344c299ff8075ba4532dbe09e80e6e97b60a9a'
-# Admitted PR jobs and secret-free post jobs use fixed GKE sizes.
-# Credentialed jobs use a separate, exact protected GKE inventory.
-PR_RUNNER = '["self-hosted","pf-gcp-pr"]'
-# There is no general post fleet: an unpinned job on this label is refused.
-POST_RUNNER = 'gke-2cpu-4gb-amd64'
-PROTECTED_RUNNER = 'gkp-2cpu-4gb-amd64'
+# Every migrated job runs on a standard hosted Ubuntu image: x86 on
+# ubuntu-24.04 and arm64 on ubuntu-24.04-arm. An unpinned job in a migrated
+# workflow must use the x86 image. Only release.yml, which is unchanged here,
+# keeps its protected GKP labels and its Bookworm old-glibc path.
+HOSTED_X86_RUNNER = 'ubuntu-24.04'
+HOSTED_ARM_RUNNER = 'ubuntu-24.04-arm'
+PR_RUNNER = HOSTED_X86_RUNNER
+POST_RUNNER = HOSTED_X86_RUNNER
+# The probe and promotion jobs keep their release-only events and environments.
+PROTECTED_RUNNER = HOSTED_X86_RUNNER
 RELEASE_RUNNER = 'gkp-od-4cpu-8gb-amd64'
 PREBUILT_RUNNER = 'gkp-od-16cpu-32gb-amd64-128gb'
 PREBUILT_ARM_RUNNER = 'ubuntu-22.04-arm'
-GKE_32_LABEL = 'gke-32cpu-64gb-amd64'
-GKE_16_LABEL = 'gke-16cpu-32gb-amd64'
-GKE_8_LABEL = 'gke-8cpu-16gb-amd64'
-GKE_ARM_LABEL = 'gke-16cpu-32gb-arm64'
-GKE_2_LABEL = 'gke-2cpu-4gb-amd64'
-GKE_4_LABEL = 'gke-4cpu-8gb-amd64'
-GKE_ONDEMAND_32_LABEL = 'gke-ondemand-32cpu-64gb-amd64'
+# Only release.yml may still name a GKP label: its two protected scale sets.
 GKP_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'notify-hub': RELEASE_RUNNER,
                     'prebuilt': PREBUILT_RUNNER},
-    'promote-baseline.yml': {'promote': PROTECTED_RUNNER},
-    'docs-post.yml': {'build': 'gkp-4cpu-8gb-amd64'},
-    'release-ruleset-probe.yml': {'probe': PROTECTED_RUNNER},
 }
 GKP_JOB_ENVIRONMENTS = {
     'release.yml': {'release': 'release', 'notify-hub': 'release'},
     'release-ruleset-probe.yml': {'probe': 'release'},
     'promote-baseline.yml': {'promote': 'release-bot'},
 }
-GKE_ONDEMAND_32_256_LABEL = 'gke-ondemand-32cpu-64gb-amd64-256gb'
-GKE_16_128_LABEL = 'gke-16cpu-32gb-amd64-128gb'
-GKE_16_256_LABEL = 'gke-16cpu-32gb-amd64-256gb'
-GKE_ARM_128_LABEL = 'gke-16cpu-32gb-arm64-128gb'
 GKE_MATRIX_RUNNER = '${{ matrix.runner }}'
 NATIVE_X86_JOB = 'build-x86-gcc133'
 NATIVE_X86_HELPER = 'scripts/ci_native_x86_release.py'
+# Historical table names: the *_JOB_LABELS / *_JOB_RUNNERS tables below now pin
+# the standard hosted images, one exact label per job (the native profile job
+# keeps its two-row matrix, both rows on the x86 image).
 GKE_JOB_LABELS = {
-    'gke-pr.yml': {'preflight': GKE_8_LABEL, 'build': GKE_32_LABEL,
-                   NATIVE_X86_JOB: GKE_32_LABEL,
-                   'build-debug': GKE_16_128_LABEL,
-                   'corpus-parity-subset': GKE_8_LABEL},
-    'ci-post.yml': {'preflight': GKE_8_LABEL, 'preflight-slow': GKE_8_LABEL,
-                    NATIVE_X86_JOB: GKE_32_LABEL,
-                    'build': GKE_ONDEMAND_32_LABEL, 'build-debug': GKE_16_128_LABEL,
-                    'sanitizers': GKE_ONDEMAND_32_256_LABEL, 'kernel-only': GKE_16_LABEL,
-                    'build-arm': GKE_ARM_128_LABEL},
-    'corpus-parity.yml': {'corpus-parity': GKE_16_LABEL, 'corpus-parity-subset': GKE_8_LABEL},
-    'native-live.yml': {'native-live': GKE_MATRIX_RUNNER, 'native-live-shards': GKE_8_LABEL},
+    'gke-pr.yml': {'preflight': HOSTED_X86_RUNNER, 'build': HOSTED_X86_RUNNER,
+                   NATIVE_X86_JOB: HOSTED_X86_RUNNER,
+                   'build-debug': HOSTED_X86_RUNNER,
+                   'corpus-parity-subset': HOSTED_X86_RUNNER},
+    'ci-post.yml': {'preflight': HOSTED_X86_RUNNER, 'preflight-slow': HOSTED_X86_RUNNER,
+                    NATIVE_X86_JOB: HOSTED_X86_RUNNER,
+                    'build': HOSTED_X86_RUNNER, 'build-debug': HOSTED_X86_RUNNER,
+                    'sanitizers': HOSTED_X86_RUNNER, 'kernel-only': HOSTED_X86_RUNNER,
+                    'build-arm': HOSTED_ARM_RUNNER},
+    'corpus-parity.yml': {'corpus-parity': HOSTED_X86_RUNNER,
+                          'corpus-parity-subset': HOSTED_X86_RUNNER},
+    'native-live.yml': {'native-live': GKE_MATRIX_RUNNER,
+                        'native-live-shards': HOSTED_X86_RUNNER},
 }
 # The arm admission variant has its own exact inventory; main keeps the old one.
-GKE_PR_ARM_JOB_LABELS = {**GKE_JOB_LABELS['gke-pr.yml'], 'build-arm': GKE_ARM_128_LABEL}
+GKE_PR_ARM_JOB_LABELS = {**GKE_JOB_LABELS['gke-pr.yml'], 'build-arm': HOSTED_ARM_RUNNER}
 GKE_LIGHT_JOB_RUNNERS = {
     'ci-post.yml': dict.fromkeys(
         ('authz', 'changes', 'build-release-gate', 'build-debug-gate',
-         'sanitizers-gate', 'kernel-only-gate', 'build-gate'), GKE_2_LABEL),
-    # Separate called-workflow guards to keep each static label count <= 8.
+         'sanitizers-gate', 'kernel-only-gate', 'build-gate'), HOSTED_X86_RUNNER),
     'native-live.yml': dict.fromkeys(
-        ('authz', 'native-live-native', 'native-live-gate'), GKE_4_LABEL),
-    'corpus-parity.yml': {'authz': GKE_4_LABEL},
-    'docs-post.yml': {'authz': GKE_2_LABEL},
-    'release-ruleset-probe.yml': {'authz': GKE_2_LABEL},
-    'promote-baseline.yml': {'promote-guard': GKE_2_LABEL},
+        ('authz', 'native-live-native', 'native-live-gate'), HOSTED_X86_RUNNER),
+    'corpus-parity.yml': {'authz': HOSTED_X86_RUNNER},
+    'docs-post.yml': {'authz': HOSTED_X86_RUNNER},
+    'release-ruleset-probe.yml': {'authz': HOSTED_X86_RUNNER},
+    'promote-baseline.yml': {'promote-guard': HOSTED_X86_RUNNER},
 }
-# Admitted PR and post jobs use bare GKE names or the exact native profile matrix.
+# Admitted PR and post jobs use the hosted label or the exact native profile matrix.
 GKE_JOB_RUNNERS = {
     name: {**GKE_JOB_LABELS.get(name, {}),
            **GKE_LIGHT_JOB_RUNNERS.get(name, {})}
@@ -242,10 +237,10 @@ NATIVE_STRATEGY = f'''    strategy:
         include:
           - profile: live-sanitizers
             build_dir: build-live-sanitizers
-            runner: {GKE_16_256_LABEL}
+            runner: {HOSTED_X86_RUNNER}
           - profile: live-tsan
             build_dir: build-live-tsan
-            runner: {GKE_16_128_LABEL}
+            runner: {HOSTED_X86_RUNNER}
 '''
 NATIVE_SHARD_STRATEGY = '''    strategy:
       fail-fast: false
@@ -349,14 +344,14 @@ JOB_COMMANDS = {
     'docs-post.yml': {'authz': None, 'build': None},
 }
 GKE_PR_ARM_JOB_COMMANDS = {**JOB_COMMANDS['gke-pr.yml'], 'build-arm': VERIFY}
-# Exact hosted pins and GKE scalar or native matrix pins, checked per job.
-# Historical name: this table also holds the exact GKE pins.
+# Exact hosted pins (x86 ubuntu-24.04, arm64 ubuntu-24.04-arm) and the native
+# matrix pin, checked per job.
 HOSTED_JOB_RUNNERS = {
     'ci.yml': {'authz': 'ubuntu-24.04'},
     'gke-pr.yml': {**dict.fromkeys(('admit', 'legs', 'result'), 'ubuntu-24.04'),
                    **GKE_JOB_RUNNERS['gke-pr.yml']},
     'ci-post.yml': GKE_JOB_RUNNERS['ci-post.yml'],
-    'docs-post.yml': {**GKE_JOB_RUNNERS['docs-post.yml'], **GKP_JOB_RUNNERS['docs-post.yml']},
+    'docs-post.yml': {**GKE_JOB_RUNNERS['docs-post.yml'], 'build': HOSTED_X86_RUNNER},
     'native-live.yml': GKE_JOB_RUNNERS['native-live.yml'],
     'corpus-parity.yml': GKE_JOB_RUNNERS['corpus-parity.yml'],
     'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
@@ -373,7 +368,7 @@ RELEASE_JOB_RUNNERS = {
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
 # standard hosted labels. Existing hosted exceptions above are pinned separately.
-STANDARD_RUNNERS = ('ubuntu-24.04',)
+STANDARD_RUNNERS = ('ubuntu-24.04', 'ubuntu-24.04-arm')
 # Refuse paid labels everywhere, including pinned jobs, metadata and release matrices.
 _LARGER_RUNNER_LABEL = re.compile(
     r'(?<![\w.-])(?:pf-linux-(?:x64|arm64)-\d+|[\w.-]+-(?:larger|xlarge|large))(?![\w.-])')
@@ -685,10 +680,9 @@ endif()
 # PR-only ALLOWED_BOTS is dependabot[bot] and pineforge-app[bot]. No local canon
 # file is needed on CI runners. Changing the script requires a new canon pin.
 AUTHZ_STEP_SHA256 = '94bf3afefe4588bc33dad5fd4d8fa3d2a104cc45743ad59286c756fa3a17baa6'
-# Scoped CI workflows bind this canon header byte for byte, including its
-# fleet comment and comma spacing. The release probe pins executable lines.
+# Scoped CI workflows bind this canon header byte for byte, including the
+# hosted runner line and comma spacing. The release probe pins executable lines.
 AUTHZ_JOB_HEADER = '''    name: authz
-    # Fleet routing is fixed per job; credentials use protected GKE runners.
     runs-on: ubuntu-24.04
     permissions: {}
 '''
@@ -815,7 +809,7 @@ _CONTINUE_ON_ERROR = re.compile(r'\s*(?:-\s+)?["\']?continue-on-error["\']?\s*:'
 # the codegen and campaign pins must carry this same literal, without repo edits.
 PROMOTE_GUARD = r'''  promote-guard:
     name: promote-guard
-    runs-on: gke-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     # Resolution needs read access in private repos; no secrets or OIDC here.
     permissions:
       pull-requests: read
@@ -2427,7 +2421,7 @@ def workflow_fleet_findings(workflows: dict[str, str]) -> list[str]:
         runner = POST_RUNNER if reachable & POST_EVENTS else PR_RUNNER
         event_class = 'post-merge events' if reachable & POST_EVENTS else 'pull_request'
         fixed_hosted = {job: label for job, label in HOSTED_JOB_RUNNERS.get(name, {}).items()
-                        if label == 'ubuntu-24.04' or (reachable & POST_EVENTS and 'pull_request' not in reachable)}
+                        if label == HOSTED_X86_RUNNER or (reachable & POST_EVENTS and 'pull_request' not in reachable)}
         if not reachable:
             findings.append(f'{name} must have a reachable event for fleet routing')
         for job, body in _jobs(workflow).items():
@@ -2456,8 +2450,9 @@ def _workflow_runner(workflow: str) -> str:
 
 
 def _authz_header(name: str) -> str:
-    # Only the runner varies; the canon step hash and all header keys stay pinned.
-    runner = GKE_LIGHT_JOB_RUNNERS.get(name, {}).get('authz', 'ubuntu-24.04')
+    # Every scoped workflow's authz job runs on the hosted x86 image; the canon
+    # step hash and all header keys stay pinned, so no per-workflow variance remains.
+    runner = GKE_LIGHT_JOB_RUNNERS.get(name, {}).get('authz', HOSTED_X86_RUNNER)
     return AUTHZ_JOB_HEADER.replace('runs-on: ubuntu-24.04', f'runs-on: {runner}')
 
 
@@ -2778,9 +2773,9 @@ def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
                           for value in _job_values(body, 'uses')
                           if value.startswith('./.github/workflows/')]
              for name, jobs in workflow_jobs.items() for job, body in jobs.items()}
+    # Only a literal gke-* route is GKE; the native profile matrix is hosted.
     gke_workflows = {name for name, jobs in workflow_jobs.items()
                      if any(_GKE_ROUTE.search(' '.join(_job_values(body, 'runs-on')))
-                            or _native_runner_matrix(name, job, body)
                             for job, body in jobs.items())}
     # Credentials follow all calls, independent of input conditions or matrix rows.
     while True:
@@ -2807,22 +2802,16 @@ def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
             runners = ' '.join(_job_values(body, 'runs-on'))
             labels = [label.lower() for label in _GKE_ROUTE.findall(runners)
                       if label.lower() != 'gke-runners']
-            native_matrix = _native_runner_matrix(name, job, body)
             callees = calls[(name, job)]
-            if not labels and not callees and not native_matrix:
+            if not labels and not callees:
                 continue
             rows = _matrix_rows(body)
             if rows is None:
                 findings.append(f'{name} job {job} must use a readable static matrix for the GKE cap')
                 continue
             instances = multiplier * len(rows)
-            if native_matrix:
-                for row in rows:
-                    label = row['runner']
-                    counts[label] = counts.get(label, 0) + multiplier
-            else:
-                for label in set(labels):
-                    counts[label] = counts.get(label, 0) + instances
+            for label in set(labels):
+                counts[label] = counts.get(label, 0) + instances
             arguments = '\n'.join(_job_block(body, 'with')[1:])
             keys = re.findall(r'^\s+([A-Za-z_]\w*):', arguments, re.MULTILINE)
             passed = {key: values[0] for key in keys
@@ -2859,7 +2848,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         if arm_variant:
             hosted_pins = {**hosted_pins, **gke_pins}
         fixed_hosted = {job: label for job, label in hosted_pins.items()
-                        if label == 'ubuntu-24.04' or name == 'gke-pr.yml'
+                        if label == HOSTED_X86_RUNNER or name == 'gke-pr.yml'
                         or (routes[name] & POST_EVENTS and 'pull_request' not in routes[name])}
         if _LARGER_RUNNER_LABEL.search(code):
             findings.append(f'{name} must not use larger-runner labels; use the GCP fleet or hosted exceptions')
@@ -2914,7 +2903,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             protected_environment = GKP_JOB_ENVIRONMENTS.get(name, {}).get(job)
             if protected_environment and _job_values(body, 'environment') != [protected_environment]:
                 findings.append(f'{name} job {job} must use environment {protected_environment} '
-                                'on protected GKE')
+                                'on its protected release job')
             native_matrix = _native_runner_matrix(name, job, body)
             if gke_pin == GKE_MATRIX_RUNNER and not native_matrix:
                 findings.append(f'{name} job {job} must keep exactly '
@@ -2965,16 +2954,14 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                                bool(re.fullmatch(r'ubuntu-(?:\d{2}\.\d{2}|latest)-arm', runs_on[0])))
             if job in fixed_release:
                 # A quoted JSON scalar does not select a YAML label array.
+                # The probe workflow pin below compares nonblank lines after
+                # removing comment-only lines; the runner label is exact.
                 actual = _job_values(body, 'runs-on', unquote=False)
                 expected = [fixed_release[job]]
-                if fixed_release[job] == PR_RUNNER:
-                    # Normalize the runner array here; the probe workflow pin below
-                    # compares nonblank lines after removing comment-only lines.
-                    actual = [_runner_value(value) for value in actual]
-                    expected = [_runner_value(value) for value in expected]
                 if actual != expected:
-                    suffix = {PR_RUNNER: '', POST_RUNNER: ' (post fleet)', 'ubuntu-24.04': ' (hosted)'}.get(
-                        fixed_release[job], ' (isolated release)')
+                    # The probe and promotion jobs run on the hosted image; the
+                    # unchanged release jobs keep their isolated GKP labels.
+                    suffix = ' (hosted)' if fixed_release[job] in STANDARD_RUNNERS else ' (isolated release)'
                     findings.append(f'{name} job {job} must run on {fixed_release[job]}{suffix}')
                 environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
@@ -2989,27 +2976,30 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             elif gke_pin and job in fixed_hosted:
                 if _job_values(body, 'runs-on', unquote=False) != [gke_pin]:
                     findings.append(f'{name} job {job} must run on {gke_pin}')
-                if credentials:
-                    findings.append(f'{name} job {job} must keep production credentials '
-                                    'on a hosted standard runner')
+                # The verification, guard and aggregate jobs hold no production
+                # credentials; the pin is the hosted image, not a credential exemption.
+                # Any id-token mention in the effective scopes stays refused, as it
+                # was for these jobs before the hosted migration.
+                if credentials or any(re.search(r'\bid-token\b', value)
+                                      for value in _effective_permissions(workflow, body)):
+                    findings.append(f'{name} job {job} must not expose credentials '
+                                    'on a pinned verification job')
+                # The pinned image is the environment under test: no job container
+                # or service may replace it (the old GKE rule, kept for the hosted pin).
+                if _job_values(body, 'container'):
+                    findings.append(f'{name} job {job} must not declare a job container '
+                                    'on a pinned verification job')
+                if _job_values(body, 'services'):
+                    findings.append(f'{name} job {job} must not declare job services '
+                                    'on a pinned verification job')
                 if (name == 'native-live.yml'
                         or name == 'promote-baseline.yml'
                         or name == 'ci-post.yml' and job not in (
                             'preflight', 'preflight-slow', 'changes', 'build-gate')):
                     environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                     if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
-                        findings.append(f'{name} job {job} must not set PF_CI_LABELS on a GKE job')
-            elif fixed_hosted.get(job) == POST_RUNNER:
-                actual = _job_values(body, 'runs-on', unquote=False)
-                if [_runner_value(value) for value in actual] != [_runner_value(POST_RUNNER)]:
-                    findings.append(f'{name} job {job} must run on {POST_RUNNER}')
-                if credentials:
-                    findings.append(f'{name} job {job} must keep production credentials '
-                                    'on a hosted standard runner')
-                environments = _job_values(workflow, 'env') + _job_values(body, 'env')
-                if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
-                    findings.append(f'{name} job {job} must not set PF_CI_LABELS '
-                                    'on a post fleet job')
+                        findings.append(f'{name} job {job} must not set PF_CI_LABELS '
+                                        'on a pinned verification job')
             elif (job in fixed_hosted
                   or (credentials and (name, job) != ('docs-post.yml', 'build'))
                   or (job not in pinned and hosted_platform)):
@@ -3539,8 +3529,7 @@ jobs:
   authz:
     name: authz
     # Preflight pins executable workflow lines after removing comment-only lines.
-    # authz uses gke-2cpu-4gb-amd64; the App-token probe uses gkp-2cpu-4gb-amd64.
-    runs-on: gke-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -3601,7 +3590,7 @@ jobs:
 
   probe:
     needs: [authz]
-    runs-on: gkp-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     environment: release
     steps:
       - name: Refuse a dispatch ref other than main
@@ -4006,9 +3995,9 @@ def native_x86_job_findings(job: str, name: str, *, pr: bool) -> list[str]:
         findings.append(f'{name} {NATIVE_X86_JOB} must start after its admission gate '
                         'and run on every admitted path')
     expected_permissions = ['{contents: read}'] if pr else ['contents: read']
-    if (_job_values(job, 'runs-on') != [GKE_32_LABEL]
+    if (_job_values(job, 'runs-on') != [HOSTED_X86_RUNNER]
             or _job_values(job, 'permissions') != expected_permissions):
-        findings.append(f'{name} {NATIVE_X86_JOB} must use the bare x86 GKE runner '
+        findings.append(f'{name} {NATIVE_X86_JOB} must use the hosted x86 runner '
                         'with read-only contents')
     if (_job_values(job, 'name') or any(_job_values(job, key) for key in (
             'strategy', 'uses', 'container', 'services', 'environment', 'env',
@@ -4555,10 +4544,9 @@ def ci_authz_only_findings(workflow: str) -> list[str]:
     if set(jobs) != {'authz'}:
         findings.append('ci.yml must retain only its authz job after PR legs move to gke-pr')
     authz = jobs.get('authz', '')
-    # The probe's authz job runs on a pod; ci.yml's copy is the same job on the
-    # hosted image, so only the runner line differs (and is pinned just below).
-    canon = _jobs(RELEASE_RULESETS_PROBE_WORKFLOW)['authz'].replace(
-        f'runs-on: {GKE_2_LABEL}', 'runs-on: ubuntu-24.04', 1)
+    # The probe's authz job and ci.yml's copy both run on the hosted image, so the
+    # canon is the probe's authz job as pinned (the runner line is pinned just below).
+    canon = _jobs(RELEASE_RULESETS_PROBE_WORKFLOW)['authz']
     if (_unparsed(workflow) or _code(authz) != _code(canon)):
         findings.append('ci.yml must start with the verbatim canon authz job')
     if (_job_values(authz, 'runs-on') != ['ubuntu-24.04']

@@ -68,14 +68,13 @@ env:
   # pin is almost entirely cache hits.
   CCACHE_MAXSIZE: 2G
 
-# Both parity jobs follow canon authz directly in gke-runners toolchain pods with sudo.
+# Both parity jobs follow canon authz directly on hosted Ubuntu runners.
 # The build uses every core of the runner.
 # scripts/ci_preflight.py pins runners and limits.
 jobs:
   authz:
     name: authz
-    # Fleet routing is fixed per job; credentials use protected GKE runners.
-    runs-on: gke-4cpu-8gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -140,12 +139,9 @@ jobs:
   corpus-parity:
     needs: [authz]
     if: inputs.mode != 'subset' && github.event_name != 'pull_request'
-    runs-on: gke-16cpu-32gb-amd64
+    runs-on: ubuntu-24.04
     env:
-      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
-    # 16.3-26.2 min on the standard runner; 360 minutes is the platform maximum,
-    # the only hang catcher (owner rule,
-    # 2026-10-12: no bound of our own may fail a run for slowness).
+      PF_CI_LABELS: '[]'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -211,11 +207,9 @@ jobs:
   corpus-parity-subset:
     needs: [authz]
     if: inputs.mode == 'subset'
-    runs-on: gke-8cpu-16gb-amd64
+    runs-on: ubuntu-24.04
     env:
-      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
-    # 1.8-4.7 min on the standard runner; 360 minutes is the platform
-    # maximum, the only hang catcher (owner rule, 2026-10-12).
+      PF_CI_LABELS: '[]'
     steps:
       # Credentials stay persisted, exactly as the nightly job above: the
       # submodule clone and `git lfs pull` below go out over https and the
