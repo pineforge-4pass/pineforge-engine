@@ -629,18 +629,41 @@ struct BoundDrawingState {
     }
 
     explicit BoundDrawingState(DrawingBoundConfig config)
-        : slots(storage_slots(config)),
-          slot_bound(config.slot_bound),
+        : slot_bound(config.slot_bound),
           pending_creation_slots(config.pending_creation_slots) {
-        directory.reserve(slots.size());
+        const std::size_t count = storage_slots(config);
+        directory.reserve(count);
+        for (std::size_t i = 0; i < count; ++i) slots.push_back(Slot{});
     }
 
-    std::vector<Slot> slots;
+    // A copy of the state is what a checkpoint of an arena pays once per script
+    // execution that writes it.  It shares the slots' blocks (O(1) once they are
+    // blocks; the first copy of the vector a fresh state starts as builds them)
+    // and copies the directory and the order, one entry per occupant.  The
+    // directory gets the room it can ever need, so a creation never reallocates it.
+    BoundDrawingState(const BoundDrawingState& other)
+        : slots(other.slots), order(other.order), next_id(other.next_id),
+          slot_bound(other.slot_bound),
+          pending_creation_slots(other.pending_creation_slots),
+          free_from(other.free_from) {
+        directory.reserve(static_cast<std::size_t>(other.slots.size()));
+        directory.assign(other.directory.begin(), other.directory.end());
+    }
+
+    // The slots live in blocks of 32 that copies of the state share, like the
+    // records of an unbound arena: a write copies the one block it reaches, and
+    // only while another copy still holds it.
+    DrawingRecordStore<Slot> slots;
     std::vector<DirectoryEntry> directory; // sorted; contains occupied IDs only
     std::deque<std::int32_t> order;
     std::int64_t next_id = 0;
     std::int32_t slot_bound = 0;
     std::uint32_t pending_creation_slots = 0;
+    // Every slot below this index has an occupant; a creation's search for the
+    // lowest free slot starts here, and a deletion lowers it to the slot it frees.
+    std::uint32_t free_from = 0;
+
+    std::size_t slot_count() const noexcept { return static_cast<std::size_t>(slots.size()); }
 
     std::int32_t slot_for(std::int32_t id) const noexcept {
         const auto it = std::lower_bound(
@@ -651,16 +674,18 @@ struct BoundDrawingState {
         if (it == directory.end() || it->logical_id != id) return -1;
         // A directory hit with no matching occupant is internal corruption,
         // never a stale drawing.  It cannot be produced by public operations.
-        if (it->slot >= slots.size()) std::terminate();
-        const Slot& candidate = slots[it->slot];
+        if (it->slot >= slot_count()) std::terminate();
+        const Slot& candidate = slots.read(it->slot);
         if (!candidate.value || candidate.logical_id != id) std::terminate();
         return static_cast<std::int32_t>(it->slot);
     }
 
+    // The lowest slot with no occupant, or slot_count() when there is none.
     std::size_t free_slot() const noexcept {
-        for (std::size_t i = 0; i < slots.size(); ++i)
-            if (!slots[i].value) return i;
-        return slots.size();
+        const std::size_t count = slot_count();
+        for (std::size_t i = free_from; i < count; ++i)
+            if (!slots.read(static_cast<std::uint32_t>(i)).value) return i;
+        return count;
     }
 };
 
@@ -705,6 +730,10 @@ class DrawingArena {
 
     static constexpr std::int64_t kIdExclusive = detail::kDrawingIdExclusive;
 
+    // Gives this arena a state of its own when a checkpoint or another arena
+    // still shares it.  The copy shares the slots' blocks, so it costs O(1) in the
+    // records (plus the directory and the order: an integer per occupant), and a
+    // refusal to allocate it leaves bound_ as it was.
     void ensure_bound_unique() {
         if (bound_ && !bound_.unique())
             bound_ = std::make_shared<detail::BoundDrawingState<Rec>>(*bound_);
@@ -716,9 +745,19 @@ class DrawingArena {
                                      "drawing access on na handle");
         const std::int32_t slot = bound_->slot_for(id);
         if (slot < 0) return detail::drawing_missing_record<Rec>();
-        return *bound_->slots[static_cast<std::uint32_t>(slot)].value;
+        return *bound_->slots.read(static_cast<std::uint32_t>(slot)).value;
     }
 
+    // The three writes of a bounded arena -- creation, deletion and an edit --
+    // change the arena's own state in place, after ensure_bound_unique().  Each
+    // does every step that can allocate or throw (the private copy of the state,
+    // the copy of the block the slot is in, the order's growth) before its first
+    // change, and only steps that cannot throw after it, so a refused allocation
+    // leaves the arena equal to what it was and the checkpoint it was copied from
+    // untouched (tests/test_drawing_slot_atomicity.cpp).
+    //
+    // `edit` is a scalar or a string move assignment, as every builtin setter's is,
+    // and cannot throw: the record is written where it is.
     template <class Edit>
     void bound_edit(int32_t id, Edit&& edit) {
         if (id < 0 || !bound_ || static_cast<std::int64_t>(id) >= bound_->next_id)
@@ -726,15 +765,14 @@ class DrawingArena {
                                      "drawing access on na handle");
         const std::int32_t slot = bound_->slot_for(id);
         if (slot < 0) return; // stale builtins are typed no-ops
-        if (!bound_->slots[static_cast<std::uint32_t>(slot)].value->alive) return;
+        if (!bound_->slots.read(static_cast<std::uint32_t>(slot)).value->alive) return;
 
-        auto candidate = std::make_shared<detail::BoundDrawingState<Rec>>(*bound_);
-        const std::int32_t candidate_slot = candidate->slot_for(id);
-        if (candidate_slot < 0) std::terminate();
-        std::forward<Edit>(edit)(
-            *candidate->slots[static_cast<std::uint32_t>(candidate_slot)].value);
+        // A private copy of the state has the same slots and directory, so `slot`
+        // is the same record in it.
+        ensure_bound_unique();
+        auto& target = bound_->slots.write(static_cast<std::uint32_t>(slot));
+        std::forward<Edit>(edit)(*target.value);
         stale_sink_.reset();
-        bound_.swap(candidate);
     }
 
 public:
@@ -834,21 +872,27 @@ public:
             last_allocation_diagnostic_ = diagnostic;
             return {diagnostic, std::nullopt};
         }
-        auto candidate = bound_
-            ? std::make_shared<detail::BoundDrawingState<Rec>>(*bound_)
-            : std::make_shared<detail::BoundDrawingState<Rec>>(*bound_config_);
-        const std::size_t slot = candidate->free_slot();
-        if (slot >= candidate->slots.size()) std::terminate(); // corrupt occupied count
+        // Every step that can allocate precedes the first change (see bound_edit):
+        // the state of its own, the block of the slot, the directory's room and the
+        // order's growth.  A moved-from arena has no state yet and gets a fresh one.
+        if (bound_) ensure_bound_unique();
+        else bound_ = std::make_shared<detail::BoundDrawingState<Rec>>(*bound_config_);
+        detail::BoundDrawingState<Rec>& state = *bound_;
+        const std::size_t slot = state.free_slot();
+        if (slot >= state.slot_count()) std::terminate(); // corrupt occupied count
         const std::int32_t id = static_cast<std::int32_t>(next_id);
+        auto& target = state.slots.write(static_cast<std::uint32_t>(slot));
+        state.directory.reserve(state.directory.size() + 1);
+        state.order.push_back(id);
+        // Nothing below can throw.
         r.alive = true;
-        candidate->slots[slot].logical_id = id;
-        candidate->slots[slot].value.emplace(std::move(r));
-        candidate->directory.push_back({id, static_cast<std::uint32_t>(slot)});
-        candidate->order.push_back(id);
-        candidate->next_id = next_id + 1;
+        target.logical_id = id;
+        target.value.emplace(std::move(r));
+        state.directory.push_back({id, static_cast<std::uint32_t>(slot)});
+        state.next_id = next_id + 1;
+        state.free_from = static_cast<std::uint32_t>(slot) + 1;
         stale_sink_.reset();
         last_allocation_diagnostic_ = diagnostic;
-        bound_.swap(candidate);
         return {diagnostic, id};
     }
 
@@ -884,24 +928,27 @@ public:
             if (id < 0 || static_cast<std::int64_t>(id) >= bound_->next_id) return;
             const std::int32_t slot = bound_->slot_for(id);
             if (slot < 0) return; // stale delete is a no-op
-            if (!bound_->slots[static_cast<std::uint32_t>(slot)].value->alive) return;
+            if (!bound_->slots.read(static_cast<std::uint32_t>(slot)).value->alive) return;
 
-            auto candidate = std::make_shared<detail::BoundDrawingState<Rec>>(*bound_);
-            const std::int32_t candidate_slot = candidate->slot_for(id);
-            if (candidate_slot < 0) std::terminate();
+            // The state of its own and the block of the slot first, then only
+            // steps that cannot throw (see bound_edit).  A private copy of the
+            // state has the same slots and directory, so `slot` is the same record.
+            ensure_bound_unique();
+            detail::BoundDrawingState<Rec>& state = *bound_;
+            auto& target = state.slots.write(static_cast<std::uint32_t>(slot));
             const auto dir = std::lower_bound(
-                candidate->directory.begin(), candidate->directory.end(), id,
+                state.directory.begin(), state.directory.end(), id,
                 [](const auto& entry, std::int32_t value) {
                     return entry.logical_id < value;
                 });
-            if (dir == candidate->directory.end() || dir->logical_id != id) std::terminate();
-            candidate->directory.erase(dir);
-            const auto it = std::find(candidate->order.begin(), candidate->order.end(), id);
-            if (it != candidate->order.end()) candidate->order.erase(it);
-            candidate->slots[static_cast<std::uint32_t>(candidate_slot)].logical_id = -1;
-            candidate->slots[static_cast<std::uint32_t>(candidate_slot)].value.reset();
+            if (dir == state.directory.end() || dir->logical_id != id) std::terminate();
+            const auto it = std::find(state.order.begin(), state.order.end(), id);
+            state.directory.erase(dir);
+            if (it != state.order.end()) state.order.erase(it);
+            target.logical_id = -1;
+            target.value.reset();
+            state.free_from = std::min(state.free_from, static_cast<std::uint32_t>(slot));
             stale_sink_.reset();
-            bound_.swap(candidate);
             return;
         }
 
@@ -915,7 +962,7 @@ public:
         if (bound_) {
             const std::int32_t slot = (id >= 0) ? bound_->slot_for(id) : -1;
             return slot >= 0
-                && bound_->slots[static_cast<std::uint32_t>(slot)].value->alive;
+                && bound_->slots.read(static_cast<std::uint32_t>(slot)).value->alive;
         }
         return id >= 0 && id < recs_.size() && recs_.read(static_cast<std::uint32_t>(id)).alive;
     }
@@ -969,7 +1016,7 @@ public:
                 ensure_bound_unique();
                 stale_sink_.reset();
                 const std::int32_t slot = bound_->slot_for(id);
-                return *bound_->slots[static_cast<std::uint32_t>(slot)].value;
+                return *bound_->slots.write(static_cast<std::uint32_t>(slot)).value;
             }
         }
         return recs_.write(static_cast<std::uint32_t>(id));
@@ -1016,7 +1063,7 @@ struct DrawingBuiltinAccess {
             if (!a.bound_) return false; // no issued IDs in a moved-from arena
             const auto slot = a.bound_->slot_for(h.id);
             return slot < 0
-                || !a.bound_->slots[static_cast<std::uint32_t>(slot)].value->alive;
+                || !a.bound_->slots.read(static_cast<std::uint32_t>(slot)).value->alive;
         }
         if constexpr (std::is_same_v<Rec, LinefillRec>) return false;
         else return !a.alive(h.id);
