@@ -11894,6 +11894,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         pending.trail_price = source_trail_price; pending.qty_percent = qty_percent;
         pending.comment = comment; pending.qty = qty; pending.oca_name = oca_name;
         pending.profit_ticks = profit_ticks; pending.loss_ticks = loss_ticks;
+        pending.void_global = void_global_issue;
         auto existing = std::find_if(pending_relative_exits_.begin(), pending_relative_exits_.end(),
             [&](const PendingRelativeExit& value) {
                 return value.exit_id == exit_id && value.from_entry == from_entry;
@@ -14583,9 +14584,19 @@ void PineExecutionAdapter::materialize_relative_exits(
         return;
     }
     std::vector<PendingRelativeExit> pending;
+    std::vector<PendingRelativeExit> global_pending;
+    // An unnamed relative exit binds to the first market opening after its call,
+    // unless the call was void (made flat with no entry order working): the flag is
+    // kept on the definition because the shadow rows of the calling execution are
+    // gone when the entry fills. Not under calc_on_order_fills: no tape covers it.
+    const bool market_opening = !config_.calc_on_order_fills
+        && !finite_positive(opening.exit_levels.limit) && !finite_positive(opening.exit_levels.stop);
     for (auto it = pending_relative_exits_.begin(); it != pending_relative_exits_.end();) {
         if (it->from_entry == opening.source_id) {
             pending.push_back(std::move(*it));
+            it = pending_relative_exits_.erase(it);
+        } else if (market_opening && it->from_entry.empty() && !it->void_global) {
+            global_pending.push_back(std::move(*it));
             it = pending_relative_exits_.erase(it);
         } else {
             ++it;
@@ -14596,6 +14607,7 @@ void PineExecutionAdapter::materialize_relative_exits(
     // re-run below is the unchanged source pipeline.
     if (!armed_relative_legs_adoptable(opening, event, pending))
         withdraw_anchored_relative_legs(nullptr, &opening.source_id);
+    for (auto& value : global_pending) pending.push_back(std::move(value));
     const double tick = staged_.syminfo.mintick;
     for (const auto& value : pending) {
         double limit = kNaN;
@@ -14630,7 +14642,8 @@ void PineExecutionAdapter::materialize_relative_exits(
         try {
             exit(value.exit_id, value.from_entry, limit, stop, value.trail_points, offset,
                  value.trail_price, value.qty_percent, value.comment, value.qty, value.oca_name,
-                 kNaN, kNaN);
+                 value.from_entry.empty() ? value.profit_ticks : kNaN,
+                 value.from_entry.empty() ? value.loss_ticks : kNaN);
         } catch (...) {
             materializing_relative_ = false;
             materializing_parent_ = {};

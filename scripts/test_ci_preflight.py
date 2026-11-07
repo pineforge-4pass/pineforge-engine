@@ -414,6 +414,16 @@ def in_step(workflow, job, name, before, after):
     return workflow.replace(step, step.replace(before, after, 1), 1)
 
 
+def legacy_release_workflow(workflow):
+    """Keep the isolated-form fixtures after the shipped workflow moves hosted."""
+    for job in ('release', 'notify-hub'):
+        workflow = in_job(workflow, job, runner_declaration(HOSTED_X86),
+                          runner_declaration(RELEASE_RUNNER))
+    return in_job(workflow, 'prebuilt',
+                  ci_preflight.RELEASE_PREBUILT_ARCHIVE_GLIBC_STEPS,
+                  ci_preflight.RELEASE_PREBUILT_LEGACY_GLIBC_STEP)
+
+
 def routed_line(before, value):
     """Keep the CI matrix's JSON string shape when replacing a literal array."""
     if before.startswith('    runs-on:'):
@@ -759,13 +769,16 @@ class AppTokenEnvironments(unittest.TestCase):
 class ProtectedGkeRunners(unittest.TestCase):
     """Protected routing is an exact job inventory, never a label-family exemption."""
 
-    def workflows(self):
-        return {path.name: path.read_text()
-                for path in (ROOT / '.github/workflows').glob('*.yml')}
+    def workflows(self, *, legacy_release=False):
+        workflows = {path.name: path.read_text()
+                     for path in (ROOT / '.github/workflows').glob('*.yml')}
+        if legacy_release:
+            workflows['release.yml'] = legacy_release_workflow(workflows['release.yml'])
+        return workflows
 
     def test_gkp_inventory_and_matrix(self):
         self.assertEqual(ci_preflight.GKP_JOB_RUNNERS, EXPECTED_GKP_JOBS)
-        workflows = self.workflows()
+        workflows = self.workflows(legacy_release=True)
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
         for name, jobs in EXPECTED_GKP_JOBS.items():
             for job, label in jobs.items():
@@ -829,7 +842,7 @@ class ProtectedGkeRunners(unittest.TestCase):
                         {**workflows, 'release.yml': changed}))
 
     def test_gkp_needs_group15_mirror(self):
-        workflows = self.workflows()
+        workflows = self.workflows(legacy_release=True)
         mirror_file = '.github/runner-group-15-allowlist.txt'
         mirror = (ROOT / mirror_file).read_text()
         repository = ci_preflight.RUNNER_ALLOWLIST_REPOSITORY
@@ -852,7 +865,7 @@ class ProtectedGkeRunners(unittest.TestCase):
             [f'{mirror_file}: mirror file is missing'])
 
     def test_gkp_refuses_wrong_runners(self):
-        workflows = self.workflows()
+        workflows = self.workflows(legacy_release=True)
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
         for name, jobs in EXPECTED_GKP_JOBS.items():
             for job, label in jobs.items():
@@ -881,6 +894,13 @@ class ProtectedGkeRunners(unittest.TestCase):
                         changed = in_job(workflows[name], job, before, after)
                         self.assertNotEqual(changed, workflows[name])
                         self.assertIn(after, _jobs(changed)[job])
+                        if (name, job, wrong) == ('release.yml', 'release', HOSTED_X86) or (
+                                name, job, wrong) == ('release.yml', 'notify-hub', HOSTED_X86):
+                            self.assertIn(
+                                'release.yml release and notify-hub must use the same '
+                                'hosted or isolated runner form',
+                                ci_preflight.runner_findings({**workflows, name: changed}))
+                            continue
                         prefix = f'{name} job {job}'
                         credential_finding = (f'{prefix} must keep production credentials '
                                               'on a hosted standard runner')
@@ -940,7 +960,7 @@ class ProtectedGkeRunners(unittest.TestCase):
                                   ci_preflight.runner_findings({**workflows, name: changed}))
 
     def test_cred_exempt_needs_exact_gkp(self):
-        workflows = self.workflows()
+        workflows = self.workflows(legacy_release=True)
         baseline = ci_preflight.runner_findings(workflows)
         for name, jobs in EXPECTED_GKP_JOBS.items():
             for job, label in jobs.items():
@@ -971,15 +991,60 @@ class ProtectedGkeRunners(unittest.TestCase):
                               'on a hosted standard runner',
                               ci_preflight.runner_findings({**workflows, 'release.yml': literal}))
 
+    def test_protected_release_jobs_refuse_containers_and_services(self):
+        workflows = self.workflows(legacy_release=False)
+        self.assertEqual(ci_preflight.runner_findings(workflows), [])
+        for name, job in (('release.yml', 'release'), ('release.yml', 'notify-hub'),
+                          ('release-ruleset-probe.yml', 'probe'),
+                          ('promote-baseline.yml', 'promote')):
+            for key, value, finding in (
+                    ('container', 'ubuntu:24.04', 'a job container'),
+                    ('services', '\n      database:\n        image: postgres:16', 'job services')):
+                with self.subTest(workflow=name, job=job, key=key):
+                    changed = in_job(workflows[name], job, '    steps:\n',
+                                     f'    {key}: {value}\n    steps:\n')
+                    self.assertNotEqual(changed, workflows[name])
+                    self.assertIn(f'{name} job {job} must not declare {finding} '
+                                  'on its protected release job',
+                                  ci_preflight.runner_findings({**workflows, name: changed}))
+
+    def test_release_and_notify_hub_environment_removal_is_refused_by_the_full_contract(self):
+        workflows = self.workflows(legacy_release=False)
+        sources = [(ROOT / path).read_text() for path in CI_SOURCES]
+        named = {Path(path).name for path in CI_SOURCES}
+        others = {name: text for name, text in workflows.items() if name not in named}
+        self.assertEqual(ci_workflow_findings(*sources, others=others), [])
+        release = others['release.yml']
+        for job in ('release', 'notify-hub'):
+            body = _jobs(release)[job]
+            # Hosted jobs that hold the App credential keep the release environment.
+            self.assertEqual(ci_preflight._job_values(body, 'runs-on', unquote=False), [HOSTED_X86])
+            self.assertEqual(body.count('    environment: release\n'), 1)
+            mint = (f'release.yml job {job}: App-token minting/private-key use requires a '
+                    'literal, non-empty environment; review other minting methods by hand')
+            for replacement, mint_refused in (
+                    ('', True), ('    environment: other\n', False),
+                    ('    environment: ${{ inputs.environment }}\n', True)):
+                with self.subTest(job=job, environment=replacement):
+                    changed = in_job(release, job, '    environment: release\n', replacement)
+                    self.assertNotEqual(changed, release)
+                    findings = ci_workflow_findings(
+                        *sources, others={**others, 'release.yml': changed})
+                    self.assertIn(f'release.yml job {job} must use environment release '
+                                  'on its protected release job', findings)
+                    self.assertEqual(mint in findings, mint_refused)
+
     def test_hosted_credentialed_jobs_need_their_exact_hosted_pin(self):
         # The probe, baseline promotion and docs deployment hold credentials and
         # now run on the hosted x86 image; any other image is refused at the pin.
-        workflows = self.workflows()
+        workflows = self.workflows(legacy_release=False)
         self.assertEqual(ci_preflight.runner_findings(workflows), [])
         credential_finding = 'must keep production credentials on a hosted standard runner'
         for name, job in (('release-ruleset-probe.yml', 'probe'),
                           ('promote-baseline.yml', 'promote'),
-                          ('docs-post.yml', 'build')):
+                          ('docs-post.yml', 'build'),
+                          ('release.yml', 'release'),
+                          ('release.yml', 'notify-hub')):
             self.assertEqual(ci_preflight._job_values(
                 _jobs(workflows[name])[job], 'runs-on', unquote=False), [HOSTED_X86])
             # The probe and promotion jobs compare the runner text exactly, so a quoted
@@ -993,7 +1058,10 @@ class ProtectedGkeRunners(unittest.TestCase):
                                      runner_declaration(wrong))
                     self.assertNotEqual(changed, workflows[name])
                     findings = ci_preflight.runner_findings({**workflows, name: changed})
-                    self.assertIn(f'{name} job {job} must run on {HOSTED_X86} (hosted)', findings)
+                    # Breaking the hosted pair restores the legacy isolated-pin finding.
+                    expected = RELEASE_RUNNER if name == 'release.yml' else HOSTED_X86
+                    suffix = 'isolated release' if name == 'release.yml' else 'hosted'
+                    self.assertIn(f'{name} job {job} must run on {expected} ({suffix})', findings)
                     if wrong in (GKE_2, GKP_2, 'ubuntu-latest', 'ubuntu-22.04', LEGACY_PR_RUNNER):
                         self.assertIn(f'{name} job {job} {credential_finding}', findings)
 
@@ -1007,7 +1075,7 @@ class ProtectedGkeRunners(unittest.TestCase):
                               ci_preflight.runner_findings({**workflows, name: changed}))
 
     def test_gkp_refuses_containers(self):
-        workflows = self.workflows()
+        workflows = self.workflows(legacy_release=True)
         for name, jobs in EXPECTED_GKP_JOBS.items():
             caller = ('on: pull_request\njobs:\n  call:\n'
                       f'    uses: ./.github/workflows/{name}\n')
@@ -1023,7 +1091,7 @@ class ProtectedGkeRunners(unittest.TestCase):
                                   ci_preflight.runner_findings({**workflows, name: changed}))
 
     def test_release_eigen_exact(self):
-        workflows = self.workflows()
+        workflows = self.workflows(legacy_release=True)
         workflow = workflows['release.yml']
         prebuilt = _jobs(workflow)['prebuilt']
         steps = ci_preflight._steps(prebuilt)
@@ -1223,7 +1291,7 @@ class PrebuiltCredentialAdmission(unittest.TestCase):
         self.workflows = {path.name: path.read_text()
                           for path in (ROOT / '.github/workflows').glob('*.yml')}
         self.shipped = self.workflows['release.yml']
-        self.release = self.shipped
+        self.release = legacy_release_workflow(self.shipped)
 
     def findings(self, workflow, *, name='release.yml'):
         with tempfile.TemporaryDirectory() as directory:
@@ -1669,6 +1737,170 @@ class PrebuiltCredentialAdmission(unittest.TestCase):
                 self.assertIn(self.CREDENTIAL_FINDING, findings)
 
 
+class HostedReleaseAdmission(unittest.TestCase):
+    """Keep the hosted release migration bound to its protected surface."""
+
+    def setUp(self):
+        self.sources = [(ROOT / path).read_text() for path in CI_SOURCES]
+        named = {Path(path).name for path in CI_SOURCES}
+        self.others = {
+            name: (ROOT / '.github/workflows' / name).read_text()
+            for name in ('release.yml', 'release-ruleset-probe.yml',
+                         'promote-baseline.yml')
+            if name not in named
+        }
+        self.legacy = legacy_release_workflow(self.others['release.yml'])
+
+    def findings(self, workflow):
+        return ci_workflow_findings(
+            *self.sources, others={**self.others, 'release.yml': workflow})
+
+    def hosted_workflow(self):
+        workflow = self.legacy
+        for job in ('release', 'notify-hub'):
+            workflow = in_job(
+                workflow, job, f'    runs-on: {RELEASE_RUNNER}\n',
+                f'    runs-on: {HOSTED_X86}\n')
+        legacy_glibc = '''      # Both dry-run and publication inspect every installed .a/.so/.so.*.
+      # Keep raw checker output and its actual exit status, including setup errors.
+      - name: Check every staged library's glibc floor
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
+          mkdir -p "${log}"
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+            checker_rc=0
+          else checker_rc=$?; fi
+          printf '%s\\n' "${checker_rc}" > "${log}/exitcode.txt"
+          cat "${log}/stdout.jsonl"
+          cat "${log}/stderr.txt" >&2
+          exit "${checker_rc}"'''
+        archive_glibc = '''      # The glibc comparison baseline is this triple's archive from the v1.10.0
+      # release: the real released bytes, pinned by sha256 and unpacked here.
+      # The checker below only reads the unpacked libraries.
+      - name: Fetch the v1.10.0 baseline archive for the glibc comparison
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          case "${TRIPLE}" in
+            linux-x86_64) digest=cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543 ;;
+            linux-aarch64) digest=982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bb ;;
+            *) echo "::error::no v1.10.0 baseline archive for ${TRIPLE}" >&2; exit 1 ;;
+          esac
+          archive="pineforge-v1.10.0-${TRIPLE}.tar.gz"
+          root="${RUNNER_TEMP}/glibc-baseline-${TRIPLE}"
+          mkdir "${root}" "${root}/download" "${root}/tree"
+          gh release download v1.10.0 --repo "${GITHUB_REPOSITORY}" \\
+            --pattern "${archive}" --dir "${root}/download"
+          echo "${digest}  ${root}/download/${archive}" | sha256sum -c -
+          tar -xzf "${root}/download/${archive}" -C "${root}/tree" \\
+            --no-same-owner --no-same-permissions
+          echo "BASELINE_DIR=${root}/tree" >> "${GITHUB_ENV}"
+
+      # Both dry-run and publication inspect every installed .a/.so/.so.* and
+      # compare their highest glibc tag with the baseline fetched above.
+      # Keep raw checker output and its actual exit status, including setup errors.
+      - name: Check every staged library's glibc floor
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
+          mkdir -p "${log}"
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" --baseline-root "${BASELINE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+            checker_rc=0
+          else checker_rc=$?; fi
+          printf '%s\\n' "${checker_rc}" > "${log}/exitcode.txt"
+          cat "${log}/stdout.jsonl"
+          cat "${log}/stderr.txt" >&2
+          exit "${checker_rc}"'''
+        return in_job(workflow, 'prebuilt', legacy_glibc, archive_glibc)
+
+    def test_legacy_isolated_release_form_remains_admitted(self):
+        self.assertEqual(self.findings(self.legacy), [])
+
+    def test_hosted_release_and_notify_hub_form_is_admitted(self):
+        hosted = self.hosted_workflow()
+        self.assertEqual(self.findings(hosted), [])
+        for job in ('release', 'notify-hub'):
+            body = _jobs(hosted)[job]
+            self.assertEqual(
+                ci_preflight._job_values(body, 'runs-on', unquote=False),
+                [HOSTED_X86])
+            self.assertEqual(
+                ci_preflight._job_values(body, 'environment', unquote=False),
+                ['release'])
+
+    def test_hosted_release_requires_the_protected_environment(self):
+        hosted = self.hosted_workflow()
+        for job in ('release', 'notify-hub'):
+            changed = in_job(hosted, job, '    environment: release\n', '')
+            findings = self.findings(changed)
+            self.assertIn(
+                f'release.yml job {job} must use environment release '
+                'on its protected release job',
+                findings)
+            self.assertIn(
+                f'release.yml job {job}: App-token minting/private-key use '
+                'requires a literal, non-empty environment; review other minting methods by hand',
+                findings)
+
+    def test_hosted_release_refuses_self_hosted_and_larger_runner_forms(self):
+        hosted = self.hosted_workflow()
+        for runner in (RELEASE_RUNNER, '["self-hosted","ubuntu-24.04"]',
+                       'ubuntu-24.04-large'):
+            for job in ('release', 'notify-hub'):
+                with self.subTest(job=job, runner=runner):
+                    changed = in_job(
+                        hosted, job, f'    runs-on: {HOSTED_X86}\n',
+                        f'    runs-on: {runner}\n')
+                    self.assertNotEqual(self.findings(changed), [])
+
+    def test_release_credentials_do_not_enter_a_neighbor_job(self):
+        hosted = self.hosted_workflow()
+        mutations = (
+            ('    environment: release\n', 'environment'),
+            ('    env:\n      RELEASE_KEY: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\n',
+             'private key'),
+        )
+        for replacement, label in mutations:
+            with self.subTest(surface=label):
+                changed = in_job(
+                    hosted, 'prebuilt', '    steps:\n',
+                    replacement + '    steps:\n')
+                findings = self.findings(changed)
+                self.assertIn(
+                    'release.yml job prebuilt must not receive the protected release '
+                    'environment or release credentials',
+                    findings)
+
+    def test_hosted_prebuilt_archive_comparison_is_ordered_and_pinned(self):
+        hosted = self.hosted_workflow()
+        expected = ('release.yml prebuilt must retain the credential-free Bookworm build, '
+                    'ARM Eigen setup, all-library glibc gate and packed-archive consumer '
+                    'before upload; the hosted form also pins its released-archive comparison')
+        self.assertEqual(self.findings(hosted), [])
+        mutations = (
+            ('gh release download v1.10.0 --repo "${GITHUB_REPOSITORY}"',
+             'gh release download v1.9.0 --repo "${GITHUB_REPOSITORY}"'),
+            ('cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543',
+             '0000000000000000000000000000000000000000000000000000000000000000'),
+            ('-C "${root}/tree" \\\n            --no-same-owner',
+             '-C "${root}/download" \\\n            --no-same-owner'),
+            ('--baseline-root "${BASELINE_DIR}"',
+             '--baseline-root "${RUNNER_TEMP}"'),
+            ('echo "BASELINE_DIR=${root}/tree" >> "${GITHUB_ENV}"', ''),
+        )
+        for before, after in mutations:
+            with self.subTest(before=before):
+                changed = in_job(hosted, 'prebuilt', before, after)
+                self.assertIn(expected, self.findings(changed))
+
+
 class WorkflowEventFleets(unittest.TestCase):
     """Fleet expectations come from events and call edges, never file names."""
 
@@ -1823,10 +2055,10 @@ class WorkflowEventFleets(unittest.TestCase):
         release = self.workflows()['release.yml']
         self.assertEqual(ci_preflight._events(release), {'workflow_dispatch'})
         self.assertEqual(ci_preflight._job_values(_jobs(release)['release'], 'runs-on'),
-                         [GKP_OD_4])
+                         [HOSTED_X86])
         self.assertEqual(ci_preflight.runner_findings({'release.yml': release}), [])
         changed = in_job(release, 'release',
-                         f'    runs-on: {GKP_OD_4}\n',
+                         f'    runs-on: {HOSTED_X86}\n',
                          '    runs-on: ["self-hosted","pf-ci","pf-ci-release"]\n')
         self.assertNotEqual(changed, release)
         self.assertIn(f'release.yml job release must run on {GKP_OD_4} '
@@ -2819,8 +3051,8 @@ class PostFleetRunnerPolicy(unittest.TestCase):
         for name, jobs in EXPECTED_GKP_JOBS.items():
             cells = [cell for workflow, cell in rows if workflow == name]
             self.assertEqual(len(cells), 1, f'{name} documented runner row')
-            self.assertEqual(set(re.findall(r'`(gkp-[^`]+)`', cells[0])),
-                             set(jobs.values()),
+            labels = {GKP_OD_PREBUILT} if name == 'release.yml' else set(jobs.values())
+            self.assertEqual(set(re.findall(r'`(gkp-[^`]+)`', cells[0])), labels,
                              f'{name} documented protected runner inventory')
         requirements = (
             'Only the unchanged `release.yml` keeps its protected `gkp-od-*` scale sets in runner group 15.\n'
@@ -2874,8 +3106,8 @@ class PostFleetRunnerPolicy(unittest.TestCase):
         rows = [line for line in docs.splitlines()
                 if line.startswith('| `release.yml` |')]
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0].count(f'`{GKP_OD_4}`'), 1)
-        changed = docs.replace(rows[0], rows[0].replace(GKP_OD_4, GKE_4, 1), 1)
+        self.assertEqual(rows[0].count(f'`{GKP_OD_PREBUILT}`'), 1)
+        changed = docs.replace(rows[0], rows[0].replace(GKP_OD_PREBUILT, GKE_4, 1), 1)
         self.assertNotEqual(changed, docs)
         self.assertEqual(len(changed.splitlines()), len(docs.splitlines()))
         with mock.patch.object(Path, 'read_text', return_value=changed) as read_doc:
@@ -4444,13 +4676,13 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.assertEqual(self.failures(lines), [], lines)
         self.assertEqual(ci_preflight.RUNNER_ALLOWLIST_REPOSITORY, self.REPOSITORY)
         self.assertEqual([line for line in lines if line.startswith('advisory:')], [])
-        # Dropping release.yml's group-15 line is refused for each of its protected labels.
+        # Dropping release.yml's group-15 line is refused for its protected prebuilt label.
         self.protected_mirror.write_text('# Group 15 without its release reference.\n')
         code, lines = self.run_stage()
         self.assertEqual(code, 1, lines)
         self.assertCountEqual(self.failures(lines), [
             self.missing('release.yml', label)
-            for label in (GKP_OD_4, GKP_OD_PREBUILT)])
+            for label in (GKP_OD_PREBUILT,)])
 
     def test_stray_mirror_lines_are_only_advisories(self):
         # A listed workflow with no group label, and a listed file that is gone, are
@@ -4694,12 +4926,16 @@ class PrebuiltGlibcRegistration(unittest.TestCase):
         names = {test_id.rsplit('.', 1)[-1] for test_id in ids}
         # expectation corrected: 33 -> 35, because the ancestor-entry and
         # inode-replacement controls extend the complete existing collection.
-        self.assertEqual(len(ids), 35)
-        self.assertEqual(len(names), 35)
+        # expectation corrected: 35 -> 43, because the released-baseline
+        # comparison controls extend the complete existing collection.
+        self.assertEqual(len(ids), 43)
+        self.assertEqual(len(names), 43)
         self.assertTrue({'test_ancestor_entry_added_between_stat_and_open_is_accepted',
                          'test_ancestor_inode_replaced_between_stat_and_open_is_refused',
                          'test_version_policy_mutation_breaks_real_rejection_assertion',
-                         'test_isoc23_policy_mutation_breaks_real_rejection_assertion'} <= names)
+                         'test_isoc23_policy_mutation_breaks_real_rejection_assertion',
+                         'test_staged_tree_above_released_baseline_is_refused',
+                         'test_baseline_policy_mutation_breaks_real_rejection_assertion'} <= names)
         area = Path(tempfile.mkdtemp(prefix='prebuilt-glibc-registration-'))
         print(f'prebuilt GLIBC registration evidence: {area}', flush=True)
         mutant_root = area / 'mutant'
@@ -4725,7 +4961,7 @@ class PrebuiltGlibcRegistration(unittest.TestCase):
                                expected_code, False)])
             rows = re.findall(r'^(test_\w+) \([^\n]+\) \.\.\. (ok|FAIL)$', log, re.MULTILINE)
             self.assertEqual(sorted(name for name, _ in rows), sorted(names), log)
-            self.assertRegex(log, r'Ran 35 tests in ')
+            self.assertRegex(log, r'Ran 43 tests in ')
             failed = [name for name, status in rows if status == 'FAIL']
             self.assertEqual(failed, [] if expected_code == 0 else
                              ['test_complete_inventory_members_spaces_and_content_identity'])
@@ -4776,9 +5012,13 @@ class PreflightFailures(unittest.TestCase):
                 for path in sorted((ROOT / '.github/workflows').iterdir())
                 if path.suffix in ('.yml', '.yaml') and path.name not in named}
 
-    def workflow_sources(self):
-        return {Path(path).name: contents for path, contents in zip(CI_SOURCES, self.ci_sources())
-                if path.endswith(('.yml', '.yaml'))} | self.other_sources()
+    def workflow_sources(self, *, legacy_release=False):
+        workflows = {Path(path).name: contents
+                     for path, contents in zip(CI_SOURCES, self.ci_sources())
+                     if path.endswith(('.yml', '.yaml'))} | self.other_sources()
+        if legacy_release:
+            workflows['release.yml'] = legacy_release_workflow(workflows['release.yml'])
+        return workflows
 
     def light_workflows(self):
         """The requested routing fixture, also constructible from main's workflows."""
@@ -4853,8 +5093,8 @@ class PreflightFailures(unittest.TestCase):
                                       ci_preflight.runner_findings({**workflows, name: changed}))
 
     def gcp_sites(self):
-        """Mutate every real fleet site; derive the class from events/callers."""
-        workflows = self.workflow_sources()
+        """Keep the 21 admitted sites, including the synthetic isolated release form."""
+        workflows = self.workflow_sources(legacy_release=True)
         routes = ci_preflight.workflow_event_routes(workflows)
         for name, workflow in workflows.items():
             workflow_fleet = ('main' if name in ci_preflight.RELEASE_JOB_RUNNERS else
@@ -4886,7 +5126,7 @@ class PreflightFailures(unittest.TestCase):
                 yield name, job, fleet, runner_declaration(value), finding
 
     def routed_file_findings(self, name, job, before, after):
-        workflows = self.workflow_sources()
+        workflows = self.workflow_sources(legacy_release=True)
         changed = in_job(workflows[name], job, before, after)
         self.assertNotEqual(changed, workflows[name], 'the mutation must change the input')
         with tempfile.TemporaryDirectory() as directory:
@@ -7078,7 +7318,7 @@ exit "$lookup_exit"
                     self.assertIn(finding, findings)
 
     def test_gcp_sites_require_every_routed_job(self):
-        workflows = self.workflow_sources()
+        workflows = self.workflow_sources(legacy_release=True)
         for name, jobs in FLEET_JOB_IDS.items():
             self.assertIn(name, workflows, f'{name} required fleet workflow is missing')
             for job in jobs:
@@ -7995,7 +8235,7 @@ finally:
         for name in ('lint.yml', 'release.yml'):
             workflow = others[name] if name == 'release.yml' else lint
             job = 'release' if name == 'release.yml' else 'lint'
-            before = f'    runs-on: {RELEASE_RUNNER}\n' if name == 'release.yml' else spot
+            before = spot
             baseline = ci_workflow_findings(*original, others=dict(others, **{name: workflow}))
             if name == 'release.yml':
                 self.assertEqual(baseline, [])
@@ -8035,12 +8275,12 @@ finally:
                 self.assertIn('release.yml must retain workflow_dispatch only '
                               'for protected release jobs', findings)
         for job in ('release', 'notify-hub'):
-            for runner in ('ubuntu-latest', 'ubuntu-24.04', HOSTED_ARM, GKE_2, LEGACY_PR_RUNNER,
+            for runner in ('ubuntu-latest', 'ubuntu-22.04', HOSTED_ARM, GKE_2, LEGACY_PR_RUNNER,
                            GKP_2, GKP_4, GKP_OD_PREBUILT,
                            f"${{{{ fromJSON('{GKP_2}') || 'ubuntu-latest' }}}}",
                            f"${{{{ fromJSON('{RELEASE_RUNNER}') || 'ubuntu-latest' }}}}"):
                 with self.subTest(job=job, runner=runner):
-                    changed = in_job(release, job, f'    runs-on: {RELEASE_RUNNER}\n',
+                    changed = in_job(release, job, f'    runs-on: {HOSTED_X86}\n',
                                      f'    runs-on: {runner}\n')
                     findings = ci_workflow_findings(
                         *original, others=dict(others, **{'release.yml': changed}))
@@ -8408,12 +8648,12 @@ finally:
         for name, jobs in (('docs.yml', ('build',)), ('promote-baseline.yml', ('promote-guard', 'promote')),
                            ('release.yml', ('release', 'prebuilt', 'notify-hub'))):
             for job in jobs:
-                # docs.yml and the promotion jobs are hosted pins now; only release.yml
-                # keeps its isolated protected scale sets.
-                before = (HOSTED_MATRIX_RUNNER if job == 'prebuilt' else
-                          HOSTED_X86 if name in ('promote-baseline.yml', 'docs.yml') else
-                          RELEASE_RUNNER)
-                after = 'ubuntu-latest' if name in ('docs.yml', 'promote-baseline.yml') else PR_RUNNER
+                # The shipped release and notify-hub jobs are hosted; the prebuilt
+                # matrix still contains the protected x86_64 artifact cell.
+                before = HOSTED_MATRIX_RUNNER if job == 'prebuilt' else HOSTED_X86
+                after = (PR_RUNNER if job == 'prebuilt' else
+                         'ubuntu-latest' if name in ('docs.yml', 'promote-baseline.yml')
+                         else HOSTED_ARM)
                 pool = in_job(workflows[name], job, f'    runs-on: {before}\n',
                               f'    runs-on: {after}\n')
                 findings = ci_preflight.runner_findings(dict(
@@ -8421,6 +8661,8 @@ finally:
                 finding = (f'{name} job {job} must run on ubuntu-24.04 (hosted)' if name == 'docs.yml' else
                            f'{name} job {job} must run on {HOSTED_X86}' if job == 'promote-guard' else
                            f'{name} job {job} must run on {HOSTED_X86} (hosted)' if job == 'promote' else
+                           f'{name} job {job} must run on {RELEASE_RUNNER} (isolated release)'
+                           if job in ('release', 'notify-hub') else
                            f'{name} job {job} must run on {before} (isolated release)')
                 self.assertIn(finding, findings)
                 marker = f"      PF_CI_LABELS: '{PR_RUNNER}'\n"
@@ -8438,6 +8680,7 @@ finally:
                     {'ci.yml': original[0], **workflows}, **{name: hosted}))
                 route = ('a hosted job' if name == 'docs.yml' else
                          'a pinned verification job' if job == 'promote-guard' else
+                         'a hosted release job' if job in ('release', 'notify-hub') else
                          'an isolated release job')
                 self.assertIn(f'{name} job {job} must not set PF_CI_LABELS on {route}', findings)
 
@@ -10010,11 +10253,10 @@ class ActionlintRunnerLabels(unittest.TestCase):
             self.tree / 'scripts/ci_preflight.py', self.config, workflow,
             *sorted((self.tree / '.github/workflows').glob('*')))
         original_config = self.config.read_text()
-        # Only release.yml's two protected labels stay declared; every other retired
-        # label of the old fleets is undeclared and refused where a workflow names it.
-        for label in (GKP_OD_4, GKP_OD_PREBUILT):
-            self.assertIn(f'    - {label}\n', original_config)
-        for label in (GKP_2, GKP_4, GKP_PREBUILT, GKE_2):
+        # Only the shipped x86_64 prebuilt label stays declared; legacy release
+        # routing remains admitted by the separate synthetic rules fixtures.
+        self.assertIn(f'    - {GKP_OD_PREBUILT}\n', original_config)
+        for label in (GKP_OD_4, GKP_2, GKP_4, GKP_PREBUILT, GKE_2):
             self.assertNotIn(f'    - {label}\n', original_config)
         workflow.write_text(
             'on: workflow_dispatch\njobs:\n  post:\n'
@@ -10031,17 +10273,24 @@ class ActionlintRunnerLabels(unittest.TestCase):
         for job, label in (('post', GKE_2), ('main', GKP_2), ('prebuilt', GKP_PREBUILT)):
             self.assertIn(f'gcp-labels.yml job {job}: label "{label}" is not declared '
                           'in .github/actionlint.yaml', output.splitlines())
-        # The two retained labels pass, and removing one is refused again.
+        # The retained label passes and the retired release label is refused.
         workflow.write_text(
             'on: workflow_dispatch\njobs:\n  main:\n'
             f'    runs-on: {GKP_OD_4}\n'
-            '    steps:\n      - run: "true"\n'
-            '  prebuilt:\n'
+            '    steps:\n      - run: "true"\n')
+        code, output = self.runner_labels()
+        self.assertEqual(code, 1, output)
+        self.assertIn(f'gcp-labels.yml job main: label "{GKP_OD_4}" is not declared '
+                      'in .github/actionlint.yaml', output.splitlines())
+        workflow.write_text(
+            'on: workflow_dispatch\njobs:\n  prebuilt:\n'
             f'    runs-on: {GKP_OD_PREBUILT}\n'
             '    steps:\n      - run: "true"\n')
         code, output = self.runner_labels()
         self.assertEqual(code, 0, output)
-        self.config.write_text(original_config.replace(f'    - {GKP_OD_PREBUILT}\n', '', 1))
+        # Keep a valid non-empty label list so this tests an undeclared label.
+        self.config.write_text(original_config.replace(
+            f'    - {GKP_OD_PREBUILT}\n', '    - gkp-unused-declared-label\n', 1))
         code, output = self.runner_labels()
         self.assertEqual(code, 1, output)
         self.assertIn(f'gcp-labels.yml job prebuilt: label "{GKP_OD_PREBUILT}" is not declared '
@@ -10088,18 +10337,17 @@ class ActionlintRunnerLabels(unittest.TestCase):
 
     def test_actionlint_runner_labels_rejects_removed_label(self):
         original = self.config.read_text()
-        # Only release.yml's two protected labels are still declared and used; every
-        # other label of the retired fleets is absent from the declaration list.
-        for label in (GKP_4, GKP_2, 'gke-32cpu-64gb-amd64', 'gke-ondemand-32cpu-64gb-amd64',
+        # Only the shipped x86_64 prebuilt label is still declared and used.
+        for label in (GKP_OD_4, GKP_4, GKP_2, 'gke-32cpu-64gb-amd64', 'gke-ondemand-32cpu-64gb-amd64',
                       'gke-ondemand-32cpu-64gb-amd64-256gb', 'gke-16cpu-32gb-amd64',
                       'gke-16cpu-32gb-amd64-128gb', 'gke-16cpu-32gb-amd64-256gb',
                       'gke-8cpu-16gb-amd64', 'gke-16cpu-32gb-arm64-128gb'):
             self.assertNotIn(f'    - {label}\n', original)
         for label, sites in (
-                (GKP_OD_4, (('release.yml', 'release'), ('release.yml', 'notify-hub'))),
-                (GKP_OD_PREBUILT, (('release.yml', 'prebuilt'),))):
+                (GKP_OD_PREBUILT, (('release.yml', 'prebuilt'),)),):
             with self.subTest(label=label):
-                changed = original.replace(f'    - {label}\n', '', 1)
+                changed = original.replace(f'    - {label}\n',
+                                           '    - gkp-unused-declared-label\n', 1)
                 self.assertNotEqual(changed, original)
                 self.config.write_text(changed)
                 code, output = self.runner_labels()
@@ -10129,6 +10377,8 @@ class ActionlintRunnerLabels(unittest.TestCase):
 
     def test_actionlint_runner_labels_rejects_unparseable_config(self):
         for config in ('self-hosted-runner: [\n',
+                       'self-hosted-runner:\n  labels:\n',
+                       'self-hosted-runner:\n  labels: []\n',
                        'self-hosted-runner:\n  labels: pf-gcp-pr\n'):
             with self.subTest(config=config):
                 self.config.write_text(config)

@@ -12249,6 +12249,18 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/source/pine_ta_length.hpp",
+   "symbol": "history_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "class SeriesPercentileNearestRank #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < double >",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/str_utils.hpp",
    "symbol": "text",
    "scope": [
@@ -36053,12 +36065,47 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "global_pending",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: materialize_relative_exits ( PlacementSnapshot opening , const native_order :: ExecutionAppliedEvent & event ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < PendingRelativeExit >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "pending",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: materialize_relative_exits ( PlacementSnapshot opening , const native_order :: ExecutionAppliedEvent & event ) #1",
     ") #1",
     "if ( it -> from_entry = = opening . source_id ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "pending . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "global_pending",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: materialize_relative_exits ( PlacementSnapshot opening , const native_order :: ExecutionAppliedEvent & event ) #1",
+    ") #1",
+    "else if ( market_opening && it -> from_entry . empty ( ) && ! it -> void_global ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "global_pending . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "pending",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: materialize_relative_exits ( PlacementSnapshot opening , const native_order :: ExecutionAppliedEvent & event ) #1"
    ],
    "cls": "grow",
    "spelling": "pending . push_back ( . . . )",
@@ -43899,6 +43946,32 @@
   },
   {
    "file": "src/source/pine_ta_length.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void max_bars_back_exceeded ( long long length ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_ta_length.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void max_bars_back_exceeded ( long long length ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/source/pine_ta_length.cpp",
    "symbol": "values_",
    "scope": [
     "namespace pineforge #1",
@@ -43911,32 +43984,6 @@
   },
   {
    "file": "src/source/pine_ta_length.cpp",
-   "symbol": "std::to_string",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "SeriesWindowExtreme :: Result SeriesWindowExtreme :: update ( double src , long long length , bool advance , bool want_max , const char * function ) #1",
-    "if ( length - 1 > kMaxBarsBack ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "std :: to_string ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
-   "symbol": "std::to_string",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace source #1",
-    "SeriesWindowExtreme :: Result SeriesWindowExtreme :: update ( double src , long long length , bool advance , bool want_max , const char * function ) #1",
-    "if ( length - 1 > kMaxBarsBack ) #1"
-   ],
-   "cls": "temp",
-   "spelling": "std :: to_string ( . . . )",
-   "ordinal": 2
-  },
-  {
-   "file": "src/source/pine_ta_length.cpp",
    "symbol": "state_",
    "scope": [
     "namespace pineforge #1",
@@ -43946,6 +43993,30 @@
    ],
    "cls": "assign",
    "spelling": "state_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_ta_length.cpp",
+   "symbol": "history_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "void SeriesPercentileNearestRank :: append ( double src ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "history_ . assign ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_ta_length.cpp",
+   "symbol": "window_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace source #1",
+    "const std :: vector < double > * SeriesPercentileNearestRank :: rebuild_window ( std :: size_t length ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "window_ . emplace ( . . . )",
    "ordinal": 1
   },
   {

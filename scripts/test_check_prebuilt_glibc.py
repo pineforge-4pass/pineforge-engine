@@ -223,13 +223,29 @@ class RealArtifacts(unittest.TestCase):
             self.command([self.tools["ar"], "s", str(output)])
         return output
 
-    def run_checker(self, root: Path | None = None, checker: Path = CHECKER):
+    def tree(self, name: str, build) -> Path:
+        """Run `build` with the fixture helpers aimed at a separate root; return it."""
+        original = self.root
+        self.root = self.area / name
+        declare(self.root)
+        self.generated(self.root).mkdir()
+        try:
+            build()
+            return self.root
+        finally:
+            self.root = original
+
+    def run_checker(self, root: Path | None = None, checker: Path = CHECKER,
+                    baseline: Path | None = None):
         root = self.root if root is None else root
         declare(checker, root)
         safe_path(checker)
         if checker != CHECKER:
             self.generated(checker)
         argv = [sys.executable, "-B", str(checker), str(root)]
+        if baseline is not None:
+            declare(baseline)
+            argv += ["--baseline-root", str(baseline)]
         result = subprocess.run(argv, capture_output=True, env=ENV)
         print(json.dumps({
             "checker_command": argv, "returncode": result.returncode,
@@ -810,6 +826,122 @@ class RealArtifacts(unittest.TestCase):
         self.assert_verdict(self.run_checker(), False)
         mutant = self.mutant("is_isoc23_reference")
         changed = self.run_checker(checker=mutant)
+        self.assert_verdict(changed, True)
+        with self.assertRaises(AssertionError):
+            self.assert_verdict(changed, False)
+
+    def test_staged_tree_above_released_baseline_is_refused(self):
+        # Both trees sit under the fixed ceiling: only the comparison can refuse.
+        released = self.tree("released baseline",
+                             lambda: self.shared("lib/released.so", ("GLIBC_2.34",)))
+        staged = self.tree("staged above",
+                           lambda: self.shared("lib/staged.so", ("GLIBC_2.35",)))
+        records = self.assert_verdict(self.run_checker(staged, baseline=released), False)
+        self.assert_issue(records, staged, "exceeds released baseline")
+        comparison = next(row for row in records if row["event"] == "baseline_comparison")
+        self.assertEqual((comparison["staged_max_glibc"], comparison["baseline_max_glibc"],
+                          comparison["exceeds"]), ("2.35", "2.34", True))
+        self.assertEqual(records[-1]["issues"], 1)
+        self.assertEqual(self.targets(records)[str(staged / "lib/staged.so")]["max_glibc"], "2.35")
+
+    def test_staged_tree_at_or_below_released_baseline_passes(self):
+        released = self.tree("released baseline",
+                             lambda: self.shared("lib/released.so", ("GLIBC_2.34",)))
+        for label, versions in (("equal", ("GLIBC_2.34",)), ("lower", ("GLIBC_2.9",)),
+                                ("zero padded", ("GLIBC_2.34.0",)), ("untagged", ())):
+            with self.subTest(staged=label):
+                staged = self.tree("staged " + label,
+                                   lambda versions=versions: self.shared("lib/staged.so", versions))
+                records = self.assert_verdict(self.run_checker(staged, baseline=released), True)
+                comparison = next(row for row in records if row["event"] == "baseline_comparison")
+                self.assertFalse(comparison["exceeds"])
+                self.assertEqual(comparison["baseline_max_glibc"], "2.34")
+                self.assertEqual(records[-1]["baseline_inspected"], 1)
+
+    def test_released_baseline_is_read_but_not_held_to_the_staged_policy(self):
+        # The real v1.10.0 x86_64 archive needs GLIBC_2.38 and references __isoc23_*.
+        def build():
+            self.shared("lib/released.so", ("GLIBC_2.38",))
+            self.archive("lib/released.a",
+                         [self.object("early.o", reference="__isoc23_strtol")])
+
+        released = self.tree("released baseline", build)
+        staged = self.tree("staged below",
+                           lambda: self.shared("lib/staged.so", ("GLIBC_2.34",)))
+        records = self.assert_verdict(self.run_checker(staged, baseline=released), True)
+        rows = {row["path"]: row for row in records
+                if row["event"] == "target" and row.get("role") == "baseline"}
+        self.assertEqual(set(rows), {str(released / "lib/released.so"),
+                                     str(released / "lib/released.a")})
+        self.assertTrue(all(row["inspected"] for row in rows.values()))
+        self.assertEqual(rows[str(released / "lib/released.so")]["max_glibc"], "2.38")
+        self.assertTrue(rows[str(released / "lib/released.a")]["isoc23_references"])
+        self.assertEqual([row for row in records if row["event"] == "issue"], [])
+        comparison = next(row for row in records if row["event"] == "baseline_comparison")
+        self.assertEqual((comparison["staged_max_glibc"], comparison["baseline_max_glibc"]),
+                         ("2.34", "2.38"))
+
+    def test_released_baseline_input_decides_the_verdict(self):
+        # The same two trees give opposite verdicts when their roles swap, so the
+        # baseline input is read, not ignored.
+        lower = self.tree("lower tree", lambda: self.shared("lib/library.so", ("GLIBC_2.34",)))
+        higher = self.tree("higher tree", lambda: self.shared("lib/library.so", ("GLIBC_2.35",)))
+        self.assert_verdict(self.run_checker(lower, baseline=higher), True)
+        records = self.assert_verdict(self.run_checker(higher, baseline=lower), False)
+        self.assert_issue(records, higher, "exceeds released baseline")
+
+    def test_unusable_released_baseline_fails_closed(self):
+        staged = self.tree("staged", lambda: self.shared("lib/staged.so", ("GLIBC_2.34",)))
+        self.assert_verdict(self.run_checker(staged), True)
+
+        def linked():
+            real = self.shared("lib/real.so", ("GLIBC_2.34",))
+            link = self.root / "lib" / "link.so.1"
+            declare(link, real)
+            link.symlink_to(real)
+
+        baselines = (
+            ("missing", self.area / "absent baseline"),
+            ("without libraries", self.tree("empty baseline", lambda: None)),
+            ("malformed library", self.tree(
+                "malformed baseline",
+                lambda: self.source(self.root / "lib" / "broken.so", b"not an ELF"))),
+            ("symlinked library", self.tree("linked baseline", linked)),
+        )
+        for label, baseline in baselines:
+            with self.subTest(baseline=label):
+                records = self.assert_verdict(self.run_checker(staged, baseline=baseline), False)
+                self.assertFalse(any(row["event"] == "baseline_comparison" for row in records))
+                self.assertTrue(any(row["event"] == "issue" and row.get("role") == "baseline"
+                                    for row in records))
+
+    def test_released_baseline_overlapping_the_staging_root_is_refused(self):
+        staged = self.tree("staged", lambda: self.shared("lib/staged.so", ("GLIBC_2.34",)))
+        for label, baseline in (("same root", staged), ("inside the root", staged / "lib"),
+                                ("around the root", staged.parent)):
+            with self.subTest(baseline=label):
+                records = self.assert_verdict(self.run_checker(staged, baseline=baseline), False)
+                self.assert_issue(records, baseline, "separate from the staging root")
+                self.assertFalse(any(row["event"] == "baseline_comparison" for row in records))
+
+    def test_empty_baseline_argument_is_an_invocation_error(self):
+        staged = self.tree("staged", lambda: self.shared("lib/staged.so", ("GLIBC_2.34",)))
+        declare(CHECKER, staged)
+        result = subprocess.run(
+            [sys.executable, "-B", str(CHECKER), str(staged), "--baseline-root", ""],
+            capture_output=True, env=ENV)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn(b"--baseline-root must name a directory", result.stderr)
+        self.assertEqual(result.stdout, b"")
+
+    def test_baseline_policy_mutation_breaks_real_rejection_assertion(self):
+        staged = self.tree("staged above",
+                           lambda: self.shared("lib/staged.so", ("GLIBC_2.35",)))
+        released = self.tree("released baseline",
+                             lambda: self.shared("lib/released.so", ("GLIBC_2.34",)))
+        self.assert_verdict(self.run_checker(staged, baseline=released), False)
+        mutant = self.mutant("exceeds_baseline")
+        changed = self.run_checker(staged, checker=mutant, baseline=released)
         self.assert_verdict(changed, True)
         with self.assertRaises(AssertionError):
             self.assert_verdict(changed, False)
