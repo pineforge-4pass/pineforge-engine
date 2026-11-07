@@ -3,6 +3,9 @@
 
 Exit 0: unchanged gitlink or completed success; 1: validation refused;
 2: the gitlink or the complete check-runs response could not be read.
+
+Run this script's text from the trusted base tree. The repository selected
+by --repo is data and may contain the proposed pull-request head.
 """
 
 import argparse
@@ -11,13 +14,14 @@ import json
 import os
 import re
 import subprocess
-import urllib.error
+import urllib.parse
 import urllib.request
 
 
 CORPUS_REPOSITORY = "pineforge-4pass/pineforge-corpus"
 CHECK_NAME = "corpus-validate"
 GITHUB_ACTIONS_APP_ID = 15368
+API_URL = "https://api.github.com"
 SHA = re.compile(r"[0-9a-f]{40}")
 
 
@@ -29,23 +33,63 @@ def parse_gitlink(text: str) -> str:
     return match.group(1)
 
 
-def gitlink(revision: str) -> str:
-    if not SHA.fullmatch(revision):
-        raise ValueError("engine revision must be a full commit SHA")
+def _git(repo: str, *arguments: str) -> str:
     result = subprocess.run(
-        ["git", "--no-optional-locks", "ls-tree", revision, "--", "corpus"],
+        ["git", "--no-optional-locks", "-C", repo, *arguments],
         check=True, capture_output=True, text=True,
     )
-    return parse_gitlink(result.stdout)
+    return result.stdout
 
 
-def read_checks(repository: str, commit: str) -> dict:
+def merge_base(base: str, head: str, repo: str = ".") -> str:
+    if any(not SHA.fullmatch(revision) for revision in (base, head)):
+        raise ValueError("engine revisions must be full commit SHAs")
+    try:
+        revision = _git(repo, "merge-base", base, head).strip()
+    except subprocess.CalledProcessError as error:
+        if error.returncode == 1:
+            raise ValueError("base and head have no merge base") from error
+        raise
+    if not SHA.fullmatch(revision):
+        raise ValueError("merge base must be one full commit SHA")
+    return revision
+
+
+def gitlink(revision: str, repo: str = ".") -> str:
+    if not SHA.fullmatch(revision):
+        raise ValueError("engine revision must be a full commit SHA")
+    return parse_gitlink(_git(repo, "ls-tree", revision, "--", "corpus"))
+
+
+def _origin(url: str) -> tuple[str, str, int]:
+    parsed = urllib.parse.urlsplit(url)
+    if (parsed.scheme not in ("http", "https") or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None):
+        raise ValueError("API URL must have an HTTP origin without credentials")
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    return parsed.scheme, parsed.hostname, port
+
+
+class _SameOriginRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        if _origin(request.full_url) != _origin(new_url):
+            raise ValueError("redirect changes API origin")
+        return super().redirect_request(request, response, code, message, headers, new_url)
+
+
+def read_checks(repository: str, commit: str, api_url: str = API_URL) -> dict:
     """Read one complete page, retaining reruns rather than only the latest."""
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError("unreadable corpus repository")
     if not SHA.fullmatch(commit):
         raise ValueError("unreadable corpus commit SHA")
-    url = (f"https://api.github.com/repos/{repository}/commits/{commit}/check-runs"
+    _origin(api_url)
+    parsed = urllib.parse.urlsplit(api_url)
+    if parsed.query or parsed.fragment:
+        raise ValueError("API base URL must not contain a query or fragment")
+    url = (f"{api_url.rstrip('/')}/repos/{repository}/commits/{commit}/check-runs"
            f"?filter=all&check_name={CHECK_NAME}&per_page=100")
     headers = {
         "Accept": "application/vnd.github+json",
@@ -56,7 +100,10 @@ def read_checks(repository: str, commit: str) -> dict:
     if token:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=30) as response:
+    opener = urllib.request.build_opener(_SameOriginRedirect())
+    with opener.open(request, timeout=30) as response:
+        if response.status != 200:
+            raise ValueError(f"unexpected check-runs HTTP status {response.status}")
         if re.search(r'rel="?next"?', response.headers.get("Link", "")):
             raise ValueError("truncated check-runs response (next page exists)")
         return json.load(response)
@@ -119,16 +166,22 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True, help="Full engine base commit SHA.")
     parser.add_argument("--head", required=True, help="Full engine pull-request head SHA.")
+    parser.add_argument("--repo", default=".", metavar="DIR",
+                        help="Repository to read as data (default: current directory).")
+    parser.add_argument("--api-url", default=API_URL,
+                        help="Check-runs API base URL (default: GitHub).")
     args = parser.parse_args(argv)
     try:
-        old, new = gitlink(args.base), gitlink(args.head)
+        ancestor = merge_base(args.base, args.head, args.repo)
+        old, new = gitlink(ancestor, args.repo), gitlink(args.head, args.repo)
         if old == new:
             print(f"gitlink unchanged: {new}")
             return 0
-        code, reason = check_result(read_checks(CORPUS_REPOSITORY, new), new)
-    except (OSError, ValueError, subprocess.CalledProcessError,
-            urllib.error.URLError) as error:
-        print(f"corpus validation unreadable: {error}")
+        code, reason = check_result(
+            read_checks(CORPUS_REPOSITORY, new, api_url=args.api_url), new)
+    except Exception as error:
+        message = " ".join(str(error).splitlines())
+        print(f"corpus validation unreadable: {type(error).__name__}: {message}")
         return 2
     print(reason)
     return code

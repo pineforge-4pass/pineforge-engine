@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from typing import Callable
 
 
 sys.dont_write_bytecode = True
@@ -216,6 +217,30 @@ def _git(root: Path, *arguments: str) -> bytes:
     return result.stdout
 
 
+def _engine_commit(engine: Path) -> str:
+    try:
+        top = Path(os.fsdecode(_git(
+            engine, "rev-parse", "--show-toplevel")).strip()).resolve()
+        if top != engine:
+            return "unknown"
+        revision = _git(engine, "rev-parse", "--verify", "HEAD^{commit}").decode("ascii").strip()
+        return revision if re.fullmatch(r"[0-9a-f]{40}", revision) else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _tracked_symlinks(root: Path) -> list[str]:
+    findings = []
+    for row in _git(root, "ls-tree", "-r", "-z", "HEAD").split(b"\0"):
+        if not row:
+            continue
+        metadata, filename = row.split(b"\t", 1)
+        mode, _, _ = metadata.split()
+        if mode == b"120000":
+            findings.append(f"records {root / os.fsdecode(filename)}: tracked symlink is forbidden")
+    return findings
+
+
 def _lfs(root: Path) -> tuple[list[str], int]:
     findings = []
     count = 0
@@ -323,6 +348,25 @@ def _header_problem(tape: Path, produced: Path) -> str | None:
     return None
 
 
+def collect_probe_results(work: Callable[[str], str | None], items: list[str],
+                          jobs: int) -> tuple[list[str], bool]:
+    """Collect every probe result even when a worker raises an exception."""
+    findings = []
+    error = False
+    with ThreadPoolExecutor(max_workers=jobs) as workers:
+        pending = [(item, workers.submit(work, item)) for item in items]
+        for item, future in pending:
+            try:
+                problem = future.result()
+                if problem:
+                    findings.append(problem)
+            except Exception as problem:
+                error = True
+                message = " ".join(str(problem).splitlines())
+                findings.append(f"run {item}: {type(problem).__name__}: {message}")
+    return findings, error
+
+
 def _build_and_run(corpus: Path, engine: Path, work: Path, probes: set[str],
                    selected: list[str], jobs: int = 8) -> tuple[list[str], bool]:
     run = Path(tempfile.mkdtemp(prefix="corpus-validation-", dir=work))
@@ -330,7 +374,7 @@ def _build_and_run(corpus: Path, engine: Path, work: Path, probes: set[str],
     print(f"WORK {run}")
     _copy_engine(engine, source)
     staged = source / "corpus"
-    shutil.copytree(corpus, staged, ignore=_copy_ignore)
+    shutil.copytree(corpus, staged, ignore=_copy_ignore, symlinks=True)
     environment = os.environ.copy()
     temporary = run / "tmp"
     temporary.mkdir()
@@ -380,11 +424,7 @@ def _build_and_run(corpus: Path, engine: Path, work: Path, probes: set[str],
             return f"header {output}: {problem}"
         return None
 
-    with ThreadPoolExecutor(max_workers=jobs) as workers:
-        for problem in workers.map(run_probe, selected):
-            if problem:
-                findings.append(problem)
-    return findings, False
+    return collect_probe_results(run_probe, selected, jobs)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -412,9 +452,11 @@ def main(argv: list[str] | None = None) -> int:
     status_ready = False
     clean = False
     error = False
+    engine_commit = "unknown"
     try:
         args = parser.parse_args(argv)
         corpus, engine = args.corpus.resolve(), args.engine.resolve()
+        engine_commit = _engine_commit(engine)
         if not 1 <= args.jobs <= 8:
             raise ValueError("--jobs must be between 1 and 8")
         if not args.records_only and args.work is None:
@@ -428,9 +470,11 @@ def main(argv: list[str] | None = None) -> int:
         status_ready = True
         before = _git(corpus, "status", "--porcelain", "--untracked-files=all")
         if before:
+            error = True
             for line in os.fsdecode(before).splitlines():
                 findings.append(f"clean {corpus}: checkout is dirty before validation: {line}")
         print(f"CORPUS {os.fsdecode(_git(corpus, 'rev-parse', 'HEAD')).strip()}")
+        findings.extend(_tracked_symlinks(corpus))
         records, measured, probes = _records(corpus)
         findings.extend(records)
         counts.update(measured)
@@ -449,18 +493,25 @@ def main(argv: list[str] | None = None) -> int:
                 work.mkdir(parents=True, exist_ok=True)
                 result, error = _build_and_run(corpus, engine, work, probes, selected, args.jobs)
                 findings.extend(result)
-    except (OSError, ValueError, subprocess.CalledProcessError) as problem:
+    except Exception as problem:
         error = True
-        findings.append(f"setup {corpus if corpus is not None else 'arguments'}: {problem}")
+        message = " ".join(str(problem).splitlines())
+        findings.append(f"setup {corpus if corpus is not None else 'arguments'}: "
+                        f"{type(problem).__name__}: {message}")
     if status_ready:
         try:
             after = _git(corpus, "status", "--porcelain", "--untracked-files=all")
             clean = not after
+            if after:
+                error = True
             for line in os.fsdecode(after).splitlines():
                 findings.append(f"clean {corpus}: checkout is dirty after validation: {line}")
-        except (OSError, subprocess.CalledProcessError) as problem:
+        except Exception as problem:
             error = True
-            findings.append(f"clean {corpus}: could not read final status: {problem}")
+            message = " ".join(str(problem).splitlines())
+            findings.append(f"clean {corpus}: could not read final status: "
+                            f"{type(problem).__name__}: {message}")
+    print(f"ENGINE {engine_commit}")
     print("COUNT " + " ".join(f"{name}={counts[name]}" for name in (
         "tapes", "owned_entries", "owned_hashes", "lfs_pointers", "feed")))
     for finding in findings:
