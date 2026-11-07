@@ -4796,7 +4796,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'corpus-parity-identity-tests',
             'corpus-parity-subset-cover-tests', 'report-schema-key-tests',
             'selected-window-ownership-tests', 'report-outputs-key-tests', 'release-version-tests',
-            'release-gate-tests', 'prebuilt-bookworm-tests', 'prebuilt-glibc-tests',
+            'release-gate-tests', 'rerun-preempted-tests', 'prebuilt-bookworm-tests', 'prebuilt-glibc-tests',
             'run-failure-diff-tests', 'run-json-harness-tests',
             'docs-only-tests', 'design-inventory-tests', 'design-inventory',
             'detached-comments-tests', 'detached-comments', 'native-tempdir-tests',
@@ -4813,8 +4813,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
         with mock.patch.object(ci_preflight.sys, 'platform', 'linux'):
             self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
             # main() prepends actionlint-version to all/fast/github-only.
-            self.assertEqual(len(expected) + 1, 66)
-            self.assertEqual(len(check_commands(ROOT, tier='fast')), 61)
+            self.assertEqual(len(expected) + 1, 67)
+            self.assertEqual(len(check_commands(ROOT, tier='fast')), 62)
             self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
             self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
         for platform in ('darwin', 'win32'):
@@ -4823,7 +4823,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
                                      if name not in ('prebuilt-bookworm-tests', 'prebuilt-glibc-tests')]
                 self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})],
                                  expected_platform)
-                self.assertEqual(len(check_commands(ROOT, tier='fast')), 59)
+                self.assertEqual(len(check_commands(ROOT, tier='fast')), 60)
 
 
 class PrebuiltGlibcRegistration(unittest.TestCase):
@@ -8831,7 +8831,7 @@ finally:
             'selected-window-ownership-tests', 'release-gate-tests', 'prebuilt-bookworm-tests',
             'run-failure-diff-tests', 'design-inventory', 'design-inventory-tests',
             'doc-anchors', 'doc-anchors-tests', 'doc-lint', 'doc-lint-tests',
-            'kernel-seam-rows', 'kernel-seam-rows-tests',
+            'kernel-seam-rows', 'kernel-seam-rows-tests', 'rerun-preempted-tests',
         }
         for platform in ('linux', 'darwin', 'win32'):
             with mock.patch.object(ci_preflight.sys, 'platform', platform):
@@ -9042,6 +9042,9 @@ finally:
             plan = {entry[0]: entry for entry in check_commands(ROOT, tier=tier)}
             self.assertEqual(plan['release-gate-tests'], (
                 'release-gate-tests', [sys.executable, str(ROOT / 'scripts/test_ci_release_gate.py')]))
+            self.assertEqual(plan['rerun-preempted-tests'], (
+                'rerun-preempted-tests',
+                [sys.executable, str(ROOT / 'scripts/test_ci_rerun_preempted.py')]))
 
     def test_release_bump_publication_mutations_refuse(self):
         original, others = self.ci_sources(), self.other_sources()
