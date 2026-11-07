@@ -3035,20 +3035,26 @@ class PostCTestShardPolicy(unittest.TestCase):
                 ('          set -euo pipefail\n          docker image prune -af\n',
                  '          set -u\n          docker image prune -af\n',
                  'sanitizer image cleanup must fail closed'),
-                ('      - name: Measure sanitizer disk space at shard start\n',
+                ('      - name: Measure sanitizer disk space at shard start\n'
+                 "        if: ${{ needs.authz.result == 'success' }}\n"
+                 '        run: df -B1 -P / /mnt\n',
                  '',
                  'sanitizers must record df at shard start after preparation'),
-                ('      - name: Measure sanitizer disk space after verification\n',
+                ('      - name: Measure sanitizer disk space after verification\n'
+                 "        if: ${{ always() && needs.authz.result == 'success' }}\n"
+                 '        run: df -B1 -P / /mnt\n',
                  '',
                  'sanitizers must record an always-run final df sample'),
-                ('      - name: Measure sanitizer disk space after hosted-image cleanup\n',
+                ('      - name: Measure sanitizer disk space after hosted-image cleanup\n'
+                 "        if: ${{ always() && needs.authz.result == 'success' }}\n"
+                 '        run: df -B1 -P / /mnt\n',
                  '',
                  'sanitizers must measure and clean image disk before checkout')):
             with self.subTest(finding=finding):
                 changed = in_job(post, 'sanitizers', before, after)
                 findings = ci_preflight.sanitizer_disk_workflow_findings(
                     _jobs(changed)['sanitizers'])
-                self.assertIn(finding, findings)
+                self.assertEqual(findings, [finding])
 
     def test_leg_aggregate_contract_refuses_wrong_dependencies_or_green_skips(self):
         for job, _, _, _, aggregate, display in POST_SHARD_CASES:
