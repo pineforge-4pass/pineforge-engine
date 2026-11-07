@@ -1849,6 +1849,7 @@ bool NativeExecutionConsumer::prepare_public_begin(
     }
     cache_policy_attempt_ = cache_policy_config_;
     scratch_io_policy_attempt_ = scratch_io_policy_config_;
+    scratch_bounds_attempt_ = scratch_bounds_config_;
     struct RestorePolicyPreparation {
         bool& flag;
         bool previous;
@@ -3084,6 +3085,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     }
     cache_policy_run_ = cache_policy_attempt_;
     scratch_io_policy_run_ = scratch_io_policy_attempt_;
+    scratch_bounds_run_ = scratch_bounds_attempt_;
     release_run_command_scratch();
     for (auto& run : run_command_scratch_) run.reset();
     dependency_scratch_stats_ = {};
@@ -3146,6 +3148,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         cache_policy_run_.receipt_tail_pages,
         cache_policy_run_.chain_segment_pages);
     requests_.bind_scratch_slab(engine.scratch_table_run_.slab);
+    requests_.bind_scratch_bounds(scratch_bounds_run_);
     host_cache_.reset();
     clear_cohort_target_cache();
     terminal_receipt_high_water_ = 0;
@@ -14458,6 +14461,58 @@ void ScriptBucketCursor::reset() {
 std::int64_t NativeExecutionConsumer::subscription_next_input_ms(int index) const noexcept {
     return subscription_input_bars_ && index >= 0 && index < subscription_input_n_ - 1
         ? subscription_input_bars_[index + 1].timestamp : 0;
+}
+
+void BacktestEngine::clear_scratch_bounds_v2() noexcept {
+    // A v1 setter on an otherwise unbound engine must not allocate a consumer.
+    if (auto* consumer = static_cast<NativeExecutionConsumer*>(execution_consumer_slot_.ptr.get()))
+        consumer->set_scratch_bounds_config({});
+}
+
+int BacktestEngine::set_scratch_tables_v2(const pf_scratch_tables_v2* descriptor) {
+    const int status = report_sink_setter_status();
+    if (status != 0) return status;
+    detail::ScratchBounds next;
+    if (descriptor) {
+        const auto reject = [](const char* reason, const char* message) {
+            throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
+                {{"input", "scratch_tables"}, {"reason", reason}}, message);
+        };
+        if (descriptor->struct_size != sizeof(*descriptor) || descriptor->reserved != 0)
+            reject("unparseable_value", "invalid scratch-table v2 descriptor size or reserved word");
+        if (descriptor->version != 2)
+            reject("invalid_enum_option", "unsupported scratch-table descriptor version");
+        constexpr auto known_fields = (UINT64_C(1) << 11) - 1;
+        if (descriptor->active_fields & ~known_fields)
+            reject("invalid_enum_option", "unknown scratch-table active-field bit");
+        next.active_fields = descriptor->active_fields;
+        next.manifest = {descriptor->K_q, descriptor->B_q, descriptor->K_e, descriptor->B_e,
+                         descriptor->K_c, descriptor->B_c, descriptor->U, descriptor->B_U,
+                         descriptor->V, descriptor->B_V, descriptor->R};
+        for (const auto field : {
+                detail::ScratchBound::K_q, detail::ScratchBound::B_q,
+                detail::ScratchBound::K_e, detail::ScratchBound::B_e,
+                detail::ScratchBound::K_c, detail::ScratchBound::B_c,
+                detail::ScratchBound::U, detail::ScratchBound::B_U,
+                detail::ScratchBound::V, detail::ScratchBound::B_V, detail::ScratchBound::R}) {
+            if (!next.active(field) && next.maximum(field) != 0)
+                reject("unparseable_value", "inactive scratch-table fields must be zero");
+        }
+        const auto unsupported = [](const char* message) {
+            throw coded<std::invalid_argument>(RunFailureCode::setting_unsupported, {}, message);
+        };
+        if (next.manifest.K_q != 0 || next.manifest.B_q != 0)
+            unsupported("K_q/B_q are retired ABI slots; nonzero limits are unsupported");
+        if (next.active(detail::ScratchBound::V) && next.manifest.V > 27)
+            unsupported("exit-rank representation tracks at most 27 IDs");
+    }
+    // Allocate the immutable copied policy before changing either installed
+    // configuration. Retained stores hold their own shared policy until reset.
+    std::shared_ptr<const detail::ScratchBounds> owner;
+    if (next.active_fields != 0) owner = std::make_shared<const detail::ScratchBounds>(next);
+    NativeExecutionConsumer::bound(*this).set_scratch_bounds_config(std::move(owner));
+    scratch_table_config_ = {};
+    return 0;
 }
 
 // Called only after the consumer's read-only lifecycle/reentry guards and

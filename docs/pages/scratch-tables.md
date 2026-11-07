@@ -3,8 +3,8 @@
 Scratch-table storage is selected independently of the report sink. The
 versioned descriptor and fixed-slab foundation are present; the host wiring
 and default header described here are authored, with remote verification
-pending. Bounded-memory enforcement and all-zero manifest expansion are
-implemented in the native begin path. Disk/RAM identity and the complete jailed
+pending. Bounded-memory enforcement, all-zero v1 expansion and independent
+optional v2 admission are implemented in native begin. Disk/RAM identity and the complete jailed
 zero-file-operation proof remain **planned**. Host tests using a
 fake library establish orchestration only.
 
@@ -12,7 +12,7 @@ fake library establish orchestration only.
 
 | Backend | Value | Contract |
 | --- | ---: | --- |
-| `disk_scratch` / `PF_SCRATCH_TABLE_DISK_SCRATCH` | 0 | Existing temporary-file tables. This remains the unjailed default. |
+| `disk_scratch` / `PF_SCRATCH_TABLE_DISK_SCRATCH` | 0 | Existing disk/arena-backed tables, with no default logical maxima. This is the JSON host's default in both profiles; jailed mode still requires its real arena. |
 | `bounded_memory` / `PF_SCRATCH_TABLE_BOUNDED_MEMORY` | 1 | Slab prepared once before the run, sized from the declared maxima and the input-bar count (about 32 bytes per bar for the root region), with count/byte admission and no growth or disk fallback on exhaustion; historical keys are not reclaimed, and exceeding a cap fails the run. |
 
 Call #strategy_set_scratch_tables_v1 on an idle handle before running it.
@@ -29,8 +29,8 @@ domains; `B` counts their total stored key bytes, including embedded NULs and
 both pair components. Erasure does not reclaim this historical budget.
 `U/B_U` cover historical cohort IDs and their bytes; `V/B_V` cover exit-rank
 IDs and bytes, with `V<=27`; `R` covers rooted replacement successors,
-including internally generated replacements. The q store is being removed:
-its descriptor fields remain for compatibility, and the default sets both to
+including internally generated replacements. The q store is retired:
+its descriptor fields remain for compatibility, and the v1 default sets both to
 zero. No descriptor field is a measured occupancy or a live-book count.
 
 The return value is 0 on success, -1 for a null handle or invalid
@@ -46,13 +46,47 @@ explicit: zero fields in that manifest stay zero. Disk mode never activates
 this default. Layout arithmetic must fit `uint64_t`, `size_t` and `off_t`
 before allocation; actual allocation failure remains `out_of_memory`.
 
-## Default P0 admission policy
+## Independent optional v2 bounds
+
+With no `--scratch-*` flags, `docker/run_json.py` makes no scratch-policy setter
+call. Fresh supported libraries retain disk/arena backing and acquire no
+missing-export requirement. Arena size, actual allocation, I/O, physical
+quotas and representable offsets still constrain execution.
+
+The flags are `--scratch-k-q`, `--scratch-b-q`, `--scratch-k-e`, `--scratch-b-e`,
+`--scratch-k-c`, `--scratch-b-c`, `--scratch-u`, `--scratch-b-u`, `--scratch-v`,
+`--scratch-b-v` and `--scratch-r`. Each active maximum is an unsigned 64-bit
+integer: omitted means no logical bound, and explicit zero is finite zero.
+Requesting one field leaves the others unbounded. Retired q slots acknowledge
+zero without requesting a store; nonzero is typed `setting_unsupported`.
+The source rank representation records at most 27 IDs; V above 27 is typed
+unsupported. This representation pin remains unchanged.
+
+#strategy_set_scratch_tables_v2 copies `pf_scratch_tables_v2`, with version 2,
+an explicit active-field mask and zero inactive/reserved values. It retains
+disk/arena backing and never derives a finite slab or sentinel infinity from
+omission. The existing source binders attach the immutable native attempt
+snapshot to the real counters. Root begin binding is
+`WorkingRequestCore::bind_scratch_bounds` at `src/native_order.cpp:8654`.
+`SuccessorRootIndex::prepare_append` at `src/native_order.cpp:8409` checks
+`disk_rows + tail_size + prospective_root` before any flush or command mutation.
+Rootless submissions, codec prewarming and kept-handle replacements consume
+no R capacity; abandoned tickets publish no root. Native
+`ScratchRootCapacityError` at `include/pineforge/detail/scratch_tables.hpp:86`
+exposes typed resource/limit/need; the current C error arguments carry
+`resource`, with exact limit and need in the diagnostic text. Structured C/JSON
+limit/need arguments still need the failure-registry owner's additive schema.
+
+These are authored source paths, not runtime acceptance. The native tests and
+real-module CLI cases remain unrun in this source lane.
+
+## Explicit v1 P0 admission policy
 
 `default_scratch_manifest(std::uint64_t bars)` is the header-only helper in
 `include/pineforge/detail/scratch_defaults.hpp`. These are **policy limits,
 not measured bounds**, and do not prove that an arbitrary strategy fits.
-The Python host mirrors this tier explicitly, so its fresh-handle wiring does
-not depend on the engine's all-zero expansion.
+The legacy Python helper still mirrors this explicit tier for embedding callers.
+The JSON CLI no longer calls it as a hidden default.
 
 | Maximum | P0 value |
 | --- | ---: |
@@ -118,9 +152,18 @@ retiring readers can keep a preceding slab alive too.
 ## Native request journal residency
 
 The native core's unbound request journal has a resident cap of 2,048 events,
-in 32-event chunks, and keeps its 128-event floor. It spills older events even
-within one bar when that bar exceeds the cap before retirement. Page size
-is still 32,768 bytes and the decoded cache still has four slots.
+in 32-event chunks, and uses 128 events as a spill stopping threshold. It spills
+older events even within one bar when that bar exceeds the cap before retirement.
+Ordinary events pack to a 32,768-byte target. A larger event is stored alone in
+an extent of its complete encoded length, with no default event-byte ceiling.
+Lengths, allocation sizes and file offsets must be representable; real memory,
+configured scratch-provider capacity and I/O failures retain their typed causes.
+The fixed ordinary writer and four ordinary input buffers total 163,840 bytes.
+Each oversized spill or reload additionally owns a temporary buffer of the
+actual encoded length. Source and decoded payload ownership is separate from
+that buffer; caller-owned copies can extend shared definition lifetimes.
+The four decoded cache slots limit extent count rather than payload bytes;
+this is not a total heap bound.
 The bound `CommandScratchStore` codec instead uses its configured workspace.
 Its owning diagnostic decoder throws typed `out_of_memory` on allocation
 failure; the nonowning validation scan retains its `noexcept` status contract.
@@ -151,11 +194,12 @@ reports and FD small reports; failures, capabilities and validation-only
 documents carry neither field. They follow the existing optional arena
 size counters without changing those counters.
 
-In this profile every fresh handle gets backend 1 and a fresh P0 descriptor
-after settings/feed selection and before execution: every warmup, repeat,
-ordinary body run, and selected-window execution. Selected mode uses the
-retained fed-input count, including pre-roll, rather than the supplied file
-length. A trial/run receives fresh occupancy, never the prior trial's usage.
+Every fresh handle receives the same requested v2 policy after settings/feed
+selection and before execution: every warmup, repeat, ordinary body run,
+metrics recovery and selected-window execution. Omission stays unrequested
+and never infers R from bar counts. A trial/run receives fresh occupancy,
+never the prior trial's usage. The HPO example remains an explicit legacy P0
+caller, separate from the JSON CLI default.
 
 The report sink stays **OFF** unless `--report-sink-fd N` explicitly supplies
 a stream. Without it, the host uses ordinary report arrays and the in-memory
@@ -176,7 +220,8 @@ validates the inherited arena (`PF_SCRATCH_ARENA_FD=5`, positive
 typed `report_sink_failed` / `arena_backing`. No attached arena means no
 execution and no TMPDIR fallback. `--spill-dir` is refused in this profile;
 `--report-sink-fd 5` is refused in every profile because 5 is the engine's
-fixed arena slot. The wrapper must charge the arena as well as the table slab.
+fixed arena slot. The wrapper charges its real arena; callers explicitly
+selecting a v1 slab must charge that slab as well.
 
 On Linux, a jailed arena must be a sealed memfd whose seal mask contains
 `F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL`. `F_SEAL_EXEC` and other
@@ -214,12 +259,13 @@ profile. With no `PF_SCRATCH_ARENA_FD`, attachment remains a no-op (the
 admission then refuses for lack of an arena); direct `attach(fd, bytes)` also
 permits ordinary files, with the same write-seal refusal on Linux.
 
-The setter is an optional ctypes binding for old libraries in the unjailed
-profile. In the jailed profile, an absent setter refuses before execution as
-`strategy_library_incompatible` with `{"reason":"setter_missing"}`. The
-export name is in the message; the optional `missing` argument is omitted
-because its closed catalog vocabulary does not include this name. A setter
-refusal is an `engine_invariant`. Neither condition permits disk fallback.
+With no active scratch flags, neither profile requires a scratch-policy
+export. An explicit active request requires the v2 setter; its absence is
+`strategy_library_incompatible` with `{"reason":"setter_missing"}` before
+execution. The export name is in the message; the optional `missing`
+argument is omitted because its closed vocabulary does not include this name.
+Setter refusals preserve their native typed error; a refusal without a native
+code is an `engine_invariant`. Explicit limits are never silently dropped.
 The arena admission export is also required; an older library missing it is
 `strategy_library_incompatible` with `{"reason":"symbol_missing"}`.
 An invalid environment profile is `run_request_invalid` with the existing
@@ -243,9 +289,9 @@ Capacity resources are `layout`, `sequence_data`, `sequence_index`,
 `erased_data`, `erased_index`, `consumed_data`, `consumed_index`, `cohort`,
 `exit_rank`, `successor_roots`, `cohort_ids_total`, and `cohort_orders_live`.
 q names remain in the wire vocabulary. `cohort_ids_total` identifies the
-historical distinct-ID count or aggregate ID-byte budget (`U/B_U`, default
-65,536 IDs / 4,194,304 bytes); `cohort_orders_live` identifies the separate
-4,096 live-order-ID cap. `cohort` remains for the 64-byte single-ID refusal,
+historical distinct-ID count or aggregate ID-byte budget (`U/B_U`; explicit
+v1 P0 is 65,536 IDs / 4,194,304 bytes). `cohort_orders_live` identifies v1's
+separate 4,096 live-order-ID cap. `cohort` remains for v1's 64-byte single-ID refusal,
 generic cohort-region capacity and the generic store's live-object cap.
 Only failure labels change; message text, limit values and refusal order
 are unchanged. The slab region and `report_sink_failed`'s `store=cohort`
@@ -319,6 +365,6 @@ This work covers historical scratch tables with the sink OFF. The sink-ON
 report chain, position-tail spill (L18), and the durable runner are outside
 this coverage; it does not certify their jailed execution or storage bounds.
 
-Release wording for implemented bounded-memory tables; remote disk/RAM identity and jailed proof remain pending:
+Release wording for explicitly selected v1 bounded-memory tables; remote disk/RAM identity and jailed proof remain pending:
 
 > Scratch tables use a single allocation before the run, with enforced count and byte capacities and typed failure on exhaustion. Historical distinct IDs, ID pairs, consumed-exit combinations and replacement successors consume that budget; the default replacement reserve depends on input-bar count. This is not a guarantee that only OHLCV memory scales.

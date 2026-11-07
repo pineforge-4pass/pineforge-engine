@@ -347,7 +347,7 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2834`; joined key at `src/source/pine_adapter.cpp:25493` |
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:642` |
 | Ordered consumed-cycle fold | 136*leaves + 2088*branches + 2096*savedPath | `include/pineforge/detail/id_pair_ordered_fold.hpp:161`, `:165`, `:172`, size assertion for `Leaf`, `Branch` and `Snapshot` at `:183` |
-| Successor-root rows | 16*R | `src/native_order.cpp:8220`, row assertion for `Row` at `:8281`, 64-row tail bound `kTailRows` at `:8286` |
+| Successor-root rows | 16*R | `Row` at `src/native_order.cpp:8360`, its size assertion at `:8364`, 64-row tail bound `kTailRows` at `:8365` |
 | Frozen external openings | **0 in this certified profile** | Stock source builds owned `BindOpenings` vectors at `src/source/pine_adapter.cpp:7085`, `:7078`, `:9794-9810`; generic external owners are excluded below |
 
 The AVL node is seven uint64 words = 56 bytes, then its value and exact key
@@ -376,7 +376,7 @@ exit_time (8), qty (8), entry_incarnation (8), side (1), margin flag (1)
 and ID length (4), after the ID bytes. This is not sizeof(Row).
 
 Successor rows are two uint64 values. The WorkingRequestCore method `index_committed`
-defined at `src/native_order.cpp:3129` omits kept-handle replacements and appends a
+defined at `src/native_order.cpp:3208` omits kept-handle replacements and appends a
 root only when a newly issued definition has one. The 64-row RAM tail makes
 charging every issued row conservative. Partial closes create one trade
 row per affected lot: `src/engine_execution.cpp:1241`. Bracket definitions
@@ -679,16 +679,29 @@ flag is false. This flag is informational: it does not affect the top-level
 verdict, its reason or `unboundedTerms`. Private growth is capped by the
 child's `RLIMIT_AS` and a breach is the strategy's typed `memory_limit`.
 
-The native request `JournalStore` caps 2,048 committed events in 32-event chunks,
-with a keep-resident floor of 128, a 32,768-byte spill page and four decoded cache slots.
-A bar exceeding the cap spills before retirement. The short waiting-child
-parent-terminal fixture's 4,096-row book cap and this journal cap give the plateau
+The native request `JournalStore` has a resident cap of 2,048 committed events
+in 32-event chunks, with a spill stopping threshold of 128.
+A bar exceeding the cap spills before retirement. Ordinary events pack to a
+32,768-byte target; a larger event is stored alone in an extent of its complete
+encoded length. There is no default event-byte ceiling. Real encoded-length,
+allocation and file-offset representability, available memory, configured
+provider capacity and I/O failures still apply with their typed causes.
+The fixed ordinary writer and four ordinary reload buffers total 163,840 bytes.
+An oversized spill or reload additionally owns one temporary buffer of the
+actual encoded length. Source and decoded payload ownership is separate from
+that buffer; caller-owned copies can extend shared definition lifetimes.
+Four decoded cache slots bound extent count, not payload bytes or process memory.
+
+For the short waiting-child parent-terminal fixture, its 4,096-row book cap
+and this journal cap give the definition plateau
 `456*(2048 + (4096/2+2) + (32+1)) + 6720 + 524 = 1890980` bytes on GNU 13.4 x86-64,
 independent of symbols, window and trades.
 The [scratch-store derivation](../scratch-store.md#resident-bound-of-the-parent-terminal-drain-native-order) separates
 the growth-time 6,936-byte fixed term from writer overlap and lists excluded event slots, buffers and arbitrary payloads.
-`scripts/arena_bound.py` has no `kMaxResident` input or native journal-page term;
-the resident-cap change changes no per-user storage term, command share, closed form or hand vector.
+This short-id definition budget is not a bound for arbitrary request payloads.
+`scripts/arena_bound.py` has no `kMaxResident` input or native journal-extent
+payload term; its existing per-user storage formula and command share do not
+account for these variable temporary buffers or owning event payloads.
 The unbound journal's `ExtFile` uses `ScratchFile`, which can claim arena regions; earlier spill
 does not certify its lifetime extent. The bound codec's existing command share supplies no private RSS/AS certification.
 

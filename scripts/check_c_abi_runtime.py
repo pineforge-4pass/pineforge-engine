@@ -136,6 +136,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_set_report_sink_fd_v1",
     "strategy_report_sink_receipt_v1",
     "strategy_set_scratch_tables_v1",
+    "strategy_set_scratch_tables_v2",
     "strategy_set_cache_policy_v1",
     "strategy_set_scratch_io_policy_v1",
     "strategy_report_sink_summary_v1",
@@ -154,10 +155,10 @@ RUNTIME_HEADERS = (
     "report_sink.h",
 )
 
-# Source inventory: pineforge.h 113 + observer 3 + window 3 + sink 5.
-EXPECTED_PUBLIC_DECLARATIONS = 124
-# c_abi.cpp implements 104 of those declarations; twenty remain generated.
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 104
+# Source inventory: pineforge.h 114 + observer 3 + window 3 + sink 5.
+EXPECTED_PUBLIC_DECLARATIONS = 125
+# c_abi.cpp implements 105 of those declarations; twenty remain generated.
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 105
 
 # Per-module implementations, never static-runtime implementations. The
 # capability has its own declaration in native_module.hpp; the other eight

@@ -15,8 +15,9 @@ namespace detail {
 // backend retains a copy of this owner until its old readers/reset retire;
 // shared_ptr copies allocate nothing and keep a preceding run's slices alive
 // across a refused/repeated begin. Engine copies discard their run owner.
-// The foundation definitions refuse nonempty owners until the corresponding
-// backend lane replaces the stub; there is no silent disk fallback.
+// Each binder also reads the host's native attempt snapshot of optional v2
+// bounds. Those retain disk/arena backing and independently check real key
+// counters; they never create an all-zero or sentinel-capacity slab.
 void bind_tree_scratch_tables(source::PineExecutionAdapter& adapter,
                               const std::shared_ptr<ScratchSlab>& slab);
 void bind_id_pair_scratch_tables(source::PineExecutionAdapter& adapter,

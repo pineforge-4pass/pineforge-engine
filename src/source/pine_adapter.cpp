@@ -29134,6 +29134,11 @@ void PlacementTable::bind_auxiliary_scratch_tables(const std::shared_ptr<::pinef
     sequence_index_.reset();
 }
 
+void PlacementTable::bind_auxiliary_scratch_bounds(
+        const std::shared_ptr<const ::pineforge::detail::ScratchBounds>& bounds) {
+    erased_minima_.bind_scratch_bounds(bounds);
+}
+
 void PlacementTable::fixture_use_memory_auxiliary_tables() {
     if (high_water_ != 0)
         throw coded<std::logic_error>(
@@ -29178,6 +29183,16 @@ void bind_tree_scratch_tables(source::PineExecutionAdapter& adapter,
             "tree scratch backend changed after use");
     adapter.cohorts_by_id_.bind_scratch(slab, ScratchResource::cohort);
     adapter.exit_rank_keys_.bind_scratch(slab, ScratchResource::exit_rank);
+    // The existing source-host begin invokes these binders after reset. Read
+    // the native attempt snapshot through its bound host, not a TLS setting
+    // or a mutable caller descriptor, and retain ownership with each store.
+    const auto bounds = adapter.host_
+        ? NativeExecutionConsumer::bound(*adapter.host_).scratch_bounds_for_run()
+        : std::shared_ptr<const ScratchBounds>{};
+    if (bounds && (bounds->active(ScratchBound::U) || bounds->active(ScratchBound::B_U)))
+        adapter.cohorts_by_id_.bind_scratch_bounds(bounds, ScratchResource::cohort);
+    if (bounds && (bounds->active(ScratchBound::V) || bounds->active(ScratchBound::B_V)))
+        adapter.exit_rank_keys_.bind_scratch_bounds(bounds, ScratchResource::exit_rank);
 }
 
 void bind_id_pair_scratch_tables(source::PineExecutionAdapter& adapter,
@@ -29185,6 +29200,13 @@ void bind_id_pair_scratch_tables(source::PineExecutionAdapter& adapter,
     adapter.placement_.bind_auxiliary_scratch_tables(slab);
     adapter.consumed_partial_exit_cycles_.bind_scratch_tables(
         slab, ScratchResource::consumed_data, ScratchResource::consumed_index);
+    const auto bounds = adapter.host_
+        ? NativeExecutionConsumer::bound(*adapter.host_).scratch_bounds_for_run()
+        : std::shared_ptr<const ScratchBounds>{};
+    if (bounds && (bounds->active(ScratchBound::K_e) || bounds->active(ScratchBound::B_e)))
+        adapter.placement_.bind_auxiliary_scratch_bounds(bounds);
+    if (bounds && (bounds->active(ScratchBound::K_c) || bounds->active(ScratchBound::B_c)))
+        adapter.consumed_partial_exit_cycles_.bind_scratch_bounds(bounds);
 }
 
 } // namespace pineforge::detail

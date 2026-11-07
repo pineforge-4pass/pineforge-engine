@@ -96,12 +96,26 @@ continues to report `programming_error`.
 ### Resident bound of the parent-terminal drain (native order)
 
 The native request core's `JournalStore` has a resident cap of 2,048
-committed events in 32-event chunks, with a keep-resident floor of 128.
+committed events in 32-event chunks, with a spill stopping threshold of 128.
 A single bar can exceed the cap before its journal is retired; older events
-then spill to pages and remain readable at their original positions and
-ordinals. The spill page remains 32,768 bytes and the decoded cache has four
-slots. The separately bound `CommandScratchStore` codec uses its own fixed
-workspace instead of this resident tail.
+then spill to extents and remain readable at their original positions and
+ordinals. Ordinary events pack to a 32,768-byte target; a larger event is
+stored alone in an extent of its complete encoded length. There is no default
+event-byte ceiling. Lengths, allocation sizes and file offsets must be
+representable; available memory, configured scratch-provider capacity and
+I/O failures retain their existing typed failure paths.
+
+The journal keeps one fixed ordinary write buffer and four fixed ordinary
+reload buffers, 163,840 bytes in total, plus four decoded cache slots.
+Each oversized spill or reload additionally owns a temporary byte buffer
+of that event's actual encoded length. Spill retains the source event until
+the append succeeds; reload builds independent owning strings, vectors and
+definitions before releasing its input buffer. Cached events and caller-owned
+copies keep payloads alive, including shared definitions, until the last owner
+releases them.
+Four cache slots therefore do not bound payload bytes or total heap usage.
+The separately bound `CommandScratchStore` codec uses its own fixed workspace
+instead of this resident tail.
 
 This is a bound of the native request core, not of `CommandScratchStore`: the
 parent-terminal drain holds at most about 1.9 MB of resident definitions at the

@@ -39,7 +39,8 @@
  *     strategy_execution_observation_v1, pf_selected_window_version, pf_report_sink_version,
  *     strategy_set_selected_window_v1, strategy_selected_window_counts_v1,
  *     strategy_set_report_sink_v1, strategy_set_report_sink_fd_v1, strategy_report_sink_receipt_v1,
- *     strategy_set_scratch_tables_v1, strategy_report_sink_summary_v1,
+ *     strategy_set_scratch_tables_v1, strategy_set_scratch_tables_v2,
+ *     strategy_report_sink_summary_v1,
  *     strategy_set_cache_policy_v1, strategy_set_scratch_io_policy_v1,
  *     pf_report_scratch_arena_stats, pf_report_cache_stats,
  *     strategy_require_report_scratch_arena_v1,
@@ -1570,6 +1571,13 @@ PF_API int strategy_set_scratch_tables_v1(pf_strategy_t s, const pf_scratch_tabl
     return pf_cabi_int(s, [&] {
         if (!s) return -1;
         return static_cast<pineforge::BacktestEngine*>(s)->set_scratch_tables_v1(config);
+    });
+}
+
+PF_API int strategy_set_scratch_tables_v2(pf_strategy_t s, const pf_scratch_tables_v2* config) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->set_scratch_tables_v2(config);
     });
 }
 

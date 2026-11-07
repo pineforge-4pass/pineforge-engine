@@ -29,6 +29,7 @@
 
 namespace pineforge::detail {
 class ScratchSlab;
+struct ScratchBounds;
 class NativeHistoryOwner;
 struct ReadThroughCacheStats;
 }
@@ -1852,6 +1853,10 @@ public:
     WorkingRequestCore& operator=(WorkingRequestCore&& other) noexcept;
     void set_successor_roots_directory(const std::string& directory); // After reset, before the first spill; empty uses TMPDIR or /tmp.
     void bind_scratch_slab(const std::shared_ptr<::pineforge::detail::ScratchSlab>& slab);
+    /// Begin-only optional R admission over the existing disk/arena backing.
+    /// The private root helper retains the immutable owner. Inactive R
+    /// requests no root bound; this does not create a slab or attach an arena.
+    void bind_scratch_bounds(const std::shared_ptr<const ::pineforge::detail::ScratchBounds>& bounds);
     void reset(RunIdentity identity);
 
     const RunIdentity& identity() const noexcept { return identity_; }
@@ -1879,9 +1884,12 @@ public:
     /// policy -- keeps the whole journal and history_base() stays 0.
     /// The window is a read view (JournalView): its newest events are resident
     /// and its older ones, past a fixed resident bound, live in external
-    /// pages that the view reads back through a fixed page cache. A reference
-    /// it hands out stays valid until the next few page loads or the next
-    /// command; copy an event that must outlive them.
+    /// extents that the view reads back through a fixed number of cache slots.
+    /// Ordinary events pack into pages; an oversized event has its own extent
+    /// sized by its complete encoding. There is no default event-byte limit;
+    /// configured scratch-provider bounds and I/O failures still apply.
+    /// A reference it hands out stays valid until the next few extent loads
+    /// or the next command; copy an event that must outlive them.
     JournalView history() const noexcept;
     /// How many events have been retired from the front of the journal.
     std::size_t history_base() const noexcept { return history_base_; }
@@ -2661,7 +2669,7 @@ private:
     // Issued ranges are dense for a consumer. Successor roots spill in order;
     // the consumer's event fold hashes their logical rows, once each.
     struct SuccessorRootIndex;
-    void reserve_successor_root();
+    void reserve_successor_root(bool adds_root = false);
     void append_successor_root(uint64_t incarnation, uint64_t root) noexcept;
     std::optional<uint64_t> successor_root(uint64_t incarnation) const;
     std::vector<std::pair<uint64_t, uint64_t>> issued_;

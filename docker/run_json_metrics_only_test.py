@@ -42,6 +42,7 @@ class MetricsLibrary(ordinary.SinkLibrary):
         self.last_equities = {}
         self.created, self.live, self.events = [], set(), []
         self.preferences, self.config, self.extents, self.errors = [], {}, {}, {}
+        self.scratch_policies = []
         self.executions, self.receipts, self.settings = [], [], []
         self.report_states, self.report_freed = {}, set()
         self.strategy_create = self.export("strategy_create", self.create)
@@ -67,8 +68,8 @@ class MetricsLibrary(ordinary.SinkLibrary):
                      "strategy_set_chart_timezone", "strategy_set_magnifier_volume_weighted"):
             setattr(self, name, self.export(
                 name, lambda st, *values, name=name: self.settings.append((st, name, values))))
-        self.strategy_set_scratch_tables_v1 = self.export(
-            "strategy_set_scratch_tables_v1", lambda *args: 0)
+        self.strategy_set_scratch_tables_v2 = self.export(
+            "strategy_set_scratch_tables_v2", self.scratch_policy)
         self.strategy_require_report_scratch_arena_v1 = self.export(
             "strategy_require_report_scratch_arena_v1", lambda *args: 0)
 
@@ -83,6 +84,13 @@ class MetricsLibrary(ordinary.SinkLibrary):
     def preference(self, state, mode, mask):
         self.preferences.append((state, mode, mask))
         self.config[state] = mode, mask
+        return 0
+
+    def scratch_policy(self, state, pointer):
+        # Transport observation only; native admission is exercised by the
+        # real scratch-manifest source module, not this metrics stand-in.
+        words = struct.unpack("=IIQ11QQ", ctypes.string_at(pointer, 112))
+        self.scratch_policies.append((state, words))
         return 0
 
     def run(self, state, feed, count, *args):
@@ -384,6 +392,26 @@ def test_recovery_replays_whole_run_once_and_cleans_first(tmp_path, monkeypatch)
     assert library.executions[0][1] == library.executions[1][1]
     assert library.executions[0][2] != library.executions[1][2]
     assert library.live == set() and library.installed == []
+
+
+@pytest.mark.parametrize("requested", [False, True])
+def test_recovery_copies_optional_scratch_policy_to_both_fresh_handles(
+        tmp_path, monkeypatch, requested):
+    monkeypatch.setattr(run_json, "_metrics_only_supported", lambda lib: True)
+    extra = ["--metrics-only"]
+    if requested:
+        extra += ["--scratch-u", "19", "--scratch-b-c", "0", "--scratch-r", "67"]
+    _, _, library = success(ordinary.invoke(
+        tmp_path, monkeypatch, library=MetricsLibrary(routes=(3, 2)), extra=extra))
+    assert len(library.created) == len(library.executions) == 2
+    if requested:
+        assert [state for state, _ in library.scratch_policies] == library.created
+        expected = (112, 2, (1 << 6) | (1 << 5) | (1 << 10),
+                    0, 0, 0, 0, 0, 0, 19, 0, 0, 0, 67, 0)
+        assert [words for _, words in library.scratch_policies] == [expected, expected]
+    else:
+        assert library.scratch_policies == []
+    assert library.live == set()
 
 
 @pytest.mark.parametrize("fault", ["status", "exception", "version", "size"])

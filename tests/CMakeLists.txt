@@ -7815,6 +7815,24 @@ set_property(TEST ${PINEFORGE_CI_VERIFY_SLICES}
     test_ci_preflight_slices_cover
     APPEND PROPERTY LABELS ci-script)
 
+# Real CLI admission has its own supported-profile row. The original profile
+# row retains its transport/parser/legacy controls in every original profile.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(scratch_manifest_options_strategy MODULE test_scratch_manifest_options.cpp)
+    target_compile_definitions(scratch_manifest_options_strategy PRIVATE
+        PINEFORGE_SCRATCH_MANIFEST_MODULE=1)
+    target_link_libraries(scratch_manifest_options_strategy PRIVATE pineforge)
+    target_link_options(scratch_manifest_options_strategy PRIVATE
+        "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    target_compile_options(scratch_manifest_options_strategy PRIVATE -ffp-contract=off -UNDEBUG)
+    add_test(NAME test_run_json_jailed_native
+        COMMAND ${CMAKE_COMMAND} -E env
+            "PF_SCRATCH_MANIFEST_MODULE=$<TARGET_FILE:scratch_manifest_options_strategy>"
+            ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_jailed_native.py)
+endif()
+
 # CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
 file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
 list(SORT CR150_LANE_CMAKE)

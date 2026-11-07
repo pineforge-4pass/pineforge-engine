@@ -297,6 +297,10 @@ public:
     void bind_scratch(const std::shared_ptr<ScratchSlab>& slab, ScratchResource resource) {
         index_.bind_scratch(slab, resource);
     }
+    void bind_scratch_bounds(const std::shared_ptr<const ScratchBounds>& bounds,
+                             ScratchResource resource) {
+        index_.bind_scratch_bounds(bounds, resource);
+    }
     // A ticket anticipates making this id live, including a retired id that
     // is about to reopen. It is read-only even when a dirty empty row awaits
     // writeback: refusal must precede table AND kernel mutation.

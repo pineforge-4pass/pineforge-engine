@@ -211,6 +211,12 @@ public:
     // (NativeStrategyHost::native_state, out of line and by value). running()
     // is the branch view() takes.
     bool running() const noexcept { return running_spec_ != nullptr; }
+    const std::shared_ptr<const detail::ScratchBounds>& scratch_bounds_for_run() const noexcept {
+        return cache_policy_preparing_ ? scratch_bounds_attempt_ : scratch_bounds_run_;
+    }
+    void set_scratch_bounds_config(std::shared_ptr<const detail::ScratchBounds> policy) noexcept {
+        scratch_bounds_config_ = std::move(policy);
+    }
     const CacheDefaults& cache_policy_config() const noexcept { return cache_policy_config_; }
     const CacheDefaults& cache_policy_for_run() const noexcept {
         return cache_policy_preparing_ ? cache_policy_attempt_ : cache_policy_run_;
@@ -1850,6 +1856,9 @@ private:
     ScratchIoPolicy scratch_io_policy_config_{};
     ScratchIoPolicy scratch_io_policy_attempt_{};
     ScratchIoPolicy scratch_io_policy_run_{};
+    std::shared_ptr<const detail::ScratchBounds> scratch_bounds_config_;
+    std::shared_ptr<const detail::ScratchBounds> scratch_bounds_attempt_;
+    std::shared_ptr<const detail::ScratchBounds> scratch_bounds_run_;
     bool cache_policy_preparing_ = false;
     void leave_running() noexcept { running_spec_ = nullptr; }
     // The caches beside the lookups they replace, compared bit for bit by

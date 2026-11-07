@@ -671,6 +671,7 @@ public:
 
     void set_auxiliary_tables_directory(const std::string& directory);
     void bind_auxiliary_scratch_tables(const std::shared_ptr<::pineforge::detail::ScratchSlab>&);
+    void bind_auxiliary_scratch_bounds(const std::shared_ptr<const ::pineforge::detail::ScratchBounds>&);
     void fixture_use_memory_auxiliary_tables();
     std::uint64_t auxiliary_disk_bytes() const noexcept;
     std::size_t size() const noexcept { return size_; }

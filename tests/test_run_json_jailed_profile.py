@@ -1,10 +1,7 @@
-"""RAM host policy at the ctypes boundary; no native-backend proof is claimed.
+"""Profile/optional-limit transport, parser and explicit legacy controls.
 
-Modeled on tests/test_run_json_sink.py (assignable fake exports and real report
-assembly), with the selected-route observer/planner harness from
-tests/test_run_json_nonfinite_report.py. The new CLI is red on d91c96d47d:
---profile is unrecognized; the binding row first lacks ScratchTablesC.
-No build or test was run on the executor Mac.
+ScratchRecorder observes ctypes transport only. Real engine admission lives
+in test_run_json_jailed_native.py with its required native module.
 """
 from __future__ import annotations
 
@@ -32,6 +29,7 @@ REAL_CDLL = ctypes.CDLL
 
 PROFILE_ENV = "PINEFORGE_RUN_JSON_PROFILE"
 SETTER = "strategy_set_scratch_tables_v1"
+OPTION_SETTER = "strategy_set_scratch_tables_v2"
 FIELDS = ("K_q", "B_q", "K_e", "B_e", "K_c", "B_c", "U", "B_U", "V", "B_V", "R")
 # P0 policy, independently transcribed from the brief, after q removal.
 P0_FIXED = (0, 0, 262144, 25165824, 32768, 4227072, 65536, 4194304, 27, 6912)
@@ -42,6 +40,12 @@ class Descriptor(ctypes.Structure):
     _fields_ = [(name, ctypes.c_uint32) for name in
                 ("struct_size", "version", "backend", "reserved")] + [
         (name, ctypes.c_uint64) for name in FIELDS]
+
+
+class OptionalDescriptor(ctypes.Structure):
+    _fields_ = [("struct_size", ctypes.c_uint32), ("version", ctypes.c_uint32),
+                ("active_fields", ctypes.c_uint64)] + [
+        (name, ctypes.c_uint64) for name in FIELDS] + [("reserved", ctypes.c_uint64)]
 
 
 class ScratchRecorder:
@@ -66,6 +70,16 @@ class ScratchRecorder:
                     self.configured[state] = snapshot
                 return self.setter_status
             setattr(self, SETTER, install)
+            def install_optional(state, pointer):
+                copy = OptionalDescriptor.from_buffer_copy(ctypes.string_at(pointer, 112))
+                snapshot = tuple(getattr(copy, name) for name in FIELDS)
+                self.history.append(("scratch", state,
+                                     (copy.struct_size, copy.version, copy.active_fields, copy.reserved),
+                                     snapshot))
+                if self.setter_status == 0:
+                    self.configured[state] = snapshot
+                return self.setter_status
+            setattr(self, OPTION_SETTER, install_optional)
 
     def create(self, params):
         state = (1 << 40) + len(self.created) + 1
@@ -95,6 +109,7 @@ class ProfileLibrary(ScratchRecorder, sinks.SinkLibrary):
         self.strategy_set_override = self.export("strategy_set_override", self.override)
         if symbol:
             setattr(self, SETTER, self.export(SETTER, getattr(self, SETTER)))
+            setattr(self, OPTION_SETTER, self.export(OPTION_SETTER, getattr(self, OPTION_SETTER)))
         for name, body in {
             "strategy_get_last_error": lambda state: b"scratch test failure" if self.failure else b"",
             "strategy_get_last_error_code": lambda state: self.failure[0].encode() if self.failure else b"",
@@ -148,6 +163,7 @@ class ProfileFdLibrary(ScratchRecorder, fd_sinks.FdLibrary):
         self.strategy_free = self.export("strategy_free", self.free)
         if symbol:
             setattr(self, SETTER, self.export(SETTER, getattr(self, SETTER)))
+            setattr(self, OPTION_SETTER, self.export(OPTION_SETTER, getattr(self, OPTION_SETTER)))
 
     def install_fd(self, state, pointer):
         self.history.append(("sink", state, pointer._obj.fd))
@@ -211,10 +227,11 @@ def clear_profile(monkeypatch):
                          ids=["implicit-default", "explicit-unjailed", "jailed"])
 @pytest.mark.parametrize("transport", ["array", "fd"])
 @pytest.mark.parametrize("route", ["ordinary", "selected", "selected-empty"])
-def test_executed_report_names_profile_and_admission(tmp_path, route, transport, profile):
+@pytest.mark.parametrize("symbol", [False, True])
+def test_executed_report_names_profile_and_admission(tmp_path, route, transport, profile, symbol):
     mode = "ordinary" if route == "ordinary" else "selected"
-    library = (ProfileFdLibrary() if mode == "ordinary" else
-               SelectedProfileFdLibrary(empty=route == "selected-empty"))
+    library = (ProfileFdLibrary(symbol=symbol) if mode == "ordinary" else
+               SelectedProfileFdLibrary(symbol=symbol, empty=route == "selected-empty"))
     extra = [] if profile is None else ["--profile", profile]
     status, text, stderr = invoke_policy_report(tmp_path, mode, transport, library, extra)
     assert (status, stderr) == (0, ""), text
@@ -227,8 +244,7 @@ def test_executed_report_names_profile_and_admission(tmp_path, route, transport,
         assert document["report_window"]["window"]["coverage"] == (
             "empty" if route == "selected-empty" else "nonempty")
     if profile == "jailed":
-        roots = 10 if mode == "ordinary" else 6 if route == "selected-empty" else 18
-        assert_admission(library, 1, roots, require_arena=True)
+        assert_admission(library, 1, require_arena=True)
     else:
         assert library.arena_admissions == []
         assert not any(row[0] == "scratch" for row in library.history)
@@ -328,10 +344,12 @@ def invoke(tmp_path, monkeypatch, library, *extra):
     return status, stdout.getvalue(), stderr.getvalue()
 
 
-def assert_admission(library, count, roots, *, require_arena=False):
+def assert_admission(library, count, roots=None, *, require_arena=False, requested=None):
     admissions = [row for row in library.history if row[0] == "scratch"]
     runs = [row for row in library.history if row[0] == "run"]
-    assert len(admissions) == len(runs) == len(library.created) == count
+    configured = roots is not None or requested is not None
+    assert len(admissions) == (count if configured else 0)
+    assert len(runs) == len(library.created) == count
     assert library.released == library.created
     assert len(set(library.created)) == count
     assert not library.configured
@@ -340,18 +358,31 @@ def assert_admission(library, count, roots, *, require_arena=False):
     for state in library.created:
         history = [row for row in library.history if row[1] == state]
         names = [row[0] for row in history]
-        assert names.count("scratch") == names.count("run") == 1
-        assert names.index("create") < names.index("scratch") < names.index("run") < names.index("free")
+        assert names.count("run") == 1
+        assert names.index("create") < names.index("run") < names.index("free")
         if require_arena:
             before_arena = next(before for owner, before in library.arena_admissions if owner == state)
-            assert [row[0] for row in before_arena if row[1] == state][-1] == "scratch"
+            if configured:
+                assert [row[0] for row in before_arena if row[1] == state][-1] == "scratch"
+            else:
+                assert not any(row[0] == "scratch" and row[1] == state for row in before_arena)
+        run = next(row for row in history if row[0] == "run")
+        if not configured:
+            assert "scratch" not in names and run[3] is None
+            continue
+        assert names.count("scratch") == 1
+        assert names.index("create") < names.index("scratch") < names.index("run")
         for setting in ("input", "override"):
             if setting in names:
                 assert names.index(setting) < names.index("scratch")
         admission = next(row for row in history if row[0] == "scratch")
-        run = next(row for row in history if row[0] == "run")
-        assert admission[2] == (104, 1, 1, 0)
-        assert admission[3] == run[3] == P0_FIXED + (roots,)
+        if roots is not None:  # Explicit legacy P0 caller, outside the JSON CLI.
+            assert admission[2] == (104, 1, 1, 0)
+            assert admission[3] == run[3] == P0_FIXED + (roots,)
+        else:
+            mask = sum(1 << bit for bit, field in enumerate(FIELDS) if field in requested)
+            assert admission[2] == (112, 2, mask, 0)
+            assert admission[3] == run[3] == tuple(requested.get(field, 0) for field in FIELDS)
 
 
 def test_jailed_configures_every_fresh_bench_and_body_handle_without_a_sink(tmp_path, monkeypatch):
@@ -359,23 +390,25 @@ def test_jailed_configures_every_fresh_bench_and_body_handle_without_a_sink(tmp_
     files = forbid_spools(monkeypatch)
     result = invoke(tmp_path, monkeypatch, library, "--profile", "jailed", "--bench",
                     "--warmup", "2", "--repeats", "3", "--inputs", '{"Fast EMA":"3"}',
-                    "--overrides", '{"pyramiding":"2"}')
+                    "--overrides", '{"pyramiding":"2"}', "--scratch-u", "37",
+                    "--scratch-b-e", "0", "--scratch-r", "13")
     assert (result[0], result[2]) == (0, ""), result
     sinks.assert_run_profile(reports.strict_line(result[1]), "jailed", admitted=True)
     assert json.loads(result[1])["summary"]["total_trades"] == 3
-    assert_admission(library, 6, 10, require_arena=True)  # five input bars, including each warmup/repeat.
+    assert_admission(library, 6, require_arena=True, requested={"U": 37, "B_e": 0, "R": 13})
     assert files == [] and library.installed == [] and library.queried == 0
     assert not list(tmp_path.glob("*.sink"))
 
 
-def test_selected_uses_retained_fed_count_before_its_native_run(tmp_path, monkeypatch):
+def test_selected_installs_only_requested_bounds_before_its_native_run(tmp_path, monkeypatch):
     monkeypatch.setattr(reports, "ReportLib", SelectedProfileLibrary)
     harness = reports.Harness(tmp_path)
     files = forbid_spools(monkeypatch)
-    result = harness.run("selected", extra=["--profile", "jailed"])
+    result = harness.run("selected", extra=["--profile", "jailed", "--scratch-u", "11",
+                                          "--scratch-r", "13"])
     assert (result.status, result.stderr) == (0, ""), result.stdout
     sinks.assert_run_profile(reports.strict_line(result.stdout), "jailed", admitted=True)
-    assert_admission(result.library, 1, 18, require_arena=True)  # ten supplied rows, nine retained/fed.
+    assert_admission(result.library, 1, require_arena=True, requested={"U": 11, "R": 13})
     assert result.library.run_args[1] == 9
     assert result.library.window_config is None and result.library.observer_descriptor is None
     assert files == []
@@ -405,12 +438,14 @@ def test_missing_setter_is_a_typed_incompatibility_without_execution_or_sink(tmp
     files = forbid_spools(monkeypatch)
     if mode == "ordinary":
         library = ProfileLibrary(symbol=False)
-        status, text, stderr = invoke(tmp_path, monkeypatch, library, "--profile", "jailed")
+        status, text, stderr = invoke(tmp_path, monkeypatch, library, "--profile", "jailed",
+                                     "--scratch-u", "9")
     else:
         def factory(*args, **kwargs):
             return SelectedProfileLibrary(*args, symbol=False, **kwargs)
         monkeypatch.setattr(reports, "ReportLib", factory)
-        result = reports.Harness(tmp_path).run("selected", extra=["--profile", "jailed"])
+        result = reports.Harness(tmp_path).run(
+            "selected", extra=["--profile", "jailed", "--scratch-u", "9"])
         library, status, text, stderr = result.library, result.status, result.stdout, result.stderr
     document = reports.strict_line(text)
     assert status == 1 and stderr == ""
@@ -418,17 +453,27 @@ def test_missing_setter_is_a_typed_incompatibility_without_execution_or_sink(tmp
     # 'missing' is optional; the released closed vocabulary does not yet name
     # this export. Do not send a new unregistered argument value to APP.
     assert document["args"] == {"reason": "setter_missing"}
-    assert SETTER in document["error"] and "summary" not in document
+    assert OPTION_SETTER in document["error"] and "summary" not in document
     assert [row[0] for row in library.history] == ["create", "free"]
     assert library.released == library.created and files == []
 
 
-def test_setter_refusal_frees_handle_and_never_runs_or_opens_a_sink(tmp_path, monkeypatch):
+@pytest.mark.parametrize("native_failure,expected", [
+    (None, ("engine_invariant", {})),
+    (("setting_unsupported", {}), ("setting_unsupported", {})),
+    (("scratch_capacity_exceeded", {"resource": "cohort_ids_total"}),
+     ("scratch_capacity_exceeded", {"resource": "cohort_ids_total"})),
+])
+def test_setter_refusal_frees_handle_and_never_runs_or_opens_a_sink(
+        tmp_path, monkeypatch, native_failure, expected):
     library = ProfileLibrary(setter_status=-1)
+    library.failure = native_failure
     files = forbid_spools(monkeypatch)
-    status, text, stderr = invoke(tmp_path, monkeypatch, library, "--profile", "jailed")
+    status, text, stderr = invoke(tmp_path, monkeypatch, library, "--profile", "jailed",
+                                 "--scratch-u", "9")
     assert status == 1 and stderr == ""
-    assert reports.strict_line(text)["code"] == "engine_invariant"
+    document = reports.strict_line(text)
+    assert (document["code"], document["args"]) == expected
     assert [row[0] for row in library.history] == ["create", "scratch", "free"]
     assert library.released == library.created and files == []
 
@@ -473,9 +518,9 @@ def test_jailed_fd_overrides_sinks_off_after_admission(tmp_path, mode):
         expected["diagnostics"].pop("phase_timing")
     fd_sinks.assert_document(json.dumps(actual, separators=(",", ":")) + "\n", expected)
     assert actual["summary"]["total_trades"] == len(fd_sinks.PNLS)
-    assert_admission(library, 1, 18 if mode == "selected" else 10, require_arena=True)
+    assert_admission(library, 1, require_arena=True)
     names = [row[0] for row in library.history]
-    assert names == ["create", "scratch", "sink", "run", "free"]
+    assert names == ["create", "sink", "run", "free"]
     assert library.installed == [stream.writer]
     assert library.queried == library.summary_queries == 1
     assert not list(tmp_path.glob("*.sink"))
@@ -522,7 +567,7 @@ def test_jailed_fd_requires_admission_before_installing_the_sink(
     library = factory(symbol=symbol, setter_status=setter_status)
     with fd_sinks.Stream() as stream:
         status, text, stderr = invoke_profile_sink(tmp_path, mode, library, [
-            "--profile", "jailed", "--report-sink-fd", str(stream.writer)])
+            "--profile", "jailed", "--report-sink-fd", str(stream.writer), "--scratch-u", "9"])
         fd_sinks.os.fstat(stream.writer)  # Admission failed before ownership transfer.
     document = reports.strict_line(text)
     assert status == 1 and stderr == ""
@@ -582,7 +627,7 @@ def test_scratch_failure_keeps_its_type_even_during_warmup(tmp_path, monkeypatch
     assert (document["code"], document["args"]) == (code, args)
     sinks.assert_no_run_profile(document)
     assert "summary" not in document
-    assert_admission(library, 1, 10, require_arena=True)
+    assert_admission(library, 1, require_arena=True)
 
 
 @pytest.mark.parametrize("symbol", [False, True])
@@ -623,7 +668,7 @@ def test_environment_profile_is_read_once_before_any_fresh_handle(tmp_path, monk
     sinks.assert_run_profile(reports.strict_line(text), profile, admitted=profile == "jailed")
     assert reads == [PROFILE_ENV]
     if profile == "jailed":
-        assert_admission(library, 4, 10, require_arena=True)
+        assert_admission(library, 4, require_arena=True)
     else:
         assert len(library.created) == 4 and library.released == library.created
         assert library.arena_admissions == []
@@ -679,6 +724,13 @@ def test_optional_binding_has_the_exact_descriptor_layout(tmp_path, monkeypatch)
     assert setter.restype is ctypes.c_int
     assert [getattr(run_json.ScratchTablesC, name).offset for name, _ in Descriptor._fields_] == [
         0, 4, 8, 12, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96]
+    assert ctypes.sizeof(run_json.ScratchTablesV2C) == ctypes.sizeof(OptionalDescriptor) == 112
+    optional = getattr(library, OPTION_SETTER)
+    assert optional.argtypes == [ctypes.c_void_p, ctypes.POINTER(run_json.ScratchTablesV2C)]
+    assert optional.restype is ctypes.c_int
+    assert [getattr(run_json.ScratchTablesV2C, name).offset
+            for name, _ in OptionalDescriptor._fields_] == [
+        0, 4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104]
     old = ProfileLibrary(symbol=False)
     monkeypatch.setattr(run_json.ctypes, "CDLL", lambda path: old)
     assert run_json.load_strategy(tmp_path / "old.so") is old
@@ -755,3 +807,65 @@ def test_hpo_missing_setter_refuses_and_releases_the_trial(tmp_path, monkeypatch
     assert failure.value.code_args == {"reason": "setter_missing"}
     assert not any(row[0] == "run" for row in library.history)
     assert library.released == library.created and len(library.created) == 1
+
+
+@pytest.mark.parametrize("field", FIELDS[2:])
+@pytest.mark.parametrize("limit", [0, 7])
+@pytest.mark.parametrize("profile", ["unjailed", "jailed"])
+def test_each_supported_option_transports_only_its_presence_bit(
+        tmp_path, monkeypatch, field, limit, profile):
+    library = ProfileLibrary()
+    option = "--scratch-" + field.lower().replace("_", "-")
+    status, text, stderr = invoke(
+        tmp_path, monkeypatch, library, "--profile", profile, option, str(limit))
+    assert (status, stderr) == (0, ""), text
+    assert_admission(library, 1, require_arena=profile == "jailed", requested={field: limit})
+
+
+@pytest.mark.parametrize("field", FIELDS)
+@pytest.mark.parametrize("value", ["", "-1", "+1", "1.5", "1e3", "18446744073709551616"])
+def test_scratch_parser_refuses_invalid_or_overflowing_values_before_io(
+        monkeypatch, field, value):
+    library = ProfileLibrary()
+    option = "--scratch-" + field.lower().replace("_", "-")
+    status, document, _, _ = bars.invoke(
+        monkeypatch, "--ohlcv", "unread.csv", option + "=" + value, library=library)
+    assert status == 2 and document["code"] == "run_request_invalid"
+    assert document["args"] == {"option": "arguments"}
+    assert library.created == [] and library.calls == []
+
+
+@pytest.mark.parametrize("field", ["K_q", "B_q"])
+def test_retired_nonzero_slots_are_typed_unsupported_before_loading(monkeypatch, field):
+    library = ProfileLibrary()
+    option = "--scratch-" + field.lower().replace("_", "-")
+    status, document, _, _ = bars.invoke(
+        monkeypatch, "--ohlcv", "unread.csv", option, "1", library=library)
+    assert status == 1 and (document["code"], document["args"]) == ("setting_unsupported", {})
+    assert option in document["error"] and "retired" in document["error"]
+    assert library.created == [] and library.calls == []
+
+
+@pytest.mark.parametrize("profile", ["unjailed", "jailed"])
+def test_retired_zero_acknowledgement_needs_no_new_setter(tmp_path, monkeypatch, profile):
+    library = ProfileLibrary(symbol=False)
+    status, text, stderr = invoke(
+        tmp_path, monkeypatch, library, "--profile", profile,
+        "--scratch-k-q", "0", "--scratch-b-q", "0")
+    assert (status, stderr) == (0, ""), text
+    assert_admission(library, 1, require_arena=profile == "jailed")
+
+
+def test_scratch_help_explains_omission_zero_retired_and_physical_limits(capsys):
+    with pytest.raises(SystemExit) as ended:
+        run_json.main(["--help"])
+    assert ended.value.code == 0
+    text = " ".join(capsys.readouterr().out.split())
+    for field in FIELDS:
+        assert "--scratch-" + field.lower().replace("_", "-") in text
+    for claim in ("Unset = no logical limit", "explicit 0 = finite zero",
+                  "Other omitted fields stay unbounded", "physical disk/arena quotas",
+                  "Retired ABI slot", "before their first flush"):
+        assert claim in text
+
+

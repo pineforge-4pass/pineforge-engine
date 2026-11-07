@@ -2976,7 +2976,7 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
             ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
         lib.strategy_set_report_replay_v1.restype = ctypes.c_int
 
-    _bind_scratch_tables(lib)  # optional unless the host selects the jailed profile
+    _bind_scratch_tables(lib)  # optional unless logical scratch bounds were requested
     _bind_cache_policy(lib)
 
     if hasattr(lib, "strategy_get_last_error"):
@@ -3127,19 +3127,35 @@ class ScratchTablesC(ctypes.Structure):
         (name, ctypes.c_uint64) for name in
         ("K_q", "B_q", "K_e", "B_e", "K_c", "B_c", "U", "B_U", "V", "B_V", "R")]
 
+SCRATCH_FIELDS = ("K_q", "B_q", "K_e", "B_e", "K_c", "B_c",
+                  "U", "B_U", "V", "B_V", "R")
+
+
+class ScratchTablesV2C(ctypes.Structure):
+    """pf_scratch_tables_v2: independent presence bits, disk/arena backing."""
+    _fields_ = [("struct_size", ctypes.c_uint32), ("version", ctypes.c_uint32),
+                ("active_fields", ctypes.c_uint64)] + [
+        (name, ctypes.c_uint64) for name in SCRATCH_FIELDS] + [
+        ("reserved", ctypes.c_uint64)]
+
 
 def _bind_scratch_tables(lib) -> None:
     if hasattr(lib, "strategy_set_scratch_tables_v1"):
         lib.strategy_set_scratch_tables_v1.argtypes = [
             ctypes.c_void_p, ctypes.POINTER(ScratchTablesC)]
         lib.strategy_set_scratch_tables_v1.restype = ctypes.c_int
+    if hasattr(lib, "strategy_set_scratch_tables_v2"):
+        lib.strategy_set_scratch_tables_v2.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ScratchTablesV2C)]
+        lib.strategy_set_scratch_tables_v2.restype = ctypes.c_int
 
 
 def default_scratch_manifest(bars: int | None) -> ScratchTablesC:
-    """Host mirror of detail/scratch_defaults.hpp's P0 POLICY, not a measured bound.
+    """Legacy explicit v1 P0 helper, retained for existing embedding callers.
 
     None means a stream without a declared lifetime bar count. Each call makes
     a fresh descriptor; the setter copies it and each run owns fresh occupancy.
+    The JSON CLI no longer calls this helper or infers bounds from bar counts.
     """
     if bars is None:
         roots = 65536
@@ -3162,7 +3178,49 @@ def apply_scratch_tables(lib, state, manifest: ScratchTablesC) -> None:
             "bounded-memory execution requires strategy_set_scratch_tables_v1",
             {"reason": "setter_missing"})
     if setter(state, ctypes.byref(manifest)) != 0:
-        raise _engine_invariant("the fresh strategy refused its scratch-table manifest")
+        code, args = engine_failure_code(lib, state) or ("engine_invariant", {})
+        raise RunFailure("the fresh strategy refused its scratch-table manifest",
+                         code or "engine_invariant", args)
+
+
+def scratch_manifest_options(args) -> ScratchTablesV2C | None:
+    """Omission stays unrequested; explicit zero is a finite logical zero."""
+    requested = {}
+    active = 0
+    for bit, field in enumerate(SCRATCH_FIELDS):
+        value = getattr(args, "scratch_" + field.lower(), None)
+        if value is not None:
+            if type(value) is not int or not 0 <= value <= (1 << 64) - 1:
+                raise _request_invalid("scratch maxima must be uint64 integers", "arguments")
+            if field in ("K_q", "B_q"):
+                if value != 0:
+                    raise RunFailure(f"--scratch-{field.lower().replace('_', '-')} is a retired "
+                                     "ABI slot; only zero is supported",
+                                     "setting_unsupported")
+                continue  # Acknowledging retirement requests no active table limit.
+            requested[field] = value
+            active |= 1 << bit
+    if not active:
+        return None
+    return ScratchTablesV2C(struct_size=ctypes.sizeof(ScratchTablesV2C),
+                           version=2, active_fields=active, **requested)
+
+
+def apply_scratch_options(lib, state, args) -> None:
+    """Install the same optional policy on each fresh body/trial/recovery handle."""
+    manifest = scratch_manifest_options(args)
+    if manifest is None:
+        return  # Fresh supported libraries already default to disk/arena scratch.
+    setter = getattr(lib, "strategy_set_scratch_tables_v2", None)
+    if setter is None:
+        raise StrategyLibraryError(
+            "optional scratch limits require strategy_set_scratch_tables_v2",
+            {"reason": "setter_missing"})
+    if setter(state, ctypes.byref(manifest)) != 0:
+        code, detail = engine_failure_code(lib, state) or ("engine_invariant", {})
+        text = (_c_text(lib.strategy_get_last_error(state))
+                if hasattr(lib, "strategy_get_last_error") else "") or "scratch limits rejected"
+        raise RunFailure(text, code or "engine_invariant", detail)
 
 
 def _bind_outputs(lib) -> None:
@@ -5093,8 +5151,8 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
                 lib.strategy_set_magnifier_volume_weighted(st, 1)
             if args.outputs:
                 enable_outputs(lib, st)
+            apply_scratch_options(lib, st, args)
             if args.profile == "jailed":
-                apply_scratch_tables(lib, st, default_scratch_manifest(fed_count))
                 args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args)
             if getattr(args, "report_replay", False) or getattr(args, "report_replay_sink", None):
@@ -5426,6 +5484,18 @@ def nonnegative_limit(value):
     raise argparse.ArgumentTypeError("must be a nonnegative integer (0 means unlimited)")
 
 
+def scratch_limit(value):
+    """A finite uint64 count/byte maximum; zero is never an infinity marker."""
+    try:
+        if value and all("0" <= char <= "9" for char in value):
+            number = int(value)
+            if number <= (1 << 64) - 1:
+                return number
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError("must be an integer in 0..18446744073709551615 (0 is finite zero)")
+
+
 def _main(argv, binary_inputs) -> int:
     # Host startup only: freeze the profile before any library/handle/run.
     environment_profile = os.environ.get("PINEFORGE_RUN_JSON_PROFILE", "unjailed")
@@ -5553,7 +5623,7 @@ def _main(argv, binary_inputs) -> int:
     pre_profile_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
     ap.add_argument("--profile", choices=("unjailed", "jailed"), default=environment_profile,
                     help="Host profile (default: PINEFORGE_RUN_JSON_PROFILE or unjailed). "
-                         "jailed requires bounded scratch tables and the inherited arena; only an explicit "
+                         "jailed requires the inherited arena; scratch has no default logical limits. Only an explicit "
                          "--report-sink-fd enables a sink, and --report-sink paths are refused.")
     ap.add_argument("--report-mode", choices=("FULL", "SUMMARY_ONLY", "STREAMED"), default=None,
                     help="FULL uses the legacy report route, identical to omitting this option. "
@@ -5563,13 +5633,38 @@ def _main(argv, binary_inputs) -> int:
     ap._legacy_usage = ap.format_usage()
     ap.add_argument("--metrics-only", nargs="?", const="auto", choices=("auto", "legacy"),
                     default=None, help="Omit trade/curve arrays and volatile counters; bare = auto.")
+    pre_scratch_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
+    scratch_help = (
+        "Retired ABI slot K_q; only zero is supported.",
+        "Retired ABI slot B_q; only zero is supported.",
+        "Distinct ever-stored retired order-id keys, erased keys included.",
+        "Aggregate stored retired order-id key bytes.",
+        "Distinct ever-stored partially filled exit keys, erased keys included.",
+        "Aggregate stored partially filled exit key bytes (joined separators included).",
+        "Distinct ever-stored cohort order IDs.",
+        "Aggregate stored cohort order-ID bytes.",
+        "Exit-rank IDs; native representation tracks at most 27 (larger requests refuse).",
+        "Aggregate stored exit-rank ID bytes.",
+        "Rooted replacement successors, including inline rows before their first flush.",
+    )
+    for field, description in zip(SCRATCH_FIELDS, scratch_help):
+        semantics = " Unset = no logical limit; explicit 0 = finite zero."
+        if field in ("K_q", "B_q"):
+            semantics = " Unset leaves this retired slot unrequested; explicit 0 acknowledges retirement."
+        ap.add_argument("--scratch-" + field.lower().replace("_", "-"), type=scratch_limit,
+                        default=None, metavar="N",
+                        help=description + semantics + " "
+                             "Other omitted fields stay unbounded; physical disk/arena quotas "
+                             "and representable offsets still apply.")
     all_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
     argv = _legacy_abbreviations(argv, legacy_long, all_long)
     argv = _legacy_abbreviations(argv, pre_profile_long, all_long)
     argv = _legacy_abbreviations(argv, pre_metrics_long, all_long)
+    argv = _legacy_abbreviations(argv, pre_scratch_long, all_long)
     if not argv:
         ap.error("the following arguments are required: --so, --ohlcv")
     args = _parse_output_series_limit(ap, argv)
+    scratch_manifest_options(args)  # Diagnose retired nonzero inputs before I/O/loading.
     if args.tv_compat:
         for name, limit in TV_COMPAT_LIMITS.items():
             if getattr(args, name) is None:
@@ -5702,8 +5797,8 @@ def _main(argv, binary_inputs) -> int:
                 lib.strategy_set_magnifier_volume_weighted(st, 1)
             if args.outputs:
                 enable_outputs(lib, st)
+            apply_scratch_options(lib, st, args)
             if args.profile == "jailed":
-                apply_scratch_tables(lib, st, default_scratch_manifest(n))
                 args._scratch_arena_admitted = _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args, body=body)
             if body and (getattr(args, "report_replay", False)

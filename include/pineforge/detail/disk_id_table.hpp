@@ -52,6 +52,7 @@ public:
             last_ = std::exchange(other.last_, 0);
             end_ = std::exchange(other.end_, 1);
             size_ = std::exchange(other.size_, 0);
+            bounds_ = std::move(other.bounds_);
         }
         return *this;
     }
@@ -70,6 +71,16 @@ public:
                                          "scratch id table requires a tree region");
         read_cache_.release();
         file_.bind_scratch(slab, resource);
+        bounds_.reset();
+    }
+    void bind_scratch_bounds(const std::shared_ptr<const ScratchBounds>& bounds,
+                             ScratchResource resource) {
+        if (size_ != 0 || file_.scratch_owner()
+            || (resource != ScratchResource::cohort && resource != ScratchResource::exit_rank)
+            || file_.scratch_resource() != resource)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                         "optional scratch id bounds changed after use or on a slab");
+        bounds_ = bounds;
     }
     void clear() noexcept {
         read_cache_.release();
@@ -111,14 +122,14 @@ public:
     // facts or accepts a kernel command. Duplicates need no count/byte growth.
     // Disk mode deliberately retains its existing search and I/O behaviour.
     void require_insert(const std::string& key) const {
-        if (!file_.scratch_owner() || find(key)) return;
+        if ((!file_.scratch_owner() && !bounds_) || find(key)) return;
         require_new_key(key.size());
     }
     // enumerate(visit) replays a stable, borrowed workset. Count each absent
     // key once without a growing side index: O(workset^2) comparisons, O(1)
     // retained scratch. No caller may mutate the workset during this ticket.
     template<class Enumerate> void require_inserts(Enumerate&& enumerate) const {
-        if (!file_.scratch_owner()) return;
+        if (!file_.scratch_owner() && !bounds_) return;
         std::uint64_t ordinal = 0, extra_rows = 0, extra_bytes = 0;
         enumerate([&](const std::string& key) {
             require_id_size(key.size());
@@ -132,6 +143,8 @@ public:
             if (repeated) return;
             const auto maximum = std::numeric_limits<std::uint64_t>::max();
             if (extra_rows == maximum || key.size() > maximum - extra_bytes) {
+                if (!file_.scratch_owner())
+                    throw AuxiliaryScratchIoError(EFBIG, "scratch id workset count or bytes exhausted");
                 const auto resource = file_.scratch_resource();
                 const auto& manifest = file_.scratch_owner()->manifest();
                 throw ScratchCapacityError(ids_total_label(resource), extra_rows == maximum
@@ -237,13 +250,24 @@ private:
         require_growth(1, key_size);
     }
     void require_growth(std::uint64_t extra_rows, std::uint64_t extra_bytes) const {
+        constexpr std::uint64_t header = sizeof(Links) + sizeof(Value);
+        // The append cursor counts exactly the historical nodes, even after
+        // resident rows spill. Optional bytes exclude their fixed headers.
+        if (bounds_) {
+            const auto resource = file_.scratch_resource();
+            const bool cohort = resource == ScratchResource::cohort;
+            const auto key_bytes = end_ - 1 - header * size_;
+            bounds_->require_growth(cohort ? ScratchBound::U : ScratchBound::V,
+                                    size_, extra_rows, ids_total_label(resource));
+            bounds_->require_growth(cohort ? ScratchBound::B_U : ScratchBound::B_V,
+                                    key_bytes, extra_bytes, ids_total_label(resource), true);
+        }
         const auto& slab = file_.scratch_owner();
         if (!slab) return;
         const auto resource = file_.scratch_resource();
         const auto& manifest = slab->manifest();
         const auto rows = resource == ScratchResource::cohort ? manifest.U : manifest.V;
         const auto bytes = resource == ScratchResource::cohort ? manifest.B_U : manifest.B_V;
-        constexpr std::uint64_t header = sizeof(Links) + sizeof(Value);
         // Packed nodes have no inter-row alignment: the append cursor minus
         // the null byte and fixed headers is exactly aggregate stored key bytes.
         const auto key_bytes = end_ - 1 - header * size_;
@@ -347,5 +371,6 @@ private:
     IdTableReadCache read_cache_;
     Offset root_ = 0, first_ = 0, last_ = 0, end_ = 1;
     std::uint64_t size_ = 0;
+    std::shared_ptr<const ScratchBounds> bounds_;
 };
 } // namespace pineforge::detail

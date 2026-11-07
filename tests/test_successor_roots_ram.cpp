@@ -554,13 +554,19 @@ void ram_needs_neither_directory_nor_file_extent() {
             "RAM flush reaches the fixed Roots region");
 }
 
-void disk_failures_are_typed() {
+void disk_failures_are_typed(bool optional = false) {
     ScratchDirectory scratch;
     // One complete cached row forces binary-search probes to evict each
     // other. The healthy lookup still warms a real cache, but cannot hide
     // the later out-of-band corruption/truncation behind 64 retained rows.
     const auto root_cache = pineforge::CacheDefaults::lines(2 * sizeof(std::uint64_t), 1);
     Driver driver(root_cache);
+    if (optional) {
+        auto policy = std::make_shared<pd::ScratchBounds>();
+        policy->active_fields = static_cast<std::uint64_t>(pd::ScratchBound::R);
+        policy->manifest.R = 65; // The next real flush is admissible logically.
+        driver.core.bind_scratch_bounds(policy);
+    }
     driver.core.set_successor_roots_directory(scratch.path + "/missing");
     auto tail = driver.submit();
     no::RequestHandle first;
@@ -604,6 +610,134 @@ void disk_failures_are_typed() {
             "truncated backing reaches the cache reader and propagates");
 }
 
+std::shared_ptr<const pd::ScratchBounds> optional_roots(std::uint64_t maximum) {
+    auto policy = std::make_shared<pd::ScratchBounds>();
+    policy->active_fields = static_cast<std::uint64_t>(pd::ScratchBound::R);
+    policy->manifest.R = maximum;
+    return policy;
+}
+
+template<class Operation>
+void expect_optional_root_capacity(Operation&& operation, std::uint64_t limit, std::uint64_t need) {
+    bool refused = false;
+    try { operation(); }
+    catch (const pd::ScratchRootCapacityError& error) {
+        const auto failure = pineforge::classify_run_failure(error);
+        require(error.resource() == pd::ScratchResource::successor_roots
+                    && error.limit() == limit && error.need() == need,
+                "optional root refusal carries actual typed resource/limit/need");
+        require(failure.code == pineforge::RunFailureCode::scratch_capacity_exceeded
+                    && failure.args && *failure.args == "{\"resource\":\"successor_roots\"}",
+                "optional root refusal preserves the closed C error vocabulary");
+        refused = true;
+    }
+    require(refused, "actual optional root admission must refuse");
+}
+
+void optional_root_limit_is_atomic(std::uint64_t maximum, bool direct) {
+    auto policy = optional_roots(maximum);
+    std::weak_ptr<const pd::ScratchBounds> lifetime = policy;
+    Driver driver;
+    driver.core.bind_scratch_bounds(policy);
+    policy.reset();
+    require(!lifetime.expired(), "private root helper owns the immutable optional policy");
+    auto tail = driver.submit(direct); // A real rootless incarnation fits R=0.
+    const auto root = tail;
+    auto first = root;
+    for (std::uint64_t i = 0; i < maximum; ++i) {
+        tail = driver.replace(tail, direct);
+        if (i == 0) first = tail;
+    }
+    const auto cohort = driver.core.cohort_open();
+    driver.core.cohort_add(cohort, tail);
+    auto cancel = driver.core.prepare_cancel(tail, driver.ordinal);
+    const auto definition = driver.core.find_live(tail)->definition;
+    const auto incarnation = driver.core.last_incarnation();
+    const auto ordinal = driver.core.last_ordinal();
+    const auto begin = driver.core.history_base();
+    const auto end = driver.core.history_end();
+    const auto receipts = driver.core.cohort_receipt_count();
+    expect_optional_root_capacity([&] { (void)driver.replace(tail, direct); }, maximum, maximum + 1);
+    require(driver.core.last_incarnation() == incarnation && driver.core.last_ordinal() == ordinal
+                && driver.core.history_base() == begin && driver.core.history_end() == end
+                && driver.core.cohort_receipt_count() == receipts
+                && driver.core.live_size() == 1 && driver.core.find_live(tail)->definition == definition,
+            "optional refusal preserves counters, live definition, receipts and retained journal");
+    require(driver.core.cohort_contains(cohort, root) && driver.core.cohort_contains(cohort, first),
+            "optional refusal preserves inline and spilled root aliases");
+    {
+        RefuseAllocations guard;
+        const auto installed = driver.core.install_cancel(std::move(cancel));
+        require(std::holds_alternative<no::CommandInstalled<no::CancelResult>>(installed),
+                "root refusal preserves a previously prepared epoch");
+    }
+    no::WorkingRequestCore moved(std::move(driver.core));
+    no::WorkingRequestCore destination({"discard-optional", 1});
+    destination = std::move(moved);
+    require(!lifetime.expired() && destination.cohort_contains(cohort, first),
+            "both moves preserve optional policy and spilled readers");
+    std::uint64_t next_incarnation = destination.last_incarnation() + 1;
+    std::uint64_t next_ordinal = destination.last_ordinal() + 1;
+    const auto submitted = destination.apply_submit(request(), {}, next_incarnation, next_ordinal).result;
+    require(submitted.status == no::SubmitStatus::Accepted && submitted.handle,
+            "a rootless command still fits after a refusal and moves");
+    ++next_incarnation; ++next_ordinal;
+    expect_optional_root_capacity([&] {
+        (void)destination.apply_replace(*submitted.handle, request(), {},
+                                         next_incarnation, next_ordinal);
+    }, maximum, maximum + 1);
+    destination.reset({"roots", 2});
+    require(lifetime.expired(), "reset releases the complete optional root binding");
+}
+
+void optional_rootless_tickets_and_omission(bool direct, std::uint64_t maximum) {
+    Driver driver;
+    driver.core.bind_scratch_bounds(optional_roots(maximum));
+    auto tail = driver.submit(direct);
+    const auto root = tail;
+    for (std::uint64_t i = 0; i < maximum; ++i) tail = driver.replace(tail, direct);
+    (void)driver.submit(false);
+    (void)driver.submit(true); // A full inline tail may flush, but consumes no root.
+    no::ReplaceOptions kept;
+    kept.keep_handle = true;
+    require(driver.replace(tail, false, kept) == tail && driver.replace(tail, true, kept) == tail,
+            "both kept-handle paths are rootless at an exact optional maximum");
+    const auto cohort = driver.core.cohort_open();
+    driver.core.cohort_add(cohort, tail);
+    require(driver.core.cohort_contains(cohort, root), "rootless tickets preserve the entire chain");
+    expect_optional_root_capacity([&] { (void)driver.replace(tail, !direct); }, maximum, maximum + 1);
+    if (maximum >= 64)
+        require(driver.core.tail_window_stats().successor_root_reads > 0,
+                "optional root tests actually resolve a flushed disk prefix");
+
+    Driver omitted;
+    auto unrelated = std::make_shared<pd::ScratchBounds>();
+    unrelated->active_fields = static_cast<std::uint64_t>(pd::ScratchBound::U);
+    unrelated->manifest.U = 0; // This does not request an R maximum.
+    omitted.core.bind_scratch_bounds(unrelated);
+    auto unbounded = omitted.submit(direct);
+    const auto original = unbounded;
+    for (std::uint64_t i = 0; i < maximum + 131; ++i)
+        unbounded = omitted.replace(unbounded, direct);
+    const auto other = omitted.core.cohort_open();
+    omitted.core.cohort_add(other, unbounded);
+    require(omitted.core.cohort_contains(other, original),
+            "omitted R admits real roots beyond the independently requested policy");
+}
+
+void optional_abandoned_ticket_is_free() {
+    Driver driver;
+    driver.core.bind_scratch_bounds(optional_roots(1));
+    const auto root = driver.submit();
+    {
+        const auto abandoned = driver.core.prepare_replace(
+            root, request(), driver.context, driver.incarnation, driver.ordinal);
+        require(static_cast<bool>(abandoned), "optional replacement really prepared");
+    }
+    const auto tail = driver.replace(root, false);
+    expect_optional_root_capacity([&] { (void)driver.replace(tail, false); }, 1, 2);
+}
+
 } // namespace
 
 int main() {
@@ -625,6 +759,16 @@ int main() {
         abandoned_ticket_does_not_consume_capacity();
         ram_needs_neither_directory_nor_file_extent();
         disk_failures_are_typed();
+        disk_failures_are_typed(true);
+        for (const std::uint64_t maximum : {0, 1, 7, 63, 64, 65, 128}) {
+            optional_root_limit_is_atomic(maximum, false);
+            optional_root_limit_is_atomic(maximum, true);
+        }
+        for (const std::uint64_t maximum : {0, 64, 65}) {
+            optional_rootless_tickets_and_omission(false, maximum);
+            optional_rootless_tickets_and_omission(true, maximum);
+        }
+        optional_abandoned_ticket_is_free();
         std::puts("successor roots RAM: PASS");
         return 0;
     } catch (const std::exception& error) {

@@ -975,52 +975,82 @@ void exercise_limits(bool direct) {
         CHECK(found && full_fold::value(*found) == values[kJournalChunk]);
     }
     {
-        no::WorkingRequestCore core{no::RunIdentity{"x08-limits-refuse", 1}};
-        core.reset(no::RunIdentity{"x08-limits-refuse", 1});
+        no::WorkingRequestCore core{no::RunIdentity{"journal-oversized-default", 1}};
+        core.reset(no::RunIdentity{"journal-oversized-default", 1});
         core.reserve(kJournalMaxResident + 64);
         std::uint64_t incarnation = 1, ordinal = 1;
         const no::Request over{no::Transact{1.0}, std::string(over_label, 'o'), ""};
+        static_assert(accepted_bytes + over_label == kJournalSpillPageBytes + 1);
         const auto accepted = submit_limit_case(core, over, incarnation, ordinal, direct);
         CHECK(accepted.status == no::SubmitStatus::Accepted);
         while (core.history_end() < kJournalMaxResident)
             CHECK(submit_limit_case(core, filler, incarnation, ordinal, direct).status
                   == no::SubmitStatus::Rejected);
-        const auto before = full_fold::core_value(core);
+        const auto words = [](const auto& value) {
+            std::vector<std::uint64_t> result;
+            full_fold::WordTrace trace(result);
+            full_fold::Fold state;
+            full_fold::fold(state, value);
+            return result;
+        };
         const auto before_end = core.history_end();
         const auto before_incarnation = incarnation, before_ordinal = ordinal;
+        const auto before_last_incarnation = core.last_incarnation();
+        const auto before_last_ordinal = core.last_ordinal();
+        const auto live_before = words(core.live_at(0));
+        std::array<std::vector<std::uint64_t>, kJournalChunk> values{};
+        std::array<std::uint64_t, kJournalChunk> ordinals{};
         std::array<std::uintptr_t, kJournalChunk> addresses{};
-        for (std::size_t index = 0; index < addresses.size(); ++index)
-            addresses[index] = reinterpret_cast<std::uintptr_t>(&core.history_at(index));
-        // The event is already resident; the next append reaches the spill
-        // refusal in reserve_plan/seal_direct. Retry also must publish nothing.
-        for (unsigned attempt = 0; attempt < 2; ++attempt) {
-            bool refused = false;
-            try {
-                (void)submit_limit_case(core, filler, incarnation, ordinal, direct);
-            } catch (const detail::ScratchIoError& error) {
-                refused = true;
-                CHECK(error.code() == std::error_code(EFBIG, std::generic_category()));
-                CHECK(std::string(error.what()).find(
-                          "native o1 journal event exceeds the spill page byte bound")
-                      != std::string::npos);
-            }
-            CHECK(refused);
-            CHECK(core.history_end() == before_end && core.history_base() == 0);
-            CHECK(incarnation == before_incarnation && ordinal == before_ordinal);
-            CHECK(full_fold::core_value(core) == before);
-            for (std::size_t index = 0; index < addresses.size(); ++index)
-                CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(index)) == addresses[index]);
+        for (std::size_t index = 0; index < addresses.size(); ++index) {
+            const auto& event = core.history_at(index);
+            values[index] = words(event);
+            ordinals[index] = std::visit([](const auto& row) { return row.ordinal; }, event);
+            addresses[index] = reinterpret_cast<std::uintptr_t>(&event);
         }
+        // expectation corrected: oversized EFBIG -> complete spill/reload, because
+        // the old assertion encoded the removed artificial cap at the packing target.
+        // This first successful append plus the two below now advance by three.
+        CHECK(submit_limit_case(core, filler, incarnation, ordinal, direct).status
+              == no::SubmitStatus::Rejected);
+        CHECK(core.history_end() == before_end + 1 && core.history_base() == 0);
+        CHECK(incarnation == before_incarnation && ordinal == before_ordinal + 1);
+        CHECK(core.last_incarnation() == before_last_incarnation);
+        CHECK(core.last_ordinal() == before_last_ordinal + 1);
+        CHECK(core.live_size() == 1 && words(core.live_at(0)) == live_before);
+        const no::CommandEvent appended =
+            no::RejectedEvent{before_ordinal, filler, no::RequestRejectReason::InvalidQuantity};
+        CHECK(words(core.history_at(before_end)) == words(appended));
+        CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(0)) != addresses[0]);
+        for (std::size_t index = 1; index < addresses.size(); ++index)
+            CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(index)) == addresses[index]);
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            CHECK(words(core.history_at(index)) == values[index]);
+            const auto* found = core.event_at(no::EventId{core.identity(), ordinals[index]});
+            CHECK(found && words(*found) == values[index]);
+        }
+        CHECK(std::get<no::AcceptedEvent>(core.history_at(0)).request().label == over.label);
+
         // Removing only the oversized event leaves a partial resident chunk.
-        // The following appends must still spill/read its surviving prefix.
-        const auto survivor = full_fold::value(core.history_at(1));
+        // The following append must spill/read its surviving prefix using the
+        // released page number, without returning the former oversized event.
         CHECK(core.retire_history(accepted.event_ordinal) == 1);
+        CHECK(core.history_base() == 1 && core.retired_through() == accepted.event_ordinal);
+        CHECK(!core.event_at(no::EventId{core.identity(), accepted.event_ordinal}));
+        CHECK(words(core.history_at(1)) == values[1]);
         for (unsigned index = 0; index < 2; ++index)
             CHECK(submit_limit_case(core, filler, incarnation, ordinal, direct).status
                   == no::SubmitStatus::Rejected);
-        CHECK(core.history_base() == 1 && core.history_end() == before_end + 2);
+        CHECK(core.history_base() == 1 && core.history_end() == before_end + 3);
+        CHECK(incarnation == before_incarnation && ordinal == before_ordinal + 3);
+        CHECK(core.last_incarnation() == before_last_incarnation);
+        CHECK(core.last_ordinal() == before_last_ordinal + 3);
+        CHECK(core.live_size() == 1 && words(core.live_at(0)) == live_before);
         CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(1)) != addresses[1]);
-        CHECK(full_fold::value(core.history_at(1)) == survivor);
+        for (std::size_t index = 1; index < values.size(); ++index) {
+            CHECK(words(core.history_at(index)) == values[index]);
+            const auto* found = core.event_at(no::EventId{core.identity(), ordinals[index]});
+            CHECK(found && words(*found) == values[index]);
+        }
     }
     std::printf("X08 limits direct=%d page_bytes=%zu accepted_fixed_bytes=%zu "
                 "under_label=%zu exact_label=%zu over_label=%zu\n",

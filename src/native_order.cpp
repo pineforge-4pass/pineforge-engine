@@ -1078,8 +1078,8 @@ inline std::size_t book_position(const std::vector<LiveRequest>& live, uint64_t 
 // deferred chains' id lists keep a fixed resident part and write the rest to
 // run-owned scratch files: detail::ScratchFile, an unlinked close-on-exec file
 // read and written by position. A store that outgrows its resident part spills;
-// a failed write/read or an oversized serialized journal event is a
-// ScratchIoError. Spill preparation can open the journal files before the first
+// a failed write/read or an unrepresentable extent is a ScratchIoError.
+// Spill preparation can open the journal files before the first
 // spill; a run whose reservation stays resident never touches them. Every spill
 // is made where the caller may still throw (reserve_plan, seal_direct), never
 // in commit.
@@ -1316,6 +1316,22 @@ struct SaveAr {
     void operator()(const T& item);
 };
 
+// Measure the SAME archive that writes an oversized event, including external
+// openings and every nested field. No schema estimate or packing limit enters
+// this sum; an unrepresentable encoded length fails before allocation/append.
+struct SizeAr {
+    static constexpr bool saving = true;
+    uint64_t bytes = 0;
+    void raw(const void*, std::size_t length) {
+        if (length > std::numeric_limits<uint64_t>::max() - bytes) {
+            throw detail::ScratchIoError(EFBIG, "native o1 journal encoded length overflow");
+        }
+        bytes += static_cast<uint64_t>(length);
+    }
+    template <class T>
+    void operator()(const T& item);
+};
+
 struct LoadAr {
     static constexpr bool saving = false;
     ByteReader& in;
@@ -1479,6 +1495,11 @@ void SaveAr::operator()(const T& item) {
 }
 
 template <class T>
+void SizeAr::operator()(const T& item) {
+    archive_value(*this, const_cast<T&>(item));
+}
+
+template <class T>
 void LoadAr::operator()(T& item) {
     archive_value(*this, item);
 }
@@ -1558,8 +1579,8 @@ void archive_refused(Ar& ar, T& item) {
 // A refused request's list was never frozen and is read back as stored; it
 // was copied when its event was built (snapshot_refused_openings), so what is
 // written here is never read through a caller's cursor. Each opening takes
-// 24 bytes inline: see JournalStore::kSpillPageBytes for the list length past
-// which an event cannot be paged.
+// sizeof(RequestHandle) bytes inline; a list past the ordinary packing target
+// belongs to its event's own correctly sized journal extent.
 template <class Ar>
 void archive_external_openings(Ar& ar, std::shared_ptr<const OpeningReadback>& external) {
     std::uint64_t count = 0;
@@ -1711,8 +1732,9 @@ template <class Ar> void archive_io(Ar& ar, MarginCallEvent& item) {
     ar(item.position_after);
 }
 
-// One page of spilled journal events: the absolute positions and ordinals it
-// covers (both ascend from page to page) and where its serialized events are.
+// One extent of spilled journal events: an ordinary packed page, or one event
+// spanning multiple packing pages. Positions and ordinals ascend between
+// extents; offset/length describe the actual concatenated serialized bytes.
 struct JournalPage {
     uint64_t first_position = 0;
     uint64_t count = 0;
@@ -1796,8 +1818,9 @@ struct WorkingRequestCore::JournalStore {
         codec_positions[slot] = position;
         return *codec_values[slot];
     }
-    // A page holds a contiguous prefix of one chunk, bounded by bytes as well
-    // as kChunk events. Before appending a command's events, make_room spills
+    // An ordinary page holds a contiguous prefix of one chunk, packed to a
+    // byte target and at most kChunk events. An oversized event has its own
+    // extent. Before appending a command's events, make_room spills
     // while resident_count() + incoming exceeds kMaxResident and the existing
     // resident count exceeds kKeepResident. The final chunk prefix can take
     // that count below kKeepResident by up to kChunk - 1 events; this is a
@@ -1806,24 +1829,12 @@ struct WorkingRequestCore::JournalStore {
     static constexpr std::size_t kMaxResident = 2048;
     static constexpr std::size_t kKeepResident = 128;
     // Page layout: concatenated events, each starting with a uint32_t
-    // alternative and a uint64_t ordinal, followed by its fields. This 32,768 B
-    // buffer is sized by the largest single serialized CommandEvent we admit:
-    // an event above it is refused with ScratchIoError(EFBIG). Request
-    // label/comment, BindOpenings/OpeningsClose opening vectors,
-    // SelectedExposure incarnations and TermsResolvedEvent/QuantityBoundEvent
-    // adjustment-id vectors have no finite schema bound. A full page closes
-    // before the next event; no per-event size estimate is used.
-    // The external openings of a BindOpenings/OpeningsClose are written inline
-    // too (archive_external_openings): 8 bytes of count, then 24 per opening
-    // (sizeof(RequestHandle)). So an event whose request or definition names
-    // about 1,360 or more external openings, accepted or refused, cannot be
-    // paged: the spill below refuses it with that EFBIG, typed, in the
-    // throwing phase of the command that needs the room (make_room, from
-    // reserve_plan and seal_direct), and nothing changes; the event stays
-    // resident, so every later command that must page past it is refused the
-    // same way. The per-event byte limit applies only when paging is required:
-    // an event the journal never pages is never refused, so a journal that
-    // stays within kMaxResident events behaves exactly as before.
+    // alternative and a uint64_t ordinal, followed by its fields. 32,768 B is
+    // the ordinary packing target, not an event-size limit. A full page closes
+    // before the next event. If its first event does not fit, SizeAr measures
+    // that archive and it is written alone in an extent of exactly that size.
+    // Existing ordinary page bytes and chunk boundaries stay unchanged.
+    // Scratch providers still enforce their configured resource bounds.
     static constexpr std::size_t kSpillPageBytes = 32768;
     static_assert(sizeof(uint32_t) == 4 && sizeof(uint64_t) == 8,
                   "journal event tag/ordinal byte widths");
@@ -1839,9 +1850,10 @@ struct WorkingRequestCore::JournalStore {
         uint64_t count = 0;
         std::vector<CommandEvent> events;
     };
-    // One lazy fixed allocation per journal. A writer never aliases a reload,
-    // and each cache slot keeps its own input bytes. Owning payload decoding
-    // below the event vector (definitions, strings, nested vectors) is separate.
+    // One lazy fixed allocation per journal for ordinary packing/reloads.
+    // Oversized I/O owns a separate temporary buffer of its measured length;
+    // a writer never aliases a reload or another reader. Owning payload
+    // decoding below the event vector is separate from these input bytes.
     struct SpillStorage {
         std::array<unsigned char, kSpillPageBytes> write;
         std::array<std::array<unsigned char, kSpillPageBytes>, 4> read;
@@ -1871,6 +1883,33 @@ struct WorkingRequestCore::JournalStore {
     explicit JournalStore(const RunIdentity& identity) : core_registration(identity) {
         chunks.reserve(kMaxResident / kChunk + 4);
     }
+    static uint64_t extent_end(uint64_t offset, std::size_t length) {
+        const auto maximum = static_cast<uint64_t>(std::numeric_limits<off_t>::max());
+        if (offset > maximum || length > maximum - offset) {
+            throw detail::ScratchIoError(EFBIG, "native o1 journal extent offset exhausted");
+        }
+        return offset + static_cast<uint64_t>(length);
+    }
+    static std::size_t extent_size(uint64_t length) {
+        if (length > std::numeric_limits<std::size_t>::max()
+            || length > static_cast<uint64_t>(std::numeric_limits<std::ptrdiff_t>::max())) {
+            throw detail::ScratchIoError(EFBIG, "native o1 journal extent length is not representable");
+        }
+        return static_cast<std::size_t>(length);
+    }
+    static std::vector<unsigned char> extent_buffer(uint64_t length) {
+        const auto size = extent_size(length);
+        std::vector<unsigned char> bytes;
+        if (size > bytes.max_size()) {
+            throw detail::ScratchIoError(EFBIG, "native o1 journal extent allocation is not representable");
+        }
+        try {
+            bytes.resize(size);
+        } catch (const std::bad_alloc&) {
+            throw detail::scratch_out_of_memory_failure();
+        }
+        return bytes;
+    }
     // Called by a beyond-resident reserve before the operation it provisions,
     // or lazily by the first unreserved spill. No added page/cache allocation
     // is charged to a core whose reservations and history stay resident.
@@ -1880,7 +1919,7 @@ struct WorkingRequestCore::JournalStore {
             for (Cached& slot : cache) slot.events.reserve(kChunk);
             spill = std::move(storage);
         }
-        data.prepare(data.size() + kSpillPageBytes);
+        data.prepare(extent_end(data.size(), kSpillPageBytes));
         pages.prepare();
     }
     void set_directory(const std::string& directory) {
@@ -1955,9 +1994,44 @@ struct WorkingRequestCore::JournalStore {
         }
         if (chunks.empty()) chunk0_base = first;
     }
+    // Publish only after the entire extent was appended. A failed allocation,
+    // source read or backing write leaves this resident prefix intact.
+    void append_page(uint64_t page_end, const unsigned char* bytes, std::size_t length) {
+        (void)extent_end(data.size(), length);
+        JournalPage page;
+        page.first_position = first;
+        page.count = page_end - first;
+        page.first_ordinal = event_ordinal(resident_at(first));
+        page.last_ordinal = event_ordinal(resident_at(page_end - 1));
+        pages.make_room();
+        page.offset = data.append(bytes, length);
+        page.length = static_cast<uint64_t>(length);
+        pages.push(page);
+        // A partly occupied chunk keeps its original slot base.
+        drop_front(page_end);
+    }
+    void spill_oversized_event() {
+        const CommandEvent& event = resident_at(first);
+        SizeAr size;
+        size(event);
+        const auto length = extent_size(size.bytes);
+        (void)extent_end(data.size(), length);
+        auto bytes = extent_buffer(size.bytes);
+        ByteWriter out(bytes.data(), bytes.size());
+        SaveAr ar{out};
+        try {
+            ar(event);
+        } catch (const ByteWriter::CapacityExceeded&) {
+            throw detail::ScratchIoError(EIO, "native o1 journal encoded size changed");
+        }
+        if (out.size() != length) {
+            throw detail::ScratchIoError(EIO, "native o1 journal encoded size changed");
+        }
+        append_page(first + 1, out.data(), out.size());
+    }
     // Writes the oldest resident events that fit, up to their chunk's end,
-    // as one page and drops exactly that prefix. Everything that can throw
-    // comes before publishing the page or changing the resident prefix.
+    // as one ordinary page, or the first event as its own larger extent.
+    // Everything that can throw precedes publication and prefix retirement.
     void spill_front_chunk() {
         const uint64_t chunk_end = std::min<uint64_t>(end, chunk0_base + kChunk);
         if (chunk_end <= first) return;
@@ -1972,24 +2046,13 @@ struct WorkingRequestCore::JournalStore {
             } catch (const ByteWriter::CapacityExceeded&) {
                 out.rewind(event_start);
                 if (page_end == first) {
-                    throw detail::ScratchIoError(
-                            EFBIG, "native o1 journal event exceeds the spill page byte bound");
+                    spill_oversized_event();
+                    return;
                 }
                 break;
             }
         }
-        JournalPage page;
-        page.first_position = first;
-        page.count = page_end - first;
-        page.first_ordinal = event_ordinal(resident_at(first));
-        page.last_ordinal = event_ordinal(resident_at(page_end - 1));
-        pages.make_room();
-        page.offset = data.append(out.data(), out.size());
-        page.length = out.size();
-        pages.push(page);
-        // drop_front keeps a partly occupied chunk and its original slot base;
-        // the next spill starts at page_end, even when it is not aligned.
-        drop_front(page_end);
+        append_page(page_end, out.data(), out.size());
     }
     // Room for `incoming` more events: spill while the resident part would
     // pass its bound, then make sure the chunks that will hold them exist.
@@ -2029,20 +2092,36 @@ struct WorkingRequestCore::JournalStore {
         for (const Cached& slot : cache) {
             if (slot.valid && slot.page_no == page_no) return slot.events;
         }
-        if (!spill || page.length > kSpillPageBytes || page.count > kChunk) {
-            throw detail::ScratchIoError(EFBIG, "native o1 journal page exceeds byte bound");
+        if (!spill || page.length == 0 || page.count == 0 || page.count > kChunk
+            || (page.length > kSpillPageBytes && page.count != 1)
+            || page.first_position >= first || page.count > first - page.first_position) {
+            throw detail::ScratchIoError(EIO, "native o1 journal extent metadata is invalid");
         }
+        // Validate the source span before allocating or forming byte pointers.
+        if (page.offset > data.size() || page.length > data.size() - page.offset) {
+            throw detail::ScratchIoError(EIO, "native o1 journal extent is truncated");
+        }
+        const auto length = extent_size(page.length);
+        (void)extent_end(page.offset, length);
         Cached& slot = cache[cache_next];
-        auto& bytes = spill->read[cache_next];
         // Invalidate before replacing a page: a failed read/decode must never
         // leave a partially replaced event vector under its old cache key.
         slot.valid = false;
         slot.events.clear();
-        data.read(page.offset, bytes.data(), static_cast<std::size_t>(page.length));
-        ByteReader in(bytes.data(), static_cast<std::size_t>(page.length));
+        std::vector<unsigned char> extent;
+        unsigned char* bytes = spill->read[cache_next].data();
+        if (length > kSpillPageBytes) {
+            extent = extent_buffer(page.length);
+            bytes = extent.data();
+        }
+        data.read(page.offset, bytes, length);
+        ByteReader in(bytes, length);
         LoadAr ar{in};
         slot.events.resize(static_cast<std::size_t>(page.count));
         for (CommandEvent& event : slot.events) ar(event);
+        if (in.remaining() != 0) {
+            throw detail::ScratchIoError(EIO, "native o1 journal extent has trailing bytes");
+        }
         cache_next = (cache_next + 1) % cache.size();
         slot.page_no = page_no;
         slot.first_position = page.first_position;
@@ -8294,8 +8373,7 @@ struct WorkingRequestCore::SuccessorRootIndex {
     detail::ScratchFile file{detail::ScratchFile::IoRaiser::auxiliary};
     std::string directory;
     std::shared_ptr<detail::ScratchSlab> slab;
-    // Transient input for one bounded-memory preparation, never a root count.
-    bool next_adds_root = true;
+    std::shared_ptr<const detail::ScratchBounds> bounds;
     mutable std::uint64_t reads = 0;
     mutable std::uint64_t read_bytes = 0;
     mutable detail::ReadThroughWindow cache;
@@ -8328,10 +8406,18 @@ struct WorkingRequestCore::SuccessorRootIndex {
         }
     }
 
-    void prepare_append() {
+    void prepare_append(bool adds_root) {
+        if (bounds) {
+            const auto pending = static_cast<uint64_t>(tail_size);
+            const auto maximum = std::numeric_limits<uint64_t>::max();
+            if (pending > maximum - disk_rows
+                || (adds_root && disk_rows + pending == maximum))
+                throw detail::AuxiliaryScratchIoError(EFBIG, "native successor root count exhausted");
+            const auto need = disk_rows + pending + (adds_root ? uint64_t{1} : uint64_t{0});
+            if (need > bounds->manifest.R)
+                throw detail::ScratchRootCapacityError(bounds->manifest.R, need);
+        }
         if (slab) {
-            const bool adds_root = next_adds_root;
-            next_adds_root = true; // Also reset before a refused ticket throws.
             // One read-only ticket covers BOTH the inline rows and the full
             // future prefix, even before the first 64-row flush. Rootless
             // preparations can flush a full tail without consuming a row.
@@ -8374,6 +8460,8 @@ struct WorkingRequestCore::SuccessorRootIndex {
         assert(tail_size < tail.size());
         assert(root != 0 && root < successor);
         assert(tail_size == 0 || tail[tail_size - 1].successor < successor);
+        assert(!bounds || (disk_rows <= bounds->manifest.R
+            && tail_size < bounds->manifest.R - disk_rows));
         tail[tail_size++] = Row{successor, root};
     }
 
@@ -8500,12 +8588,10 @@ void WorkingRequestCore::reserve_plan(const MutationPlan& plan) {
             history_candidate.emplace(journal_->managed_history->stage(
                 detail::NativeHistoryRecordKind::issued, source));
         }
-        if (successor_roots_ && successor_roots_->slab) {
-            successor_roots_->next_adds_root = plan.live_row.definition
-                    && plan.live_row.definition->root
-                    && plan.live_row.handle().incarnation == plan.incarnation_used;
-        }
-        reserve_successor_root();
+        const bool adds_root = plan.live_row.definition
+                && plan.live_row.definition->root
+                && plan.live_row.handle().incarnation == plan.incarnation_used;
+        reserve_successor_root(adds_root);
     }
     // A re-price that kept its handle moves its row in the queue, which
     // repriced_ records (note_repriced).
@@ -8538,11 +8624,9 @@ void WorkingRequestCore::seal_direct(std::size_t events, bool push_live, bool ad
     }
     if (consume_incarnation) {
         reserve_n(issued_, 1);
-        if (successor_roots_ && successor_roots_->slab) {
-            // Only replacements root a newly issued incarnation.
-            successor_roots_->next_adds_root = !push_live;
-        }
-        reserve_successor_root();
+        // Only replacements root a newly issued incarnation. Pass this on
+        // the stack: a refused or abandoned ticket leaves no transient flag.
+        reserve_successor_root(!push_live);
     }
     // The book's room last (see reserve_plan).
     if (push_live) {
@@ -8565,6 +8649,30 @@ void WorkingRequestCore::bind_scratch_slab(
     } else if (successor_roots_ && successor_roots_->slab) {
         successor_roots_.reset();
     }
+}
+
+void WorkingRequestCore::bind_scratch_bounds(
+        const std::shared_ptr<const ::pineforge::detail::ScratchBounds>& bounds) {
+    const bool active = bounds && bounds->active(detail::ScratchBound::R);
+    if (!active && (!successor_roots_ || !successor_roots_->bounds)) return;
+    if (last_ordinal_ != 0 || last_incarnation_ != 0)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "optional root bounds changed after a command");
+    if (!active) {
+        successor_roots_->bounds.reset();
+        return;
+    }
+    if (successor_roots_ && successor_roots_->slab)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "optional root bounds cannot bind a v1 slab");
+    if (!successor_roots_) {
+        auto next = std::make_shared<SuccessorRootIndex>(
+            tail_window_config().successor_root_rows,
+            tail_cache_capacity(TailWindowKind::successor_roots));
+        next->set_directory(scratch_directory());
+        successor_roots_ = std::move(next);
+    }
+    successor_roots_->bounds = bounds;
 }
 
 void WorkingRequestCore::set_successor_roots_directory(const std::string& directory) {
@@ -8591,12 +8699,12 @@ const std::string& WorkingRequestCore::scratch_directory() const noexcept {
     return journal_ ? journal_->where : none;
 }
 
-void WorkingRequestCore::reserve_successor_root() {
+void WorkingRequestCore::reserve_successor_root(bool adds_root) {
     if (!successor_roots_)
         successor_roots_ = std::make_shared<SuccessorRootIndex>(
             tail_window_config().successor_root_rows,
             tail_cache_capacity(TailWindowKind::successor_roots));
-    successor_roots_->prepare_append();
+    successor_roots_->prepare_append(adds_root);
 }
 
 void WorkingRequestCore::append_successor_root(uint64_t incarnation, uint64_t root) noexcept {

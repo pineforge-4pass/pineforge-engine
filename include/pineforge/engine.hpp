@@ -2718,6 +2718,7 @@ private:
     };
     ScratchTableRun scratch_table_run_;
     void prepare_scratch_table_run(const detail::ScratchTableConfig& config);
+    void clear_scratch_bounds_v2() noexcept;
 
     // Reporting configuration and run-local output ownership. Copies retain
     // configuration, never a writer, receipt, or an active-call barrier.
@@ -2834,12 +2835,16 @@ public:
                              descriptor->U, descriptor->B_U,
                              descriptor->V, descriptor->B_V, descriptor->R};
         }
+        clear_scratch_bounds_v2();
         scratch_table_config_ = next;
         return 0;
     }
     const detail::ScratchTableConfig& scratch_table_config() const noexcept {
         return scratch_table_config_;
     }
+    // Optional bounds live in the opaque consumer: the engine layout and
+    // the frozen v1 configuration stay unchanged.
+    int set_scratch_tables_v2(const pf_scratch_tables_v2* descriptor);
 
     // Physical policy lives behind the opaque consumer, so these additive
     // methods do not change the engine's layout or virtual interface.

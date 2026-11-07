@@ -257,11 +257,17 @@ public:
             }
         }
         slab_ = slab;
+        bounds_.reset();
         data_resource_ = data;
         index_resource_ = index;
         key_limit_ = limit;
         fixed_slots_ = count;
         clear();
+    }
+    void bind_scratch_bounds(const std::shared_ptr<const ScratchBounds>& bounds) {
+        if (slab_ || memory_ || used_ != 0 || size_ != 0 || data_.opened() || index_.opened())
+            throw std::logic_error("optional id pair bounds changed after use or on a slab/fixture");
+        bounds_ = bounds;
     }
 
     struct KeyView {
@@ -275,20 +281,20 @@ public:
     // Neither a successful ticket nor a refusal changes extents or bytes.
     template<class Enumerate>
     void preflight_keys(const Enumerate& enumerate) const {
-        if (!slab_) return;
+        if (!slab_ && !bounds_) return;
         std::uint64_t keys = used_;
         std::uint64_t extent = data_bytes_;
         std::size_t ordinal = 0;
         enumerate([&](KeyView key) {
             auto first = key.first;
             auto second = key.second;
-            if (data_resource_ == ScratchResource::consumed_data && second
+            if (slab_ && data_resource_ == ScratchResource::consumed_data && second
                 && (first.find('\x1f') != std::string_view::npos
                     || second->find('\x1f') != std::string_view::npos)) {
                 throw ScratchCapacityError(data_resource_,
                     "order ids cannot contain the control character 0x1f");
             }
-            if (data_resource_ == ScratchResource::consumed_data && !second) {
+            if (slab_ && data_resource_ == ScratchResource::consumed_data && !second) {
                 // Consumed singles join two ids with '\x1f'. A boundary
                 // after at most 64 bytes is safe because the source id
                 // components are rejected before this representation is made.
@@ -298,7 +304,7 @@ public:
                     first = first.substr(0, separator);
                 }
             }
-            require_id_components(first.size(), second ? second->size() : 0);
+            if (slab_) require_id_components(first.size(), second ? second->size() : 0);
             const auto own_ordinal = ordinal++;
             if (slots_ != 0 && locate(key.first, key.second,
                                      hash_for_key(key.first, key.second)).second.offset_plus_one != 0)
@@ -325,19 +331,21 @@ public:
     // a temporary string allocation (including for an eventual refusal).
     void preflight_joined_single(std::string_view first, char separator,
                                  std::string_view last) const {
-        if (!slab_) return;
-        if (data_resource_ == ScratchResource::consumed_data
+        if (!slab_ && !bounds_) return;
+        if (slab_ && data_resource_ == ScratchResource::consumed_data
             && (first.find('\x1f') != std::string_view::npos
                 || last.find('\x1f') != std::string_view::npos)) {
             throw ScratchCapacityError(data_resource_,
                 "order ids cannot contain the control character 0x1f");
         }
-        require_id_components(first.size(), last.size());
+        if (slab_) require_id_components(first.size(), last.size());
         constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
-        if (first.size() >= maximum || last.size() > maximum - first.size() - 1)
+        if (first.size() >= maximum || last.size() > maximum - first.size() - 1) {
+            if (!slab_) throw IdPairStoreError(EFBIG, "id table joined key exhausted");
             throw ScratchCapacityError(data_resource_, scratch_byte_limit_message(data_resource_,
                 data_resource_ == ScratchResource::erased_data
                     ? slab_->manifest().B_e : slab_->manifest().B_c));
+        }
         const auto length = static_cast<std::uint64_t>(first.size()) + 1 + last.size();
         std::uint64_t hash = 1469598103934665603ULL;
         const auto byte = [&](unsigned char value) { hash ^= value; hash *= 1099511628211ULL; };
@@ -393,7 +401,7 @@ public:
     // No global switch, environment knob, cached key roster or fallback on IO
     // failure. clear() preserves this choice for a second run on the host.
     void fixture_use_memory_reference() {
-        if (slab_ || used_ != 0 || size_ != 0 || data_.opened() || index_.opened())
+        if (slab_ || bounds_ || used_ != 0 || size_ != 0 || data_.opened() || index_.opened())
             throw std::logic_error("id table fixture backend changed after use");
         memory_ = std::make_unique<MemoryMap>();
     }
@@ -439,6 +447,25 @@ private:
     }
     void preflight_new_key(std::uint64_t& keys, std::uint64_t& extent,
                            std::uint64_t first, std::uint64_t second) const {
+        if (!slab_) {
+            constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
+            if (keys == std::numeric_limits<std::size_t>::max()
+                || extent > maximum - sizeof(Header)
+                || first > maximum - extent - sizeof(Header)
+                || second > maximum - extent - sizeof(Header) - first)
+                throw IdPairStoreError(EFBIG, "id table data exhausted");
+            if (bounds_) {
+                const bool erased = data_resource_ == ScratchResource::erased_data;
+                bounds_->require_growth(erased ? ScratchBound::K_e : ScratchBound::K_c,
+                                        keys, 1, index_resource_);
+                const auto key_bytes = extent - sizeof(Header) * keys;
+                bounds_->require_growth(erased ? ScratchBound::B_e : ScratchBound::B_c,
+                                        key_bytes, first + second, data_resource_, true);
+            }
+            ++keys;
+            extent += sizeof(Header) + first + second;
+            return;
+        }
         if (keys >= key_limit_ || keys >= slots_ / 2
             || keys >= std::numeric_limits<std::size_t>::max())
             throw ScratchCapacityError(index_resource_,
@@ -470,6 +497,7 @@ private:
         swap(size_, other.size_);
         swap(memory_, other.memory_);
         swap(slab_, other.slab_);
+        swap(bounds_, other.bounds_);
         swap(data_resource_, other.data_resource_);
         swap(index_resource_, other.index_resource_);
         swap(key_limit_, other.key_limit_);
@@ -883,6 +911,7 @@ private:
     std::size_t size_ = 0;  // live keys
     std::unique_ptr<MemoryMap> memory_; // allocated only by the explicit fixture seam
     std::shared_ptr<ScratchSlab> slab_;
+    std::shared_ptr<const ScratchBounds> bounds_;
     ScratchResource data_resource_ = ScratchResource::erased_data;
     ScratchResource index_resource_ = ScratchResource::erased_index;
     std::uint64_t key_limit_ = 0;

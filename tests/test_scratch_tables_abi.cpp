@@ -5,6 +5,7 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/native_host.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
+#include "../src/native_execution_consumer.hpp"
 
 #include <algorithm>
 #include <array>
@@ -101,6 +102,14 @@ private:
         auto next = descriptor();
         require(setter(handle(*this), &next) == (is_stream ? -2 : -3), "active setter refusal");
         require(setter(handle(*this), nullptr) == (is_stream ? -2 : -3), "active NULL refusal");
+        pf_scratch_tables_v2 optional{};
+        optional.struct_size = sizeof(optional);
+        optional.version = 2;
+        optional.active_fields = PF_SCRATCH_BOUND_U | PF_SCRATCH_BOUND_R; // Finite zero.
+        require(strategy_set_scratch_tables_v2(handle(*this), &optional) == (is_stream ? -2 : -3),
+                "active v2 replacement refusal");
+        require(strategy_set_scratch_tables_v2(handle(*this), nullptr) == (is_stream ? -2 : -3),
+                "active v2 NULL refusal");
         same_config(*this, before);
     }
 };
@@ -297,6 +306,95 @@ void invalid_layouts_precede_provider_mutation() {
     layout_refusal_precedes_provider_mutation(config);
 }
 
+class OptionalHost final : public NativeStrategyHost {
+public:
+    std::shared_ptr<const detail::ScratchBounds> observed;
+    bool slab = false;
+    int calls = 0;
+    void prepare_native_begin(const NativeBeginArgs&) override {
+        observed = NativeExecutionConsumer::bound(*this).scratch_bounds_for_run();
+        slab = static_cast<bool>(scratch_tables_for_run());
+    }
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override { ++calls; }
+};
+
+void optional_v2_layout_copy_and_atomic_replacement() {
+    static_assert(std::is_standard_layout<pf_scratch_tables_v2>::value, "v2 is a C POD");
+    static_assert(sizeof(pf_scratch_tables_v1) == 104, "v1 ABI unchanged");
+    static_assert(sizeof(pf_scratch_tables_v2) == 112, "v2 exact independent layout");
+    static_assert(offsetof(pf_scratch_tables_v2, active_fields) == 8, "active mask follows version");
+    static_assert(offsetof(pf_scratch_tables_v2, K_q) == 16, "v2 maxima start at byte 16");
+    static_assert(offsetof(pf_scratch_tables_v2, reserved) == 104, "reserved last");
+    static_assert(static_cast<std::uint64_t>(detail::ScratchBound::K_q) == PF_SCRATCH_BOUND_K_Q,
+                  "C and C++ retired bit");
+    static_assert(static_cast<std::uint64_t>(detail::ScratchBound::B_V) == PF_SCRATCH_BOUND_B_V,
+                  "C and C++ byte bit");
+    static_assert(static_cast<std::uint64_t>(detail::ScratchBound::R) == PF_SCRATCH_BOUND_R,
+                  "C and C++ root bit");
+    OptionalHost host;
+    require(host.configure_native(spec("scratch-abi-v2")).status == NativeSetupStatus::Applied,
+            "v2 compatibility host uses a real configured native run");
+    pf_scratch_tables_v2 config{};
+    config.struct_size = sizeof(config);
+    config.version = 2;
+    config.active_fields = PF_SCRATCH_BOUND_U | PF_SCRATCH_BOUND_B_C;
+    config.B_c = 123;
+    require(strategy_set_scratch_tables_v2(nullptr, &config) == -1, "v2 NULL handle refused");
+    require(strategy_set_scratch_tables_v2(handle(host), &config) == 0, "v2 mixed finite/zero accepted");
+    const auto installed = config;
+    config.U = 999; config.B_c = 999; // Cannot modify the copied policy.
+    const auto reject = [&](pf_scratch_tables_v2 bad, const char* code) {
+        require(strategy_set_scratch_tables_v2(handle(host), &bad) == -1, "invalid v2 descriptor refused");
+        require(std::strcmp(strategy_get_last_error_code(handle(host)), code) == 0,
+                "v2 refusal carries its typed code");
+    };
+    auto bad = installed;
+    --bad.struct_size;
+    reject(bad, "setting_rejected");
+    bad = installed; bad.version = 1;
+    reject(bad, "setting_rejected");
+    bad = installed; bad.reserved = 1;
+    reject(bad, "setting_rejected");
+    bad = installed; bad.active_fields |= UINT64_C(1) << 63;
+    reject(bad, "setting_rejected");
+    bad = installed; bad.B_U = 1; // Nonzero value without its presence bit.
+    reject(bad, "setting_rejected");
+    bad = installed; bad.active_fields |= PF_SCRATCH_BOUND_K_Q; bad.K_q = 1;
+    reject(bad, "setting_unsupported");
+    bad = installed; bad.active_fields |= PF_SCRATCH_BOUND_B_Q; bad.B_q = 1;
+    reject(bad, "setting_unsupported");
+    bad = installed; bad.active_fields |= PF_SCRATCH_BOUND_V; bad.V = 28;
+    reject(bad, "setting_unsupported");
+    host.run(bars.data(), 2);
+    require(host.calls == 2 && host.observed && !host.slab, "v2 uses real disk path, never P0 slab");
+    require(host.observed->active_fields == installed.active_fields
+            && host.observed->manifest.U == 0 && host.observed->manifest.B_c == 123,
+            "invalid replacements preserve copied mixed finite/zero policy");
+    require(!host.observed->active(detail::ScratchBound::B_U)
+            && !host.observed->active(detail::ScratchBound::K_c),
+            "omitted paired fields remain logically unbounded");
+    const auto preceding = host.observed;
+    auto legacy = descriptor();
+    require(setter(handle(host), &legacy) == 0, "explicit v1 replaces v2");
+    host.run(bars.data(), 2);
+    require(host.slab && !host.observed && preceding->manifest.B_c == 123,
+            "v1 preserves its fixed slab and old policy owners stay valid");
+    require(strategy_set_scratch_tables_v2(handle(host), nullptr) == 0, "v2 NULL replaces v1 with disk");
+    host.run(bars.data(), 2);
+    require(!host.slab && !host.observed && host.calls == 6, "NULL v2 reset completed on real host");
+    for (const auto roots : {UINT64_C(0), UINT64_C(1), UINT64_C(65)}) {
+        auto with_roots = installed;
+        with_roots.active_fields |= PF_SCRATCH_BOUND_R;
+        with_roots.R = roots;
+        require(strategy_set_scratch_tables_v2(handle(host), &with_roots) == 0,
+                "v2 supports an independent finite root maximum, including zero");
+        host.run(bars.data(), 2); // Native bootstrap itself consumes no roots.
+        require(host.observed && host.observed->active(detail::ScratchBound::R)
+                    && host.observed->manifest.R == roots && !host.slab,
+                "copied R policy reaches a completed native begin");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -305,6 +403,7 @@ int main() {
         active_batch_and_stream_refusals();
         allocation_precedes_provider_and_copies_drop_ownership();
         invalid_layouts_precede_provider_mutation();
+        optional_v2_layout_copy_and_atomic_replacement();
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "test_scratch_tables_abi: %s\n", error.what());

@@ -1088,6 +1088,67 @@ typedef struct pf_scratch_tables_v1 {
 PF_API int strategy_set_scratch_tables_v1(pf_strategy_t s,
                                          const pf_scratch_tables_v1* config);
 
+/** Independent optional logical bounds. The bit order follows the eleven
+ *  maxima in pf_scratch_tables_v1; v1's layout and all-zero P0 semantics are
+ *  unchanged. These constants are uint64_t masks, not backend selectors. */
+#define PF_SCRATCH_BOUND_K_Q (UINT64_C(1) << 0)
+#define PF_SCRATCH_BOUND_B_Q (UINT64_C(1) << 1)
+#define PF_SCRATCH_BOUND_K_E (UINT64_C(1) << 2)
+#define PF_SCRATCH_BOUND_B_E (UINT64_C(1) << 3)
+#define PF_SCRATCH_BOUND_K_C (UINT64_C(1) << 4)
+#define PF_SCRATCH_BOUND_B_C (UINT64_C(1) << 5)
+#define PF_SCRATCH_BOUND_U   (UINT64_C(1) << 6)
+#define PF_SCRATCH_BOUND_B_U (UINT64_C(1) << 7)
+#define PF_SCRATCH_BOUND_V   (UINT64_C(1) << 8)
+#define PF_SCRATCH_BOUND_B_V (UINT64_C(1) << 9)
+#define PF_SCRATCH_BOUND_R   (UINT64_C(1) << 10)
+
+/** Version 2 uses the existing disk/arena stores with independent admission
+ *  checks, never a fixed slab. Set struct_size = sizeof(pf_scratch_tables_v2),
+ *  version = 2, reserved = 0. An active bit supplies a finite maximum,
+ *  including zero; an inactive field must be zero and has no logical bound.
+ *  Counts include distinct historical keys after erase; bytes count stored
+ *  key strings, excluding record headers, index slots and page padding.
+ *  Physical allocation, arena quotas, disk I/O and representable offsets can
+ *  still fail. No sentinel value denotes infinity.
+ *  K_q/B_q are retired slots: explicit zero is accepted, nonzero is
+ *  setting_unsupported. The source exit-rank representation tracks at most
+ *  27 IDs; an active V greater than 27 is setting_unsupported.
+ *  R bounds rooted replacement successors, including inline rows before
+ *  their first flush. Rootless submissions and kept-handle replacements
+ *  consume no root capacity. Native root errors expose exact limit/need;
+ *  the C error arguments retain resource and the text names limit/need.
+ *  This descriptor neither attaches an arena nor selects a host profile. */
+typedef struct pf_scratch_tables_v2 {
+    uint32_t struct_size;
+    uint32_t version;
+    uint64_t active_fields;
+    uint64_t K_q;
+    uint64_t B_q;
+    uint64_t K_e;
+    uint64_t B_e;
+    uint64_t K_c;
+    uint64_t B_c;
+    uint64_t U;
+    uint64_t B_U;
+    uint64_t V;
+    uint64_t B_V;
+    uint64_t R;
+    uint64_t reserved;
+} pf_scratch_tables_v2;
+
+/** Copy v2 policy while idle; NULL restores disk defaults with no logical
+ *  bounds. Successful v1/v2 setters replace one another for the next run.
+ *  Active begin/callback/batch/stream calls refuse with the same -2/-3
+ *  lifecycle statuses as v1, preserving installed policy and retained stores.
+ *  Invalid shape/mask/inactive values return -1 with setting_rejected;
+ *  unsupported requested fields return -1 with setting_unsupported. Neither
+ *  kind of refusal partially installs a policy. Exceeding a supported bound
+ *  fails the actual run with scratch_capacity_exceeded and its store resource.
+ *  The descriptor is copied; caller memory is never retained. */
+PF_API int strategy_set_scratch_tables_v2(pf_strategy_t s,
+                                         const pf_scratch_tables_v2* config);
+
 /** Request cooperative abort of the run in progress (see c_abi.cpp). */
 PF_API void strategy_request_abort(pf_strategy_t s);
 /** 0 = completed, 1 = NOT_COMPLETED (aborted), -1 = @p s is NULL. */
