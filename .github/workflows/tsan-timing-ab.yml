@@ -59,9 +59,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            cmake ninja-build libeigen3-dev tzdata-legacy ccache strace \
+            cmake ninja-build libeigen3-dev tzdata-legacy ccache strace time \
             libssl-dev zlib1g-dev libsqlite3-dev python3-venv
-          python3 -m pip install --user --requirement scripts/requirements-preflight.txt
+
+      - name: Validate host and elapsed parser
+        run: |
+          mkdir -p "$BUILD_ROOT"
+          test -x /usr/bin/time
+          setarch --version
+          nproc
+          lscpu | grep -E 'Architecture|Model name|CPU\(s\)'
+          /usr/bin/time -f 'state=T row=probe replicate=0 elapsed_seconds=%e' \
+            -o "$BUILD_ROOT/probe.time" sleep 2
+          elapsed="$(awk -F'elapsed_seconds=' '/elapsed_seconds=/{print $2}' "$BUILD_ROOT/probe.time")"
+          awk -v value="$elapsed" 'BEGIN { exit !(value + 0 >= 1.5 && value + 0 <= 30) }'
 
       - name: Fetch and prepare both exact trees
         run: |
@@ -138,6 +149,11 @@ jobs:
             build="$2"
             log="$BUILD_ROOT/${state}-${JOB_ROW}.log"
             timing="$BUILD_ROOT/${state}-${JOB_ROW}.time"
+            echo "state=${state} row=${JOB_ROW} replicate=${JOB_REPLICATE} host"
+            uptime
+            free -m
+            nproc
+            lscpu | grep -E 'Architecture|Model name|CPU\(s\)'
             set +e
             /usr/bin/time -f "state=${state} row=${JOB_ROW} replicate=${JOB_REPLICATE} elapsed_seconds=%e" \
               -o "$timing" \
@@ -149,12 +165,17 @@ jobs:
             set -e
             cat "$timing"
             grep -E "Test #[0-9]+: ${JOB_ROW} .*Passed|100% tests passed, 0 tests failed" "$log"
-            elapsed="$(awk -F= '/elapsed_seconds=/{print $2}' "$timing")"
+            elapsed="$(awk -F'elapsed_seconds=' '/elapsed_seconds=/{print $2}' "$timing")"
             awk -v value="$elapsed" 'BEGIN { if (value + 0 < 60) exit 1 }'
             test "$rc" -eq 0
           }
-          measure A "$BUILD_ROOT/A"
-          measure B "$BUILD_ROOT/B"
+          if [ "$JOB_REPLICATE" -eq 2 ]; then
+            measure B "$BUILD_ROOT/B"
+            measure A "$BUILD_ROOT/A"
+          else
+            measure A "$BUILD_ROOT/A"
+            measure B "$BUILD_ROOT/B"
+          fi
 
       - name: Upload raw A/B evidence
         if: always()
@@ -164,7 +185,7 @@ jobs:
           path: |
             ${{ env.BUILD_ROOT }}/*.log
             ${{ env.BUILD_ROOT }}/*.time
-            ${{ env.BUILD_ROOT }}/A/Testing/**
-            ${{ env.BUILD_ROOT }}/B/Testing/**
+            ${{ env.BUILD_ROOT }}/A/runner/Testing/**
+            ${{ env.BUILD_ROOT }}/B/runner/Testing/**
           if-no-files-found: error
           retention-days: 14
