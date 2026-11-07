@@ -638,10 +638,16 @@ def report_default_delta_work(f):
         assert len(reports) == count + 1
         passes = [row["points"] for row in observed if row["type"] == "ratio"]
         assert passes and passes[0] > 0, "observer missed the real warmup ratio pass"
+        assert len(passes) >= 2 and passes[-1] > 0, \
+            ("observer missed the real finite-feed terminal ratio pass", count, mode, passes)
         assert any(row["type"] == "sqlite" and row["vm_steps"] > 0 for row in observed)
+        assert query(ledger, "SELECT COUNT(*) FROM inputs")[0][0] == count
         assert query(ledger, "SELECT COUNT(*) FROM events")[0][0] > count // 2
         final = json.loads(f.run([f.options.runner, "report", "--ledger", ledger])[0].stdout)
         assert len(final["closed_trades"]) > count // 4 and len(final["report"]["equity_curve"]) >= count
+        assert passes[-1] == len(final["report"]["equity_curve"]), \
+            ("terminal ratio pass did not cover the committed equity curve", count, mode, passes[-1],
+             len(final["report"]["equity_curve"]))
         ordinary = passes[1:-1]  # Warmup and finite-feed final work are separate.
         row = {"inputs": count, "mode": mode, "bytes": len(result.stdout.encode()),
                "ratio_calls": len(passes), "ratio_points": sum(passes),
@@ -675,6 +681,18 @@ def report_default_delta_work(f):
         for row in measurements:
             for key in ("ratio_calls", "ratio_points", "ordinary_ratio_points"):
                 assert row[key] <= row["v1_delta"][key], ("v2 ratio work exceeds v1 delta", key, row)
+    # A fresh writer with omitted ratio options has only warmup and finite-file
+    # terminal boundaries. Compare real observed work for each mode separately:
+    # equal whole-curve work in v1 and v2 is still ordinary work, not a pass.
+    for measurement in measurements:
+        rows = [measurement]
+        if f.options.mode == "delta-v2":
+            rows.append(measurement["v1_delta"])
+        for row in rows:
+            assert row["ordinary_ratio_points"] == 0, \
+                ("omitted ratio options recomputed whole-curve ratios between boundaries", row)
+            assert row["ratio_calls"] == 2, \
+                ("omitted ratio options require real warmup and terminal ratio passes only", row)
 
 
 def report_jsonl_delta_v2_contract(f):
