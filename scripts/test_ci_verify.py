@@ -32,6 +32,7 @@ from ci_verify import (
     ConfigError,
     KERNEL_MIN_TESTS,
     LIVE_SANITIZERS_MIN_TESTS,
+    MAX_CTEST_SHARDS,
     PROFILES,
     RELEASE_MIN_TESTS,
     ROOT,
@@ -381,8 +382,18 @@ class Scripted:
                 registry = self.exits['ctest_shard_inventory']
                 names = list(registry)
                 if '--show-only=json-v1' in argv:
+                    commands = self.exits.get('ctest_shard_commands', {})
+                    properties = self.exits.get('ctest_shard_properties', {})
                     return Completed(0, json.dumps({
-                        'tests': [{'name': name} for name in names],
+                        'tests': [{
+                            'name': name,
+                            'command': list(commands.get(
+                                name, [str(self.build_dir / 'tests' / name)])) + (
+                                    ['--artifacts', str(
+                                        self.build_dir / 'tests/pytest-no-skips' / name)]
+                                    if self.exits.get('ctest_shard_artifacts') else []),
+                            'properties': properties.get(name, []),
+                        } for name in names],
                     }).encode())
                 labelled = set(self.exits.get('ctest_shard_labelled', ()))
                 if '-L' in argv:
@@ -528,6 +539,22 @@ class Scripted:
             # A real, empty CTest inventory proves the no-test exit policy.
             # Configure/build remain scripted; no engine executable is run.
             (self.build_dir / 'CTestTestfile.cmake').write_text('# deliberately empty inventory\n')
+        if (self.profile == 'sanitizers'
+                and 'ctest_shard_inventory' in self.exits
+                and not self.exits.get('actual_empty_ctest')):
+            no_targets = set(self.exits.get('ctest_shard_no_targets', ()))
+            target_names = self.exits.get('ctest_shard_target_names', {})
+            link_outputs = self.exits.get('ctest_shard_link_outputs', {})
+            for name in self.exits['ctest_shard_inventory']:
+                if name in no_targets:
+                    continue
+                target = target_names.get(name, name)
+                output = link_outputs.get(
+                    target, str(self.build_dir / 'tests' / name))
+                link = self.build_dir / 'tests' / 'CMakeFiles' / f'{target}.dir' / 'link.txt'
+                link.parent.mkdir(parents=True, exist_ok=True)
+                with open(link, 'w', encoding='utf-8') as stream:
+                    stream.write(f'c++ -o {output}\n')
         # 'example_commands' == 'absent' scripts a configure that wrote no
         # compile database at all.
         if self.exits.get('example_commands') != 'absent':
@@ -747,15 +774,16 @@ def failure_stages(summary: dict) -> list[str]:
 
 class ConfigValidation(unittest.TestCase):
     def test_ctest_shard_rejects_each_invalid_index_count_and_syntax(self):
-        for value in ('0/4', '5/4', '1/9', '9/9', '-1/4', '1/0',
+        for value in ('0/4', '5/4', '1/17', '17/16', '17/17', '-1/4', '1/0',
                       '1/-1', '1', '1/2/3', 'one/4', '1/one', '1.0/4', '1/04'):
             with self.subTest(shard=value):
                 with self.assertRaises(ConfigError):
                     parse_args(['debug', '--ctest-shard', value])
         self.assertEqual(main(['debug', '--ctest-shard', '5/4']), 2)
-        self.assertEqual(main(['debug', '--ctest-shard', '1/9']), 2)
+        self.assertEqual(main(['debug', '--ctest-shard', '1/17']), 2)
+        self.assertEqual(main(['debug', '--ctest-shard', '17/16']), 2)
         self.assertIsNone(parse_args(['debug']).ctest_shard)
-        for count in range(1, 9):
+        for count in range(1, MAX_CTEST_SHARDS + 1):
             for index in range(1, count + 1):
                 args = parse_args(['debug', '--ctest-shard', f'{index}/{count}'])
                 self.assertEqual((args.ctest_shard.index, args.ctest_shard.count), (index, count))
@@ -1306,7 +1334,7 @@ class RowFloorConfig(unittest.TestCase):
 
     def test_ctest_partition_is_exhaustive_disjoint_and_nonempty_for_every_count(self):
         names = tuple(f'public_{index:03}' for index in range(256))
-        for count in range(1, 9):
+        for count in range(1, MAX_CTEST_SHARDS + 1):
             with self.subTest(count=count):
                 parts = ci_verify.ctest_partitions(names, count)
                 flat = [name for part in parts for name in part]
@@ -1324,7 +1352,7 @@ class RowFloorConfig(unittest.TestCase):
 
     def test_ctest_partition_keeps_existing_owners_when_names_are_added(self):
         names = tuple(f'public_{index:03}' for index in range(256))
-        for count in range(2, 9):
+        for count in range(2, MAX_CTEST_SHARDS + 1):
             before = ci_verify.ctest_partitions(names, count)
             after = ci_verify.ctest_partitions((*names, 'a_new_test', 'z_new_test'), count)
             for index, part in enumerate(before):
@@ -1708,6 +1736,8 @@ class RowFloorConfig(unittest.TestCase):
             first.update(('kernel-residuals', 'native-help'))
         if profile == 'sanitizers':
             every |= {'sanitizer-public-flag'}
+            if len(summaries) > 1:
+                every |= {'ctest-target-inventory', 'ctest-target-mapping'}
         floor = LAB_SHARD_FLOORS.get(profile, {}).get(overlay)
         registry = reference['ctestRegisteredNames']
         excluded = sorted(SHARD_SLOW_FIXTURE_NAMES) if LAB_SHARD_EXCLUDE[profile] else []
@@ -1725,6 +1755,11 @@ class RowFloorConfig(unittest.TestCase):
             self.assertEqual(summary['ctestRegisteredNames'], sorted(registry))
             self.assertEqual(summary['ctestRegistered'], len(registry))
             self.assertEqual(summary['ctestRegistrySha256'], digest)
+            if profile == 'sanitizers' and len(summaries) > 1:
+                self.assertEqual(set(summary['ctestTargetMap']), set(registry))
+                self.assertEqual(set(summary['ctestUnmappedBuildPaths']), set(registry))
+                self.assertEqual(summary['ctestUnmappedBuildPaths'],
+                                 reference['ctestUnmappedBuildPaths'])
             self.assertEqual(summary['ctestExcludedNames'], excluded)
             self.assertEqual(summary['ctestUnshardedSelectedNames'], selection)
             self.assertEqual(summary['ctestUnshardedSelected'], len(selection))
@@ -1774,7 +1809,7 @@ class RowFloorConfig(unittest.TestCase):
             self.assertGreaterEqual(sum(len(s['ctestRan']) for s in summaries), floor)
 
     def test_ctest_union_accepts_every_count_and_refuses_a_lost_or_duplicated_row(self):
-        for count in range(1, 9):
+        for count in range(1, MAX_CTEST_SHARDS + 1):
             with self.subTest(count=count):
                 summaries = self.shard_summaries(count)
                 self.assert_lab_shard_contract(summaries)
@@ -1804,6 +1839,33 @@ class RowFloorConfig(unittest.TestCase):
         within[0]['ctestRan'].append(within[0]['ctestRan'][0])
         with self.assertRaisesRegex(ValueError, 'duplicated CTest row'):
             ci_verify.validate_ctest_shard_union(within)
+
+    def test_sanitizer_union_requires_target_and_data_path_evidence(self):
+        baseline = self.shard_summaries(
+            2, profile='sanitizers', ctest_shard_artifacts=True)
+        self.assertIsNone(ci_verify.validate_ctest_shard_union(baseline))
+        for key in ('ctestTargetMap', 'ctestUnmappedBuildPaths', 'ctestBuildTargets'):
+            changed = json.loads(json.dumps(baseline))
+            for summary in changed:
+                summary.pop(key)
+            with self.subTest(missing=key), self.assertRaises(ValueError):
+                ci_verify.validate_ctest_shard_union(changed)
+        for name in ('ctest-target-inventory', 'ctest-target-mapping'):
+            changed = json.loads(json.dumps(baseline))
+            changed[1]['stages'] = [
+                stage for stage in changed[1]['stages'] if stage['name'] != name]
+            with self.subTest(stage=name), self.assertRaisesRegex(
+                    ValueError, 'did not prove required stage ' + name):
+                ci_verify.validate_ctest_shard_union(changed)
+        changed = json.loads(json.dumps(baseline))
+        row = changed[1]['ctestRegisteredNames'][0]
+        changed[1]['ctestUnmappedBuildPaths'][row] = ['different-data-path']
+        with self.assertRaisesRegex(ValueError, 'mismatched CTest registry'):
+            ci_verify.validate_ctest_shard_union(changed)
+        changed = json.loads(json.dumps(baseline))
+        changed[1]['ctestBuildTargets'].pop()
+        with self.assertRaisesRegex(ValueError, 'build targets do not match'):
+            ci_verify.validate_ctest_shard_union(changed)
 
     def test_real_summaries_match_lab_stages_and_floors_in_both_fixture_worlds(self):
         for profile in ('release', 'debug', 'sanitizers', 'kernel'):
@@ -2952,6 +3014,253 @@ class GitObjectDiscovery(unittest.TestCase):
             self.assertFalse(ci_verify.pinned_object_present(source, scripted, '0' * 40))
 
 
+class CTestTargetMapping(unittest.TestCase):
+    def test_generated_ctest_command_parser_preserves_names_and_every_argument(self):
+        with tempfile.TemporaryDirectory(prefix='ci-ctest-quoted-') as temporary:
+            build = Path(temporary)
+            expected = {}
+            for index, name in enumerate(('row #one [quoted]', 'NAME')):
+                command = (
+                    str(build / f'bin/resolved output {index}'),
+                    'a "quote" (and #hash)', r'back\slash', '${literal}',
+                    'one;two', r'one\;two', 'line\ncarriage\rtab\t', '',
+                    '[=[literal brackets]=]', 'continued-argument',
+                )
+                expected[name] = command
+                # These are generated CMake escapes, rather than shell quoting.
+                text = (
+                    f'add_test([==[\n{name}]==] "{command[0]}"\n'
+                    r'  "a \"quote\" (and #hash)" "back\\slash" "\${literal}"'
+                    '\n'
+                    r'  "one;two" "one\\;two" "line\ncarriage\rtab\t" ""'
+                    '\n'
+                    '  [==[\n[=[literal brackets]=]]==] "continued-\\\nargument")\n'
+                    'set_tests_properties([==[%s]==] PROPERTIES '
+                    '"DESCRIPTION" "add_test(fake ignored)")\n' % name
+                )
+                child = build / f'generated-{index}'
+                child.mkdir()
+                with open(child / 'CTestTestfile.cmake', 'w', encoding='utf-8') as stream:
+                    stream.write(text)
+            with open(build / 'CTestTestfile.cmake', 'w', encoding='utf-8') as stream:
+                stream.write(
+                    '# add_test(commented ignored)\n'
+                    '#[==[\nadd_test(bracket_comment ignored)\n]==]\n'
+                    'subdirs("generated-0" "generated-1")\n')
+            # A nested build is not part of the registry unless subdirs names it.
+            unrelated = build / 'historical-abi'
+            unrelated.mkdir()
+            with open(unrelated / 'CTestTestfile.cmake', 'w', encoding='utf-8') as stream:
+                stream.write('add_test([=[NAME]=] "unrelated-output")\n')
+            self.assertEqual(ci_verify.ctest_configure_commands(build), expected)
+
+    def test_missing_json_commands_keep_generated_argument_targets_and_json_properties(self):
+        with tempfile.TemporaryDirectory(prefix='ci-target-map-source-') as temporary:
+            build = Path(temporary)
+            outputs = {
+                'short_target': build / 'tests' / 'target',
+                'long_target': build / 'tests' / 'target with spaces',
+            }
+            for target, output in outputs.items():
+                link = build / 'tests' / 'CMakeFiles' / f'{target}.dir' / 'link.txt'
+                link.parent.mkdir(parents=True)
+                with open(link, 'w', encoding='utf-8') as stream:
+                    stream.write(f'c++ -o "{output}"\n')
+            with open(build / 'CTestTestfile.cmake', 'w', encoding='utf-8') as stream:
+                stream.write('subdirs("tests")\nsubdirs("tutorial")\n')
+            tutorial = build / 'tutorial'
+            tutorial.mkdir()
+            with open(tutorial / 'CTestTestfile.cmake', 'w', encoding='utf-8') as stream:
+                stream.write(
+                    f'add_test([=[tutorial row]=] "{outputs["long_target"]}" '
+                    f'"--data={build}/tutorial/data.bin")\n')
+            with open(build / 'tests' / 'CTestTestfile.cmake', 'w', encoding='utf-8') as stream:
+                stream.write(
+                    f'add_test([=[wrapper row]=] "{build}/bin/unbuilt-wrapper" '
+                    f'"-DPAIR={outputs["long_target"]};{build}/include")\n'
+                    f'add_test([=[JSON command wins]=] "{outputs["short_target"]}")\n')
+            inventory = {
+                'tests': [
+                    {'name': 'tutorial row'},
+                    {'name': 'wrapper row', 'properties': [{
+                        'name': 'ENVIRONMENT',
+                        'value': [
+                            f'PF_TARGET={outputs["short_target"]}',
+                            f'PF_RECEIPT={build}/receipt.json',
+                        ],
+                    }]},
+                    {'name': 'JSON command wins', 'command': [sys.executable]},
+                ],
+            }
+            mapping, unmapped = ci_verify.ctest_target_mapping(
+                json.dumps(inventory).encode(), build)
+            self.assertEqual(mapping, {
+                'tutorial row': ('long_target',),
+                'wrapper row': tuple(sorted(outputs)),
+                'JSON command wins': (),
+            })
+            self.assertEqual(unmapped, {
+                'tutorial row': ('tutorial/data.bin',),
+                'wrapper row': ('bin/unbuilt-wrapper', 'include', 'receipt.json'),
+                'JSON command wins': (),
+            })
+
+    def test_missing_json_command_refuses_without_generated_ctest_source(self):
+        with tempfile.TemporaryDirectory(prefix='ci-target-map-no-source-') as temporary:
+            build = Path(temporary)
+            inventory = {'tests': [{'name': 'needs-configure-source', 'properties': []}]}
+            with self.assertRaisesRegex(ValueError, 'generated CTestTestfile.cmake source'):
+                ci_verify.ctest_target_mapping(
+                    json.dumps(inventory).encode(), build)
+            for source in (
+                    '# no rows\n',
+                    'add_test(another_row "another-command")\n'):
+                with open(build / 'CTestTestfile.cmake', 'w', encoding='utf-8') as stream:
+                    stream.write(source)
+                with self.subTest(source=source), self.assertRaisesRegex(
+                        ValueError, 'needs-configure-source.*no command'):
+                    ci_verify.ctest_target_mapping(json.dumps(inventory).encode(), build)
+
+    def test_generated_ctest_command_source_refuses_malformed_or_duplicate_rows(self):
+        with tempfile.TemporaryDirectory(prefix='ci-ctest-source-invalid-') as temporary:
+            build = Path(temporary)
+            for source in (
+                    'add_test()\n', 'add_test(row)\n', 'add_test(row "")\n',
+                    'add_test(row "unterminated)\n', 'add_test([==[row "unterminated")\n',
+                    'add_test(row "bad\\q")\n',
+                    'add_test(row "one")\nadd_test(row "two")\n',
+                    'subdirs("missing-directory")\n'):
+                with open(build / 'CTestTestfile.cmake', 'w', encoding='utf-8') as stream:
+                    stream.write(source)
+                with self.subTest(source=source), self.assertRaises(ValueError):
+                    ci_verify.ctest_configure_commands(build)
+
+    def test_target_mapping_keeps_argument_targets_and_records_build_data_paths(self):
+        with tempfile.TemporaryDirectory(prefix='ci-target-map-') as temporary:
+            build = Path(temporary)
+            output = build / 'tests' / 'renamed-alpha'
+            link = build / 'tests' / 'CMakeFiles' / 'alpha_target.dir' / 'link.txt'
+            link.parent.mkdir(parents=True)
+            with open(link, 'w', encoding='utf-8') as stream:
+                stream.write(f'c++ -o {output}\n')
+            inventory = {
+                'tests': [
+                    {'name': 'alpha', 'command': [str(output)], 'properties': []},
+                    {'name': 'external', 'command': [sys.executable], 'properties': []},
+                    {'name': 'property_row', 'command': [sys.executable],
+                     'properties': [{
+                         'name': 'ENVIRONMENT',
+                         'value': [f'PF_TARGET={output}', f'TMPDIR={build}/tmp'],
+                     }]},
+                    {'name': 'mixed', 'command': [
+                        sys.executable, '--library', str(output),
+                        '--generated-include', str(build / 'include'),
+                        '--receipt=' + str(build / 'script-abi-receipt.json'),
+                        '--artifacts', str(build / 'tests/pytest-no-skips/mixed'),
+                    ], 'properties': []},
+                    {'name': 'list_argument', 'command': [
+                        sys.executable, f'-DINPUTS={build}/include|{output}',
+                    ], 'properties': []},
+                    {'name': 'data', 'command': [
+                        sys.executable, '--artifacts', str(build / 'tests/not-a-target'),
+                    ], 'properties': []},
+                ],
+            }
+            mapping, unmapped = ci_verify.ctest_target_mapping(
+                json.dumps(inventory).encode(), build)
+            self.assertEqual(mapping['alpha'], ('alpha_target',))
+            self.assertEqual(mapping['external'], ())
+            self.assertEqual(mapping['property_row'], ('alpha_target',))
+            self.assertEqual(mapping['mixed'], ('alpha_target',))
+            self.assertEqual(mapping['list_argument'], ('alpha_target',))
+            self.assertEqual(mapping['data'], ())
+            self.assertEqual(unmapped, {
+                'alpha': (), 'external': (), 'property_row': ('tmp',),
+                'mixed': ('include', 'script-abi-receipt.json',
+                          'tests/pytest-no-skips/mixed'),
+                'list_argument': ('include',),
+                'data': ('tests/not-a-target',),
+            })
+            self.assertEqual(
+                set(ci_verify.ctest_shard_build_targets(
+                    mapping, ('alpha', 'external'))),
+                set(ci_verify.ARCHIVE_TARGETS) | {'alpha_target'})
+
+    def test_target_mapping_refuses_malformed_inventory(self):
+        valid = {'name': 'valid', 'command': [sys.executable]}
+        with tempfile.TemporaryDirectory(prefix='ci-target-map-invalid-') as temporary:
+            build = Path(temporary)
+            # A malformed JSON command must be refused even when a generated
+            # command is available; only an omitted key permits recovery.
+            with open(build / 'CTestTestfile.cmake', 'w', encoding='utf-8') as stream:
+                stream.write('add_test(valid "generated-command")\n')
+            for document in (
+                    {}, {'tests': []}, {'tests': 'wrong type'},
+                    {'tests': [valid, valid]}, {'tests': [None]},
+                    *({'tests': [{'name': 'valid', 'command': command}]}
+                      for command in (sys.executable, [], None, [''], [42])),
+                    {'tests': [{'name': '', 'command': [sys.executable]}]},
+                    {'tests': [{**valid, 'properties': {}}]},
+                    {'tests': [{**valid, 'properties': [None]}]},
+                    {'tests': [{**valid, 'properties': [{'value': [42]}]}]}):
+                with self.subTest(document=document), self.assertRaises(ValueError):
+                    ci_verify.ctest_target_mapping(
+                        json.dumps(document).encode(), build)
+            for output in (b'not JSON', b'\xff', b'[]', b'null'):
+                with self.subTest(output=output), self.assertRaises(ValueError):
+                    ci_verify.ctest_target_mapping(output, build)
+
+    def test_disk_receipt_reports_input_sensitive_totals_and_peak_files(self):
+        with tempfile.TemporaryDirectory(prefix='ci-disk-receipt-') as temporary:
+            build = Path(temporary)
+            object_file = build / 'obj' / 'one.o'
+            archive = build / 'lib' / 'libpineforge.a'
+            binary = build / 'tests' / 'test_alpha'
+            object_file.parent.mkdir()
+            archive.parent.mkdir()
+            binary.parent.mkdir()
+            object_file.write_bytes(b'123')
+            archive.write_bytes(b'12345')
+            binary.write_bytes(b'1234567')
+            cfg = ci_verify.build_config(
+                ['sanitizers', '--build-dir', str(build)],
+                which=lambda name: '/fixture/bin/' + name,
+                stream_output=False)
+            driver = ci_verify.Driver(cfg)
+            driver.disk_binary_paths = (binary,)
+            # An interval sample must win over the start/end readings. The
+            # file sizes change too, so a constant receipt cannot satisfy it.
+            driver.disk_stop = mock.Mock()
+            driver.disk_stop.wait.side_effect = [False, True]
+            record = driver.record_disk_sample
+
+            def changed_sample(label):
+                if label == 'interval':
+                    object_file.write_bytes(b'123456789')
+                record(label)
+
+            with mock.patch.object(driver, 'record_disk_sample', side_effect=changed_sample), \
+                    mock.patch.object(ci_verify.shutil, 'disk_usage', side_effect=[
+                        mock.Mock(total=100, used=20, free=80),
+                        mock.Mock(total=100, used=20, free=80),
+                        mock.Mock(total=100, used=60, free=40),
+                        mock.Mock(total=100, used=60, free=40),
+                    ]):
+                driver.start_disk_sampling()
+                driver.write_disk_telemetry()
+            with open(build / 'ci-logs' / 'disk-telemetry.log', encoding='utf-8') as stream:
+                receipt = stream.read()
+            self.assertIn('objects.bytes=9', receipt)
+            self.assertIn('archives.bytes=5', receipt)
+            self.assertIn('test-binaries.bytes=7', receipt)
+            self.assertIn('tests/test_alpha', receipt)
+            self.assertIn('peak {"archivesBytes": 5, "label": "interval"', receipt)
+            self.assertIn('df shard=unsharded label=shard-start mount=root', receipt)
+            self.assertIn('df shard=unsharded label=peak mount=root', receipt)
+            self.assertEqual(driver.summary['diskTelemetry']['minimumFreeBytes'],
+                             {'root': 40, 'mnt': 40})
+
+
 class DriverOrderingAndAggregation(unittest.TestCase):
     def test_configure_binds_invoking_python_without_resolving_venv_path(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -3022,6 +3331,35 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         code = run_driver(profile, build_dir, scripted, extra=extra)
         summary = load_summary(build_dir)
         return code, summary, scripted, build_dir
+
+    def test_sanitizer_shard_build_targets_follow_the_selected_registry_rows(self):
+        inventory = (*(f'target_row_{index:04d}' for index in range(1024)),
+                     *SHARD_SLOW_FIXTURE_NAMES)
+        code, summary, scripted, _ = self.run_profile(
+            'sanitizers',
+            extra=['--ctest-shard', '1/16'],
+            ctest_shard_inventory=inventory,
+            ctest_shard_artifacts=True,
+            ctest_shard_labelled=SHARD_SLOW_FIXTURE_NAMES,
+            junit_help='absent')
+        self.assertEqual(code, 0, summary['failures'])
+        build = next(argv for argv in scripted.calls
+                      if argv[0] == 'cmake' and '--build' in argv)
+        self.assertIn('--target', build)
+        build_targets = build[build.index('--target') + 1:]
+        self.assertEqual(build_targets, summary['ctestBuildTargets'])
+        self.assertTrue(set(ci_verify.ARCHIVE_TARGETS) <= set(build_targets))
+        self.assertTrue(set(ci_verify.CTEST_INSTALL_TARGETS) <= set(build_targets))
+        self.assertEqual(set(build_targets) - set(ci_verify.ARCHIVE_TARGETS)
+                         - set(ci_verify.CTEST_INSTALL_TARGETS),
+                         set(summary['ctestRan']))
+        self.assertLess(len(build_targets), len(inventory) + len(ci_verify.ARCHIVE_TARGETS)
+                        + len(ci_verify.CTEST_INSTALL_TARGETS))
+        self.assertEqual(set(summary['ctestTargetMap']), set(inventory))
+        self.assertEqual(summary['ctestUnmappedBuildPaths'], {
+            name: ['tests/pytest-no-skips/' + name] for name in inventory})
+        names = [stage['name'] for stage in summary['stages']]
+        self.assertEqual(len(names), len(set(names)))
 
     def test_profile_summaries_match_lab_exclusion_declarations(self):
         commands = {name: 0 for name in LAB_SHARD_GUARDS | {'source-guard-twin-parity'}}

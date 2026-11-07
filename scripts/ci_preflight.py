@@ -209,7 +209,7 @@ POST_ARM_BUILD_NAME = ('build-shard (ubuntu-24.04-arm, ${{ matrix.build_type }},
                        '${{ matrix.shard }}/4)')
 POST_ARM_CTEST_EXCLUSION = (
     " ${{ matrix.build_type == 'Release' && '--exclude-label ci-script' || '' }}")
-POST_SHARDS = {'build': 4, 'build-debug': 2, 'build-arm': 4, 'sanitizers': 8, 'kernel-only': 2}
+POST_SHARDS = {'build': 4, 'build-debug': 2, 'build-arm': 4, 'sanitizers': 16, 'kernel-only': 2}
 POST_LEG_GATES = {
     'build-release-gate': ('build', 'build (ubuntu-24.04, Release)'),
     'build-debug-gate': ('build-debug', 'build (ubuntu-24.04, Debug)'),
@@ -3909,6 +3909,61 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
     return findings
 
 
+def sanitizer_disk_workflow_findings(job: str) -> list[str]:
+    """Keep hosted-image recovery before checkout and failure-visible."""
+    findings = []
+    steps = _steps(job)
+    cleanup = [_step_named(steps, '      - name: ' + name) for name in (
+        'Remove disposable .NET installation', 'Remove disposable Android SDK',
+        'Remove disposable GHC installation', 'Remove disposable Boost installation',
+        'Prune unused Docker images',
+    )]
+    before = _step_named(
+        steps, '      - name: Measure sanitizer disk space before hosted-image cleanup')
+    after = _step_named(
+        steps, '      - name: Measure sanitizer disk space after hosted-image cleanup')
+    start = _step_named(
+        steps, '      - name: Measure sanitizer disk space at shard start')
+    final = _step_named(
+        steps, '      - name: Measure sanitizer disk space after verification')
+    prepare = _step_named(steps, '      - name: Prepare sanitizer build storage')
+    dependencies = _step_named(steps, '      - name: Install dependencies')
+    verify = _step_named(steps, '      - name: Verify (sanitizers)')
+    checkout_index = next(
+        (index for index, step in enumerate(steps) if 'actions/checkout@' in _code(step)),
+        None)
+    if not all(cleanup):
+        findings.append('sanitizers must reclaim hosted-image bulk before checkout')
+        return findings
+    cleanup_positions = [steps.index(step) for step in cleanup]
+    if (checkout_index is None
+            or not before or not after
+            or _step_values(before, 'run') != ['df -B1 -P / /mnt']
+            or _step_values(after, 'run') != ['df -B1 -P / /mnt']
+            or 'always()' not in _code(after)
+            or not steps.index(before) < min(cleanup_positions)
+            or not max(cleanup_positions) < steps.index(after) < checkout_index):
+        findings.append('sanitizers must measure and clean image disk before checkout')
+    if any('set -euo pipefail' not in _code(step)
+           or '||' in _code(step) or 'set +e' in _code(step)
+           or _step_values(step, 'continue-on-error')
+           or _step_values(step, 'if') != [AUTHZ_SUCCESS]
+           for step in cleanup):
+        findings.append('sanitizer image cleanup must fail closed')
+    if (not start or not prepare or not dependencies or not verify
+            or _step_values(start, 'run') != ['df -B1 -P / /mnt']
+            or checkout_index is None
+            or not checkout_index < steps.index(prepare) < steps.index(dependencies)
+            < steps.index(start) < steps.index(verify)):
+        findings.append('sanitizers must record df at shard start after preparation')
+    if (not final or not verify
+            or _step_values(final, 'run') != ['df -B1 -P / /mnt']
+            or 'always()' not in _code(final)
+            or steps.index(final) <= steps.index(verify)):
+        findings.append('sanitizers must record an always-run final df sample')
+    return findings
+
+
 def post_shard_workflow_findings(jobs: dict[str, str]) -> list[str]:
     """Keep each leg independent, its cache single-writer and diagnostics distinct."""
     findings = []
@@ -3926,6 +3981,8 @@ def post_shard_workflow_findings(jobs: dict[str, str]) -> list[str]:
     for job, count in POST_SHARDS.items():
         body = jobs.get(job, '')
         steps = _steps(body)
+        if job == 'sanitizers':
+            findings += sanitizer_disk_workflow_findings(body)
         if ('actions/cache' in body
                 or re.search(r'(?m)^\s*cache\s*:', body)):
             findings.append(f'{job} must build cold without an Actions cache')

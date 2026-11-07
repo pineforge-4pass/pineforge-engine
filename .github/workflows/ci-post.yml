@@ -559,13 +559,13 @@ jobs:
   # instrumentation propagates into every test binary (CMakeLists.txt option
   # PINEFORGE_ENABLE_SANITIZERS).
   sanitizers:
-    name: sanitizers-shard (${{ matrix.shard }}/8)
+    name: sanitizers-shard (${{ matrix.shard }}/16)
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     runs-on: ubuntu-24.04
     env:
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
@@ -577,33 +577,14 @@ jobs:
         run: |
           echo "::error::authz did not pass; nothing of this run's code is checked out or run"
           exit 1
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Diagnostic partition: 16, pending the configure-only registry fixture
+      # and hosted measurements. Capacity must include repeated libraries:
+      # free after cleanup - common build bytes - largest shard target closure
+      # - transient overhead >= 20 GiB. Dividing a full build by N does not
+      # establish this bound; accept N only from every shard's sampled df peak.
+      - name: Measure sanitizer disk space before hosted-image cleanup
         if: ${{ needs.authz.result == 'success' }}
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-
-      - name: Measure sanitizer disk space before preparation
-        if: ${{ needs.authz.result == 'success' }}
-        run: df -h / /mnt
-
-      - name: Prepare sanitizer build storage
-        if: ${{ needs.authz.result == 'success' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo install -d -m 0775 -o "$USER" -g "$(id -gn)" \
-            "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/build-asan" \
-            "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/tmp" \
-            "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/.ccache"
-          [[ ! -e build-asan && ! -L build-asan ]]
-          ln -s -- \
-            "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/build-asan" \
-            build-asan
-          resolved_build="$(readlink -f -- build-asan)"
-          printf 'sanitizer build tree: %s\n' "$resolved_build"
-          [[ "$resolved_build" == "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/build-asan" ]]
-          stat -c '%A %U:%G %n' -- "$resolved_build" "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/tmp" "$CCACHE_DIR"
+        run: df -B1 -P / /mnt
 
       - name: Inventory disposable .NET installation
         if: ${{ needs.authz.result == 'success' }}
@@ -716,9 +697,37 @@ jobs:
           set -euo pipefail
           docker image prune -af
 
+      - name: Measure sanitizer disk space after hosted-image cleanup
+        if: ${{ always() && needs.authz.result == 'success' }}
+        run: df -B1 -P / /mnt
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: ${{ needs.authz.result == 'success' }}
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Prepare sanitizer build storage
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo install -d -m 0775 -o "$USER" -g "$(id -gn)" \
+            "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/build-asan" \
+            "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/tmp" \
+            "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/.ccache"
+          [[ ! -e build-asan && ! -L build-asan ]]
+          ln -s -- \
+            "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/build-asan" \
+            build-asan
+          resolved_build="$(readlink -f -- build-asan)"
+          printf 'sanitizer build tree: %s\n' "$resolved_build"
+          [[ "$resolved_build" == "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/build-asan" ]]
+          stat -c '%A %U:%G %n' -- "$resolved_build" "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/tmp" "$CCACHE_DIR"
+
       - name: Measure sanitizer disk space after preparation
         if: ${{ always() && needs.authz.result == 'success' }}
-        run: df -h / /mnt
+        run: df -B1 -P / /mnt
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -740,15 +749,19 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache
 
+      - name: Measure sanitizer disk space at shard start
+        if: ${{ needs.authz.result == 'success' }}
+        run: df -B1 -P / /mnt
+
       - name: Verify (sanitizers)
         if: ${{ needs.authz.result == 'success' }}
         env:
           TMPDIR: /mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/tmp
-        run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/8
+        run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/16
 
       - name: Measure sanitizer disk space after verification
         if: ${{ always() && needs.authz.result == 'success' }}
-        run: df -h / /mnt
+        run: df -B1 -P / /mnt
 
       - name: Stage and summarize diagnostics
         if: ${{ always() && needs.authz.result == 'success' }}
@@ -758,7 +771,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ci-diagnostics-sanitizers-shard-${{ matrix.shard }}-of-8
+          name: ci-diagnostics-sanitizers-shard-${{ matrix.shard }}-of-16
           path: ci-diagnostics/
           if-no-files-found: warn
 

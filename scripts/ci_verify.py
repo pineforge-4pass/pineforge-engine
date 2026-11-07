@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Callable
 
@@ -1095,6 +1096,9 @@ OBJECT_DIR = re.compile(r'(?:^|[/\\])CMakeFiles[/\\]([^/\\]+)\.dir[/\\]')
 # libpineforge_kernel.a (the kernel alone). stale-binaries holds each against
 # the files its own compiles read.
 ARCHIVE_TARGETS = ('pineforge', 'pineforge_kernel')
+# The shared window-plan library is installed beside the archives. Shard 1
+# still proves installation/smoke, even if none of its CTest rows names it.
+CTEST_INSTALL_TARGETS = ('pineforge_window_plan',)
 INCLUDE_DIRECTIVE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]', re.MULTILINE)
 
 
@@ -1110,6 +1114,9 @@ CTEST_SHARED_STAGES = frozenset(name for name, _ in SOURCE_GUARD_SCRIPTS) | froz
 CTEST_SHARD_PROFILES = frozenset((
     'release', 'debug', 'sanitizers', 'kernel', 'native', 'live-sanitizers', 'live-tsan',
 ))
+# expectation corrected: 8 -> 16, because the sanitizer diagnostic now
+# partitions its real registry into sixteen target-specific builds.
+MAX_CTEST_SHARDS = 16
 # Pinned to shards.mjs ABSENT_SKIP_STAGES, not a prefix or a moving guard list.
 CTEST_ABSENT_SKIP_STAGES = frozenset((
     'source-guard-c-abi', 'source-guard-native-source', 'source-guard-broker-hash',
@@ -1129,15 +1136,28 @@ class CTestShard:
 
     def __post_init__(self) -> None:
         if (type(self.index) is not int or type(self.count) is not int
-                or not 1 <= self.index <= self.count <= 8):
-            raise ConfigError('--ctest-shard requires 1 <= I <= N <= 8')
+                or not 1 <= self.index <= self.count <= MAX_CTEST_SHARDS):
+            raise ConfigError(
+                f'--ctest-shard requires 1 <= I <= N <= {MAX_CTEST_SHARDS}')
 
 
 def parse_ctest_shard(value: str) -> CTestShard:
-    if not re.fullmatch(r'[1-8]/[1-8]', value):
-        raise ConfigError('--ctest-shard must be I/N with 1 <= I <= N <= 8')
+    if not re.fullmatch(r'[1-9][0-9]*/[1-9][0-9]*', value):
+        raise ConfigError(
+            f'--ctest-shard must be I/N with 1 <= I <= N <= {MAX_CTEST_SHARDS}')
     index, count = map(int, value.split('/'))
     return CTestShard(index, count)
+
+
+@dataclass(frozen=True)
+class CTestShardDiscovery:
+    registry: tuple[str, ...]
+    selection: tuple[str, ...]
+    excluded: tuple[str, ...]
+    selected: tuple[str, ...]
+    expression: str
+    target_map: dict[str, tuple[str, ...]] | None = None
+    build_targets: tuple[str, ...] = ()
 
 
 def ctest_registry(output: bytes) -> tuple[str, ...]:
@@ -1179,6 +1199,416 @@ def ctest_partitions(names: tuple[str, ...] | list[str],
     if any(not part for part in partitions):
         raise ValueError('CTest shard would select zero rows; use fewer shards')
     return tuple(tuple(part) for part in partitions)
+
+
+def ctest_target_output_manifest(build_dir: Path) -> dict[Path, str]:
+    """Map generated target output paths to their CMake target names.
+
+    CTest's commands give resolved target-file arguments, but not the CMake
+    target name. The generated link recipes are the source of that name,
+    including targets whose OUTPUT_NAME differs from the target. An output
+    that is not unique is refused rather than guessed.
+    """
+    manifest: dict[Path, str] = {}
+    root = build_dir.resolve()
+    for link in root.rglob('link.txt'):
+        match = OBJECT_DIR.search(link.as_posix())
+        if match is None:
+            continue
+        target = match.group(1)
+        target_root = link.parent.parent.parent
+        try:
+            with open(link, encoding='utf-8', errors='replace') as stream:
+                text = stream.read()
+            argv = shlex.split(text)
+        except (OSError, ValueError) as error:
+            raise ValueError(f'cannot read generated link recipe {link}: {error}') from error
+        outputs: list[str] = []
+        for index, token in enumerate(argv):
+            if token == '-o' and index + 1 < len(argv):
+                outputs.append(argv[index + 1])
+            elif token.startswith('-o') and len(token) > 2:
+                outputs.append(token[2:])
+        if argv and Path(argv[0]).name in {'ar', 'llvm-ar', 'gcc-ar', 'ranlib'}:
+            outputs.extend(token for token in argv[1:]
+                           if token.endswith(('.a', '.so', '.dylib', '.dll', '.lib'))
+                           and not token.startswith('-'))
+        for raw in outputs:
+            if not raw or '$' in raw:
+                continue
+            output = Path(raw)
+            if not output.is_absolute():
+                output = target_root / output
+            output = output.resolve()
+            previous = manifest.get(output)
+            if previous is not None and previous != target:
+                raise ValueError(
+                    f'generated output {output} belongs to both {previous} and {target}')
+            manifest[output] = target
+    return manifest
+
+
+def _cmake_bracket_span(text: str, start: int) -> tuple[int, int, int] | None:
+    if start >= len(text) or text[start] != '[':
+        return None
+    cursor = start + 1
+    while cursor < len(text) and text[cursor] == '=':
+        cursor += 1
+    if cursor >= len(text) or text[cursor] != '[':
+        return None
+    close = ']' + '=' * (cursor - start - 1) + ']'
+    content_start = cursor + 1
+    content_end = text.find(close, content_start)
+    if content_end < 0:
+        raise ValueError('unterminated CMake bracket argument')
+    # CMake ignores the single newline immediately after a bracket opener.
+    if text.startswith('\r\n', content_start):
+        content_start += 2
+    elif text.startswith('\n', content_start):
+        content_start += 1
+    return content_start, content_end, content_end + len(close)
+
+
+def _cmake_comment_end(text: str, start: int) -> int:
+    bracket = _cmake_bracket_span(text, start + 1)
+    if bracket is not None:
+        return bracket[2]
+    newline = text.find('\n', start)
+    return len(text) if newline < 0 else newline + 1
+
+
+def _cmake_escape(text: str, start: int, *, quoted: bool = False) -> tuple[str, int]:
+    if start + 1 >= len(text):
+        raise ValueError('trailing backslash in CMake argument')
+    escaped = text[start + 1]
+    if escaped == '\r' and start + 2 < len(text) and text[start + 2] == '\n':
+        return '', start + 3
+    if escaped == '\n':
+        return '', start + 2
+    if escaped in 'nrt':
+        return {'n': '\n', 'r': '\r', 't': '\t'}[escaped], start + 2
+    if escaped.isalnum():
+        raise ValueError(f'invalid CMake escape \\{escaped}')
+    # In a quoted argument, CMake retains the escape protecting a list item.
+    return ('\\;' if quoted and escaped == ';' else escaped), start + 2
+
+
+def _cmake_arguments(text: str) -> list[str]:
+    """Tokenize one generated CMake command's already-expanded arguments."""
+    values = []
+    cursor = 0
+    while cursor < len(text):
+        while cursor < len(text) and text[cursor].isspace():
+            cursor += 1
+        if cursor >= len(text):
+            break
+        if text[cursor] == '#':
+            cursor = _cmake_comment_end(text, cursor)
+            continue
+        if text[cursor] == '"':
+            cursor += 1
+            value = []
+            while cursor < len(text) and text[cursor] != '"':
+                if text[cursor] == '\\':
+                    escaped, cursor = _cmake_escape(text, cursor, quoted=True)
+                    value.append(escaped)
+                else:
+                    value.append(text[cursor])
+                    cursor += 1
+            if cursor >= len(text):
+                raise ValueError('unterminated quoted CMake argument')
+            cursor += 1
+            values.append(''.join(value))
+            continue
+        bracket = _cmake_bracket_span(text, cursor)
+        if bracket is not None:
+            content_start, content_end, cursor = bracket
+            values.append(text[content_start:content_end])
+            continue
+        value = []
+        while cursor < len(text) and not text[cursor].isspace():
+            if text[cursor] == '\\':
+                escaped, cursor = _cmake_escape(text, cursor)
+                value.append(escaped)
+            elif text[cursor] == ';':
+                if value:
+                    values.append(''.join(value))
+                    value = []
+                cursor += 1
+            else:
+                value.append(text[cursor])
+                cursor += 1
+        if value:
+            values.append(''.join(value))
+    return values
+
+
+def _cmake_command_end(text: str, opening: int) -> int:
+    depth = 1
+    cursor = opening + 1
+    quoted = False
+    while cursor < len(text):
+        if quoted:
+            if text[cursor] == '\\':
+                _, cursor = _cmake_escape(text, cursor)
+            elif text[cursor] == '"':
+                quoted = False
+                cursor += 1
+            else:
+                cursor += 1
+            continue
+        if text[cursor] == '"':
+            quoted = True
+            cursor += 1
+            continue
+        bracket = _cmake_bracket_span(text, cursor)
+        if bracket is not None:
+            cursor = bracket[2]
+            continue
+        if text[cursor] == '\\':
+            _, cursor = _cmake_escape(text, cursor)
+        elif (text[cursor] == '#'
+              and (cursor == opening + 1 or text[cursor - 1].isspace())):
+            cursor = _cmake_comment_end(text, cursor)
+        elif text[cursor] == '(':
+            depth += 1
+            cursor += 1
+        elif text[cursor] == ')':
+            depth -= 1
+            if depth == 0:
+                return cursor
+            cursor += 1
+        else:
+            cursor += 1
+    raise ValueError('unterminated CMake command')
+
+
+def _ctest_cmake_commands(text: str) -> list[tuple[str, list[str]]]:
+    commands = []
+    cursor = 0
+    while cursor < len(text):
+        if text[cursor].isspace():
+            cursor += 1
+            continue
+        if text[cursor] == '#':
+            cursor = _cmake_comment_end(text, cursor)
+            continue
+        if text[cursor].isalpha() or text[cursor] == '_':
+            start = cursor
+            cursor += 1
+            while (cursor < len(text)
+                   and (text[cursor].isalnum() or text[cursor] == '_')):
+                cursor += 1
+            name = text[start:cursor].lower()
+            after_name = cursor
+            while cursor < len(text) and text[cursor].isspace():
+                cursor += 1
+            if cursor < len(text) and text[cursor] == '(':
+                end = _cmake_command_end(text, cursor)
+                if name in {'add_test', 'subdirs'}:
+                    commands.append((name, _cmake_arguments(text[cursor + 1:end])))
+                cursor = end + 1
+            else:
+                cursor = after_name
+            continue
+        cursor += 1
+    return commands
+
+
+def ctest_configure_commands(build_dir: Path) -> dict[str, tuple[str, ...]]:
+    """Follow the generated registry and read its resolved positional add_test rows.
+
+    Starting at the root and following subdirs avoids historical ABI builds
+    and other unrelated CTest inventories below a reused build directory.
+    Commands are already generator-resolved; do not expand or shell-split them.
+    """
+    root = build_dir.resolve()
+    if not (root / 'CTestTestfile.cmake').is_file():
+        raise ValueError(f'generated CTestTestfile.cmake source is missing in {root}')
+    files = [root / 'CTestTestfile.cmake']
+    visited = set()
+    commands: dict[str, tuple[str, ...]] = {}
+    while files:
+        path = files.pop().resolve()
+        if path in visited:
+            raise ValueError(f'repeated generated CTest command source {path}')
+        visited.add(path)
+        try:
+            with open(path, encoding='utf-8') as stream:
+                text = stream.read()
+            rows = _ctest_cmake_commands(text)
+        except (OSError, UnicodeError, ValueError) as error:
+            raise ValueError(
+                f'cannot read generated CTest command source {path}: {error}') from error
+        for kind, arguments in rows:
+            if kind == 'subdirs':
+                if not arguments or any(not value for value in arguments):
+                    raise ValueError(f'malformed subdirs command in {path}')
+                files.extend(path.parent / value / 'CTestTestfile.cmake'
+                             for value in reversed(arguments))
+                continue
+            if (len(arguments) < 2 or not arguments[0] or not arguments[1]
+                    or '\n' in arguments[0] or '\r' in arguments[0]):
+                raise ValueError(f'malformed add_test command in {path}')
+            name, command = arguments[0], arguments[1:]
+            if name in commands:
+                raise ValueError(f'duplicate generated CTest row {name}')
+            commands[name] = tuple(command)
+    return commands
+
+
+def _ctest_json_strings(value) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return list(value)
+    raise ValueError('CTest JSON command/property value must be a string or string list')
+
+
+def _ctest_build_paths(value: str, build_dir: Path) -> list[Path]:
+    root = build_dir.resolve().as_posix().rstrip('/')
+    text = value.replace('\\', '/')
+    if root not in text:
+        return []
+    pattern = (r'(?<![\w./-])' + re.escape(root)
+               + r'(?=/|$|[\s"\';|,)}\]])(?:/[^\s"\';|,]+)?')
+    paths = []
+    for match in re.finditer(pattern, text):
+        raw = match.group(0).rstrip('),]}')
+        paths.append(Path(raw).resolve())
+    return paths
+
+
+def ctest_target_mapping(
+        output: bytes, build_dir: Path
+) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
+    """Map every row to targets and record its other build-root-relative paths.
+
+    A row invoking Python, CMake ``-E`` or another external command has no
+    target unless its arguments or properties name a generated target output.
+    Build-tree artifacts, includes, receipts and work directories are data,
+    retained separately so they never prevent discovery or hide a target.
+    Unbuilt executables can make CTest omit a JSON command; recover only that
+    field from the generated registry and keep the row's JSON properties.
+    """
+    try:
+        document = json.loads(output.decode('utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f'CTest JSON inventory is unreadable: {error}') from error
+    tests = document.get('tests') if isinstance(document, dict) else None
+    if not isinstance(tests, list) or not tests:
+        raise ValueError('CTest JSON inventory has no tests')
+    outputs = ctest_target_output_manifest(build_dir)
+    # Match complete outputs before tokenizing data paths, including outputs
+    # with spaces and paths embedded in -D arguments or environment entries.
+    output_patterns = [
+        (re.compile(r'(?<![\w./-])' + re.escape(path.as_posix())
+                    + r'(?=$|[\s"\';|,)}\]])'), target)
+        # A shorter output can be a prefix of another output containing spaces.
+        for path, target in sorted(
+            outputs.items(), key=lambda item: (-len(item[0].as_posix()), item[0]))
+    ]
+    root = build_dir.resolve()
+    mapping: dict[str, tuple[str, ...]] = {}
+    unmapped: dict[str, tuple[str, ...]] = {}
+    configure_commands: dict[str, tuple[str, ...]] | None = None
+    for test in tests:
+        if (not isinstance(test, dict) or not isinstance(test.get('name'), str)
+                or not test['name'] or '\n' in test['name'] or '\r' in test['name']):
+            raise ValueError('CTest JSON inventory has a malformed test row')
+        name = test['name']
+        if name in mapping:
+            raise ValueError('CTest JSON inventory contains duplicate row ' + name)
+        if 'command' not in test:
+            if configure_commands is None:
+                configure_commands = ctest_configure_commands(build_dir)
+            command = configure_commands.get(name)
+            if command is None:
+                raise ValueError(
+                    f'CTest JSON row {name} has no command in JSON or generated CTest source')
+        else:
+            command = test['command']
+            if (not isinstance(command, list) or not command or not command[0]
+                    or any(not isinstance(value, str) for value in command)):
+                raise ValueError(f'CTest JSON row {name} has no command list')
+        values = list(command)
+        properties = test.get('properties', [])
+        if not isinstance(properties, list):
+            raise ValueError(f'CTest JSON row {name} has malformed properties')
+        for property_value in properties:
+            if not isinstance(property_value, dict):
+                raise ValueError(f'CTest JSON row {name} has a malformed property')
+            value = property_value.get('value')
+            if isinstance(value, (str, list)):
+                values.extend(_ctest_json_strings(value))
+        targets = set()
+        data_paths = set()
+        for value in values:
+            remaining = value.replace('\\', '/')
+            for pattern, target in output_patterns:
+                if pattern.search(remaining):
+                    targets.add(target)
+                    remaining = pattern.sub('', remaining)
+            for path in _ctest_build_paths(remaining, build_dir):
+                if path in outputs:
+                    targets.add(outputs[path])
+                else:
+                    data_paths.add(Path(os.path.relpath(path, root)).as_posix())
+        mapping[name] = tuple(sorted(targets))
+        unmapped[name] = tuple(sorted(data_paths))
+    return mapping, unmapped
+
+
+def ctest_shard_build_targets(target_map: dict[str, tuple[str, ...]],
+                              selected: tuple[str, ...], *,
+                              include_install: bool = False) -> tuple[str, ...]:
+    """Return row targets, checked archives and the install owner's outputs."""
+    missing = sorted(set(selected) - set(target_map))
+    if missing:
+        raise ValueError('CTest target mapping omitted selected rows: ' + ', '.join(missing))
+    targets = set(ARCHIVE_TARGETS)
+    if include_install:
+        targets.update(CTEST_INSTALL_TARGETS)
+    for name in selected:
+        targets.update(target_map[name])
+    return tuple(sorted(targets))
+
+
+def disk_tree_totals(build_dir: Path,
+                     test_binary_paths: tuple[Path, ...] = ()) -> dict:
+    """Return byte totals and largest files for the sanitizer disk receipt."""
+    binary_paths = {path.resolve() for path in test_binary_paths}
+    objects = archives = test_binaries = 0
+    files: list[tuple[int, str]] = []
+    for path in build_dir.rglob('*'):
+        try:
+            if not path.is_file():
+                continue
+            size = path.stat().st_size
+        except OSError:
+            continue
+        resolved = path.resolve()
+        suffix = path.suffix.lower()
+        if suffix in {'.o', '.obj'}:
+            objects += size
+        if suffix in {'.a', '.lib'}:
+            archives += size
+        if resolved in binary_paths:
+            test_binaries += size
+        try:
+            display = str(path.relative_to(build_dir))
+        except ValueError:
+            display = str(path)
+        files.append((size, display))
+    return {
+        'objectsBytes': objects,
+        'archivesBytes': archives,
+        'testBinariesBytes': test_binaries,
+        'topFiles': [
+            {'bytes': size, 'path': name}
+            for size, name in sorted(files, key=lambda item: (-item[0], item[1]))[:20]
+        ],
+    }
 
 
 CTEST_NAMED_RESULT = re.compile(
@@ -1287,6 +1717,28 @@ def validate_ctest_shard_union(
     if not names_valid(registry):
         raise ValueError('invalid CTest registry names')
     digest = ctest_registry_sha256(registry)
+    target_map = first.get('ctestTargetMap')
+    unmapped_paths = first.get('ctestUnmappedBuildPaths')
+    build_targets = first.get('ctestBuildTargets')
+    if profile == 'sanitizers' and count > 1 and target_map is None:
+        raise ValueError('missing sanitizer CTest target mapping')
+    if target_map is not None:
+        if (not isinstance(target_map, dict)
+                or set(target_map) != set(registry)
+                or any(not names_valid(value) or value != sorted(set(value))
+                       for value in target_map.values())):
+            raise ValueError('invalid CTest target mapping')
+        if (not isinstance(unmapped_paths, dict)
+                or set(unmapped_paths) != set(registry)
+                or any(not names_valid(value) or value != sorted(set(value))
+                       or any(Path(path).is_absolute() for path in value)
+                       for value in unmapped_paths.values())):
+            raise ValueError('invalid CTest unmapped build paths')
+        if (not names_valid(build_targets)
+                or build_targets != sorted(set(build_targets))):
+            raise ValueError('invalid CTest shard build targets')
+    elif unmapped_paths is not None or build_targets is not None:
+        raise ValueError('CTest build paths or targets have no target mapping')
     exclude_label = PROFILE[profile].exclude_label
     if profile == 'release' and first.get('excludeLabel') == CI_SCRIPT_LABEL:
         exclude_label = CI_SCRIPT_LABEL
@@ -1369,6 +1821,8 @@ def validate_ctest_shard_union(
                 or type(summary['ctestPrivateFixturesOverlay']) is not bool
                 or summary['ctestPrivateFixturesOverlay'] != overlay
                 or summary['ctestRegistrySha256'] != digest
+                or summary.get('ctestTargetMap') != target_map
+                or summary.get('ctestUnmappedBuildPaths') != unmapped_paths
                 or not names_valid(summary['ctestRegisteredNames'])
                 or sorted(summary['ctestRegisteredNames']) != sorted(registry)
                 or type(summary['ctestRegistered']) is not int
@@ -1395,6 +1849,12 @@ def validate_ctest_shard_union(
             raise ValueError('CTest shard count/name disagreement')
         if summary['ctestNotRun'] or summary['ctestDisabled']:
             raise ValueError('CTest shard contains not-run or disabled rows')
+        if target_map is not None:
+            expected_targets = list(ctest_shard_build_targets(
+                {name: tuple(value) for name, value in target_map.items()},
+                tuple(names), include_install=shard['index'] == 1))
+            if summary.get('ctestBuildTargets') != expected_targets:
+                raise ValueError('CTest shard build targets do not match its rows')
         union.update(names)
         counted += summary['ctestRows']
         if (profile not in LIVE_ONLY_PROFILES and not overlay
@@ -1402,6 +1862,8 @@ def validate_ctest_shard_union(
             counted += 1
         reported = stage_tables[id(summary)]
         required = every | shared
+        if target_map is not None:
+            required |= {'ctest-target-inventory', 'ctest-target-mapping'}
         if profile in LIVE_ONLY_PROFILES and summary['ctestSkipped']:
             required |= {'live-test-skips'}
         for name in sorted(required):
@@ -1734,7 +2196,7 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
                              'slow names must belong to PINNED_SLOW_TEST_ROWS; '
                              'release shards also permit the pinned ci-script label')
     parser.add_argument('--ctest-shard', type=parse_ctest_shard, default=None, metavar='I/N',
-                        help='run deterministic CTest shard I of N (1 <= I <= N <= 8); '
+                        help=f'run deterministic CTest shard I of N (1 <= I <= N <= {MAX_CTEST_SHARDS}); '
                              'all shards are required for a full verification')
     parser.add_argument('--min-tests', type=int, default=None,
                         help='minimum executed CTest rows for full runs and Debug-build-type '
@@ -2131,6 +2593,12 @@ class Driver:
         self.abi_v15_frozen_action = 'not-started'
         self.abi_v16_frozen_action = 'not-started'
         self.abi_v18_frozen_action = 'not-started'
+        self.shard_discovery: CTestShardDiscovery | None = None
+        self.disk_samples: list[dict] = []
+        self.disk_binary_paths: tuple[Path, ...] = ()
+        self.disk_telemetry_written = False
+        self.disk_stop = threading.Event()
+        self.disk_thread: threading.Thread | None = None
         self.summary: dict = {
             'schemaVersion': SCHEMA,
             'status': 'incomplete',
@@ -2180,6 +2648,9 @@ class Driver:
                 'ctestUnshardedSelectedNames': None,
                 'ctestPrivateFixturesOverlay': private_fixtures_overlay(),
                 'ctestRan': None,
+                'ctestTargetMap': None,
+                'ctestUnmappedBuildPaths': None,
+                'ctestBuildTargets': None,
             })
 
     def shared_stage(self, name: str) -> bool:
@@ -2201,8 +2672,9 @@ class Driver:
         self.write_summary()
         return False
 
-    def run_sharded_ctest(self, test_dir: Path, jobs: int, all_rows: Completed,
-                          selected_rows: Completed) -> Completed | None:
+    def discover_ctest_shard(self, test_dir: Path, all_rows: Completed,
+                             selected_rows: Completed, *,
+                             target_mapping: bool = False) -> CTestShardDiscovery | None:
         try:
             if all_rows.returncode or selected_rows.returncode:
                 raise ValueError('CTest discovery command failed')
@@ -2258,9 +2730,74 @@ class Driver:
             if (discovered.returncode
                     or set(ctest_registry(discovered.stdout + discovered.stderr)) != set(selected)):
                 raise ValueError('CTest shard filter lost or added a row')
+            mapped = None
+            build_targets = ()
+            if target_mapping:
+                target_inventory = self.invoke(
+                    'ctest-target-inventory',
+                    ['ctest', '--test-dir', str(test_dir), '--show-only=json-v1'],
+                    stream_output=False)
+                if target_inventory.returncode:
+                    raise ValueError('CTest target inventory command failed')
+                mapped, unmapped = ctest_target_mapping(
+                    target_inventory.stdout + target_inventory.stderr, self.cfg.build_dir)
+                if set(mapped) != set(registry):
+                    raise ValueError(
+                        'CTest target mapping names differ from the full registry')
+                build_targets = ctest_shard_build_targets(
+                    mapped, selected, include_install=shard.index == 1)
+                target_outputs = ctest_target_output_manifest(self.cfg.build_dir)
+                selected_targets = set().union(*(mapped[name] for name in selected))
+                self.disk_binary_paths = tuple(sorted(
+                    path for path, target in target_outputs.items()
+                    if target in selected_targets))
+                self.summary.update({
+                    'ctestTargetMap': {
+                        name: list(mapped[name]) for name in sorted(mapped)
+                    },
+                    'ctestUnmappedBuildPaths': {
+                        name: list(unmapped[name]) for name in sorted(unmapped)
+                    },
+                    'ctestBuildTargets': list(build_targets),
+                })
+                no_target = sum(not mapped[name] for name in registry)
+                mapping_message = (
+                    f'{len(registry)} registry rows mapped from CTest JSON '
+                    'and generated command sources; '
+                    f'{no_target} rows have no build target; '
+                    f'{sum(map(len, unmapped.values()))} unmapped build data paths; '
+                    f'{len(build_targets)} shard build targets')
+                self.pass_stage('ctest-target-mapping', mapping_message)
+                if self.cfg.stream_output:
+                    print('ci_verify: ctest-target-mapping: ' + mapping_message, flush=True)
+            discovery = CTestShardDiscovery(
+                registry=registry,
+                selection=selection,
+                excluded=tuple(excluded),
+                selected=selected,
+                expression=expression,
+                target_map=mapped,
+                build_targets=tuple(build_targets),
+            )
+            self.shard_discovery = discovery
+            return discovery
         except (OSError, ValueError) as error:
             self.fail_stage('ctest-shard-discovery', str(error))
             return None
+
+    def run_sharded_ctest(self, test_dir: Path, jobs: int, all_rows: Completed,
+                          selected_rows: Completed,
+                          discovery: CTestShardDiscovery | None = None) -> Completed | None:
+        if discovery is None:
+            discovery = self.discover_ctest_shard(test_dir, all_rows, selected_rows)
+        if discovery is None:
+            return None
+        registry = discovery.registry
+        selection = discovery.selection
+        excluded = discovery.excluded
+        selected = discovery.selected
+        expression = discovery.expression
+        shard = self.cfg.ctest_shard
         command = ctest_command(self.cfg, test_dir, jobs=jobs,
                                 junit=ctest_supports_junit(self.cfg.runner))
         # 1/1 keeps the unsharded execution command and accounting.
@@ -2288,6 +2825,97 @@ class Driver:
             f'match discovery; registry {len(registry)} sha256 '
             + self.summary['ctestRegistrySha256'])
         return ran
+
+    def record_disk_sample(self, label: str) -> None:
+        if self.cfg.profile.name != 'sanitizers':
+            return
+        sample = {'label': label, 'time': round(time.time(), 3)}
+        for mount, key in (('/', 'root'), ('/mnt', 'mnt')):
+            try:
+                usage = shutil.disk_usage(mount)
+                sample[key] = {
+                    'totalBytes': usage.total,
+                    'usedBytes': usage.used,
+                    'freeBytes': usage.free,
+                }
+            except OSError as error:
+                sample[key] = {'error': str(error)}
+        sample.update(disk_tree_totals(self.cfg.build_dir, self.disk_binary_paths))
+        self.disk_samples.append(sample)
+
+    def start_disk_sampling(self) -> None:
+        if self.cfg.profile.name != 'sanitizers':
+            return
+        self.record_disk_sample('shard-start')
+
+        def sample_until_stopped() -> None:
+            while not self.disk_stop.wait(5):
+                self.record_disk_sample('interval')
+
+        self.disk_thread = threading.Thread(target=sample_until_stopped, daemon=True)
+        self.disk_thread.start()
+
+    def write_disk_telemetry(self) -> None:
+        self.disk_stop.set()
+        if self.disk_thread is not None:
+            self.disk_thread.join()
+            self.disk_thread = None
+        if self.disk_telemetry_written or not self.disk_samples:
+            return
+        self.disk_telemetry_written = True
+
+        def free_bytes(sample: dict) -> int:
+            values = [
+                sample[mount]['freeBytes']
+                for mount in ('root', 'mnt')
+                if isinstance(sample.get(mount), dict)
+                and isinstance(sample[mount].get('freeBytes'), int)
+            ]
+            return min(values) if values else 1 << 62
+
+        peak = min(self.disk_samples, key=free_bytes)
+        minimum_free = {
+            mount: min(sample[mount]['freeBytes'] for sample in self.disk_samples
+                       if 'freeBytes' in sample.get(mount, {}))
+            for mount in ('root', 'mnt')
+            if any('freeBytes' in sample.get(mount, {}) for sample in self.disk_samples)
+        }
+        self.summary['diskTelemetry'] = {
+            'sampleIntervalSeconds': 5,
+            'samples': len(self.disk_samples),
+            'minimumFreeBytes': minimum_free,
+            'log': 'ci-logs/disk-telemetry.log',
+        }
+        shard = self.cfg.ctest_shard
+        shard_name = f'{shard.index}/{shard.count}' if shard else 'unsharded'
+        lines = [
+            'disk telemetry v1',
+            'df samples: root and mnt free bytes; peak is the lowest observed free value',
+        ]
+        lines.extend('sample ' + json.dumps(sample, sort_keys=True)
+                     for sample in self.disk_samples)
+        lines.append('peak ' + json.dumps(peak, sort_keys=True))
+        lines.append(f'objects.bytes={peak["objectsBytes"]}')
+        lines.append(f'archives.bytes={peak["archivesBytes"]}')
+        lines.append(f'test-binaries.bytes={peak["testBinariesBytes"]}')
+        lines.append('top files:')
+        lines.extend(f'  {entry["bytes"]} {entry["path"]}'
+                     for entry in peak['topFiles'])
+        for label, sample in (('shard-start', self.disk_samples[0]), ('peak', peak)):
+            for mount in ('root', 'mnt'):
+                usage = sample[mount]
+                line = f'df shard={shard_name} label={label} mount={mount} '
+                if 'freeBytes' in usage:
+                    line += (f'totalBytes={usage["totalBytes"]} '
+                             f'usedBytes={usage["usedBytes"]} freeBytes={usage["freeBytes"]}')
+                else:
+                    line += 'error=' + usage['error']
+                lines.append(line)
+                if self.cfg.stream_output:
+                    print('ci_verify: ' + line, flush=True)
+        self.logs.mkdir(parents=True, exist_ok=True)
+        with open(self.logs / 'disk-telemetry.log', 'w', encoding='utf-8') as stream:
+            stream.write('\n'.join(lines) + '\n')
 
     def enforce_sharded_test_floor(self, ran: Completed, registry: tuple[str, ...],
                                    selection: tuple[str, ...],
@@ -2721,6 +3349,7 @@ class Driver:
     def run(self) -> int:
         self.logs.mkdir(parents=True, exist_ok=True)
         self.write_summary()
+        self.start_disk_sampling()
         if not self.collect_tool_versions():
             return self.finish('failed', 1)
         if not self.ensure_corpus_submodule():
@@ -2814,8 +3443,50 @@ class Driver:
             self.pass_stage('examples-assert-live',
                             f'assert() is live in all {len(targets)} targets built from '
                             'examples/native sources: ' + ', '.join(targets))
-        build_argv = ['cmake', '--build', str(self.cfg.build_dir), '--parallel', str(self.cfg.jobs)]
-        if self.invoke('build', build_argv).returncode != 0:
+        optimized_shard = (
+            self.cfg.profile.name == 'sanitizers'
+            and self.cfg.ctest_shard is not None
+            and self.cfg.ctest_shard.count > 1
+        )
+        shard_discovery = None
+        all_rows = selected_rows = None
+        registered = selected = None
+        test_dir = self.cfg.build_dir
+        if optimized_shard:
+            listing = ['ctest', '--test-dir', str(test_dir), '-N']
+            all_rows = self.invoke('ctest-list-all', listing, stream_output=False)
+            registered = (ctest_list_count(all_rows.stdout + all_rows.stderr)
+                          if all_rows.returncode == 0 else None)
+            selected_rows = all_rows
+            selected = registered
+            if self.cfg.exclude_label:
+                selected_rows = self.invoke(
+                    'ctest-list-selected',
+                    listing + ['-LE', self.cfg.exclude_label],
+                    stream_output=False)
+                selected = (ctest_list_count(selected_rows.stdout + selected_rows.stderr)
+                            if selected_rows.returncode == 0 else None)
+            self.summary['ctestRegistered'] = registered
+            self.summary['ctestSelected'] = selected
+            if registered is None or selected is None:
+                self.fail_stage(
+                    'ctest-discovery',
+                    'could not read registered/selected CTest counts')
+                return self.finish('failed', 1)
+            shard_discovery = self.discover_ctest_shard(
+                test_dir, all_rows, selected_rows, target_mapping=True)
+            if shard_discovery is None:
+                return self.finish('failed', 1)
+        self.record_disk_sample('before-build')
+        build_argv = [
+            'cmake', '--build', str(self.cfg.build_dir),
+            '--parallel', str(self.cfg.jobs),
+        ]
+        if optimized_shard:
+            build_argv += ['--target', *shard_discovery.build_targets]
+        build = self.invoke('build', build_argv)
+        self.record_disk_sample('after-build')
+        if build.returncode != 0:
             return self.finish('failed', 1)
         archives = [self.cfg.build_dir / 'lib' / f'lib{target}.a' for target in ARCHIVE_TARGETS]
         for archive in archives:
@@ -2878,7 +3549,6 @@ class Driver:
         apple_asan = (self.cfg.profile.sanitizers and sys.platform == 'darwin'
                       and not cxx_name.startswith('g++'))
         ctest_jobs = 1 if apple_asan else self.cfg.jobs
-        test_dir = self.cfg.build_dir
         if self.cfg.profile.name in LIVE_ONLY_PROFILES:
             test_dir /= 'runner'
             inventory = self.invoke('live-test-inventory',
@@ -2902,26 +3572,31 @@ class Driver:
                 return self.finish('failed', 1)
             self.pass_stage('live-test-inventory-required',
                             'all required runner rows registered: ' + ', '.join(sorted(names)))
-        listing = ['ctest', '--test-dir', str(test_dir), '-N']
-        all_rows = self.invoke('ctest-list-all', listing,
-                               stream_output=False)
-        registered = (ctest_list_count(all_rows.stdout + all_rows.stderr)
-                      if all_rows.returncode == 0 else None)
-        selected = registered
-        selected_rows = all_rows
-        if self.cfg.exclude_label:
-            selected_rows = self.invoke('ctest-list-selected',
-                                        listing + ['-LE', self.cfg.exclude_label],
-                                        stream_output=False)
-            selected = (ctest_list_count(selected_rows.stdout + selected_rows.stderr)
-                        if selected_rows.returncode == 0 else None)
-        self.summary['ctestRegistered'] = registered
-        self.summary['ctestSelected'] = selected
-        if registered is None or selected is None:
-            self.fail_stage('ctest-discovery', 'could not read registered/selected CTest counts')
-        self.write_summary()
+        if not optimized_shard:
+            listing = ['ctest', '--test-dir', str(test_dir), '-N']
+            all_rows = self.invoke('ctest-list-all', listing,
+                                   stream_output=False)
+            registered = (ctest_list_count(all_rows.stdout + all_rows.stderr)
+                          if all_rows.returncode == 0 else None)
+            selected = registered
+            selected_rows = all_rows
+            if self.cfg.exclude_label:
+                selected_rows = self.invoke(
+                    'ctest-list-selected',
+                    listing + ['-LE', self.cfg.exclude_label],
+                    stream_output=False)
+                selected = (ctest_list_count(selected_rows.stdout + selected_rows.stderr)
+                            if selected_rows.returncode == 0 else None)
+            self.summary['ctestRegistered'] = registered
+            self.summary['ctestSelected'] = selected
+            if registered is None or selected is None:
+                self.fail_stage(
+                    'ctest-discovery',
+                    'could not read registered/selected CTest counts')
+            self.write_summary()
         if self.cfg.ctest_shard is not None:
-            ran = self.run_sharded_ctest(test_dir, ctest_jobs, all_rows, selected_rows)
+            ran = self.run_sharded_ctest(
+                test_dir, ctest_jobs, all_rows, selected_rows, discovery=shard_discovery)
             if ran is None:
                 return self.finish('failed', 1)
         else:
@@ -2943,6 +3618,7 @@ class Driver:
                                 if all_rows.returncode == 0 else None)
             self.enforce_test_floor(ran, registered=registered, selected=selected,
                                     registered_names=registered_names, excluded_names=excluded_names)
+        self.record_disk_sample('after-ctest')
         if self.cfg.profile.name in LIVE_ONLY_PROFILES:
             try:
                 rows = ctest_rows(ran.stdout + ran.stderr)
@@ -3013,6 +3689,7 @@ class Driver:
                         'require-websocket-skip',
                         '--require-websocket cannot accept skip (exit 77)',
                         argv=[str(ws)])
+        self.record_disk_sample('job-end')
         status = 'passed' if not self.failures else 'failed'
         return self.finish(status, 0 if status == 'passed' else 1)
 
@@ -3272,6 +3949,8 @@ class Driver:
                 f'{PRIVATE_FIXTURE_LABEL} rows skipped')
 
     def finish(self, status: str, code: int) -> int:
+        self.record_disk_sample('finish')
+        self.write_disk_telemetry()
         self.summary['status'] = status
         self.summary['exitCode'] = code
         self.write_summary()
