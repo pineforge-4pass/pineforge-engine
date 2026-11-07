@@ -13185,6 +13185,17 @@
    "symbol": "values_",
    "scope": [
     "namespace pineforge #1",
+    "class ExactWindowSum #1"
+   ],
+   "cls": "decl",
+   "spelling": "OwnedDeque < double >",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/window_sum.hpp",
+   "symbol": "values_",
+   "scope": [
+    "namespace pineforge #1",
     "class KahanWindowSum #1"
    ],
    "cls": "decl",
@@ -45727,6 +45738,29 @@
    ],
    "cls": "assign",
    "spelling": "held_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_moving_averages.cpp",
+   "symbol": "values_",
+   "scope": [
+    "namespace pineforge #1",
+    "double ExactWindowSum :: push ( double src ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "values_ . push_front ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/ta_moving_averages.cpp",
+   "symbol": "values_",
+   "scope": [
+    "namespace pineforge #1",
+    "void ExactWindowSum :: unpush ( ) #1",
+    "if ( saved_evicted_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "values_ . push_back ( . . . )",
    "ordinal": 1
   },
   {
