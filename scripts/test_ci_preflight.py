@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import io
 import inspect
 import json
@@ -12370,10 +12371,8 @@ class GkeAdmissionRuleTests(unittest.TestCase):
 def main_admission_data_findings(workflows):
     """Exercise the ordinary data-only entry without executing a supplied checker."""
     copies = ('.github/actionlint.yaml', '.github/actions/setup-live-curl/action.yml')
-    scratch = ROOT / '.lane-notes'
-    announce_compare_fixture_paths(scratch, *(ROOT / relative for relative in copies))
-    scratch.mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='admit-main-', dir=scratch) as fetched:
+    announce_compare_fixture_paths(*(ROOT / relative for relative in copies))
+    with tempfile.TemporaryDirectory(prefix='admit-main-') as fetched:
         directory = Path(fetched)
         targets = [directory / relative for relative in copies]
         targets += [directory / '.github/workflows' / name for name in workflows]
@@ -12388,24 +12387,39 @@ def main_admission_data_findings(workflows):
 
 
 class SplitHostedReleaseAdmission(unittest.TestCase):
-    """The exported split layout must bind each architecture and its handoff."""
+    """The split layout must bind each architecture and its artifact handoff."""
 
-    JOBS = ('prebuilt-x86', 'prebuilt-arm', 'upload')
+    JOBS = ('release', 'prebuilt-x86', 'prebuilt-arm', 'upload', 'notify-hub')
     INVENTORY = ('release.yml split prebuilt must contain exactly release, prebuilt-x86, '
                  'prebuilt-arm, upload and notify-hub jobs')
     HEADER = 'release.yml {} must retain its reviewed header, permissions, dependencies and outputs'
     STEP = 'release.yml {} must retain step {} with its reviewed command and context'
     RAW = ('release.yml {} must retain the raw single-line all-library glibc checker '
            'invocation and its run context')
+    CREDENTIAL = ('release.yml job {} must not receive the protected release '
+                  'environment or release credentials')
+    TRIGGER = ('release.yml split prebuilt must retain exactly its workflow_dispatch '
+               'trigger and reviewed inputs')
 
     def setUp(self):
         fixture = ROOT / 'scripts/fixtures/ci_preflight/release_split_hosted_2167.yml'
+        legacy = ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml'
+        gke_fixture = ROOT / 'scripts/fixtures/ci_preflight/gke_pr_legacy.yml'
         release = ROOT / '.github/workflows/release.yml'
-        gke = ROOT / '.github/workflows/gke-pr.yml'
-        announce_compare_fixture_paths(fixture, release, gke)
-        self.split = fixture.read_text(encoding='utf-8')
+        announce_compare_fixture_paths(fixture, legacy, gke_fixture, release)
+        split_bytes = fixture.read_bytes()
+        self.assertEqual(hashlib.sha256(split_bytes).hexdigest(),
+                         '00e84f8d45028105c580ac84818ccdd96ff08aeab352286273a29a02eaeed062')
+        legacy_bytes = legacy.read_bytes()
+        self.assertEqual(hashlib.sha256(legacy_bytes).hexdigest(),
+                         '3f6443192ad993e59e543b85ef00ebca226dba4a2e4c2647a02ac371daa2b267')
+        gke_bytes = gke_fixture.read_bytes()
+        self.assertEqual(hashlib.sha256(gke_bytes).hexdigest(),
+                         '21025075090a0a40bfd7360e54a36a0c9bbac9bb8109fbbaa86edce347c27b87')
+        self.split = split_bytes.decode('utf-8')
+        self.legacy = legacy_bytes.decode('utf-8')
         self.shipped = release.read_text(encoding='utf-8')
-        self.gke = gke.read_text(encoding='utf-8')
+        self.gke = gke_bytes.decode('utf-8')
 
     def step(self, job, name):
         step = ci_preflight._step_named(ci_preflight._steps(_jobs(self.split)[job]),
@@ -12427,11 +12441,13 @@ class SplitHostedReleaseAdmission(unittest.TestCase):
         self.assertIn(finding, main_admission_data_findings(
             {'gke-pr.yml': self.gke, 'release.yml': changed}))
 
-    def test_legacy_and_unchanged_export_dispatch_through_real_parsers(self):
-        # On the old production source the legacy controls pass, then the exact
-        # split export fails for the absent matrix job/raw gate, not setup.
-        for workflow in (self.shipped, legacy_release_workflow(self.shipped), self.split):
+    def test_legacy_and_split_layouts_dispatch_through_real_parsers(self):
+        # Exercise the matrix forms and the intended split through the same
+        # checker entry points, independently of later workflow cutovers.
+        for workflow in (self.shipped, self.legacy,
+                         legacy_release_workflow(self.legacy), self.split):
             with self.subTest(jobs=tuple(_jobs(workflow))):
+                self.assertEqual(ci_preflight.release_credential_findings(workflow), [])
                 self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(workflow), [])
                 self.assertEqual(ci_preflight.runner_findings({'release.yml': workflow}), [])
                 self.assertEqual(main_admission_data_findings(
@@ -12445,6 +12461,9 @@ class SplitHostedReleaseAdmission(unittest.TestCase):
                     'release-ruleset-probe.yml': probe.read_text(encoding='utf-8')}), [])
 
     def test_each_split_step_is_required_and_cannot_be_weakened(self):
+        self.assertEqual(
+            {job: len(ci_preflight._steps(_jobs(self.split)[job])) for job in self.JOBS},
+            {'release': 12, 'prebuilt-x86': 15, 'prebuilt-arm': 14, 'upload': 4, 'notify-hub': 2})
         for job in self.JOBS:
             for step in ci_preflight._steps(_jobs(self.split)[job]):
                 name, = ci_preflight._step_values(step, 'name')
@@ -12459,13 +12478,177 @@ class SplitHostedReleaseAdmission(unittest.TestCase):
             with self.subTest(missing=job):
                 self.assert_refused(self.split.replace(f'  {job}:' + body, '', 1),
                                     self.INVENTORY)
-        legacy = _jobs(self.shipped)['prebuilt']
+        legacy = _jobs(self.legacy)['prebuilt']
         for addition in ('\n  prebuilt:' + legacy,
                          '\n  surprise:\n    runs-on: ubuntu-24.04\n'
                          '    steps:\n      - run: true\n',
                          '\n  upload:' + _jobs(self.split)['upload']):
             with self.subTest(addition=addition.splitlines()[1]):
                 self.assert_refused(self.split + addition, self.INVENTORY)
+
+    def test_legacy_inventory_rejects_missing_extra_and_duplicate_jobs(self):
+        finding = 'release.yml prebuilt must retain exactly release, prebuilt and notify-hub jobs'
+        self.assertEqual(set(_jobs(self.legacy)), {'release', 'prebuilt', 'notify-hub'})
+        mutations = [(f'  {job}:' + body, '')
+                     for job, body in _jobs(self.legacy).items()]
+        mutations += [
+            ('\n  prebuilt:', '\n  unexpected:\n    runs-on: ubuntu-24.04\n'
+             '    steps:\n      - run: true\n\n  prebuilt:'),
+            ('\n  prebuilt:', '\n  prebuilt:\n    runs-on: ubuntu-24.04\n'
+             '    steps:\n      - run: true\n\n  prebuilt:'),
+        ]
+        for before, after in mutations:
+            with self.subTest(before=before.splitlines()[0], after=after):
+                self.assertIn(before, self.legacy)
+                changed = self.legacy.replace(before, after, 1)
+                self.assertNotEqual(changed, self.legacy)
+                self.assert_refused(changed, finding)
+
+    def test_split_dispatch_trigger_and_all_input_shapes_are_pinned(self):
+        for before, after in (
+                ('on:\n  workflow_dispatch:\n', 'on:\n  push:\n'),
+                ('on:\n  workflow_dispatch:\n', 'on:\n  pull_request:\n'),
+                ('on:\n  workflow_dispatch:\n', 'on:\n  workflow_call:\n'),
+                ('on:\n  workflow_dispatch:\n',
+                 'on:\n  push:\n  workflow_dispatch:\n'),
+                ('on:\n  workflow_dispatch:\n',
+                 'on:\n  workflow_dispatch:\n  workflow_dispatch:\n'),
+                ('on:\n  workflow_dispatch:\n',
+                 'on:\n  workflow_dispatch:\non:\n  workflow_dispatch:\n'),
+                ('    inputs:\n', ''),
+                ('    inputs:\n', '    inputs: {}\n'),
+                ('      bump:\n', '      increment:\n'),
+                ('        type: choice\n', '        type: string\n'),
+                ('        required: true\n', '        required: false\n'),
+                ('        default: patch\n', '        default: major\n'),
+                ('          - major\n', '          - major\n          - arbitrary\n'),
+                ('      override:\n', '      override_disabled:\n'),
+                ("        default: ''\n", "        default: '1.0.0'\n"),
+                ('        type: string\n', '        type: boolean\n'),
+                ('      dry_run:\n', '      dry_run_disabled:\n'),
+                ('        type: boolean\n', '        type: string\n'),
+                ('        default: false\n', '        default: true\n'),
+                ('    inputs:\n', '    inputs:\n      token:\n        type: string\n')):
+            with self.subTest(before=before, after=after):
+                self.assertIn(before, self.split)
+                changed = self.split.replace(before, after, 1)
+                self.assert_refused(changed, self.TRIGGER)
+                self.assertIn(self.CREDENTIAL.format('prebuilt-x86'),
+                              ci_preflight.release_credential_findings(changed))
+
+    def test_release_and_notify_action_and_dispatch_pins_are_binding(self):
+        for job, name, before, after in (
+                ('release', 'Mint org App token',
+                 'd72941d797fd3113feb6b93fd0dec494b13a2547', '0' * 40),
+                ('release', 'Refuse unless pineforge/verify and pineforge/parity are green',
+                 'python3 scripts/ci_release_gate.py gate', 'true # gate disabled'),
+                ('notify-hub', 'Mint org App token (hub dispatch)',
+                 'd72941d797fd3113feb6b93fd0dec494b13a2547', '0' * 40),
+                ('notify-hub', 'Mint org App token (hub dispatch)',
+                 'repositories: pineforge-release', 'repositories: pineforge-engine'),
+                ('notify-hub', 'Dispatch engine-release -> pineforge-release',
+                 'gh api repos/pineforge-4pass/pineforge-release/dispatches',
+                 'gh api repos/pineforge-4pass/other/dispatches'),
+                ('notify-hub', 'Dispatch engine-release -> pineforge-release',
+                 '-f event_type=engine-release', '-f event_type=other'),
+                ('notify-hub', 'Dispatch engine-release -> pineforge-release',
+                 '-F "client_payload[prerelease]=${PRERELEASE}"',
+                 '-f "client_payload[prerelease]=${PRERELEASE}"')):
+            with self.subTest(job=job, step=name, before=before):
+                self.assert_refused(self.mutate_step(job, name, before, after),
+                                    self.STEP.format(job, name))
+
+    def test_x86_credential_exception_requires_the_exact_reader(self):
+        announce_compare_fixture_paths(ROOT / 'scripts/ci_preflight.py')
+        source = inspect.getsource(ci_preflight.release_credential_findings)
+        guard = 'and _release_split_toolchain_reader_is_pinned(workflow, body)'
+        self.assertIn(guard, source)
+        self.assertEqual(source.count(guard), 1)
+        mutant = source.replace(guard, 'and True', 1)
+        self.assertNotEqual(mutant, source)
+        namespace = dict(ci_preflight.release_credential_findings.__globals__)
+        exec(compile(mutant, '<release-reader-exemption-without-pin>', 'exec'), namespace)
+        unchecked = namespace['release_credential_findings']
+        self.assertEqual(ci_preflight.release_credential_findings(self.split), [])
+        self.assertEqual(unchecked(self.split), [])
+        for before, after in (
+                ('create_credentials_file: false', 'create_credentials_file: true'),
+                ('export_environment_variables: false', 'export_environment_variables: true'),
+                ('    steps:\n', '    environment: release\n    steps:\n')):
+            with self.subTest(before=before):
+                if before == '    steps:\n':
+                    self.assertIn(before, _jobs(self.split)['prebuilt-x86'])
+                    changed = in_job(self.split, 'prebuilt-x86', before, after)
+                else:
+                    changed = self.mutate_step(
+                        'prebuilt-x86', 'Authenticate the dedicated toolchain reader', before, after)
+                self.assertNotEqual(changed, self.split)
+                finding = self.CREDENTIAL.format('prebuilt-x86')
+                self.assertIn(finding, ci_preflight.release_credential_findings(changed))
+                self.assertIn(finding, ci_preflight.runner_findings({'release.yml': changed}))
+                self.assertIn(finding, main_admission_data_findings(
+                    {'gke-pr.yml': self.gke, 'release.yml': changed}))
+                self.assertNotIn(finding, unchecked(changed))
+
+    def test_runner_strict_scan_covers_arm_and_upload_raw_secret_expressions(self):
+        announce_compare_fixture_paths(ROOT / 'scripts/ci_preflight.py')
+        source = inspect.getsource(ci_preflight.runner_findings)
+        guard = "'prebuilt', 'prebuilt-x86', 'prebuilt-arm', 'upload'"
+        self.assertIn(guard, source)
+        self.assertEqual(source.count(guard), 1)
+        mutant = source.replace(guard, "'prebuilt', 'prebuilt-x86'", 1)
+        self.assertNotEqual(mutant, source)
+        namespace = dict(ci_preflight.runner_findings.__globals__)
+        exec(compile(mutant, '<release-runner-without-arm-upload-strict-scan>', 'exec'), namespace)
+        unchecked = namespace['runner_findings']
+        for job, step in (('prebuilt-arm', 'Configure'),
+                          ('upload', 'Verify both tarballs against build outputs')):
+            with self.subTest(job=job):
+                # GitHub evaluates expressions even in shell comments. Move
+                # the job off hosted so the independent routing guard must act.
+                changed = self.mutate_step(
+                    job, step, '          set -euo pipefail\n',
+                    '          set -euo pipefail\n          # ${{ secrets.DEPLOY_TOKEN }}\n')
+                runner, = ci_preflight._job_values(_jobs(changed)[job], 'runs-on')
+                self.assertIn('runs-on: ' + runner, _jobs(changed)[job])
+                changed = in_job(changed, job, 'runs-on: ' + runner, 'runs-on: self-hosted')
+                self.assertNotEqual(changed, self.split)
+                finding = (f'release.yml job {job} must keep production credentials '
+                           'on a hosted standard runner')
+                self.assertIn(finding, ci_preflight.runner_findings({'release.yml': changed}))
+                mutant_findings = unchecked({'release.yml': changed})
+                self.assertNotIn(finding, mutant_findings)
+                self.assertIn(self.CREDENTIAL.format(job), mutant_findings)
+
+    def test_x86_oidc_caller_guards_admit_only_main_dispatch_from_this_workflow(self):
+        job = 'prebuilt-x86'
+        for before, after in (
+                ("github.ref == 'refs/heads/main'",
+                 "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))"),
+                ("github.event_name == 'workflow_dispatch'",
+                 "github.event_name == 'push'"),
+                ("github.ref == 'refs/heads/main'", "github.ref == 'refs/heads/other'"),
+                ('pineforge-engine/.github/workflows/release.yml@{0}',
+                 'pineforge-engine/.github/workflows/other.yml@{0}')):
+            with self.subTest(header=before, after=after):
+                self.assertIn(before, _jobs(self.split)[job])
+                changed = in_job(self.split, job, before, after)
+                self.assert_refused(changed, self.HEADER.format(job))
+                self.assertIn(self.CREDENTIAL.format(job),
+                              ci_preflight.release_credential_findings(changed))
+        name = 'Refuse an untrusted toolchain caller'
+        for before, after in (
+                ('case "${REF}" in refs/heads/main)',
+                 'case "${REF}" in refs/heads/main|refs/tags/v*)'),
+                ('[[ "${EVENT}" == workflow_dispatch ]]', '[[ "${EVENT}" == push ]]'),
+                ('case "${REF}" in refs/heads/main)', 'case "${REF}" in refs/heads/other)'),
+                ('pineforge-engine/.github/workflows/release.yml@${REF}',
+                 'pineforge-engine/.github/workflows/other.yml@${REF}')):
+            with self.subTest(caller=before, after=after):
+                changed = self.mutate_step(job, name, before, after)
+                self.assert_refused(changed, self.STEP.format(job, name))
+                self.assertIn(self.CREDENTIAL.format(job),
+                              ci_preflight.release_credential_findings(changed))
 
     def test_both_raw_glibc_invocations_bind_arguments_context_streams_and_exit(self):
         name = "Check every staged library's glibc floor"
@@ -12565,6 +12748,12 @@ class SplitHostedReleaseAdmission(unittest.TestCase):
                                     self.STEP.format('prebuilt-arm', name))
 
     def test_upload_verifies_actual_archives_before_public_write(self):
+        for before, after in (
+                ('          GH_REPO: ${{ github.repository }}\n', ''),
+                ('GH_REPO: ${{ github.repository }}', 'GH_REPO: pineforge-4pass/other')):
+            with self.subTest(repository=after):
+                self.assert_refused(self.mutate_step('upload', 'Upload to release', before, after),
+                                    self.STEP.format('upload', 'Upload to release'))
         name = 'Verify both tarballs against build outputs'
         for before, after in (
                 ('needs.prebuilt-x86.outputs.sha256', 'needs.prebuilt-arm.outputs.sha256'),
@@ -12591,7 +12780,7 @@ class SplitHostedReleaseAdmission(unittest.TestCase):
             self.assert_refused(in_job(self.split, job, before, after), self.HEADER.format(job))
 
     def test_split_permissions_tokens_shell_env_and_runner_boundaries_fail_closed(self):
-        for job in self.JOBS:
+        for job in ('prebuilt-x86', 'prebuilt-arm', 'upload'):
             for declaration in (
                     '    environment: release\n',
                     '    env:\n      TOKEN: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\n',
@@ -12633,10 +12822,15 @@ class SplitHostedReleaseAdmission(unittest.TestCase):
             changed = in_job(self.split, job, '      contents: ',
                              '      id-token: write\n      contents: ')
             self.assert_refused(changed, self.HEADER.format(job))
+            finding = self.CREDENTIAL.format(job)
+            self.assertIn(finding, ci_preflight.release_credential_findings(changed))
+            self.assertIn(finding, ci_preflight.runner_findings({'release.yml': changed}))
+            self.assertIn(finding, main_admission_data_findings(
+                {'gke-pr.yml': self.gke, 'release.yml': changed}))
 
 
 class GkeSmokeOutputAdmission(unittest.TestCase):
-    """Exact old4/new5 forms leave the original smoke and identity binding intact."""
+    """Four smoke steps and an optional collector retain the admitted identity."""
 
     COLLECTOR = '''      - name: Retain PR smoke test output
         if: always()
@@ -12654,8 +12848,15 @@ class GkeSmokeOutputAdmission(unittest.TestCase):
 
     def setUp(self):
         path = ROOT / '.github/workflows/gke-pr.yml'
-        announce_compare_fixture_paths(path)
-        self.original = path.read_text(encoding='utf-8')
+        fixture = ROOT / 'scripts/fixtures/ci_preflight/gke_pr_legacy.yml'
+        announce_compare_fixture_paths(path, fixture)
+        data = fixture.read_bytes()
+        self.assertEqual(hashlib.sha256(data).hexdigest(),
+                         '21025075090a0a40bfd7360e54a36a0c9bbac9bb8109fbbaa86edce347c27b87')
+        self.original = data.decode('utf-8')
+        self.shipped = path.read_text(encoding='utf-8')
+        for job in ('build', 'build-debug'):
+            self.assertEqual(len(ci_preflight._steps(_jobs(self.original)[job])), 4)
 
     def with_collectors(self, jobs=('build', 'build-debug')):
         workflow = self.original
@@ -12669,6 +12870,8 @@ class GkeSmokeOutputAdmission(unittest.TestCase):
         self.assertIn(finding, main_admission_data_findings({'gke-pr.yml': changed}))
 
     def test_exact_four_or_five_steps_are_admitted_independently_in_both_jobs(self):
+        self.assertEqual(gke_admit_workflow_findings(self.shipped), [])
+        self.assertEqual(main_admission_data_findings({'gke-pr.yml': self.shipped}), [])
         for jobs in ((), ('build',), ('build-debug',), ('build', 'build-debug')):
             with self.subTest(collectors=jobs):
                 workflow = self.with_collectors(jobs)
