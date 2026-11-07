@@ -256,6 +256,72 @@ class CatalogDiff(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertIn("self-test OK", self.ok(result))
 
+    def pending_release(self, version: str = "1.1.0") -> str:
+        """A real untagged two-file reset, with the catalog retained verbatim."""
+        self.start({"alpha": code("1.1.0")})
+        parent = self.repo.git("rev-parse", "HEAD")
+        self.ok(self.repo.run("--reset", "--tag", "v" + version))
+        self.repo.write("VERSION", (version + "\n").encode())
+        self.repo.commit("chore(release): v" + version)
+        return parent
+
+    def test_untagged_two_file_reset_admits_then_keeps_tagged_behavior(self) -> None:
+        parent = self.pending_release()
+        before = self.repo.git("show", parent + ":" + CATALOG)
+        self.assertEqual(self.repo.git("show", "HEAD:" + CATALOG), before)
+        self.assertEqual(set(self.repo.git("diff", "--name-only", parent, "HEAD").splitlines()),
+                         {"VERSION", DIFF})
+        self.ok(self.repo.run("--check", env={REQUIRE_TAGS: "1"}))
+        self.repo.tag("v1.1.0")
+        self.ok(self.repo.run("--check", env={REQUIRE_TAGS: "1"}))
+
+    def test_untagged_transition_refuses_two_parents(self) -> None:
+        parent = self.pending_release()
+        other = self.repo.git("rev-parse", parent + "^")
+        tree = self.repo.git("rev-parse", "HEAD^{tree}")
+        merged = self.repo.git("commit-tree", tree, "-p", parent, "-p", other,
+                               "-m", "forged release merge")
+        self.repo.git("reset", "--hard", merged)
+        self.fails(self.repo.run("--check", env={REQUIRE_TAGS: "1"}), 1, "single parent")
+
+    def test_untagged_transition_refuses_extra_path(self) -> None:
+        self.pending_release()
+        self.repo.write("README.md", b"extra release change\n")
+        self.repo.commit("extra",)
+        self.fails(self.repo.run("--check", env={REQUIRE_TAGS: "1"}), 1, "exactly VERSION")
+
+    def test_untagged_transition_refuses_backward_or_invalid_version(self) -> None:
+        self.pending_release()
+        for version in ("0.9.0", "invalid", "1.0.0"):
+            with self.subTest(version=version):
+                self.repo.write("VERSION", (version + "\n").encode())
+                self.repo.git("add", "VERSION")
+                self.repo.git("commit", "--amend", "--no-edit")
+                self.fails(self.repo.run("--check", env={REQUIRE_TAGS: "1"}), 1,
+                           "forward VERSION")
+
+    def test_untagged_transition_refuses_changed_catalog_bytes(self) -> None:
+        self.pending_release()
+        # JSON semantics are unchanged; literal catalog bytes still must match.
+        self.repo.write(CATALOG, (self.repo.path / CATALOG).read_bytes() + b"\n")
+        self.repo.git("add", CATALOG)
+        self.repo.git("commit", "--amend", "--no-edit")
+        self.fails(self.repo.run("--check", env={REQUIRE_TAGS: "1"}), 1,
+                   "catalog bytes")
+
+    def test_untagged_transition_refuses_future_tag_on_another_commit(self) -> None:
+        parent = self.pending_release()
+        self.repo.git("tag", "v1.1.0", parent)
+        self.fails(self.repo.run("--check", env={REQUIRE_TAGS: "1"}), 1,
+                   "already exists")
+
+    def test_untagged_transition_keeps_parent_stamp_constraints(self) -> None:
+        # alpha's first release is 1.1.0; a patch release cannot erase that rule
+        # merely by committing a reset before its tag exists.
+        self.pending_release("1.0.1")
+        self.fails(self.repo.run("--check", env={REQUIRE_TAGS: "1"}), 1,
+                   "minor")
+
     def test_release_cycle(self) -> None:
         self.start({"alpha": code("1.1.0")})
         diff = self.repo.diff()
