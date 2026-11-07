@@ -322,7 +322,7 @@ resident suffix in order. `finish_streamed_trade_metrics`
 accumulators over resident closed rows, then the presented open rows. The
 source host's terminal-quote presentation continues that same closed-row PnL
 fold before adding its edited open rows (`net_profit`
-`src/source/pine_strategy_host.cpp:2390-2391`).
+`src/source/pine_strategy_host.cpp:2400-2401`).
 
 Selected carry-in validation includes the minimum entry time folded at seal
 (`first_entry_time` `src/native_execution_consumer.cpp:13199`), so a
