@@ -2945,9 +2945,195 @@ def _gke_cap_findings(workflows: dict[str, str]) -> list[str]:
     return findings
 
 
+def clang_build_workflow_findings(workflow: str) -> list[str]:
+    """Admit the installed-toolchain, main-push Clang build without executing it.
+
+    This small workflow uses a closed shell program, like the existing pinned
+    verification steps. Compare executable lines, not substrings that a comment,
+    echo, dead branch, fallback or extra command could satisfy.
+    """
+    name = 'clang-build.yml'
+    findings = []
+
+    def keys(text: str, depth: int) -> list[str]:
+        return [line.strip().split(':', 1)[0] for line in _code(text)
+                if _indent(line) == depth]
+
+    def step_keys(step: str) -> list[str]:
+        return keys(re.sub(r'^( *)- ', r'\1  ', step, count=1), 8)
+
+    def run_lines(step: str) -> list[str]:
+        lines = step.splitlines()
+        starts = [index for index, line in enumerate(lines)
+                  if _indent(line) == 8 and _key_value(line, 'run') == '|']
+        if len(starts) != 1:
+            return []
+        block = []
+        for line in lines[starts[0] + 1:]:
+            if line.strip() and _indent(line) <= 8:
+                break
+            block.append(line)
+        return [line.strip() for line in _code('\n'.join(block))]
+
+    def expected_lines(text: str) -> list[str]:
+        return [line.strip() for line in _code(text)]
+
+    jobs = _jobs(workflow)
+    body = jobs.get('clang-build', '')
+    on_body = '\n'.join(_job_block(workflow, 'on')[1:])
+    if (_events(workflow) != {'push'}
+            or _job_values(on_body, 'push') != ['branches: [main]']
+            or _job_values(body, 'if') != [
+                "github.repository == 'pineforge-4pass/pineforge-engine'"]):
+        findings.append(f'{name} must run only engine main pushes')
+    steps = _steps(body)
+    names = ('Checkout the push', 'Record and verify the installed toolchain',
+             'Configure Release', 'Build all targets',
+             'Record final identity and evidence', 'Upload build logs')
+    if (keys(workflow, 0) != ['name', 'on', 'permissions', 'jobs']
+            or list(jobs) != ['clang-build'] or _unparsed(workflow)
+            or keys(body, 4) != ['if', 'runs-on', 'steps']
+            or _job_values(body, 'runs-on', unquote=False) != ['ubuntu-24.04']
+            or [_step_values(step, 'name') for step in steps] != [[item] for item in names]):
+        findings.append(f'{name} must keep one native ubuntu-24.04 build job without overrides')
+    if (_job_values(workflow, 'permissions') != ['{contents: read}']
+            or any(_job_values(body, key) for key in ('permissions', 'environment', 'secrets', 'env'))
+            or _job_values(workflow, 'env')
+            or re.search(r'\bsecrets\b|\bid-token\b|\bgithub\s*\.\s*token\b', workflow)
+            or _holds_credentials(workflow, body, strict=True)):
+        findings.append(f'{name} must use contents: read without credentials')
+
+    selected = [_step_named(steps, f'      - name: {item}') for item in names]
+    checkout, toolchain, configure, build, identity, upload = selected
+    if (step_keys(checkout) != ['name', 'uses', 'with']
+            or _step_values(checkout, 'uses') != [
+                'actions/checkout@11d5960a326750d5838078e36cf38b85af677262']
+            or [line.strip() for line in _step_block(checkout, 'with')[1:]] != [
+                'repository: ${{ github.repository }}', 'ref: ${{ github.sha }}',
+                'fetch-depth: 0', 'persist-credentials: false']):
+        findings.append(f'{name} checkout must use the push SHA without persisted credentials')
+
+    toolchain_program = r'''
+set -euo pipefail
+mkdir clang-build-logs
+date -u --iso-8601=seconds | tee clang-build-logs/started-at.log
+git rev-parse HEAD HEAD^{tree} | tee clang-build-logs/identity-before.log
+test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+uname -a | tee clang-build-logs/machine.log
+test "$(uname -m)" = x86_64
+dpkg --print-architecture | tee clang-build-logs/package-architecture.log
+grep -Fx amd64 clang-build-logs/package-architecture.log
+test -x /usr/bin/clang++-18
+test -x /usr/bin/g++-13
+test -d /usr/lib/gcc/x86_64-linux-gnu/13
+readlink -f /usr/bin/clang++-18 /usr/bin/g++-13 /usr/lib/gcc/x86_64-linux-gnu/13 | tee clang-build-logs/toolchain-paths.log
+/usr/bin/clang++-18 --version 2>&1 | tee clang-build-logs/clang-version.log
+grep -Eq '^Ubuntu clang version 18\.' clang-build-logs/clang-version.log
+grep -Eq '^Target: x86_64-.*linux-gnu$' clang-build-logs/clang-version.log
+/usr/bin/g++-13 -dumpfullversion | tee clang-build-logs/gcc-version.log
+grep -Eq '^13\.' clang-build-logs/gcc-version.log
+/usr/bin/g++-13 -dumpmachine | tee clang-build-logs/gcc-target.log
+grep -Fx x86_64-linux-gnu clang-build-logs/gcc-target.log
+dpkg-query -W -f='${binary:Package}\t${Version}\t${Architecture}\n' clang-18 g++-13 libstdc++-13-dev libstdc++6 | tee clang-build-logs/packages.log
+dpkg-query -S /usr/bin/clang++-18 /usr/bin/g++-13 /usr/include/c++/13/vector /usr/include/x86_64-linux-gnu/c++/13/bits/c++config.h | tee clang-build-logs/package-owners.log
+printf '#include <bits/c++config.h>\n#include <vector>\n' | /usr/bin/clang++-18 --gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13 -std=c++17 -E -v -H -dM -x c++ - > clang-build-logs/header-macros.log 2> clang-build-logs/header-trace.log
+cat clang-build-logs/header-trace.log
+grep -Fx 'Selected GCC installation: /usr/lib/gcc/x86_64-linux-gnu/13' clang-build-logs/header-trace.log
+grep -Eq '^#define __clang_major__ 18$' clang-build-logs/header-macros.log
+grep -Eq '^#define __cplusplus 201703L$' clang-build-logs/header-macros.log
+grep -Eq '^#define _GLIBCXX_RELEASE 13$' clang-build-logs/header-macros.log
+header_path=$(sed -n 's/^\. \(.*\/bits\/c++config.h\)$/\1/p' clang-build-logs/header-trace.log)
+vector_path=$(sed -n 's/^\. \(.*\/vector\)$/\1/p' clang-build-logs/header-trace.log)
+readlink -f "$header_path" "$vector_path" | tee clang-build-logs/selected-headers.log
+test "$(readlink -f "$header_path")" = /usr/include/x86_64-linux-gnu/c++/13/bits/c++config.h
+test "$(readlink -f "$vector_path")" = /usr/include/c++/13/vector
+cmake --version | tee clang-build-logs/cmake-version.log
+if /usr/bin/time -f 'wall_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S\nexit_status=%x' -o clang-build-logs/crash.time bash -euo pipefail -c 'exit 23' 2>&1 | tee clang-build-logs/crash.log; then
+exit 1
+else
+crash_status=$?
+printf '%s\n' "$crash_status" | tee clang-build-logs/crash-status.log
+test "$crash_status" -eq 23
+fi
+'''
+    if run_lines(toolchain) != expected_lines(toolchain_program):
+        findings.append(f'{name} must verify installed Clang 18 and GCC 13 headers without fallback')
+    configure_program = r'''
+set -euo pipefail
+test ! -e build-clang18
+/usr/bin/time -f 'wall_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S\nexit_status=%x' -o clang-build-logs/configure.time \
+cmake -S . -B build-clang18 \
+-DCMAKE_BUILD_TYPE=Release \
+-DCMAKE_CXX_STANDARD=17 \
+-DCMAKE_CXX_COMPILER=/usr/bin/clang++-18 \
+-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13 \
+-DPINEFORGE_BUILD_TESTS=ON \
+-DPINEFORGE_BUILD_SOURCE_LAYER=ON \
+-DPINEFORGE_BUILD_TUTORIAL=ON 2>&1 | tee clang-build-logs/configure.log
+cat build-clang18/CMakeCache.txt > clang-build-logs/cmake-cache.log
+grep -Eq '^CMAKE_CXX_COMPILER:(FILEPATH|STRING)=/usr/bin/clang\+\+-18$' clang-build-logs/cmake-cache.log
+grep -Eq '^-- The CXX compiler identification is Clang 18\.' clang-build-logs/configure.log
+'''
+    if run_lines(configure) != expected_lines(configure_program):
+        findings.append(f'{name} must configure fresh Release C++17 with tests ON, '
+                        'source ON and tutorials ON')
+    build_program = r'''
+set -euo pipefail
+/usr/bin/time -f 'wall_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S\nexit_status=%x' -o clang-build-logs/build.time \
+cmake --build build-clang18 --parallel 4 2>&1 | tee clang-build-logs/build.log
+'''
+    build_lines = [re.sub(r'--parallel [1-4](?= )', '--parallel 4', line)
+                   for line in run_lines(build)]
+    if build_lines != expected_lines(build_program):
+        findings.append(f'{name} must complete the default ALL build with at most four workers')
+    identity_program = r'''
+set -euo pipefail
+mkdir -p clang-build-logs
+date -u --iso-8601=seconds | tee clang-build-logs/finished-at.log
+git rev-parse HEAD HEAD^{tree} 2>&1 | tee clang-build-logs/identity-after.log
+test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+cmp clang-build-logs/identity-before.log clang-build-logs/identity-after.log
+test -s clang-build-logs/clang-version.log
+test -s clang-build-logs/packages.log
+test -s clang-build-logs/selected-headers.log
+test -s clang-build-logs/crash-status.log
+test -s clang-build-logs/crash.time
+test -s clang-build-logs/configure.log
+test -s clang-build-logs/configure.time
+test -s clang-build-logs/cmake-cache.log
+test -s clang-build-logs/build.log
+test -s clang-build-logs/build.time
+'''
+    if (run_lines(identity) != expected_lines(identity_program)
+            or _step_values(identity, 'if') != ['always()']
+            or step_keys(upload) != ['name', 'if', 'uses', 'with']
+            or _step_values(upload, 'if') != ['always()']
+            or _step_values(upload, 'uses') != [
+                'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02']
+            or [line.strip() for line in _step_block(upload, 'with')[1:]] != [
+                'name: clang18-${{ github.run_id }}-${{ github.run_attempt }}',
+                'path: clang-build-logs/', 'if-no-files-found: error']):
+        findings.append(f'{name} must always retain identity, toolchain, logs and timings')
+
+    programs = (toolchain, configure, build, identity)
+    if (keys(body, 4) != ['if', 'runs-on', 'steps']
+            or keys(workflow, 0) != ['name', 'on', 'permissions', 'jobs']
+            or any(step_keys(step) != (['name', 'if', 'shell', 'run'] if step == identity
+                                       else ['name', 'shell', 'run'])
+                   or _step_values(step, 'shell') != ['bash']
+                   or run_lines(step)[:1] != ['set -euo pipefail']
+                   for step in programs)
+            or any(re.search(r'\|\||\bset\s+\+|\bcontinue-on-error\s*:', step)
+                   for step in selected)):
+        findings.append(f'{name} must propagate shell and child failures')
+    return findings
+
+
 def runner_findings(workflows: dict[str, str]) -> list[str]:
     """Enforce event-derived fleets, release forms and command/core pins."""
     findings = workflow_fleet_findings(workflows) + _gke_cap_findings(workflows)
+    if 'clang-build.yml' in workflows:
+        findings += clang_build_workflow_findings(workflows['clang-build.yml'])
     routes = workflow_event_routes(workflows)
     for name, workflow in workflows.items():
         code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(workflow))

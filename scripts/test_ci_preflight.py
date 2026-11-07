@@ -12968,6 +12968,163 @@ class GkeSmokeOutputAdmission(unittest.TestCase):
                         self.assert_refused(in_job(workflow, job, before, after), finding)
 
 
+class ClangBuildWorkflowControls(unittest.TestCase):
+    """Clang admission uses the real runner entry point."""
+
+    NAME = 'clang-build.yml'
+
+    def setUp(self):
+        source = ROOT / '.github/workflows' / self.NAME
+        self.assertTrue(source.is_file(), f'missing shipped workflow: {source}')
+        self.workflow = source.read_text(encoding='utf-8')
+        self.assertTrue(self.workflow.strip(), 'the shipped workflow must not be empty')
+
+    def findings(self, workflow):
+        return ci_preflight.runner_findings({self.NAME: workflow})
+
+    def refuse(self, before, after, finding):
+        self.assertEqual(self.workflow.count(before), 1, before)
+        changed = self.workflow.replace(before, after, 1)
+        self.assertNotEqual(changed, self.workflow)
+        self.assertIn(f'{self.NAME} {finding}', self.findings(changed))
+
+    def test_workflow_is_accepted_through_runner_entry_point(self):
+        self.assertEqual(self.workflow.count('-DPINEFORGE_BUILD_TESTS=ON'), 1)
+        self.assertNotIn('-DPINEFORGE_BUILD_TESTS=OFF', self.workflow)
+        self.assertEqual(self.findings(self.workflow), [])
+        before = 'cmake --build build-clang18 --parallel 4'
+        self.assertEqual(self.workflow.count(before), 1)
+        for workers in (1, 2, 3):
+            with self.subTest(workers=workers):
+                changed = self.workflow.replace(before, before[:-1] + str(workers), 1)
+                self.assertNotEqual(changed, self.workflow)
+                self.assertEqual(self.findings(changed), [])
+
+    def test_absent_workflow_does_not_invent_inventory_requirements(self):
+        self.assertEqual(ci_preflight.runner_findings({}), [])
+        legacy = ('on: push\njobs:\n  build:\n    runs-on: ubuntu-24.04\n'
+                  '    steps:\n      - run: cmake --build build\n')
+        self.assertEqual(ci_preflight.runner_findings({'legacy.yml': legacy}), [])
+        self.assertIn(f'{self.NAME} must run only engine main pushes', self.findings(''))
+
+    def test_event_branch_and_repository_widening(self):
+        for before, after in (
+                ('on:\n', 'on:\n  pull_request:\n'),
+                ('on:\n', 'on:\n  workflow_dispatch:\n'),
+                ('on:\n', 'on:\n  workflow_call:\n'),
+                ('branches: [main]', 'branches: [main, feature]'),
+                ('branches: [main]', 'branches: [main]\n    paths: ["src/**"]'),
+                ("if: github.repository == 'pineforge-4pass/pineforge-engine'",
+                 'if: true')):
+            with self.subTest(after=after):
+                self.refuse(before, after, 'must run only engine main pushes')
+
+    def test_compiler_fallback(self):
+        before = ('/usr/bin/clang++-18 --version 2>&1 | '
+                  'tee clang-build-logs/clang-version.log')
+        self.refuse(before, before + ' || /usr/bin/g++-13 --version',
+                    'must verify installed Clang 18 and GCC 13 headers without fallback')
+        for before, after in (
+                ("grep -Eq '^Ubuntu clang version 18\\.'",
+                 "grep -Eq '^Ubuntu clang version 19\\.'"),
+                ("grep -Eq '^#define _GLIBCXX_RELEASE 13$'",
+                 "grep -Eq '^#define _GLIBCXX_RELEASE 14$'"),
+                ('test "$(readlink -f "$header_path")" = '
+                 '/usr/include/x86_64-linux-gnu/c++/13/bits/c++config.h', 'true'),
+                ('cmake --version | tee clang-build-logs/cmake-version.log',
+                 'sudo apt-get install clang-18')):
+            with self.subTest(before=before):
+                self.refuse(before, after,
+                            'must verify installed Clang 18 and GCC 13 headers without fallback')
+
+    def test_real_default_all_build_cannot_be_removed_or_narrowed(self):
+        before = 'cmake --build build-clang18 --parallel 4'
+        for after in ('true', 'printf "build complete\\n"',
+                      'cmake --build build-clang18 --target pineforge --parallel 4',
+                      'cmake --build build-clang18 --target pineforge_pr_smoke --parallel 4',
+                      'cmake --build build-clang18 --parallel 8'):
+            with self.subTest(after=after):
+                self.refuse(before, after,
+                            'must complete the default ALL build with at most four workers')
+
+    def test_release_language_and_build_switches(self):
+        for before, after in (
+                ('-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_BUILD_TYPE=Debug'),
+                ('-DCMAKE_CXX_STANDARD=17', '-DCMAKE_CXX_STANDARD=20'),
+                ('-DCMAKE_CXX_COMPILER=/usr/bin/clang++-18',
+                 '-DCMAKE_CXX_COMPILER=/usr/bin/g++-13'),
+                ('-DPINEFORGE_BUILD_TESTS=ON', '-DPINEFORGE_BUILD_TESTS=OFF'),
+                ('-DPINEFORGE_BUILD_TESTS=ON',
+                 '-DPINEFORGE_BUILD_TESTS=ON -DPINEFORGE_BUILD_TESTS=OFF'),
+                ('            -DPINEFORGE_BUILD_TESTS=ON \\\n', ''),
+                ('-DPINEFORGE_BUILD_SOURCE_LAYER=ON', '-DPINEFORGE_BUILD_SOURCE_LAYER=OFF'),
+                ('-DPINEFORGE_BUILD_TUTORIAL=ON', '-DPINEFORGE_BUILD_TUTORIAL=OFF')):
+            with self.subTest(before=before, after=after):
+                self.refuse(before, after,
+                            'must configure fresh Release C++17 with tests ON, '
+                            'source ON and tutorials ON')
+
+    def test_suppressed_build_failure(self):
+        before = 'cmake --build build-clang18 --parallel 4'
+        self.refuse(before, before + ' || true', 'must propagate shell and child failures')
+        before = '      - name: Build all targets\n'
+        self.refuse(before, before + '        continue-on-error: true\n',
+                    'must propagate shell and child failures')
+        self.refuse(before, before + '        if: false\n',
+                    'must propagate shell and child failures')
+        before = ('      - name: Build all targets\n        shell: bash\n'
+                  '        run: |\n          set -euo pipefail')
+        self.refuse(before, before.replace('set -euo pipefail', 'set +e'),
+                    'must propagate shell and child failures')
+
+    def test_always_retention_and_missing_evidence(self):
+        before = '      - name: Upload build logs\n        if: always()'
+        self.refuse(before, before.replace('always()', 'success()'),
+                    'must always retain identity, toolchain, logs and timings')
+        self.refuse('path: clang-build-logs/', 'path: .',
+                    'must always retain identity, toolchain, logs and timings')
+        self.refuse('if-no-files-found: error', 'if-no-files-found: warn',
+                    'must always retain identity, toolchain, logs and timings')
+        before = '      - name: Record final identity and evidence\n        if: always()'
+        self.refuse(before, before.replace('always()', 'success()'),
+                    'must always retain identity, toolchain, logs and timings')
+        upload = ci_preflight._steps(_jobs(self.workflow)['clang-build'])[-1]
+        self.refuse(upload, '', 'must always retain identity, toolchain, logs and timings')
+
+    def test_permissions_and_secrets(self):
+        for before, after in (
+                ('permissions: {contents: read}', 'permissions: {contents: write}'),
+                ('permissions: {contents: read}',
+                 'permissions: {contents: read, id-token: write}'),
+                ('jobs:\n', 'env:\n  TOKEN: ${{ secrets.BUILD_TOKEN }}\njobs:\n'),
+                ('    steps:\n', '    environment: release\n    steps:\n')):
+            with self.subTest(after=after):
+                self.refuse(before, after, 'must use contents: read without credentials')
+
+    def test_checkout_binds_push_without_persisting_credentials(self):
+        self.refuse('ref: ${{ github.sha }}', 'ref: main',
+                    'checkout must use the push SHA without persisted credentials')
+        self.refuse('persist-credentials: false', 'persist-credentials: true',
+                    'checkout must use the push SHA without persisted credentials')
+
+    def test_identity_comparison_cannot_be_replaced_by_success(self):
+        self.refuse(
+            'cmp clang-build-logs/identity-before.log clang-build-logs/identity-after.log',
+            'true', 'must always retain identity, toolchain, logs and timings')
+
+    def test_native_single_job_has_no_timeout_or_target_overrides(self):
+        for before, after in (
+                ('runs-on: ubuntu-24.04', 'runs-on: ubuntu-24.04-arm'),
+                ('    steps:\n', '    timeout-minutes: 15\n    steps:\n'),
+                ('    steps:\n',
+                 '    strategy:\n      matrix:\n        compiler: [clang, gcc]\n    steps:\n'),
+                ('jobs:\n', 'jobs:\n  extra:\n    runs-on: ubuntu-24.04\n'
+                 '    steps:\n      - run: true\n')):
+            with self.subTest(after=after):
+                self.refuse(before, after,
+                            'must keep one native ubuntu-24.04 build job without overrides')
+
+
 if __name__ == '__main__':
     if any(arg == '--slice' or arg.startswith('--slice=') for arg in sys.argv[1:]):
         parser = argparse.ArgumentParser(description=__doc__)

@@ -1,0 +1,119 @@
+name: Clang 18 build
+
+on:
+  push:
+    branches: [main]
+
+permissions: {contents: read}
+
+jobs:
+  clang-build:
+    if: github.repository == 'pineforge-4pass/pineforge-engine'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout the push
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Record and verify the installed toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir clang-build-logs
+          date -u --iso-8601=seconds | tee clang-build-logs/started-at.log
+          git rev-parse HEAD HEAD^{tree} | tee clang-build-logs/identity-before.log
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          uname -a | tee clang-build-logs/machine.log
+          test "$(uname -m)" = x86_64
+          dpkg --print-architecture | tee clang-build-logs/package-architecture.log
+          grep -Fx amd64 clang-build-logs/package-architecture.log
+          test -x /usr/bin/clang++-18
+          test -x /usr/bin/g++-13
+          test -d /usr/lib/gcc/x86_64-linux-gnu/13
+          readlink -f /usr/bin/clang++-18 /usr/bin/g++-13 /usr/lib/gcc/x86_64-linux-gnu/13 | tee clang-build-logs/toolchain-paths.log
+          /usr/bin/clang++-18 --version 2>&1 | tee clang-build-logs/clang-version.log
+          grep -Eq '^Ubuntu clang version 18\.' clang-build-logs/clang-version.log
+          grep -Eq '^Target: x86_64-.*linux-gnu$' clang-build-logs/clang-version.log
+          /usr/bin/g++-13 -dumpfullversion | tee clang-build-logs/gcc-version.log
+          grep -Eq '^13\.' clang-build-logs/gcc-version.log
+          /usr/bin/g++-13 -dumpmachine | tee clang-build-logs/gcc-target.log
+          grep -Fx x86_64-linux-gnu clang-build-logs/gcc-target.log
+          dpkg-query -W -f='${binary:Package}\t${Version}\t${Architecture}\n' clang-18 g++-13 libstdc++-13-dev libstdc++6 | tee clang-build-logs/packages.log
+          dpkg-query -S /usr/bin/clang++-18 /usr/bin/g++-13 /usr/include/c++/13/vector /usr/include/x86_64-linux-gnu/c++/13/bits/c++config.h | tee clang-build-logs/package-owners.log
+          printf '#include <bits/c++config.h>\n#include <vector>\n' | /usr/bin/clang++-18 --gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13 -std=c++17 -E -v -H -dM -x c++ - > clang-build-logs/header-macros.log 2> clang-build-logs/header-trace.log
+          cat clang-build-logs/header-trace.log
+          grep -Fx 'Selected GCC installation: /usr/lib/gcc/x86_64-linux-gnu/13' clang-build-logs/header-trace.log
+          grep -Eq '^#define __clang_major__ 18$' clang-build-logs/header-macros.log
+          grep -Eq '^#define __cplusplus 201703L$' clang-build-logs/header-macros.log
+          grep -Eq '^#define _GLIBCXX_RELEASE 13$' clang-build-logs/header-macros.log
+          header_path=$(sed -n 's/^\. \(.*\/bits\/c++config.h\)$/\1/p' clang-build-logs/header-trace.log)
+          vector_path=$(sed -n 's/^\. \(.*\/vector\)$/\1/p' clang-build-logs/header-trace.log)
+          readlink -f "$header_path" "$vector_path" | tee clang-build-logs/selected-headers.log
+          test "$(readlink -f "$header_path")" = /usr/include/x86_64-linux-gnu/c++/13/bits/c++config.h
+          test "$(readlink -f "$vector_path")" = /usr/include/c++/13/vector
+          cmake --version | tee clang-build-logs/cmake-version.log
+          if /usr/bin/time -f 'wall_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S\nexit_status=%x' -o clang-build-logs/crash.time bash -euo pipefail -c 'exit 23' 2>&1 | tee clang-build-logs/crash.log; then
+            exit 1
+          else
+            crash_status=$?
+            printf '%s\n' "$crash_status" | tee clang-build-logs/crash-status.log
+            test "$crash_status" -eq 23
+          fi
+
+      - name: Configure Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e build-clang18
+          /usr/bin/time -f 'wall_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S\nexit_status=%x' -o clang-build-logs/configure.time \
+            cmake -S . -B build-clang18 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=17 \
+            -DCMAKE_CXX_COMPILER=/usr/bin/clang++-18 \
+            -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13 \
+            -DPINEFORGE_BUILD_TESTS=ON \
+            -DPINEFORGE_BUILD_SOURCE_LAYER=ON \
+            -DPINEFORGE_BUILD_TUTORIAL=ON 2>&1 | tee clang-build-logs/configure.log
+          cat build-clang18/CMakeCache.txt > clang-build-logs/cmake-cache.log
+          grep -Eq '^CMAKE_CXX_COMPILER:(FILEPATH|STRING)=/usr/bin/clang\+\+-18$' clang-build-logs/cmake-cache.log
+          grep -Eq '^-- The CXX compiler identification is Clang 18\.' clang-build-logs/configure.log
+
+      - name: Build all targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time -f 'wall_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S\nexit_status=%x' -o clang-build-logs/build.time \
+            cmake --build build-clang18 --parallel 4 2>&1 | tee clang-build-logs/build.log
+
+      - name: Record final identity and evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p clang-build-logs
+          date -u --iso-8601=seconds | tee clang-build-logs/finished-at.log
+          git rev-parse HEAD HEAD^{tree} 2>&1 | tee clang-build-logs/identity-after.log
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          cmp clang-build-logs/identity-before.log clang-build-logs/identity-after.log
+          test -s clang-build-logs/clang-version.log
+          test -s clang-build-logs/packages.log
+          test -s clang-build-logs/selected-headers.log
+          test -s clang-build-logs/crash-status.log
+          test -s clang-build-logs/crash.time
+          test -s clang-build-logs/configure.log
+          test -s clang-build-logs/configure.time
+          test -s clang-build-logs/cmake-cache.log
+          test -s clang-build-logs/build.log
+          test -s clang-build-logs/build.time
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: clang18-${{ github.run_id }}-${{ github.run_attempt }}
+          path: clang-build-logs/
+          if-no-files-found: error
