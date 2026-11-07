@@ -1220,8 +1220,10 @@ class RealTree(unittest.TestCase):
         # emitted, 4 stale entries removed), one group of the local list of
         # materialize_relative_exits and three groups of
         # SeriesPercentileNearestRank (its ring, the growth of the ring and its
-        # window); all 184 pending-flat-memory groups remain.
-        self.assertEqual(c['OPEN'], 1356 + 50 + 184)
+        # window), less the two whole-state copies of the bounded drawing arena
+        # removed when it began writing in place; all 184 pending-flat-memory
+        # groups remain.
+        self.assertEqual(c['OPEN'], 1356 + 48 + 184)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')

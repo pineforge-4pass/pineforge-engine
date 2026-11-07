@@ -103,7 +103,7 @@ public:
     int worst_negative_qty_rows() const {
         int n = 0;
         for (int i = 0; i < trade_count(); ++i)
-            if (closed_trade_size(i) < 0.0) ++n;
+            if (get_trade(i).qty < 0.0) ++n;
         return n;
     }
     using BacktestEngine::position_side_;
@@ -138,8 +138,12 @@ void test_negative_equity_reversal_declined_clean() {
     CHECK(eng.worst_negative_qty_rows() == 0);   // RED on baseline (1 neg row)
     CHECK(eng.position_side_ == PositionSide::SHORT);
     CHECK(eng.position_qty_ > 0.0);              // never a negative-qty position
-    // Every emitted trade row carries a POSITIVE size (Pine/TV magnitude column).
-    for (int i = 0; i < eng.trade_count(); ++i) CHECK(eng.trade_size(i) >= 0.0);
+    // Stored quantities remain magnitudes; Pine sizes also encode the side.
+    for (int i = 0; i < eng.trade_count(); ++i) {
+        const auto trade = eng.get_trade(i);
+        CHECK(trade.qty >= 0.0);
+        CHECK(eng.trade_size(i) == (trade.is_long ? trade.qty : -trade.qty));
+    }
 }
 
 // A2. EMISSION/ACCOUNTING split closed: the exported per-trade PnL (sum) agrees
@@ -191,6 +195,12 @@ void test_solvent_reversal_opens_normally() {
     CHECK(eng.position_qty_ > 0.0);
     CHECK(eng.trade_count() >= 1);                      // short closed cleanly
     CHECK(eng.worst_negative_qty_rows() == 0);
+    if (eng.trade_count() >= 1) {
+        const auto trade = eng.get_trade(0);
+        CHECK(!trade.is_long);
+        CHECK_NEAR(trade.qty, 100.0, 1e-9);          // 10000 / entry price 100
+        CHECK_NEAR(eng.trade_size(0), -100.0, 1e-9);
+    }
 }
 
 // C2. CONTROL — a SOLVENT true-flat all-in long open is unchanged: opens the
