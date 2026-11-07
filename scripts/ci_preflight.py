@@ -4534,6 +4534,15 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or any(_step_values(step, 'if') != ["steps.ci.outputs.green == 'true'"]
                    for step in promote_steps[4:])):
         findings.append('baseline promotion must guard resolution, tree and gate checks before credentials')
+    head_predicates = re.findall(r'^[ \t]*\|[ \t]*(.*?)\s*\' <<< "\$statuses"',
+                                 head_gate, re.MULTILINE | re.DOTALL)
+    for index, predicate in enumerate(head_predicates):
+        predicate = predicate.strip()
+        # Only whole-expression wrappers may surround the exact parity atom.
+        # Unbalanced wrappers and compound expressions cannot reduce to it.
+        while predicate.startswith('(') and predicate.endswith(')'):
+            predicate = predicate[1:-1].strip()
+        head_predicates[index] = predicate
     if (_events(promote) != {'push', 'workflow_dispatch'}
             or re.search(r'^  pull_request(?:_target)?:', promote, re.MULTILINE)
             or '  statuses: read' not in promote
@@ -4546,9 +4555,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or 'gh api --paginate' not in head_gate
             or 'reduce (.[][]) as $s' not in head_gate
             or 'if has($s.context) then . else .[$s.context] = $s.state end' not in head_gate
-            or re.findall(r'^[ \t]*\|[ \t]*(.*?)\s*\' <<< "\$statuses"',
-                          head_gate, re.MULTILINE | re.DOTALL)
-            != ['.["pineforge/parity"] == "success"']
+            or head_predicates != ['.["pineforge/parity"] == "success"']
             or head_gate.count('echo "green=false" >> "$GITHUB_OUTPUT"; exit 0') != 2):
         findings.append("baseline promotion must run main's copy and require "
                         "the latest head parity status only (verify is advisory)")

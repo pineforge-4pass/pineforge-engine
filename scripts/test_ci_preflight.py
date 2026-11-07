@@ -5738,6 +5738,10 @@ class PreflightFailures(unittest.TestCase):
                    "the latest head parity status only (verify is advisory)")
         for predicate in (verify + ' and ' + parity, parity + ' and ' + verify,
                           parity + '\n              and ' + verify,
+                          '(' + parity, parity + ')', '((' + parity + ')',
+                          '(' + parity + '))', '(' + parity + ') or true',
+                          '(' + parity + ') and true', 'not (' + parity + ')',
+                          '(' + parity + ') | true',
                           verify, 'true', '.["pineforge/parity"] == "failure"'):
             with self.subTest(predicate=predicate):
                 changed = original.copy()
@@ -5745,6 +5749,37 @@ class PreflightFailures(unittest.TestCase):
                                      parity, predicate)
                 self.assertNotEqual(changed[2], original[2])
                 self.assertIn(finding, ci_workflow_findings(*changed))
+
+    def test_baseline_promotion_head_predicate_four_rows_and_wrapping(self):
+        original = self.ci_sources()
+        self.assertEqual(ci_workflow_findings(*original), [])
+        parity = '.["pineforge/parity"] == "success"'
+        finding = ("baseline promotion must run main's copy and require "
+                   "the latest head parity status only (verify is advisory)")
+        cases = (
+            ('parenthesized-parity-only',
+             '(.["pineforge/parity"] == "success")', []),
+            ('neither-required', 'true', [finding]),
+            ('parenthesized-verify-and-parity',
+             '(.["pineforge/verify"] == "success" and .["pineforge/parity"] == "success")',
+             [finding]),
+            ('verify-only', '.["pineforge/verify"] == "success"', [finding]),
+        )
+        for name, predicate, expected in cases:
+            with self.subTest(policy=name):
+                changed = original.copy()
+                changed[2] = in_step(changed[2], 'promote', 'Confirm the gate on the PR head',
+                                     parity, predicate)
+                self.assertNotEqual(changed[2], original[2])
+                self.assertEqual(ci_workflow_findings(*changed), expected)
+        for predicate in ('  ' + parity + '  ', '( ( ' + parity + ' ) )',
+                          '(\n              ( ' + parity + ' )\n              )'):
+            with self.subTest(wrapping=predicate):
+                changed = original.copy()
+                changed[2] = in_step(changed[2], 'promote', 'Confirm the gate on the PR head',
+                                     parity, predicate)
+                self.assertNotEqual(changed[2], original[2])
+                self.assertEqual(ci_workflow_findings(*changed), [])
 
     def test_promotion_guard_rejects_added_contents_read_permission(self):
         finding = 'baseline promotion must start with the pinned read-only promote-guard'
