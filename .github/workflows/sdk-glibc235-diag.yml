@@ -1,0 +1,52 @@
+name: SDK glibc 2.35 hosted diagnostic
+
+on:
+  push:
+    branches:
+      - diag/sdk-glibc235-1110
+
+permissions:
+  contents: read
+
+jobs:
+  sdk-glibc235-diag:
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/diag/sdk-glibc235-1110' &&
+      github.repository == 'pineforge-4pass/pineforge-engine'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout the exact diagnostic head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: pineforge-4pass/pineforge-engine
+          ref: ${{ github.sha }}
+          path: new-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout the matching published example
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: pineforge-4pass/pineforge-engine
+          ref: v1.10.0
+          path: old-tag-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build, inspect and actually load both SDK strategies
+        run: |
+          python3 -I "$GITHUB_WORKSPACE/new-source/docker/sdk-glibc235/diagnostic.py" \
+            --new-source "$GITHUB_WORKSPACE/new-source" \
+            --old-tag-source "$GITHUB_WORKSPACE/old-tag-source" \
+            --work-root "$RUNNER_TEMP/sdk-glibc235-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --report-root "$RUNNER_TEMP/sdk-glibc235-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/reports"
+
+      - name: Preserve complete diagnostic reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sdk-glibc235-diag-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sdk-glibc235-${{ github.run_id }}-${{ github.run_attempt }}/reports/
+          if-no-files-found: error
+          retention-days: 14

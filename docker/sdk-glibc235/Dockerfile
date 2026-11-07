@@ -1,10 +1,12 @@
-# Build context: repository root. No externally fetched Dockerfile frontend.
+# Build context: six declared inputs prepared by diagnostic.py --prepare-only.
+# No checkout metadata, host root store, or externally fetched Dockerfile frontend.
 FROM --platform=linux/amd64 docker.io/library/ubuntu:22.04@sha256:8a2321a92b438238f93b4346fff61bc4259c99fdd4d9b52ee86f153fee0c344f AS gcc-build
 
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 ENV LC_ALL=C LANG=C
 
 COPY docker/sdk-glibc235/Dockerfile docker/sdk-glibc235/README.md docker/sdk-glibc235/ubuntu-snapshot.list docker/sdk-glibc235/gcc-13.3.0.sha512 /usr/local/share/sdk-toolchain/inputs/
+COPY docker/sdk-glibc235/bootstrap-ca.sha256 docker/sdk-glibc235/ca-certificates_20260816ubuntu0.22.04.1_all.deb /usr/local/share/sdk-toolchain/bootstrap/
 
 WORKDIR /build
 RUN . /etc/os-release; \
@@ -12,11 +14,20 @@ RUN . /etc/os-release; \
     [[ "$(dpkg --print-architecture)" == amd64 && "$(uname -m)" == x86_64 ]]; \
     [[ "$(getconf GNU_LIBC_VERSION)" == 'glibc 2.35' ]]; \
     [[ -s /usr/share/keyrings/ubuntu-archive-keyring.gpg ]]; \
-    if [[ ! -s /etc/ssl/certs/ca-certificates.crt ]]; then \
-        printf '%s\n' 'NEEDS: pinned base lacks the CA bundle for authenticated HTTPS snapshot bootstrap; no insecure fallback.' >&2; \
-        exit 1; \
-    fi; \
     mkdir -p /usr/local/share/sdk-toolchain/gcc-build; \
+    bootstrap=/usr/local/share/sdk-toolchain/bootstrap; \
+    (cd "$bootstrap"; sha256sum --check --strict bootstrap-ca.sha256) \
+        | tee /usr/local/share/sdk-toolchain/gcc-build/bootstrap-ca-check.txt; \
+    dpkg-deb --extract "$bootstrap/ca-certificates_20260816ubuntu0.22.04.1_all.deb" /build/bootstrap-ca; \
+    certs=(/build/bootstrap-ca/usr/share/ca-certificates/mozilla/*.crt); \
+    [[ ${#certs[@]} -gt 0 && -f "${certs[0]}" ]]; \
+    mkdir -p /etc/ssl/certs; \
+    for cert in "${certs[@]}"; do \
+        [[ -f "$cert" && ! -L "$cert" ]]; cat "$cert"; printf '\n'; \
+    done > /etc/ssl/certs/ca-certificates.crt; \
+    [[ -s /etc/ssl/certs/ca-certificates.crt ]]; \
+    sha256sum /etc/ssl/certs/ca-certificates.crt \
+        > /usr/local/share/sdk-toolchain/gcc-build/bootstrap-bundle.sha256; \
     cp /etc/os-release /usr/local/share/sdk-toolchain/gcc-build/base-os-release; \
     getconf GNU_LIBC_VERSION > /usr/local/share/sdk-toolchain/gcc-build/base-glibc.txt; \
     apt_options=( \
@@ -69,16 +80,26 @@ FROM --platform=linux/amd64 docker.io/library/ubuntu:22.04@sha256:8a2321a92b4382
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 ENV LC_ALL=C LANG=C
 COPY --from=gcc-build /usr/local/share/sdk-toolchain/ /usr/local/share/sdk-toolchain/
+COPY docker/sdk-glibc235/bootstrap-ca.sha256 docker/sdk-glibc235/ca-certificates_20260816ubuntu0.22.04.1_all.deb /usr/local/share/sdk-toolchain/bootstrap/
 
 RUN . /etc/os-release; \
     [[ "$ID" == ubuntu && "$VERSION_ID" == 22.04 ]]; \
     [[ "$(dpkg --print-architecture)" == amd64 && "$(uname -m)" == x86_64 ]]; \
     [[ "$(getconf GNU_LIBC_VERSION)" == 'glibc 2.35' ]]; \
     [[ -s /usr/share/keyrings/ubuntu-archive-keyring.gpg ]]; \
-    if [[ ! -s /etc/ssl/certs/ca-certificates.crt ]]; then \
-        printf '%s\n' 'NEEDS: pinned base lacks the CA bundle for authenticated HTTPS snapshot bootstrap; no insecure fallback.' >&2; \
-        exit 1; \
-    fi; \
+    bootstrap=/usr/local/share/sdk-toolchain/bootstrap; \
+    (cd "$bootstrap"; sha256sum --check --strict bootstrap-ca.sha256) \
+        | tee /usr/local/share/sdk-toolchain/bootstrap/final-ca-check.txt; \
+    dpkg-deb --extract "$bootstrap/ca-certificates_20260816ubuntu0.22.04.1_all.deb" /bootstrap-ca; \
+    certs=(/bootstrap-ca/usr/share/ca-certificates/mozilla/*.crt); \
+    [[ ${#certs[@]} -gt 0 && -f "${certs[0]}" ]]; \
+    mkdir -p /etc/ssl/certs; \
+    for cert in "${certs[@]}"; do \
+        [[ -f "$cert" && ! -L "$cert" ]]; cat "$cert"; printf '\n'; \
+    done > /etc/ssl/certs/ca-certificates.crt; \
+    [[ -s /etc/ssl/certs/ca-certificates.crt ]]; \
+    sha256sum /etc/ssl/certs/ca-certificates.crt \
+        > /usr/local/share/sdk-toolchain/bootstrap/final-bundle.sha256; \
     apt_options=( \
         -o Dir::Etc::sourcelist=/usr/local/share/sdk-toolchain/inputs/ubuntu-snapshot.list \
         -o Dir::Etc::sourceparts=- \
