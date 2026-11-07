@@ -2369,7 +2369,7 @@ class OptionCWorkflowTests(unittest.TestCase):
         self.assertEqual(ci_preflight.release_prebuilt_image_findings(pin), [])
         for changed in ("", pin.rstrip("\n"), pin + "\n", pin + "# extra\n",
                         pin.replace("@sha256:", ":latest#"), pin.replace("72fb3", "82fb3"),
-                        pin.replace("gke-runner-images", "other-images")):
+                        pin.replace("engine-release-toolchains", "other-images")):
             with self.subTest(pin=changed):
                 self.assertNotEqual(changed, pin)
                 self.assertTrue(ci_preflight.release_prebuilt_image_findings(changed))
