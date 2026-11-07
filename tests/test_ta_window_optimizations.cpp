@@ -951,6 +951,37 @@ void check_window_allocations(const char* name, int length) {
     check_true(old_counts.other >= static_cast<std::size_t>(kAllocationCalls), label);
 }
 
+std::size_t rci_constructor_bytes(int length) {
+    // Every recorded object is destroyed before the next recording window.
+    global_allocation::live_bytes = 0;
+    global_allocation::peak_bytes = 0;
+    global_allocation::recording = true;
+    std::size_t retained = 0;
+    {
+        ta::RCI indicator(length);
+        retained = global_allocation::live_bytes;
+    }
+    global_allocation::recording = false;
+    return retained;
+}
+
+void test_rci_constructor_workspace() {
+    // Before values arrive, only the permutation and rank workspaces should
+    // scale with length. The empty live deque has length-independent storage.
+    // Measure real requested heap bytes, not a timer or a reported constant.
+    for (int length : {7, 37, 129}) {
+        const auto small = rci_constructor_bytes(length);
+        const auto large = rci_constructor_bytes(2 * length);
+        const auto expected = static_cast<std::size_t>(length)
+            * (sizeof(int) + sizeof(double));
+        char label[160];
+        std::snprintf(label, sizeof(label),
+                      "RCI constructor length=%d measured workspace delta=%zu expected=%zu",
+                      length, large >= small ? large - small : 0, expected);
+        check_true(small > 0 && large > small && large - small == expected, label);
+    }
+}
+
 void test_allocations() {
     for (int length : {5, 50}) {
         check_window_allocations<ta::RCI, RefRCI>("RCI", length);
@@ -975,6 +1006,7 @@ int main() {
     test_mfi_cmo();
     test_recompute_paths();
     test_allocations();
+    test_rci_constructor_workspace();
 
     std::printf("test_ta_window_optimizations: checks=%d failures=%d\n",
                 checks, failures);
