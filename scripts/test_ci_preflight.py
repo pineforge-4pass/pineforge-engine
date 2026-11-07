@@ -6525,11 +6525,13 @@ exit "$lookup_exit"
     def test_fast_label_rows_and_build_dependencies_are_pinned(self):
         cmake = self.ci_sources()[3]
         rows = ci_preflight.fast_rows(cmake)
+        # expectation corrected: 11 -> 12, because PR smoke now builds and
+        # selects the existing ABI layout probe alongside every prior row.
         self.assertEqual(rows, [
             'test_ringbuffer', 'test_timeframe', 'test_path_at', 'test_na_runtime',
             'test_math_sum', 'test_str_utils', 'test_ta', 'test_matrix',
             'test_native_run_spec', 'test_native_bare_host_contracts',
-            'test_native_kernel_edge'])
+            'test_native_kernel_edge', 'test_abi_layout_probe'])
         mutations = [
             ('    test_ringbuffer\n', ''),
             ('    test_ringbuffer\n', '    test_ringbuffer\n    test_ringbuffer\n'),
@@ -6549,6 +6551,20 @@ exit "$lookup_exit"
                 findings = self.mutated_file_findings(3, None, fast_block, changed_block)
                 self.assertIn('PR fast rows must keep one pinned CMake label list and executable build target',
                               findings)
+
+    def test_fast_rows_refuse_removing_abi_layout_probe(self):
+        sources = self.ci_sources()
+        cmake = sources[3]
+        finding = 'PR fast rows must keep one pinned CMake label list and executable build target'
+        self.assertIn('test_abi_layout_probe', ci_preflight.fast_rows(cmake))
+        self.assertNotIn(finding, ci_workflow_findings(*sources, others=self.other_sources()))
+        fast_block = cmake[cmake.index('set(PINEFORGE_PR_FAST_TESTS\n'):]
+        self.assertEqual(fast_block.count('    test_abi_layout_probe\n'), 1)
+        changed_block = fast_block.replace('    test_abi_layout_probe\n', '', 1)
+        self.assertNotEqual(changed_block, fast_block)
+        self.assertNotIn('test_abi_layout_probe', ci_preflight.fast_rows(changed_block))
+        findings = self.mutated_file_findings(3, None, fast_block, changed_block)
+        self.assertIn(finding, findings)
 
     def test_fast_rows_refuse_property_writes_after_the_registration_block(self):
         sources = self.ci_sources()
