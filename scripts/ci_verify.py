@@ -1216,7 +1216,7 @@ def ctest_target_output_manifest(build_dir: Path) -> dict[Path, str]:
     if ninja.is_file():
         text = re.sub(r'\$\r?\n[ \t]*', '', ninja.read_text())
         for edge in re.finditer(
-                r'(?m)^build .+: [^\s:]*_LINKER__[^\s:]+[^\n]*\n'
+                r'(?m)^build (?P<outputs>(?:\$[^\n]|[^$:\n])+): [^\s:]*_LINKER__[^\s:]+[^\n]*\n'
                 r'(?P<bindings>(?:[ \t]+[^\n]*\n|\n)*)', text):
             bindings = edge['bindings']
             directory = re.search(r'(?m)^  OBJECT_DIR = (.+)$', bindings)
@@ -1236,7 +1236,11 @@ def ctest_target_output_manifest(build_dir: Path) -> dict[Path, str]:
             match = OBJECT_DIR.search(object_dir.as_posix() + '/')
             if match is None or object_dir.resolve() not in active:
                 raise ValueError(f'generated Ninja link edge has no active CMake target: {directory[1]}')
-            register(literal(product[1]), match[1], root)
+            # TARGET_FILE is a shell fragment; declared edge outputs instead
+            # use Ninja path escapes, including $ spaces within a path.
+            for output in re.findall(r'(?:\$[^\n]|[^ \t$])+|\$', edge['outputs']):
+                if output != '|':  # Ninja's implicit-output separator.
+                    register(literal(output), match[1], root)
     else:
         for directory in sorted(active):
             link = directory / 'link.txt'
