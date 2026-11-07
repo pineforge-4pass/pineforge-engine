@@ -32,6 +32,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parent / "gen_run_failure_catalog_diff.py"
 ROOT = SCRIPT.parents[1]
@@ -143,6 +144,11 @@ class Repo:
     def commit(self, message: str) -> str:
         self.git("add", "-A")
         self.git("commit", "-q", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def amend(self) -> str:
+        self.git("add", "-A")
+        self.git("commit", "--amend", "--no-edit")
         return self.git("rev-parse", "HEAD")
 
     def tag(self, tag: str) -> None:
@@ -285,10 +291,137 @@ class CatalogDiff(unittest.TestCase):
         self.fails(self.repo.run("--check", env={REQUIRE_TAGS: "1"}), 1, "single parent")
 
     def test_untagged_transition_refuses_extra_path(self) -> None:
-        self.pending_release()
+        parent = self.pending_release()
         self.repo.write("README.md", b"extra release change\n")
-        self.repo.commit("extra",)
-        self.fails(self.repo.run("--check", env={REQUIRE_TAGS: "1"}), 1, "exactly VERSION")
+        self.repo.amend()
+        self.assertEqual(self.repo.git("rev-parse", "HEAD^"), parent)
+        self.assertEqual({row[0] for row in generator.Git(self.repo.path).changed_files(parent)},
+                         {"VERSION", DIFF, "README.md"})
+        result = self.repo.run("--check", env={REQUIRE_TAGS: "1"})
+        self.fails(result, 1, "release transition must modify exactly VERSION and "
+                   "docker/run_failure_codes_diff.json as regular files")
+        self.assertEqual(result.stderr.splitlines(), [
+            "gen_run_failure_catalog_diff: release transition must modify exactly VERSION "
+            "and docker/run_failure_codes_diff.json as regular files"])
+
+    def assert_irregular_transition(self, parent: str, rows: list[tuple]) -> None:
+        snapshot = generator.Git(self.repo.path)
+        self.assertEqual(snapshot.parents(), [parent])
+        self.assertCountEqual(snapshot.changed_files(parent), rows)
+        with self.assertRaises(generator.Finding) as refused:
+            generator.validate_release_transition(
+                generator.default_config(self.repo.path), snapshot, expected_parent=parent)
+        self.assertEqual(str(refused.exception),
+                         "release transition must modify exactly VERSION and "
+                         "docker/run_failure_codes_diff.json as regular files")
+
+    def test_untagged_transition_refuses_renamed_reset_in_the_bump_commit(self) -> None:
+        parent = self.pending_release()
+        renamed = "docker/renamed_diff.json"
+        self.repo.git("mv", DIFF, renamed)
+        self.repo.amend()
+        self.assert_irregular_transition(parent, [
+            ("VERSION", "100644", "100644", "M"),
+            (DIFF, "100644", "000000", "D"),
+            (renamed, "000000", "100644", "A"),
+        ])
+
+    def test_untagged_transition_refuses_deleted_reset_in_the_bump_commit(self) -> None:
+        parent = self.pending_release()
+        self.repo.git("rm", DIFF)
+        self.repo.amend()
+        self.assert_irregular_transition(parent, [
+            ("VERSION", "100644", "100644", "M"),
+            (DIFF, "100644", "000000", "D"),
+        ])
+
+    def test_untagged_transition_refuses_symlink_version_with_valid_version_blob(self) -> None:
+        parent = self.pending_release()
+        version = self.repo.path / "VERSION"
+        version.unlink()
+        # Git reads the link's literal target as its blob. It parses as a valid
+        # forward version, so the mode check must be the reason for refusal.
+        version.symlink_to("1.1.0")
+        self.repo.amend()
+        self.assertEqual(generator.Git(self.repo.path).file_at("HEAD", "VERSION"), b"1.1.0")
+        self.assert_irregular_transition(parent, [
+            ("VERSION", "100644", "120000", "T"),
+            (DIFF, "100644", "100644", "M"),
+        ])
+
+    def test_untagged_transition_refuses_unreadable_parent_diff(self) -> None:
+        self.start({"alpha": code("1.1.0")})
+        self.repo.write(DIFF, b"{invalid json\n")
+        parent = self.repo.commit("unreadable parent diff")
+        self.ok(self.repo.run("--reset", "--tag", "v1.1.0"))
+        self.repo.write("VERSION", b"1.1.0\n")
+        self.repo.commit("chore(release): v1.1.0")
+        with self.assertRaises(generator.Finding) as refused:
+            generator.validate_release_transition(
+                generator.default_config(self.repo.path), generator.Git(self.repo.path),
+                expected_parent=parent)
+        self.assertEqual(str(refused.exception), "release parent catalog diff is unreadable")
+
+    def test_release_diff_reader_reports_git_failure_without_returning_empty_paths(self) -> None:
+        parent = self.pending_release()
+        snapshot = generator.Git(self.repo.path)
+        argv = ("diff-tree", "-r", "--raw", "--no-abbrev", "--no-commit-id",
+                "--no-renames", "--no-ext-diff", "-z", parent, "HEAD", "--")
+        for response in (None, subprocess.CompletedProcess(
+                ["git"], 128, stdout="", stderr="fatal: unreadable diff")):
+            with self.subTest(response=response):
+                with mock.patch.object(snapshot, "_run", return_value=response) as read:
+                    with self.assertRaises(generator.Unreadable) as refused:
+                        snapshot.changed_files(parent)
+                read.assert_called_once_with(*argv)
+                self.assertEqual(str(refused.exception), "git cannot read " + " ".join(argv))
+
+    def test_release_diff_reader_refuses_odd_truncated_or_malformed_nul_records(self) -> None:
+        parent = self.pending_release()
+        snapshot = generator.Git(self.repo.path)
+        argv = ("diff-tree", "-r", "--raw", "--no-abbrev", "--no-commit-id",
+                "--no-renames", "--no-ext-diff", "-z", parent, "HEAD", "--")
+        raw = snapshot._text(*argv)
+        header = raw.split("\0", 1)[0]
+        self.assertTrue(raw.endswith("\0"))
+        self.assertEqual({row[0] for row in snapshot.changed_files(parent)}, {"VERSION", DIFF})
+        for name, payload, finding in (
+                ("odd", raw + header + "\0", "git returned an unreadable release diff"),
+                ("truncated", raw[:-1], "git returned an unreadable release diff"),
+                ("header", ":invalid\0VERSION\0",
+                 "git returned an unreadable release diff entry"),
+                ("empty-path", header + "\0\0",
+                 "git returned an unreadable release diff entry")):
+            with self.subTest(record=name):
+                response = subprocess.CompletedProcess(["git"], 0, stdout=payload, stderr="")
+                with mock.patch.object(snapshot, "_run", return_value=response) as read:
+                    with self.assertRaises(generator.Unreadable) as refused:
+                        snapshot.changed_files(parent)
+                read.assert_called_once_with(*argv)
+                self.assertEqual(str(refused.exception), finding)
+
+    def test_tagged_release_refuses_a_version_only_commit_without_a_reset(self) -> None:
+        self.pending_release()
+        self.repo.tag("v1.1.0")
+        self.repo.write("VERSION", b"1.2.0\n")
+        self.repo.commit("version without reset")
+        result = self.repo.run("--check", env={REQUIRE_TAGS: "1"})
+        self.fails(result, 1, "release transition must modify exactly VERSION and "
+                   "docker/run_failure_codes_diff.json as regular files")
+        self.assertEqual(result.stderr.splitlines(), [
+            "gen_run_failure_catalog_diff: release transition must modify exactly VERSION "
+            "and docker/run_failure_codes_diff.json as regular files"])
+
+    def test_tagged_release_requires_a_readable_worktree_version(self) -> None:
+        self.pending_release()
+        self.repo.tag("v1.1.0")
+        version = self.repo.path / "VERSION"
+        version.unlink()
+        result = self.repo.run("--check", env={REQUIRE_TAGS: "1"})
+        self.fails(result, 2, "cannot read VERSION:")
+        self.assertTrue(result.stderr.startswith(
+            "gen_run_failure_catalog_diff: cannot read VERSION: "))
+        self.assertIn(str(version), result.stderr)
 
     def test_untagged_transition_refuses_backward_or_invalid_version(self) -> None:
         self.pending_release()
@@ -550,17 +683,21 @@ class CatalogDiff(unittest.TestCase):
         clone.write(DIFF, (json.dumps(diff, indent=2) + "\n").encode())
         self.fails(clone.run("--check"), 1, "stale")
 
-    def test_generic_catalog_flags(self) -> None:
+    def generic_catalog_flags(self) -> tuple[str, ...]:
         catalog = {"schema": "pineforge-diagnostics-catalog/v2", "features": ["a"],
                    "codes": {"PF-E0001": {"message": "m", "args": {}}},
                    "fragments": {"PF-F0001": {"message": "f", "args": {}}}}
         self.repo.write("pkg/diagnostics_catalog.json",
                         (json.dumps(catalog, indent=2) + "\n").encode())
-        flags = ("--catalog", "pkg/diagnostics_catalog.json",
-                 "--diff", "pkg/diagnostics_catalog_diff.json",
-                 "--schema", "pineforge-diagnostics-catalog/v2",
-                 "--diff-schema", "pineforge-diagnostics-catalog-diff/v1",
-                 "--collection", "codes", "--collection", "fragments")
+        return ("--catalog", "pkg/diagnostics_catalog.json",
+                "--catalog-path-in-git", "pkg/diagnostics_catalog.json",
+                "--diff", "pkg/diagnostics_catalog_diff.json",
+                "--schema", "pineforge-diagnostics-catalog/v2",
+                "--diff-schema", "pineforge-diagnostics-catalog-diff/v1",
+                "--collection", "codes", "--collection", "fragments")
+
+    def test_generic_catalog_flags(self) -> None:
+        flags = self.generic_catalog_flags()
         self.ok(self.repo.run("--write", *flags))
         diff = json.loads((self.repo.path / "pkg/diagnostics_catalog_diff.json").read_text())
         self.assertEqual(diff["schema"], "pineforge-diagnostics-catalog-diff/v1")
@@ -569,6 +706,28 @@ class CatalogDiff(unittest.TestCase):
         self.assertEqual([change["path"] for change in diff["metadataChanges"]], ["features"])
         self.ok(self.repo.run("--check", *flags))
         self.fails(self.repo.run("--check", *flags[:-2]), 1, "stale")
+        self.repo.commit("generic catalog")
+        self.ok(self.repo.run("--reset", "--tag", "v1.1.0", *flags))
+        self.repo.write("VERSION", b"1.1.0\n")
+        self.repo.commit("generic release")
+        self.repo.tag("v1.1.0")
+        self.ok(self.repo.run("--check", *flags, env={REQUIRE_TAGS: "1"}))
+        external = self.tmp / "diagnostics_catalog.json"
+        external.write_bytes((self.repo.path / "pkg/diagnostics_catalog.json").read_bytes())
+        self.ok(self.repo.run("--check", "--catalog", str(external), *flags[2:],
+                              env={REQUIRE_TAGS: "1"}))
+
+    def test_generic_catalog_flags_apply_to_an_untagged_release_transition(self) -> None:
+        flags = self.generic_catalog_flags()
+        self.ok(self.repo.run("--write", *flags))
+        parent = self.repo.commit("generic catalog")
+        self.ok(self.repo.run("--reset", "--tag", "v1.1.0", *flags))
+        self.repo.write("VERSION", b"1.1.0\n")
+        self.repo.commit("generic release")
+        self.assertEqual(self.repo.git("rev-parse", "HEAD^"), parent)
+        self.assertEqual(set(self.repo.git("diff", "--name-only", parent, "HEAD").splitlines()),
+                         {"VERSION", "pkg/diagnostics_catalog_diff.json"})
+        self.ok(self.repo.run("--check", *flags, env={REQUIRE_TAGS: "1"}))
 
     def test_this_tree(self) -> None:
         # The source guard's own command, on the checked-in diff.

@@ -9144,18 +9144,56 @@ finally:
         original, others = self.ci_sources(), self.other_sources()
         release = others['release.yml']
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
-        for before, after in (
-                ('      phase:\n', '      disabled_phase:\n'),
-                ('        default: bump\n', '        default: tag\n'),
+        phase_finding = ('release.yml must declare bump-default/tag phases and the explicit '
+                         'phase1 dispatch SHA input')
+        for before, after, finding in (
+                ('      phase:\n', '      disabled_phase:\n', phase_finding),
+                ('        default: bump\n', '        default: tag\n', phase_finding),
                 ('            --phase "${PHASE}" --dispatch-sha "${DISPATCH_SHA}"',
-                 '            --phase bump'),
-                ("    if: ${{ inputs.phase == 'tag' }}\n", ''),
-                ("        if: ${{ inputs.phase == 'tag' && !inputs.dry_run }}\n",
-                 '        if: ${{ !inputs.dry_run }}\n')):
+                 '            --phase bump',
+                 'release.yml must keep the unconditional release gate '
+                 'with its release App token for the App-only main pull_request barrier')):
             with self.subTest(after=after):
                 changed = release.replace(before, after, 1)
                 self.assertNotEqual(changed, release)
-                self.assertTrue(ci_workflow_findings(
+                self.assertIn(finding, ci_workflow_findings(
+                    *original, others={**others, 'release.yml': changed}))
+        for name, condition in (
+                ('Generate release notes', "${{ inputs.phase == 'tag' }}"),
+                ('Create GitHub Release', "${{ inputs.phase == 'tag' && !inputs.dry_run }}"),
+                ('Dry run summary', "${{ inputs.phase == 'tag' && inputs.dry_run }}"),
+                ('Refuse if tag already exists', "${{ inputs.phase == 'bump' }}")):
+            guard = f'        if: {condition}\n'
+            finding = f'release.yml {name} must carry if: {condition}'
+            for replacement in (
+                    '', '        if: ${{ always() }}\n',
+                    '        if: ${{ !inputs.dry_run }}\n',
+                    '        if: ${{ always() || ' + condition[4:-3] + ' }}\n'):
+                with self.subTest(step=name, replacement=replacement):
+                    changed = in_step(release, 'release', name, guard, replacement)
+                    self.assertNotEqual(changed, release)
+                    self.assertEqual(ci_preflight.release_bump_workflow_findings(changed),
+                                     [finding])
+                    self.assertIn(finding, ci_workflow_findings(
+                        *original, others={**others, 'release.yml': changed}))
+
+    def test_release_prebuilt_job_refuses_missing_or_bypassed_tag_phase(self):
+        original, others = self.ci_sources(), self.other_sources()
+        release = others['release.yml']
+        guard = "    if: ${{ inputs.phase == 'tag' }}\n"
+        finding = ("release.yml prebuilt must carry if: ${{ inputs.phase == 'tag' }} "
+                   "so phase 1 stops before builds")
+        self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(release), [])
+        for replacement in (
+                '', '    if: ${{ always() }}\n',
+                "    if: ${{ always() || inputs.phase == 'tag' }}\n"):
+            with self.subTest(replacement=replacement):
+                changed = in_job(release, 'prebuilt', guard, replacement)
+                self.assertNotEqual(changed, release)
+                self.assertEqual(_jobs(changed)['release'], _jobs(release)['release'])
+                self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(changed),
+                                 [finding])
+                self.assertIn(finding, ci_workflow_findings(
                     *original, others={**others, 'release.yml': changed}))
 
     def test_release_bump_app_token_mutations_refuse(self):

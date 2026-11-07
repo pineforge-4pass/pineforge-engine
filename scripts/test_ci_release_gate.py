@@ -285,11 +285,13 @@ class FakeHistory:
 class ReleaseSnapshot:
     """Committed git bytes; the production transition checker judges them."""
 
-    def __init__(self):
+    def __init__(self, version="1.1.0", *, tags=("v1.0.0",)):
         self.ref = SHA
         self.parent = BUMP_PARENT
         self.parent_list = [BUMP_PARENT]
         self.tagged = None
+        self.version = version
+        self.known_tags = list(tags)
         self.paths = [("VERSION", "100644", "100644", "M"),
                       ("docker/run_failure_codes_diff.json", "100644", "100644", "M")]
         self.cfg = catalog_diff.default_config(ROOT)
@@ -297,14 +299,14 @@ class ReleaseSnapshot:
             "schema": catalog_diff.SCHEMA, "codes": {}})
         self.files = {
             (BUMP_PARENT, "VERSION"): b"1.0.0\n",
-            (SHA, "VERSION"): b"1.1.0\n",
+            (SHA, "VERSION"): (version + "\n").encode(),
             (BUMP_PARENT, catalog_diff.CATALOG): catalog,
             (SHA, catalog_diff.CATALOG): catalog,
             ("v1.0.0", catalog_diff.CATALOG): None,
             (BUMP_PARENT, catalog_diff.DIFF): catalog_diff.render(
                 catalog_diff.build_diff(None, catalog, "v1.0.0", self.cfg)).encode(),
             (SHA, catalog_diff.DIFF): catalog_diff.render(
-                catalog_diff.build_diff(catalog, catalog, "v1.1.0", self.cfg)).encode(),
+                catalog_diff.build_diff(catalog, catalog, "v" + version, self.cfg)).encode(),
         }
 
     def resolve(self, ref):
@@ -330,10 +332,10 @@ class ReleaseSnapshot:
         return "v1.0.0"
 
     def tags(self):
-        return ["v1.0.0"]
+        return list(self.known_tags)
 
     def tag_target(self, tag):
-        return self.tagged if tag == "v1.1.0" else BUMP_PARENT
+        return self.tagged if tag == "v" + self.version else BUMP_PARENT
 
 
 class ReleasePhaseTests(unittest.TestCase):
@@ -363,22 +365,65 @@ class ReleasePhaseTests(unittest.TestCase):
                 code, out, err = self.run_phase(dispatch=dispatch)
                 self.assertEqual(code, 1, (out, err))
                 self.assertEqual(out, "")
-                self.assertIn("dispatch", err)
+                self.assertEqual(err, "::error::tag phase requires the phase1 dispatch SHA\n")
         self.api.responses[PULLS_API] = json.dumps([pull()])
         self.api.responses[BUMP_API] = json.dumps(commit(SHA, TREE))
         code, out, err = self.run_phase()
         self.assertEqual(code, 1, (out, err))
-        self.assertIn("one valid parent", err)
+        self.assertEqual(out, "")
+        self.assertEqual(err, "::error::release bump requires exactly one valid parent\n")
         self.api.release_bump()
         self.api.responses[MAIN_API] = OTHER_HEAD
         code, out, err = self.run_phase()
         self.assertEqual(code, 1, (out, err))
-        self.assertIn("not current main head", err)
+        self.assertEqual(out, "")
+        self.assertEqual(err, f"::error::release sha {SHA} is not current main head {OTHER_HEAD}\n")
         self.api.responses[MAIN_API] = SHA
         self.snapshot.ref = OTHER_HEAD
         code, out, err = self.run_phase()
         self.assertEqual(code, 1, (out, err))
-        self.assertIn("exact dispatch SHA", err)
+        self.assertEqual(out, "")
+        self.assertEqual(err, "::error::release checkout is not the exact dispatch SHA\n")
+
+    def test_tag_refuses_local_parent_disagreement_after_authenticated_api_bump(self):
+        for parents, finding in (
+                ([], "release transition requires a single parent"),
+                ([BUMP_PARENT, HEAD], "release transition requires a single parent"),
+                ([HEAD], "release bump parent does not equal the phase1 dispatch SHA")):
+            with self.subTest(parents=parents):
+                self.snapshot.parent_list = parents
+                code, out, err = self.run_phase()
+                self.assertEqual(code, 1, (out, err))
+                self.assertEqual(out, "")
+                self.assertEqual(err, f"::error::{finding}\n")
+
+    def test_tag_refuses_local_path_disagreement_after_authenticated_api_bump(self):
+        regular = list(self.snapshot.paths)
+        for paths in (
+                regular + [("README.md", "100644", "100644", "M")],
+                regular[:1],
+                [("VERSION", "100644", "000000", "D"), regular[1]],
+                [regular[0], (catalog_diff.DIFF, "100644", "120000", "M")]):
+            with self.subTest(paths=paths):
+                self.snapshot.paths = paths
+                code, out, err = self.run_phase()
+                self.assertEqual(code, 1, (out, err))
+                self.assertEqual(out, "")
+                self.assertEqual(err, "::error::release transition must modify exactly VERSION "
+                                 "and docker/run_failure_codes_diff.json as regular files\n")
+
+    def test_tag_refuses_untrusted_parent_parity_creators(self):
+        for login, creator_type in (("untrusted-operator", "User"), ("luisleo526", "Bot")):
+            with self.subTest(login=login, creator_type=creator_type):
+                parity = status("pineforge/parity")
+                parity["creator"] = {"login": login, "type": creator_type}
+                self.api.statuses([parity])
+                code, out, err = self.run_phase()
+                self.assertEqual(code, 1, (out, err))
+                self.assertEqual(out, "")
+                self.assertEqual(err, f"::error::API {STATUSES_API}: pineforge/parity: "
+                                 f"refused status creator (login={login!r}, "
+                                 f"type={creator_type!r})\n")
 
     def test_tag_uses_authenticated_parent_parity_and_own_ci(self):
         code, out, err = self.run_phase()
@@ -437,20 +482,24 @@ class ReleasePhaseTests(unittest.TestCase):
     def test_tag_checks_version_catalog_reset_and_existing_tag_target(self):
         original = dict(self.snapshot.files)
         for path, value, reason in (
-                ("VERSION", b"0.9.0\n", "forward VERSION"),
+                ("VERSION", b"0.9.0\n", "release transition requires a valid forward VERSION"),
                 (catalog_diff.CATALOG, original[(SHA, catalog_diff.CATALOG)] + b"\n",
-                 "catalog bytes"),
-                (catalog_diff.DIFF, original[(BUMP_PARENT, catalog_diff.DIFF)], "reset")):
+                 "release transition requires unchanged catalog bytes versus parent"),
+                (catalog_diff.DIFF, original[(BUMP_PARENT, catalog_diff.DIFF)],
+                 "release transition requires the exact catalog reset for forward VERSION")):
             with self.subTest(path=path):
                 self.snapshot.files = {**original, (SHA, path): value}
                 code, out, err = self.run_phase()
                 self.assertEqual(code, 1, (out, err))
-                self.assertIn(reason, err)
+                self.assertEqual(out, "")
+                self.assertEqual(err, f"::error::{reason}\n")
         self.snapshot.files = original
         self.snapshot.tagged = HEAD
         code, out, err = self.run_phase()
         self.assertEqual(code, 1, (out, err))
-        self.assertIn("already exists", err)
+        self.assertEqual(out, "")
+        self.assertEqual(err, "::error::release tag v1.1.0 already exists at another commit "
+                         "or before transition\n")
         self.snapshot.tagged = SHA
         code, out, err = self.run_phase()
         self.assertEqual(code, 0, (out, err))
@@ -470,6 +519,58 @@ class ReleasePhaseTests(unittest.TestCase):
         code, out, err = self.run_phase(phase="bump", dispatch="")
         self.assertEqual(code, 0, (out, err))
         self.assertIn(f"ci-post run 9001 for {SHA}", out)
+
+    def test_bump_plan_consumes_committed_version_bump_override_and_tags(self):
+        for current, bump, override, tags, expected in (
+                ("2.3.4", "patch", "", ("v2.3.3", "v2.3.4", "v4.0.0"),
+                 {"current": "2.3.4", "next": "2.3.5", "tag": "v2.3.5",
+                  "prerelease": "false", "previous": "v2.3.4"}),
+                ("1.0.0", "minor", "", ("v1.0.0", "v1.1.0-rc.2", "not-a-release"),
+                 {"current": "1.0.0", "next": "1.1.0", "tag": "v1.1.0",
+                  "prerelease": "false", "previous": "v1.0.0"}),
+                ("2.3.4", "major", "", ("v2.3.4", "v2.9.0", "v4.0.0"),
+                 {"current": "2.3.4", "next": "3.0.0", "tag": "v3.0.0",
+                  "prerelease": "false", "previous": "v2.9.0"}),
+                ("1.1.0-rc.1", "major", "1.1.0-rc.2", ("v1.0.0", "v1.1.0-rc.1"),
+                 {"current": "1.1.0-rc.1", "next": "1.1.0-rc.2", "tag": "v1.1.0-rc.2",
+                  "prerelease": "true", "previous": "v1.1.0-rc.1"})):
+            with self.subTest(current=current, bump=bump, override=override):
+                snapshot = ReleaseSnapshot(current, tags=tags)
+                fields = ci_release_gate.release_plan(
+                    SHA, "bump", bump, override, "", release_git=snapshot)
+                self.assertEqual(fields, expected)
+
+    def test_plan_cli_appends_parsed_fields_for_bump_and_tag_including_prerelease(self):
+        for phase, version, extra, expected in (
+                ("bump", "2.3.4", ["--bump", "major"],
+                 {"current": "2.3.4", "next": "3.0.0", "tag": "v3.0.0",
+                  "prerelease": "false", "previous": "v1.0.0"}),
+                ("bump", "1.0.0", ["--override", "1.1.0-rc.1"],
+                 {"current": "1.0.0", "next": "1.1.0-rc.1", "tag": "v1.1.0-rc.1",
+                  "prerelease": "true", "previous": "v1.0.0"}),
+                ("tag", "1.1.0", ["--dispatch-sha", BUMP_PARENT],
+                 {"current": "1.1.0", "next": "1.1.0", "tag": "v1.1.0",
+                  "prerelease": "false", "previous": "v1.0.0"}),
+                ("tag", "1.1.0-rc.1", ["--dispatch-sha", BUMP_PARENT],
+                 {"current": "1.1.0-rc.1", "next": "1.1.0-rc.1", "tag": "v1.1.0-rc.1",
+                  "prerelease": "true", "previous": "v1.0.0"})):
+            with self.subTest(phase=phase, version=version), tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "github-output"
+                output.write_text("earlier=retained\n", encoding="utf-8")
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    code = ci_release_gate.main(
+                        ["plan", "--sha", SHA, "--phase", phase,
+                         "--github-output", str(output), *extra],
+                        release_git=ReleaseSnapshot(version))
+                self.assertEqual(code, 0, (out.getvalue(), err.getvalue()))
+                self.assertEqual(err.getvalue(), "")
+                stdout_rows = out.getvalue().splitlines()
+                self.assertEqual(len(stdout_rows), len(expected))
+                self.assertEqual(dict(row.split("=", 1) for row in stdout_rows), expected)
+                output_rows = output.read_text(encoding="utf-8").splitlines()
+                self.assertEqual(output_rows, ["earlier=retained", *stdout_rows])
+                self.assertEqual(dict(row.split("=", 1) for row in output_rows[1:]), expected)
 
     def test_tag_plan_keeps_committed_version_and_refuses_bump_only_inputs(self):
         fields = ci_release_gate.release_plan(
@@ -535,6 +636,7 @@ class ReleaseWriterTests(unittest.TestCase):
         self.assertNotEqual(sha, self.dispatch)
         self.assertEqual(self.repo.git("rev-parse", "HEAD^"), self.dispatch)
         self.assertEqual(self.repo.git("tag", "--list", "v1.1.0"), "")
+        self.assertEqual(self.repo.git("ls-remote", "--refs", "origin", "refs/tags/v1.1.0"), "")
         self.assertEqual(self.repo.git("ls-remote", "--refs", "origin", "refs/heads/main")
                          .split()[0], sha)
         self.assertIn("sha=" + sha, (self.tmp / "outputs").read_text())
@@ -549,6 +651,59 @@ class ReleaseWriterTests(unittest.TestCase):
             self.assertEqual(self.repo.git("rev-parse", "refs/tags/v1.1.0^{commit}"), sha)
             self.assertEqual(self.repo.git("ls-remote", "--refs", "origin", "refs/heads/main")
                              .split()[0], sha)
+            self.assertEqual(
+                self.repo.git("ls-remote", "origin", "refs/tags/v1.1.0^{}"),
+                f"{sha}\trefs/tags/v1.1.0^{{}}")
+
+    def writer_state(self):
+        output = self.tmp / "outputs"
+        return {
+            "head": self.repo.git("rev-parse", "HEAD"),
+            "local_refs": self.repo.git("show-ref"),
+            "index": self.repo.git("ls-files", "--stage"),
+            "worktree": self.repo.git("status", "--porcelain=v1"),
+            "version": (self.repo.path / "VERSION").read_bytes(),
+            "diff": (self.repo.path / catalog_diff.DIFF).read_bytes(),
+            "remote_refs": self.repo.git("ls-remote", "origin"),
+            "output": output.read_bytes() if output.exists() else None,
+        }
+
+    def test_bump_writer_refuses_a_future_tag_only_on_origin_without_writing(self):
+        self.repo.git("tag", "v1.1.0", self.dispatch)
+        self.repo.git("push", "origin", "refs/tags/v1.1.0")
+        self.repo.git("tag", "-d", "v1.1.0")
+        self.assertEqual(self.repo.git("tag", "--list", "v1.1.0"), "")
+        self.assertEqual(self.repo.git("ls-remote", "--refs", "origin", "refs/tags/v1.1.0"),
+                         f"{self.dispatch}\trefs/tags/v1.1.0")
+        before = self.writer_state()
+        result = self.write_phase("bump", self.dispatch)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.stderr, "::error::release tag v1.1.0 already exists\n")
+        self.assertEqual(self.writer_state(), before)
+
+    def test_bump_writer_refuses_moved_remote_main_without_writing(self):
+        self.repo.write("README.md", b"remote main advanced\n")
+        advanced = self.repo.commit("advance main")
+        self.repo.git("push", "origin", "HEAD:refs/heads/main")
+        self.repo.git("reset", "--hard", self.dispatch)
+        self.assertEqual(self.repo.git("rev-parse", "HEAD"), self.dispatch)
+        self.assertEqual(self.repo.git("ls-remote", "--refs", "origin", "refs/heads/main"),
+                         f"{advanced}\trefs/heads/main")
+        before = self.writer_state()
+        result = self.write_phase("bump", self.dispatch)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (1, "", ""))
+        self.assertEqual(self.writer_state(), before)
+
+    def test_bump_writer_refuses_local_head_different_from_dispatch_without_writing(self):
+        self.repo.write("README.md", b"local checkout advanced\n")
+        advanced = self.repo.commit("advance checkout")
+        self.assertNotEqual(advanced, self.dispatch)
+        self.assertEqual(self.repo.git("ls-remote", "--refs", "origin", "refs/heads/main"),
+                         f"{self.dispatch}\trefs/heads/main")
+        before = self.writer_state()
+        result = self.write_phase("bump", self.dispatch)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (1, "", ""))
+        self.assertEqual(self.writer_state(), before)
 
     def test_writer_refuses_an_existing_wrong_tag_without_moving_main(self):
         sha = self.bump()
@@ -678,7 +833,7 @@ class GateTests(unittest.TestCase):
                     "pineforge/parity: refused status creator "
                     f"(login={creator.get('login')!r}, type={creator.get('type')!r})")
 
-    def test_missing_verify_refuses(self):
+    def test_pr_parity_and_exact_ci_accept_missing_or_non_success_advisory_verify(self):
         """Parity and exact CI evidence admit every advisory verify state."""
         for state in (None, "success", "pending", "failure", "error"):
             with self.subTest(verify=state):
@@ -707,11 +862,11 @@ class GateTests(unittest.TestCase):
         self.api.statuses(rows)
         self.assert_refused("pineforge/parity=pending (expected success)")
 
-    def test_lite_verify_cannot_replace_missing_full_verify(self):
+    def test_verify_lite_alone_cannot_supply_required_parity(self):
         self.api.statuses([status("pineforge/verify-lite")])
         self.assert_refused(f"PR #17 head {HEAD}: missing pineforge/parity")
 
-    def test_lite_verify_cannot_override_pending_full_verify(self):
+    def test_verify_lite_with_pending_advisory_verify_cannot_rescue_pending_parity(self):
         self.api.statuses([
             status("pineforge/verify-lite"),
             status("pineforge/verify", "pending"), status("pineforge/parity", "pending")])
@@ -965,7 +1120,7 @@ class GateTests(unittest.TestCase):
         ])
         self.assert_refused("pineforge/parity=failure (expected success)")
 
-    def test_green_fixture_fails_when_either_context_is_removed(self):
+    def test_green_fixture_requires_parity_and_accepts_removed_advisory_verify(self):
         for removed in ("pineforge/verify", "pineforge/parity"):
             with self.subTest(removed=removed):
                 self.api = FakeAPI()
@@ -1065,7 +1220,7 @@ class GateTests(unittest.TestCase):
         self.proof.assert_called_once_with(REPO, SHA)
         self.assert_no_pr_fallback(ci_post=True)
 
-    def test_main_proof_lite_context_cannot_replace_either_full_context(self):
+    def test_main_proof_requires_parity_and_accepts_verify_lite_without_advisory_verify(self):
         for missing in ("pineforge/verify", "pineforge/parity"):
             with self.subTest(missing=missing):
                 self.api = FakeAPI()
@@ -1451,7 +1606,7 @@ class ReleaseBumpTests(unittest.TestCase):
                 self.api.responses[RUNS_API] = payload
                 self.assert_refused(fragment)
 
-    def test_bump_on_an_ungated_parent_refuses(self):
+    def test_bump_parent_requires_parity_and_accepts_missing_advisory_verify(self):
         # Condition (b) mutation control: identity and the two-file diff are green.
         for context in ("pineforge/verify", "pineforge/parity"):
             with self.subTest(context=context):
@@ -2571,14 +2726,30 @@ class MainProofSeamTests(unittest.TestCase):
         for node in ast.walk(main):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "add_argument"):
-                flags.setdefault(node.func.value.id, []).extend(
-                    ast.literal_eval(argument) for argument in node.args)
+                arguments = tuple(ast.literal_eval(argument) for argument in node.args)
+                keywords = {
+                    keyword.arg: (keyword.value.id if isinstance(keyword.value, ast.Name)
+                                  else ast.literal_eval(keyword.value))
+                    for keyword in node.keywords}
+                flags.setdefault(node.func.value.id, []).append((arguments, keywords))
         # plan's --override selects the release version, never the main-proof cut-over.
         self.assertEqual(flags, {
-            "check": ["--repo", "--sha", "--ref", "--phase", "--dispatch-sha"],
-            "plan": ["--sha", "--phase", "--bump", "--override", "--dispatch-sha",
-                     "--github-output"],
-            "probe": ["--repo"],
+            "check": [
+                (("--repo",), {"required": True}),
+                (("--sha",), {"required": True}),
+                (("--ref",), {"required": True}),
+                (("--phase",), {"choices": ("bump", "tag")}),
+                (("--dispatch-sha",), {"default": ""}),
+            ],
+            "plan": [
+                (("--sha",), {"required": True}),
+                (("--phase",), {"choices": ("bump", "tag"), "required": True}),
+                (("--bump",), {"choices": ("patch", "minor", "major"), "default": "patch"}),
+                (("--override",), {"default": ""}),
+                (("--dispatch-sha",), {"default": ""}),
+                (("--github-output",), {"type": "Path", "required": True}),
+            ],
+            "probe": [(("--repo",), {"required": True})],
         }, "no subcommand may offer a main-proof cut-over override flag")
 
     def test_reader_is_not_live_and_defines_no_storage_format(self):
@@ -3208,9 +3379,12 @@ class WorkflowPinTests(unittest.TestCase):
         self.assertRegex(jobs["notify-hub"],
                          r"(?m)^    if: \$\{\{ inputs.phase == 'tag' && !inputs.dry_run \}\}$")
         steps = _steps(jobs["release"])
-        for name in ("Generate release notes", "Create GitHub Release"):
+        for name, condition in (
+                ("Generate release notes", "${{ inputs.phase == 'tag' }}"),
+                ("Create GitHub Release", "${{ inputs.phase == 'tag' && !inputs.dry_run }}")):
             step = next(step for step in steps if step.startswith("      - name: " + name + "\n"))
-            self.assertIn("inputs.phase == 'tag'", step)
+            self.assertEqual([line for line in step.splitlines() if line.startswith("        if:")],
+                             ["        if: " + condition])
         writer = next(step for step in steps if "        id: publish\n" in step)
         self.assertIn('if [[ "${PHASE}" == bump ]]; then', writer)
         self.assertIn('test "$(git rev-parse HEAD^)" = "${GITHUB_SHA}"', writer)
@@ -3552,7 +3726,7 @@ class CiPostGateTests(unittest.TestCase):
                     f"sha {self.post_run['head_sha']} event {self.post_run['event']}: "
                     f"missing job {original['name']}\n"))
 
-    def test_red_macos_jobs_follow_only_the_aggregate_run_verdict(self):
+    def test_red_surplus_macos_job_refuses_even_with_a_successful_aggregate_run(self):
         """Every returned red leg refuses, including a surplus or retired platform."""
         for conclusion in ("success", "failure"):
             with self.subTest(run_conclusion=conclusion):
@@ -3596,7 +3770,7 @@ class CiPostGateTests(unittest.TestCase):
         self.assert_green(row, sha=sha, repo=repo)
         self.assertEqual(self.history.calls, [row["head_sha"]])
 
-    def test_docs_only_tip_uses_built_parent_and_names_both_shas(self):
+    def test_docs_only_tip_with_skipped_builds_cannot_borrow_green_parent_ci(self):
         """A fully built ancestor cannot replace skipped builds on the release SHA."""
         ancestor = self.built_ancestor()
         self.history = FakeHistory({
@@ -3610,7 +3784,7 @@ class CiPostGateTests(unittest.TestCase):
         self.assertNotIn((ci_post_runs_api(ancestor["head_sha"]), True, None),
                          self.api.calls)
 
-    def test_multiple_docs_commits_use_the_shared_classifiers_full_path_rule(self):
+    def test_multiple_docs_commits_classify_ancestry_and_keep_ci_on_release_tip(self):
         """Documentation ancestry still requires full CI evidence at the release tip."""
         ancestor = self.built_ancestor(OTHER_TREE)
         self.history = FakeHistory({
@@ -4109,7 +4283,7 @@ class CiPostGateTests(unittest.TestCase):
                 self.assertEqual(self.history.calls, expected)
                 self.assertEqual(self.post_calls(), [])
 
-    def test_phase_two_pass_also_reads_ci_post_without_pr_fallback(self):
+    def test_receipt_parity_and_exact_ci_accept_missing_or_non_success_advisory_verify(self):
         """R1/R5/R6/R7: block the main-proof early return bypassing non-vacuous ci-post."""
         for state in (None, "success", "pending", "failure", "error"):
             with self.subTest(verify=state):
@@ -4143,7 +4317,7 @@ class CiPostGateTests(unittest.TestCase):
             (ci_post_jobs_api(failed["id"]), False, None),
         ])
 
-    def test_release_bump_pass_requires_its_own_ci_post_build(self):
+    def test_bump_parent_advisory_verify_states_still_require_bumps_own_ci_post(self):
         """R1/R5/R6/R7: block the release-bump exemption bypassing post-merge proof."""
         for state in (None, "success", "pending", "failure", "error"):
             with self.subTest(verify=state):
@@ -4659,7 +4833,7 @@ class CiPostGateTests(unittest.TestCase):
                 self.api.ci_post_runs(docs[0], [older, newest], {})
                 self.assert_docs_red(newest, read_shas=docs)
 
-    def test_docs_tip_success_with_four_skipped_builds_needs_no_docs_jobs(self):
+    def test_docs_tip_success_with_skipped_builds_cannot_prove_exact_release_sha(self):
         """Run success with skipped builds cannot prove the exact release SHA."""
         docs, ancestor = self.docs_chain(1)
         skipped_jobs = [{**job, "conclusion": "skipped"} for job in ci_post_jobs()]
@@ -4797,7 +4971,7 @@ class CiPostGateTests(unittest.TestCase):
             skipped_jobs[0]["conclusion"], docs=docs[:-1])
         self.assertEqual(self.history.calls, docs)
 
-    def test_docs_tip_paginated_runs_choose_newest_matching_success_without_jobs(self):
+    def test_docs_tip_paginated_runs_choose_newest_matching_success_and_read_its_jobs(self):
         """F-1/runs: prove docs pages/filtering precede judgment; block first-page red veto."""
         docs, ancestor = self.docs_chain(1)
         newest = self.docs_runs[0]
