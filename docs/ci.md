@@ -74,9 +74,11 @@ all stages and its existing event-aware verifier-class selection. `runner-allowl
 
 The smoke configures Release, builds `pineforge_pr_smoke` and directly runs
 `ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error`.
-`PINEFORGE_PR_FAST_TESTS` in `tests/CMakeLists.txt` names its eleven real
-executables; configure refuses missing, disabled, skippable, private-fixture
-or `slow` rows. The target rebuilds those executables with their library.
+`PINEFORGE_PR_FAST_TESTS` in `tests/CMakeLists.txt` names its twelve real
+executables, including `test_abi_layout_probe`, whose size and offset pins
+apply on Linux x86_64 with GNU libstdc++. Configure refuses missing, disabled,
+skippable, private-fixture or `slow` rows. The target rebuilds those executables
+with their library.
 PR proof legs build cold; trusted post workflows also build cold and contain
 no Actions cache restore or save.
 
