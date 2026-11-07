@@ -1,0 +1,7 @@
+# Real oversized extents, mixed packing, and retained-window readers.
+list(APPEND TEST_SOURCES test_journal_oversized_event)
+pineforge_add_unit_test(test_journal_oversized_event)
+list(APPEND TEST_SOURCES test_journal_oversized_event_mixed)
+pineforge_add_unit_test(test_journal_oversized_event_mixed)
+list(APPEND TEST_SOURCES test_journal_retained_history)
+pineforge_add_unit_test(test_journal_retained_history)
