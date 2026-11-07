@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "store.hpp"
+#include "ledger_backup.hpp"
 #include "report_delta.hpp"
 #include "ratio_report.hpp"
 #include "json.hpp"
@@ -16,6 +17,7 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <set>
 #include <stdexcept>
 #include <string_view>
 
@@ -537,85 +539,36 @@ std::optional<std::uint64_t> ledger_cached_pages(const void* owner) {
     return pages;
 }
 
-void migrate_delivery_state(sqlite3* db) {
-    const auto tables = scalar(db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
-        "AND name IN ('delivery_state','delivery_totals','delivery_targets')");
-    if (tables == 3) return;
-    if (tables) throw std::runtime_error("native ledger delivery summary migration is incomplete");
+void ensure_delivery_state_objects(sqlite3* db) {
     exec(db,
-        "CREATE TABLE delivery_totals(singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
-        "pending_count INTEGER NOT NULL CHECK(pending_count>=0),"
-        "unsent_count INTEGER NOT NULL CHECK(unsent_count>=0),actions INTEGER NOT NULL CHECK(actions>=0));"
-        "INSERT INTO delivery_totals VALUES(1,0,0,0);"
-        "CREATE TABLE delivery_targets(target_id TEXT PRIMARY KEY,"
-        "pending_count INTEGER NOT NULL DEFAULT 0 CHECK(pending_count>=0),"
-        "unsent_count INTEGER NOT NULL DEFAULT 0 CHECK(unsent_count>=0),"
-        "legacy_sent INTEGER NOT NULL DEFAULT 0 CHECK(legacy_sent>=0),"
-        "sent INTEGER NOT NULL DEFAULT 0,failed INTEGER NOT NULL DEFAULT 0,"
-        "last_attempt INTEGER,last_success INTEGER,last_error_log INTEGER);"
         "CREATE INDEX IF NOT EXISTS delivery_targets_pending ON delivery_targets(target_id) WHERE pending_count>0;"
-        "CREATE TABLE delivery_state(ordinal INTEGER PRIMARY KEY REFERENCES events(ordinal),target_id TEXT,"
-        "pending INTEGER NOT NULL CHECK(pending IN (0,1)),unsent INTEGER NOT NULL CHECK(unsent IN (0,1)),"
-        "has_log INTEGER NOT NULL CHECK(has_log IN (0,1)),completed INTEGER NOT NULL CHECK(completed IN (0,1)),"
-        "oldest_ms INTEGER);"
         "CREATE INDEX IF NOT EXISTS delivery_state_pending ON delivery_state(ordinal) WHERE pending=1;"
         "CREATE INDEX IF NOT EXISTS delivery_state_unsent ON delivery_state(ordinal) WHERE unsent=1;"
         "CREATE INDEX IF NOT EXISTS delivery_state_oldest ON delivery_state(target_id,oldest_ms) "
         "WHERE pending=1 AND target_id IS NOT NULL AND oldest_ms IS NOT NULL;"
         // Summary triggers also cover legacy acknowledgements and SQL rollbacks.
-        "CREATE TRIGGER delivery_state_insert AFTER INSERT ON delivery_state BEGIN "
+        "CREATE TRIGGER IF NOT EXISTS delivery_state_insert AFTER INSERT ON delivery_state BEGIN "
         "UPDATE delivery_totals SET pending_count=pending_count+NEW.pending,"
         "unsent_count=unsent_count+NEW.unsent,actions=actions+1 WHERE singleton=1;"
         "INSERT INTO delivery_targets(target_id,pending_count,unsent_count,legacy_sent) "
         "SELECT NEW.target_id,NEW.pending,NEW.unsent,(1-NEW.pending)*(1-NEW.has_log) WHERE NEW.target_id IS NOT NULL "
         "ON CONFLICT(target_id) DO UPDATE SET pending_count=pending_count+excluded.pending_count,"
         "unsent_count=unsent_count+excluded.unsent_count,legacy_sent=legacy_sent+excluded.legacy_sent; END;"
-        "CREATE TRIGGER delivery_state_update AFTER UPDATE ON delivery_state BEGIN "
+        "CREATE TRIGGER IF NOT EXISTS delivery_state_update AFTER UPDATE ON delivery_state BEGIN "
         "UPDATE delivery_totals SET pending_count=pending_count+NEW.pending-OLD.pending,"
         "unsent_count=unsent_count+NEW.unsent-OLD.unsent WHERE singleton=1;"
         "UPDATE delivery_targets SET pending_count=pending_count+NEW.pending-OLD.pending,"
         "unsent_count=unsent_count+NEW.unsent-OLD.unsent,"
         "legacy_sent=legacy_sent+(1-NEW.pending)*(1-NEW.has_log)-(1-OLD.pending)*(1-OLD.has_log) "
         "WHERE target_id=NEW.target_id; END;"
-        "INSERT INTO delivery_state "
-        "SELECT e.ordinal,r.target_id,1-e.acknowledged,"
-        "e.acknowledged=0 AND r.target_id IS NOT NULL AND NOT EXISTS "
-        "(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed'),"
-        "EXISTS(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id),"
-        "EXISTS(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed'),"
-        "CASE WHEN e.created_at_ms>0 THEN e.created_at_ms ELSE "
-        "(SELECT MIN(started_at) FROM delivery_log d WHERE d.event_id=e.event_id) END "
-        "FROM events e JOIN event_routes r ON r.ordinal=e.ordinal;"
-        "INSERT INTO delivery_targets(target_id,sent,failed,last_attempt,last_success,last_error_log) "
-        "SELECT target_id,SUM(phase='completed' AND success=1),SUM(phase='completed' AND success=0),"
-        "MAX(started_at),MAX(CASE WHEN phase='completed' AND success=1 THEN ended_at END),"
-        "MAX(CASE WHEN phase='completed' AND success=0 THEN log_id END) FROM delivery_log WHERE true GROUP BY target_id "
-        "ON CONFLICT(target_id) DO UPDATE SET sent=excluded.sent,failed=excluded.failed,"
-        "last_attempt=excluded.last_attempt,last_success=excluded.last_success,last_error_log=excluded.last_error_log;");
-    // Recount the source rows once, in the migration transaction, before
-    // trusting the new durable summaries. Subsequent opens do not rebuild.
-    if (scalar(db, "SELECT pending_count<>(SELECT COUNT(*) FROM events WHERE acknowledged=0) "
-        "OR unsent_count<>(SELECT COUNT(*) FROM events e JOIN event_routes r ON r.ordinal=e.ordinal "
-        "WHERE e.acknowledged=0 AND r.target_id IS NOT NULL AND NOT EXISTS "
-        "(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed')) "
-        "OR actions<>(SELECT COUNT(*) FROM events) FROM delivery_totals WHERE singleton=1"))
-        throw std::runtime_error("native ledger delivery summary migration mismatch");
-    if (scalar(db, "SELECT COUNT(*) FROM delivery_targets t WHERE "
-        "t.pending_count<>(SELECT COUNT(*) FROM events e JOIN event_routes r ON r.ordinal=e.ordinal "
-        "WHERE r.target_id=t.target_id AND e.acknowledged=0) OR "
-        "t.unsent_count<>(SELECT COUNT(*) FROM events e JOIN event_routes r ON r.ordinal=e.ordinal "
-        "WHERE r.target_id=t.target_id AND e.acknowledged=0 AND NOT EXISTS "
-        "(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed'))"))
-        throw std::runtime_error("native ledger target summary migration mismatch");
-    exec(db,
-        "CREATE TRIGGER delivery_route_insert AFTER INSERT ON event_routes BEGIN "
+        "CREATE TRIGGER IF NOT EXISTS delivery_route_insert AFTER INSERT ON event_routes BEGIN "
         "INSERT INTO delivery_state SELECT e.ordinal,NEW.target_id,1-e.acknowledged,"
         "e.acknowledged=0 AND NEW.target_id IS NOT NULL,0,0,NULLIF(e.created_at_ms,0) "
         "FROM events e WHERE e.ordinal=NEW.ordinal; END;"
-        "CREATE TRIGGER delivery_event_update AFTER UPDATE OF acknowledged ON events BEGIN "
+        "CREATE TRIGGER IF NOT EXISTS delivery_event_update AFTER UPDATE OF acknowledged ON events BEGIN "
         "UPDATE delivery_state SET pending=1-NEW.acknowledged,"
         "unsent=NEW.acknowledged=0 AND target_id IS NOT NULL AND completed=0 WHERE ordinal=NEW.ordinal; END;"
-        "CREATE TRIGGER delivery_log_insert AFTER INSERT ON delivery_log BEGIN "
+        "CREATE TRIGGER IF NOT EXISTS delivery_log_insert AFTER INSERT ON delivery_log BEGIN "
         "UPDATE delivery_state SET has_log=1,completed=completed OR NEW.phase='completed',"
         "unsent=CASE WHEN NEW.phase='completed' THEN 0 ELSE unsent END,"
         "oldest_ms=CASE WHEN (SELECT created_at_ms FROM events WHERE ordinal=delivery_state.ordinal)>0 THEN oldest_ms "
@@ -631,6 +584,62 @@ void migrate_delivery_state(sqlite3* db) {
         "THEN last_success ELSE MAX(last_success,excluded.last_success) END,"
         "last_error_log=CASE WHEN last_error_log IS NULL THEN excluded.last_error_log WHEN excluded.last_error_log IS NULL "
         "THEN last_error_log ELSE MAX(last_error_log,excluded.last_error_log) END; END;");
+}
+
+void migrate_delivery_state(sqlite3* db) {
+    const auto tables = scalar(db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+        "AND name IN ('delivery_state','delivery_totals','delivery_targets')");
+    if (tables == 3) {
+        ensure_delivery_state_objects(db);
+        return;
+    }
+    if (tables) throw std::runtime_error("native ledger delivery summary migration is incomplete");
+    exec(db,
+        "CREATE TABLE delivery_totals(singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
+        "pending_count INTEGER NOT NULL CHECK(pending_count>=0),"
+        "unsent_count INTEGER NOT NULL CHECK(unsent_count>=0),actions INTEGER NOT NULL CHECK(actions>=0));"
+        "INSERT INTO delivery_totals VALUES(1,0,0,0);"
+        "CREATE TABLE delivery_targets(target_id TEXT PRIMARY KEY,"
+        "pending_count INTEGER NOT NULL DEFAULT 0 CHECK(pending_count>=0),"
+        "unsent_count INTEGER NOT NULL DEFAULT 0 CHECK(unsent_count>=0),"
+        "legacy_sent INTEGER NOT NULL DEFAULT 0 CHECK(legacy_sent>=0),"
+        "sent INTEGER NOT NULL DEFAULT 0,failed INTEGER NOT NULL DEFAULT 0,"
+        "last_attempt INTEGER,last_success INTEGER,last_error_log INTEGER);"
+        "CREATE TABLE delivery_state(ordinal INTEGER PRIMARY KEY REFERENCES events(ordinal),target_id TEXT,"
+        "pending INTEGER NOT NULL CHECK(pending IN (0,1)),unsent INTEGER NOT NULL CHECK(unsent IN (0,1)),"
+        "has_log INTEGER NOT NULL CHECK(has_log IN (0,1)),completed INTEGER NOT NULL CHECK(completed IN (0,1)),"
+        "oldest_ms INTEGER);");
+    ensure_delivery_state_objects(db);
+    exec(db,
+        "INSERT INTO delivery_state "
+        "SELECT e.ordinal,r.target_id,1-e.acknowledged,"
+        "e.acknowledged=0 AND r.target_id IS NOT NULL AND NOT EXISTS "
+        "(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed'),"
+        "EXISTS(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id),"
+        "EXISTS(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed'),"
+        "CASE WHEN e.created_at_ms>0 THEN e.created_at_ms ELSE "
+        "(SELECT MIN(started_at) FROM delivery_log d WHERE d.event_id=e.event_id) END "
+        "FROM events e JOIN event_routes r ON r.ordinal=e.ordinal;"
+        "INSERT INTO delivery_targets(target_id,sent,failed,last_attempt,last_success,last_error_log) "
+        "SELECT target_id,SUM(phase='completed' AND success=1),SUM(phase='completed' AND success=0),"
+        "MAX(started_at),MAX(CASE WHEN phase='completed' AND success=1 THEN ended_at END),"
+        "MAX(CASE WHEN phase='completed' AND success=0 THEN log_id END) FROM delivery_log WHERE true GROUP BY target_id "
+        "ON CONFLICT(target_id) DO UPDATE SET sent=excluded.sent,failed=excluded.failed,"
+        "last_attempt=excluded.last_attempt,last_success=excluded.last_success,last_error_log=excluded.last_error_log;");
+    // Recount once before trusting newly built summaries.
+    if (scalar(db, "SELECT pending_count<>(SELECT COUNT(*) FROM events WHERE acknowledged=0) "
+        "OR unsent_count<>(SELECT COUNT(*) FROM events e JOIN event_routes r ON r.ordinal=e.ordinal "
+        "WHERE e.acknowledged=0 AND r.target_id IS NOT NULL AND NOT EXISTS "
+        "(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed')) "
+        "OR actions<>(SELECT COUNT(*) FROM events) FROM delivery_totals WHERE singleton=1"))
+        throw std::runtime_error("native ledger delivery summary migration mismatch");
+    if (scalar(db, "SELECT COUNT(*) FROM delivery_targets t WHERE "
+        "t.pending_count<>(SELECT COUNT(*) FROM events e JOIN event_routes r ON r.ordinal=e.ordinal "
+        "WHERE r.target_id=t.target_id AND e.acknowledged=0) OR "
+        "t.unsent_count<>(SELECT COUNT(*) FROM events e JOIN event_routes r ON r.ordinal=e.ordinal "
+        "WHERE r.target_id=t.target_id AND e.acknowledged=0 AND NOT EXISTS "
+        "(SELECT 1 FROM delivery_log d WHERE d.event_id=e.event_id AND d.phase='completed'))"))
+        throw std::runtime_error("native ledger target summary migration mismatch");
 }
 
 // Every table the ledger open creates, by the layout stage that added it. The
@@ -651,15 +660,61 @@ constexpr LedgerTable ledger_tables[] = {
 
 // Admit every written layout, and each one without report_integrity: the open
 // creates the missing tables and one verified replay populates the digests.
-bool supported_layout(std::uint64_t table_count) {
-    std::uint64_t tables = 0;
-    bool integrity = false;
+bool supported_layout(sqlite3* db) {
+    std::set<std::string> actual, expected;
+    Statement names(db, "SELECT name FROM sqlite_master WHERE type='table'");
+    while (names.row()) actual.insert(names.text(0));
     for (std::size_t i = 0; i < std::size(ledger_tables); ++i) {
-        ++tables;
-        integrity = integrity || std::string_view(ledger_tables[i].name) == "report_integrity";
+        expected.insert(ledger_tables[i].name);
         if (i + 1 < std::size(ledger_tables) && ledger_tables[i + 1].stage == ledger_tables[i].stage)
             continue;
-        if (table_count == tables || (integrity && table_count == tables - 1)) return true;
+        if (actual == expected) return true;
+        auto without_integrity = expected;
+        without_integrity.erase("report_integrity");
+        if (actual == without_integrity) return true;
+    }
+    return false;
+}
+
+bool schema_upgrade_needed(sqlite3* db) {
+    for (const auto& table : ledger_tables) {
+        Statement found(db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?");
+        found.bind(1, std::string(table.name));
+        if (!found.row()) return true;
+    }
+    if (!has_column(db, "events", "created_at_ms") ||
+        !has_column(db, "delivery_log", "request_id")) return true;
+    // These are the existing constructor/migration objects, not a new layout.
+    // Look at their actual kind and owning table as well as their names.
+    constexpr const char* objects[][3] = {
+        {"index", "pending_events", "events"},
+        {"index", "delivery_results", "delivery_log"},
+        {"index", "delivery_request_results", "delivery_log"},
+        {"index", "delivery_targets_pending", "delivery_targets"},
+        {"index", "delivery_state_pending", "delivery_state"},
+        {"index", "delivery_state_unsent", "delivery_state"},
+        {"index", "delivery_state_oldest", "delivery_state"},
+        {"trigger", "report_no_update", "report_snapshots"},
+        {"trigger", "report_no_delete", "report_snapshots"},
+        {"trigger", "report_integrity_no_update", "report_integrity"},
+        {"trigger", "report_integrity_no_delete", "report_integrity"},
+        {"trigger", "report_checkpoint_no_update", "report_checkpoints"},
+        {"trigger", "report_checkpoint_no_delete", "report_checkpoints"},
+        {"trigger", "delivery_log_no_update", "delivery_log"},
+        {"trigger", "delivery_log_no_delete", "delivery_log"},
+        {"trigger", "redelivery_no_update", "redelivery_requests"},
+        {"trigger", "redelivery_no_delete", "redelivery_requests"},
+        {"trigger", "delivery_state_insert", "delivery_state"},
+        {"trigger", "delivery_state_update", "delivery_state"},
+        {"trigger", "delivery_route_insert", "event_routes"},
+        {"trigger", "delivery_event_update", "events"},
+        {"trigger", "delivery_log_insert", "delivery_log"},
+    };
+    for (const auto& object : objects) {
+        Statement found(db, "SELECT 1 FROM sqlite_master WHERE type=? AND name=? AND tbl_name=?");
+        found.bind(1, std::string(object[0])); found.bind(2, std::string(object[1]));
+        found.bind(3, std::string(object[2]));
+        if (!found.row()) return true;
     }
     return false;
 }
@@ -929,12 +984,19 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity,
     validate_bytes(deployment_identity, "deployment identity");
     if (path.empty() || path == ":memory:" || path.find('\0') != std::string::npos)
         throw std::runtime_error("native ledger requires an on-disk path");
+    struct stat supplied_path {};
+    if (lstat(path.c_str(), &supplied_path) == 0 && S_ISLNK(supplied_path.st_mode))
+        throw std::runtime_error("native ledger path must not be a symlink");
     const std::string canonical = std::filesystem::weakly_canonical(path).string();
     impl_->path = canonical;
     impl_->max_bytes = max_bytes;
     impl_->lock_fd = open((canonical + ".lock").c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (impl_->lock_fd < 0)
         throw std::runtime_error("native ledger lock file cannot be opened");
+    struct stat lock_stat {};
+    if (fstat(impl_->lock_fd, &lock_stat) != 0 || !S_ISREG(lock_stat.st_mode) ||
+        lock_stat.st_uid != geteuid() || lock_stat.st_nlink != 1)
+        throw std::runtime_error("native ledger requires an exclusively owned lock file");
     if (flock(impl_->lock_fd, LOCK_EX | LOCK_NB) != 0)
         throw std::runtime_error("the runner is running: stop it first; it resumes from its ledger");
     if (max_bytes) {
@@ -952,8 +1014,27 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity,
     impl_->database_fd = open(canonical.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
     struct stat st {};
     if (impl_->database_fd < 0 || fstat(impl_->database_fd, &st) != 0 ||
-        !S_ISREG(st.st_mode) || st.st_nlink != 1)
+        !S_ISREG(st.st_mode) || st.st_nlink != 1 || st.st_uid != geteuid())
         throw std::runtime_error("native ledger requires an exclusively owned regular file");
+    if (st.st_size) {
+        // This connection is READONLY, and its first schema read pins the
+        // committed WAL prefix for the whole copy/verification operation.
+        // No writer open or persistent PRAGMA precedes durable completion.
+        LedgerBackupSource source(canonical, impl_->database_fd, options.cancelled);
+        auto* db = source.database();
+        if (scalar(db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'")) {
+            if (!supported_layout(db))
+                throw std::runtime_error("native ledger is not an empty or supported ledger database");
+            Statement metadata(db, "SELECT schema_version,identity FROM metadata WHERE singleton=1");
+            if (!metadata.row() || metadata.integer(0) != 1 ||
+                metadata.text(1) != deployment_identity)
+                throw std::runtime_error("native ledger deployment identity or schema mismatch (including webhook routing); reconcile the old deployment and redeploy with a new ledger");
+            if (metadata.row() || scalar(db, "SELECT COUNT(*) FROM metadata") != 1) database_error();
+            if (schema_upgrade_needed(db)) source.complete();
+        } else if (scalar(db, "SELECT COUNT(*) FROM sqlite_master")) {
+            throw std::runtime_error("native ledger is not an empty or supported ledger database");
+        }
+    }
     OpeningLedger opening(impl_.get());
     if (sqlite3_open_v2(canonical.c_str(), &impl_->db,
                         SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_PRIVATECACHE, nullptr) != SQLITE_OK)
@@ -1013,7 +1094,7 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity,
         Statement q(impl_->db, "INSERT INTO metadata VALUES(1,1,?)");
         q.bind(1, deployment_identity);
         q.done();
-    } else if (!supported_layout(table_count)) {
+    } else if (!supported_layout(impl_->db)) {
         throw std::runtime_error("native ledger is not an empty or supported ledger database");
     }
     {
@@ -1023,6 +1104,7 @@ Ledger::Ledger(const std::string& path, const std::string& deployment_identity,
         if (q.row() || scalar(impl_->db, "SELECT COUNT(*) FROM metadata") != 1) database_error();
     }
     exec(impl_->db,
+        "CREATE INDEX IF NOT EXISTS pending_events ON events(ordinal) WHERE acknowledged=0;"
         "CREATE TABLE IF NOT EXISTS report_snapshots (input_cursor INTEGER PRIMARY KEY CHECK(input_cursor>=0),payload TEXT NOT NULL);"
         "CREATE TRIGGER IF NOT EXISTS report_no_update BEFORE UPDATE ON report_snapshots BEGIN SELECT RAISE(ABORT,'reports are immutable'); END;"
         "CREATE TRIGGER IF NOT EXISTS report_no_delete BEFORE DELETE ON report_snapshots BEGIN SELECT RAISE(ABORT,'reports are immutable'); END;"

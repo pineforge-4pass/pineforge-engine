@@ -20,6 +20,9 @@ inline constexpr std::uint64_t kDefaultReportCheckpointInterval = 1024;
 struct LedgerOptions {
     // First boundary; later boundaries double: K, 2K, 4K, ...
     std::uint64_t report_checkpoint_interval = kDefaultReportCheckpointInterval;
+    // Startup backup honors the same cancellation as the runner's feed and
+    // delivery loops. An empty callback supplies no artificial retry deadline.
+    std::function<bool()> cancelled;
 };
 
 enum class CheckpointFailureCode {

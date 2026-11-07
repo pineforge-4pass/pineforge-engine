@@ -435,6 +435,26 @@
    "retryable": false,
    "since": "1.4.0"
   },
+  "live_ledger_backup_failed": {
+   "args": {
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "space",
+      "io",
+      "verification",
+      "incomplete"
+     ]
+    }
+   },
+   "class": "resource",
+   "description": "A durable verified pre-upgrade SQLite ledger copy could not be established. Schema migration has not begun. Repair the reported cause before retrying the invocation.",
+   "english": [
+    "native ledger automatic backup failed: {reason}"
+   ],
+   "retryable": false,
+   "since": "1.12.0"
+  },
   "lot_grid_rejected": {
    "args": {},
    "class": "symbol_metadata",

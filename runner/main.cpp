@@ -4,6 +4,7 @@
 #include "deployment_identity.hpp"
 #include "native_startup.hpp"
 #include "store.hpp"
+#include "ledger_backup.hpp"
 #include "transport.hpp"
 #include "delivery.hpp"
 #include "report.hpp"
@@ -1066,6 +1067,7 @@ int run(Config c) {
     ControlDirectory controls(c.control_dir);
     LedgerOptions ledger_options;
     ledger_options.report_checkpoint_interval = c.checkpoint_interval;
+    ledger_options.cancelled = [] { return stopped != 0; };
     Ledger ledger(c.ledger, deployment, c.max_ledger_bytes, ledger_options);
     ServiceFile service(c.status_file, c.status_interval * 1000);
     ledger.bind_routing(c.routing.stored_document());
@@ -1588,7 +1590,9 @@ int ledger_command(int argc, char** argv) {
         else ++position;
     }
     auto targets = routing.load_secrets();
-    Ledger ledger(path, view.identity(), max_ledger_bytes);
+    LedgerOptions ledger_options;
+    ledger_options.cancelled = [] { return stopped != 0; };
+    Ledger ledger(path, view.identity(), max_ledger_bytes, ledger_options);
     auto events = view.redelivery_events(target, from, failed_only);
     const auto selected = events.size();
     std::set<std::string> selected_ids;
@@ -1626,6 +1630,9 @@ int main(int argc, char **argv) {
         if (command == "actions" || command == "status" || command == "redeliver" || command == "report")
             return ledger_command(argc, argv);
         return run(args(argc, argv));
+    } catch (const LedgerBackupFailed &e) {
+        std::cerr << "pineforge-live: " << e.what() << '\n';
+        return 1;
     } catch (const LedgerBudgetExceeded &e) {
         std::cerr << "pineforge-live: " << e.what() << '\n';
         return 3;

@@ -115,7 +115,7 @@ transaction's report state before its admission. The input is refused before
 growth if its cached pages plus that margin do not fit. A refused boundary
 input leaves database, WAL and SHM byte-identical, including repeated refusals.
 Charging the cumulative payload to the boundary input is intended
-(`Ledger::commit_input`, `runner/store.cpp:1140`). A boundary input can therefore
+(`Ledger::commit_input`, `runner/store.cpp:1222`). A boundary input can therefore
 hit a storage stop when the input alone would fit, up to the cumulative
 payload's reservation earlier than strictly necessary. This cost buys the
 guarantee that no input commits with a checkpoint admitted without room in its
@@ -142,8 +142,8 @@ Startup and recovery checkpoints also admit their actual cached pages before
 COMMIT, using the configured budget without an input reservation. They are
 optional on refusal and publish the same diagnostic. This is intended for both
 startup and post-replay checkpoints (`Ledger::checkpoint_recovered_report`,
-`runner/store.cpp:1266`; the post-replay call is `checkpoint_recovered_report`,
-`runner/main.cpp:1147`): with a large budget, either can spend most of the
+`runner/store.cpp:1348`; the post-replay call is `checkpoint_recovered_report`,
+`runner/main.cpp:1156`): with a large budget, either can spend most of the
 remaining headroom on an O(report) payload before the first live input. The run
 can stop sooner, never over budget. Opening files already
 over a newly supplied finite budget refuses with `LedgerBudgetExceeded` before
@@ -198,8 +198,9 @@ formula as other writes. Checkpoint debt from an existing WAL still counts.
 If cache observation is unavailable or auto-vacuum is enabled, the whole-page
 fallback honestly requires roughly `2*S` headroom for a checkpointed logical
 database of size `S`, plus sector/SHM allowances and new summary pages.
-The upgrade is **one-way**; back up the ledger first, since older runners
-cannot open the migrated database. Read-only `status` retains its scan
+The upgrade is **one-way**; schema work now requires an automatic verified
+pre-upgrade copy, since older runners cannot open the migrated database.
+Read-only `status` retains its scan
 fallback until `run` upgrades it. Incompatible chart-feed ledgers retain their
 existing refusal. Export/recovery formats and action payloads do not change.
 
@@ -224,6 +225,76 @@ and prints request, actual growth, limit and admission result. Migration rows
 cover a ledger produced by the previous runner under a finite budget and a
 fixture with 4 MB of historical action payload under 8 MiB of upgrade headroom,
 with brute-force recounts and source-row comparisons.
+
+## Automatic copy accounting
+
+The existing runner lock protects read-only inspection and the pre-upgrade
+copy. The writer connection opens only after required copy completion.
+Missing historical tables, existing columns, indexes or triggers require the
+copy; a complete current ledger and an empty fresh ledger bypass it.
+The copy uses a pinned SQLite read transaction and 128-page online-backup
+steps, including committed WAL frames without a source checkpoint.
+
+The destination is an owner-only **0700** directory named
+`<ledger-basename>.backups` beside the ledger. Images and completion manifests
+are **0600**, exclusively created without following symlinks. Completed names
+contain the actual canonical source-prefix digest and a random suffix.
+Files with `.partial` suffixes and orphaned outputs remain available after
+failure. Publication removes only redundant successful partial names.
+There is no automatic deletion or retention limit.
+
+Let `S = source page_count * page_size` and `B` be the filesystem allocation
+unit. Before starting a new copy, the single free-space admission requires:
+
+| Allocation | Admitted bytes |
+|---|---:|
+| New image plus construction journal allowance | `2*S` |
+| Separate later restore image and initial WAL/SHM | `S + 32 + 32768` |
+| Manifest/filesystem overhead allowance | `8*B` |
+
+The sum must fit process-available space; each term spends different free
+bytes. Copy construction admits three file entries, and a later restore
+admits three more when available-file counts are known. The diagnostic
+`ledger_backup_admission` reports these terms, total `required_bytes`,
+`available_bytes`, `remaining_bytes`, file counts and phase (`copy`, `completion`
+or `reuse`). Completion/reuse checks the restore requirement against remaining
+free space again. This is independent of `max_ledger_bytes` and leaves its
+unlimited default intact. Existing migration/live write admission still
+applies separately. The copy admission does not reserve physical space
+against concurrent consumers or bound future schema/data growth.
+
+A completion manifest uses schema `pineforge-ledger-backup/v1`. It records
+the actual source identity/layout/version, committed input/event/report cursors,
+canonical logical schema/row digests, original main/WAL/SHM sizes, and the real
+standalone file SHA-256 and size. SQLite integrity and foreign-key checks and
+source-versus-image logical equality precede flushing/publication. Reuse
+validates the manifest fields and rechecks the actual image against the
+current pinned logical prefix. Original sidecar sizes describe creation time,
+so later physical checkpointing alone does not invalidate that prefix.
+
+The logical digest encoding is length-delimited and streaming. Unsigned
+64-bit lengths and integer bit patterns use big-endian bytes. Strings use
+UTF-8; REAL values use their IEEE binary64 bits. A row begins with byte `1`;
+each value begins with its SQLite type byte (INTEGER `1`, FLOAT `2`, TEXT `3`,
+BLOB `4`, NULL `5`). TEXT/BLOB then carry a byte length and bytes; NULL carries
+no payload. A stream ends with byte `0`. The schema digest starts with the
+length-prefixed domain `pineforge-ledger-schema/v1`, followed by
+`type,name,tbl_name,sql` rows from `sqlite_master` in binary type/name order.
+The row digest starts with `pineforge-ledger-rows/v1`. Tables follow in binary
+name order; each contributes its length-prefixed name, column count, ordered
+column names and rows ordered by all columns with binary collation, then byte
+`0`. Only schema names and the current SQLite row are resident in the backup
+hasher. This is not a claim about the engine's history memory or all layouts.
+
+Copy, space, flush, verification or cancellation failure refuses before
+schema work, with `live_ledger_backup_failed`, class `resource`,
+`retryable:false`, exit 1 and `args.reason` of `space`, `io`, `verification`
+or `incomplete`. The source's committed logical contents are retained.
+Incomplete artifacts are not rollback evidence.
+See the [rollback procedure](../runner/README.md#automatic-pre-upgrade-copy-and-rollback),
+including preservation and listing of consumed post-copy control-directory
+redelivery requests, retained delivery audit, and restore to a separate path
+without newer sidecars.
 
 ## Advisory disk observations and indexed delivery
 

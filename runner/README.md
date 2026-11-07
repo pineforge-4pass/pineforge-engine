@@ -165,7 +165,7 @@ payload length supplies the extra-payload reservation. After the input commits,
 the checkpoint is inserted in its own admitted transaction while retaining the
 writer mutex, with a byte ceiling no greater than the input's reservation.
 Charging that payload to the boundary input is intended
-(`Ledger::commit_input`, `runner/store.cpp:1140`): the boundary input can hit a
+(`Ledger::commit_input`, `runner/store.cpp:1222`): the boundary input can hit a
 storage stop when the input alone would fit, up to the cumulative payload's
 reservation earlier than strictly necessary. This cost buys the guarantee that
 no input commits with a checkpoint admitted without room in its reservation.
@@ -220,8 +220,8 @@ document memory. Ledgers that first need reports or integrity digests populated
 retry after startup replay, before new inputs. Later opens add no startup copy
 when a checkpoint already exists.
 Startup and post-replay checkpoints intentionally have no input reservation
-behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1266`;
-the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1147`).
+behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1348`;
+the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1156`).
 With a large budget, either can spend most of the remaining headroom on an
 O(T) payload before the first live input. The run can stop sooner, never over
 budget; this is the intended cost of preparing the report shortcut at startup.
@@ -511,9 +511,98 @@ The row and oldest index copy the target name. `delivery_targets` adds one
 row, a primary-key index entry and an eligible pending-index entry per distinct
 target, shared by its actions. These grow alongside the original action and
 attempt history; there is no pruning.
-This is a one-way runner upgrade: back up the ledger before upgrading; earlier
-runner versions cannot open the migrated database. Strategy/deployment identity
-and historical action payload bytes remain unchanged.
+This is a one-way runner upgrade; earlier runner versions cannot open the
+migrated database. Strategy/deployment identity and historical action payload
+bytes remain unchanged. Before an existing ledger needs additive schema work,
+the runner now requires the automatic verified copy described below.
+
+### Automatic pre-upgrade copy and rollback
+
+After taking the exclusive runner lock, the writer inspects a read-only
+SQLite snapshot. Historical table names, missing existing columns, indexes
+and triggers determine whether schema work is needed. A fresh empty ledger
+and a complete current ledger do not require a copy on ordinary open.
+Read-only `status`, `actions` and `report` do not create copies.
+This prerequisite keeps the existing ledger version and report policies.
+
+The default destination is `<ledger-basename>.backups` beside the ledger,
+owned by the runner user with mode **0700**. Each image is named
+`<ledger-basename>.<source-prefix-sha256>.<nonce>.sqlite`, with a
+`.manifest.json` completion beside it. Images and manifests have mode **0600**.
+Creation refuses symlinks and collisions. The source prefix hashes the actual
+source descriptor, including its identity, layout, cursors, schema and row
+digests. The random suffix permits a new immutable image when a previous
+completion fails revalidation.
+
+SQLite online backup copies **128 pages per step** from the pinned read
+transaction, including committed WAL content. It does not checkpoint the
+source. Existing read-only WAL readers can retain their own snapshots.
+The runner compares the standalone image with the pinned source: full logical
+schema, metadata identity/version, input/event/report cursors and every ordered
+table row. Both databases must pass SQLite integrity and foreign-key checks.
+It also hashes the real image file. A filename or matching file hash alone
+does not establish source equality.
+
+The manifest schema is `pineforge-ledger-backup/v1`. `source` records the
+canonical path, device/inode/owner, table-name layout, metadata version and
+identity, committed cursors, page size, SQLite settings and logical digests.
+`original_sizes` records main/WAL/SHM sizes before the read-only open.
+`image_sha256` and `image_bytes` describe the actual standalone image.
+The source SQLite schema cookie is recorded separately: SQLite may rewrite
+the destination cookie during online backup without changing logical schema.
+
+The image, manifest contents and directory are flushed before completion is
+published; the published directory entry is flushed before schema work starts.
+Unfinished work has `.partial` names. Failed and orphaned artifacts remain
+for diagnosis. A successfully published file loses only its redundant partial
+name. No completed copy is automatically overwritten or retired. An existing
+completion is reusable only after its manifest fields, source descriptor,
+actual file bytes and logical contents revalidate and are flushed again.
+Original sidecar sizes describe copy creation; later physical checkpointing
+does not invalidate an otherwise identical committed logical prefix.
+
+Before copying, `ledger_backup_admission` on stderr reports a single combined
+free-space requirement for the copy, construction journal, manifest overhead
+and a **separate later restore**. It also reports available files when the
+filesystem supplies that measurement. Completion/reuse checks restore room
+again. These copies are outside `--max-ledger-bytes`; the default ledger
+allowance remains unlimited. See [disk accounting](../docs/live-ledger-budget.md).
+No space observation reserves disk against other processes or promises room
+for arbitrary later migration/live growth.
+
+Failure to establish the durable verified copy exits **1**, with typed
+`live_ledger_backup_failed`, class `resource`, `retryable:false` and
+`args.reason` equal to `space`, `io`, `verification` or `incomplete`.
+No schema work starts on that invocation. Repair the cause and retry; retain
+the committed source and incomplete output. SIGINT/SIGTERM cancels backup
+work, including busy waits. Backup retries have no fixed refusal count.
+Initialization can fail before a service status file is published.
+
+Rollback uses a separately prepared ledger path:
+
+1. Stop the runner and all readers/writers. Retain the upgraded ledger, all
+   sidecars and delivery audit as a separate recovery artifact. Archive the
+   entire control directory and the submitted request documents before
+   upgrading, and preserve new submissions while running.
+2. Select a completed copy by its manifest's identity, layout and committed
+   cursors. Recheck its real file SHA-256, integrity, foreign keys and logical
+   digests before use. A `.partial` file alone is not a completed rollback copy.
+3. List accepted redelivery request IDs and selections present in the retained
+   new ledger's `redelivery_requests` audit but absent from the copy. If the
+   old layout has no request table, list all new accepted requests. Retain
+   their attempt/result audit and the archived request/acknowledgement files.
+   Polling consumes accepted request files and retains only a limited number
+   of acknowledgements, so the current control directory alone cannot supply
+   this list. Also list still-pending control-directory requests separately.
+4. Restore the standalone image into the separately prepared path, with no
+   WAL/SHM/journal from the newer ledger at that path. Verify it with the
+   previous runner and matching strategy/config/warmup before switching service
+   configuration. Preserve the newer ledger and the selected backup.
+5. Reconcile post-copy inputs, delivery outcomes and consumed redelivery
+   requests before resuming. Restore loses those newer committed records.
+   Refeeding can recompute inputs but cannot undo external deliveries.
+   Preserve immutable delivery IDs and require receiver deduplication; do not
+   blindly resubmit every consumed request.
 
 ## Build
 
