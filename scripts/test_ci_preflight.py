@@ -3039,7 +3039,8 @@ class PostFleetRunnerPolicy(unittest.TestCase):
 
     def test_post_fleet_docs_match_runner_policy(self):
         docs = (ROOT / 'docs/ci.md').read_text()
-        self.assertEqual(len(docs.splitlines()), 2060)
+        # expectation corrected: 2117 -> 2143, because raw response/race docs added 26 lines.
+        self.assertEqual(len(docs.splitlines()), 2143)
         # The test-owned job catalog defines the protected label inventory.
         tables = re.findall(
             r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
@@ -5551,7 +5552,8 @@ class PreflightFailures(unittest.TestCase):
 
     def test_documented_slow_row_counts_match_literal_population(self):
         text = (ROOT / 'docs/ci.md').read_text()
-        self.assertEqual(len(text.splitlines()), 2060)
+        # expectation corrected: 2117 -> 2143, because raw response/race docs added 26 lines.
+        self.assertEqual(len(text.splitlines()), 2143)
         slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
                        if name.startswith('test_ci_verify_slice_'))
         self.assertTrue(slices, 'verifier slice inventory must not be empty')
@@ -9211,6 +9213,45 @@ finally:
                 self.assertIn('release.yml bump push must use the release App installation token',
                               ci_workflow_findings(
                                   *original, others={**others, 'release.yml': changed}))
+
+    def test_release_receipt_is_always_retained_with_exact_upload_contract(self):
+        original, others = self.ci_sources(), self.other_sources()
+        release = others['release.yml']
+        name = 'Keep release gate receipt'
+        finding = ('release.yml must always retain the exact release gate receipt artifact '
+                   'before planning or publishing')
+        self.assertEqual(ci_preflight.release_bump_workflow_findings(release), [])
+        for before, after in (
+                ('        if: ${{ always() }}\n', ''),
+                ('        if: ${{ always() }}', '        if: ${{ success() }}'),
+                ('        if: ${{ always() }}', '        if: ${{ inputs.dry_run }}'),
+                ('ea165f8d65b6e75b540449e92b4886f43607fa02', 'v4'),
+                ('name: release-gate-${{ inputs.phase }}-${{ github.run_id }}-${{ github.run_attempt }}',
+                 'name: other-evidence'),
+                ('path: ${{ runner.temp }}/release-gate-receipt.json',
+                 'path: ${{ runner.temp }}/*'),
+                ('if-no-files-found: error', 'if-no-files-found: warn'),
+                ('retention-days: 7', 'retention-days: 1'),
+                ('        with:', '        continue-on-error: true\n        with:')):
+            with self.subTest(after=after):
+                changed = in_step(release, 'release', name, before, after)
+                self.assertNotEqual(changed, release)
+                self.assertIn(finding, ci_preflight.release_bump_workflow_findings(changed))
+                self.assertIn(finding, ci_workflow_findings(
+                    *original, others={**others, 'release.yml': changed}))
+        for before, after in (
+                ('--receipt "${RECEIPT}"', '--receipt ignored.json'),
+                ('--dry-run "${DRY_RUN}"', '--dry-run false')):
+            with self.subTest(gate=after):
+                changed = in_step(
+                    release, 'release',
+                    'Refuse unless authenticated parity and exact-SHA full CI are green',
+                    before, after)
+                self.assertNotEqual(changed, release)
+                self.assertIn(
+                    'release.yml must keep the unconditional release gate with its release App token '
+                    'for the App-only main pull_request barrier',
+                    ci_preflight.release_bump_workflow_findings(changed))
 
     def test_release_ruleset_reader_token_and_invocation_mutations_refuse(self):
         original, others = self.ci_sources(), self.other_sources()

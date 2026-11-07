@@ -729,6 +729,45 @@ class CatalogDiff(unittest.TestCase):
                          {"VERSION", "pkg/diagnostics_catalog_diff.json"})
         self.ok(self.repo.run("--check", *flags, env={REQUIRE_TAGS: "1"}))
 
+    def test_generic_transition_checks_declared_committed_diff_and_worktree(self) -> None:
+        flags = self.generic_catalog_flags()
+        self.ok(self.repo.run("--write", *flags))
+        parent = self.repo.commit("generic catalog")
+        self.ok(self.repo.run("--reset", "--tag", "v1.1.0", *flags))
+        self.repo.write("VERSION", b"1.1.0\n")
+        release = self.repo.commit("generic release")
+        path = "pkg/diagnostics_catalog_diff.json"
+        reset = (self.repo.path / path).read_bytes()
+        cfg = generator.Config(
+            self.repo.path, self.repo.path / "pkg/diagnostics_catalog.json",
+            "pkg/diagnostics_catalog.json", self.repo.path / path,
+            "pineforge-diagnostics-catalog/v2",
+            "pineforge-diagnostics-catalog-diff/v1", ("codes", "fragments"))
+        self.assertEqual(generator.validate_release_transition(
+            cfg, generator.Git(self.repo.path), expected_parent=parent), (parent, "1.1.0"))
+        # A valid declared reset cannot be rescued by bytes at the default path.
+        self.repo.write(path, reset + b" ")
+        self.fails(self.repo.run("--check", *flags, env={REQUIRE_TAGS: "1"}), 1,
+                   "untagged release transition must match the committed files")
+        self.repo.write(path, reset)
+        self.repo.write("README.md", b"extra packaged change\n")
+        self.repo.amend()
+        self.fails(self.repo.run("--check", *flags, env={REQUIRE_TAGS: "1"}), 1,
+                   f"release transition must modify exactly VERSION and {path} as regular files")
+        self.repo.git("reset", "--hard", release)
+        self.repo.git("update-index", "--chmod=+x", path)
+        self.repo.git("commit", "--amend", "--no-edit")
+        self.fails(self.repo.run("--check", *flags, env={REQUIRE_TAGS: "1"}), 1,
+                   f"release transition must modify exactly VERSION and {path} as regular files")
+        self.repo.git("reset", "--hard", release)
+        self.repo.write(path, reset.replace(b"v1.1.0", b"v1.1.1"))
+        self.repo.amend()
+        self.fails(self.repo.run("--check", *flags, env={REQUIRE_TAGS: "1"}), 1,
+                   "release transition requires the exact catalog reset for forward VERSION")
+        with self.assertRaisesRegex(generator.Finding, "phase1 dispatch SHA"):
+            generator.validate_release_transition(
+                cfg, generator.Git(self.repo.path), expected_parent="f" * 40)
+
     def test_this_tree(self) -> None:
         # The source guard's own command, on the checked-in diff.
         result = subprocess.run([sys.executable, str(SCRIPT), "--check"], capture_output=True,

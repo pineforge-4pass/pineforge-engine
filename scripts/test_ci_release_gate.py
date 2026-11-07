@@ -6,18 +6,22 @@ import ast
 import contextlib
 from collections import Counter
 import errno
+import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import tempfile
 import unicodedata
 import unittest
 from unittest import mock
 
-from ci_preflight import _jobs, _steps, release_prebuilt_workflow_findings
+from ci_preflight import (_jobs, _steps, release_bump_workflow_findings,
+                          release_prebuilt_workflow_findings)
+from ci_docs_only import is_documentation
 import ci_release_gate
 import gen_run_failure_catalog_diff as catalog_diff
 
@@ -94,7 +98,8 @@ def http_response(code, body, headers=None):
 
 def push_run(*, actor="pineforge-app[bot]", triggering_actor="pineforge-app[bot]",
              event="push", branch="main", sha=SHA):
-    return {"event": event, "head_branch": branch, "head_sha": sha,
+    return {"id": 8801, "run_attempt": 1, "status": "completed", "conclusion": "success",
+            "event": event, "head_branch": branch, "head_sha": sha,
             "actor": {"login": actor}, "triggering_actor": {"login": triggering_actor}}
 
 
@@ -110,6 +115,10 @@ def ci_post_runs_api(sha, *, repo=REPO):
 
 def ci_post_jobs_api(run_id, *, repo=REPO):
     return f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"
+
+
+def run_metadata_api(run_id, *, repo=REPO):
+    return f"repos/{repo}/actions/runs/{run_id}"
 
 
 def ci_post_run(run_id, *, sha=SHA, branch="main", state="completed", conclusion="success",
@@ -137,9 +146,23 @@ def linux_ci_post_jobs():
         for index, job in enumerate(amd64) for shard in range(1, 5)]
 
 
-def jobs_page(rows, *, total=None):
+def jobs_page(rows, *, total=None, headers=None):
     return http_response(200, json.dumps({
-        "total_count": len(rows) if total is None else total, "jobs": rows}))
+        "total_count": len(rows) if total is None else total, "jobs": rows}), headers)
+
+
+def attempt_api(run_id, attempt, *, repo=REPO):
+    return f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}"
+
+
+def attempt_jobs_api(run_id, attempt, *, repo=REPO):
+    return attempt_api(run_id, attempt, repo=repo) + "/jobs?per_page=100"
+
+
+def attempt_reads(row, *, repo=REPO):
+    return [call for attempt in range(1, row["run_attempt"] + 1) for call in (
+        (attempt_api(row["id"], attempt, repo=repo), False, None),
+        (attempt_jobs_api(row["id"], attempt, repo=repo), True, None))]
 
 
 def bypass(actor_id=4105147, actor_type="Integration", mode="always"):
@@ -201,8 +224,22 @@ def git_tree(sha, entries, *, truncated=False):
     return json.dumps({"sha": sha, "truncated": truncated, "tree": entries})
 
 
+class FixtureResponse(str):
+    """A string view for old gates, retaining the exact synthetic transport bytes.
+
+    Existing text fixtures are UTF-8 encoded at the fake transport boundary,
+    never reconstructed from parsed objects. Recorded projections retain their
+    existing descriptors; these HTTP envelopes are synthetic, not raw captures.
+    """
+
+    def __new__(cls, received_bytes):
+        result = super().__new__(cls, received_bytes.decode("utf-8", errors="surrogateescape"))
+        result.received_bytes = received_bytes
+        return result
+
+
 class FakeAPI:
-    """Raw gh responses keyed by exact endpoint, including jq/pagination flags."""
+    """Exact synthetic gh stdout fixtures; the transport is the only responder fake."""
 
     def __init__(self):
         self.responses = {
@@ -220,27 +257,50 @@ class FakeAPI:
         if endpoint not in self.responses:
             raise AssertionError(f"unexpected API endpoint: {endpoint}")
         response = self.responses[endpoint]
+        if callable(response):
+            response = response()
         if isinstance(response, Exception):
             raise response
+        if isinstance(response, str):
+            return FixtureResponse(response.encode("utf-8"))
+        if isinstance(response, bytes):
+            return FixtureResponse(response)
         return response
 
     def statuses(self, rows):
         self.responses[STATUSES_API] = json.dumps(rows)
 
     def ci_post(self, row, jobs, *, repo=REPO):
-        # Opt in only: old rows retain their exact responses and call lists.
+        # Synthetic single-attempt metadata; rerun controls supply every attempt.
+        self.responses.setdefault(f"repos/{repo}/commits/{row['head_sha']}",
+                                  json.dumps(commit(row["head_sha"], TREE)))
         self.responses.update({
             ci_post_runs_api(row["head_sha"], repo=repo): runs_page([row]),
             ci_post_jobs_api(row["id"], repo=repo): jobs_page(jobs),
         })
+        self.attempts(row, {1: jobs}, repo=repo)
+
+    def attempts(self, row, jobs_by_attempt, *, metadata=None, repo=REPO):
+        self.responses[run_metadata_api(row["id"], repo=repo)] = json.dumps(row)
+        for attempt, jobs in jobs_by_attempt.items():
+            run = {**row, "run_attempt": attempt}
+            if metadata is not None:
+                run.update(metadata[attempt])
+            self.responses[attempt_api(row["id"], attempt, repo=repo)] = json.dumps(run)
+            self.responses[attempt_jobs_api(row["id"], attempt, repo=repo)] = jobs_page(jobs)
 
     def ci_post_runs(self, sha, rows, jobs_by_run, *, repo=REPO):
-        # Register only the exact runs/jobs endpoints this fixture supplies.
+        # Default/latest jobs are opt-in. Synthetic one-attempt audit pages
+        # are separate, with an explicitly empty page for docs-health-only rows.
         self.responses[ci_post_runs_api(sha, repo=repo)] = runs_page(rows)
         self.responses.update({
             ci_post_jobs_api(run_id, repo=repo): jobs_page(jobs)
             for run_id, jobs in jobs_by_run.items()
         })
+        for row in rows:
+            self.responses.setdefault(f"repos/{repo}/commits/{row['head_sha']}",
+                                      json.dumps(commit(row["head_sha"], TREE)))
+            self.attempts(row, {1: jobs_by_run.get(row["id"], [])}, repo=repo)
 
     def rulesets(self, rows):
         self.responses[RULESETS_API] = http_response(200, json.dumps(ruleset_summaries(rows)))
@@ -262,6 +322,7 @@ class FakeAPI:
             AFTER_TREE_API: git_tree(OTHER_TREE, bump_files(after=True)),
         })
         self.rulesets(release_rulesets())
+        self.attempts(push_run(), {1: []})
 
 
 class FakeHistory:
@@ -338,6 +399,614 @@ class ReleaseSnapshot:
         return self.tagged if tag == "v" + self.version else BUMP_PARENT
 
 
+# Bounded recorded-data projection, not a complete run or release-App proof.
+# Capture: cr900-rerun41767951876-{latest,attempt1,attempt2,attempt3}-jobs-0156.raw.json.
+# Select jobs named preflight, corpus-parity / authz, or build; retain every
+# matching row, including duplicate names and nulls. Copy the fields below
+# verbatim, including complete step arrays; omit URLs and runner/host fields.
+# Source SHA256 (latest = attempt3):
+# 575d946ddfe215d8b99137df01d2e8e24dbabaebbd0d36828bca735a0f702cd8
+# attempt1: d515507d370361b6de5648b7e8dedb7570a64edc3d37553dbe2d33519f2732b5
+# attempt2: 14dba00386426928b7e428061bae516d114d8418e31f95e7dd5b22942a08a00f
+RECORDED_CARRIED_JOBS = json.loads(r'''
+{
+ "latest": [
+  {
+   "id": 126405132405,
+   "run_id": 41767951876,
+   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
+   "name": "corpus-parity / authz",
+   "run_attempt": 3,
+   "status": "completed",
+   "conclusion": "success",
+   "created_at": "2026-11-04T05:21:26Z",
+   "started_at": "2026-11-04T03:38:45Z",
+   "completed_at": "2026-11-04T03:38:48Z",
+   "steps": []
+  },
+  {
+   "id": 126405164992,
+   "run_id": 41767951876,
+   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
+   "name": "preflight",
+   "run_attempt": 3,
+   "status": "completed",
+   "conclusion": "success",
+   "created_at": "2026-11-04T05:21:32Z",
+   "started_at": "2026-11-04T03:38:56Z",
+   "completed_at": "2026-11-04T03:44:31Z",
+   "steps": [
+    {
+     "name": "Set up job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 1,
+     "started_at": "2026-11-04T03:38:57Z",
+     "completed_at": "2026-11-04T03:38:58Z"
+    },
+    {
+     "name": "Refuse an unauthorised run before anything else",
+     "status": "completed",
+     "conclusion": "skipped",
+     "number": 2,
+     "started_at": "2026-11-04T03:38:58Z",
+     "completed_at": "2026-11-04T03:38:58Z"
+    },
+    {
+     "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 3,
+     "started_at": "2026-11-04T03:38:58Z",
+     "completed_at": "2026-11-04T03:39:04Z"
+    },
+    {
+     "name": "Install workflow linters",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 4,
+     "started_at": "2026-11-04T03:39:04Z",
+     "completed_at": "2026-11-04T03:39:08Z"
+    },
+    {
+     "name": "Verify workflow wiring and source guards",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 5,
+     "started_at": "2026-11-04T03:39:08Z",
+     "completed_at": "2026-11-04T03:44:27Z"
+    },
+    {
+     "name": "Retain preflight diagnostics",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 6,
+     "started_at": "2026-11-04T03:44:27Z",
+     "completed_at": "2026-11-04T03:44:29Z"
+    },
+    {
+     "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 12,
+     "started_at": "2026-11-04T03:44:29Z",
+     "completed_at": "2026-11-04T03:44:29Z"
+    },
+    {
+     "name": "Complete job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 13,
+     "started_at": "2026-11-04T03:44:29Z",
+     "completed_at": "2026-11-04T03:44:29Z"
+    }
+   ]
+  },
+  {
+   "id": 126424565826,
+   "run_id": 41767951876,
+   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
+   "name": "build",
+   "run_attempt": 3,
+   "status": "completed",
+   "conclusion": "success",
+   "created_at": "2026-11-04T06:20:26Z",
+   "started_at": "2026-11-04T06:21:14Z",
+   "completed_at": "2026-11-04T06:21:18Z",
+   "steps": [
+    {
+     "name": "Set up job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 1,
+     "started_at": "2026-11-04T06:21:15Z",
+     "completed_at": "2026-11-04T06:21:15Z"
+    },
+    {
+     "name": "Refuse an unauthorised run before anything else",
+     "status": "completed",
+     "conclusion": "skipped",
+     "number": 2,
+     "started_at": "2026-11-04T06:21:15Z",
+     "completed_at": "2026-11-04T06:21:15Z"
+    },
+    {
+     "name": "Require every verification lane to have passed",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 3,
+     "started_at": "2026-11-04T06:21:15Z",
+     "completed_at": "2026-11-04T06:21:16Z"
+    },
+    {
+     "name": "Complete job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 4,
+     "started_at": "2026-11-04T06:21:16Z",
+     "completed_at": "2026-11-04T06:21:16Z"
+    }
+   ]
+  }
+ ],
+ "attempt1": [
+  {
+   "id": 126371887906,
+   "run_id": 41767951876,
+   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
+   "name": "preflight",
+   "run_attempt": 1,
+   "status": "completed",
+   "conclusion": "success",
+   "created_at": "2026-11-04T03:38:03Z",
+   "started_at": "2026-11-04T03:38:56Z",
+   "completed_at": "2026-11-04T03:44:31Z",
+   "steps": [
+    {
+     "name": "Set up job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 1,
+     "started_at": "2026-11-04T03:38:57Z",
+     "completed_at": "2026-11-04T03:38:58Z"
+    },
+    {
+     "name": "Refuse an unauthorised run before anything else",
+     "status": "completed",
+     "conclusion": "skipped",
+     "number": 2,
+     "started_at": "2026-11-04T03:38:58Z",
+     "completed_at": "2026-11-04T03:38:58Z"
+    },
+    {
+     "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 3,
+     "started_at": "2026-11-04T03:38:58Z",
+     "completed_at": "2026-11-04T03:39:04Z"
+    },
+    {
+     "name": "Install workflow linters",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 4,
+     "started_at": "2026-11-04T03:39:04Z",
+     "completed_at": "2026-11-04T03:39:08Z"
+    },
+    {
+     "name": "Verify workflow wiring and source guards",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 5,
+     "started_at": "2026-11-04T03:39:08Z",
+     "completed_at": "2026-11-04T03:44:27Z"
+    },
+    {
+     "name": "Retain preflight diagnostics",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 6,
+     "started_at": "2026-11-04T03:44:27Z",
+     "completed_at": "2026-11-04T03:44:29Z"
+    },
+    {
+     "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 12,
+     "started_at": "2026-11-04T03:44:29Z",
+     "completed_at": "2026-11-04T03:44:29Z"
+    },
+    {
+     "name": "Complete job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 13,
+     "started_at": "2026-11-04T03:44:29Z",
+     "completed_at": "2026-11-04T03:44:29Z"
+    }
+   ]
+  },
+  {
+   "id": 126371888529,
+   "run_id": 41767951876,
+   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
+   "name": "corpus-parity / authz",
+   "run_attempt": 1,
+   "status": "completed",
+   "conclusion": "success",
+   "created_at": "2026-11-04T03:38:03Z",
+   "started_at": "2026-11-04T03:38:45Z",
+   "completed_at": "2026-11-04T03:38:48Z",
+   "steps": [
+    {
+     "name": "Set up job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 1,
+     "started_at": "2026-11-04T03:38:46Z",
+     "completed_at": "2026-11-04T03:38:46Z"
+    },
+    {
+     "name": "Only our own pull requests and our own events run CI",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 2,
+     "started_at": "2026-11-04T03:38:46Z",
+     "completed_at": "2026-11-04T03:38:46Z"
+    },
+    {
+     "name": "Complete job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 3,
+     "started_at": "2026-11-04T03:38:46Z",
+     "completed_at": "2026-11-04T03:38:46Z"
+    }
+   ]
+  },
+  {
+   "id": 126392478276,
+   "run_id": 41767951876,
+   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
+   "name": "build",
+   "run_attempt": 1,
+   "status": "completed",
+   "conclusion": "failure",
+   "created_at": "2026-11-04T04:42:05Z",
+   "started_at": "2026-11-04T04:43:33Z",
+   "completed_at": "2026-11-04T04:43:36Z",
+   "steps": [
+    {
+     "name": "Set up job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 1,
+     "started_at": "2026-11-04T04:43:34Z",
+     "completed_at": "2026-11-04T04:43:34Z"
+    },
+    {
+     "name": "Refuse an unauthorised run before anything else",
+     "status": "completed",
+     "conclusion": "skipped",
+     "number": 2,
+     "started_at": "2026-11-04T04:43:34Z",
+     "completed_at": "2026-11-04T04:43:34Z"
+    },
+    {
+     "name": "Require every verification lane to have passed",
+     "status": "completed",
+     "conclusion": "failure",
+     "number": 3,
+     "started_at": "2026-11-04T04:43:34Z",
+     "completed_at": "2026-11-04T04:43:35Z"
+    },
+    {
+     "name": "Complete job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 4,
+     "started_at": "2026-11-04T04:43:35Z",
+     "completed_at": "2026-11-04T04:43:35Z"
+    }
+   ]
+  }
+ ],
+ "attempt2": [
+  {
+   "id": 126393439911,
+   "run_id": 41767951876,
+   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
+   "name": "corpus-parity / authz",
+   "run_attempt": 2,
+   "status": "pending",
+   "conclusion": null,
+   "created_at": "2026-11-04T04:45:10Z",
+   "started_at": "2026-11-04T04:45:10Z",
+   "completed_at": null,
+   "steps": []
+  },
+  {
+   "id": 126393440242,
+   "run_id": 41767951876,
+   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
+   "name": "preflight",
+   "run_attempt": 2,
+   "status": "completed",
+   "conclusion": "success",
+   "created_at": "2026-11-04T04:45:10Z",
+   "started_at": "2026-11-04T03:38:56Z",
+   "completed_at": "2026-11-04T03:44:31Z",
+   "steps": [
+    {
+     "name": "Set up job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 1,
+     "started_at": "2026-11-04T03:38:57Z",
+     "completed_at": "2026-11-04T03:38:58Z"
+    },
+    {
+     "name": "Refuse an unauthorised run before anything else",
+     "status": "completed",
+     "conclusion": "skipped",
+     "number": 2,
+     "started_at": "2026-11-04T03:38:58Z",
+     "completed_at": "2026-11-04T03:38:58Z"
+    },
+    {
+     "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 3,
+     "started_at": "2026-11-04T03:38:58Z",
+     "completed_at": "2026-11-04T03:39:04Z"
+    },
+    {
+     "name": "Install workflow linters",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 4,
+     "started_at": "2026-11-04T03:39:04Z",
+     "completed_at": "2026-11-04T03:39:08Z"
+    },
+    {
+     "name": "Verify workflow wiring and source guards",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 5,
+     "started_at": "2026-11-04T03:39:08Z",
+     "completed_at": "2026-11-04T03:44:27Z"
+    },
+    {
+     "name": "Retain preflight diagnostics",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 6,
+     "started_at": "2026-11-04T03:44:27Z",
+     "completed_at": "2026-11-04T03:44:29Z"
+    },
+    {
+     "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 12,
+     "started_at": "2026-11-04T03:44:29Z",
+     "completed_at": "2026-11-04T03:44:29Z"
+    },
+    {
+     "name": "Complete job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 13,
+     "started_at": "2026-11-04T03:44:29Z",
+     "completed_at": "2026-11-04T03:44:29Z"
+    }
+   ]
+  },
+  {
+   "id": 126393440365,
+   "run_id": 41767951876,
+   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
+   "name": "corpus-parity / authz",
+   "run_attempt": 2,
+   "status": "completed",
+   "conclusion": "success",
+   "created_at": "2026-11-04T04:45:10Z",
+   "started_at": "2026-11-04T03:38:45Z",
+   "completed_at": "2026-11-04T03:38:48Z",
+   "steps": []
+  },
+  {
+   "id": 126404305583,
+   "run_id": 41767951876,
+   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
+   "name": "build",
+   "run_attempt": 2,
+   "status": "completed",
+   "conclusion": "failure",
+   "created_at": "2026-11-04T05:18:58Z",
+   "started_at": "2026-11-04T05:20:27Z",
+   "completed_at": "2026-11-04T05:20:30Z",
+   "steps": [
+    {
+     "name": "Set up job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 1,
+     "started_at": "2026-11-04T05:20:27Z",
+     "completed_at": "2026-11-04T05:20:28Z"
+    },
+    {
+     "name": "Refuse an unauthorised run before anything else",
+     "status": "completed",
+     "conclusion": "skipped",
+     "number": 2,
+     "started_at": "2026-11-04T05:20:28Z",
+     "completed_at": "2026-11-04T05:20:28Z"
+    },
+    {
+     "name": "Require every verification lane to have passed",
+     "status": "completed",
+     "conclusion": "failure",
+     "number": 3,
+     "started_at": "2026-11-04T05:20:28Z",
+     "completed_at": "2026-11-04T05:20:28Z"
+    },
+    {
+     "name": "Complete job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 4,
+     "started_at": "2026-11-04T05:20:28Z",
+     "completed_at": "2026-11-04T05:20:28Z"
+    }
+   ]
+  }
+ ],
+ "attempt3": [
+  {
+   "id": 126405132405,
+   "run_id": 41767951876,
+   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
+   "name": "corpus-parity / authz",
+   "run_attempt": 3,
+   "status": "completed",
+   "conclusion": "success",
+   "created_at": "2026-11-04T05:21:26Z",
+   "started_at": "2026-11-04T03:38:45Z",
+   "completed_at": "2026-11-04T03:38:48Z",
+   "steps": []
+  },
+  {
+   "id": 126405164992,
+   "run_id": 41767951876,
+   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
+   "name": "preflight",
+   "run_attempt": 3,
+   "status": "completed",
+   "conclusion": "success",
+   "created_at": "2026-11-04T05:21:32Z",
+   "started_at": "2026-11-04T03:38:56Z",
+   "completed_at": "2026-11-04T03:44:31Z",
+   "steps": [
+    {
+     "name": "Set up job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 1,
+     "started_at": "2026-11-04T03:38:57Z",
+     "completed_at": "2026-11-04T03:38:58Z"
+    },
+    {
+     "name": "Refuse an unauthorised run before anything else",
+     "status": "completed",
+     "conclusion": "skipped",
+     "number": 2,
+     "started_at": "2026-11-04T03:38:58Z",
+     "completed_at": "2026-11-04T03:38:58Z"
+    },
+    {
+     "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 3,
+     "started_at": "2026-11-04T03:38:58Z",
+     "completed_at": "2026-11-04T03:39:04Z"
+    },
+    {
+     "name": "Install workflow linters",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 4,
+     "started_at": "2026-11-04T03:39:04Z",
+     "completed_at": "2026-11-04T03:39:08Z"
+    },
+    {
+     "name": "Verify workflow wiring and source guards",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 5,
+     "started_at": "2026-11-04T03:39:08Z",
+     "completed_at": "2026-11-04T03:44:27Z"
+    },
+    {
+     "name": "Retain preflight diagnostics",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 6,
+     "started_at": "2026-11-04T03:44:27Z",
+     "completed_at": "2026-11-04T03:44:29Z"
+    },
+    {
+     "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 12,
+     "started_at": "2026-11-04T03:44:29Z",
+     "completed_at": "2026-11-04T03:44:29Z"
+    },
+    {
+     "name": "Complete job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 13,
+     "started_at": "2026-11-04T03:44:29Z",
+     "completed_at": "2026-11-04T03:44:29Z"
+    }
+   ]
+  },
+  {
+   "id": 126424565826,
+   "run_id": 41767951876,
+   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
+   "name": "build",
+   "run_attempt": 3,
+   "status": "completed",
+   "conclusion": "success",
+   "created_at": "2026-11-04T06:20:26Z",
+   "started_at": "2026-11-04T06:21:14Z",
+   "completed_at": "2026-11-04T06:21:18Z",
+   "steps": [
+    {
+     "name": "Set up job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 1,
+     "started_at": "2026-11-04T06:21:15Z",
+     "completed_at": "2026-11-04T06:21:15Z"
+    },
+    {
+     "name": "Refuse an unauthorised run before anything else",
+     "status": "completed",
+     "conclusion": "skipped",
+     "number": 2,
+     "started_at": "2026-11-04T06:21:15Z",
+     "completed_at": "2026-11-04T06:21:15Z"
+    },
+    {
+     "name": "Require every verification lane to have passed",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 3,
+     "started_at": "2026-11-04T06:21:15Z",
+     "completed_at": "2026-11-04T06:21:16Z"
+    },
+    {
+     "name": "Complete job",
+     "status": "completed",
+     "conclusion": "success",
+     "number": 4,
+     "started_at": "2026-11-04T06:21:16Z",
+     "completed_at": "2026-11-04T06:21:16Z"
+    }
+   ]
+  }
+ ]
+}
+''')
+
 class ReleasePhaseTests(unittest.TestCase):
     def setUp(self):
         self.api = FakeAPI()
@@ -360,12 +1029,17 @@ class ReleasePhaseTests(unittest.TestCase):
         return code, out.getvalue(), err.getvalue()
 
     def test_tag_requires_parent_identity_and_never_accepts_an_ordinary_pr(self):
-        for dispatch in ("", "not-a-sha", HEAD, SHA):
+        for dispatch in ("", "not-a-sha", SHA):
             with self.subTest(dispatch=dispatch):
                 code, out, err = self.run_phase(dispatch=dispatch)
                 self.assertEqual(code, 1, (out, err))
                 self.assertEqual(out, "")
                 self.assertEqual(err, "::error::tag phase requires the phase1 dispatch SHA\n")
+        code, out, err = self.run_phase(dispatch=HEAD)
+        self.assertEqual(code, 1, (out, err))
+        self.assertEqual(out, "")
+        self.assertEqual(err, "::error::release bump parent does not equal "
+                         "the phase1 dispatch SHA\n")
         self.api.responses[PULLS_API] = json.dumps([pull()])
         self.api.responses[BUMP_API] = json.dumps(commit(SHA, TREE))
         code, out, err = self.run_phase()
@@ -740,8 +1414,12 @@ class GateTests(unittest.TestCase):
         if ci_post:
             # A green receipt now also needs ci-post; refusal rows still stop at main.
             reads.extend([
+                (f"repos/{REPO}/commits/{SHA}", False, None),
                 (ci_post_runs_api(self.post_run["head_sha"]), True, None),
-                (ci_post_jobs_api(self.post_run["id"]), False, None),
+                (run_metadata_api(self.post_run["id"]), False, None),
+                (ci_post_jobs_api(self.post_run["id"]), True, None),
+                *attempt_reads(self.post_run),
+                (run_metadata_api(self.post_run["id"]), False, None),
             ])
         self.assertEqual(self.api.calls, reads,
                          "phase 2 must never read PR heads or their statuses")
@@ -774,6 +1452,7 @@ class GateTests(unittest.TestCase):
         # Required parity and the exact CI run identify the reviewed tree.
         self.assertEqual(stdout, (
             f"release gate green: PR #17 head {HEAD}; pineforge/parity=success; tree {TREE}; "
+            "pineforge/verify=success (advisory); "
             f"ci-post run {self.post_run['id']} for {self.post_run['head_sha']}\n"))
         self.assertIn((MAIN_API, False, ".commit.sha"), self.api.calls)
         self.assertIn((PULLS_API, True, None), self.api.calls)
@@ -847,9 +1526,9 @@ class GateTests(unittest.TestCase):
                 self.assertEqual(stderr, "")
                 self.assertIn("pineforge/parity=success", stdout)
                 self.assertIn(f"ci-post run {self.post_run['id']} for {SHA}", stdout)
-                self.assertNotIn("pineforge/verify=", stdout)
+                self.assertIn(f"pineforge/verify={state or 'missing'} (advisory)", stdout)
                 self.assertIn((STATUSES_API, True, None), self.api.calls)
-                self.assertIn((ci_post_jobs_api(self.post_run["id"]), False, None),
+                self.assertIn((ci_post_jobs_api(self.post_run["id"]), True, None),
                               self.api.calls)
 
     def test_missing_parity_refuses(self):
@@ -1025,7 +1704,7 @@ class GateTests(unittest.TestCase):
         self.assert_refused(f"API {STATUSES_API} upstream error 503")
         self.assertEqual(Counter(endpoint for endpoint, _, _ in self.api.calls)[STATUSES_API], 1)
 
-    def test_each_api_read_is_attempted_at_most_once(self):
+    def test_only_run_metadata_has_a_bounded_second_read_before_admission(self):
         endpoints = [MAIN_API, PULLS_API, f"repos/{REPO}/commits/{SHA}",
                      f"repos/{REPO}/commits/{HEAD}", STATUSES_API]
         for failed in [None, *endpoints]:
@@ -1041,7 +1720,12 @@ class GateTests(unittest.TestCase):
                     self.assertEqual(code, 0, (stdout, stderr))
                 counts = Counter(endpoint for endpoint, _, _ in self.api.calls)
                 self.assertTrue(counts)
-                self.assertTrue(all(count == 1 for count in counts.values()), counts)
+                doubled = {run_metadata_api(self.post_run["id"])} if failed is None else set()
+                self.assertEqual({endpoint: count for endpoint, count in counts.items()
+                                  if endpoint in doubled},
+                                 {endpoint: 2 for endpoint in doubled})
+                self.assertTrue(all(count == 1 for endpoint, count in counts.items()
+                                    if endpoint not in doubled), counts)
 
     def test_http_headers_are_stripped_for_main_and_all_json_pages(self):
         self.api.responses = {endpoint: http_response(200, raw)
@@ -1215,7 +1899,7 @@ class GateTests(unittest.TestCase):
         # Phase two retains its receipt evidence and now names ci-post too.
         self.assertEqual(stdout, (
             f"release gate green: main-proof receipt for {SHA}; "
-            "pineforge/parity=success; "
+            "pineforge/parity=success; pineforge/verify=success (advisory); "
             f"ci-post run {self.post_run['id']} for {self.post_run['head_sha']}\n"))
         self.proof.assert_called_once_with(REPO, SHA)
         self.assert_no_pr_fallback(ci_post=True)
@@ -1370,6 +2054,7 @@ class ReleaseBumpTests(unittest.TestCase):
         self.assertEqual(stdout, (
             f"release gate green: release bump {SHA}; parent {BUMP_PARENT}; "
             f"PR #17 head {HEAD}; pineforge/parity=success; tree {TREE}; "
+            "pineforge/verify=success (advisory); "
             f"ci-post run {self.post_run['id']} for {self.post_run['head_sha']}\n"))
 
     def test_bump_on_a_gated_parent_passes(self):
@@ -1380,8 +2065,12 @@ class ReleaseBumpTests(unittest.TestCase):
         self.assertIn((STATUSES_API, True, None), self.api.calls)
         self.assertIn((BEFORE_TREE_API, False, None), self.api.calls)
         self.assertIn((AFTER_TREE_API, False, None), self.api.calls)
-        self.assertTrue(all(count == 1 for count in
-                            Counter(endpoint for endpoint, _, _ in self.api.calls).values()))
+        counts = Counter(endpoint for endpoint, _, _ in self.api.calls)
+        doubled = {run_metadata_api(push_run()["id"]), run_metadata_api(self.post_run["id"])}
+        self.assertEqual({endpoint: counts[endpoint] for endpoint in doubled},
+                         {endpoint: 2 for endpoint in doubled})
+        self.assertTrue(all(count == 1 for endpoint, count in counts.items()
+                            if endpoint not in doubled), counts)
         self.git.assert_not_called()
         self.proof.assert_not_called()
 
@@ -1392,7 +2081,7 @@ class ReleaseBumpTests(unittest.TestCase):
         self.assert_refused("release bump must modify exactly VERSION and "
                             "docker/run_failure_codes_diff.json")
 
-    def test_human_push_or_rerun_refuses_even_with_forged_commit_identity(self):
+    def test_non_app_original_push_refuses_even_with_forged_commit_identity(self):
         candidate = json.loads(self.api.responses[BUMP_API])
         candidate.update(author={"login": "github-actions[bot]"},
                          committer={"login": "github-actions[bot]"})
@@ -1401,15 +2090,14 @@ class ReleaseBumpTests(unittest.TestCase):
             committer={"name": "github-actions[bot]"},
             verification={"verified": True})
         for actor, trigger in (("luisleo526", "luisleo526"),
-                               ("luisleo526", "pineforge-app[bot]"),
-                               ("pineforge-app[bot]", "luisleo526")):
+                               ("luisleo526", "pineforge-app[bot]")):
             with self.subTest(actor=actor, triggering_actor=trigger):
                 self.reset_bump()
                 self.api.responses[BUMP_API] = json.dumps(candidate)
-                self.api.responses[RUNS_API] = runs_page([
-                    push_run(actor=actor, triggering_actor=trigger)])
-                self.assert_refused("release bump push actor must be pineforge-app[bot] "
-                                    "for both actor and triggering_actor")
+                row = push_run(actor=actor, triggering_actor=trigger)
+                self.api.responses[RUNS_API] = runs_page([row])
+                self.api.attempts(row, {1: []})
+                self.assert_refused("release bump push actor must be pineforge-app[bot]")
 
     def test_zero_runs_refuses(self):
         self.api.responses[RUNS_API] = runs_page([])
@@ -1423,9 +2111,9 @@ class ReleaseBumpTests(unittest.TestCase):
                 self.api.responses[RUNS_API] = runs_page([row])
                 self.assert_refused(f"no exact-main push workflow run for release bump {SHA}")
 
-    def test_every_matching_push_run_must_have_both_app_actors(self):
+    def test_every_matching_push_run_must_have_an_app_original_actor(self):
         for rows in ([push_run(), push_run(actor="luisleo526")],
-                     [push_run(triggering_actor="luisleo526"), push_run()]):
+                     [push_run(actor="luisleo526"), push_run()]):
             with self.subTest(rows=rows):
                 self.reset_bump()
                 self.api.responses[RUNS_API] = runs_page(rows)
@@ -1599,8 +2287,8 @@ class ReleaseBumpTests(unittest.TestCase):
                  "invalid workflow_runs page"),
                 (runs_page([None]), "invalid workflow run"),
                 (runs_page([{"event": "push"}]), "invalid workflow run"),
-                (runs_page([{**push_run(), "actor": None}]), "push actor must be"),
-                (runs_page([{**push_run(), "triggering_actor": {}}]), "push actor must be")):
+                (runs_page([{**push_run(), "actor": None}]), "invalid workflow actor"),
+                (runs_page([{**push_run(), "triggering_actor": {}}]), "latest metadata changed")):
             with self.subTest(payload=payload):
                 self.reset_bump()
                 self.api.responses[RUNS_API] = payload
@@ -2682,17 +3370,19 @@ class APICommandTests(unittest.TestCase):
 
     def test_gh_adapter_paginates_the_statuses_list(self):
         with mock.patch.object(ci_release_gate.subprocess, "run") as run:
-            run.return_value.stdout = "[]\n"
-            self.assertEqual(ci_release_gate.gh_api(STATUSES_API, paginate=True), "[]\n")
+            raw = b"HTTP/2.0 200\r\nContent-Type: application/json\r\n\r\n[ ]\r\n"
+            run.return_value.stdout = raw
+            self.assertEqual(ci_release_gate.gh_api(STATUSES_API, paginate=True), raw)
         run.assert_called_once_with(["gh", "api", STATUSES_API, "--include", "--paginate"],
-                                    check=True, capture_output=True, text=True)
+                                    check=True, capture_output=True, text=False)
 
     def test_gh_adapter_reads_live_main_sha_with_jq(self):
         with mock.patch.object(ci_release_gate.subprocess, "run") as run:
-            run.return_value.stdout = SHA + "\n"
-            self.assertEqual(ci_release_gate.gh_api(MAIN_API, jq=".commit.sha"), SHA + "\n")
+            run.return_value.stdout = (SHA + "\r\n").encode("ascii")
+            self.assertEqual(ci_release_gate.gh_api(MAIN_API, jq=".commit.sha"),
+                             (SHA + "\r\n").encode("ascii"))
         run.assert_called_once_with(["gh", "api", MAIN_API, "--include", "--jq", ".commit.sha"],
-                                    check=True, capture_output=True, text=True)
+                                    check=True, capture_output=True, text=False)
 
     def test_gh_adapter_does_not_retry_a_failed_read(self):
         failure = subprocess.CalledProcessError(
@@ -2701,7 +3391,7 @@ class APICommandTests(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 ci_release_gate.gh_api(STATUSES_API, paginate=True)
         run.assert_called_once_with(["gh", "api", STATUSES_API, "--include", "--paginate"],
-                                    check=True, capture_output=True, text=True)
+                                    check=True, capture_output=True, text=False)
 
 
 class MainProofSeamTests(unittest.TestCase):
@@ -2740,6 +3430,8 @@ class MainProofSeamTests(unittest.TestCase):
                 (("--ref",), {"required": True}),
                 (("--phase",), {"choices": ("bump", "tag")}),
                 (("--dispatch-sha",), {"default": ""}),
+                (("--receipt",), {"type": "Path", "help": "write allowlisted decision evidence, including refusal"}),
+                (("--dry-run",), {"choices": ("true", "false"), "default": "false"}),
             ],
             "plan": [
                 (("--sha",), {"required": True}),
@@ -3095,6 +3787,12 @@ class WorkflowPinTests(unittest.TestCase):
         self.assertRegex(jobs["prebuilt"], r"(?m)^    needs: release$")
         for job in ("release", "prebuilt"):
             stripped = _without_comments(jobs[job])
+            if job == "release":
+                self.assertEqual(release_bump_workflow_findings(workflow), [])
+                receipts = [step for step in _steps(jobs[job])
+                            if step.splitlines()[0] == "      - name: Keep release gate receipt"]
+                self.assertEqual(len(receipts), 1)
+                stripped = stripped.replace(_without_comments(receipts[0]), "", 1)
             self.assertNotRegex(stripped, r"\balways\s*\(")
             self.assertNotRegex(stripped, r"!\s*cancelled\s*\(")
             self.assertNotRegex(stripped, r"(?m)^\s*continue-on-error\s*:")
@@ -3603,9 +4301,12 @@ class CiPostGateTests(unittest.TestCase):
         return code, stdout.getvalue(), stderr.getvalue()
 
     def post_calls(self):
+        # This helper pins proving reads and run order. Receipt controls inspect
+        # the distinct attempt-specific audit reads and their completeness.
         return [call for call in self.api.calls
                 if "/actions/workflows/ci-post.yml/runs?" in call[0]
-                or ("/actions/runs/" in call[0] and "/jobs?" in call[0])]
+                or ("/actions/runs/" in call[0] and "/jobs?" in call[0]
+                    and "/attempts/" not in call[0])]
 
     def assert_post_reads(self, row, *, repo=REPO, newer=(), docs=()):
         # Each examined completed run needs its own jobs read, newest first.
@@ -3614,7 +4315,7 @@ class CiPostGateTests(unittest.TestCase):
             *[(ci_post_runs_api(sha, repo=repo), True, None) for sha in docs],
             *([(ci_post_runs_api(row["head_sha"], repo=repo), True, None)]
               if row["head_sha"] not in docs else []),
-            *[(ci_post_jobs_api(examined["id"], repo=repo), False, None)
+            *[(ci_post_jobs_api(examined["id"], repo=repo), True, None)
               for examined in (*newer, row)],
         ], "history runs, then exact release runs and examined jobs, each read once")
 
@@ -3642,7 +4343,9 @@ class CiPostGateTests(unittest.TestCase):
         self.assertIn("ci-post", text)
         self.assertRegex(text, rf"\b{row['id']}\b")
         self.assertIn(row["head_sha"], text)
-        self.assertEqual(row["head_sha"], release_sha)
+        self.assertIn(f"ci-post run {row['id']} for {row['head_sha']}", text)
+        if not skipped:
+            self.assertEqual(row["head_sha"], release_sha)
         if skipped:
             self.assertIn(release_sha, text)
             self.assertIn("docs-only", text)
@@ -3693,7 +4396,7 @@ class CiPostGateTests(unittest.TestCase):
             self.assertIn(row["conclusion"], stderr)
         self.assertEqual(self.post_calls(), [
             (ci_post_runs_api(sha), True, None) for sha in read_shas],
-            "stop at the first refused docs run, without any docs or proof jobs")
+            "stop at the first refused docs run, without proving jobs or later docs runs")
 
     def test_plain_pass_reads_non_vacuous_ci_post_and_names_its_evidence(self):
         """R1/R2/R5/R6: block a PR-only green line with no ci-post reads."""
@@ -3770,8 +4473,8 @@ class CiPostGateTests(unittest.TestCase):
         self.assert_green(row, sha=sha, repo=repo)
         self.assertEqual(self.history.calls, [row["head_sha"]])
 
-    def test_docs_only_tip_with_skipped_builds_cannot_borrow_green_parent_ci(self):
-        """A fully built ancestor cannot replace skipped builds on the release SHA."""
+    def test_docs_only_tip_with_skipped_builds_uses_green_parent_ci(self):
+        """The shared docs classifier selects the fully built ancestor."""
         ancestor = self.built_ancestor()
         self.history = FakeHistory({
             SHA: (ancestor["head_sha"], ["docs/release-notes.md"]),
@@ -3779,13 +4482,13 @@ class CiPostGateTests(unittest.TestCase):
         })
         self.api.responses[ci_post_jobs_api(self.post_run["id"])] = jobs_page([
             {**job, "conclusion": "skipped"} for job in self.jobs])
-        self.assert_no_full_run([self.post_run], "skipped", docs=[SHA])
+        self.assert_green(ancestor, skipped=[SHA])
         self.assertEqual(self.history.calls, [SHA, ancestor["head_sha"]])
-        self.assertNotIn((ci_post_runs_api(ancestor["head_sha"]), True, None),
+        self.assertIn((ci_post_runs_api(ancestor["head_sha"]), True, None),
                          self.api.calls)
 
-    def test_multiple_docs_commits_classify_ancestry_and_keep_ci_on_release_tip(self):
-        """Documentation ancestry still requires full CI evidence at the release tip."""
+    def test_multiple_docs_commits_classify_ancestry_and_select_built_ancestor(self):
+        """Each docs run stays healthy and the non-doc ancestor supplies full CI."""
         ancestor = self.built_ancestor(OTHER_TREE)
         self.history = FakeHistory({
             SHA: (OTHER_HEAD, ["README.md"]),
@@ -3794,7 +4497,7 @@ class CiPostGateTests(unittest.TestCase):
         })
         self.api.ci_post_runs(
             OTHER_HEAD, [ci_post_run(self.post_run["id"] + 1, sha=OTHER_HEAD)], {})
-        self.assert_green(self.post_run, skipped=[SHA, OTHER_HEAD])
+        self.assert_green(ancestor, skipped=[SHA, OTHER_HEAD])
         self.assertEqual(self.history.calls, [SHA, OTHER_HEAD, ancestor["head_sha"]])
 
     def test_docs_tip_source_parent_red_cannot_reach_older_or_second_parent_green(self):
@@ -3804,7 +4507,7 @@ class CiPostGateTests(unittest.TestCase):
         failed_job = self.jobs[2]
         failed_job["conclusion"] = "failure"
         self.api.ci_post(failed, self.jobs)
-        self.api.ci_post(self.post_run, self.jobs)
+        self.api.ci_post(self.post_run, ci_post_jobs())
         candidate = json.loads(self.api.responses[BUMP_API])
         candidate["parents"] = [{"sha": failed["head_sha"]}, {"sha": older["head_sha"]}]
         self.api.responses[BUMP_API] = json.dumps(candidate)
@@ -3813,11 +4516,11 @@ class CiPostGateTests(unittest.TestCase):
             failed["head_sha"]: (older["head_sha"], ["src/runtime_change.cpp"]),
             older["head_sha"]: (TREE, ["src/older_build.cpp"]),
         })
-        self.assert_refused("newer-run-failed", self.post_run["id"], SHA,
-                            self.post_run["event"], failed_job["name"], failed_job["conclusion"])
+        self.assert_refused("newer-run-failed", failed["id"], failed["head_sha"],
+                            failed["event"], failed_job["name"], failed_job["conclusion"])
         self.assertEqual(self.history.calls, [SHA, failed["head_sha"]])
         # The failed build is more specific than the run conclusion; jobs must be read.
-        self.assert_post_reads(self.post_run, docs=[SHA])
+        self.assert_post_reads(failed, docs=[SHA])
 
     def test_first_non_documentation_commit_without_run_cannot_use_older_green(self):
         """R1/R3/R4/R6: block skipping CI Markdown, CMake or proof inputs to older green."""
@@ -3833,11 +4536,12 @@ class CiPostGateTests(unittest.TestCase):
                     OTHER_HEAD: (older["head_sha"], [path]),
                     older["head_sha"]: (TREE, ["src/older_build.cpp"]),
                 })
-                self.api.responses[ci_post_runs_api(SHA)] = runs_page([])
-                self.assert_refused("docs-commit-no-run", SHA)
+                self.api.responses[ci_post_runs_api(OTHER_HEAD)] = runs_page([])
+                self.assert_refused("no-run", OTHER_HEAD)
                 self.assertEqual(self.history.calls, [SHA, OTHER_HEAD])
                 self.assertEqual(self.post_calls(), [
-                    (ci_post_runs_api(SHA), True, None)])
+                    (ci_post_runs_api(SHA), True, None),
+                    (ci_post_runs_api(OTHER_HEAD), True, None)])
 
     def test_rename_old_non_documentation_side_selects_proof_commit_without_run(self):
         """R1/R3/R4/R6: block judging only a rename's docs destination or using older green."""
@@ -3851,11 +4555,12 @@ class CiPostGateTests(unittest.TestCase):
                     OTHER_HEAD: (older["head_sha"], paths),
                     older["head_sha"]: (TREE, ["src/older_build.cpp"]),
                 })
-                self.api.responses[ci_post_runs_api(SHA)] = runs_page([])
-                self.assert_refused("docs-commit-no-run", SHA)
+                self.api.responses[ci_post_runs_api(OTHER_HEAD)] = runs_page([])
+                self.assert_refused("no-run", OTHER_HEAD)
                 self.assertEqual(self.history.calls, [SHA, OTHER_HEAD])
                 self.assertEqual(self.post_calls(), [
-                    (ci_post_runs_api(SHA), True, None)])
+                    (ci_post_runs_api(SHA), True, None),
+                    (ci_post_runs_api(OTHER_HEAD), True, None)])
 
     def test_no_ci_post_run_refuses(self):
         """R1/R4: block accepting green PR-head statuses with no ci-post run."""
@@ -4108,7 +4813,7 @@ class CiPostGateTests(unittest.TestCase):
                             403, '{"message":"API rate limit exceeded"}'))
                     self.assert_refused("unreadable", endpoint, "rate limited")
                     self.assertEqual(Counter(call[0] for call in self.api.calls)[endpoint], 1)
-                    self.assertEqual(self.api.calls[-1], (endpoint, not jobs_read, None))
+                    self.assertEqual(self.api.calls[-1], (endpoint, True, None))
 
     def test_ci_post_5xx_errors_name_the_endpoint_and_are_not_retried(self):
         """R4: block upstream errors being swallowed or retried on either ci-post read."""
@@ -4121,7 +4826,7 @@ class CiPostGateTests(unittest.TestCase):
                     self.api.responses[endpoint] = http_response(code, "unavailable")
                     self.assert_refused("unreadable", endpoint, f"upstream error {code}")
                     self.assertEqual(Counter(call[0] for call in self.api.calls)[endpoint], 1)
-                    self.assertEqual(self.api.calls[-1], (endpoint, not jobs_read, None))
+                    self.assertEqual(self.api.calls[-1], (endpoint, True, None))
 
     def test_ci_post_transport_empty_and_parse_errors_fail_closed(self):
         """R4: block unreadable runs or jobs silently becoming successful evidence."""
@@ -4137,7 +4842,7 @@ class CiPostGateTests(unittest.TestCase):
                     self.api.responses[endpoint] = response
                     self.assert_refused("unreadable", endpoint, diagnostic)
                     self.assertEqual(Counter(call[0] for call in self.api.calls)[endpoint], 1)
-                    self.assertEqual(self.api.calls[-1], (endpoint, not jobs_read, None))
+                    self.assertEqual(self.api.calls[-1], (endpoint, True, None))
 
     def test_runs_at_or_beyond_1000_limit_refuse_even_with_green_rows(self):
         """R1/R4: block trusting a capped Actions search with matching or larger totals."""
@@ -4208,9 +4913,9 @@ class CiPostGateTests(unittest.TestCase):
         self.assertEqual(self.post_calls(), [(ci_post_runs_api(SHA), True, None)])
 
     def test_twenty_docs_commits_can_reach_a_built_proof(self):
-        """Twenty documentation commits retain history checks and require full tip CI."""
+        """Twenty documentation commits retain history checks and require full ancestor CI."""
         docs, ancestor = self.docs_chain(20)
-        self.assert_green(self.docs_runs[0], skipped=docs)
+        self.assert_green(ancestor, skipped=docs)
         self.assertEqual(self.history.calls, [*docs, ancestor["head_sha"]])
 
     def test_twenty_one_docs_commits_refuse_before_reaching_older_green(self):
@@ -4297,8 +5002,12 @@ class CiPostGateTests(unittest.TestCase):
                 self.proof.assert_called_once_with(REPO, SHA)
                 self.assertEqual(self.api.calls, [
                     (MAIN_API, False, ".commit.sha"),
+                    (f"repos/{REPO}/commits/{SHA}", False, None),
                     (ci_post_runs_api(self.post_run["head_sha"]), True, None),
-                    (ci_post_jobs_api(self.post_run["id"]), False, None),
+                    (run_metadata_api(self.post_run["id"]), False, None),
+                    (ci_post_jobs_api(self.post_run["id"]), True, None),
+                    *attempt_reads(self.post_run),
+                    (run_metadata_api(self.post_run["id"]), False, None),
                 ])
                 self.assertEqual(self.history.calls, [self.post_run["head_sha"]])
 
@@ -4313,8 +5022,11 @@ class CiPostGateTests(unittest.TestCase):
         # A phase-two receipt still needs the completed run's jobs to diagnose its failure.
         self.assertEqual(self.api.calls, [
             (MAIN_API, False, ".commit.sha"),
+            (f"repos/{REPO}/commits/{SHA}", False, None),
             (ci_post_runs_api(failed["head_sha"]), True, None),
-            (ci_post_jobs_api(failed["id"]), False, None),
+            (run_metadata_api(failed["id"]), False, None),
+            (ci_post_jobs_api(failed["id"]), True, None),
+            *attempt_reads(failed),
         ])
 
     def test_bump_parent_advisory_verify_states_still_require_bumps_own_ci_post(self):
@@ -4519,15 +5231,15 @@ class CiPostGateTests(unittest.TestCase):
         failed_job = self.jobs[2]
         failed_job["conclusion"] = "failure"
         self.api.ci_post(failed, self.jobs)
-        self.api.ci_post(self.post_run, self.jobs)
+        self.api.ci_post(self.post_run, ci_post_jobs())
         self.history = FakeHistory({
             SHA: (failed["head_sha"], ["docs/release-notes.md"]),
             failed["head_sha"]: (OTHER_TREE, ["src/release_proof.cpp"]),
         })
-        self.assert_refused("newer-run-failed", self.post_run["id"], SHA,
-                            self.post_run["event"], failed_job["name"], failed_job["conclusion"])
+        self.assert_refused("newer-run-failed", failed["id"], failed["head_sha"],
+                            failed["event"], failed_job["name"], failed_job["conclusion"])
         self.assertEqual(self.history.calls, [SHA, failed["head_sha"]])
-        self.assert_post_reads(self.post_run, docs=[SHA])
+        self.assert_post_reads(failed, docs=[SHA])
 
     def test_only_skipped_runs_and_a_missing_matrix_name_give_no_full_run(self):
         """Rules 4/5: prove all non-proving runs exhaust; block skipped or missing-cell green."""
@@ -4556,7 +5268,7 @@ class CiPostGateTests(unittest.TestCase):
             proof["head_sha"]: (older["head_sha"], ["src/release_proof.cpp"]),
             older["head_sha"]: (TREE, ["src/older_build.cpp"]),
         })
-        self.assert_no_full_run([self.post_run], skipped_jobs[0]["conclusion"], docs=[SHA])
+        self.assert_no_full_run([proof], skipped_jobs[0]["conclusion"], docs=[SHA])
         self.assertEqual(self.history.calls, [SHA, proof["head_sha"]])
 
     def test_skipped_only_newer_run_allows_older_full_green(self):
@@ -4638,7 +5350,7 @@ class CiPostGateTests(unittest.TestCase):
     def test_skipped_newer_run_count_is_separate_from_docs_only_commit_count(self):
         """Green line: prove both counts follow fixtures; block a bare or reused number."""
         docs, ancestor = self.docs_chain(2)
-        proving = self.docs_runs[0]
+        proving = ancestor
         newest = [
             ci_post_run(
                 ancestor["id"] + index + 1, sha=proving["head_sha"], event=event,
@@ -4673,7 +5385,7 @@ class CiPostGateTests(unittest.TestCase):
                 # Only the completed skipped run has jobs read before the unfinished blocker.
                 self.assertEqual(self.post_calls(), [
                     (ci_post_runs_api(newest["head_sha"]), True, None),
-                    (ci_post_jobs_api(newest["id"]), False, None),
+                    (ci_post_jobs_api(newest["id"]), True, None),
                 ])
 
     def test_red_build_after_skipped_newer_run_blocks_older_green(self):
@@ -4833,17 +5545,12 @@ class CiPostGateTests(unittest.TestCase):
                 self.api.ci_post_runs(docs[0], [older, newest], {})
                 self.assert_docs_red(newest, read_shas=docs)
 
-    def test_docs_tip_success_with_skipped_builds_cannot_prove_exact_release_sha(self):
-        """Run success with skipped builds cannot prove the exact release SHA."""
+    def test_docs_tip_success_with_skipped_builds_uses_full_ancestor_proof(self):
+        """A successful docs-only run may use the actual built ancestor."""
         docs, ancestor = self.docs_chain(1)
         skipped_jobs = [{**job, "conclusion": "skipped"} for job in ci_post_jobs()]
         self.api.ci_post(self.docs_runs[0], skipped_jobs)
-        code, stdout, stderr = self.run_gate()
-        self.assertEqual(code, 1, (stdout, stderr))
-        self.assertEqual(stdout, "")
-        self.assert_post_reads(self.docs_runs[0], docs=docs)
-        self.assertIn(f"ci-post: no-full-run {SHA}", stderr)
-        self.assertRegex(stderr, r"\ball four build jobs skipped\b")
+        self.assert_green(ancestor, skipped=docs)
 
     def test_docs_tip_newer_red_schedule_blocks_older_green_push(self):
         """F-1/g: prove all events decide docs health; block a push-only green rescue."""
@@ -4891,9 +5598,10 @@ class CiPostGateTests(unittest.TestCase):
                     failed_job = failed_jobs[2]
                     failed_job["conclusion"] = "failure"
                 self.api.ci_post(failed, failed_jobs)
-                self.assert_no_full_run([self.docs_runs[0]], "skipped", docs=docs)
-                self.assertNotIn((ci_post_runs_api(ancestor["head_sha"]), True, None),
-                                 self.api.calls)
+                self.assert_refused(
+                    "newer-run-failed" if build_failed else "not-success",
+                    failed["id"], failed["head_sha"], "failure")
+                self.assert_post_reads(failed, docs=docs)
 
     def test_phase_two_receipt_cannot_rescue_red_docs_tip(self):
         """F-1/k: prove phase two checks docs health; block receipt-only release approval."""
@@ -4905,7 +5613,10 @@ class CiPostGateTests(unittest.TestCase):
         self.proof.assert_called_once_with(REPO, docs[0])
         self.assertEqual(self.api.calls, [
             (MAIN_API, False, ".commit.sha"),
+            (f"repos/{REPO}/commits/{SHA}", False, None),
             (ci_post_runs_api(docs[0]), True, None),
+            (run_metadata_api(failed["id"]), False, None),
+            *attempt_reads(failed),
         ])
 
     def test_release_bump_path_cannot_rescue_docs_tip_without_run(self):
@@ -4934,7 +5645,7 @@ class CiPostGateTests(unittest.TestCase):
                     rows = [newest, older] if newest_first else [older, newest]
                     self.api.ci_post_runs(docs[0], rows, {newest["id"]: ci_post_jobs()})
                     if newest_conclusion == "success":
-                        self.assert_green(newest, skipped=docs)
+                        self.assert_green(ancestor, skipped=docs)
                     else:
                         self.assert_docs_red(newest, read_shas=docs)
 
@@ -4952,7 +5663,7 @@ class CiPostGateTests(unittest.TestCase):
                     rows = [newest, older] if newest_first else [older, newest]
                     self.api.ci_post_runs(docs[0], rows, {newest["id"]: ci_post_jobs()})
                     if newest_conclusion == "success":
-                        self.assert_green(newest, skipped=docs)
+                        self.assert_green(ancestor, skipped=docs)
                     else:
                         self.assert_docs_red(newest, read_shas=docs)
 
@@ -4967,7 +5678,7 @@ class CiPostGateTests(unittest.TestCase):
         self.api.ci_post(proof, skipped_jobs)
         self.api.ci_post(self.docs_runs[0], skipped_jobs)
         self.assert_no_full_run(
-            [self.docs_runs[0]], self.docs_runs[0]["event"],
+            [proof], proof["event"],
             skipped_jobs[0]["conclusion"], docs=docs[:-1])
         self.assertEqual(self.history.calls, docs)
 
@@ -4990,7 +5701,7 @@ class CiPostGateTests(unittest.TestCase):
                 "Link": f'<https://api.github.com/{endpoint}&page=2>; rel="next"'})
             + runs_page(rows[100:], total=len(rows), headers={
                 "Link": f'<https://api.github.com/{endpoint}&page=1>; rel="prev"'}))
-        self.assert_green(newest, skipped=docs)
+        self.assert_green(ancestor, skipped=docs)
 
     def test_docs_tip_incomplete_runs_pages_refuse_before_proof_reads(self):
         """F-1/runs: prove complete docs pagination is required; block visible-green rescue."""
@@ -5104,7 +5815,7 @@ class CiPostGateTests(unittest.TestCase):
                     if on_proof:
                         self.assert_docs_red(newer, read_shas=docs)
                     else:
-                        self.assert_green(self.docs_runs[0], skipped=docs)
+                        self.assert_green(ancestor, skipped=docs)
                     self.assertNotIn(
                         (ci_post_runs_api(parent_sha), True, None), self.api.calls)
                     self.assertEqual(self.history.calls, [*docs, ancestor["head_sha"]])
@@ -5126,7 +5837,7 @@ class CiPostGateTests(unittest.TestCase):
                     if on_docs:
                         self.assert_docs_red(newer, read_shas=docs[:2])
                     else:
-                        self.assert_green(self.docs_runs[0], skipped=docs)
+                        self.assert_green(ancestor, skipped=docs)
                         self.assertEqual(self.history.calls, [*docs, ancestor["head_sha"]])
 
 
@@ -5329,6 +6040,847 @@ class CiPostGateTests(unittest.TestCase):
                             f"newer-run-failed {newest['id']}", newest["head_sha"],
                             newest["event"], failed_job["name"], failed_job["conclusion"])
                         self.assert_post_reads(newest)
+
+
+class PackagedDocumentationTests(unittest.TestCase):
+    """Derive the artifact inventory from its real install and staging rules."""
+
+    def commands(self, source, name):
+        source = re.sub(r"(?m)#.*$", "", source)
+        starts = list(re.finditer(rf"(?mi)^\s*{name}\s*\(", source))
+        matches = list(re.finditer(rf"(?mi)^\s*{name}\s*\(([^()]*)\)", source))
+        self.assertEqual(len(starts), len(matches), f"unsupported {name} rule")
+        return [shlex.split(match[1]) for match in matches]
+
+    def inventory(self, cmake, workflow, helper):
+        inventory = set()
+
+        def relative(value):
+            for prefix in ("${CMAKE_CURRENT_SOURCE_DIR}/", "/source/", "$workspace/"):
+                value = value.removeprefix(prefix)
+            path = Path(value)
+            self.assertFalse(path.is_absolute() or ".." in path.parts or "$" in value
+                             or "~" in value, f"unsupported packaged path: {value}")
+            self.assertTrue(path.parts, "empty packaged path")
+            self.assertFalse(any(part in (".ssh", ".aws", ".codex", ".config")
+                                 or part.endswith(".env") for part in path.parts),
+                             f"protected packaged path: {value}")
+            return path.as_posix()
+
+        variables = {row[0]: row[1:] for row in self.commands(cmake, "set") if row}
+        libraries = {}
+        for row in self.commands(cmake, "add_library"):
+            if len(row) >= 3 and row[1] in ("STATIC", "SHARED"):
+                libraries.setdefault(row[0], []).extend(row[2:])
+            elif len(row) < 3 or row[1] != "ALIAS":
+                self.fail(f"unsupported library packaging rule: {row}")
+
+        def inputs(values, seen=()):
+            for value in values:
+                variable = re.fullmatch(r"\$\{([A-Za-z0-9_]+)\}", value)
+                if variable:
+                    key = variable[1]
+                    self.assertIn(key, variables, f"unresolved packaged source list: {key}")
+                    self.assertNotIn(key, seen, "cyclic packaged source list")
+                    inputs(variables[key], (*seen, key))
+                else:
+                    inventory.add(relative(value))
+
+        generated = {}
+        for row in self.commands(cmake, "configure_file"):
+            self.assertEqual(row[2:], ["@ONLY"], "unsupported generated header rule")
+            generated[row[1]] = [row[0]]
+        for row in self.commands(cmake, "configure_package_config_file"):
+            self.assertEqual(row[2:], [
+                "INSTALL_DESTINATION", "${CMAKE_INSTALL_LIBDIR}/cmake/PineForge"],
+                "unsupported package config rule")
+            generated[row[1]] = [row[0]]
+        for row in self.commands(cmake, "write_basic_package_version_file"):
+            self.assertEqual(row[1:], [
+                "VERSION", "${PROJECT_VERSION}", "COMPATIBILITY", "SameMajorVersion"],
+                "unsupported package version rule")
+            generated[row[0]] = ["CMakeLists.txt", "VERSION"]
+        includes = self.commands(cmake, "include")
+        for row in includes:
+            self.assertEqual(len(row), 1, "unsupported package include rule")
+            if row[0] not in ("GNUInstallDirs", "CMakePackageConfigHelpers", "FetchContent"):
+                inventory.add(relative("cmake/" + row[0] + ".cmake"))
+
+        for row in self.commands(cmake, "install"):
+            self.assertTrue(row, "unsupported empty install rule")
+            self.assertIn(row[0], ("TARGETS", "DIRECTORY", "FILES", "EXPORT"),
+                          f"unsupported install rule: {row}")
+            if row[0] == "TARGETS":
+                boundary = row.index("EXPORT")
+                self.assertEqual(row[boundary:], [
+                    "EXPORT", "PineForgeTargets",
+                    "LIBRARY", "DESTINATION", "${CMAKE_INSTALL_LIBDIR}",
+                    "ARCHIVE", "DESTINATION", "${CMAKE_INSTALL_LIBDIR}",
+                    "RUNTIME", "DESTINATION", "${CMAKE_INSTALL_BINDIR}",
+                    "INCLUDES", "DESTINATION", "${CMAKE_INSTALL_INCLUDEDIR}"],
+                    "unsupported target install rule")
+                for target in row[1:boundary]:
+                    self.assertIn(target, libraries, "unresolved installed library")
+                    inputs(libraries[target])
+                    inventory.add("lib/" + "lib" + target + (
+                        ".so" if any(r[:2] == [target, "SHARED"]
+                                     for r in self.commands(cmake, "add_library")) else ".a"))
+            elif row[0] == "DIRECTORY":
+                self.assertEqual(row[2:5], [
+                    "DESTINATION", "${CMAKE_INSTALL_INCLUDEDIR}", "FILES_MATCHING"],
+                    "unsupported header directory rule")
+                tail, patterns = row[5:], []
+                while tail:
+                    self.assertGreaterEqual(len(tail), 2, "incomplete header pattern")
+                    self.assertEqual(tail[0], "PATTERN", "unsupported header matching rule")
+                    if len(tail) >= 3 and tail[2] == "EXCLUDE":
+                        # Union both source-layer branches: the full release includes both.
+                        tail = tail[3:]
+                    else:
+                        patterns.append(tail[1])
+                        tail = tail[2:]
+                directory = relative(row[1])
+                cursor = ROOT
+                for component in Path(directory).parts:
+                    cursor /= component
+                    self.assertFalse(cursor.is_symlink(), "symlink packaged header directory")
+                for pattern in patterns:
+                    self.assertRegex(pattern, r"^\*\.[A-Za-z0-9]+$", "unsupported header glob")
+                    paths = sorted((ROOT / directory).rglob(pattern))
+                    self.assertTrue(paths, f"empty packaged header pattern: {pattern}")
+                    self.assertFalse(any(path.is_symlink() for path in paths),
+                                     "symlink packaged header input")
+                    inventory.update(path.relative_to(ROOT).as_posix() for path in paths)
+            elif row[0] == "FILES":
+                boundary = row.index("DESTINATION")
+                self.assertEqual(len(row[boundary:]), 2, "unsupported file install options")
+                for value in row[1:boundary]:
+                    if value.startswith("${CMAKE_CURRENT_BINARY_DIR}/"):
+                        self.assertIn(value, generated, "unresolved generated packaged file")
+                        inputs(generated[value])
+                        inventory.add(relative(value.removeprefix("${CMAKE_CURRENT_BINARY_DIR}/")))
+                    else:
+                        inputs([value])
+            else:
+                self.assertEqual(row[:4], ["EXPORT", "PineForgeTargets", "FILE",
+                                           "PineForgeTargets.cmake"], "unsupported export rule")
+                self.assertEqual(row[4:], [
+                    "NAMESPACE", "PineForge::", "DESTINATION",
+                    "${CMAKE_INSTALL_LIBDIR}/cmake/PineForge"], "unsupported export options")
+                inventory.add(row[3])
+                configurations = set(re.findall(
+                    r"-DCMAKE_BUILD_TYPE=([A-Za-z0-9_]+)", workflow + "\n" + helper))
+                self.assertTrue(configurations, "unresolved exported target configuration")
+                for configuration in configurations:
+                    inventory.add(Path(row[3]).stem + "-" + configuration.lower() + ".cmake")
+                inventory.add("CMakeLists.txt")
+
+        self.assertIn("cmake --install build", workflow, "ARM staging must use the install rules")
+        self.assertIn("cmake --install /output/build", helper,
+                      "x86 staging must use the same install rules")
+        self.assertIn('local stage="/output/stage/', helper, "unresolved x86 staging path")
+        copies = 0
+        for source in (workflow, helper):
+            for line in source.splitlines():
+                staging = any(value in line for value in ("STAGE_DIR", '"$stage', '"${stage}'))
+                if staging and re.match(r"\s*(?:install|rsync|mv|ln|tee|touch)\b", line):
+                    self.fail("unsupported staging packaging command")
+                if re.search(r">\s*['\"]?\$(?:\{STAGE_DIR\}|\{?stage\}?)", line):
+                    self.fail("unsupported staging packaging redirection")
+                if not line.strip().startswith("cp "):
+                    continue
+                values = shlex.split(line.strip())
+                if staging:
+                    self.assertIn(values[-1], ("${STAGE_DIR}/", "$stage/", "${stage}/"),
+                                  "unsupported staging copy destination")
+                    self.assertFalse(any(value.startswith("-") for value in values[1:]),
+                                     "unsupported staging copy options")
+                    inputs(values[1:-1])
+                    copies += 1
+        self.assertGreater(copies, 0, "no packaged root copies found")
+        self.assertTrue(inventory, "empty package inventory")
+        return sorted(inventory)
+
+    def assert_packaged_inputs_require_ci(self, cmake, workflow, helper):
+        paths = self.inventory(cmake, workflow, helper)
+        self.assertIs(ci_release_gate.is_documentation, is_documentation)
+        for path in paths:
+            self.assertFalse(is_documentation(path),
+                             f"packaged input is docs-only: {path}")
+        return paths
+
+    def test_real_packaging_inventory_uses_the_shared_classifier_and_detects_docs_additions(self):
+        cmake = (ROOT / "CMakeLists.txt").read_text()
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        helper = (ROOT / "scripts/build_prebuilt_bookworm.sh").read_text()
+        paths = self.assert_packaged_inputs_require_ci(cmake, workflow, helper)
+        self.assertTrue(any(path.startswith("include/pineforge/") for path in paths))
+        self.assertTrue(any(path.startswith("src/") for path in paths))
+        for changed_cmake, changed_workflow in (
+                (cmake + "\ninstall(FILES README.md DESTINATION share)\n", workflow),
+                (cmake, workflow.replace('cp LICENSE NOTICE VERSION "${STAGE_DIR}/"',
+                                         'cp LICENSE NOTICE VERSION README.md "${STAGE_DIR}/"'))):
+            with self.subTest(added="README.md", cmake=changed_cmake != cmake):
+                with self.assertRaisesRegex(AssertionError, "packaged input is docs-only: README.md"):
+                    self.assert_packaged_inputs_require_ci(changed_cmake, changed_workflow, helper)
+        with self.assertRaisesRegex(AssertionError, "unsupported install rule"):
+            self.inventory(cmake + '\ninstall(CODE "unmodelled")\n', workflow, helper)
+
+
+class ReceiptEvidenceTests(unittest.TestCase):
+    """The CLI's own decision and receipt share one input-sensitive collection."""
+
+    def setUp(self):
+        GateTests.setUp(self)
+        self.row = ci_post_run(8341)
+        self.jobs = ci_post_jobs()
+        self.api.ci_post(self.row, self.jobs)
+        self.history = FakeHistory({SHA: (OTHER_HEAD, ["src/release.cpp"])})
+        temporary = tempfile.TemporaryDirectory(prefix="pf-release-receipt-")
+        self.addCleanup(temporary.cleanup)
+        self.path = Path(temporary.name) / "gate.json"
+
+    def run_receipt(self, *, phase="bump", dispatch="", dry_run="false"):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = ci_release_gate.main(
+                ["gate", "--repo", REPO, "--sha", SHA, "--ref", "refs/heads/main",
+                 "--phase", phase, "--dispatch-sha", dispatch, "--receipt", str(self.path),
+                 "--dry-run", dry_run],
+                api=self.api, git=self.git, history=self.history,
+                release_git=ReleaseSnapshot())
+        return code, out.getvalue(), err.getvalue()
+
+    def receipt(self):
+        return json.loads(self.path.read_text())
+
+    def test_each_phase_and_dry_run_record_the_same_admitted_identity(self):
+        for phase in ("bump", "tag"):
+            for dry in ("false", "true"):
+                with self.subTest(phase=phase, dry_run=dry):
+                    self.api = FakeAPI()
+                    if phase == "tag":
+                        self.api.release_bump()
+                    self.api.ci_post(self.row, self.jobs)
+                    code, out, err = self.run_receipt(
+                        phase=phase, dispatch=BUMP_PARENT if phase == "tag" else "", dry_run=dry)
+                    self.assertEqual((code, err), (0, ""), out)
+                    data = self.receipt()
+                    self.assertEqual(data["gate"]["outcome"], "admitted")
+                    self.assertEqual(data["phase"], phase)
+                    self.assertEqual(data["dry_run"], dry == "true")
+                    self.assertEqual(data["requested"], {"sha": SHA, "tree": (
+                        OTHER_TREE if phase == "tag" else TREE)})
+                    self.assertEqual(data["observed_main"], SHA)
+                    self.assertEqual(data["required_contexts"], ["pineforge/parity"])
+                    self.assertEqual(data["ci_post"]["proof"]["sha"], SHA)
+                    self.assertEqual(data["ci_post"]["selected_run_id"], self.row["id"])
+                    self.assertEqual(data["ci_post"]["runs"][-1]["proving_jobs"],
+                                     self.jobs)
+                    self.assertTrue(data["ci_post"]["runs"][-1]["history_complete"])
+                    doubled = {(run_metadata_api(self.row["id"]), False, None)}
+                    if phase == "tag":
+                        doubled.add((run_metadata_api(push_run()["id"]), False, None))
+                    counts = Counter(self.api.calls)
+                    self.assertEqual({call: counts[call] for call in doubled},
+                                     {call: 2 for call in doubled})
+                    self.assertTrue(all(count == 1 for call, count in counts.items()
+                                        if call not in doubled), counts)
+
+    def assert_response_bytes(self, response, raw, pages, *, complete=True):
+        self.assertEqual(response["scope"], "gh-api-stdout-bytes/v1")
+        self.assertEqual(response["sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(response["byte_length"], len(raw))
+        self.assertEqual(response["responses"], [
+            {"number": number, "sha256": hashlib.sha256(page).hexdigest(),
+             "byte_length": len(page)}
+            for number, page in enumerate(pages, 1)])
+        self.assertEqual(response["complete"], complete)
+
+    def assert_decision_binding(self, data):
+        inventory = data["response_inventory"]
+        encoded = json.dumps(inventory, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=True).encode("utf-8")
+        self.assertEqual(data["gate"]["response_binding"], {
+            "scope": "canonical-response-inventory/v1",
+            "sha256": hashlib.sha256(encoded).hexdigest(), "entries": len(inventory)})
+
+    def test_raw_bytes_bind_every_attempt_and_both_latest_jobs_pages(self):
+        # Constructed transport bytes, not any historical raw capture.
+        self.row["run_attempt"] = 2
+        self.api.ci_post(self.row, self.jobs)
+        self.api.attempts(self.row, {1: self.jobs, 2: self.jobs},
+                          metadata={1: {"conclusion": "failure"}, 2: {}})
+        expected_metadata = {}
+        expected_jobs = {}
+        for attempt in (1, 2):
+            endpoint = attempt_api(self.row["id"], attempt)
+            raw = http_response(200, " \n" + self.api.responses[endpoint] + "\r\n").encode()
+            self.api.responses[endpoint] = raw
+            expected_metadata[attempt] = raw
+            endpoint = attempt_jobs_api(self.row["id"], attempt)
+            page1 = jobs_page(self.jobs[:3], total=len(self.jobs), headers={
+                "Link": f'<https://api.github.com/{endpoint}&page=2>; rel="next"'}).encode()
+            page2 = jobs_page(self.jobs[3:], total=len(self.jobs)).encode()
+            self.api.responses[endpoint] = page1 + page2
+            expected_jobs[attempt] = (page1, page2)
+        latest = ci_post_jobs_api(self.row["id"])
+        page1 = jobs_page(self.jobs[:2], total=len(self.jobs), headers={
+            "Link": f'<https://api.github.com/{latest}&page=2>; rel="next"'}).encode()
+        page2 = jobs_page(self.jobs[2:], total=len(self.jobs)).encode()
+        self.api.responses[latest] = page1 + page2
+        code, out, err = self.run_receipt()
+        self.assertEqual((code, err), (0, ""), out)
+        data = self.receipt()
+        record = data["ci_post"]["runs"][-1]
+        self.assertEqual(record["proving_jobs"], self.jobs)
+        self.assert_response_bytes(record["proving_response"], page1 + page2, [page1, page2])
+        for audit in record["attempt_history"]:
+            attempt = audit["requested_attempt"]
+            raw = expected_metadata[attempt]
+            self.assert_response_bytes(audit["metadata_response"], raw, [raw])
+            pages = expected_jobs[attempt]
+            self.assert_response_bytes(audit["jobs_response"], b"".join(pages), pages)
+            self.assertEqual(audit["jobs_response"]["attempt"], attempt)
+            self.assertEqual(audit["metadata_response"]["attempt"], attempt)
+            self.assertTrue(audit["jobs_complete"])
+        self.assertEqual([row["purpose"] for row in data["response_inventory"]], [
+            "run_initial", "proving_jobs", "attempt_metadata", "attempt_jobs",
+            "attempt_metadata", "attempt_jobs", "run_final"])
+        self.assert_decision_binding(data)
+        changed = json.loads(json.dumps(data))
+        changed["response_inventory"][1]["responses"][1]["sha256"] = "0" * 64
+        with self.assertRaises(AssertionError):
+            self.assert_decision_binding(changed)
+
+    def test_equal_json_semantics_do_not_hide_original_byte_changes(self):
+        first = json.dumps(self.row).encode()
+        second = (" \r\n" + json.dumps(dict(reversed(list(self.row.items()))), indent=2)
+                  + "\n").encode()
+        self.assertEqual(json.loads(first), json.loads(second))
+        self.assertNotEqual(first, second)
+        digests = []
+        for raw in (first, second):
+            self.api = FakeAPI()
+            self.api.ci_post(self.row, self.jobs)
+            self.api.responses[attempt_api(self.row["id"], 1)] = raw
+            code, out, err = self.run_receipt()
+            self.assertEqual((code, err), (0, ""), out)
+            data = self.receipt()
+            response = data["ci_post"]["runs"][-1]["attempt_history"][0]["metadata_response"]
+            self.assert_response_bytes(response, raw, [raw])
+            digests.append(response["sha256"])
+            self.assert_decision_binding(data)
+        self.assertNotEqual(*digests)
+
+    def test_unread_jobs_page_refuses_and_binds_the_incomplete_received_prefix(self):
+        for history in (False, True):
+            with self.subTest(history=history):
+                self.api = FakeAPI()
+                self.api.ci_post(self.row, self.jobs)
+                endpoint = (attempt_jobs_api(self.row["id"], 1) if history
+                            else ci_post_jobs_api(self.row["id"]))
+                raw = jobs_page(self.jobs, headers={
+                    "Link": f'<https://api.github.com/{endpoint}&page=2>; rel="next"'}).encode()
+                self.api.responses[endpoint] = raw
+                code, out, err = self.run_receipt()
+                self.assertEqual((code, out), (1, ""), err)
+                self.assertIn("unread or unlinked next page", err)
+                data = self.receipt()
+                self.assertEqual(data["gate"]["outcome"], "refused")
+                record = data["ci_post"]["runs"][-1]
+                self.assertFalse(record["history_complete"])
+                if history:
+                    audit = record["attempt_history"][-1]
+                    self.assertEqual(audit["requested_attempt"], 1)
+                    self.assertFalse(audit["jobs_complete"])
+                    self.assertIsNone(audit["jobs"])
+                    response = audit["jobs_response"]
+                else:
+                    self.assertFalse(record["proving_jobs_complete"])
+                    self.assertIsNone(record["proving_jobs"])
+                    response = record["proving_response"]
+                self.assert_response_bytes(response, raw, [raw], complete=False)
+                self.assertEqual(self.api.calls[-1][0], endpoint)
+                self.assert_decision_binding(data)
+
+    def test_bound_attempt_metadata_refuses_text_without_original_bytes(self):
+        transport = self.api
+        endpoint = attempt_api(self.row["id"], 1)
+
+        def text_only(endpoint_read, **options):
+            raw = transport(endpoint_read, **options)
+            return str(raw) if endpoint_read == endpoint else raw
+
+        self.api = text_only
+        code, out, err = self.run_receipt()
+        self.assertEqual((code, out), (1, ""), err)
+        self.assertIn("has no original response bytes", err)
+        data = self.receipt()
+        audit = data["ci_post"]["runs"][-1]["attempt_history"][-1]
+        self.assertEqual(audit["requested_attempt"], 1)
+        self.assertFalse(audit["jobs_complete"])
+        self.assertIsNone(audit["metadata_response"]["sha256"])
+        self.assertFalse(audit["metadata_response"]["complete"])
+        self.assertEqual(data["gate"]["outcome"], "refused")
+        self.assert_decision_binding(data)
+
+    def sequence_metadata(self, row, final):
+        initial = http_response(200, json.dumps(row)).encode()
+        responses = iter((initial, final))
+        self.api.responses[run_metadata_api(row["id"])] = lambda: next(responses)
+        return initial
+
+    def test_initial_metadata_mismatch_refuses_before_proving_jobs(self):
+        for payload in (OSError("unreadable initial metadata"),
+                        {**self.row, "run_attempt": 2},
+                        {**self.row, "head_sha": OTHER_HEAD}):
+            with self.subTest(payload=payload):
+                self.api = FakeAPI()
+                self.api.ci_post(self.row, self.jobs)
+                self.api.responses[run_metadata_api(self.row["id"])] = (
+                    payload if isinstance(payload, Exception) else json.dumps(payload).encode())
+                code, out, err = self.run_receipt()
+                self.assertEqual((code, out), (1, ""), err)
+                data = self.receipt()
+                record = data["ci_post"]["runs"][-1]
+                self.assertFalse(record["proving_jobs_complete"])
+                self.assertIsNone(record["proving_jobs"])
+                self.assertFalse(record["run_validation"]["complete"])
+                self.assertEqual(self.api.calls[-1],
+                                 (run_metadata_api(self.row["id"]), False, None))
+                self.assertNotIn((ci_post_jobs_api(self.row["id"]), True, None), self.api.calls)
+                self.assertEqual(data["gate"]["outcome"], "refused")
+                self.assert_decision_binding(data)
+
+    def test_selected_attempt_change_on_uncached_final_read_refuses(self):
+        final = http_response(200, json.dumps({**self.row, "run_attempt": 2})).encode()
+        initial = self.sequence_metadata(self.row, final)
+        code, out, err = self.run_receipt()
+        # Check the policy failure before inspecting any new receipt interface:
+        # R8 admits this same string-compatible transport instead.
+        self.assertEqual((code, out), (1, ""), err)
+        self.assertIn("run attempt changed", err)
+        data = self.receipt()
+        validation = data["run_validations"][0]
+        self.assertEqual((validation["initial_attempt"], validation["final_attempt"]), (1, 2))
+        self.assertEqual(validation["outcome"], "changed")
+        self.assertFalse(validation["complete"])
+        self.assertEqual(data["gate"]["outcome"], "refused")
+        self.assert_response_bytes(validation["initial_response"], initial, [initial])
+        self.assert_response_bytes(validation["final_response"], final, [final])
+        self.assertEqual(Counter(self.api.calls)[
+            (run_metadata_api(self.row["id"]), False, None)], 2)
+        self.assert_decision_binding(data)
+
+    def test_stable_final_metadata_requires_two_real_reads_and_binds_final_bytes(self):
+        final = http_response(200, "\n" + json.dumps(self.row, indent=2) + "\r\n").encode()
+        initial = self.sequence_metadata(self.row, final)
+        code, out, err = self.run_receipt()
+        self.assertEqual((code, err), (0, ""), out)
+        counts = Counter(self.api.calls)
+        metadata_call = (run_metadata_api(self.row["id"]), False, None)
+        self.assertEqual(counts[metadata_call], 2)
+        self.assertEqual(self.api.calls[-1], metadata_call)
+        self.assertTrue(all(count == 1 for call, count in counts.items()
+                            if call != metadata_call), counts)
+        data = self.receipt()
+        self.assertEqual(len(data["run_validations"]), 1)
+        validation = data["run_validations"][0]
+        self.assertEqual((validation["initial_attempt"], validation["final_attempt"]), (1, 1))
+        self.assertEqual(validation["outcome"], "stable")
+        self.assertTrue(validation["complete"])
+        self.assert_response_bytes(validation["initial_response"], initial, [initial])
+        self.assert_response_bytes(validation["final_response"], final, [final])
+        self.assertNotEqual(validation["initial_response"]["sha256"],
+                            validation["final_response"]["sha256"])
+        self.assert_decision_binding(data)
+
+    def test_missing_broken_or_mismatched_final_metadata_refuses_with_identity(self):
+        cases = {
+            "unreadable": OSError("private-transport-diagnostic"),
+            "invalid-json": b'HTTP/2.0 200\r\n\r\n{"broken":',
+            "invalid-utf8": b'HTTP/2.0 200\r\n\r\n"\xff"',
+            "id": {**self.row, "id": self.row["id"] + 1},
+            "sha": {**self.row, "head_sha": OTHER_HEAD},
+            "branch": {**self.row, "head_branch": "other"},
+            "event": {**self.row, "event": "pull_request"},
+            "actor": {**self.row, "actor": {"login": "someone-else"}},
+            "trigger": {**self.row, "triggering_actor": {"login": "someone-else"}},
+            "actor-id": {**self.row, "actor": {**self.row["actor"], "id": 999}},
+            "trigger-type": {**self.row, "triggering_actor": {
+                **self.row["triggering_actor"], "type": "User"}},
+            "created-at": {**self.row, "created_at": "2026-10-24T12:00:00Z"},
+            "updated-at": {**self.row, "updated_at": "2026-10-25T13:00:00Z"},
+            "started-at": {**self.row, "run_started_at": "2026-10-25T13:00:00Z"},
+            "url": {**self.row, "html_url": "https://example.invalid/different-run"},
+            "status": {**self.row, "status": "in_progress"},
+            "conclusion": {**self.row, "conclusion": "failure"},
+            "bool-attempt": {**self.row, "run_attempt": True},
+        }
+        for name, payload in cases.items():
+            with self.subTest(failure=name):
+                self.api = FakeAPI()
+                self.api.ci_post(self.row, self.jobs)
+                final = (http_response(200, json.dumps(payload)).encode()
+                         if isinstance(payload, dict) else payload)
+                self.sequence_metadata(self.row, final)
+                code, out, err = self.run_receipt()
+                self.assertEqual((code, out), (1, ""), err)
+                data = self.receipt()
+                validation = data["run_validations"][0]
+                self.assertEqual(validation["initial_attempt"], 1)
+                self.assertFalse(validation["complete"])
+                self.assertEqual(data["gate"]["outcome"], "refused")
+                self.assertEqual(self.api.calls[-1],
+                                 (run_metadata_api(self.row["id"]), False, None))
+                self.assertEqual(Counter(self.api.calls)[self.api.calls[-1]], 2)
+                response = validation["final_response"]
+                if isinstance(final, bytes):
+                    self.assertEqual(response["sha256"], hashlib.sha256(final).hexdigest())
+                else:
+                    self.assertIsNone(response["sha256"])
+                    self.assertFalse(response["complete"])
+                    self.assertIsNone(validation["final_attempt"])
+                self.assertNotIn("private-transport-diagnostic", self.path.read_text())
+                self.assert_decision_binding(data)
+
+    def test_failed_final_transport_binds_received_stdout_without_copying_secrets(self):
+        secret = "unapproved-raw-authorization-value"
+        raw = http_response(503, json.dumps({"private_source": secret}),
+                            {"Authorization": secret}).encode()
+        failure = subprocess.CalledProcessError(
+            1, ["gh", "api", run_metadata_api(self.row["id"])],
+            output=raw, stderr=secret.encode())
+        self.sequence_metadata(self.row, failure)
+        code, out, err = self.run_receipt()
+        self.assertEqual((code, out), (1, ""), err)
+        data = self.receipt()
+        validation = data["run_validations"][0]
+        self.assertFalse(validation["complete"])
+        self.assertEqual(validation["outcome"], "unreadable")
+        self.assert_response_bytes(validation["final_response"], raw, [raw], complete=False)
+        self.assertEqual(data["gate"]["outcome"], "refused")
+        self.assertNotIn(secret, self.path.read_text())
+        self.assertNotIn("CalledProcessError(", self.path.read_text())
+        self.assert_decision_binding(data)
+
+    def test_all_relied_on_docs_push_and_passed_over_runs_are_revalidated(self):
+        for role in ("docs", "push", "passed-over"):
+            for changed in (False, True):
+                with self.subTest(role=role, changed=changed):
+                    self.api = FakeAPI()
+                    self.api.ci_post(self.row, self.jobs)
+                    self.history = FakeHistory({SHA: (OTHER_HEAD, ["src/release.cpp"])})
+                    phase, dispatch = "bump", ""
+                    if role == "docs":
+                        self.history = FakeHistory({
+                            SHA: (OTHER_HEAD, ["README.md"]),
+                            OTHER_HEAD: (OTHER_TREE, ["src/engine.cpp"])})
+                        target = self.row
+                        self.api.ci_post(self.row, [{**j, "conclusion": "skipped"}
+                                                     for j in self.jobs])
+                        self.api.ci_post(ci_post_run(8342, sha=OTHER_HEAD), self.jobs)
+                    elif role == "push":
+                        self.api.release_bump()
+                        target = push_run()
+                        phase, dispatch = "tag", BUMP_PARENT
+                    else:
+                        target = ci_post_run(9001, created_at="2026-10-25T13:00:00Z")
+                        self.api.ci_post_runs(SHA, [target, self.row], {
+                            target["id"]: [{**j, "conclusion": "skipped"} for j in self.jobs],
+                            self.row["id"]: self.jobs})
+                    final = http_response(200, json.dumps({
+                        **target, "run_attempt": 2 if changed else 1})).encode()
+                    self.sequence_metadata(target, final)
+                    code, out, err = self.run_receipt(phase=phase, dispatch=dispatch)
+                    self.assertEqual((code, out if changed else err),
+                                     (1, "") if changed else (0, ""), (out, err))
+                    data = self.receipt()
+                    self.assertEqual(data["gate"]["outcome"],
+                                     "refused" if changed else "admitted")
+                    validation = next(v for v in data["run_validations"]
+                                      if v["run_id"] == target["id"])
+                    self.assertEqual(validation["final_attempt"], 2 if changed else 1)
+                    self.assertEqual(validation["outcome"], "changed" if changed else "stable")
+                    self.assert_response_bytes(validation["final_response"], final, [final])
+                    self.assertEqual(Counter(self.api.calls)[
+                        (run_metadata_api(target["id"]), False, None)], 2)
+                    if changed:
+                        self.assertIn("run attempt changed", err)
+                    else:
+                        self.assertTrue(all(v["complete"] for v in data["run_validations"]))
+                        doubled = {(run_metadata_api(v["run_id"]), False, None)
+                                   for v in data["run_validations"]}
+                        counts = Counter(self.api.calls)
+                        self.assertEqual({call: counts[call] for call in doubled},
+                                         {call: 2 for call in doubled})
+                        self.assertTrue(all(count == 1 for call, count in counts.items()
+                                            if call not in doubled), counts)
+                        selected = data["ci_post"]["selected_run_id"]
+                        self.assertEqual(self.api.calls[-1],
+                                         (run_metadata_api(selected), False, None))
+                    self.assert_decision_binding(data)
+
+    def test_shared_push_and_proof_identity_is_verified_twice_total(self):
+        self.api.release_bump()
+        self.api.ci_post(self.row, self.jobs)
+        self.api.responses[RUNS_API] = runs_page([self.row])
+        code, out, err = self.run_receipt(phase="tag", dispatch=BUMP_PARENT)
+        self.assertEqual((code, err), (0, ""), out)
+        data = self.receipt()
+        self.assertEqual(len(data["run_validations"]), 1)
+        self.assertEqual(Counter(self.api.calls)[
+            (run_metadata_api(self.row["id"]), False, None)], 2)
+        self.assertEqual(data["push_provenance"][0]["run_validation"],
+                         data["ci_post"]["runs"][-1]["run_validation"])
+        self.assertTrue(data["run_validations"][0]["complete"])
+        self.assert_decision_binding(data)
+
+    def test_failed_and_missing_verify_are_recorded_on_pr_and_main_proof_paths(self):
+        for watcher in (False, True):
+            for state in (None, "failure"):
+                with self.subTest(watcher=watcher, state=state):
+                    self.api = FakeAPI()
+                    self.api.ci_post(self.row, self.jobs)
+                    contexts = {"pineforge/parity": "success"}
+                    rows = [status("pineforge/parity")]
+                    if state is not None:
+                        contexts["pineforge/verify"] = state
+                        rows.insert(0, {**status("pineforge/verify", state), "id": 401,
+                                        "target_url": "https://example.invalid/verify/401",
+                                        "created_at": "2026-10-25T11:00:00Z"})
+                    self.api.statuses(rows)
+                    with mock.patch.object(ci_release_gate, "MAIN_PROOF_WATCHER_FIRST_SHA",
+                                           SHA if watcher else None), \
+                            mock.patch.object(ci_release_gate, "read_main_proof",
+                                              return_value=contexts):
+                        self.git.side_effect = None
+                        self.git.return_value = True
+                        code, out, err = self.run_receipt()
+                    self.assertEqual((code, err), (0, ""), out)
+                    advisory = self.receipt()["advisory_verify"]
+                    self.assertEqual(advisory["presence"], state is not None)
+                    self.assertEqual(advisory["state"], state or "missing")
+                    self.assertEqual(advisory["sha"], SHA if watcher else HEAD)
+                    self.assertEqual(advisory["tree"], TREE)
+                    self.assertIn(f"pineforge/verify={state or 'missing'} (advisory)", out)
+                    if not watcher and state:
+                        self.assertEqual(advisory["status"]["id"], 401)
+                        self.assertEqual(advisory["status"]["creator"]["login"], "luisleo526")
+
+    def test_watcher_enabled_bump_cannot_rebump_an_app_push_without_a_pr(self):
+        self.api.release_bump()
+        self.api.ci_post(self.row, self.jobs)
+        self.git.side_effect = None
+        self.git.return_value = True
+        with mock.patch.object(ci_release_gate, "MAIN_PROOF_WATCHER_FIRST_SHA", SHA), \
+                mock.patch.object(ci_release_gate, "read_main_proof",
+                                  return_value={"pineforge/parity": "success"}):
+            code, out, err = self.run_receipt()
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("dispatch its existing bump with phase tag", err)
+        self.assertEqual(self.receipt()["gate"]["outcome"], "refused")
+
+    def test_parity_refusal_writes_a_refusal_and_never_prints_green(self):
+        self.api.statuses([status("pineforge/parity", "failure")])
+        code, out, err = self.run_receipt()
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("pineforge/parity=failure", err)
+        data = self.receipt()
+        self.assertEqual(data["gate"]["outcome"], "refused")
+        self.assertTrue(data["gate"]["reasons"])
+        self.assertEqual(data["contexts"]["pineforge/parity"]["state"], "failure")
+
+    def test_receipt_write_failure_vetoes_green_and_preserves_refusal(self):
+        for parity in ("success", "failure"):
+            with self.subTest(parity=parity):
+                self.api.statuses([status("pineforge/parity", parity)])
+                with mock.patch.object(Path, "write_text", side_effect=PermissionError("disk denied")):
+                    code, out, err = self.run_receipt()
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn("cannot write release gate receipt", err)
+                if parity == "failure":
+                    self.assertIn("pineforge/parity=failure", err)
+
+    def test_exception_details_and_extra_api_fields_never_enter_receipt(self):
+        secret = "private-authorization-value"
+        self.api.responses[STATUSES_API] = OSError(secret)
+        code, out, err = self.run_receipt()
+        self.assertEqual((code, out), (1, ""))
+        advisory = self.receipt()["advisory_verify"]
+        self.assertIsNone(advisory["presence"])
+        self.assertEqual(advisory["state"], "unread")
+        self.assertFalse(advisory["complete"])
+        self.assertNotIn(secret, self.path.read_text())
+        self.api.statuses([{**row, "token": secret, "authorization": secret}
+                           for row in successes()])
+        self.api.ci_post({**self.row, "private_source": secret}, self.jobs)
+        code, out, err = self.run_receipt()
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertNotIn(secret, self.path.read_text())
+
+    def test_synthetic_full_rerun_preserves_failed_and_cancelled_history(self):
+        self.row["run_attempt"] = 3
+        self.row["actor"] = {"login": "release-maintainer"}
+        self.row["triggering_actor"] = {"login": "release-maintainer"}
+        self.api.ci_post(self.row, self.jobs)
+        histories = {
+            attempt: [{**job, "id": 1000 * attempt + job["id"], "run_attempt": attempt,
+                       "started_at": f"2026-10-25T12:0{attempt}:00Z",
+                       "completed_at": f"2026-10-25T12:0{attempt}:30Z",
+                       "steps": [{"number": 1, "name": "build", "status": "completed",
+                                  "conclusion": "success"}],
+                       "conclusion": ("failure" if attempt == 1 else
+                                      "cancelled" if attempt == 2 else "success")}
+                      for job in self.jobs]
+            for attempt in range(1, 4)}
+        self.jobs = histories[3]
+        self.api.responses[ci_post_jobs_api(self.row["id"])] = jobs_page(self.jobs)
+        metadata = {
+            1: {"conclusion": "failure", "triggering_actor": {"login": "release-maintainer"}},
+            2: {"conclusion": "cancelled"},
+            3: {"conclusion": "success"}}
+        self.api.attempts(self.row, histories, metadata=metadata)
+        self.api.responses[f"repos/{REPO}/collaborators/release-maintainer/permission"] = \
+            json.dumps({"permission": "maintain", "user": {"login": "release-maintainer"}})
+        code, out, err = self.run_receipt()
+        self.assertEqual((code, err), (0, ""), out)
+        record = self.receipt()["ci_post"]["runs"][-1]
+        self.assertEqual([a["run"]["conclusion"] for a in record["attempt_history"]],
+                         ["failure", "cancelled", "success"])
+        self.assertEqual(record["carried_associations"], [])
+        self.assertEqual(record["attempt_history"][1]["trigger_permission"]["permission"],
+                         "maintain")
+        self.assertEqual(record["proving_jobs"], self.jobs)
+
+    def test_app_original_push_allows_only_permission_authenticated_maintainer_reruns(self):
+        for permission in ("admin", "maintain", "write", "read", None):
+            with self.subTest(permission=permission):
+                self.api = FakeAPI()
+                self.api.release_bump()
+                self.api.ci_post(self.row, self.jobs)
+                push = {**push_run(), "run_attempt": 2,
+                        "triggering_actor": {"login": "release-maintainer"}}
+                self.api.responses[RUNS_API] = runs_page([push])
+                self.api.attempts(
+                    push, {1: [{**self.jobs[0], "conclusion": "failure"}], 2: self.jobs},
+                    metadata={
+                        1: {"conclusion": "failure",
+                            "triggering_actor": {"login": "pineforge-app[bot]"}},
+                        2: {}})
+                endpoint = f"repos/{REPO}/collaborators/release-maintainer/permission"
+                self.api.responses[endpoint] = (
+                    OSError("permission unreadable") if permission is None else
+                    json.dumps({"permission": permission, "user": {"login": "release-maintainer"}}))
+                code, out, err = self.run_receipt(phase="tag", dispatch=BUMP_PARENT)
+                record = self.receipt()["push_provenance"][0]
+                if permission in ("admin", "maintain", "write"):
+                    self.assertEqual((code, err), (0, ""), out)
+                    self.assertTrue(record["history_complete"])
+                    self.assertEqual(record["attempt_history"][0]["run"]["conclusion"], "failure")
+                    self.assertEqual(record["attempt_history"][1]["trigger_permission"]["permission"],
+                                     permission)
+                else:
+                    self.assertEqual((code, out), (1, ""), err)
+                    self.assertFalse(record["history_complete"])
+                self.assertEqual(Counter(call[0] for call in self.api.calls)[endpoint], 1)
+
+    def test_latest_proving_jobs_never_fill_a_gap_from_green_history(self):
+        self.row["run_attempt"] = 2
+        self.api.ci_post(self.row, self.jobs)
+        self.api.attempts(self.row, {1: self.jobs, 2: self.jobs})
+        self.api.responses[ci_post_jobs_api(self.row["id"])] = jobs_page(self.jobs[:-1])
+        code, out, err = self.run_receipt()
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("missing job " + self.jobs[-1]["name"], err)
+        record = self.receipt()["ci_post"]["runs"][-1]
+        self.assertEqual(record["proving_jobs"], self.jobs[:-1])
+        self.assertTrue(record["history_complete"])
+        # The same history name is normal; a duplicate in latest is a veto.
+        duplicate = {**self.jobs[-1], "id": 9999}
+        self.api.responses[ci_post_jobs_api(self.row["id"])] = jobs_page([*self.jobs, duplicate])
+        code, out, err = self.run_receipt()
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("duplicate-job", err)
+
+    def test_gapped_unreadable_and_truncated_history_refuse_as_incomplete(self):
+        for failure in ("gap", "unreadable", "total", "link"):
+            with self.subTest(failure=failure):
+                self.api = FakeAPI()
+                row = {**self.row, "run_attempt": 3}
+                self.api.ci_post(row, self.jobs)
+                self.api.attempts(row, {1: self.jobs, 2: self.jobs, 3: self.jobs})
+                endpoint = attempt_api(row["id"], 2)
+                if failure == "gap":
+                    payload = {**row, "run_attempt": 3}
+                    self.api.responses[endpoint] = json.dumps(payload)
+                elif failure == "unreadable":
+                    self.api.responses[endpoint] = OSError("unreadable attempt")
+                else:
+                    endpoint = attempt_jobs_api(row["id"], 2)
+                    self.api.responses[endpoint] = jobs_page(
+                        self.jobs, total=len(self.jobs) + (failure == "total"),
+                        headers={"Link": f'<https://api.github.com/{endpoint}&page=2>; rel="next"'}
+                        if failure == "link" else None)
+                code, out, err = self.run_receipt()
+                self.assertEqual((code, out), (1, ""), err)
+                record = self.receipt()["ci_post"]["runs"][-1]
+                self.assertFalse(record["history_complete"])
+                self.assertEqual(record["expected_attempts"], [1, 2, 3])
+                self.assertEqual(self.api.calls[-1][0], endpoint)
+                self.assertEqual(record["attempt_history"][-1]["requested_attempt"], 2)
+
+    def test_recorded_carried_rows_keep_api_identity_steps_and_ambiguous_null_history(self):
+        # Only this bounded projection is recorded; metadata below is synthetic.
+        row = {**self.row, "id": 41767951876, "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
+               "run_attempt": 3}
+        self.api.attempts(row, {n: RECORDED_CARRIED_JOBS[f"attempt{n}"]
+                                for n in range(1, 4)})
+        self.api.responses[ci_post_jobs_api(row["id"])] = jobs_page(RECORDED_CARRIED_JOBS["latest"])
+        record = {}
+        ci_release_gate._collect_attempts(self.api, REPO, row, record)
+        latest = ci_release_gate._ci_post_jobs(self.api, REPO, row["id"])
+        links = ci_release_gate._carried_associations(latest, record["attempt_history"])
+        self.assertTrue(record["history_complete"])
+        self.assertEqual(latest, RECORDED_CARRIED_JOBS["latest"])
+        second = record["attempt_history"][1]["jobs"]
+        authz = [j for j in second if j["name"] == "corpus-parity / authz"]
+        self.assertEqual(len(authz), 2)
+        self.assertTrue(any(j["conclusion"] is None for j in authz))
+        preflight = next(j for j in latest if j["name"] == "preflight")
+        link = next(a for a in links if a["proving_job_id"] == preflight["id"])
+        self.assertEqual(link["earliest_matching_api_attempt"], 1)
+        self.assertEqual(link["basis"], "unique name, identical non-null times and steps")
+        self.assertEqual(link["matches"], [
+            {"api_attempt": n, "job_id": next(
+                j["id"] for j in RECORDED_CARRIED_JOBS[f"attempt{n}"]
+                if j["name"] == "preflight")} for n in range(1, 4)])
+        self.assertNotIn("physical_execution_attempt", link)
+        self.assertFalse(any(a["name"] == "corpus-parity / authz" for a in links))
+
+    def test_docs_receipt_keeps_requested_and_built_proof_trees_distinct(self):
+        self.history = FakeHistory({
+            SHA: (OTHER_HEAD, ["README.md"]), OTHER_HEAD: (OTHER_TREE, ["src/engine.cpp"])})
+        ancestor = ci_post_run(8342, sha=OTHER_HEAD)
+        self.api.ci_post(ancestor, self.jobs)
+        self.api.responses[f"repos/{REPO}/commits/{OTHER_HEAD}"] = json.dumps(
+            commit(OTHER_HEAD, OTHER_TREE))
+        self.api.ci_post(self.row, [{**j, "conclusion": "skipped"} for j in self.jobs])
+        code, out, err = self.run_receipt()
+        self.assertEqual((code, err), (0, ""), out)
+        data = self.receipt()
+        self.assertEqual(data["requested"], {"sha": SHA, "tree": TREE})
+        self.assertEqual(data["ci_post"]["proof"], {"sha": OTHER_HEAD, "tree": OTHER_TREE})
+        self.assertEqual(data["docs_chain"][0]["changed_paths"], ["README.md"])
+        self.assertTrue(data["docs_chain"][0]["documentation_only"])
+        self.assertEqual(data["docs_chain"][0]["run"]["id"], self.row["id"])
+        self.api.ci_post({**self.row, "conclusion": "failure"}, self.jobs)
+        code, out, err = self.run_receipt()
+        self.assertEqual((code, out), (1, ""), err)
+        data = self.receipt()
+        self.assertEqual(data["docs_chain"][0]["run"]["conclusion"], "failure")
+        self.assertTrue(data["docs_chain"][0]["audit"]["history_complete"])
 
 
 if __name__ == "__main__":

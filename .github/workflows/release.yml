@@ -39,7 +39,7 @@ name: Release
 #
 # Security notes:
 #   - `bump` is a `choice` enum. `override` is free text: it reaches only
-#     scripts/release_version.py, through an `env:` block, which refuses
+#     ci_release_gate.py plan and release_version.py through `env:`, which refuse
 #     anything but X.Y.Z or X.Y.Z-rc.N before any later step reads it.
 #   - All other interpolations are GitHub-controlled context (repo, actor,
 #     sha, secrets) or values the scripts computed from VERSION, the tags and
@@ -146,10 +146,22 @@ jobs:
           GITHUB_REF: ${{ github.ref }}
           PHASE: ${{ inputs.phase }}
           DISPATCH_SHA: ${{ inputs.dispatch_sha }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          RECEIPT: ${{ runner.temp }}/release-gate-receipt.json
         run: |
           python3 scripts/ci_release_gate.py gate \
             --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF}" \
-            --phase "${PHASE}" --dispatch-sha "${DISPATCH_SHA}"
+            --phase "${PHASE}" --dispatch-sha "${DISPATCH_SHA}" \
+            --receipt "${RECEIPT}" --dry-run "${DRY_RUN}"
+
+      - name: Keep release gate receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-gate-${{ inputs.phase }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-gate-receipt.json
+          if-no-files-found: error
+          retention-days: 7
 
       # current / next / tag / prerelease / previous (the release-notes base),
       # validated; see scripts/release_version.py.

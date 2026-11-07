@@ -3720,10 +3720,23 @@ RELEASE_GATE_STEP = r'''      - name: Refuse unless authenticated parity and exa
           GITHUB_REF: ${{ github.ref }}
           PHASE: ${{ inputs.phase }}
           DISPATCH_SHA: ${{ inputs.dispatch_sha }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          RECEIPT: ${{ runner.temp }}/release-gate-receipt.json
         run: |
           python3 scripts/ci_release_gate.py gate \
             --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF}" \
-            --phase "${PHASE}" --dispatch-sha "${DISPATCH_SHA}"
+            --phase "${PHASE}" --dispatch-sha "${DISPATCH_SHA}" \
+            --receipt "${RECEIPT}" --dry-run "${DRY_RUN}"
+'''
+
+RELEASE_RECEIPT_STEP = '''      - name: Keep release gate receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-gate-${{ inputs.phase }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-gate-receipt.json
+          if-no-files-found: error
+          retention-days: 7
 '''
 
 # This tiny release-class workflow has no writer or release-gate phases.
@@ -3871,6 +3884,14 @@ def release_bump_workflow_findings(workflow: str) -> list[str]:
     if _code(plan) != _code(RELEASE_PLAN_STEP):
         findings.append('release.yml must compute a version only in bump phase and '
                         'read the validated committed VERSION in tag phase')
+    receipt = _step_named(steps, '      - name: Keep release gate receipt')
+    if (_code(receipt) != _code(RELEASE_RECEIPT_STEP)
+            or sum(_step_values(step, 'name') == ['Keep release gate receipt']
+                   for step in steps) != 1
+            or gate not in steps or receipt not in steps or plan not in steps
+            or not (steps.index(gate) < steps.index(receipt) < steps.index(plan))):
+        findings.append('release.yml must always retain the exact release gate receipt artifact '
+                        'before planning or publishing')
     dispatch = workflow.split('\n  workflow_dispatch:\n', 1)
     dispatch = dispatch[1].split('\npermissions:', 1)[0] if len(dispatch) == 2 else ''
     if (_code(RELEASE_PHASE_INPUTS) != _code(
