@@ -3656,6 +3656,30 @@ def release_prebuilt_consumer_findings(source: str) -> list[str]:
 
 # Split release publication keeps the existing main-tree writer and hub
 # dispatch bodies. These are step contracts, not a fixture hash or execution.
+RELEASE_SPLIT_DISPATCH = '''on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump'
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      override:
+        description: 'Exact version, X.Y.Z or X.Y.Z-rc.N (for example 1.0.0-rc.1); wins over bump'
+        required: false
+        type: string
+        default: ''
+      dry_run:
+        description: 'Rehearse: build and verify the tarballs; commit, tag, release, upload and dispatch nothing'
+        required: false
+        type: boolean
+        default: false
+'''
+
 RELEASE_SPLIT_RELEASE_STEPS = r'''      - name: Mint org App token
         id: app
         uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
@@ -3923,7 +3947,7 @@ RELEASE_SPLIT_NOTIFY_STEPS = r'''      - name: Mint org App token (hub dispatch)
       # run_id}. -F sends prerelease as a JSON boolean and run_id as a
       # number. The hub never publishes a prerelease to its stable or
       # `latest` channels and pairs the engine with codegen of the same
-      # version (lane REL10-HUB).
+      # version.
       - name: Dispatch engine-release -> pineforge-release
         env:
           GH_TOKEN:   ${{ steps.app.outputs.token }}
@@ -3953,7 +3977,7 @@ RELEASE_SPLIT_HEADERS = {
       prerelease: ${{ steps.bump.outputs.prerelease }}
 ''',
     'prebuilt-x86': '''    needs: release
-    if: ${{ github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && github.workflow_ref == format('pineforge-4pass/pineforge-engine/.github/workflows/release.yml@{0}', github.ref) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.workflow_ref == format('pineforge-4pass/pineforge-engine/.github/workflows/release.yml@{0}', github.ref) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -3992,7 +4016,7 @@ RELEASE_SPLIT_CALLER_STEP = r'''      - name: Refuse an untrusted toolchain call
         run: |
           set -euo pipefail
           [[ "${EVENT}" == workflow_dispatch ]]
-          case "${REF}" in refs/heads/main|refs/tags/v*) ;; *) exit 1 ;; esac
+          case "${REF}" in refs/heads/main) ;; *) exit 1 ;; esac
           [[ "${WORKFLOW_REF}" == "pineforge-4pass/pineforge-engine/.github/workflows/release.yml@${REF}" ]]
 '''
 
@@ -4111,6 +4135,7 @@ RELEASE_SPLIT_UPLOAD_STEPS = r'''      - name: Download x86_64 tarball
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.release.outputs.tag }}
           X86_TARBALL: ${{ needs.prebuilt-x86.outputs.tarball }}
           ARM_TARBALL: ${{ needs.prebuilt-arm.outputs.tarball }}
@@ -4208,6 +4233,7 @@ def _release_split_toolchain_reader_is_pinned(workflow: str, body: str) -> bool:
             or len(_JOB_HEADER.findall(_jobs_text(workflow) or '')) != len(jobs)
             or _unparsed(workflow)
             or _events(workflow) != {'workflow_dispatch'}
+            or _job_block(workflow, 'on') != _code(RELEASE_SPLIT_DISPATCH)
             or _job_values(workflow, 'permissions') != ['contents: read']
             or _job_values(workflow, 'env') != ['PINEFORGE_REQUIRE_RELEASE_TAGS: "1"']
             or _job_values(workflow, 'defaults')
@@ -4227,6 +4253,10 @@ def _release_split_workflow_findings(workflow: str) -> list[str]:
             or _unparsed(workflow)):
         findings.append('release.yml split prebuilt must contain exactly release, prebuilt-x86, '
                         'prebuilt-arm, upload and notify-hub jobs')
+    if (_events(workflow) != {'workflow_dispatch'}
+            or _job_block(workflow, 'on') != _code(RELEASE_SPLIT_DISPATCH)):
+        findings.append('release.yml split prebuilt must retain exactly its workflow_dispatch '
+                        'trigger and reviewed inputs')
     if (_events(workflow) != {'workflow_dispatch'}
             or _job_values(workflow, 'permissions') != ['contents: read']
             or _job_values(workflow, 'env') != ['PINEFORGE_REQUIRE_RELEASE_TAGS: "1"']
