@@ -88,6 +88,13 @@ Modes:
             nor `from.catalogSha256` is verified against git: only the rebuilt
             catalog against the sha the diff states, and `from.tag` against
             VERSION; the note says so.
+            Before the tag exists, a forward VERSION/reset transition is
+            checked from committed parent and child bytes. Exactly VERSION
+            and the declared --diff path must be modified regular files.
+            The catalog is unchanged, the reset is regenerated exactly, and
+            worktree bytes must match the commit. The --diff location comes
+            from Config, including generic --catalog/--diff use; a transition
+            diff must lie inside --root. This admits source CI only.
   --stamp --to-version X.Y.Z[-rc.N] --previous-tag vA.B.C[-rc.N]
           --output PATH [--chain-output PATH]
             the release. --previous-tag is the release its notes start at
@@ -187,6 +194,16 @@ class Config:
     schema: str
     diff_schema: str
     collections: tuple
+
+    @property
+    def diff_in_git(self) -> str:
+        try:
+            path = self.diff.relative_to(self.root)
+        except ValueError:
+            raise InputError("release transition --diff must lie inside --root") from None
+        if not path.parts or ".." in path.parts:
+            raise InputError("release transition --diff must be a repository file path")
+        return path.as_posix()
 
     def show(self, path: Path) -> str:
         try:
@@ -774,7 +791,7 @@ def do_check(cfg: Config, git, require_tags: str | None = None, *,
         try:
             _, version = validate_release_transition(cfg, git)
             if (new_bytes != git.file_at(git.ref, cfg.catalog_in_git)
-                    or text.encode("utf-8") != git.file_at(git.ref, DIFF)
+                    or text.encode("utf-8") != git.file_at(git.ref, cfg.diff_in_git)
                     or read_bytes(cfg.root / "VERSION", cfg)
                     != git.file_at(git.ref, "VERSION")):
                 raise Finding("untagged release transition must match the committed files")
@@ -876,10 +893,11 @@ def validate_release_transition(cfg: Config, git, *, expected_parent: str | None
     if _snapshot_file(git, parent, cfg.catalog_in_git) != catalog:
         raise Finding("release transition requires unchanged catalog bytes versus parent")
     rows = git.changed_files(parent)
-    if (len(rows) > 2 or any(row[0] not in {"VERSION", DIFF} for row in rows)
+    diff_path = cfg.diff_in_git
+    if (len(rows) > 2 or any(row[0] not in {"VERSION", diff_path} for row in rows)
             or any(row[1:] != ("100644", "100644", "M") for row in rows)):
         raise Finding("release transition must modify exactly VERSION and "
-                      "docker/run_failure_codes_diff.json as regular files")
+                      f"{diff_path} as regular files")
     try:
         before = _snapshot_file(git, parent, "VERSION").decode("utf-8").strip()
         version = _snapshot_file(git, git.ref, "VERSION").decode("utf-8").strip()
@@ -888,14 +906,14 @@ def validate_release_transition(cfg: Config, git, *, expected_parent: str | None
     if (version_key(before) is None or version_key(version) is None
             or version_key(version) <= version_key(before)):
         raise Finding("release transition requires a valid forward VERSION")
-    if len(rows) != 2 or {row[0] for row in rows} != {"VERSION", DIFF}:
+    if len(rows) != 2 or {row[0] for row in rows} != {"VERSION", diff_path}:
         raise Finding("release transition must modify exactly VERSION and "
-                      "docker/run_failure_codes_diff.json as regular files")
+                      f"{diff_path} as regular files")
     tag = "v" + version
     target = git.tag_target(tag)
     if target is not None and not (allow_tagged and target == git.resolve(git.ref)):
         raise Finding(f"release tag {tag} already exists at another commit or before transition")
-    parent_diff = _snapshot_file(git, parent, DIFF)
+    parent_diff = _snapshot_file(git, parent, diff_path)
     try:
         text = parent_diff.decode("utf-8")
         diff = json.loads(text)
@@ -910,7 +928,7 @@ def validate_release_transition(cfg: Config, git, *, expected_parent: str | None
     previous = previous_tag(parse_version(version), parse_tags(git.tags()))
     release_stamp_diffs(cfg, git, catalog, diff, version, previous)
     reset = render(build_diff(catalog, catalog, tag, cfg)).encode("utf-8")
-    if _snapshot_file(git, git.ref, DIFF) != reset:
+    if _snapshot_file(git, git.ref, diff_path) != reset:
         raise Finding("release transition requires the exact catalog reset for forward VERSION")
     return parent, version
 
