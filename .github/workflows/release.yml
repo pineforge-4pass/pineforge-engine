@@ -361,7 +361,7 @@ jobs:
   # release notes / README.
   prebuilt-x86:
     needs: release
-    if: ${{ github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && github.workflow_ref == format('pineforge-4pass/pineforge-engine/.github/workflows/release.yml@{0}', github.ref) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.workflow_ref == format('pineforge-4pass/pineforge-engine/.github/workflows/release.yml@{0}', github.ref) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -379,7 +379,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${EVENT}" == workflow_dispatch ]]
-          case "${REF}" in refs/heads/main|refs/tags/v*) ;; *) exit 1 ;; esac
+          case "${REF}" in refs/heads/main) ;; *) exit 1 ;; esac
           [[ "${WORKFLOW_REF}" == "pineforge-4pass/pineforge-engine/.github/workflows/release.yml@${REF}" ]]
 
       - name: Checkout release commit
@@ -752,6 +752,7 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.release.outputs.tag }}
           X86_TARBALL: ${{ needs.prebuilt-x86.outputs.tarball }}
           ARM_TARBALL: ${{ needs.prebuilt-arm.outputs.tarball }}
@@ -788,7 +789,7 @@ jobs:
       # run_id}. -F sends prerelease as a JSON boolean and run_id as a
       # number. The hub never publishes a prerelease to its stable or
       # `latest` channels and pairs the engine with codegen of the same
-      # version (lane REL10-HUB).
+      # version.
       - name: Dispatch engine-release -> pineforge-release
         env:
           GH_TOKEN:   ${{ steps.app.outputs.token }}
