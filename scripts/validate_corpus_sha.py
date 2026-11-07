@@ -27,6 +27,8 @@ from corpus_trades_identity import ALLOWED_EXTRA_COLUMNS  # noqa: E402
 
 ENGINE = Path(__file__).resolve().parents[1]
 FEED = "data/ohlcv_ETH-USDT-USDT_1m.csv"
+FILE_DIGESTS = "file_digests.json"
+FILE_DIGEST_SCHEMA = "pineforge-corpus-file-digests-v1"
 ARTIFACT_FILES = {
     "engine_trade_tape_sha256": "engine_trades.csv",
     "generated_cpp_sha256": "generated.cpp",
@@ -38,6 +40,7 @@ ARTIFACT_FILES = {
 DIGEST = re.compile(r"[0-9a-f]{64}")
 PROBE = re.compile(r"validation/[A-Za-z0-9][A-Za-z0-9._-]*")
 LFS_VERSION = b"version https://git-lfs.github.com/spec/v1"
+FILE_PATH = re.compile(r"[A-Za-z0-9._/-]+")
 
 
 def _sha256(path: Path) -> str:
@@ -49,10 +52,22 @@ def _sha256(path: Path) -> str:
 
 
 def _local_file(root: Path, path: Path) -> None:
-    if not path.resolve().is_relative_to(root.resolve()) or path.is_symlink():
+    if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
         raise ValueError("file must stay inside the corpus and must not be a symlink")
     if not path.is_file():
-        raise ValueError("file is missing")
+        raise ValueError("file is missing or is not a regular file")
+
+
+def _normalized_file_path(name: str) -> bool:
+    return bool(FILE_PATH.fullmatch(name)) and all(
+        part not in ("", ".", "..") for part in name.split("/"))
+
+
+def _require_materialized(path: Path) -> None:
+    """Refuse pointer bytes rather than hashing them as corpus content."""
+    with path.open("rb") as stream:
+        if stream.read(len(LFS_VERSION)) == LFS_VERSION:
+            raise ValueError("Git-LFS content is not materialized")
 
 
 def _unique_object(pairs: list[tuple]) -> dict:
@@ -78,12 +93,16 @@ def _record(root: Path, filename: str, findings: list[str]) -> dict:
         return {}
 
 
-def _digest_problem(root: Path, path: Path, expected: object) -> str | None:
+def _digest_problem(root: Path, path: Path, expected: object,
+                    counts: dict[str, int] | None = None) -> str | None:
     try:
         _local_file(root, path)
         if not isinstance(expected, str) or not DIGEST.fullmatch(expected):
             raise ValueError("recorded sha256 is missing or malformed")
+        _require_materialized(path)
         actual = _sha256(path)
+        if counts is not None:
+            counts["bound"] += 1
         if actual != expected:
             return f"records {path}: sha256 {actual} differs from recorded {expected}"
     except (OSError, ValueError) as error:
@@ -91,9 +110,97 @@ def _digest_problem(root: Path, path: Path, expected: object) -> str | None:
     return None
 
 
+def _tracked_entries(root: Path) -> list[tuple[str, str, str]]:
+    """Read path, mode and index stage from Git, independently of records."""
+    entries = []
+    for row in _git(root, "ls-files", "-z", "--stage").split(b"\0"):
+        if not row:
+            continue
+        metadata, filename = row.split(b"\t", 1)
+        mode, _, stage = metadata.split()
+        entries.append((os.fsdecode(filename), mode.decode("ascii"), stage.decode("ascii")))
+    return entries
+
+
+def _mode_problem(mode: str) -> str | None:
+    if mode == "100644":
+        return None
+    kind = {"120000": "symlink", "100755": "executable", "160000": "gitlink"}.get(mode, "file")
+    return f"tracked {kind} with mode {mode} is forbidden; expected mode 100644"
+
+
+def _census_difference(root: Path, paths: set[str], kind: str,
+                       findings: list[str]) -> None:
+    ordered = sorted(paths)
+    for name in ordered[:50]:
+        if _normalized_file_path(name):
+            findings.append(f"records {root / name}: {kind} in {FILE_DIGESTS}")
+        else:
+            findings.append(f"records {root / FILE_DIGESTS}: {kind} path {name!r}")
+    if len(ordered) > 50:
+        findings.append(f"records {root / FILE_DIGESTS}: {kind}: and {len(ordered) - 50} more")
+
+
+def _file_census(root: Path, findings: list[str], counts: dict[str, int]) -> dict[str, str]:
+    """Compare every tracked file with the manifest's recorded bytes.
+
+    The manifest records what the corpus held when it was written. It detects
+    changes without a rewrite and makes deliberate changes visible in its diff.
+    It is not a signature; its own bytes are bound by the checked commit.
+    """
+    record = _record(root, FILE_DIGESTS, findings)
+    record_path = root / FILE_DIGESTS
+    if record.get("schema_version") != FILE_DIGEST_SCHEMA:
+        findings.append(f"records {record_path}: unsupported schema_version")
+    files = record.get("files")
+    if not isinstance(files, dict) or not files:
+        findings.append(f"records {record_path}: files must be a nonempty object")
+        files = {}
+
+    entries = _tracked_entries(root)
+    tracked = {name for name, _, _ in entries}
+    counts["tracked"] = len(tracked)
+    if FILE_DIGESTS not in tracked:
+        findings.append(f"records {record_path}: manifest must be tracked in Git")
+    for name, mode, stage in sorted(entries):
+        problem = _mode_problem(mode)
+        if problem:
+            findings.append(f"records {root / name}: {problem}")
+        if stage != "0":
+            findings.append(f"records {root / name}: unresolved index stage {stage}")
+        if not _normalized_file_path(name):
+            findings.append(f"records {record_path}: unusable tracked path {name!r}")
+    _census_difference(root, tracked - {FILE_DIGESTS} - set(files),
+                       "tracked but unlisted", findings)
+    _census_difference(root, set(files) - (tracked - {FILE_DIGESTS}),
+                       "listed but untracked", findings)
+
+    digests = {}
+    for name, expected in sorted(files.items()):
+        if not _normalized_file_path(name) or name == FILE_DIGESTS:
+            findings.append(f"records {record_path}: unusable file path {name!r}")
+            continue
+        problem = _digest_problem(root, root / name, expected, counts)
+        if problem:
+            findings.append(problem)
+        if isinstance(expected, str) and DIGEST.fullmatch(expected):
+            digests[name] = expected
+    return digests
+
+
+def _cross_check_digest(root: Path, digests: dict[str, str], name: str,
+                        expected: object, source: str, field: str,
+                        findings: list[str]) -> None:
+    if name not in digests or expected != digests[name]:
+        findings.append(
+            f"records {root / source}: {field} digest {expected!r} disagrees with "
+            f"{root / FILE_DIGESTS}: files[{name!r}]={digests.get(name)!r}")
+
+
 def _records(root: Path) -> tuple[list[str], dict[str, int], set[str]]:
     findings: list[str] = []
-    counts = dict(tapes=0, owned_entries=0, owned_hashes=0, feed=0)
+    counts = dict(tapes=0, owned_entries=0, owned_hashes=0, feed=0, tracked=0, bound=0)
+    digests = _file_census(root, findings, counts)
     manifest = _record(root, "run_manifest.json", findings)
     owned = _record(root, "owned_strategies.json", findings)
     manifest_path = root / "run_manifest.json"
@@ -136,11 +243,15 @@ def _records(root: Path) -> tuple[list[str], dict[str, int], set[str]]:
         problem = _digest_problem(root, root / name / "engine_trades.csv", expected)
         if problem:
             findings.append(problem)
+        _cross_check_digest(root, digests, f"{name}/engine_trades.csv", expected,
+                            "run_manifest.json", f"tapes[{name!r}]", findings)
     problem = _digest_problem(root, root / FEED, manifest.get("feedSha256"))
     if problem:
         findings.append(problem)
     else:
         counts["feed"] = 1
+    _cross_check_digest(root, digests, FEED, manifest.get("feedSha256"),
+                        "run_manifest.json", "feedSha256", findings)
 
     entries = owned.get("entries")
     if not isinstance(entries, list) or not entries:
@@ -174,11 +285,13 @@ def _records(root: Path) -> tuple[list[str], dict[str, int], set[str]]:
             problem = _digest_problem(root, root / name / filename, artifacts.get(key))
             if problem:
                 findings.append(problem)
+            _cross_check_digest(root, digests, f"{name}/{filename}", artifacts.get(key),
+                                "owned_strategies.json", f"{name} artifacts[{key!r}]", findings)
     return findings, counts, probes
 
 
 def check_records(root: Path) -> list[str]:
-    """Bind each manifest record to its named bytes, without requiring Git."""
+    """Bind all tracked corpus files and each existing record to checkout bytes."""
     return _records(Path(root))[0]
 
 
@@ -195,9 +308,7 @@ def lfs_problem(path: Path, pointer: bytes) -> str | None:
             raise ValueError("malformed Git-LFS pointer oid")
         if len(sizes) != 1 or not re.fullmatch(rb"[0-9]+", sizes[0]):
             raise ValueError("malformed Git-LFS pointer size")
-        with path.open("rb") as stream:
-            if stream.read(len(LFS_VERSION)) == LFS_VERSION:
-                raise ValueError("Git-LFS content is not materialized")
+        _require_materialized(path)
         expected = oids[0].decode("ascii")
         actual = _sha256(path)
         if actual != expected:
@@ -227,18 +338,6 @@ def _engine_commit(engine: Path) -> str:
         return revision if re.fullmatch(r"[0-9a-f]{40}", revision) else "unknown"
     except Exception:
         return "unknown"
-
-
-def _tracked_symlinks(root: Path) -> list[str]:
-    findings = []
-    for row in _git(root, "ls-tree", "-r", "-z", "HEAD").split(b"\0"):
-        if not row:
-            continue
-        metadata, filename = row.split(b"\t", 1)
-        mode, _, _ = metadata.split()
-        if mode == b"120000":
-            findings.append(f"records {root / os.fsdecode(filename)}: tracked symlink is forbidden")
-    return findings
 
 
 def _lfs(root: Path) -> tuple[list[str], int]:
@@ -446,7 +545,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Parallel build and probe workers, from 1 to 8 (default: 8).")
     parser.add_argument("--subset", type=Path, metavar="FILE",
                         help="Probe list (default: engine scripts/corpus_parity_subset.txt).")
-    counts = dict(tapes=0, owned_entries=0, owned_hashes=0, lfs_pointers=0, feed=0)
+    counts = dict(tapes=0, owned_entries=0, owned_hashes=0, lfs_pointers=0,
+                  feed=0, tracked=0, bound=0)
     findings: list[str] = []
     corpus = None
     status_ready = False
@@ -474,7 +574,6 @@ def main(argv: list[str] | None = None) -> int:
             for line in os.fsdecode(before).splitlines():
                 findings.append(f"clean {corpus}: checkout is dirty before validation: {line}")
         print(f"CORPUS {os.fsdecode(_git(corpus, 'rev-parse', 'HEAD')).strip()}")
-        findings.extend(_tracked_symlinks(corpus))
         records, measured, probes = _records(corpus)
         findings.extend(records)
         counts.update(measured)
@@ -513,7 +612,7 @@ def main(argv: list[str] | None = None) -> int:
                             f"{type(problem).__name__}: {message}")
     print(f"ENGINE {engine_commit}")
     print("COUNT " + " ".join(f"{name}={counts[name]}" for name in (
-        "tapes", "owned_entries", "owned_hashes", "lfs_pointers", "feed")))
+        "tapes", "owned_entries", "owned_hashes", "lfs_pointers", "feed", "tracked", "bound")))
     for finding in findings:
         print(f"FINDING {finding}")
     if clean:
