@@ -2964,6 +2964,15 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             if protected_environment and _job_values(body, 'environment') != [protected_environment]:
                 findings.append(f'{name} job {job} must use environment {protected_environment} '
                                 'on its protected release job')
+            if protected_environment:
+                # The release App credential stays on the runner itself: the protected
+                # scale-set route refused these, and the hosted pin must not drop that.
+                if _job_values(body, 'container'):
+                    findings.append(f'{name} job {job} must not declare a job container '
+                                    'on its protected release job')
+                if _job_values(body, 'services'):
+                    findings.append(f'{name} job {job} must not declare job services '
+                                    'on its protected release job')
             native_matrix = _native_runner_matrix(name, job, body)
             if gke_pin == GKE_MATRIX_RUNNER and not native_matrix:
                 findings.append(f'{name} job {job} must keep exactly '
