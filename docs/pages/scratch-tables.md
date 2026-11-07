@@ -66,8 +66,8 @@ unsupported. This representation pin remains unchanged.
 an explicit active-field mask and zero inactive/reserved values. It retains
 disk/arena backing and never derives a finite slab or sentinel infinity from
 omission. The existing source binders attach the immutable native attempt
-snapshot to the real counters. Root begin binding is
-`WorkingRequestCore::bind_scratch_bounds` at `src/native_order.cpp:8654`.
+snapshot to the real counters. Root begin binding uses the WorkingRequestCore
+out-of-class method `bind_scratch_bounds` at `src/native_order.cpp:8654`.
 `SuccessorRootIndex::prepare_append` at `src/native_order.cpp:8409` checks
 `disk_rows + tail_size + prospective_root` before any flush or command mutation.
 Rootless submissions, codec prewarming and kept-handle replacements consume

@@ -502,7 +502,7 @@ five commands through `strategy_native_submit_v1` / `_replace_v1` /
 kernel from C* below.
 
 `native_order::Request` values belong to `native_order_v8`
-(`native_order.hpp:46`); identity types stay `native_order_v1`. Label/comment
+(`native_order.hpp:47`); identity types stay `native_order_v1`. Label/comment
 remain inert text. The market default path still constructs from:
 
 - `order_action::Transact{signed_units}` — finite nonzero
@@ -642,7 +642,7 @@ search then sees only the unconsumed suffix (`born_on_remaining_path`,
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:8637`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:8640`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
 `engine.current_bar_ = open_view` (`native_execution_consumer.cpp:8519`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
@@ -2047,11 +2047,11 @@ The kernel never drops an event its own live state still reads. A queued
 applied notification (and the margin receipt it carries) pins the window at
 its execution, a live deferred group-adjustment chain pins it at its head,
 and the rest of what the journal used to answer is state now: a request's
-replace-chain root is `RequestDefinition::root` (`native_order.hpp:829`) and
+replace-chain root is `RequestDefinition::root` (`native_order.hpp:830`) and
 the order core's chain index, which is all a cohort command reads about a
 request that is no longer working; a trail's arm ordinal
 (`NativeTrailState::activation_ordinal`) is its tracking state's
-(`TrailTrack` `native_order.hpp:728`); the FX-roll margin check reads the
+(`TrailTrack` `native_order.hpp:729`); the FX-roll margin check reads the
 last two driver points' instants; and a group-effect receipt whose outcome
 event was dropped stands on its own record. A host that wants the whole run
 after it has ended asks for `Full` (or `Commands`); the Pine adapter declares
@@ -2112,7 +2112,7 @@ default, set while no run is active — because each row is a full
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:9548`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:9551`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -2239,13 +2239,13 @@ under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
 `closed_trade_close_cause(i)` (`engine.hpp:2224`) is the C++ read and
-`strategy_closed_trade_close_cause` (`pineforge.h:1569`) the C one, with the
+`strategy_closed_trade_close_cause` (`pineforge.h:1630`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
 INTRADAY_FILL_CAP, `6` RANGE_END. A row closed at the end of the run
 (`open_at_end`) always answers `6`, ahead of every other cause. The ticket a
-row was booked under is `strategy_closed_trade_entry_id` /
-`_exit_id` / `_exit_comment` (`pineforge.h:1502-1504`), which index exactly the
+row was booked under is `strategy_closed_trade_entry_id` (`pineforge.h:1548`),
+`strategy_closed_trade_exit_id` (`pineforge.h:1561`) or `strategy_closed_trade_exit_comment` (`pineforge.h:1563`), which index exactly the
 rows of `fill_report`'s trade array and take any handle this engine produces
 — including a `pf_strategy_t` from `strategy_native_host_create_v1`, which is
 how a C host reads back the ticket its own margin model declared.
@@ -3086,7 +3086,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`ScriptBucketCursor` `native_execution_consumer.cpp:14438`). What it does
+(`ScriptBucketCursor` `native_execution_consumer.cpp:14441`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the

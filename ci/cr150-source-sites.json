@@ -1616,7 +1616,7 @@
     "template < class Value , bool MaintainSortedFold = false > class IdPairStore #1",
     "template < class Enumerate > void preflight_keys ( const Enumerate & enumerate ) const #1",
     "enumerate ( [ & ] ( KeyView key ) #1",
-    "if ( data_resource_ = = ScratchResource :: consumed_data && ! second ) #1",
+    "if ( slab_ && data_resource_ = = ScratchResource :: consumed_data && ! second ) #1",
     "if ( separator ! = std :: string_view :: npos ) #1"
    ],
    "cls": "assign",
@@ -21044,6 +21044,18 @@
   },
   {
    "file": "src/native_execution_consumer.cpp",
+   "symbol": "owner",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "int BacktestEngine :: set_scratch_tables_v2 ( const pf_scratch_tables_v2 * descriptor ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
    "symbol": "next",
    "scope": [
     "namespace pineforge #1",
@@ -22002,6 +22014,20 @@
   },
   {
    "file": "src/native_order.cpp",
+   "symbol": "bytes",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "namespace #3",
+    "class ByteWriter #1",
+    "void raw ( const void * data , std :: size_t length ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "bytes = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
    "symbol": "buffer_",
    "scope": [
     "namespace pineforge :: native_order #1",
@@ -22025,6 +22051,19 @@
    ],
    "cls": "decl",
    "spelling": "std :: vector < unsigned char >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "bytes",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "namespace #3",
+    "struct SizeAr #1"
+   ],
+   "cls": "assign",
+   "spelling": "bytes = . . .",
    "ordinal": 1
   },
   {
@@ -22269,6 +22308,45 @@
   },
   {
    "file": "src/native_order.cpp",
+   "symbol": "extent_buffer",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "struct WorkingRequestCore :: JournalStore #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < unsigned char >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "bytes",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "struct WorkingRequestCore :: JournalStore #1",
+    "static std :: vector < unsigned char > extent_buffer ( uint64_t length ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < unsigned char >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "bytes",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "struct WorkingRequestCore :: JournalStore #1",
+    "static std :: vector < unsigned char > extent_buffer ( uint64_t length ) #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "bytes . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
    "symbol": "storage",
    "scope": [
     "namespace pineforge :: native_order #1",
@@ -22342,10 +22420,23 @@
     "namespace pineforge :: native_order #1",
     "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: JournalStore #1",
-    "void spill_front_chunk ( ) #1"
+    "void append_page ( uint64_t page_end , const unsigned char * bytes , std :: size_t length ) #1"
    ],
    "cls": "grow",
    "spelling": "data . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "bytes",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "struct WorkingRequestCore :: JournalStore #1",
+    "void spill_oversized_event ( ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "bytes = . . .",
    "ordinal": 1
   },
   {
@@ -22388,6 +22479,60 @@
    ],
    "cls": "grow",
    "spelling": "chunks . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "extent",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "struct WorkingRequestCore :: JournalStore #1",
+    "const std :: vector < CommandEvent > & load ( uint64_t page_no , const JournalPage & page ) const #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < unsigned char >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "bytes",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "struct WorkingRequestCore :: JournalStore #1",
+    "const std :: vector < CommandEvent > & load ( uint64_t page_no , const JournalPage & page ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "bytes = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "extent",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "struct WorkingRequestCore :: JournalStore #1",
+    "const std :: vector < CommandEvent > & load ( uint64_t page_no , const JournalPage & page ) const #1",
+    "if ( length > kSpillPageBytes ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "extent = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "bytes",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "struct WorkingRequestCore :: JournalStore #1",
+    "const std :: vector < CommandEvent > & load ( uint64_t page_no , const JournalPage & page ) const #1",
+    "if ( length > kSpillPageBytes ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "bytes = . . .",
    "ordinal": 1
   },
   {
@@ -24424,7 +24569,7 @@
     "namespace pineforge :: native_order #1",
     "inline namespace native_order_v8 #1",
     "struct WorkingRequestCore :: SuccessorRootIndex #1",
-    "void prepare_append ( ) #1",
+    "void prepare_append ( bool adds_root ) #1",
     "if ( slab ) #1"
    ],
    "cls": "assign",
@@ -24501,6 +24646,19 @@
   },
   {
    "file": "src/native_order.cpp",
+   "symbol": "next",
+   "scope": [
+    "namespace pineforge :: native_order #1",
+    "inline namespace native_order_v8 #1",
+    "void WorkingRequestCore :: bind_scratch_bounds ( const std :: shared_ptr < const :: pineforge :: detail :: ScratchBounds > & bounds ) #1",
+    "if ( ! successor_roots_ ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
    "symbol": "successor_roots_",
    "scope": [
     "namespace pineforge :: native_order #1",
@@ -24529,7 +24687,7 @@
    "scope": [
     "namespace pineforge :: native_order #1",
     "inline namespace native_order_v8 #1",
-    "void WorkingRequestCore :: reserve_successor_root ( ) #1"
+    "void WorkingRequestCore :: reserve_successor_root ( bool adds_root ) #1"
    ],
    "cls": "alloc",
    "spelling": "make_shared",
@@ -24545,6 +24703,17 @@
    ],
    "cls": "grow",
    "spelling": "successor_roots_ . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_order.cpp",
+   "symbol": "bytes",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "ScratchStatus PayloadReadback :: field ( std :: uint64_t index , PayloadField & out ) const noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "bytes = . . .",
    "ordinal": 1
   },
   {

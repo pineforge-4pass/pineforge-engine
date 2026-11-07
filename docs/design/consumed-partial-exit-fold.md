@@ -95,7 +95,7 @@ old sorted live sequence. Dead rows contribute identity. The existing
 257-seed composition law therefore proves equality for every state and
 every incoming seed, including binary keys and prefixes. `fold_sorted`
 still folds the live count and applies this root in O(1)
-(`include/pineforge/detail/id_pair_store.hpp:369`).
+(`include/pineforge/detail/id_pair_store.hpp:377`).
 
 ### Fixed budget and publication
 
@@ -130,7 +130,7 @@ The root and scalar layout state stay in the store; the slab update workspace
 is 4,632 bytes, below the existing disk workspace allowance. The final store
 static assertion still bounds the store plus update workspace and fixed
 buffer/frame allowance to 32 KiB
-(`include/pineforge/detail/id_pair_store.hpp:894`), excluding the separately
+(`include/pineforge/detail/id_pair_store.hpp:923`), excluding the separately
 admitted, fixed slab. All slab access copies through `read_at`/`write_at`;
 there are no retained payload pointers, allocations or file operations.
 
