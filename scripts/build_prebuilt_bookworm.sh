@@ -5,6 +5,8 @@ set -euo pipefail
 export LC_ALL=C LANG=C
 
 readonly image_digest=sha256:72fb3f2a4d3409e6050b17530585992784a21a4955b368cb8f8b392981abc780
+# Docker's .Id identifies the image config, separately from the registry manifest.
+readonly image_config_id=sha256:9b1e6c557f68a8b0f1577293d95aae135ade1f9c5499d817f6df100d1cf616bd
 readonly image=${ENGINE_TOOLCHAIN_IMAGE:-}
 readonly shared_root=/home/runner/work
 
@@ -96,8 +98,8 @@ admit_image() {
     cat "$evidence/docker-image-id.stderr" >&2
     printf '%s\n' "$image_id_rc" > "$evidence/docker-image-id.exitcode"
     if [[ "$image_id_rc" != 0 ]]; then exit "$image_id_rc"; fi
-    [[ "$(cat "$evidence/docker-image-id.txt")" == "$image_digest" ]] \
-        || fail "preloaded image Id differs from pinned digest"
+    [[ "$(cat "$evidence/docker-image-id.txt")" == "$image_config_id" ]] \
+        || fail "preloaded image Id differs from pinned config ID"
     [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" == linux/amd64 ]] \
         || fail "preloaded image must be linux/amd64"
     docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" \

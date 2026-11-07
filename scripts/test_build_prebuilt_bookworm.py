@@ -26,6 +26,7 @@ import ci_preflight
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "scripts/build_prebuilt_bookworm.sh"
 IMAGE_DIGEST = "sha256:72fb3f2a4d3409e6050b17530585992784a21a4955b368cb8f8b392981abc780"
+IMAGE_CONFIG_ID = "sha256:9b1e6c557f68a8b0f1577293d95aae135ade1f9c5499d817f6df100d1cf616bd"
 IMAGE = "example.invalid/toolchains/engine-bookworm@" + IMAGE_DIGEST
 SCRATCH: Path | None = None
 
@@ -57,13 +58,13 @@ def recording_command() -> int:
             return controls["inspect_rc"]
         print(json.dumps([{"Os": "linux", "Architecture": "amd64",
                            "RepoDigests": [args[-1]],
-                           "Id": controls.get("id", IMAGE_DIGEST)}]))
+                           "Id": controls.get("id", IMAGE_CONFIG_ID)}]))
     elif len(args) == 5 and args[:3] == ["image", "inspect", "--format"]:
         if args[3] == "{{.Id}}":
             if controls.get("id_rc"):
                 print("RECORDING FIXTURE: image Id inspect failed", file=sys.stderr)
                 return controls["id_rc"]
-            print(controls.get("id", IMAGE_DIGEST))
+            print(controls.get("id", IMAGE_CONFIG_ID))
         elif args[3] == "{{.Os}}/{{.Architecture}}":
             print(controls.get("arch", "linux/amd64"))
         elif args[3] == "{{range .RepoDigests}}{{println .}}{{end}}":
@@ -261,19 +262,57 @@ class BookwormTransport(unittest.TestCase):
                 self.assertFalse(any(row[0] == "docker" for row in self.commands()))
 
     def test_actual_inspected_image_id_must_equal_pinned_digest(self):
-        for image_id in ("sha256:" + "a" * 64, "", IMAGE_DIGEST + "suffix"):
-            with self.subTest(image_id=image_id):
-                previous = set(self.temp.glob("prebuilt-bookworm.*"))
-                ran = self.invoke(controls={"id": image_id})
-                self.assertEqual(ran.returncode, 1, ran.stderr)
-                self.assert_refused(ran, "preloaded image Id differs from pinned digest")
-                self.assertIn(["docker", "image", "inspect", "--format", "{{.Id}}", IMAGE],
-                              self.commands())
-                created = set(self.temp.glob("prebuilt-bookworm.*")) - previous
+        # The supplied build log records this config ID; the registry pin is
+        # a distinct manifest. This remains a recording protocol, not a pull.
+        self.assertNotEqual(IMAGE_CONFIG_ID, IMAGE_DIGEST)
+        for consume in (False, True):
+            if consume:
+                archive, checksum = self.consumer_inputs()
+            for image_id in ("sha256:" + "a" * 64, "", IMAGE_DIGEST + "suffix",
+                             IMAGE_DIGEST, IMAGE_CONFIG_ID + "suffix"):
+                with self.subTest(image_id=image_id, consume=consume):
+                    previous = set(self.temp.iterdir())
+                    before_commands = len(self.commands())
+                    before_environment = self.env_file.read_text()
+                    controls = {"id": image_id}
+                    ran = (self.consume(archive, checksum, controls=controls) if consume
+                           else self.invoke(controls=controls))
+                    self.assertEqual(ran.returncode, 1, ran.stderr)
+                    self.assertIn("preloaded image Id differs from pinned config ID", ran.stderr)
+                    commands = self.commands()[before_commands:]
+                    self.assertFalse(any(row[1:2] == ["run"] for row in commands))
+                    self.assertEqual(self.env_file.read_text(), before_environment)
+                    self.assertIn(["docker", "image", "inspect", "--format", "{{.Id}}", IMAGE],
+                                  commands)
+                    created = set(self.temp.iterdir()) - previous
+                    self.assertEqual(len(created), 1)
+                    evidence = created.pop() / "evidence"
+                    self.assertEqual((evidence / "docker-image-id.txt").read_text(), image_id + "\n")
+                    self.assertEqual((evidence / "docker-image-id.exitcode").read_text(), "0\n")
+            with self.subTest(accepted_config_id=IMAGE_CONFIG_ID, consume=consume):
+                previous = set(self.temp.iterdir())
+                before_commands = len(self.commands())
+                controls = {"id": IMAGE_CONFIG_ID, "digest": IMAGE}
+                ran = (self.consume(archive, checksum, controls=controls) if consume
+                       else self.invoke(controls=controls))
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                created = set(self.temp.iterdir()) - previous
                 self.assertEqual(len(created), 1)
                 evidence = created.pop() / "evidence"
-                self.assertEqual((evidence / "docker-image-id.txt").read_text(), image_id + "\n")
+                self.assertEqual((evidence / "docker-image-id.txt").read_text(), IMAGE_CONFIG_ID + "\n")
+                self.assertEqual((evidence / "docker-image-id.stderr").read_text(), "")
                 self.assertEqual((evidence / "docker-image-id.exitcode").read_text(), "0\n")
+                inspected = json.loads((evidence / "docker-image-inspect.json").read_text())
+                self.assertEqual(inspected[0]["Id"], IMAGE_CONFIG_ID)
+                self.assertEqual(inspected[0]["RepoDigests"], [IMAGE])
+                self.assertEqual((evidence / "docker-repo-digests.txt").read_text(), IMAGE + "\n")
+                commands = self.commands()[before_commands:]
+                inspects = [row for row in commands if row[1:3] == ["image", "inspect"]]
+                self.assertEqual(len(inspects), 4)
+                self.assertTrue(all(row[-1] == IMAGE for row in inspects), inspects)
+                run = next(row for row in commands if row[1:2] == ["run"])
+                self.assertIn(IMAGE, run)
+                self.assertNotIn(IMAGE_CONFIG_ID, run)
 
     def test_image_id_inspection_failure_preserves_child_status_and_raw_output(self):
         ran = self.invoke(controls={"id_rc": 19})
@@ -298,13 +337,19 @@ class BookwormTransport(unittest.TestCase):
         self.assertNotIn("--env", run)
         evidence = next(self.temp.glob("prebuilt-bookworm.*")) / "evidence"
         self.assertIn("image=" + alternate + "\n", (evidence / "source-identity.txt").read_text())
-        self.assertEqual((evidence / "docker-image-id.txt").read_text(), IMAGE_DIGEST + "\n")
+        self.assertEqual((evidence / "docker-image-id.txt").read_text(), IMAGE_CONFIG_ID + "\n")
 
     def test_empty_or_wrong_repository_digest_and_architecture_are_refused(self):
-        for controls in ({"digest": ""}, {"digest": "example:latest"}, {"arch": "linux/arm64"}):
-            with self.subTest(controls=controls):
-                ran = self.invoke(controls=controls)
-                self.assert_refused(ran, "prebuilt-bookworm:")
+        for consume in (False, True):
+            if consume:
+                archive, checksum = self.consumer_inputs()
+            for controls in ({"digest": ""}, {"digest": "example:latest"},
+                             {"digest": IMAGE.split("@", 1)[0] + "@" + IMAGE_CONFIG_ID},
+                             {"arch": "linux/arm64"}):
+                with self.subTest(controls=controls, consume=consume):
+                    ran = (self.consume(archive, checksum, controls=controls) if consume
+                           else self.invoke(controls=controls))
+                    self.assert_refused(ran, "prebuilt-bookworm:")
 
     def test_observed_docker_versions_are_recorded_for_both_transports(self):
         for consume in (False, True):
@@ -456,7 +501,8 @@ class BookwormTransport(unittest.TestCase):
                 ("readonly image=${ENGINE_TOOLCHAIN_IMAGE:-}",
                  "readonly image=example.invalid/toolchains/engine-bookworm:latest"),
                 (IMAGE_DIGEST, IMAGE_DIGEST[:-1] + "1"),
-                ('|| fail "preloaded image Id differs from pinned digest"', '|| true'),
+                (IMAGE_CONFIG_ID, IMAGE_CONFIG_ID[:-1] + "1"),
+                ('|| fail "preloaded image Id differs from pinned config ID"', '|| true'),
                 ("{{.Id}}", "{{.RepoDigests}}"),
                 ("--pull=never", "--pull=always"),
                 ("--platform linux/amd64", "--platform linux/arm64"),
