@@ -208,8 +208,9 @@ Notes that cost other lanes a cycle:
 - `ctest` rebuilds nothing. Build **all** targets before it, or you are running
   stale binaries. The sanitizer shards and `live-sanitizers` profile in
   `scripts/ci_verify.py` derive the selected build closure from the configured
-  CTest commands and properties, include install prerequisites, rebuild it,
-  and check its outputs before running that exact selection.
+  CTest commands and properties, add install prerequisites only on the owner
+  shard (shard 1, or an unsharded run), rebuild the closure, and check its
+  outputs before running that exact selection.
 
 ### 5. Report
 
