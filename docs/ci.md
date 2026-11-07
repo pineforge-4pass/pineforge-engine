@@ -2033,9 +2033,14 @@ The main branch rule table and parser grammar judge the fetched head workflows.
 A workflow change that needs a loosened rule must therefore use two changes.
 
 Rule and table changes land first while existing workflows pass; workflow changes follow, so one PR cannot change both sides of admission.
-`gke-pr.yml` admits exactly two variants: OLD is the shape without the arm job, kept so earlier workflow files still pass; defining the `build-arm` job selects all NEW checks together.
-NEW requires the exact arm classifier output, fixed Debug job on `ubuntu-24.04-arm`, arm-aware `legs` needs/check and independent `result` check.
-Hybrids and extra jobs, outputs, needs or arm steps are refused; OLD retains its original exact rules and templates for a workflow without the arm job.
+`gke-pr.yml` admits two independent variants, each with OLD and NEW shapes.
+For arm, OLD omits `build-arm`, so earlier workflow files still pass; defining that job selects all arm NEW checks together.
+Arm NEW requires the exact arm classifier output, fixed Debug job on `ubuntu-24.04-arm`, arm-aware `legs` needs/check and independent `result` check.
+For corpus validation, OLD omits `corpus-gitlink-result`, so earlier workflow files still pass; defining that job selects all corpus NEW checks together.
+Corpus NEW requires the exact validation job, its hosted runner and commands, and the matching `result` needs, environment and success check.
+The corpus job is independent of the proof legs and runs for every admitted path class.
+All four arm/corpus combinations are admitted when complete; hybrids and extra jobs, outputs, needs or steps are refused.
+Each OLD shape retains its original exact rules, tables and templates for a workflow without its selecting job.
 The github-only class still runs the full workflow policy preflight.
 The proof legs are the only jobs skipped for the two documentation classes.
 The hosted result requires admission and preflight success in every class.
@@ -2060,3 +2065,43 @@ Skipped proof legs are accepted only for an agreed documentation class, or for t
 Missing admission output is a failed result.
 The hosted result never treats an absent proof as green.
 Admission diagnostics preserve the observed class and outcome for review.
+
+### Corpus repository validation gate
+
+Accepting the corpus NEW shape does not enable the gate: it takes effect only
+when a later workflow change adds `corpus-gitlink-result` and its result wiring.
+Roll out the engine rules, scripts, tests and documentation first, then the
+corpus repository pull request with its validation workflow and digest manifest,
+then the engine pull-request workflow change. The trusted base rules must
+admit both the earlier workflow and the proposed workflow during this rollout.
+
+Once enabled, the job checks whether the proposed head changes the corpus
+gitlink relative to the engine merge base. An unchanged gitlink needs no new
+validation. A changed gitlink requires a completed successful GitHub Actions
+`corpus-validate` check on that exact corpus commit; unreadable or unsuccessful
+validation refuses the change. `result` requires this job to succeed even for
+documentation classes, without adding it to `legs` or its proof population.
+
+The job checks out the immutable base under `base` and the admitted head under
+`head`, with credentials persistence disabled for both and full head history.
+It runs `base/scripts/check_corpus_gitlink_result.py --repo head`: the checker
+comes from the trusted base tree, and the head checkout is data. A pull request
+cannot replace the checker that judges its proposed corpus commit.
+The job uses only its read-only job token and the admitted base and head SHAs.
+
+The corpus workflow runs the engine's `scripts/validate_corpus_sha.py` against
+the proposed corpus checkout and prints the engine commit it ran.
+The validator checks recorded bytes and checkout cleanliness, builds the
+probes and measures the selected subset. The manifest `file_digests.json`,
+written by `scripts/write_corpus_file_digests.py`, binds every tracked corpus
+file except itself. The checked commit binds the manifest's own bytes.
+The manifest is not a signature: it detects unrecorded changes and exposes
+deliberate rewrites for review, without proving the correctness of those files.
+A coverage limit is a finding; subset measurement does not establish full
+population parity. The full parity sweep remains a separate gate.
+
+Known limit: while corpus OLD remains accepted, as arm OLD is today, a pull
+request that removes the corpus job and restores OLD result wiring is admitted.
+A workflow without that job is a valid OLD workflow; these rules cannot tell
+a removal from an old branch. A later, separate change must stop accepting
+corpus OLD once no open branch lacks the job.
