@@ -5,8 +5,14 @@ source_root=$1
 module=$2
 out=$3
 mkdir -p "$out"
-test ! -e "$out/collection.json"
-test -s "$module"
+if test -e "$out/collection.json"; then
+    printf 'CR559 CLI: collection already exists: %s; use a fresh output directory to preserve prior artifacts.\n' "$out/collection.json" >&2
+    exit 1
+fi
+if ! test -s "$module"; then
+    printf 'CR559 CLI: generated module is missing or empty: %s; build target cr559_cli_pair before running this test.\n' "$module" >&2
+    exit 1
+fi
 set -x
 python3 -B "$source_root/tests/test_cr559_map_capacity_cli.py" prepare --out "$out"
 

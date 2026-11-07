@@ -5566,12 +5566,18 @@ class PreflightFailures(unittest.TestCase):
             r'in `tests/CMakeLists.txt`: (\d+)$', text, re.MULTILINE)
         self.assertEqual([int(first or second) for first, second in counts],
                          [len(EXPECTED_PR_SLOW_ROWS)] * 2)
+        # expectation corrected: 71 -> 90, because docs/ci.md now states the
+        # size of the pinned set (89 names, 90 with test_cr559_map_capacity_cli)
+        # instead of the retired 43 + 28 = 71 breakdown, which had fallen
+        # behind the pin.
         inventory = re.findall(
-            r'pins all (\d+) source-labelled names: (\d+) from the\n'
-            r'`PINEFORGE_PR_SLOW_TESTS` loop and (\d+) direct CMake', text)
-        self.assertEqual(inventory, [('71', '43', '28')])
-        self.assertIn('The timing list contains 43 names, and 28 additional names', text)
-        self.assertIn('making 71 distinct pinned slow names.', text)
+            r'`scripts/ci_verify\.py` pins (\d+) slow-test names, including\n'
+            r'`test_cr559_map_capacity_cli`\.', text)
+        self.assertEqual(inventory, ['90'])
+        self.assertIn(
+            '`PINNED_SLOW_TEST_ROWS` explicitly pins 90 distinct slow names across\n'
+            '`tests/CMakeLists.txt` and `tests/cr150.d/*.cmake`, including the directly\n'
+            'labelled `test_cr559_map_capacity_cli` row.', text)
 
     def test_documented_slow_rows_refuse_same_size_wrong_slice(self):
         text = (ROOT / 'docs/ci.md').read_text()
