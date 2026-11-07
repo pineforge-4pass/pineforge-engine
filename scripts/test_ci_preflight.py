@@ -881,6 +881,13 @@ class ProtectedGkeRunners(unittest.TestCase):
                         changed = in_job(workflows[name], job, before, after)
                         self.assertNotEqual(changed, workflows[name])
                         self.assertIn(after, _jobs(changed)[job])
+                        if (name, job, wrong) == ('release.yml', 'release', HOSTED_X86) or (
+                                name, job, wrong) == ('release.yml', 'notify-hub', HOSTED_X86):
+                            self.assertIn(
+                                'release.yml release and notify-hub must use the same '
+                                'hosted or isolated runner form',
+                                ci_preflight.runner_findings({**workflows, name: changed}))
+                            continue
                         prefix = f'{name} job {job}'
                         credential_finding = (f'{prefix} must keep production credentials '
                                               'on a hosted standard runner')
@@ -1667,6 +1674,170 @@ class PrebuiltCredentialAdmission(unittest.TestCase):
                 findings = ci_workflow_findings(
                     *sources, others={**others, 'release.yml': path.read_text()})
                 self.assertIn(self.CREDENTIAL_FINDING, findings)
+
+
+class HostedReleaseAdmission(unittest.TestCase):
+    """Keep the hosted release migration bound to its protected surface."""
+
+    def setUp(self):
+        self.sources = [(ROOT / path).read_text() for path in CI_SOURCES]
+        named = {Path(path).name for path in CI_SOURCES}
+        self.others = {
+            name: (ROOT / '.github/workflows' / name).read_text()
+            for name in ('release.yml', 'release-ruleset-probe.yml',
+                         'promote-baseline.yml')
+            if name not in named
+        }
+        self.legacy = self.others['release.yml']
+
+    def findings(self, workflow):
+        return ci_workflow_findings(
+            *self.sources, others={**self.others, 'release.yml': workflow})
+
+    def hosted_workflow(self):
+        workflow = self.legacy
+        for job in ('release', 'notify-hub'):
+            workflow = in_job(
+                workflow, job, f'    runs-on: {RELEASE_RUNNER}\n',
+                f'    runs-on: {HOSTED_X86}\n')
+        legacy_glibc = '''      # Both dry-run and publication inspect every installed .a/.so/.so.*.
+      # Keep raw checker output and its actual exit status, including setup errors.
+      - name: Check every staged library's glibc floor
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
+          mkdir -p "${log}"
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+            checker_rc=0
+          else checker_rc=$?; fi
+          printf '%s\\n' "${checker_rc}" > "${log}/exitcode.txt"
+          cat "${log}/stdout.jsonl"
+          cat "${log}/stderr.txt" >&2
+          exit "${checker_rc}"'''
+        archive_glibc = '''      # The glibc comparison baseline is this triple's archive from the v1.10.0
+      # release: the real released bytes, pinned by sha256 and unpacked here.
+      # The checker below only reads the unpacked libraries.
+      - name: Fetch the v1.10.0 baseline archive for the glibc comparison
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          case "${TRIPLE}" in
+            linux-x86_64) digest=cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543 ;;
+            linux-aarch64) digest=982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bb ;;
+            *) echo "::error::no v1.10.0 baseline archive for ${TRIPLE}" >&2; exit 1 ;;
+          esac
+          archive="pineforge-v1.10.0-${TRIPLE}.tar.gz"
+          root="${RUNNER_TEMP}/glibc-baseline-${TRIPLE}"
+          mkdir "${root}" "${root}/download" "${root}/tree"
+          gh release download v1.10.0 --repo "${GITHUB_REPOSITORY}" \\
+            --pattern "${archive}" --dir "${root}/download"
+          echo "${digest}  ${root}/download/${archive}" | sha256sum -c -
+          tar -xzf "${root}/download/${archive}" -C "${root}/tree" \\
+            --no-same-owner --no-same-permissions
+          echo "BASELINE_DIR=${root}/tree" >> "${GITHUB_ENV}"
+
+      # Both dry-run and publication inspect every installed .a/.so/.so.* and
+      # compare their highest glibc tag with the baseline fetched above.
+      # Keep raw checker output and its actual exit status, including setup errors.
+      - name: Check every staged library's glibc floor
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
+          mkdir -p "${log}"
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" --baseline-root "${BASELINE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+            checker_rc=0
+          else checker_rc=$?; fi
+          printf '%s\\n' "${checker_rc}" > "${log}/exitcode.txt"
+          cat "${log}/stdout.jsonl"
+          cat "${log}/stderr.txt" >&2
+          exit "${checker_rc}"'''
+        return in_job(workflow, 'prebuilt', legacy_glibc, archive_glibc)
+
+    def test_legacy_isolated_release_form_remains_admitted(self):
+        self.assertEqual(self.findings(self.legacy), [])
+
+    def test_hosted_release_and_notify_hub_form_is_admitted(self):
+        hosted = self.hosted_workflow()
+        self.assertEqual(self.findings(hosted), [])
+        for job in ('release', 'notify-hub'):
+            body = _jobs(hosted)[job]
+            self.assertEqual(
+                ci_preflight._job_values(body, 'runs-on', unquote=False),
+                [HOSTED_X86])
+            self.assertEqual(
+                ci_preflight._job_values(body, 'environment', unquote=False),
+                ['release'])
+
+    def test_hosted_release_requires_the_protected_environment(self):
+        hosted = self.hosted_workflow()
+        for job in ('release', 'notify-hub'):
+            changed = in_job(hosted, job, '    environment: release\n', '')
+            findings = self.findings(changed)
+            self.assertIn(
+                f'release.yml job {job} must use environment release '
+                'on its protected release job',
+                findings)
+            self.assertIn(
+                f'release.yml job {job}: App-token minting/private-key use '
+                'requires a literal, non-empty environment; review other minting methods by hand',
+                findings)
+
+    def test_hosted_release_refuses_self_hosted_and_larger_runner_forms(self):
+        hosted = self.hosted_workflow()
+        for runner in (RELEASE_RUNNER, '["self-hosted","ubuntu-24.04"]',
+                       'ubuntu-24.04-large'):
+            for job in ('release', 'notify-hub'):
+                with self.subTest(job=job, runner=runner):
+                    changed = in_job(
+                        hosted, job, f'    runs-on: {HOSTED_X86}\n',
+                        f'    runs-on: {runner}\n')
+                    self.assertNotEqual(self.findings(changed), [])
+
+    def test_release_credentials_do_not_enter_a_neighbor_job(self):
+        hosted = self.hosted_workflow()
+        mutations = (
+            ('    environment: release\n', 'environment'),
+            ('    env:\n      RELEASE_KEY: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\n',
+             'private key'),
+        )
+        for replacement, label in mutations:
+            with self.subTest(surface=label):
+                changed = in_job(
+                    hosted, 'prebuilt', '    steps:\n',
+                    replacement + '    steps:\n')
+                findings = self.findings(changed)
+                self.assertIn(
+                    'release.yml job prebuilt must not receive the protected release '
+                    'environment or release credentials',
+                    findings)
+
+    def test_hosted_prebuilt_archive_comparison_is_ordered_and_pinned(self):
+        hosted = self.hosted_workflow()
+        expected = ('release.yml prebuilt must retain the credential-free Bookworm build, '
+                    'ARM Eigen setup, all-library glibc gate and packed-archive consumer '
+                    'before upload; the hosted form also pins its released-archive comparison')
+        self.assertEqual(self.findings(hosted), [])
+        mutations = (
+            ('gh release download v1.10.0 --repo "${GITHUB_REPOSITORY}"',
+             'gh release download v1.9.0 --repo "${GITHUB_REPOSITORY}"'),
+            ('cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543',
+             '0000000000000000000000000000000000000000000000000000000000000000'),
+            ('-C "${root}/tree" \\\n            --no-same-owner',
+             '-C "${root}/download" \\\n            --no-same-owner'),
+            ('--baseline-root "${BASELINE_DIR}"',
+             '--baseline-root "${RUNNER_TEMP}"'),
+            ('echo "BASELINE_DIR=${root}/tree" >> "${GITHUB_ENV}"', ''),
+        )
+        for before, after in mutations:
+            with self.subTest(before=before):
+                changed = in_job(hosted, 'prebuilt', before, after)
+                self.assertIn(expected, self.findings(changed))
 
 
 class WorkflowEventFleets(unittest.TestCase):
@@ -8035,7 +8206,7 @@ finally:
                 self.assertIn('release.yml must retain workflow_dispatch only '
                               'for protected release jobs', findings)
         for job in ('release', 'notify-hub'):
-            for runner in ('ubuntu-latest', 'ubuntu-24.04', HOSTED_ARM, GKE_2, LEGACY_PR_RUNNER,
+            for runner in ('ubuntu-latest', 'ubuntu-22.04', HOSTED_ARM, GKE_2, LEGACY_PR_RUNNER,
                            GKP_2, GKP_4, GKP_OD_PREBUILT,
                            f"${{{{ fromJSON('{GKP_2}') || 'ubuntu-latest' }}}}",
                            f"${{{{ fromJSON('{RELEASE_RUNNER}') || 'ubuntu-latest' }}}}"):
@@ -8408,12 +8579,15 @@ finally:
         for name, jobs in (('docs.yml', ('build',)), ('promote-baseline.yml', ('promote-guard', 'promote')),
                            ('release.yml', ('release', 'prebuilt', 'notify-hub'))):
             for job in jobs:
-                # docs.yml and the promotion jobs are hosted pins now; only release.yml
-                # keeps its isolated protected scale sets.
+                # docs.yml and the promotion jobs are hosted pins; release.yml
+                # accepts either its legacy isolated release form or the exact
+                # hosted form, while its prebuilt matrix remains separate.
                 before = (HOSTED_MATRIX_RUNNER if job == 'prebuilt' else
                           HOSTED_X86 if name in ('promote-baseline.yml', 'docs.yml') else
                           RELEASE_RUNNER)
-                after = 'ubuntu-latest' if name in ('docs.yml', 'promote-baseline.yml') else PR_RUNNER
+                after = (PR_RUNNER if job == 'prebuilt' else
+                         'ubuntu-latest' if name in ('docs.yml', 'promote-baseline.yml')
+                         else HOSTED_ARM)
                 pool = in_job(workflows[name], job, f'    runs-on: {before}\n',
                               f'    runs-on: {after}\n')
                 findings = ci_preflight.runner_findings(dict(
