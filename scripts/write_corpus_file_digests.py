@@ -77,8 +77,12 @@ def write_file_digests(corpus: Path, output: Path | None = None) -> Path:
     files = {}
     for name in sorted(tracked - {FILE_DIGESTS}):
         path = root / name
-        _local_file(root, path)
-        _require_materialized(path)
+        try:
+            _local_file(root, path)
+            _require_materialized(path)
+        except ValueError as problem:
+            # Name the file: these two helpers describe the problem without a path.
+            raise ValueError(f"{path}: {problem}") from problem
         files[name] = _sha256(path)
     _check_clean(root, outputs)
     if _tracked_entries(root) != entries:
