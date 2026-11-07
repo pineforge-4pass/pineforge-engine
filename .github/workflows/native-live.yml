@@ -292,6 +292,10 @@ jobs:
           TMPDIR: /mnt/pineforge-native-sanitizers/${{ github.run_id }}-${{ matrix.profile }}/tmp
         run: python3 scripts/ci_verify.py ${{ matrix.profile }} --build-dir ${{ matrix.build_dir }} --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache
 
+      - name: Measure sanitizer disk space after verification
+        if: ${{ always() && needs.authz.result == 'success' }}
+        run: df -h / /mnt
+
       - name: Stage and summarize diagnostics
         if: always()
         env:
