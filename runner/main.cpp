@@ -370,6 +370,12 @@ Config args(int argc, char **argv) {
                 throw std::runtime_error("trade-text must not replace a ledger or input artifact");
         if (fs::exists(fs::symlink_status(fs::absolute(c.trade_text_path))))
             throw std::runtime_error("trade-text requires a new output path");
+        // The companion is written after the stop is recorded, so a directory that cannot take
+        // the file must fail here, before anything runs, not after the exit summary is lost.
+        std::error_code directory_error;
+        const auto directory = fs::absolute(c.trade_text_path).parent_path();
+        if (!fs::is_directory(directory, directory_error) || ::access(directory.c_str(), W_OK | X_OK) != 0)
+            throw std::runtime_error("trade-text parent directory must exist and be writable");
     }
     return c;
 }
@@ -1035,6 +1041,9 @@ int run(Config c) {
     strategy.load(c.strategy, c.max_output_series);
     if (sha256_hex(read_file(c.strategy, 512ULL * 1024 * 1024)) != sha256_hex(library))
         throw std::runtime_error("strategy library changed during initialization");
+    // Known at load, so refuse before the run rather than after its stop is recorded.
+    if (!c.trade_text_path.empty() && !strategy.has_current_engine_layout)
+        throw std::runtime_error("trade-text requires the current engine layout; rebuild strategy");
     strategy.require_contract(c);
     auto warmup = history(original, !pine_minute_input(c));
     if (chart_delivery(c)) {

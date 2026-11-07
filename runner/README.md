@@ -78,7 +78,10 @@ and report are already durable, and export remains available.
 
 `run --trade-text PATH` writes a separate `pf-trade-text` version 1 JSONL
 companion after successful intake and delivery finish. It is off by default.
-The path must be new; existing files and input/ledger paths are refused.
+The path must be new; existing files and input/ledger paths are refused. Its
+parent directory must exist and be writable, and the strategy must expose the
+current engine layout: both are checked before the run starts, so a refusal
+creates no ledger and prints no summary.
 Stdout keeps its existing report and summary bytes. The companion run ID is
 `deployment:inputs_committed`, binding its zero-based row indices to the
 report at that deployment and cursor. Each row includes the entry incarnation,
@@ -88,10 +91,12 @@ JSON escaping and invalid UTF-8 replacement match the sink string encoder;
 valid UTF-8, including decimal digits, survives byte-for-byte after JSON
 decoding. A closing record supplies the row count and SHA-256 of all preceding
 bytes, including line feeds. There is no field, line or stream size cap.
-The 4096-byte read quantum is only a transfer size. The strategy must expose
-the current engine layout. A failed run or storage-budget stop produces no
-successful companion; an I/O failure can leave an incomplete file that must
-not be accepted without a valid trailer and successful runner exit.
+The 4096-byte read quantum is only a transfer size. A failed run or
+storage-budget stop produces no successful companion; an I/O failure while the
+file is written, after the run's stop is recorded, loses the exit summary and
+can leave an incomplete file, which also blocks a restart with the same path
+until it is removed; it must not be accepted without a valid trailer and a
+successful runner exit.
 
 The input, engine hash, actions, report delta and its integrity digest commit in
 one SQLite transaction. Append-only `pineforge-native-report-delta/v1` rows

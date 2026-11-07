@@ -141,7 +141,38 @@ def main():
     rejected(command("overlap.sqlite3", "--trade-text", str(warmup)),
              b"trade-text must not replace a ledger or input artifact")
     assert companion.read_bytes() == before
-    print("PASS trade text runner: digits, binding, digest and default/full/delta stdout")
+
+    # The companion is written after the run's stop is recorded and before its exit summary, so what
+    # decides whether it can be written fails first: nothing runs, no ledger is created.
+    rejected(command("noparent.sqlite3", "--trade-text",
+                     str(root / "no-such-directory" / "texts.jsonl")),
+             b"trade-text parent directory must exist and be writable")
+    assert not (root / "noparent.sqlite3").exists()
+    # A parent that is a file, not a directory, is refused the same way.
+    rejected(command("fileparent.sqlite3", "--trade-text", str(warmup / "texts.jsonl")),
+             b"trade-text parent directory must exist and be writable")
+    assert not (root / "fileparent.sqlite3").exists()
+
+    # A module without the engine layout export (an older build) runs without the option and is
+    # refused at load with it. The old module is a copy of the real one in which the export's name
+    # is changed by one letter (same length, so the dynamic symbol table stays valid).
+    export = b"strategy_stream_engine_layout_version"
+    module = Path(library).read_bytes()
+    assert module.count(export) >= 1
+    old_module = root / "old-layout-module.so"
+    old_module.write_bytes(module.replace(export, export[:-1] + b"X"))
+
+    def old_command(name, *options):
+        old = command(name, *options)
+        old[old.index("--strategy") + 1] = str(old_module)
+        return old
+
+    checked(old_command("old-plain.sqlite3"))
+    rejected(old_command("old-text.sqlite3", "--trade-text", str(root / "old-texts.jsonl")),
+             b"trade-text requires the current engine layout; rebuild strategy")
+    assert not (root / "old-texts.jsonl").exists()
+    assert not (root / "old-text.sqlite3").exists()
+    print("PASS trade text runner: digits, binding, digest, default/full/delta stdout and early refusals")
 
 
 if __name__ == "__main__":
