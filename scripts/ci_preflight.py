@@ -93,7 +93,7 @@ PR_SLOW_ROWS = (
     'test_native_script_bucket_completions',
     'test_native_settlement_carry',
 )
-PR_FAST_ROWS_SHA256 = '0509b2219786efb6878b193639344c299ff8075ba4532dbe09e80e6e97b60a9a'
+PR_FAST_ROWS_SHA256 = '2cb4ca445fbf30f813a8bc036e5a88e7b157be40496d9502445581dcd81ea4f7'
 # Every migrated job runs on a standard hosted Ubuntu image: x86 on
 # ubuntu-24.04 and arm64 on ubuntu-24.04-arm. An unpinned job in a migrated
 # workflow must use the x86 image. The legacy release form keeps its protected
