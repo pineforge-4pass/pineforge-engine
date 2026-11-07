@@ -1349,8 +1349,8 @@ tooling) runs `main`'s own copy on a `push` to `main` and runs no PR code.
 It resolves the pushed SHA through the commit's associated PRs, requiring
 exactly one merged PR whose `merge_commit_sha` is that SHA and whose base is
 `main`; no match or ambiguity exits green with a notice. Manual dispatch
-retains its five merge inputs. It requires both statuses to be successful on
-the resolved PR head and a merge commit on `main` that carries
+retains its five merge inputs. It requires `pineforge/parity` success on
+the resolved PR head (`pineforge/verify` is advisory) and a merge commit on `main` that carries
 exactly that head's tree (PRs are squash-merged, so the head itself never lands
 on the base branch). It hands the campaign tool the merge commit, the PR head and that
 tree, and the tool promotes the pair the merge gate's parity verdict measured
