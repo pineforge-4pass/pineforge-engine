@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "d4a555dcea58c5d7a4c3a0f2223832acb04361f6eebda5f4a642226df4a5067f"
+    "catalogSha256": "dd3476db02bd9b472bb352418a032616ed940ee863c77bbf375ca716046fe46c"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -16,6 +16,30 @@
   },
   "metadataChanges": [],
   "added": [
+    {
+      "code": "live_ledger_backup_failed",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "reason": {
+            "kind": "vocab",
+            "values": [
+              "space",
+              "io",
+              "verification",
+              "incomplete"
+            ]
+          }
+        },
+        "class": "resource",
+        "description": "A durable verified pre-upgrade SQLite ledger copy could not be established. Schema migration has not begun. Repair the reported cause before retrying the invocation.",
+        "english": [
+          "native ledger automatic backup failed: {reason}"
+        ],
+        "retryable": false,
+        "since": "1.12.0"
+      }
+    },
     {
       "code": "pine_map_capacity_exceeded",
       "collection": "codes",

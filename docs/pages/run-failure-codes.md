@@ -203,6 +203,7 @@ other `strategy_create_failed` lines omit it.
 | `engine_invariant` | `engine_fault` | no | `reason` (vocab, 1 values, optional) | An engine invariant failed: a PineForge bug. |
 | `engine_unclassified_error` | `engine_fault` | no | none | An error no coded site reported: a PineForge bug. |
 | `harness_internal_error` | `engine_fault` | no | none | The run harness failed: a PineForge bug. |
+| `live_ledger_backup_failed` | `resource` | no | `reason` (vocab, 4 values) | A durable verified pre-upgrade SQLite ledger copy could not be established. Schema migration has not begun. Repair the reported cause before retrying the invocation. |
 | `lot_grid_rejected` | `symbol_metadata` | yes | none | The symbol's lot size (syminfo.mincontract, the quantity grid) is not a value the engine accepts. |
 | `no_data_request` | `no_data` | no | `call` (pine_source), `function` (vocab, 9 values), `line` (integer) | The script read a request whose data PineForge does not pin for this run. |
 | `other_symbol_feed_missing` | `no_data` | no | `timeframe` (timeframe, optional) | No feed is installed for another symbol's request at its timeframe. |
