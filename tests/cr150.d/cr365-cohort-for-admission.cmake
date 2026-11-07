@@ -1,0 +1,8 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_cohort_for_live_limit_new_id)
+    pineforge_add_unit_test(test_cohort_for_live_limit_new_id)
+    list(APPEND TEST_SOURCES test_cohort_for_existing_id_cadence)
+    pineforge_add_unit_test(test_cohort_for_existing_id_cadence)
+    list(APPEND TEST_SOURCES test_cohort_for_admission_io_refusal)
+    pineforge_add_unit_test(test_cohort_for_admission_io_refusal)
+endif()

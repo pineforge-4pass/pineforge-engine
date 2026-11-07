@@ -7,6 +7,12 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- `ta.percentile_nearest_rank` now accepts a series length at runtime. Each
+  call site retains its own appended source history and computes the
+  nearest-rank percentile over the requested recent values, within the
+  documented historical limit.
+- An exit given in ticks and without `from_entry` that follows a market entry in
+  the same execution now takes effect when that entry fills, as a named exit does.
 - **Strategy modules built against 1.10.x must be rebuilt.** The C++ script
   ABI epoch moves from `engine_script_run_v19` to `engine_script_run_v20`
   (and `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19` to `..._V20`) because
@@ -156,6 +162,18 @@ version number follows semantic versioning over the surfaces the
   Ratio scheduling is a separate later change; whole-curve passes remain.
   Plain/full and v1 delta bytes are preserved. Ledger tables and checkpoint
   layout are unchanged.
+- New run option `series_origin_ms`: the open time, in epoch milliseconds, of
+  the first bar of the series the reference ran on. The source host takes it
+  as a metadata key (a value that is not finite or not positive changes
+  nothing) and the `--syminfo` document of `docker/run_json.py` as a positive
+  JSON integer (`0`, a negative number, a float, a string, a boolean, `NaN` or
+  `Infinity` fails with `syminfo_unreadable`; absent or `null` applies nothing).
+  Declaring it makes `ta.ema`, and the EMAs inside `ta.macd`, `ta.kc` and
+  `ta.tsi`, answer `na` for the first `length - 1` inputs and then start from an
+  SMA seed, as TradingView does at the start of its series, and starts
+  `request.security` at the first whole bucket opening at or after the origin.
+  A run that does not declare it is unchanged. The option has no defined
+  meaning in a live run. See `docker/README.md`.
 - A bounded drawing arena (the line, box and label arenas the generated code
   builds from a script's declared `max_*_count`) now writes in place and keeps
   its slots in blocks of 32 that a checkpoint of the arena shares, like an

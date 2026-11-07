@@ -74,9 +74,12 @@ Schema:
       }
     }
 
-applied_runtime (and so provenance.runtime) also holds
-"syminfo": {"qty_step": float, "mincontract": float} when --syminfo set a lot
-grid from syminfo.mincontract; without one the key is absent.
+applied_runtime (and so provenance.runtime) also holds "syminfo" when --syminfo
+set a lot grid ({"qty_step": float, "mincontract": float}) or declared a
+series_origin_ms (see series_origin_echo for first-bar, offset and warning
+fields). The origin enables both EMA warmup and request.security aggregation
+from the first whole bucket at/after it, with plain expressions na until
+completion. Without either declaration the key is absent.
 
 applied_runtime also holds "symbol_feeds" when --symbol-feeds installed other
 symbols' bars for request.security (see load_symbol_feeds):
@@ -3403,8 +3406,11 @@ def apply_syminfo(lib, strat, syminfo_path):
     syminfo_unreadable{reason: io|not_json|not_object|value_type}; a library
     without the setter a key needs is strategy_library_incompatible{reason:
     setter_missing, missing}.
-    Returns what main() records in applied_runtime["syminfo"]:
-    {"qty_step": v, "mincontract": v}, or {} when no grid was applied."""
+    series_origin_ms is a positive JSON integer declaring the reference series'
+    first bar open. Absent/null applies nothing; malformed values are
+    syminfo_unreadable{reason: value_type}.
+    Returns the applied lot metadata and/or series_origin_ms for
+    applied_runtime["syminfo"], or {} when neither was applied."""
     def unreadable(text, reason):
         return SyminfoError(text, "syminfo_unreadable", {"reason": reason})
 
@@ -3446,6 +3452,15 @@ def apply_syminfo(lib, strat, syminfo_path):
         meta = setter("strategy_set_syminfo_metadata", "mincontract")
         calls += [(meta, b"qty_step", v), (meta, b"mincontract", v)]
         applied = {"qty_step": v, "mincontract": v}
+    origin = si.get("series_origin_ms")
+    if origin is not None:
+        if type(origin) is not int or origin <= 0:
+            raise unreadable(
+                "syminfo.series_origin_ms must be a positive JSON integer, got "
+                + json.dumps(origin)[:80], "value_type")
+        meta = setter("strategy_set_syminfo_metadata", "series_origin_ms")
+        calls.append((meta, b"series_origin_ms", origin))
+        applied["series_origin_ms"] = origin
     for key, name, present, convert, kind in (
             ("mintick", "strategy_set_syminfo_mintick", "mintick" in si, float, "a number"),
             ("pointvalue", "strategy_set_syminfo_pointvalue", "pointvalue" in si, float,
@@ -3465,6 +3480,23 @@ def apply_syminfo(lib, strat, syminfo_path):
     for call in calls:
         call[0](strat, *call[1:])
     return applied
+
+
+def series_origin_echo(applied, first_bar_ms):
+    """Echo the declared reference origin and first fed chart bar, without mutation.
+
+    Declaring the origin also starts request.security at the first whole bucket
+    opening at/after it; plain expressions stay na until that bucket completes.
+    No origin adds no fields, preserving undeclared reports and fingerprints.
+    """
+    if "series_origin_ms" not in applied or first_bar_ms is None:
+        return applied
+    echo = dict(applied)
+    echo["series_origin_first_bar_ms"] = int(first_bar_ms)
+    echo["series_origin_offset_ms"] = int(first_bar_ms) - applied["series_origin_ms"]
+    if applied["series_origin_ms"] > first_bar_ms:
+        echo["series_origin_warning"] = "origin_after_first_bar"
+    return echo
 
 
 # --- Other symbols' bars for request.security (--symbol-feeds) --------------
@@ -5050,7 +5082,9 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             apply_settings(lib, st, inputs, overrides, checked)
             if args.syminfo:
                 r = apply_syminfo(lib, st, args.syminfo)
-                syminfo_applied = r if isinstance(r, dict) else {}
+                syminfo_applied = series_origin_echo(
+                    r if isinstance(r, dict) else {},
+                    retained[0].timestamp if fed_count else None)
             if symbol_feeds:
                 install_symbol_feeds(lib, st, symbol_feeds)
             if args.chart_tz and hasattr(lib, "strategy_set_chart_timezone"):
@@ -5636,7 +5670,7 @@ def _main(argv, binary_inputs) -> int:
     # Volume-weighted magnifier only meaningful when the magnifier is on.
     vw_on = bool(args.magnifier_volume_weighted) and bar_magnifier == 1
 
-    # The lot grid the last _make_state() applied (the body run's), for
+    # The metadata the last _make_state() applied (the body run's), for
     # applied_runtime["syminfo"]; {} when none.
     syminfo_applied: dict = {}
     # Other symbols' bars, read once before the first state (None without
@@ -5656,7 +5690,8 @@ def _main(argv, binary_inputs) -> int:
             if args.syminfo:
                 r = (metrics.apply_syminfo(st) if metrics is not None
                      else apply_syminfo(lib, st, args.syminfo))
-                syminfo_applied = r if isinstance(r, dict) else {}
+                syminfo_applied = series_origin_echo(
+                    r if isinstance(r, dict) else {}, first_ts)
             if symbol_feeds:
                 install_symbol_feeds(lib, st, symbol_feeds)
             if args.trade_start_ms is not None and hasattr(lib, "strategy_set_trade_start_time"):

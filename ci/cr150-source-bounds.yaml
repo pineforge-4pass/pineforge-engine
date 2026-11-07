@@ -55,7 +55,7 @@ codegen:
   tree: absent
   # The codegen checkout is not in this tree, so its emitter source is NOT
   # scanned. These are the container shapes the pinned emitter is documented
-  # (docs/coverage.md:58, :895-896) and observed (tutorial/**/generated*.cpp) to
+  # (docs/coverage.md:58, :900-901) and observed (tutorial/**/generated*.cpp) to
   # emit. All OPEN: a bound for generated user state needs a codegen-side proof.
   emitter_templates:
     - {id: "T01", emits: "Pine array<T> as std::vector<T>", owner: "generated-cpp", phase: "bar", state: "pending-flat-memory", grows_with: ["bars", "events"], inventory: "U01"}
@@ -83,14 +83,16 @@ ceilings:
   # CR-559: one map Store resize group and one group of three error-string temporaries.
   # Both stay OPEN; an optional pair limit with default zero establishes no fixed bound.
   # Ten time-format string groups use per-call pattern and written-width storage.
-  # Forty-seven more unreviewed groups on the integrated tree (51 emitted by
+  # Forty-six more unreviewed groups on the integrated tree (50 emitted by
   # --emit-seed, 4 stale entries removed): the bounded drawings, the owned
   # storage and runtime context service, the ledger cache
   # and the selected-capacity driver, reader and core. None is bounded.
   # Two of those groups are gone (U1666 and U1668, the whole-state copies a bounded
   # drawing arena made on every create, delete and edit): its slots are now shared
   # blocks written in place, so the ceiling drops by two.
-  unreviewed: 1401
+  # One materialize_relative_exits local-list group and three
+  # SeriesPercentileNearestRank groups remain OPEN as well.
+  unreviewed: 1404
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -926,7 +928,6 @@ entries:
   - {id: "U0828", file: "src/source/pine_adapter.cpp", symbol: "close_logical_units_", ops: ["subscript"], container: "unresolved by the index: close_logical_units_[...]", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 9488}
   - {id: "U0830", file: "src/source/pine_adapter.cpp", symbol: "closes", ops: ["assign", "decl", "grow"], container: "std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1885}
   - {id: "U0833", file: "src/source/pine_adapter.cpp", symbol: "cohort_sides", ops: ["decl", "subscript"], container: "std::unordered_map<const void*, CohortSides>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1551}
-  - {id: "U0834", file: "src/source/pine_adapter.cpp", symbol: "cohorts_by_id_", ops: ["grow", "subscript"], container: "unresolved by the index: cohorts_by_id_.emplace(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 3020}
   - {id: "U0835", file: "src/source/pine_adapter.cpp", symbol: "consumed_partial_exit_cycles_", ops: ["grow", "subscript"], container: "unresolved by the index: consumed_partial_exit_cycles_[...]", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 24790}
   - {id: "U0836", file: "src/source/pine_adapter.cpp", symbol: "cross_side_by_entry", ops: ["decl", "grow"], container: "std::unordered_map<SourceId, bool>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1974}
   - {id: "U0837", file: "src/source/pine_adapter.cpp", symbol: "current_debited_applied_ordinals_", ops: ["grow"], container: "unresolved by the index: current_debited_applied_ordinals_.insert(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 10535}
@@ -1179,7 +1180,7 @@ entries:
   - {id: "U1104", file: "src/source/pine_ta_length.cpp", symbol: "atr_", ops: ["grow"], container: "unresolved by the index: atr_.emplace(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 354}
   - {id: "U1105", file: "src/source/pine_ta_length.cpp", symbol: "bar_prefix", ops: ["decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 26}
   - {id: "U1108", file: "src/source/pine_ta_length.cpp", symbol: "state_", ops: ["assign"], container: "unresolved by the index: state_ = ...", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 195}
-  - {id: "U1109", file: "src/source/pine_ta_length.cpp", symbol: "std::to_string", ops: ["temp"], container: "unresolved by the index: std::to_string(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 29}
+  - {id: "U1109", file: "src/source/pine_ta_length.cpp", symbol: "std::to_string", ops: ["temp"], container: "unresolved by the index: std::to_string(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 30}
   - {id: "U1508", file: "src/source/pine_value_admission.cpp", symbol: "<temp:RunFailureArgs>", ops: ["temp"], container: "unresolved by the index: RunFailureArgs", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-26 (c171b), class: error-path temporary. One RunFailureArgs list built once in admit_text, only when a strategy identifier containing NUL or the unit separator is refused; the run then fails on the throw. Three short fields; nothing is retained, nothing grows with bars, never on a per-bar path. Bound not argued, so OPEN.", line: 54}
   - {id: "U1509", file: "src/source/pine_value_admission.cpp", symbol: "<temp:string>", ops: ["temp"], container: "unresolved by the index: std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-26 (c171b), class: error-path temporaries. Three std::string temporaries in the same throw (line 54: the 'strategy.' prefix and the part of the field name before the dot; line 55: the part after the dot), sized by the length of the field name (a literal chosen by the caller), built only when an identifier with NUL or the unit separator is refused, freed on the throw; nothing retained, not per-bar. Bound not argued, so OPEN.", line: 54}
   - {id: "U1111", file: "src/source/pine_value_admission.hpp", symbol: "<temp:RunFailureArgs>", ops: ["temp"], container: "unresolved by the index: RunFailureArgs", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 33}
@@ -1731,3 +1732,7 @@ entries:
   - {id: "U1720", file: "src/selected_capacity_driver.hpp", symbol: "option", ops: ["decl"], container: "std::string", owner: "selected-capacity", phase: "unclassified", state: "unreviewed", line: 126}
   - {id: "U1721", file: "src/source/multi_day_periods.hpp", symbol: "allocate_shared", ops: ["alloc"], container: "unresolved by the index: allocate_shared", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 103}
   - {id: "U1722", file: "src/source/pine_strategy_host.cpp", symbol: "timeframe", ops: ["assign", "decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1885}
+  - {id: "U1726", file: "src/source/pine_adapter.cpp", symbol: "global_pending", ops: ["decl", "grow"], container: "std::vector<PendingRelativeExit>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "A local list of materialize_relative_exits: the unnamed relative exit definitions taken from pending_relative_exits_ (one definition per exit id and from_entry pair) when a market entry fills, one push_back each in the loop over pending_relative_exits_, then moved into the local pending list of the same call; it lives for one call. OPEN.", line: 14587}
+  - {id: "U1724", file: "include/pineforge/source/pine_ta_length.hpp", symbol: "history_", ops: ["decl"], container: "std::vector<double>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "SeriesPercentileNearestRank's append ring retains kMaxBarsBack + 1 doubles. Its optional ta::PercentileWindow retains the requested length, at most kMaxBarsBack + 1 values, and is rebuilt on a length change. OPEN.", line: 289}
+  - {id: "U1725", file: "src/source/pine_ta_length.cpp", symbol: "history_", ops: ["grow"], container: "unresolved by the index: history_.assign(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "SeriesPercentileNearestRank's append ring is assigned once at kMaxBarsBack + 1 doubles and then overwrites slots. The optional ta::PercentileWindow retains the requested length, at most kMaxBarsBack + 1 values, and is rebuilt on a length change. OPEN.", line: 342}
+  - {id: "U1728", file: "src/source/pine_ta_length.cpp", symbol: "window_", ops: ["grow"], container: "unresolved by the index: window_.emplace(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "SeriesPercentileNearestRank builds its ta::PercentileWindow for the requested length and builds it again when the requested length changes; the window retains that length, at most kMaxBarsBack + 1 values. OPEN.", line: 366}
