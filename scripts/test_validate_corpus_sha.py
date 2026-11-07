@@ -4,13 +4,16 @@ from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
-import shlex
+import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 import validate_corpus_sha as validator
+import write_corpus_file_digests as writer
 
 
 class CorpusRecordsTests(unittest.TestCase):
@@ -19,6 +22,7 @@ class CorpusRecordsTests(unittest.TestCase):
         self.addCleanup(resources.close)
         self.root = Path(resources.enter_context(
             tempfile.TemporaryDirectory(prefix="corpus-records-")))
+        git(self.root, "init", "-q")
         probe = self.root / "validation" / "sample"
         probe.mkdir(parents=True)
         (self.root / "data").mkdir()
@@ -27,6 +31,20 @@ class CorpusRecordsTests(unittest.TestCase):
         for filename in validator.ARTIFACT_FILES.values():
             (probe / filename).write_bytes(b"recorded bytes\n")
         self.write_records()
+        self.rewrite_file_digests()
+
+    def rewrite_file_digests(self):
+        git(self.root, "add", "--all")
+        git(self.root, "commit", "-q", "-m", "Record corpus records fixture")
+        output = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(output):
+            code = writer.main(["--corpus", str(self.root)])
+        self.assertEqual(code, 0, output.getvalue())
+        # Only the first refresh introduces a new tracked file. Later refreshes
+        # need not commit an identical manifest.
+        git(self.root, "add", "--all")
+        if git(self.root, "diff", "--cached", "--name-only"):
+            git(self.root, "commit", "-q", "-m", "Record file digests")
 
     def write_records(self):
         probe = self.root / "validation" / "sample"
@@ -60,28 +78,50 @@ class CorpusRecordsTests(unittest.TestCase):
                 path = self.root / "validation" / "sample" / filename
                 previous = path.read_bytes()
                 path.write_bytes(previous + b"x")
+                self.rewrite_file_digests()
                 errors = validator.check_records(self.root)
                 self.assertTrue(errors)
                 self.assertIn(path.resolve().name, "\n".join(errors))
+                self.assertTrue(any(
+                    error.startswith(f"records {path.resolve()}: sha256 ")
+                    and "differs from recorded" in error for error in errors), errors)
                 path.write_bytes(previous)
+                self.rewrite_file_digests()
 
     def test_renamed_directory_reports_missing_and_unrecorded(self):
         (self.root / "validation" / "sample").rename(
             self.root / "validation" / "renamed")
+        self.rewrite_file_digests()
         errors = "\n".join(validator.check_records(self.root))
         self.assertIn("validation/sample", errors)
         self.assertIn("validation/renamed", errors)
+        self.assertIn(
+            f"records {self.root / 'validation/sample'}: recorded probe directory is missing",
+            errors)
+        self.assertIn(
+            f"records {self.root / 'validation/renamed'}: directory is unrecorded in run_manifest.json",
+            errors)
 
     def test_empty_population_and_wrong_schemas_are_invalid(self):
         for kind in ("tapes", "kind", "schemaVersion"):
             previous = self.manifest[kind]
             self.manifest[kind] = {} if kind == "tapes" else "wrong"
             self.save()
-            self.assertTrue(validator.check_records(self.root))
+            self.rewrite_file_digests()
+            errors = validator.check_records(self.root)
+            self.assertTrue(errors)
+            reason = ("tapes must be a nonempty map" if kind == "tapes"
+                      else f"unsupported {kind}")
+            self.assertIn(f"records {self.root / 'run_manifest.json'}: {reason}", errors)
             self.manifest[kind] = previous
         self.owned["entries"] = []
         self.save()
-        self.assertTrue(validator.check_records(self.root))
+        self.rewrite_file_digests()
+        errors = validator.check_records(self.root)
+        self.assertTrue(errors)
+        self.assertIn(
+            f"records {self.root / 'owned_strategies.json'}: entries must be a nonempty list",
+            errors)
 
     def test_lfs_pointer_is_checked_against_materialized_bytes(self):
         feed = self.root / "data" / "ohlcv_ETH-USDT-USDT_1m.csv"
@@ -137,6 +177,7 @@ class CorpusValidatorMainTests(unittest.TestCase):
         feed.write_bytes(b"timestamp,open,high,low,close,volume\n0,1,1,1,1,1\n")
         (self.root / ".gitattributes").write_text(
             f"{validator.FEED} filter=lfs diff=lfs merge=lfs -text\n")
+        (self.root / ".gitignore").write_text("untracked-*\n")
         self.lfs_files = [feed]
         self.owned_probe = self.root / "validation" / "sample"
         self.owned_probe.mkdir(parents=True)
@@ -145,6 +186,7 @@ class CorpusValidatorMainTests(unittest.TestCase):
         self.unowned_probe = self.root / "validation" / "additional"
         self.unowned_probe.mkdir()
         (self.unowned_probe / "engine_trades.csv").write_bytes(b"additional tape\n")
+        (self.unowned_probe / "tv_trades.csv").write_bytes(b"additional export\n")
         self.manifest = {
             "kind": "pineforge-corpus-run-manifest",
             "schemaVersion": 2,
@@ -164,10 +206,31 @@ class CorpusValidatorMainTests(unittest.TestCase):
         (self.root / "run_manifest.json").write_text(json.dumps(self.manifest))
         (self.root / "owned_strategies.json").write_text(json.dumps(self.owned))
         self.commit("Record corpus fixture")
+        self.rewrite_file_digests()
 
     def commit(self, message):
         git(self.root, "add", "--all")
         git(self.root, "commit", "-q", "-m", message)
+
+    def rewrite_file_digests(self):
+        output = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(output):
+            code = writer.main(["--corpus", str(self.root)])
+        self.assertEqual(code, 0, output.getvalue())
+        self.commit("Record file digests")
+
+    def file_digests(self):
+        return json.loads((self.root / "file_digests.json").read_text())
+
+    def save_file_digests(self, record):
+        (self.root / "file_digests.json").write_text(json.dumps(record))
+        self.commit("Change the file digest record")
+
+    def count_fields(self, output):
+        lines = [line for line in output.splitlines() if line.startswith("COUNT ")]
+        self.assertEqual([line.split()[0] for line in lines], ["COUNT"], output)
+        return {key: int(value) for key, value in
+                (field.split("=", 1) for field in lines[0].split()[1:])}
 
     def invoke(self, *arguments, corpus=None):
         output = io.StringIO()
@@ -192,15 +255,19 @@ class CorpusValidatorMainTests(unittest.TestCase):
 
     def test_records_only_valid_checkout(self):
         output = self.assert_outcome(self.invoke("--records-only"), 0)
+        tracked = set(git(self.root, "ls-files", "-z").rstrip("\0").split("\0"))
         expected = {
             "tapes": len(self.manifest["tapes"]),
             "owned_entries": len(self.owned["entries"]),
             "owned_hashes": sum(len(entry["artifacts"]) for entry in self.owned["entries"]),
             "lfs_pointers": len(self.lfs_files),
             "feed": len(self.lfs_files),
+            "tracked": len(tracked),
+            "bound": len(tracked - {"file_digests.json"}),
         }
         self.assertIn("COUNT " + " ".join(f"{key}={value}"
                                          for key, value in expected.items()), output)
+        self.assertEqual(self.count_fields(output), expected)
         self.assertIn("CLEAN corpus tree unchanged", output)
         self.assertNotIn("FINDING ", output)
 
@@ -211,6 +278,7 @@ class CorpusValidatorMainTests(unittest.TestCase):
         previous = path.read_bytes()
         path.write_bytes(bytes([previous[0] ^ 1]) + previous[1:])
         self.commit("Change an unowned tape byte")
+        self.rewrite_file_digests()
         output = self.assert_outcome(self.invoke("--records-only"), 1)
         self.assertIn(str(path), output)
         self.assertIn("differs from recorded", output)
@@ -220,9 +288,217 @@ class CorpusValidatorMainTests(unittest.TestCase):
         previous = path.read_bytes()
         path.write_bytes(bytes([previous[0] ^ 1]) + previous[1:])
         self.commit("Change an owned artifact byte")
+        self.rewrite_file_digests()
         output = self.assert_outcome(self.invoke("--records-only"), 1)
         self.assertIn(str(path), output)
         self.assertIn("differs from recorded", output)
+
+    def test_unowned_export_flipped_byte_is_invalid(self):
+        self.assertNotIn(self.unowned_probe.name,
+                         [entry["corpus_id"] for entry in self.owned["entries"]])
+        path = self.unowned_probe / "tv_trades.csv"
+        recorded_paths = {f"{name}/engine_trades.csv" for name in self.manifest["tapes"]}
+        recorded_paths.update(
+            f"validation/{entry['corpus_id']}/{filename}"
+            for entry in self.owned["entries"] for filename in validator.ARTIFACT_FILES.values())
+        self.assertNotIn(path.relative_to(self.root).as_posix(), recorded_paths)
+        previous = path.read_bytes()
+        path.write_bytes(bytes([previous[0] ^ 1]) + previous[1:])
+        self.commit("Change an export outside the owned records")
+        output = self.assert_outcome(self.invoke("--records-only"), 1)
+        self.assertIn(str(path), output)
+        self.assertIn("differs from recorded", output)
+
+    def test_new_tracked_file_without_a_digest_is_invalid(self):
+        path = self.root / "additional.txt"
+        path.write_bytes(b"new tracked bytes\n")
+        self.commit("Add a file without rewriting the manifest")
+        output = self.assert_outcome(self.invoke("--records-only"), 1)
+        self.assertIn(str(path), output)
+        self.assertIn("tracked but unlisted", output)
+
+    def test_listed_file_removed_from_repository_is_invalid_and_not_counted(self):
+        path = self.unowned_probe / "tv_trades.csv"
+        recorded = self.file_digests()["files"]
+        relative = path.relative_to(self.root).as_posix()
+        git(self.root, "rm", "--", relative)
+        git(self.root, "commit", "-q", "-m", "Remove a listed file")
+        output = self.assert_outcome(self.invoke("--records-only"), 1)
+        self.assertIn(str(path), output)
+        self.assertIn("listed but untracked", output)
+        self.assertEqual(self.count_fields(output)["bound"],
+                         len(set(recorded) - {relative}))
+
+    def test_listed_path_that_was_never_tracked_is_invalid(self):
+        source = self.unowned_probe / "tv_trades.csv"
+        path = self.root / "untracked-never-recorded.txt"
+        path.write_bytes(source.read_bytes())
+        record = self.file_digests()
+        record["files"][path.name] = record["files"][
+            source.relative_to(self.root).as_posix()]
+        self.save_file_digests(record)
+        self.assertNotIn(path.name, git(self.root, "ls-files").splitlines())
+        output = self.assert_outcome(self.invoke("--records-only"), 1)
+        self.assertIn(str(path), output)
+        self.assertIn("listed but untracked", output)
+
+    def test_tape_digest_disagreement_names_both_records(self):
+        name = self.unowned_probe.relative_to(self.root).as_posix()
+        replacement = digest(self.unowned_probe / "tv_trades.csv")
+        self.assertNotEqual(replacement, self.manifest["tapes"][name])
+        self.manifest["tapes"][name] = replacement
+        (self.root / "run_manifest.json").write_text(json.dumps(self.manifest))
+        self.commit("Change only the tape record")
+        self.rewrite_file_digests()
+        output = self.assert_outcome(self.invoke("--records-only"), 1)
+        self.assertTrue(any("run_manifest.json" in line
+                            and "file_digests.json" in line
+                            and f"{name}/engine_trades.csv" in line
+                            for line in output.splitlines()), output)
+
+    def test_owned_digest_disagreement_names_both_records(self):
+        original = dict(self.owned["entries"][0]["artifacts"])
+        replacement = digest(self.unowned_probe / "tv_trades.csv")
+        for key, filename in validator.ARTIFACT_FILES.items():
+            with self.subTest(artifact=key):
+                source = self.owned_probe / filename
+                self.assertNotEqual(replacement, original[key])
+                self.owned["entries"][0]["artifacts"] = {**original, key: replacement}
+                (self.root / "owned_strategies.json").write_text(json.dumps(self.owned))
+                self.commit("Change only an owned artifact record")
+                self.rewrite_file_digests()
+                output = self.assert_outcome(self.invoke("--records-only"), 1)
+                self.assertTrue(any("owned_strategies.json" in line
+                                    and "file_digests.json" in line
+                                    and source.relative_to(self.root).as_posix() in line
+                                    for line in output.splitlines()), output)
+
+    def test_feed_digest_disagreement_names_both_records(self):
+        replacement = digest(self.unowned_probe / "tv_trades.csv")
+        self.assertNotEqual(replacement, self.manifest["feedSha256"])
+        self.manifest["feedSha256"] = replacement
+        (self.root / "run_manifest.json").write_text(json.dumps(self.manifest))
+        self.commit("Change only the feed record")
+        self.rewrite_file_digests()
+        output = self.assert_outcome(self.invoke("--records-only"), 1)
+        self.assertTrue(any("run_manifest.json" in line
+                            and "feedSha256" in line
+                            and "file_digests.json" in line
+                            and validator.FEED in line
+                            for line in output.splitlines()), output)
+
+    def test_missing_file_digest_manifest_is_invalid(self):
+        path = self.root / "file_digests.json"
+        git(self.root, "rm", "--", path.name)
+        git(self.root, "commit", "-q", "-m", "Remove the digest manifest")
+        output = self.assert_outcome(self.invoke("--records-only"), 1)
+        self.assertIn(str(path), output)
+        self.assertIn("missing", output)
+
+    def test_ignored_untracked_manifest_is_invalid(self):
+        path = self.root / "file_digests.json"
+        git(self.root, "rm", "--cached", "--", path.name)
+        ignore = self.root / ".gitignore"
+        ignore.write_text(ignore.read_text() + path.name + "\n")
+        self.commit("Leave the manifest ignored and untracked")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(writer.main(["--corpus", str(self.root)]), 0)
+        self.assertEqual(git(self.root, "status", "--porcelain"), "")
+        output = self.assert_outcome(self.invoke("--records-only"), 1)
+        self.assertTrue(any(str(path) in line and "must be tracked" in line
+                            for line in output.splitlines()), output)
+
+    def test_census_difference_lists_are_capped_per_kind(self):
+        limit = 50
+        old = {f"old-{index}.txt" for index in range(limit + len(self.manifest["tapes"]))}
+        new = {name.replace("old-", "new-", 1) for name in old}
+        for name in old:
+            (self.root / name).write_bytes(b"census input\n")
+        self.commit("Record the initial census population")
+        self.rewrite_file_digests()
+        git(self.root, "rm", "--", *sorted(old))
+        for name in new:
+            (self.root / name).write_bytes(b"census input\n")
+        self.commit("Replace the census population without a manifest rewrite")
+        output = self.assert_outcome(self.invoke("--records-only"), 1)
+        for kind, paths in (("tracked but unlisted", new), ("listed but untracked", old)):
+            with self.subTest(kind=kind):
+                lines = [line for line in output.splitlines() if kind in line]
+                summary = [line for line in lines if ": and " in line]
+                self.assertEqual(
+                    summary,
+                    [f"FINDING records {self.root / 'file_digests.json'}: "
+                     f"{kind}: and {len(paths) - limit} more"])
+                listed = [line for line in lines if line not in summary]
+                self.assertEqual(len(listed), limit)
+                for name, line in zip(sorted(paths)[:limit], listed):
+                    self.assertIn(str(self.root / name), line)
+
+    def test_tracked_executable_is_invalid_even_with_unchanged_bytes(self):
+        path = self.unowned_probe / "tv_trades.csv"
+        path.chmod(0o755)
+        self.commit("Make a recorded file executable")
+        mode = git(self.root, "ls-files", "--stage", "--",
+                   path.relative_to(self.root).as_posix()).split()[0]
+        output = self.assert_outcome(self.invoke("--records-only"), 1)
+        self.assertTrue(any(str(path) in line and mode in line
+                            and "executable" in line
+                            for line in output.splitlines()), output)
+
+    def test_file_manifest_schema_and_population_are_required(self):
+        original = self.file_digests()
+        for field, value in (("schema_version", "unsupported"),
+                             ("files", {}), ("files", []), ("files", None)):
+            with self.subTest(field=field, value=value):
+                record = dict(original)
+                record[field] = value
+                self.save_file_digests(record)
+                output = self.assert_outcome(self.invoke("--records-only"), 1)
+                reason = ("unsupported schema_version" if field == "schema_version"
+                          else "files must be a nonempty object")
+                self.assertIn(f"FINDING records {self.root / 'file_digests.json'}: {reason}",
+                              output)
+
+    def test_file_manifest_rejects_duplicate_keys_and_nonobjects(self):
+        path = self.root / "file_digests.json"
+        record = self.file_digests()
+        for content, reason in (
+                (json.dumps([]), "JSON object"),
+                ('{"files": {}, "files": {}}', "duplicate JSON key")):
+            with self.subTest(reason=reason):
+                path.write_text(content)
+                self.commit("Record malformed file manifest")
+                output = self.assert_outcome(self.invoke("--records-only"), 1)
+                self.assertTrue(any(str(path) in line and reason in line
+                                    for line in output.splitlines()), output)
+        self.save_file_digests(record)
+
+    def test_file_manifest_paths_must_be_normalized_and_cannot_name_itself(self):
+        original = self.file_digests()
+        expected = next(iter(original["files"].values()))
+        for name in ("", ".", "..", "/absolute", "./relative", "a//b",
+                     "a/../b", "a/", "with space.txt", "file_digests.json"):
+            with self.subTest(name=name):
+                record = {**original, "files": {**original["files"], name: expected}}
+                self.save_file_digests(record)
+                output = self.assert_outcome(self.invoke("--records-only"), 1)
+                self.assertTrue(any("file_digests.json" in line
+                                    and repr(name) in line and "unusable file path" in line
+                                    for line in output.splitlines()), output)
+
+    def test_malformed_digest_is_invalid_and_not_counted_as_bound(self):
+        original = self.file_digests()
+        name = (self.unowned_probe / "tv_trades.csv").relative_to(self.root).as_posix()
+        expected = original["files"][name]
+        for value in ("A" + expected[1:], expected[:-1], None):
+            with self.subTest(value=value):
+                record = {**original, "files": {**original["files"], name: value}}
+                self.save_file_digests(record)
+                output = self.assert_outcome(self.invoke("--records-only"), 1)
+                self.assertIn(str(self.root / name), output)
+                self.assertIn("malformed", output)
+                self.assertEqual(self.count_fields(output)["bound"],
+                                 len(set(original["files"]) - {name}))
 
     def test_work_is_required_for_builds(self):
         output = self.assert_outcome(self.invoke(), 2)
@@ -249,33 +525,66 @@ class CorpusValidatorMainTests(unittest.TestCase):
 
     def test_checkout_dirty_before_validation_is_an_error(self):
         path = self.owned_probe / "README.md"
-        path.write_bytes(path.read_bytes() + b"dirty\n")
-        output = self.assert_outcome(self.invoke("--records-only"), 2)
+        original = self.directory / "original-readme"
+        original.write_bytes(path.read_bytes())
+        path.write_bytes(original.read_bytes() + b"dirty\n")
+        output = self.assert_outcome(self.invoke_status_fault(path, original), 2)
         self.assertIn("FINDING clean ", output)
         self.assertIn("dirty before validation", output)
+        self.assertNotIn("dirty after validation", output)
         self.assertIn(path.relative_to(self.root).as_posix(), output)
+        self.assertEqual(path.read_bytes(), original.read_bytes())
 
     def test_checkout_dirtied_during_validation_is_an_error(self):
-        marker = self.directory / "status-seen"
         changed = self.root / "changed-during-validation"
-        hook = self.directory / "filesystem-monitor"
-        hook.write_text(
-            "#!/bin/sh\n"
-            f"if [ -f {shlex.quote(str(marker))} ]; then\n"
-            f"  : > {shlex.quote(str(changed))}\n"
-            "else\n"
-            f"  : > {shlex.quote(str(marker))}\n"
-            "fi\n"
-            "printf 'corpus-token\\000/\\000'\n")
-        hook.chmod(0o755)
-        git(self.root, "config", "core.fsmonitorHookVersion", "2")
-        git(self.root, "config", "core.fsmonitor", str(hook))
-        output = self.assert_outcome(self.invoke("--records-only"), 2)
+        output = self.assert_outcome(self.invoke_status_fault(changed), 2)
         self.assertIn("FINDING clean ", output)
         self.assertNotIn("dirty before validation", output)
         self.assertIn("dirty after validation", output)
         self.assertIn(changed.name, output)
         self.assertTrue(changed.is_file())
+
+    def invoke_status_fault(self, changed, original=None):
+        # This controlled fault sits at the tool boundary: one status command
+        # is one count. Git may invoke a filesystem-monitor hook several times
+        # within a single status command, so a hook cannot control this moment.
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        real_git = str(Path(real_git).resolve())
+        directory = self.directory / "git-boundary"
+        directory.mkdir()
+        shim = directory / "git"
+        shim.write_text(
+            "#!/bin/sh\n"
+            "set -eu\n"
+            "for argument do\n"
+            '  if [ "$argument" = status ]; then\n'
+            "    count=0\n"
+            '    if [ -f "$CORPUS_STATUS_COUNTER" ]; then\n'
+            '      IFS= read -r count < "$CORPUS_STATUS_COUNTER"\n'
+            "    fi\n"
+            "    count=$((count + 1))\n"
+            '    printf \'%s\\n\' "$count" > "$CORPUS_STATUS_COUNTER"\n'
+            '    if [ "$count" -eq 2 ]; then\n'
+            '      if [ -n "$CORPUS_STATUS_ORIGINAL" ]; then\n'
+            '        cat "$CORPUS_STATUS_ORIGINAL" > "$CORPUS_STATUS_CHANGED"\n'
+            "      else\n"
+            '        : > "$CORPUS_STATUS_CHANGED"\n'
+            "      fi\n"
+            "    fi\n"
+            "    break\n"
+            "  fi\n"
+            "done\n"
+            'exec "$CORPUS_REAL_GIT" "$@"\n')
+        shim.chmod(0o755)
+        with mock.patch.dict(os.environ, {
+                "PATH": str(directory) + os.pathsep + os.environ.get("PATH", os.defpath),
+                "CORPUS_REAL_GIT": real_git,
+                "CORPUS_STATUS_COUNTER": str(self.directory / "status-count"),
+                "CORPUS_STATUS_CHANGED": str(changed),
+                "CORPUS_STATUS_ORIGINAL": str(original) if original is not None else "",
+        }):
+            return self.invoke("--records-only")
 
     def test_tracked_file_and_directory_symlinks_are_invalid(self):
         file_link = self.owned_probe / "extra-file"
