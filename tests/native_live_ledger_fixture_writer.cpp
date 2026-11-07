@@ -5,10 +5,42 @@
 
 #include <cstdio>
 #include <exception>
+#include <string>
 
 using namespace pineforge::live;
 
 int main(int argc, char** argv) {
+    // Settle a prefix of a CLI-produced ledger through the actual writer API.
+    // Source inputs/reports/actions and the last K routed events are untouched.
+    if (argc == 4 && std::string(argv[1]) == "--settle-prefix") {
+        try {
+            const auto keep = std::stoull(argv[3]);
+            LedgerView view(argv[2]);
+            std::vector<StoredEvent> routed;
+            std::uint64_t after = 0;
+            for (;;) {
+                const auto rows = view.actions_after(after);
+                if (rows.empty()) break;
+                for (const auto& row : rows) {
+                    after = row.ordinal;
+                    if (row.target_id) routed.push_back(row);
+                }
+            }
+            if (routed.size() <= keep + 1)
+                throw std::runtime_error("fixture needs routed history and a tail");
+            Ledger ledger(argv[2], view.identity());
+            for (std::size_t i = 0; i < routed.size() - keep; ++i) {
+                const auto attempt = ledger.start_attempt(routed[i], 100 + i);
+                const bool success = i + 1 != routed.size() - keep;
+                ledger.finish_attempt(attempt, 200 + i, success ? 204 : 503,
+                    success, success ? "" : "http_status");
+            }
+            return 0;
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "fixture prefix failed: %s\n", error.what());
+            return 1;
+        }
+    }
     if (argc != 2) {
         std::fprintf(stderr, "usage: native_live_ledger_fixture_writer NEW_LEDGER\n");
         return 2;

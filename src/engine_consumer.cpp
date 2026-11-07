@@ -19,13 +19,14 @@ CacheCapacity CacheDefaults::platform_command_pages() noexcept {
     return lines(page, 64 * 1024 / page);
 }
 
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 
 namespace {
-WindowCacheCapacity numeric_window_capacity(CacheCapacity capacity) noexcept {
+WindowCacheCapacity numeric_window_capacity(
+        CacheCapacity capacity, const ScratchIoPolicy& scratch_io_policy) noexcept {
     if (capacity.capacity_bytes == std::numeric_limits<std::size_t>::max())
-        return {};
-    return {capacity.lines(1024 * sizeof(double))};
+        return {WindowCacheCapacity::kKeepResident, scratch_io_policy};
+    return {capacity.lines(1024 * sizeof(double)), scratch_io_policy};
 }
 }
 
@@ -73,7 +74,11 @@ void BacktestEngine::guard_native_mutation(const char* operation) {
 void BacktestEngine::set_syminfo_metadata(const std::string& key, double value) {
     guard_native_mutation("set_syminfo_metadata");
     syminfo_metadata_[key] = value;
-    if (key == "qty_step") {
+    // Metadata is per-handle. An explicit qty_step (including zero/invalid)
+    // wins in either setter order; otherwise retain the last valid mincontract.
+    if (key == "qty_step"
+        || (key == "mincontract" && std::isfinite(value) && value > 0.0
+            && syminfo_metadata_.find("qty_step") == syminfo_metadata_.end())) {
         qty_step_ = (std::isfinite(value) && value > 0.0) ? value : 0.0;
         syminfo_.qty_step = qty_step_;
     }
@@ -127,8 +132,53 @@ const CacheDefaults& BacktestEngine::cache_policy_for_run() const {
     return as_native_consumer(execution_consumer()).cache_policy_for_run();
 }
 
+void BacktestEngine::set_scratch_io_policy(const ScratchIoPolicy& policy) {
+    auto& consumer = as_native_consumer(execution_consumer());
+    if (report_sink_setter_status() != 0 || consumer.scratch_io_policy_setter_busy())
+        throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
+            {{"input", "scratch_io_policy"}, {"reason", "frozen"}},
+            "scratch I/O policy is frozen for the current run");
+    consumer.set_scratch_io_policy_config(policy);
+}
+
+int BacktestEngine::set_scratch_io_policy_v1(const pf_scratch_io_policy_v1* descriptor) {
+    auto& consumer = as_native_consumer(execution_consumer());
+    if (report_sink_setter_status() != 0 || consumer.scratch_io_policy_setter_busy())
+        throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
+            {{"input", "scratch_io_policy"}, {"reason", "frozen"}},
+            "scratch I/O policy is frozen for the current run");
+    ScratchIoPolicy next;
+    if (descriptor) {
+        if (descriptor->struct_size != sizeof(*descriptor))
+            throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
+                {{"input", "scratch_io_policy"}, {"reason", "unparseable_value"}},
+                "scratch I/O policy descriptor size is invalid");
+        if (descriptor->version != 1)
+            throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
+                {{"input", "scratch_io_policy"}, {"reason", "invalid_enum_option"}},
+                "scratch I/O policy version is unsupported");
+        for (const auto reserved : descriptor->reserved)
+            if (reserved != 0)
+                throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
+                    {{"input", "scratch_io_policy"}, {"reason", "unparseable_value"}},
+                    "scratch I/O policy reserved word is nonzero");
+        next.write_batch_bytes = descriptor->write_batch_bytes;
+    }
+    consumer.set_scratch_io_policy_config(next);
+    return 0;
+}
+
+const ScratchIoPolicy& BacktestEngine::scratch_io_policy_config() const {
+    return as_native_consumer(execution_consumer()).scratch_io_policy_config();
+}
+
+const ScratchIoPolicy& BacktestEngine::scratch_io_policy_for_run() const {
+    return as_native_consumer(execution_consumer()).scratch_io_policy_for_run();
+}
+
 void BacktestEngine::run(const Bar* bars, int n) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_config().ta_history_pages));
+    const WindowCacheScope cache_scope(numeric_window_capacity(
+        cache_policy_config().ta_history_pages, scratch_io_policy_config()));
     execution_consumer().run_simple(*this, bars, n);
 }
 
@@ -138,7 +188,8 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
                          bool bar_magnifier,
                          int magnifier_samples,
                          MagnifierDistribution magnifier_dist) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_config().ta_history_pages));
+    const WindowCacheScope cache_scope(numeric_window_capacity(
+        cache_policy_config().ta_history_pages, scratch_io_policy_config()));
     execution_consumer().run_tf(*this, input_bars, n_input, input_tf, script_tf,
                                 bar_magnifier, magnifier_samples, magnifier_dist);
 }
@@ -152,7 +203,8 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
                          bool bar_magnifier,
                          int magnifier_samples,
                          MagnifierDistribution magnifier_dist) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_config().ta_history_pages));
+    const WindowCacheScope cache_scope(numeric_window_capacity(
+        cache_policy_config().ta_history_pages, scratch_io_policy_config()));
     execution_consumer().run_rich(*this, input_bars, n_input, input_tf, script_tf,
                                   inputs, syminfo, overrides, bar_magnifier,
                                   magnifier_samples, magnifier_dist);
@@ -161,33 +213,39 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
 bool BacktestEngine::stream_begin(const Bar* warmup_bars, int n_warmup,
                                   const std::string& input_tf,
                                   const std::string& script_tf) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_config().ta_history_pages));
+    const WindowCacheScope cache_scope(numeric_window_capacity(
+        cache_policy_config().ta_history_pages, scratch_io_policy_config()));
     return execution_consumer().stream_begin(*this, warmup_bars, n_warmup,
                                              input_tf, script_tf);
 }
 
 bool BacktestEngine::stream_push_bar(const Bar& bar) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_for_run().ta_history_pages));
+    const WindowCacheScope cache_scope(numeric_window_capacity(
+        cache_policy_for_run().ta_history_pages, scratch_io_policy_for_run()));
     return execution_consumer().stream_push_bar(*this, bar);
 }
 
 bool BacktestEngine::stream_push_tick(const TradeTick& tick) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_for_run().ta_history_pages));
+    const WindowCacheScope cache_scope(numeric_window_capacity(
+        cache_policy_for_run().ta_history_pages, scratch_io_policy_for_run()));
     return execution_consumer().stream_push_tick(*this, tick);
 }
 
 bool BacktestEngine::stream_push_ticks(const TradeTick* ticks, int n) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_for_run().ta_history_pages));
+    const WindowCacheScope cache_scope(numeric_window_capacity(
+        cache_policy_for_run().ta_history_pages, scratch_io_policy_for_run()));
     return execution_consumer().stream_push_ticks(*this, ticks, n);
 }
 
 bool BacktestEngine::stream_advance_time(int64_t timestamp_ms) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_for_run().ta_history_pages));
+    const WindowCacheScope cache_scope(numeric_window_capacity(
+        cache_policy_for_run().ta_history_pages, scratch_io_policy_for_run()));
     return execution_consumer().stream_advance_time(*this, timestamp_ms);
 }
 
 bool BacktestEngine::stream_end(bool finalize_partial_input_bar) {
-    const WindowCacheScope cache_scope(numeric_window_capacity(cache_policy_for_run().ta_history_pages));
+    const WindowCacheScope cache_scope(numeric_window_capacity(
+        cache_policy_for_run().ta_history_pages, scratch_io_policy_for_run()));
     return execution_consumer().stream_end(*this, finalize_partial_input_bar);
 }
 
@@ -273,5 +331,5 @@ double BacktestEngine::initial_capital() const {
     return initial_capital_;
 }
 
-}  // inline namespace engine_script_run_v19
+}  // inline namespace engine_script_run_v20
 }  // namespace pineforge

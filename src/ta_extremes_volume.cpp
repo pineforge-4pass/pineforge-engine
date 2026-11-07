@@ -76,9 +76,9 @@ namespace ta {
 // oldest first and re-caches (best, bar - k_best); otherwise the cache is
 // kept, leaving aliased stale slots unread — pinned 2026-09-04 on NYSE:F 1D
 // (8 tapes 696/696: t382 `m = bar_index % 49; m < 4 or 37 <= m < 47 or
-// m == 48`, ta.lowest(low, 10) -> bars 48..51 keep 9.88 over bar 3's
-// aliased 9.20, bar 52 rescans to 9.20), BINANCE:ETHUSDT.P 15 (82/82) and
-// the jayentriken BBWP ETH replay (593/593; the plain ring 587).
+// m == 48`, ta.lowest(low, 10) -> synthetic bars 48..51 keep 25.00 over bar 3's
+// aliased 24.00, bar 52 rescans to 24.00), BINANCE:ETHUSDT.P 15 (82/82) and
+// a third-party BBWP ETH replay (593/593; the plain ring 587).
 
 BarContext& bar_context() {
     // Per thread (internal::runtime_ambient: the thread's own block, or the
@@ -211,8 +211,8 @@ ExtremeRing::Result ExtremeRing::update(double src, bool advance, bool want_max)
         // below, whatever the cache held and however young it was (pinned
         // 2026-09-04 on NYSE:F 1D, every-bar `x = bar_index % 4 == 0 ? na :
         // low`: ta.lowest(x, 5) == ta.highest(x, 5) on the bar after each na
-        // bar, 20/20 -- bar 9 answers 9.20, its own low, where the untouched
-        // 3-bar-old cache would have said 8.44; and on OANDA:XAUUSD 15 the
+        // bar, 20/20 -- a synthetic bar 9 answers 25.00, where the untouched
+        // 3-bar-old cache would have said 24.00; and on OANDA:XAUUSD 15 the
         // inserted `ta.lowest(na, 10)` calls answer na, 34/34).
         cached_ = true;
         cval_ = src;

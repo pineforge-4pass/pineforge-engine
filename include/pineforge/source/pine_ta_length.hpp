@@ -22,6 +22,16 @@
 // * A series length re-windows every call: SeriesHighest, SeriesLowest,
 //   SeriesHighestBars and SeriesLowestBars implement the rule documented at
 //   SeriesWindowExtreme.
+// * ta.percentile_nearest_rank with a series length appends its source on
+//   every call at the call site, including repeated calls in one bar, then
+//   ranks the last `length` appended values. It answers na until that many
+//   values have been appended. While the length stays constant, the position
+//   of na values among the others follows the constant-length class; after a
+//   length change, the new window is replayed in appended time order.
+//   Re-execution of a bar containing a call site that runs more than once is
+//   not modelled, as with the constant-length class. Pinned by one TradingView
+//   number pair of a loop call; the shape of a call inside an `if` is not
+//   pinned by a tape.
 // * ta.supertrend accepts a series factor but uses the factor of its first
 //   execution for the whole run (PineSupertrend).
 //
@@ -78,6 +88,9 @@ public:
         return *object_;
     }
     bool bound() const { return object_.has_value(); }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_storage(out, object_);
+    }
 
     template <class Make, class... Args>
     decltype(auto) compute(Make&& make, Args&&... args) {
@@ -114,6 +127,9 @@ public:
     double at(long long bar) const;
     WindowCacheCapacity cache_capacity() const { return values_.cache_capacity(); }
     WindowCacheStats cache_stats() const { return values_.cache_stats(); }
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        values_.observe_owned_storage(out);
+    }
 
 private:
     void ensure_slots(std::size_t keep);
@@ -169,6 +185,9 @@ public:
     };
     Result update(double src, long long length, bool advance, bool want_max,
                   const char* function);
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        history_.observe_owned_storage(out);
+    }
 
 private:
     struct Cache {
@@ -198,6 +217,9 @@ class SeriesHighest {
 public:
     SeriesHighest() = default;
     explicit SeriesHighest(WindowCacheCapacity cache) : core_(cache) {}
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        core_.observe_owned_storage(out);
+    }
     double compute(double src, double length);
     double recompute(double src, double length);
 };
@@ -208,6 +230,9 @@ class SeriesLowest {
 public:
     SeriesLowest() = default;
     explicit SeriesLowest(WindowCacheCapacity cache) : core_(cache) {}
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        core_.observe_owned_storage(out);
+    }
     double compute(double src, double length);
     double recompute(double src, double length);
 };
@@ -218,6 +243,9 @@ class SeriesHighestBars {
 public:
     SeriesHighestBars() = default;
     explicit SeriesHighestBars(WindowCacheCapacity cache) : core_(cache) {}
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        core_.observe_owned_storage(out);
+    }
     double compute(double src, double length);
     double recompute(double src, double length);
 };
@@ -228,8 +256,41 @@ class SeriesLowestBars {
 public:
     SeriesLowestBars() = default;
     explicit SeriesLowestBars(WindowCacheCapacity cache) : core_(cache) {}
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        core_.observe_owned_storage(out);
+    }
     double compute(double src, double length);
     double recompute(double src, double length);
+};
+
+// ta.percentile_nearest_rank(source, length, percentage) with a series
+// length. Every compute() appends one source value to this call site's own
+// ring, even when the site executes more than once in a bar. The answer is
+// the nearest-rank percentile over the last `length` appended values and is
+// na until that many values exist. While the length stays constant, the
+// position of na values follows ta::PercentileNearestRank; after a length
+// change, the requested window is rebuilt by replaying its retained values in
+// time order. recompute() replaces the value appended by the previous call of
+// this site. Re-execution of a bar containing a call site that runs more than
+// once in a bar is not modelled, as with ta::PercentileNearestRank. The ring
+// retains kMaxBarsBack + 1 values.
+class SeriesPercentileNearestRank {
+public:
+    double compute(double src, double length, double percentage);
+    double recompute(double src, double length, double percentage);
+    void observe_owned_storage(OwnedStorage& out) const noexcept;
+
+private:
+    void append(double src);
+    void replace_last(double src);
+    double history_at(std::size_t offset) const;
+    const std::vector<double>* rebuild_window(std::size_t length);
+
+    std::vector<double> history_;
+    std::optional<ta::PercentileWindow> window_;
+    std::size_t window_length_ = 0;
+    std::size_t next_ = 0;
+    std::size_t count_ = 0;
 };
 
 // ta.supertrend(factor, atrPeriod) as TradingView computes it: the Pine
@@ -252,6 +313,9 @@ public:
                                  double close);
     ta::SupertrendResult recompute(double factor, double atr_period, double high, double low,
                                    double close);
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        ::pineforge::observe_owned_storage(out, atr_);
+    }
 
 private:
     struct State {

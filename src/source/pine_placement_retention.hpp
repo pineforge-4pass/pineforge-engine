@@ -1,6 +1,6 @@
 #pragma once
 
-// R5 lane V19-E: the test-only switch behind the retired-row erasure.
+// The retired-row compaction: the test-only switch behind the retired-row erasure.
 //
 // PineExecutionAdapter::erase_retired_rows erases, at every bar open, the
 // placement row of each request that is no longer working and that nothing

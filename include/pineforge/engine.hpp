@@ -52,6 +52,7 @@
 #include <pineforge/metrics_fold.hpp>
 #include <pineforge/report_sink_writer.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
+#include <pineforge/runtime_context.hpp>
 // Generated script lifecycle users must be rebuilt against this runtime.
 // These internal C++ capabilities change no public C POD or C signature.
 #define PINEFORGE_HAS_TRADE_HISTORY_POLICY_V1 1
@@ -372,7 +373,7 @@ static_assert(sizeof(ReportEnvelopeV1) == sizeof(pf_report_envelope_v1),
 
 // Reopened here so the row source and the engine it borrows live in the same
 // ABI epoch (the inline namespace is the same one that holds BacktestEngine).
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 class BacktestEngine;
 
 // O1 R12: the terminal range-end row source.
@@ -463,7 +464,7 @@ private:
     // this empty).
     std::vector<Trade> synthetic_;
 };
-}  // inline namespace engine_script_run_v19
+}  // inline namespace engine_script_run_v20
 
 using ExitLegLifecycle = exit_legs::Lifecycle;
 
@@ -487,13 +488,13 @@ struct SymInfo {
     std::string description = "";
     double mintick = 0.01;
     double pointvalue = 1.0;
-    // Per-instrument quantity step (syminfo.* "qty_step" — the smallest
-    // tradable lot increment, e.g. 0.0004 for BINANCE:ETHUSDT.P). 0 = disabled
-    // (the engine default), so no quantity quantization is applied — corpus
-    // instruments leave this 0 and are byte-identical. A host that sizes in
-    // lots declares it as the run spec's quantity_grid, where admission
-    // requires on-grid units and the kernel's own liquidation floors an
-    // off-grid slice onto it (kernel_submit_liquidation).
+    // Per-instrument quantity step (syminfo.* "qty_step", the smallest tradable
+    // lot increment, e.g. 0.0004 for BINANCE:ETHUSDT.P). A declared qty_step, or
+    // a finite mincontract > 0 while no qty_step is declared, sets the grid.
+    // 0 = disabled (the engine default): no quantization, corpus instruments
+    // stay byte-identical. A host that sizes in lots declares it as the run
+    // spec's quantity_grid, where admission requires on-grid units and the
+    // kernel's liquidation floors an off-grid slice onto it.
     double qty_step = 0.0;
 };
 
@@ -506,7 +507,7 @@ using InputsMap = std::unordered_map<std::string, std::string>;
 // v6 adds explicit owner-bound exit-leg activation and Pine placement evidence.
 // Version the mangled class name so older headers' member offsets/vtable cannot
 // silently bind out-of-line members of this different object layout.
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 // The fold broker_state_hash() is built on: FNV-1a over a canonical byte
 // spelling of each value (-0.0 folds as 0.0, every NaN as one quiet NaN, a
 // string as its length then its bytes). It is a public, complete type because
@@ -615,11 +616,11 @@ protected:
     int slippage_ = 0;              // slippage in ticks
     double syminfo_mintick_ = 0.01; // tick size for slippage calculation
     // Per-instrument lot-size step (the instrument's quantity increment).
-    // 0 = disabled (default; corpus no-op). Fed via the syminfo_metadata
-    // channel ("qty_step") or the SymInfo struct on the explicit run() path.
-    // The kernel's own readers are the apply_*qty_step floors below; a host
-    // that sizes in lots declares the step as the run spec's quantity_grid
-    // (the source host projects this field there).
+    // 0 = disabled (default; corpus no-op). Fed via the syminfo_metadata channel
+    // ("qty_step", or a finite "mincontract" > 0 while no qty_step is declared)
+    // or the SymInfo struct on the explicit run() path. The kernel's own readers
+    // are the apply_*qty_step floors below; a host that sizes in lots declares
+    // the step as the run spec's quantity_grid (the source host projects it).
     double qty_step_ = 0.0;
     // Account-currency FX multiplier for every quote->account money path:
     // equity is denominated in the account currency and a position's notional
@@ -1034,8 +1035,8 @@ protected:
     // exactly this function of it: 24,582 /
     // 24,582 half-cent AAPL closes (22,122 rounded up, 2,460 rounded DOWN
     // because the binary quotient lands just under the midpoint —
-    // 228.765 / 0.01 = 22876.499999999996 -> 228.76, while
-    // 214.385 / 0.01 = 21438.5 -> 214.39) and 142,938 / 142,938 EURUSD
+    // synthetic 35.035 / 0.01 = 3503.4999999999995 -> 35.03, while
+    // 25.005 / 0.01 = 2500.5 -> 25.01) and 142,938 / 142,938 EURUSD
     // fills at tick 1e-5. Any epsilon nudge (floor(r + 0.5 + 1e-6)) or a
     // decimal half-up rule forces every binary midpoint up and breaks the
     // 2,460 down cases. For r >= 1 the form below is bit-identical to
@@ -1080,12 +1081,12 @@ protected:
     // ruling), while a native host declares its ladder through the run
     // spec's price grid. It stays because the twin-parity-frozen
     // test_stop_tick_rounding_l4d pins it. Calibration record
-    // (design-stop-tick-rounding, round 6; NYSE:F 1D `lab tv` tapes
-    // stopround-*, 2026-09-04): sell-stops 13.74624 / 13.7451 / 13.7449 /
-    // 13.745 skip 02-02 (low 13.745 -> 13.75) and fill 02-03 @13.74 while
-    // 13.3449 fills 01-26 (low 13.3448 -> 13.34); buy-stops fill on the high
-    // rounded to NEAREST (14.0351 -> 14.04; 13.225 skips a 13.2202 high); the
-    // open is quantized too (13.776 over a 13.775 open fills at 13.77); the
+    // (NYSE:F 1D tapes; synthetic prices here): sell-stops
+    // 25.04624 / 25.0451 / 25.0449 /
+    // 25.045 skip a bar (low 25.045 -> 25.05) and fill later at 25.04 while
+    // 25.3449 fills at a low of 25.3448 -> 25.34; buy-stops fill on the high
+    // rounded to NEAREST (26.0351 -> 26.04; 25.225 skips a 25.2202 high); the
+    // open is quantized too (synthetic 35.036 over a 35.035 open fills at 35.03); the
     // exit-limit, entry-stop / -limit and order-stop tapes reproduce, and
     // stopround-ohlc-0/1 show the prints themselves are raw, so the
     // quantization is the broker's. Trail legs, stop-limit entries and the
@@ -1118,8 +1119,8 @@ protected:
     // twin-parity-frozen test_level_grid_snap_l4d pins it. Calibration
     // record (round 8 family T, 40 `lab tv` sensor tapes on NYSE:F /
     // CME_MINI:ES1! / OANDA:EURUSD 15m, 2026-09-05): the band is 1e-6 on a
-    // 2-decimal symbol (10.040001 IS 10.04; a sell limit at 10.0400012 is not
-    // and fills at 10.05), the same on ES1! (tick 0.25, pricescale 100) and
+    // 2-decimal symbol (tick 0.01; synthetic 25.040001 IS 25.04, inclusive;
+    // 25.0400011 is not and fills at 25.05), same on ES1! (tick 0.25, pricescale 100) and
     // 1e-12 on EURUSD (pricescale 1e5); comparing the raw level against the
     // tick-quantized bar instead cost 148 of the 179 exit-time mismatches of
     // the F@15 lane.
@@ -1143,8 +1144,8 @@ protected:
         // Points as level / pointsize (pointsize = 1 / pricescale as a
         // double): of the candidate arithmetics this is the one that
         // reproduces every tape at the band's FP boundary (EURUSD
-        // 1.13556 + 1e-12 snaps, + 2e-12 does not; ES 5513.75 + 5e-7
-        // snaps, + 1e-6 does not; F 10.04 + 1e-6 snaps, + 1.2e-6 does not).
+        // synthetic levels near 2.00000 and ES 5000.00 illustrate the bands;
+        // F 25.04 + 8e-7 snaps, while + 1.2e-6 does not).
         const double pointsize = 1.0 / pricescale;
         const double p = level / pointsize;
         const double k = std::floor(p + 0.5);
@@ -1239,10 +1240,10 @@ protected:
     // reconstructing it as floor(...)*step lands one ulp away (0.3 ->
     // 0.30000000000000004), jitter that would leak into printed P&L.
     // Calibration record: TradingView's BINANCE:ETHUSDT.P (qty_step 0.0001)
-    // fills a qty_percent=50/50 short bracket over 5.4103 as 2.7051 + 2.7051
-    // and leaves a 0.0001 dust short open (39 of
-    // stockhunter2025-btcusd-4h-ema-swing-strategy's 56 unmatched trades were
-    // such rows); officialjackofalltrades' exact 30%-of-1 legs pin the no-op.
+    // splits a qty_percent=50/50 short bracket; synthetic 7.0003 becomes
+    // 3.5001 + 3.5001, leaving 0.0001 dust short open (39 of
+    // the EMA swing probe's 56 unmatched trades were
+    // such rows); the exact-fraction bracket probe's 30%-of-1 legs pin the no-op.
     double apply_exit_qty_step(double qty) const {
         if (qty_step_ <= 0.0 || !std::isfinite(qty) || qty <= 0.0) return qty;
         double floored = std::floor(qty / qty_step_ + 1e-6) * qty_step_;
@@ -2296,7 +2297,7 @@ public:
     // which the codegen reads as the default tz argument of the 1-arg
     // ``hour(time)`` / ``minute(time)`` / ``dayofweek(time)`` form. That
     // conflated two distinct TV concepts and silently shifted the result
-    // by the chart-vs-exchange offset (e.g. Asia/Taipei vs UTC = +8h)
+    // by the chart-vs-exchange offset (e.g. Asia/Hong_Kong vs UTC = +8h)
     // for crypto symbols. The shift cascaded into ``hour``-bucketed
     // accumulators — see
     // ``validation_typed_matrix/typed-matrix-probe-01-bool-regime-mask``,
@@ -2413,7 +2414,7 @@ public:
     // had on a bare host -- accepted before begin, guarded like every other
     // setter, and inert (no kernel path ever read the flags on a native
     // host) -- so it stores nothing, leaves last_error() untouched and
-    // answers false, meaning "no such mode here". R5 lane N14: the flags
+    // answers false, meaning "no such mode here". The source-runtime extraction: the flags
     // were BacktestEngine members until then.
     virtual bool set_realtime_tail(bool on, int horizon_bars);
     virtual bool set_probe_suppress_tail_logic(bool on);
@@ -2697,7 +2698,7 @@ private:
     // close walk and the opening beside a surviving book read it
     // (src/engine_execution.cpp); the execution consumer, a friend, projects
     // it from the spec at every begin, and the spec digest folds the spec's
-    // value. Private, so no host writes it (R5 lane K-ULP4).
+    // value. Private, so no host writes it (the representable-quantity refusal change).
     double native_quantity_tolerance_ = 0.0;
 
     // Physical scratch policy and run ownership, independent of the report
@@ -2846,6 +2847,10 @@ public:
     void set_cache_policy(const CacheDefaults& policy);
     const CacheDefaults& cache_policy_config() const;
     const CacheDefaults& cache_policy_for_run() const;
+    void set_scratch_io_policy(const ScratchIoPolicy& policy);
+    int set_scratch_io_policy_v1(const pf_scratch_io_policy_v1* descriptor);
+    const ScratchIoPolicy& scratch_io_policy_config() const;
+    const ScratchIoPolicy& scratch_io_policy_for_run() const;
 
     // The additive C ABI delegates here; receipt queries never bind a consumer.
     int set_report_sink_v1(const pf_report_sink_v1* sink);
@@ -2991,16 +2996,23 @@ public:
     // setter; write that maximum. 0: none; -1: null destination. No allocation.
     static int output_series_limit_failure(std::int64_t* maximum) noexcept;
 
+    // Independent of legacy security_eval_states_: registering a context from
+    // an evaluator never invalidates the registry a native pump is visiting.
+    RuntimeContextService& runtime_contexts() noexcept { return runtime_contexts_; }
+    const RuntimeContextService& runtime_contexts() const noexcept { return runtime_contexts_; }
+    bool runtime_context_early_close_completes() const;
+
 private:
     static std::optional<std::int64_t> default_output_series_limit() noexcept;
     // Recorder admission only, outside execution state and its hashes, like
     // the output shape and recording switch. Existing hosts keep their setting.
     std::optional<std::int64_t> max_output_series_ = default_output_series_limit();
+    RuntimeContextService runtime_contexts_;
 };
 
 inline constexpr std::size_t kReportSinkHeldEquityPoints = 1;
 
-} // inline namespace engine_script_run_v19
+} // inline namespace engine_script_run_v20
 } // namespace pineforge
 
 // Optional metrics C entry points, implemented in engine_report.cpp and

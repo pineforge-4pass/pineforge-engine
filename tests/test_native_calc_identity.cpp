@@ -25,14 +25,14 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 // The consumer's private group state, for seeding and reading it.
 struct NativeExecutionConsumerProbe {
     static native_calc::State& state(NativeExecutionConsumer& consumer) {
         return consumer.calc_group_->state;
     }
 };
-}  // inline namespace engine_script_run_v19
+}  // inline namespace engine_script_run_v20
 }  // namespace pineforge
 
 namespace {

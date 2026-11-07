@@ -18,10 +18,10 @@
  * a buy, a fixed or cash default, an explicit qty, and every reissue whose
  * first call waited in the callback's same-bar batch (every fixed default,
  * and a variable size over a single-lot short). The reference
- * you970716-snrz-0-7-1 calls strategy.entry twice per signal, so its
+ * same-bar reissue probe calls strategy.entry twice per signal, so its
  * reversals under percent_of_equity 10 opened whole positions where
- * TradingView opened slivers (BINANCE:BTCUSDT 15, 2025-10-19 08:30 UTC: TV
- * long 0.00002, engine 0.0093).
+ * TradingView opened slivers (synthetic BINANCE:BTCUSDT book: held short
+ * 0.0100, reissue buy 0.0101 -> long 0.0001, not a full 0.0101 long).
  *
  * A single call, a LIMIT first call re-issued as a MARKET order, and a
  * strategy.cancel between the two calls keep TradingView's full reversal;
@@ -77,18 +77,18 @@ struct FeedBar {
     double open, high, low, close, volume;
 };
 
-// The corpus 15m BINANCE:ETHUSDT.P bars 2025-04-07 00:00 .. 04-10 12:00 UTC,
-// shared with lane TVDEF-DROPS's tapes (the same chart and window).
+// The corpus 15m BINANCE:ETHUSDT.P bars across successive sessions,
+// shared with the default-quantity refusal tapes (the same chart and window).
 #include "fixtures/tvdef_drops/bars.inc"
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 // TradingView's BINANCE:ETHUSDT.P quantity step and price tick.
 constexpr double kLot = 0.0001;
 constexpr double kTick = 0.01;
-// The bar before every tape's first entry order (the earliest is placed
-// 2025-04-08 00:15 UTC); the harness trades from here, as run_strategy.py
+// The bar before every tape's first entry order; the earliest is placed
+// on the next bar. The harness trades from here, as run_strategy.py
 // does for a corpus tape.
-constexpr std::int64_t kTradeStartMs = 1744070400000LL;  // 2025-04-08 00:00 UTC
+constexpr std::int64_t kTradeStartMs = 1744070400000LL;  // Immediately preceding bar.
 
 // One trade as both sides report it, prices in ticks and quantity in lots:
 // (entry ms, long, entry price, quantity, exit ms, exit price).
@@ -315,9 +315,9 @@ private:
     double e_level_ = kNaN;
 };
 
-// Lane W8B-SIGSTATE-2's probes (w8b-*): a seed on 2025-04-08 00:15 flipped at
-// 00:30 (cell 1, after the price rose, so X < P for a long flip) and a seed
-// on 04-09 00:00 flipped at 00:15 (cell 2, after it fell, so X > P); which
+// The probes (w8b-*): a seed flips on its next bar
+// (cell 1, after the price rose, so X < P for a long flip); another seed
+// flips after the price falls (cell 2, so X > P); which
 // side the seed takes, how often the flip bar calls its entry, which
 // brackets exist, and how the seed is sized.
 struct Shape {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared, compiler-backed controls for the frozen v18 / live v19 C++ boundary.
+"""Shared, compiler-backed controls for the frozen v18 / live v20 C++ boundary.
 
 The ABI checks deliberately compile callers against the headers that name each
 epoch, then link them only.  A caller binary is never executed: a successful
@@ -29,10 +29,10 @@ from prepare_settlement_cpp_abi_base import (
 ROOT = Path(__file__).resolve().parents[1]
 V16_EPOCH = "engine_script_run_v16"
 V18_EPOCH = "engine_script_run_v18"
-V19_EPOCH = "engine_script_run_v19"
+V20_EPOCH = "engine_script_run_v20"
 # The live epoch, and the frozen provider every receipt-gated pair links
 # against in both directions (tests/fixtures/native_cpp_abi/host-fc7aad6).
-CURRENT_EPOCH = V19_EPOCH
+CURRENT_EPOCH = V20_EPOCH
 ACTIVE_FROZEN_ROLE = "v18-frozen"
 
 
@@ -139,7 +139,7 @@ def load_frozen_v16(receipt_path: Path, destination: Path) -> FrozenProvider:
 def audit_prepared_receipt(receipt_path: Path, label: str) -> dict:
     """Consume every historical CMake receipt with artifact-byte evidence.
 
-    Only host-fc7aad6 is the active v18/v19 pairing provider.  The older
+    Only host-fc7aad6 is the active v18/v20 pairing provider.  The older
     receipts remain historical input evidence, so accepting a CMake argument
     without reading its archive and header bytes would make the CTest command
     line misleading again.

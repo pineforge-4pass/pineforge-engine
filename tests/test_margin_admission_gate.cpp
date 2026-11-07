@@ -13,7 +13,7 @@
  * Pins (see the gate comment in engine_fills.cpp for the evidence trail):
  *   A. Flat all-in (pct=100) zero-commission open on a gap-UP bar is REJECTED
  *      when the frozen-qty notional at the fill exceeds the sizing equity by
- *      more than one lot (design-cntvxiao-gap-reject). Flat opens still price
+ *      more than one lot (the frozen-quantity gap probe). Flat opens still price
  *      the add/reversal gate at the SIZING notional, but this narrower
  *      true-flat zero-comm all-in carve-out re-checks the FILL notional and
  *      silently drops the entry.
@@ -318,7 +318,7 @@ void test_slipped_short_reversal_zero_gap_admitted() {
 //    decline TradingView's exports confirm has a margin exceeding one lot —
 //    which held only while no sub-lot ground truth existed.
 //
-//    It does now. chartprime-power-order-blocks-chartprime (percent_of_equity
+//    It does now. The order-block probe (percent_of_equity
 //    100, margin 100, qty_step 0.0001, 13 months of ETHUSDT.P) carries 2,419
 //    TradingView reversal decisions: 94 declines, and 92 of those 94 have
 //    margins BELOW one lot. On an all-in reversal the entire decision lives
@@ -512,8 +512,8 @@ void test_same_side_market_becomes_reversal_free_margin_gate() {
 // percent-of-equity, and it still proves exactly that. The new expectation is
 // what TradingView does: pinned by data/probes/pf-probe-ki65-pending-market-
 // affordability (3,128 trades, 100%) and by 159/159 live-short real-row events
-// on chartprime-power-order-blocks / fluxchart-supply-and-demand-zones /
-// market-logic-india-low-lag-strength-oscillator.
+// on the order-block probe / the supply-demand probe /
+// the oscillator probe.
 void test_same_side_role_change_scope_controls() {
     std::printf("-- M: same-side role-change scope controls --\n");
     {

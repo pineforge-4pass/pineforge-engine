@@ -6,6 +6,10 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
 endif()
 
 set(TEST_SOURCES
+    test_runtime_context
+    test_runtime_context_failures
+    # Supplied by the concurrent N6 slice before configure, with no fallback.
+    test_runtime_security_cursor
     test_value_invalid_relative_risk
     test_value_invalid_relative_risk_source
     # R4-D L4a native-route behavioral twins.  These retain the legacy
@@ -105,6 +109,7 @@ set(TEST_SOURCES
     test_adapter_range_end_relower
     test_native_margin_kernel_r5
     test_adapter_brackets_relower
+    test_exit_without_from_entry_same_execution
     test_adapter_grid_relower
     test_adapter_htf_relower
     test_native_queued_reverse_to
@@ -259,6 +264,8 @@ set(TEST_SOURCES
     test_math_sum
     test_recompute
     test_str_utils
+    test_str_format_time_patterns
+    test_str_format_time_preservation
     test_ta
     test_mfi_source_direction
     test_ta_indicators_extras
@@ -335,6 +342,8 @@ set(TEST_SOURCES
     test_calendar_wm_open_utc_fastpath
     test_calendar_bucket_closes_once
     test_intraday_grid_late_day_open
+    test_intraday_bucket_dst_characterization
+    test_intraday_bucket_end_contract
     test_native_day_labels
     test_daily_magnifier_tapes
     test_htf_session_close_completion
@@ -409,12 +418,22 @@ set(TEST_SOURCES
     test_ta_osc_edge
     test_ta_extremes_edge
     test_ta_extremes_ring
+    test_series_percentile_nearest_rank
     test_ta_voltrend_edge
     test_timezone_concurrency
     test_pointvalue
     test_metrics
     test_drawing
+    test_drawing_bound_status
+    test_drawing_bounded_builtins
+    test_drawing_bounded_creation_failure
     test_drawing_checkpoint
+    test_drawing_id_domain
+    test_drawing_slot_atomicity
+    test_drawing_slot_bound
+    test_drawing_slot_checkpoint
+    test_drawing_slot_defaults
+    test_drawing_slot_reuse
     test_coof_drawing_checkpoint_cost
     test_coof_drawing_rollback_tape
     test_margin_call
@@ -1759,6 +1778,14 @@ list(APPEND TEST_SOURCES test_symbol_calendar_tapes)
 list(APPEND TEST_SOURCES test_session_break_open_bar_tape)
 #   F1(e) an aggregated process_orders_on_close script reading entry_bar_index.
 list(APPEND TEST_SOURCES test_aggregated_entry_bar_index_tape)
+# Quantity-step metadata against TradingView quantities for the next release.
+list(APPEND TEST_SOURCES test_qty_step_mincontract_tapes)
+list(APPEND TEST_SOURCES test_qty_step_qna_rows)
+# Requested-bar grids against TradingView quantities and raw observations.
+list(APPEND TEST_SOURCES test_requested_bar_grid_tapes)
+# Reference-series origin: public host definitions and private EMA tape.
+list(APPEND TEST_SOURCES test_series_origin_host)
+list(APPEND TEST_SOURCES test_series_origin_tailh_tape)
 #   F1's magnified residual on the aggregated chart.
 list(APPEND TEST_SOURCES test_magnified_aggregated_tape)
 #   G2-23 every condition that keeps request.security on the source evaluator.
@@ -2113,6 +2140,9 @@ set(_pf_source_bound_private_rows
     test_publication_witness
     test_pyramiding_count_differential
     test_pyramiding_open_order_tape
+    test_qty_step_mincontract_tapes
+    test_qty_step_qna_rows
+    test_requested_bar_grid_tapes
     test_reversal_admission_float_guard_l4c
     test_reversal_close_all_tapes
     test_risk_max_intraday_loss_tv_l4a
@@ -2124,6 +2154,7 @@ set(_pf_source_bound_private_rows
     test_samebar_pyramiding_entries_tapes
     test_second_extreme_order_tapes
     test_security_multi_day_buckets_tapes
+    test_series_origin_tailh_tape
     test_session_break_open_bar_tape
     test_session_day_facts_adapter
     test_session_extended_day_tape
@@ -2227,11 +2258,9 @@ if(NOT PINEFORGE_BUILD_SOURCE_LAYER)
             "skipped (PINEFORGE_BUILD_SOURCE_LAYER is OFF)")
     endif()
 endif()
-
 add_test(NAME test_cmake_version_source
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_cmake_version_source.py)
-# Compute each slice from real unittest collection at invocation, never from
-# a handwritten method list. One parent becomes eight slices plus a cover: +8.
+# Slice real unittest collection at invocation: eight slices plus a cover (+8 rows).
 set(PINEFORGE_CI_VERIFY_SLICE_COUNT 8)
 set(PINEFORGE_CI_VERIFY_SLICES)
 foreach(_pf_ci_verify_slice RANGE 1 ${PINEFORGE_CI_VERIFY_SLICE_COUNT})
@@ -2243,6 +2272,8 @@ endforeach()
 add_test(NAME test_ci_verify_slices_cover
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_verify_split.py
         --slice-count ${PINEFORGE_CI_VERIFY_SLICE_COUNT})
+add_test(NAME test_ci_verify_fetch_lock
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_verify_fetch_lock.py)
 add_test(NAME test_ci_preflight_slice_1
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py --slice 1/8)
 add_test(NAME test_ci_preflight_slice_2
@@ -2303,8 +2334,12 @@ add_test(NAME test_run_json_nonfinite_report
 add_test(NAME test_run_json_post_execution
     COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_run_json_post_execution.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+add_test(NAME test_series_origin_run_json
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_series_origin_run_json.py
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
 add_test(NAME test_compile_inventory_pipeline
-    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py ${PROJECT_SOURCE_DIR}/tests/test_entrypoint_build_only.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
 # Opt-in supervised report channel and compile-step limits: real-process rows (Linux only,
@@ -2613,6 +2648,24 @@ add_test(
     NAME test_verify_corpus_open_mark
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/test_verify_corpus_open_mark.py
+)
+
+add_test(
+    NAME test_verify_corpus_trail_profile
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_verify_corpus_trail_profile.py
+)
+
+add_test(
+    NAME test_verify_corpus_count_rule
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_verify_corpus_count_rule.py
+)
+
+add_test(
+    NAME test_regen_validation_report
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_regen_validation_report.py
 )
 
 add_test(
@@ -3811,9 +3864,13 @@ list(APPEND _pf_private_fixture_rows
     test_pooc_same_pass_close_tape
     test_pooc_short_slip_admission_tapes
     test_pyramiding_open_order_tape
+    test_qty_step_mincontract_tapes
+    test_qty_step_qna_rows
+    test_requested_bar_grid_tapes
     test_same_bar_reissue_tapes
     test_same_point_entries_tapes
     test_samebar_pyramiding_entries_tapes
+    test_series_origin_tailh_tape
     test_session_transition_clock_tapes
     test_short_seed_report_swap
     test_small_money_margin_residual_l4a
@@ -3893,6 +3950,47 @@ endif()
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
+
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    target_link_libraries(test_runtime_context_failures PRIVATE Threads::Threads)
+    target_link_libraries(test_runtime_security_cursor PRIVATE Threads::Threads)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Real production ledger/service, with actual inherited marker channels.
+        # No test timeout, fixture skip, or replacement host protocol.
+        add_test(NAME test_runtime_context_managed_scratch_observation
+            COMMAND ${Python3_EXECUTABLE} -I -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_context_managed.py
+                --mode scratch --binary $<TARGET_FILE:test_runtime_context>)
+        add_test(NAME test_runtime_context_managed_quota_endpoint_observation
+            COMMAND ${Python3_EXECUTABLE} -I -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_context_managed.py
+                --mode endpoint --binary $<TARGET_FILE:test_runtime_context>)
+        add_test(NAME test_runtime_context_managed_endpoint_observer_race
+            COMMAND ${Python3_EXECUTABLE} -I -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_context_managed.py
+                --mode race --binary $<TARGET_FILE:test_runtime_context_failures>)
+        add_test(NAME test_runtime_context_managed_crash_control
+            COMMAND ${Python3_EXECUTABLE} -I -B
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_context_managed.py
+                --mode crash-control)
+    endif()
+endif()
+
+# Each order runs in its own process, before that process has seeded the
+# timezone-offset cache. These pin native legacy expectations, not TV rows.
+add_test(NAME test_intraday_bucket_dst_characterization_reverse
+    COMMAND test_intraday_bucket_dst_characterization --reverse)
+
+# Lab measurements for the next release require externally supplied inputs.
+# Opting in makes absent inputs a failure; there is no placeholder or skip.
+option(PINEFORGE_LAB_ONLY_TESTS "Build lab-only measurement tests" OFF)
+if(PINEFORGE_LAB_ONLY_TESTS)
+    if(NOT PINEFORGE_BUILD_SOURCE_LAYER)
+        message(FATAL_ERROR "PINEFORGE_LAB_ONLY_TESTS requires PINEFORGE_BUILD_SOURCE_LAYER")
+    endif()
+    pineforge_add_unit_test(test_requested_bar_grid_private_tapes)
+    set_tests_properties(test_requested_bar_grid_private_tapes PROPERTIES LABELS "lab-only")
+endif()
 
 if(UNIX)
     # PASS_REGULAR_EXPRESSION makes output matching replace CTest's exit-code
@@ -4386,6 +4484,59 @@ target_compile_definitions(test_native_sizing_bases PRIVATE
 target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)
 target_link_libraries(test_local_time_lock_free_hit PRIVATE Threads::Threads)
 target_link_libraries(test_native_runtime_ambient PRIVATE Threads::Threads)
+
+# Independent whole-archive modules reproduce sequential process-TZ switches.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
+    foreach(_pf_timezone_module IN ITEMS timezone_module_a timezone_module_b)
+        add_library(${_pf_timezone_module} MODULE timezone_module_fixture.cpp)
+        target_link_libraries(${_pf_timezone_module} PRIVATE pineforge Threads::Threads)
+        if(APPLE)
+            target_link_options(${_pf_timezone_module} PRIVATE
+                "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+        else()
+            target_link_options(${_pf_timezone_module} PRIVATE
+                "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+        endif()
+    endforeach()
+    set(_pf_timezone_test_command)
+    if(PINEFORGE_ENABLE_SANITIZERS)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            set(_pf_timezone_runtime_name libasan.so)
+        elseif(APPLE)
+            set(_pf_timezone_runtime_name libclang_rt.asan_osx_dynamic.dylib)
+        else()
+            set(_pf_timezone_runtime_name "libclang_rt.asan-${CMAKE_SYSTEM_PROCESSOR}.so")
+            foreach(_pf_timezone_module IN ITEMS timezone_module_a timezone_module_b)
+                target_link_options(${_pf_timezone_module} PRIVATE -shared-libasan)
+            endforeach()
+        endif()
+        execute_process(COMMAND ${CMAKE_CXX_COMPILER} "-print-file-name=${_pf_timezone_runtime_name}"
+            OUTPUT_VARIABLE _pf_timezone_sanitizer_runtime OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _pf_timezone_runtime_result)
+        if(NOT _pf_timezone_runtime_result EQUAL 0 OR NOT EXISTS "${_pf_timezone_sanitizer_runtime}")
+            message(FATAL_ERROR "The two-module timezone test requires the compiler's shared ASan runtime")
+        endif()
+        if(APPLE)
+            set(_pf_timezone_runtime_environment "DYLD_INSERT_LIBRARIES=${_pf_timezone_sanitizer_runtime}")
+        else()
+            set(_pf_timezone_runtime_environment "LD_PRELOAD=${_pf_timezone_sanitizer_runtime}")
+        endif()
+        # The interpreter is not instrumented: LeakSanitizer inside it would
+        # report CPython's own exit-time allocations as leaks, so leak
+        # detection is off for this row (the choice the stop-equivalence row
+        # below makes too). The instrumented modules are still checked for
+        # memory errors, and the first one halts the row.
+        list(APPEND _pf_timezone_test_command ${CMAKE_COMMAND} -E env
+            "${_pf_timezone_runtime_environment}"
+            "ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=1"
+            "UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")
+    endif()
+    list(APPEND _pf_timezone_test_command ${Python3_EXECUTABLE} -B
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_timezone_multi_module.py
+        --module-a $<TARGET_FILE:timezone_module_a>
+        --module-b $<TARGET_FILE:timezone_module_b>)
+    add_test(NAME test_timezone_multi_module COMMAND ${_pf_timezone_test_command})
+endif()
 
 # The LIFO row's expectation is the library's build type. The library's
 # NDEBUG, which compiles uninstall_runtime_ambient's order check out, comes
@@ -5930,6 +6081,34 @@ elseif(NOT test_aggregated_entry_bar_index_tape IN_LIST _pf_kernel_absent_rows)
     set_tests_properties(test_aggregated_entry_bar_index_tape PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
+if(NOT test_qty_step_mincontract_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/qty_step_mincontract/btc60/reporter/tv_trades.csv")
+    pineforge_add_unit_test(test_qty_step_mincontract_tapes)
+elseif(NOT test_qty_step_mincontract_tapes IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_qty_step_mincontract_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/qty_step_mincontract/btc60/reporter/tv_trades.csv")
+    set_tests_properties(test_qty_step_mincontract_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+if(NOT test_qty_step_qna_rows IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/qty_step_mincontract/qna/signal_rows.tsv")
+    pineforge_add_unit_test(test_qty_step_qna_rows)
+elseif(NOT test_qty_step_qna_rows IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_qty_step_qna_rows COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/qty_step_mincontract/qna/signal_rows.tsv")
+    set_tests_properties(test_qty_step_qna_rows PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+if(NOT test_requested_bar_grid_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/requested_bar_grid/btc60/bi-300/tv_trades.csv")
+    pineforge_add_unit_test(test_requested_bar_grid_tapes)
+elseif(NOT test_requested_bar_grid_tapes IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_requested_bar_grid_tapes COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/requested_bar_grid/btc60/bi-300/tv_trades.csv")
+    set_tests_properties(test_requested_bar_grid_tapes PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
+if(NOT test_series_origin_tailh_tape IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/series_origin/tailh/tv_trades.csv")
+    pineforge_add_unit_test(test_series_origin_tailh_tape)
+elseif(NOT test_series_origin_tailh_tape IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_series_origin_tailh_tape COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/series_origin/tailh/tv_trades.csv")
+    set_tests_properties(test_series_origin_tailh_tape PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
 if(NOT test_color_tapes IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/color_tv/w11-color-alpha-eth15/meta.json")
     pineforge_add_unit_test(test_color_tapes)
 elseif(NOT test_color_tapes IN_LIST _pf_kernel_absent_rows)
@@ -6771,6 +6950,7 @@ endif()
 
 # R5 lane H-MEASURE: the rows that read TradingView tapes from the fixture tree.
 foreach(_pf_hm_row IN ITEMS
+        "test_series_origin_tailh_tape|PINEFORGE_SERIES_ORIGIN_FIXTURE_DIR|series_origin"
         "test_pyramiding_count_differential|PINEFORGE_PYRAMIDING_FIXTURE_DIR|pyramiding_count"
         "test_zero_trail_sibling_stop|PINEFORGE_ZERO_TRAIL_FIXTURE_DIR|zero_trail_sibling_stop"
         "test_pending_entry_trail_tapes|PINEFORGE_PENDING_TRAIL_FIXTURE_DIR|pending_entry_trail"
@@ -6778,6 +6958,9 @@ foreach(_pf_hm_row IN ITEMS
         "test_pine_dust_sweep_paired|PINEFORGE_G232_FIXTURE_DIR|g232_decimal_dust"
         "test_session_ismarket_tape|PINEFORGE_G236_FIXTURE_DIR|session_ismarket"
         "test_aggregated_entry_bar_index_tape|PINEFORGE_HM_F1E_FIXTURE_DIR|aggregated_entry_bar_index"
+        "test_qty_step_mincontract_tapes|PINEFORGE_QTY_STEP_FIXTURE_DIR|qty_step_mincontract"
+        "test_qty_step_qna_rows|PINEFORGE_QTY_STEP_FIXTURE_DIR|qty_step_mincontract"
+        "test_requested_bar_grid_tapes|PINEFORGE_REQUESTED_BAR_GRID_FIXTURE_DIR|requested_bar_grid"
         "test_magnified_aggregated_tape|PINEFORGE_HM_MAG_FIXTURE_DIR|magnified_aggregated"
         "test_adapter_margin_schedule_differential|PINEFORGE_HM_M7A_FIXTURE_DIR|margin_entry_bar"
         # R5 lane PAR-ORDERS-2's tape rows.
@@ -7377,7 +7560,7 @@ endforeach()
 # execute every slice. Both covers only collect and stay outside the slow
 # population. All are PUBLIC with no private-fixture label or SKIP_RETURN_CODE,
 # and register in both fixture modes.
-set_tests_properties(${PINEFORGE_CI_VERIFY_SLICES} test_ci_verify_slices_cover PROPERTIES
+set_tests_properties(${PINEFORGE_CI_VERIFY_SLICES} test_ci_verify_slices_cover test_ci_verify_fetch_lock PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 set_tests_properties(
     test_ci_preflight_slice_1
@@ -7602,6 +7785,36 @@ if(PINEFORGE_COHORT_EXPOSURE_FIXTURES)
             COMPILE_DEFINITIONS PINEFORGE_COHORT_EXPOSURE_FIXTURES)
     endforeach()
 endif()
+
+# Ledger cache policy wrapper fixture.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8
+        AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(run_json_ledger_cache_policy_fixture MODULE run_json_ledger_cache_policy_fixture.cpp)
+    target_link_libraries(run_json_ledger_cache_policy_fixture PRIVATE pineforge)
+    target_compile_options(run_json_ledger_cache_policy_fixture PRIVATE -ffp-contract=off)
+    # Bind the fixture's real pread interposer for this module, including the
+    # linked engine; a Python process's earlier libc binding must not bypass it.
+    target_link_options(run_json_ledger_cache_policy_fixture PRIVATE "-Wl,-Bsymbolic-functions")
+endif()
+
+# These CI-script self-tests are independent of CPU architecture. The arm
+# workflow excludes only this explicit population; amd64 Release runs it all.
+# R4-D L6a's clear resets LABELS on the verifier slices, so keep this APPEND
+# after every label clear and the slow loop (the slices retain slow), and
+# before the CR-150 include block: check_cr150_cmake_d allows only fences
+# after it, and ci_preflight pins the fast-row registration as the tail.
+set_property(TEST ${PINEFORGE_CI_VERIFY_SLICES}
+    test_ci_verify_slices_cover test_ci_verify_fetch_lock
+    test_ci_preflight_slice_1
+    test_ci_preflight_slice_2
+    test_ci_preflight_slice_3
+    test_ci_preflight_slice_4
+    test_ci_preflight_slice_5
+    test_ci_preflight_slice_6
+    test_ci_preflight_slice_7
+    test_ci_preflight_slice_8
+    test_ci_preflight_slices_cover
+    APPEND PROPERTY LABELS ci-script)
 
 # CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
 file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
@@ -8081,6 +8294,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     add_dependencies(test_cache_policy_v1 cache_policy_module)
 endif()
 # --- CR-150 cache-policy-v1 end ---
+
 # --- CR-150 ta-history-cache begin ---
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
     target_link_options(test_ta_history_cache_faults PRIVATE
@@ -8197,6 +8411,25 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
         PINEFORGE_ROSTER_PASS_OBSERVER=1)
 endif()
 # --- CR-150 roster-pass-work end ---
+
+# --- CR-150 cr559-map-capacity begin ---
+if(UNIX)
+    target_link_libraries(test_cr559_map_capacity_limit PRIVATE ${CMAKE_DL_LIBS})
+    if(APPLE)
+        target_link_options(test_cr559_map_capacity_limit PRIVATE "-Wl,-export_dynamic")
+    else()
+        target_link_options(test_cr559_map_capacity_limit PRIVATE "-Wl,--export-dynamic")
+    endif()
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        target_link_libraries(test_cr559_map_capacity_run PRIVATE ${CMAKE_DL_LIBS})
+        if(APPLE)
+            target_link_options(test_cr559_map_capacity_run PRIVATE "-Wl,-export_dynamic")
+        else()
+            target_link_options(test_cr559_map_capacity_run PRIVATE "-Wl,--export-dynamic")
+        endif()
+    endif()
+endif()
+# --- CR-150 cr559-map-capacity end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))

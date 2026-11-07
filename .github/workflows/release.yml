@@ -77,7 +77,7 @@ env:
 
 jobs:
   release:
-    runs-on: ["self-hosted","pf-gcp-main"]
+    runs-on: ubuntu-24.04
     environment: release
 
     outputs:
@@ -366,7 +366,7 @@ jobs:
       matrix:
         include:
           - triple: linux-x86_64
-            runner: ["self-hosted","pf-gcp-main"]
+            runner: gkp-od-16cpu-32gb-amd64-128gb
           - triple: linux-aarch64
             runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
@@ -378,6 +378,7 @@ jobs:
         with:
           ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
           fetch-depth: 0   # the version helper still observes the git sha
+          persist-credentials: false
 
       - name: Assert tag still names the emitted release commit
         if: ${{ !inputs.dry_run }}
@@ -398,17 +399,26 @@ jobs:
           NEXT: ${{ needs.release.outputs.version }}
         run: printf '%s\n' "${NEXT}" > VERSION
 
-      # linux-x86_64 runs on the pf-gcp-main fleet: no sudo, no docker, Eigen 3.4.0 is baked
-      # into its image. Only the hosted Linux slice (linux-aarch64) installs Eigen here.
+      # The x86_64 build uses only the preloaded immutable Bookworm toolchain.
+      - name: Build x86_64 in preloaded Bookworm
+        if: matrix.triple == 'linux-x86_64'
+        env:
+          ENGINE_TOOLCHAIN_IMAGE: ${{ vars.ENGINE_TOOLCHAIN_IMAGE }}
+          SOURCE_SHA: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
+          NEXT: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          bash scripts/build_prebuilt_bookworm.sh \
+            "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" "${SOURCE_SHA}" "${NEXT}" "${TAG}" "${DRY_RUN}"
+
       - name: Install Eigen3 (Linux)
-        if: runner.os == 'Linux' && matrix.triple != 'linux-x86_64'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libeigen3-dev
 
-      # Fail closed on the self-hosted slice: if the image ever loses its baked Eigen, the
-      # build must stop here instead of falling back to an unverified source.
-      - name: Assert Eigen3 3.4 on the self-hosted Linux x86_64 slice
+      - name: Assert Eigen3 3.4.0 on the protected Linux x86_64 slice
         if: runner.os == 'Linux' && matrix.triple == 'linux-x86_64'
         run: |
           set -euo pipefail
@@ -417,15 +427,27 @@ jobs:
             if [ -f "$p" ]; then hdr="$p"; break; fi
           done
           if [ -z "$hdr" ]; then
-            echo "::error::Eigen3 headers not found on the pf-gcp-main image"
+            echo "::error::Eigen3 headers not found on the protected GKE runner"
             exit 1
           fi
           macros="$(dirname "$hdr")/src/Core/util/Macros.h"
-          grep -q 'define EIGEN_WORLD_VERSION 3' "$macros"
-          grep -q 'define EIGEN_MAJOR_VERSION 4' "$macros"
-          echo "Eigen3 3.4.x present at $(dirname "$(dirname "$hdr")")"
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "$macros"
+          echo "Eigen3 3.4.0 present at $(dirname "$(dirname "$hdr")")"
+
+      # The ARM build checks the exact Eigen headers that CMake will consume.
+      - name: Assert Eigen3 3.4.0 on ARM
+        if: runner.os == 'Linux' && matrix.triple == 'linux-aarch64'
+        run: |
+          set -euo pipefail
+          macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "${macros}"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "${macros}"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "${macros}"
 
       - name: Configure
+        if: matrix.triple == 'linux-aarch64'
         env:
           TAG:         ${{ needs.release.outputs.tag }}
           TRIPLE:      ${{ matrix.triple }}
@@ -438,15 +460,20 @@ jobs:
           # VERSION has no tag at all.
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DEigen3_DIR=/usr/share/eigen3/cmake \
+            -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
             -DPINEFORGE_BUILD_TESTS=OFF \
             -DPINEFORGE_BUILD_TUTORIAL=OFF \
             -DPINEFORGE_VERSION_SOURCE=FILE \
             -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}"
+          grep -Fx 'Eigen3_DIR:PATH=/usr/share/eigen3/cmake' build/CMakeCache.txt
 
       - name: Build
+        if: matrix.triple == 'linux-aarch64'
         run: cmake --build build -j 4
 
       - name: Install to staging
+        if: matrix.triple == 'linux-aarch64'
         run: cmake --install build
 
       # The generated version.h and the CMake package files must carry the
@@ -457,6 +484,48 @@ jobs:
         run: |
           python3 scripts/release_version.py check-install \
             --prefix "${STAGE_DIR}" --expect "${NEXT}"
+
+      # The glibc comparison baseline is this triple's archive from the v1.10.0
+      # release: the real released bytes, pinned by sha256 and unpacked here.
+      # The checker below only reads the unpacked libraries.
+      - name: Fetch the v1.10.0 baseline archive for the glibc comparison
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          case "${TRIPLE}" in
+            linux-x86_64) digest=cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543 ;;
+            linux-aarch64) digest=982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bb ;;
+            *) echo "::error::no v1.10.0 baseline archive for ${TRIPLE}" >&2; exit 1 ;;
+          esac
+          archive="pineforge-v1.10.0-${TRIPLE}.tar.gz"
+          root="${RUNNER_TEMP}/glibc-baseline-${TRIPLE}"
+          mkdir "${root}" "${root}/download" "${root}/tree"
+          gh release download v1.10.0 --repo "${GITHUB_REPOSITORY}" \
+            --pattern "${archive}" --dir "${root}/download"
+          echo "${digest}  ${root}/download/${archive}" | sha256sum -c -
+          tar -xzf "${root}/download/${archive}" -C "${root}/tree" \
+            --no-same-owner --no-same-permissions
+          echo "BASELINE_DIR=${root}/tree" >> "${GITHUB_ENV}"
+
+      # Both dry-run and publication inspect every installed .a/.so/.so.* and
+      # compare their highest glibc tag with the baseline fetched above.
+      # Keep raw checker output and its actual exit status, including setup errors.
+      - name: Check every staged library's glibc floor
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
+          mkdir -p "${log}"
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" --baseline-root "${BASELINE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+            checker_rc=0
+          else checker_rc=$?; fi
+          printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
+          cat "${log}/stdout.jsonl"
+          cat "${log}/stderr.txt" >&2
+          exit "${checker_rc}"
 
       - name: Bundle docs into tarball root
         run: |
@@ -472,10 +541,26 @@ jobs:
           set -euo pipefail
           base="pineforge-${TAG}-${TRIPLE}"
           tarball="${base}.tar.gz"
-          tar -czf "${tarball}" -C stage "${base}"
+          tar -czf "${tarball}" -C "$(dirname "${STAGE_DIR}")" "${base}"
           sha256sum "${tarball}" > "${tarball}.sha256"
           echo "tarball=${tarball}"           >> "$GITHUB_OUTPUT"
           echo "sha256=${tarball}.sha256"     >> "$GITHUB_OUTPUT"
+
+      # The x86_64 release path must consume the bytes it is about to upload.
+      # The helper checks the sidecar, unpacks the archive, and runs the
+      # existing native host against the shipped full archive in Bookworm.
+      - name: Consume packed x86_64 archive
+        if: matrix.triple == 'linux-x86_64'
+        env:
+          ENGINE_TOOLCHAIN_IMAGE: ${{ vars.ENGINE_TOOLCHAIN_IMAGE }}
+          TARBALL:  ${{ steps.pack.outputs.tarball }}
+          SHASUM:   ${{ steps.pack.outputs.sha256 }}
+          TAG:      ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          bash scripts/build_prebuilt_bookworm.sh \
+            --consume "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" \
+            "${TARBALL}" "${SHASUM}" "${TAG}"
 
       - name: Upload to release
         if: ${{ !inputs.dry_run }}
@@ -505,7 +590,7 @@ jobs:
   notify-hub:
     needs: [release, prebuilt]
     if: ${{ !inputs.dry_run }}
-    runs-on: ["self-hosted","pf-gcp-main"]
+    runs-on: ubuntu-24.04
     environment: release
     steps:
       - name: Mint org App token (hub dispatch)

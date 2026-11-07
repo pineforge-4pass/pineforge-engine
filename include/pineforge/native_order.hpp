@@ -29,6 +29,7 @@
 
 namespace pineforge::detail {
 class ScratchSlab;
+class NativeHistoryOwner;
 struct ReadThroughCacheStats;
 }
 // The matcher (src/native_execution_consumer.hpp) is declared in the engine
@@ -36,7 +37,7 @@ struct ReadThroughCacheStats;
 // so the friends below name that one class and no other.
 namespace pineforge {
 struct CacheCapacity;
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 class NativeExecutionConsumer;
 }
 }
@@ -985,7 +986,7 @@ enum class MatchRejectReason : std::uint8_t {
     /// scope settles no longer closes whole lots of the book it meets
     /// (CommandContext::units_are_scope_boundary). The request ends here,
     /// nothing moves, and the run goes on; the settlement's and the core's
-    /// cases stopped the whole run before R5 lane K-ULP4.
+    /// cases stopped the whole run before the representable-quantity refusal change.
     UnrepresentableQuantity = 10,
 };
 
@@ -1068,8 +1069,8 @@ enum class CoreFailure : std::uint8_t {
     ConflictingReceipt = 6,
     /// A group deduction's pending total that overflows binary64 (or a
     /// non-finite reservation, which a valid run does not reach). A deduction
-    /// binary64 cannot take off its recipient is absorbed instead (R5 lane
-    /// K-ULP5); it failed the run with this discriminator before.
+    /// binary64 cannot take off its recipient is absorbed instead (the
+    /// absorbed-deduction rule); it failed the run with this discriminator before.
     UnrepresentableReservation = 7,
     InvalidScope = 8,
     InvalidProposal = 9,
@@ -1177,7 +1178,7 @@ struct NoEffectEvent {
 /// (`prior_adjustment_ids`, `pending_total`), takes `effective_deduction` off the
 /// resolved units and leaves `remaining_after`. That deduction is 0 with a
 /// positive `pending_total` and positive resolved units when binary64 cannot
-/// take the total off them -- absorbed, and the units stand (R5 lane K-ULP5).
+/// take the total off them -- absorbed, and the units stand (the absorbed-deduction rule).
 struct TermsResolvedEvent {
     uint64_t ordinal = 0;
     DefinitionRef definition;
@@ -1276,7 +1277,7 @@ struct ExecutionAppliedEvent {
 /// `filled_working`, `actual_deduction` the part taken -- capped at `before`,
 /// which then cancels the sibling -- and `after` is fl(before -
 /// actual_deduction). A deduction binary64 cannot take off `before` (at most
-/// half an ulp of it: fl(before - d) is `before`) is absorbed (R5 lane K-ULP5):
+/// half an ulp of it: fl(before - d) is `before`) is absorbed (the absorbed-deduction rule):
 /// `actual_deduction` is 0 and `after` equals `before`, the exact binary64
 /// result, and the member's fill stands. A deduction that is taken is positive,
 /// so an `actual_deduction` of 0 names an absorbed one.
@@ -1317,7 +1318,7 @@ struct DeferredGroupAdjustmentEvent {
 /// ArmedEvent of the same drain. `effective_deduction` is the part of the child's
 /// pending group total taken off `source_units`; it is 0 with a positive
 /// `pending_total` when binary64 cannot take that total off them -- absorbed, and
-/// the owner's units stand (R5 lane K-ULP5).
+/// the recipient's units stand (the absorbed-deduction rule).
 struct QuantityBoundEvent {
     uint64_t ordinal = 0;
     DefinitionRef definition;
@@ -1568,7 +1569,7 @@ struct CommandContext {
     /// lot's own size, a prefix, the whole scope. Such a quantity is on the
     /// quantity grid whatever the grid predicate answers: these are the book's
     /// own quantities, which settlement arithmetic can move off any decimal
-    /// grid; closing them takes whole lots and splits none (R5 lane K-ULP4).
+    /// grid; closing them takes whole lots and splits none (the representable-quantity refusal change).
     /// The execution consumer measures it at submit, for a request of
     /// ImmediateRemaining capacity; its candidate settles what then remains
     /// only on the grid, at a boundary of the scope as it stands or at least at
@@ -1656,7 +1657,7 @@ using TriggerTransition = std::variant<BeginTrailTracking, ObserveTrailExtremum,
 /// tested or rounded on it; it is the ladder a level spelled in ticks names,
 /// so a trailing stop a whole number of ticks from a best on that ladder is
 /// the ladder point it names rather than the subtraction's ULP-off neighbour
-/// (native_matching::ladder_trail_stop, R5 lane E16). Zero leaves the raw
+/// (native_matching::ladder_trail_stop, the integer-tick trailing stop). Zero leaves the raw
 /// arithmetic, which is what a run with no declared tick has.
 struct ActivationGrid {
     double price_tick = 0.0;  // finite and positive when a ladder is in force
@@ -2155,7 +2156,7 @@ public:
     /// Pure arithmetic over the cached pending total. Outputs are assigned only
     /// after every validation and subtraction succeeds. A total binary64 cannot
     /// take off the resolved units is absorbed: the deduction is 0 and the
-    /// units stand (R5 lane K-ULP5).
+    /// units stand (the absorbed-deduction rule).
     static bool effective_host_units(const PendingAdjustments& pending,
                                      double resolved_units,
                                      double* deduction,
@@ -2167,14 +2168,14 @@ public:
     /// cohort, born before the fill; none for a fill with no effect, such as a
     /// Cancel member's nonterminal one -- in queue order (live()): a request
     /// re-priced with its handle kept stands behind every sibling accepted or
-    /// re-priced before it, where a plain replace's successor stands (R5 lane
-    /// K-OCA-KEEP).
+    /// re-priced before it, where a plain replace's successor stands (the
+    /// stable group-recipient ordering).
     std::vector<RequestHandle> group_recipients(const EventId& applied) const;
     std::vector<RequestHandle> waiting_children(const RequestHandle& parent) const;
     bool has_waiting_children(const RequestHandle& parent) const;
     std::vector<RequestHandle> bound_close_handles() const;
     /// The same three lists written over `out`, whose capacity a caller that
-    /// keeps it reuses (R5 lane L3): the same handles in the same order.
+    /// keeps it reuses (the direct request-core forms): the same handles in the same order.
     void group_recipients(const EventId& applied, std::vector<RequestHandle>& out) const;
     void waiting_children(const RequestHandle& parent, std::vector<RequestHandle>& out) const;
     void bound_close_handles(std::vector<RequestHandle>& out) const;
@@ -2205,7 +2206,7 @@ public:
                                                           const RequestHandle& child,
                                                           uint64_t& next_timeline_ordinal);
 
-    /// The direct forms (R5 lane L3). Each apply_* makes the checks of the
+    /// The direct forms (the direct request-core forms). Each apply_* makes the checks of the
     /// prepare_* it is named after, in the same order, and answers what that
     /// prepare_* followed at once by its install answers: the same NoChange or
     /// PreparationError, the same exception at the same point with nothing
@@ -2343,6 +2344,9 @@ public:
 
 private:
     enum class TargetKind { Live, NotWorking, InvalidHandle };
+    // Native-private bridge. The existing opaque journal owns the resource;
+    // this borrow ends at reset/move/destruction, like its other core reads.
+    const detail::NativeHistoryOwner* managed_history_owner() const noexcept;
     friend void bind_journal_codec(WorkingRequestCore&, detail::CommandScratchStore&);
     friend detail::ScratchStatus append_journal_record(WorkingRequestCore&,
         const detail::ScratchByteSource&) noexcept;
@@ -2354,7 +2358,7 @@ private:
     friend class PreparedExecution;
     // The matcher reuses a row it scanned outside the heap through the place
     // its walk found the row at (book_generation, hold_scanned below).
-    friend class ::pineforge::engine_script_run_v19::NativeExecutionConsumer;
+    friend class ::pineforge::engine_script_run_v20::NativeExecutionConsumer;
 
     static void require_identity(const RunIdentity& identity);
     static void require_grid(std::optional<double> quantity_grid);
@@ -2537,7 +2541,7 @@ private:
     void seal_plan(MutationPlan& plan);
     PreparedMutation finish_mutation(MutationPlan plan);
 
-    // The direct forms' halves of a plan (R5 lane L3). begin_direct makes
+    // The direct forms' halves of a plan (the direct request-core forms). begin_direct makes
     // begin_plan's checks; seal_direct reserves what seal_plan would reserve
     // for `events` events and the live change and takes the seal's epoch;
     // append_direct appends one event exactly as commit does (the journal
@@ -2901,7 +2905,7 @@ public:
 
     private:
         friend class LiveView;
-        friend class ::pineforge::engine_script_run_v19::NativeExecutionConsumer;
+        friend class ::pineforge::engine_script_run_v20::NativeExecutionConsumer;
         const_iterator(const WorkingRequestCore* core, BookCursor cursor) noexcept
             : core_(core), cursor_(cursor) {}
         // The spilled table's offset of the row the iterator stands on, 0

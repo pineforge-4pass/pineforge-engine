@@ -30,7 +30,7 @@ errors map to `io_error`.
 Interrupted I/O is retried. Zero, non-platform-page-multiple, and
 unrepresentable page sizes throw `std::invalid_argument`.
 
-The run owner calls
+The run caller invokes
 `pineforge::source::detail::set_command_scratch_io_observer(observer)` on the
 thread creating command backings. It returns the previous registration, which
 the owner can restore after nested scopes. Each thread starts with no observer.

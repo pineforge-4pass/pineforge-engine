@@ -730,8 +730,8 @@ void source::PineStrategyHost::on_native_run_begin() {
     // "nothing read yet" here marks this host as one that polls, so the
     // kernel keeps every event above the cursor until the adapter has seen it.
     native_acknowledge_events(0);
-    // The spec facts the per-bar callbacks read, once for the run (R5 lane
-    // D2-C, pine_host_reads.hpp).
+    // The spec facts the per-bar callbacks read, once for the run (the
+    // per-pump state cache, pine_host_reads.hpp).
     detail::take_run_facts(detail::run_consumer(*this), adapter_, adapter_.run_counter_);
     // A selected window's pre-roll capture state is parked for this run alone
     // (pine_intent_state.hpp). It sits outside the try below on purpose: an
@@ -869,7 +869,7 @@ std::int64_t source::PineStrategyHost::symbol_calendar_open_from(std::int64_t at
 
 void source::PineStrategyHost::capture_script_continuation_hash() {
     // Taken at once: since v19 the fold is the live state alone, which is what
-    // a deferred view would have recorded word for word (R5 lane V19-A).
+    // a deferred view would have recorded word for word (the v19 live-state hash change).
     const std::uint64_t execution = execution_consumer().continuation_hash();
     // A read of the spilled book that failed inside the noexcept fold is
     // thrown here, before the hash it cut short is latched as valid; the
@@ -970,7 +970,7 @@ void source::PineStrategyHost::on_native_bar(
 void source::PineStrategyHost::on_native_applied(
         const native_order::ExecutionAppliedEvent& event,
         const NativeDecisionContext& context) { adapter_.invalidate_exit_group(event.first_trade_index, event.closed_trade_count); // Covers later close_cause, exit_time and exit_id writes; no exit-group sort intervenes.
-    // R5 lane F3: the kernel records CloseCause::Bracket for a close its
+    // The host excursion and bracket-cause integration: the kernel records CloseCause::Bracket for a close its
     // owner's fill armed (WaitForApplied). A Pine row keeps the cause this host
     // has always given it -- a strategy.exit leg by its order family
     // (exit_from_bracket), a strategy.close armed on a reversal parent as a
@@ -1003,7 +1003,7 @@ void source::PineStrategyHost::on_native_applied(
     // presents). TradingView dates every magnified fill at its chart bar's
     // open, 218 of 218 on H-MEASURE's sixteen tapes; ab9714be kept a sub-bar
     // fill's own instant, and so did this adapter for all but the close
-    // points until R5 lane PAR-ORDERS. A realtime print keeps its own
+    // points until the order-schedule correction. A realtime print keeps its own
     // instant, as it does on the chart timeframe, and so does a stream's
     // quiet carried interval, whose context still names the bar before it.
     // The kernel's own instant, which its FX lookup, decision floor and
@@ -1115,7 +1115,7 @@ void source::PineStrategyHost::on_native_applied(
             });
         }
     }
-    // R5 lane L12 (2.ii l): the kernel used to read these strings back out of
+    // The kernel/source boundary extraction (2.ii l): the kernel used to read these strings back out of
     // the row to answer strategy_closed_trade_close_cause. They are the
     // adapter's, so the adapter's host states the cause instead, on the rows
     // this event produced and after the relabel above has settled them. The
@@ -1520,6 +1520,9 @@ void source::PineStrategyHost::set_syminfo_metadata(
             ? value : std::numeric_limits<double>::quiet_NaN();
         return;
     }
+    // Malformed origins are a no-op even for the generic metadata store.
+    if (key == "series_origin_ms" && (!std::isfinite(value) || value <= 0.0))
+        return;
     BacktestEngine::set_syminfo_metadata(key, value);
     // TradingView's symbol calendar (set_symbol_calendar) over the C ABI:
     // "symbol_calendar_days" = N, then "symbol_calendar_open:<i>" and
@@ -1558,6 +1561,13 @@ void source::PineStrategyHost::set_syminfo_metadata(
     if (key == "bar_index_offset") {
         scheduler_.set_bar_index_offset(std::isfinite(value)
             ? static_cast<int>(std::llround(value)) : 0);
+    }
+    // One declared reference-series origin enables both warmup contexts.
+    // Raw keys written afterwards win for their own context (last writer).
+    if (key == "series_origin_ms" && std::isfinite(value) && value > 0.0) {
+        chart_ema_na_warmup_ = true;
+        security_range_start_na_warmup_ = true;
+        security_range_start_ms_ = static_cast<int64_t>(std::llround(value));
     }
     if (key == "security_range_start_na_warmup") {
         if (std::isfinite(value) && value > 0.0) {
@@ -1853,8 +1863,144 @@ void source::PineStrategyHost::scheduler_prepare_script_run(
     source_last_bar_index_ = last_bar_index_;
 }
 
+thread_local const source::PineStrategyHost* source::PineRuntimeSecurityScope::owner_ = nullptr;
+thread_local source::PineRuntimeSecurityCursor* source::PineRuntimeSecurityScope::cursor_ = nullptr;
+
+source::PineRuntimeSecurityScope::PineRuntimeSecurityScope(
+        const PineStrategyHost& owner, PineRuntimeSecurityCursor& cursor) noexcept
+    : previous_owner_(owner_), previous_cursor_(cursor_) {
+    owner_ = &owner; cursor_ = &cursor;
+}
+source::PineRuntimeSecurityScope::~PineRuntimeSecurityScope() {
+    owner_ = previous_owner_; cursor_ = previous_cursor_;
+}
+const source::PineRuntimeSecurityCursor* source::PineRuntimeSecurityScope::current(
+        const PineStrategyHost& owner) noexcept {
+    return owner_ == &owner ? cursor_ : nullptr;
+}
+std::string source::PineStrategyHost::runtime_security_timeframe(
+        const std::string& selected) const {
+    if (!selected.empty()) return selected;
+    const auto* parent = PineRuntimeSecurityScope::current(*this);
+    return parent ? parent->timeframe : script_tf_;
+}
+
+source::PineRuntimeSecurityCursor source::PineStrategyHost::make_runtime_security_cursor(
+        const std::string& selected, bool lookahead, bool gaps, bool lower_array,
+        bool heikinashi) const {
+    if (input_tf_.empty())
+        throw coded<std::runtime_error>(
+            RunFailureCode::run_options_rejected, {{"option", "input_timeframe"}},
+            "request.security cannot infer input timeframe; pass input_tf explicitly");
+    const std::string timeframe = runtime_security_timeframe(selected);
+    if (!native_calendar::parse_timeframe(timeframe)) {
+        const char* api = lower_array ? "request.security_lower_tf" : "request.security";
+        throw coded<std::runtime_error>(
+            RunFailureCode::request_timeframe_invalid, {{"api", api}},
+            std::string(api) + ": invalid timeframe literal '" + timeframe + "'");
+    }
+    PineRuntimeSecurityCursor cursor;
+    cursor.timeframe = timeframe;
+    const auto* parent = PineRuntimeSecurityScope::current(*this);
+    cursor.chart_timeframe = parent ? parent->timeframe : script_tf_;
+    cursor.timezone = syminfo_.timezone;
+    cursor.session = syminfo_.session;
+    cursor.lookahead_on = lookahead;
+    cursor.gaps_on = gaps;
+    cursor.lower_array = lower_array;
+    cursor.heikinashi = heikinashi;
+    const int requested_seconds = tf_to_seconds(timeframe);
+    const int input_seconds = tf_to_seconds(input_tf_);
+    const int chart_seconds = tf_to_seconds(cursor.chart_timeframe);
+    if (lower_array && chart_seconds <= 0)
+        throw coded<std::runtime_error>(
+            RunFailureCode::request_timeframe_unsupported,
+            {{"reason", "lower_tf_script_unknown"}},
+            "request.security_lower_tf: script timeframe is unknown");
+    if (lower_array && (requested_seconds <= 0 || requested_seconds >= chart_seconds))
+        throw coded<std::runtime_error>(
+            RunFailureCode::request_timeframe_unsupported,
+            {{"reason", "lower_tf_not_finer_than_script"}, {"script_tf", script_tf_}},
+            "request.security_lower_tf: requested timeframe must be finer than the chart timeframe");
+    if (lower_array && chart_seconds % requested_seconds != 0)
+        throw coded<std::runtime_error>(
+            RunFailureCode::request_timeframe_unsupported,
+            {{"reason", "lower_tf_not_divisor_of_script"}, {"script_tf", script_tf_}},
+            "request.security_lower_tf: requested timeframe must evenly divide the chart timeframe");
+    if (requested_seconds > 0 && input_seconds > 0 && requested_seconds < input_seconds) {
+        if (lower_array) {
+            cursor.subdivision = runtime_subdivision(input_tf_, timeframe);
+            if (!cursor.subdivision)
+                throw coded<std::runtime_error>(
+                    RunFailureCode::request_timeframe_unsupported,
+                    {{"reason", "lower_tf_not_divisor_of_input"}, {"input_tf", input_tf_}},
+                    "request.security_lower_tf: requested timeframe is not an integer divisor of input");
+        } else if (chart_seconds == -1 || input_seconds < chart_seconds) {
+            cursor.no_loaded_bars = true;
+        } else {
+            throw coded<std::runtime_error>(
+                RunFailureCode::request_timeframe_unsupported,
+                {{"reason", "finer_than_input"}, {"input_tf", input_tf_}},
+                "request.security: requested timeframe is finer than input; supply finer bars");
+        }
+    }
+    cursor.aggregator = TimeframeAggregator(timeframe, input_tf_,
+                                            cursor.timezone, cursor.session);
+    cursor.aggregator.set_early_close_completes(runtime_context_early_close_completes());
+    return cursor;
+}
+
+std::uint64_t source::PineStrategyHost::runtime_security_frontier() const {
+    const auto& service = runtime_contexts();
+    if (service.active_context().serial) return service.callback_frontier();
+    // A lazy seal may calculate the preceding chart bar after the next input
+    // was admitted. Its timestamp is not part of that chart bar's frontier.
+    return service.frontier_before(chart_time_close());
+}
+
+void source::PineRuntimeSecurityCursor::feed(
+        const RuntimeContextEvent& event, const Delivery& deliver,
+        const std::function<void()>& begin_chart) {
+    if (prior_input == std::numeric_limits<std::int64_t>::min()
+        || tf_change(prior_input, event.bar.timestamp, chart_timeframe, timezone, session)) {
+        chart_open = event.bar.timestamp;
+        sub_bar_index = 0;
+        begin_chart();
+    }
+    prior_input = event.bar.timestamp;
+    if (no_loaded_bars) return;
+    if (subdivision) {
+        for (const auto& sub_bar : runtime_subdivide(event.bar, *subdivision)) {
+            slot_new = true;
+            ++requested_index;
+            ta::BarContextScope context(requested_index, 0);
+            deliver(sub_bar, true);
+            ++sub_bar_index;
+        }
+        return;
+    }
+    auto aggregate = aggregator.feed(event.bar);
+    if (!aggregate.is_complete && (lower_array || !lookahead_on)) return;
+    slot_new = aggregate.bar.timestamp != slot_open;
+    slot_open = aggregate.bar.timestamp;
+    if (slot_new) ++requested_index;
+    if (heikinashi) {
+        const double close = (aggregate.bar.open + aggregate.bar.high
+                              + aggregate.bar.low + aggregate.bar.close) / 4.0;
+        const double open = ha_seeded ? (ha_open + ha_close) / 2.0
+                                      : (aggregate.bar.open + aggregate.bar.close) / 2.0;
+        aggregate.bar.high = std::max(aggregate.bar.high, std::max(open, close));
+        aggregate.bar.low = std::min(aggregate.bar.low, std::min(open, close));
+        aggregate.bar.open = open; aggregate.bar.close = close;
+        if (aggregate.is_complete) { ha_open = open; ha_close = close; ha_seeded = true; }
+    }
+    ta::BarContextScope context(requested_index, 0);
+    deliver(aggregate.bar, aggregate.is_complete);
+    if (lower_array) ++sub_bar_index;
+}
+
 // Live-runtime tail (spec §3.1): the horizon freeze of last_bar_index_ /
-// last_bar_time_. Moved verbatim from src/engine_run.cpp (R5 lane N14); the
+// last_bar_time_. Moved verbatim from src/engine_run.cpp (the source-runtime extraction); the
 // geometry rules are documented on the declaration.
 void source::PineStrategyHost::apply_realtime_tail_horizon(const Bar* bars, int n,
                                                   bool script_bar_geometry) {
@@ -2152,7 +2298,7 @@ void source::PineStrategyHost::scheduler_finish_security_sequence() {
 #endif
 }
 
-// sort_same_bar_exit_trades' first test, asked before the call (R5 lane D2-D):
+// sort_same_bar_exit_trades' first test, asked before the call (the UTC chart-day memo):
 // its group grows past the last row only when the row before it is a bracket
 // exit of the same entry at the same exit time, as the last row is. Otherwise
 // the group is one row, the sort moves nothing and the call answers nullopt.
@@ -2697,7 +2843,7 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
 void source::PineStrategyHost::scheduler_update_session_state() {
     // session_ismarket_ and the _regular pair are the kernel's session-day
     // facts of this script bar, selected before the source callback reads
-    // them (R5 lane F5). The rule lane E26 established here -- TradingView
+    // them (the kernel session-day integration). The rule the session-day rule established here -- TradingView
     // ends a session at the session DAY, the flag belonging to the last chart
     // bar whose successor is out of session or on another session day,
     // isfirstbar its dual; the `lab tv` tapes in tests/fixtures/session_islastbar
@@ -2973,7 +3119,7 @@ void source::PineStrategyHost::finish_adapter_evaluation() {
         adapter_.flush_pending_closes();
 #if PINEFORGE_PINE_QUIET_BAR_GATES
     // flush_pending_entries' own quiet gate, asked here instead of behind the
-    // call (R5 lane D2-D): with nothing delayed, batched or held, the flush
+    // call (the UTC chart-day memo): with nothing delayed, batched or held, the flush
     // only resets the batch's close total. The gate is asked once either way,
     // so the probe counts what it always counted.
     if (adapter_.host_ != nullptr && adapter_.delayed_market_orders_.empty()

@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <memory>
 
+namespace pineforge { class OwnedStorage; }
+
 namespace pineforge::detail {
 
 inline constexpr std::uint64_t kRunQuotaMax = (std::uint64_t{1} << 53) - 1;
@@ -114,6 +116,9 @@ public:
     QuotaTicket& operator=(QuotaTicket&&) noexcept = default;
 
     std::uint64_t id() const noexcept { return ticket_; }
+    // External ownership only; the containing owner counts this inline ticket.
+    // Share one serialized walk with clients/files to deduplicate the endpoint.
+    void observe_owned_storage(OwnedStorage&) const noexcept;
     // Cumulative realization of this reservation, not another delta. Report
     // the host-policy-rounded real storage extent after partial write/error.
     // The host must confirm a new inode before accepting its file COMMIT.
@@ -147,6 +152,10 @@ public:
     QuotaSnapshot snapshot(QuotaResource = QuotaResource::scratch_bytes);
     QuotaSnapshot finish(QuotaResource = QuotaResource::scratch_bytes);
     std::shared_ptr<const QuotaSnapshot> refusal() const;
+    // Observe the retained graph without attachment, RPC or state changes.
+    // Global weak-registry nodes/active-attempt retention are separate roots.
+    // Refusal JSON without a public allocation hook stays explicitly incomplete.
+    void observe_owned_storage(OwnedStorage&) const noexcept;
     void check() const;
 
 private:

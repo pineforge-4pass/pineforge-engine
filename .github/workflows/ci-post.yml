@@ -32,17 +32,14 @@ env:
   PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
 
 # The canon authz gate admits our events before any checkout.
-# Light jobs and per-leg aggregates use bare gke-2cpu-4gb-amd64; Linux proof jobs
-# use bare GKE scale-set names with fixed amd64 and arm64 sizes.
-# Jobs run directly in runner pods carrying the engine toolchain image and sudo.
+# Light jobs, aggregates and proof jobs use the standard hosted Ubuntu images.
 # Each verification sizes its parallelism to the runner that took it.
 # scripts/ci_preflight.py pins every runner and shard count. GitHub's platform
 # maximum remains the only job time limit; docs/ci.md records the policy.
 jobs:
   authz:
     name: authz
-    # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
-    runs-on: gke-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -108,11 +105,11 @@ jobs:
   # builds the site as before. Classification uses the light pool class.
   changes:
     needs: [authz]
-    runs-on: gke-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     env:
-      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
+      PF_CI_LABELS: '[]'
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
       verifier_slow: ${{ steps.verifier.outputs.verifier_slow }}
@@ -154,12 +151,44 @@ jobs:
             echo "verifier_slow=true" >> "$GITHUB_OUTPUT"
           fi
 
+  build-x86-gcc133:
+    needs: [authz]
+    if: ${{ always() && needs.authz.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
+      - name: Checkout the exact workflow head
+        if: ${{ needs.authz.result == 'success' }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build native x86 GNU 13.3.0 Release
+        if: ${{ needs.authz.result == 'success' }}
+        run: |
+          python3 scripts/ci_native_x86_release.py --source . --build-dir build-x86-gcc133 --artifact-dir ci-native-x86-gcc133 --jobs "$(getconf _NPROCESSORS_ONLN)"
+      - name: Retain native x86 GNU 13.3.0 build artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-post-native-x86-gcc133
+          path: ci-native-x86-gcc133/
+          if-no-files-found: warn
+
   preflight:
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' }}
-    runs-on: gke-8cpu-16gb-amd64
+    runs-on: ubuntu-24.04
     env:
-      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
+      PF_CI_LABELS: '[]'
       PINEFORGE_VERIFIER_SLOW: ${{ needs.changes.result == 'success' && needs.changes.outputs.verifier_slow || 'true' }}
     # PRs run only source, documentation and policy checks. Build-driving
     # controls and dependency-heavy harness tests live in preflight-slow.
@@ -211,7 +240,7 @@ jobs:
   preflight-slow:
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' }}
-    runs-on: gke-8cpu-16gb-amd64
+    runs-on: ubuntu-24.04
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -258,7 +287,7 @@ jobs:
         shard: [1, 2, 3, 4]
 
     # Four shards divide roughly 15,300 measured CTest row-seconds.
-    runs-on: gke-32cpu-64gb-amd64
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -341,7 +370,7 @@ jobs:
           - os: ubuntu-24.04
         build_type: [Debug]
         shard: [1, 2]
-    runs-on: gke-16cpu-32gb-amd64
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -405,7 +434,7 @@ jobs:
     name: build (ubuntu-24.04, Release)
     needs: [authz, changes, build]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: gke-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -425,7 +454,7 @@ jobs:
     name: build (ubuntu-24.04, Debug)
     needs: [authz, changes, build-debug]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: gke-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -441,16 +470,17 @@ jobs:
           printf '%s\n' "shards: $SHARD_RESULT"
           [[ "$SHARD_RESULT" == "success" ]]
 
-  # GKE arm64 cells run the same verification steps as the amd64 post jobs.
+  # GKE arm64 shards keep engine coverage; Release CI-script self-tests run on amd64.
   build-arm:
-    name: build (ubuntu-24.04-arm, ${{ matrix.build_type }})
+    name: build-shard (ubuntu-24.04-arm, ${{ matrix.build_type }}, ${{ matrix.shard }}/4)
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     strategy:
       fail-fast: false
       matrix:
         build_type: [Release, Debug]
-    runs-on: gke-16cpu-32gb-arm64
+        shard: [1, 2, 3, 4]
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Refuse an unauthorised run before anything else
@@ -508,7 +538,7 @@ jobs:
           PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: '0'
         if: ${{ needs.authz.result == 'success' }}
         run: |
-          python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
+          python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/4 ${{ matrix.build_type == 'Release' && '--exclude-label ci-script' || '' }}
 
       - name: Stage and summarize diagnostics
         if: ${{ always() && needs.authz.result == 'success' }}
@@ -518,7 +548,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ci-diagnostics-ubuntu-24.04-arm-${{ matrix.build_type }}
+          name: ci-diagnostics-ubuntu-24.04-arm-${{ matrix.build_type }}-shard-${{ matrix.shard }}-of-4
           path: ci-diagnostics/
           if-no-files-found: warn
 
@@ -529,17 +559,18 @@ jobs:
   # instrumentation propagates into every test binary (CMakeLists.txt option
   # PINEFORGE_ENABLE_SANITIZERS).
   sanitizers:
-    name: sanitizers-shard (${{ matrix.shard }}/4)
+    name: sanitizers-shard (${{ matrix.shard }}/8)
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
-    runs-on: gke-32cpu-64gb-amd64
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    runs-on: ubuntu-24.04
     env:
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+      CCACHE_DIR: /mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/.ccache
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -551,6 +582,143 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+
+      - name: Measure sanitizer disk space before preparation
+        if: ${{ needs.authz.result == 'success' }}
+        run: df -h / /mnt
+
+      - name: Prepare sanitizer build storage
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo install -d -m 0775 -o "$USER" -g "$(id -gn)" \
+            "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/build-asan" \
+            "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/tmp" \
+            "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/.ccache"
+          [[ ! -e build-asan && ! -L build-asan ]]
+          ln -s -- \
+            "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/build-asan" \
+            build-asan
+          resolved_build="$(readlink -f -- build-asan)"
+          printf 'sanitizer build tree: %s\n' "$resolved_build"
+          [[ "$resolved_build" == "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/build-asan" ]]
+          stat -c '%A %U:%G %n' -- "$resolved_build" "/mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/tmp" "$CCACHE_DIR"
+
+      - name: Inventory disposable .NET installation
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /usr/share/dotnet && ! -L /usr/share/dotnet ]]; then
+            sudo ls -ld -- /usr/share/dotnet
+            sudo du -sh -- /usr/share/dotnet
+          elif [[ -e /usr/share/dotnet || -L /usr/share/dotnet ]]; then
+            sudo ls -ld -- /usr/share/dotnet
+            echo "::warning::optional preinstall is not a real directory; no removal performed: /usr/share/dotnet"
+          else
+            echo "optional preinstall absent: /usr/share/dotnet"
+          fi
+
+      - name: Remove disposable .NET installation
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /usr/share/dotnet && ! -L /usr/share/dotnet ]]; then
+            sudo rm -rf -- /usr/share/dotnet
+          else
+            echo "no directory removal for absent or symlinked optional preinstall: /usr/share/dotnet"
+          fi
+
+      - name: Inventory disposable Android SDK
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /usr/local/lib/android && ! -L /usr/local/lib/android ]]; then
+            sudo ls -ld -- /usr/local/lib/android
+            sudo du -sh -- /usr/local/lib/android
+          elif [[ -e /usr/local/lib/android || -L /usr/local/lib/android ]]; then
+            sudo ls -ld -- /usr/local/lib/android
+            echo "::warning::optional preinstall is not a real directory; no removal performed: /usr/local/lib/android"
+          else
+            echo "optional preinstall absent: /usr/local/lib/android"
+          fi
+
+      - name: Remove disposable Android SDK
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /usr/local/lib/android && ! -L /usr/local/lib/android ]]; then
+            sudo rm -rf -- /usr/local/lib/android
+          else
+            echo "no directory removal for absent or symlinked optional preinstall: /usr/local/lib/android"
+          fi
+
+      - name: Inventory disposable GHC installation
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /opt/ghc && ! -L /opt/ghc ]]; then
+            sudo ls -ld -- /opt/ghc
+            sudo du -sh -- /opt/ghc
+          elif [[ -e /opt/ghc || -L /opt/ghc ]]; then
+            sudo ls -ld -- /opt/ghc
+            echo "::warning::optional preinstall is not a real directory; no removal performed: /opt/ghc"
+          else
+            echo "optional preinstall absent: /opt/ghc"
+          fi
+
+      - name: Remove disposable GHC installation
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /opt/ghc && ! -L /opt/ghc ]]; then
+            sudo rm -rf -- /opt/ghc
+          else
+            echo "no directory removal for absent or symlinked optional preinstall: /opt/ghc"
+          fi
+
+      - name: Inventory disposable Boost installation
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /usr/local/share/boost && ! -L /usr/local/share/boost ]]; then
+            sudo ls -ld -- /usr/local/share/boost
+            sudo du -sh -- /usr/local/share/boost
+          elif [[ -e /usr/local/share/boost || -L /usr/local/share/boost ]]; then
+            sudo ls -ld -- /usr/local/share/boost
+            echo "::warning::optional preinstall is not a real directory; no removal performed: /usr/local/share/boost"
+          else
+            echo "optional preinstall absent: /usr/local/share/boost"
+          fi
+
+      - name: Remove disposable Boost installation
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /usr/local/share/boost && ! -L /usr/local/share/boost ]]; then
+            sudo rm -rf -- /usr/local/share/boost
+          else
+            echo "no directory removal for absent or symlinked optional preinstall: /usr/local/share/boost"
+          fi
+
+      - name: Prune unused Docker images
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker image prune -af
+
+      - name: Measure sanitizer disk space after preparation
+        if: ${{ always() && needs.authz.result == 'success' }}
+        run: df -h / /mnt
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -574,7 +742,13 @@ jobs:
 
       - name: Verify (sanitizers)
         if: ${{ needs.authz.result == 'success' }}
-        run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/4
+        env:
+          TMPDIR: /mnt/pineforge-sanitizers/${{ github.run_id }}-${{ matrix.shard }}/tmp
+        run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/8
+
+      - name: Measure sanitizer disk space after verification
+        if: ${{ always() && needs.authz.result == 'success' }}
+        run: df -h / /mnt
 
       - name: Stage and summarize diagnostics
         if: ${{ always() && needs.authz.result == 'success' }}
@@ -584,7 +758,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ci-diagnostics-sanitizers-shard-${{ matrix.shard }}-of-4
+          name: ci-diagnostics-sanitizers-shard-${{ matrix.shard }}-of-8
           path: ci-diagnostics/
           if-no-files-found: warn
 
@@ -592,7 +766,7 @@ jobs:
     name: sanitizers
     needs: [authz, changes, sanitizers]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: gke-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -622,7 +796,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2]
-    runs-on: gke-16cpu-32gb-amd64
+    runs-on: ubuntu-24.04
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -680,7 +854,7 @@ jobs:
     name: kernel-only
     needs: [authz, changes, kernel-only]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: gke-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -727,14 +901,14 @@ jobs:
   # maintainers, rather than this build context.
   build-gate:
     name: build
-    needs: [authz, changes, preflight, build, build-debug, build-release-gate, build-debug-gate, build-arm, sanitizers, sanitizers-gate, native-live, kernel-only, kernel-only-gate, corpus-parity-subset, preflight-slow, corpus-parity]
+    needs: [authz, changes, preflight, build, build-debug, build-release-gate, build-debug-gate, build-arm, build-x86-gcc133, sanitizers, sanitizers-gate, native-live, kernel-only, kernel-only-gate, corpus-parity-subset, preflight-slow, corpus-parity]
     if: always()
     # The aggregate runs inline Python and shell on the light pool class.
-    runs-on: gke-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     env:
-      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
+      PF_CI_LABELS: '[]'
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -748,6 +922,7 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          X86_GCC133_RESULT: ${{ needs.build-x86-gcc133.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           DEBUG_BUILD_RESULT: ${{ needs.build-debug.result }}
           RELEASE_GATE_RESULT: ${{ needs.build-release-gate.result }}
@@ -764,6 +939,7 @@ jobs:
         run: |
           printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
             "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
+            "native x86 GNU 13.3.0: $X86_GCC133_RESULT" \
             "debug shards: $DEBUG_BUILD_RESULT" "release aggregate: $RELEASE_GATE_RESULT" "debug aggregate: $DEBUG_GATE_RESULT" \
             "arm64 matrix: $ARM_BUILD_RESULT" \
             "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
@@ -777,7 +953,8 @@ jobs:
           if [[ "$CHANGES_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then docs_only=true; fi
           passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
           [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
-            && [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
+            && [[ "$PREFLIGHT_RESULT" == "success" ]] \
+            && [[ "$X86_GCC133_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
             && passed "$DEBUG_BUILD_RESULT" && passed "$RELEASE_GATE_RESULT" && passed "$DEBUG_GATE_RESULT" \
             && passed "$ARM_BUILD_RESULT" \
             && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \

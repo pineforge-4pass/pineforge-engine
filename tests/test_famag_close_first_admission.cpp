@@ -9,7 +9,7 @@
  * is not a corpus, feed, or grader replay. Source and TV tape readback:
  * campaign log-20260906t001223z-0fda20b7. B-z-tie-cf separately proves that
  * passing rule 2 must not activate rule 5 for this ordering. The gap control
- * protects the existing demete1226 contract: judge frozen signal equity,
+ * protects the existing close-first gap probe's contract: judge frozen signal equity,
  * then let a fill-time deficit be trimmed rather than declining the entry.
  */
 #include <cmath>

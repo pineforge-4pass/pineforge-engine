@@ -305,7 +305,7 @@ bool single_print(const Bar& bar) noexcept {
 std::optional<PineScheduler::InputWaypoint> PineScheduler::next_input_waypoint(
         const PineStrategyHost& host, const NativeDecisionContext& context) const noexcept {
     // The sub-bar being walked is a bar of the run's lower path -- one of
-    // TradingView's intrabars since R5 lane MAG-INTRABAR, no longer always an
+    // TradingView's intrabars since the TradingView intrabar import, no longer always an
     // input bar -- so it is looked up there.
     const Bar* found = lower_path_bar_at(host, context);
     if (!found) return std::nullopt;
@@ -314,7 +314,7 @@ std::optional<PineScheduler::InputWaypoint> PineScheduler::next_input_waypoint(
     // walked once), then each intrabar's open, first extreme and second
     // extreme -- an intrabar's close is not one, the next intrabar's open
     // follows its second extreme (tests/fixtures/magnifier_intrabars/
-    // mi-coof-refill*, 72 of 72 cascades; R5 lane MAG-INTRABAR).
+    // mi-coof-refill*, 72 of 72 cascades; the TradingView intrabar import).
     const auto* spec = detail::run_spec(host);
     const auto views = detail::run_consumer(host).bar_views();
     const Bar* successor = nullptr;
@@ -355,7 +355,7 @@ std::optional<PineScheduler::InputWaypoint> PineScheduler::next_input_waypoint(
         // Finding 6d): TradingView's hm-mag-diff-v2 / -v3 bar 19 book ML at
         // 11.72, where PX's limit filled on the 2-minute intrabar's high. A
         // fill the adapter forced there -- a cascade's market order -- still
-        // takes the next intrabar's open (R5 lane INT27).
+        // takes the next intrabar's open (the lower-timeframe open integration).
         if (index == 2 && !host.adapter_.coof_fill_forced_)
             return InputWaypoint{price[index], false};
         if (index < 2) return InputWaypoint{price[index + 1], false};
@@ -804,7 +804,7 @@ void PineScheduler::recalculate(const native_order::ExecutionAppliedEvent& event
     // close, high and low: the 5m close read after the open fill, and after a
     // later fill of the bar, is the chart bar's close, a lookahead_on 5m site
     // reads the bar's first 5m bar and a 5m lower_tf array all three (lab tv
-    // int28fix-rc, -rc2, -rc3; lane INT28-FIX rule RC). The slice waited for
+    // int28fix-rc, -rc2, -rc3; the recalculation-feed rule). The slice waited for
     // the close callback, so the recalculation read the previous bar's. A
     // recalculation after the close callback (a fill the close booked) finds
     // the slice that callback fed.

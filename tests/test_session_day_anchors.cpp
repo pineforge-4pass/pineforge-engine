@@ -172,7 +172,7 @@ static void test_forex_pine_time_symbol_clock() {
     CHECK_EQ_MS(pine_time(bar, "D", "Europe/Prague", "", "15", NY, FX), utc_ms(2025, 6, 9, 21, 0));
     // A VALID session argument's D bar is the session's own, in ITS timezone
     // (TV keys `time("D", "0000-2359", "America/New_York")` on New York
-    // midnight — measured on lukeborgerding-orb-avwap-retest, 100% vs 18% —
+    // midnight — measured on the anchored-VWAP probe, 100% vs 18% —
     // and opens `time("D", "0930-1600", "America/New_York")` at 09:30 New
     // York, lab tv w12-tfd-xau15 field d, tests/fixtures/session_period): the
     // same bar in the 5-arg forms, na outside the window. Lane W12-ENG-TIME

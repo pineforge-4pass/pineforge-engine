@@ -36,7 +36,7 @@
 //      the two paths agreeing.
 // Two further effects are adapter-side and were left alone with the rest:
 // the grid pre-rounds facts.default_resolved_price, which TradingView's
-// directional snap of a sub-tick open needs raw (AAPL 196.135 -> 196.13), and
+// directional snap needs raw (synthetic AAPL 35.035 -> 35.03), and
 // a raw level makes a re-issued leg bit-equal to its source level, so the
 // adapter keeps a request it replaces today (5 of 312 corpus probes change
 // their "Engine entry incarnation" column and nothing else).
@@ -436,8 +436,8 @@ std::vector<Bar> feed(Shape shape) {
         push(14.01, 14.02, 14.00, 14.01);   // 3
         break;
     case Shape::SubTickSellLimit:
-        // pine_adapter.cpp:7830-7834: NYSE:F high 10.175 -> 10.18 fills a
-        // 10.18 sell limit.
+        // Synthetic NYSE:F high 25.045 -> 25.05 fills a 25.05 sell limit.
+        // Assertions below use original quantities; these numbers only illustrate the same rule.
         push(10.10, 10.10, 10.10, 10.10);   // 0: entry placed
         push(10.10, 10.12, 10.08, 10.10);   // 1: L fills @10.10, limit 10.18 placed
         push(10.10, 10.175, 10.09, 10.15);  // 2: high 10.175 -> 10.18: fills @10.18
@@ -460,8 +460,8 @@ std::vector<Bar> feed(Shape shape) {
         // the raw path and the exit waited for bar 4. R5 lane E16: that ULP
         // was the LEVEL, not the rule -- a stop a whole number of ticks from a
         // best on the ladder IS the ladder point -- and TradingView books the
-        // exit on this bar (lane E14's NYSE:F tape, 11.44 - 5 ticks against a
-        // low of 11.39). The stop is now 1499.92 and bar 3 reaches it.
+        // exit on this bar (synthetic NYSE:F 20.06 - 21 ticks against a
+        // low of 19.85). The stop below is now 1499.92 and bar 3 reaches it.
         push(1500.00, 1500.00, 1500.00, 1500.00);   // 0: entry placed
         push(1500.00, 1500.03, 1499.98, 1500.02);   // 1: L fills @1500.00, trail placed
         push(1500.02, 1500.07, 1500.01, 1500.05);   // 2: arms; best 1500.07

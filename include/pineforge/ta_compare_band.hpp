@@ -13,13 +13,13 @@
 // 1.0186e-10 — all above the band, so it is not relative to |a|); a fixed
 // relative diff 1e-11 is EQUAL at m = 0.01 (1e-13) and 1 (1e-11) but a > b
 // at m = 100 (1e-9), 1e4 and 1e6; 1e-10 vs 0 is EQUAL (inclusive edge),
-// 1.1e-10 vs 0 is a > b, 0.9e-10 vs 0 EQUAL; 11.58-11.565 vs 11.54-11.525
-// (diff 1.78e-15) and 0.1+0.2 vs 0.3 are EQUAL. The builtins that decide on
+// 1.1e-10 vs 0 is a > b, 0.9e-10 vs 0 EQUAL; 25.08-25.065 vs 25.04-25.025
+// (diff 3.55e-15) and 0.1+0.2 vs 0.3 are EQUAL. The builtins that decide on
 // two derived doubles (ta.dmi's up > down, ta.percentrank's src[i] <= src)
 // use these helpers so the engine answers the ties those builtins answer —
-// the 2025-07-15 19:30Z NYSE:F bar (up = 11.58-11.565, down = 11.54-11.525,
+// a synthetic NYSE:F 15-minute bar (up = 25.08-25.065, down = 25.04-25.025,
 // both 0.015 in decimal) gives plusDM 0 AND minusDM 0 on TradingView
-// (`lab tv` f15-plusdm-perbar-0714 / f15-dmi-internals-0718), where a strict
+// (the probes establish the tie rule), where a strict
 // IEEE compare hands the 0.015 to one side. A source frontend lowers its own
 // script-level float relationals to the same predicate (visit_expr.py
 // _emit_float_relational); the deprecated `pine_float_*` spellings of these

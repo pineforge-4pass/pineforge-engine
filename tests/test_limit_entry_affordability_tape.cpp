@@ -11,17 +11,17 @@
  * its placement check, so a re-issue rejected by TradingView kept its
  * resting order alive.
  *
- * The reference algotorma-algo-torma-orb-strategy (BINANCE:BTCUSDT 15, strong)
+ * The reference opening-range limit probe (BINANCE:BTCUSDT 15, strong)
  * re-issues its breakout limit every bar while armed; the last re-issue
- * (2026-01-14 23:45, close 96951.78 over an equity of 96846.71) was
- * rejected in TradingView, and the engine filled the resting order on 01-15
- * 03:15 -- its one engine-only trade.
+ * is unaffordable at the close (synthetic qty 1 at 250.00, equity 249.00).
+ * TradingView rejects it; retaining the order lets the engine fill it
+ * on a later bar -- its one engine-only trade.
  *
  * One recorded reference run (tests/fixtures/limit_entry_affordability/
  * w8a-btc15-limafford, BINANCE:BTCUSDT 15, equity 95000, a default fixed
  * quantity of 1, margin 100 %) replayed through the Pine adapter under the
- * configuration its generated constructor declares, over the lane's 15m bars
- * of bars.inc (2025-04-25 00:00 .. 04-30 12:00 UTC): every trade must be the
+ * configuration its generated constructor declares, over the 15m fixture bars
+ * of bars.inc across successive sessions: every trade must be the
  * engine's -- entry signal, entry and exit time, side, price and quantity --
  * and the rule is read off TradingView's rows and the bars:
  *

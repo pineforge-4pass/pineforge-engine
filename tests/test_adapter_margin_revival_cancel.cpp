@@ -13,50 +13,50 @@
  * it since: R5 lane V19-D's directed variant 2 closed a position through an
  * exit strategy.cancel had cancelled.
  *
- * TradingView decides it. Two lab tv tapes on NYSE:F 15 (2025-04-15 ..
- * 2025-05-20, range proof covered), one script with and without its cancel:
- *   - 04-29 15:45 ET: strategy.entry("S", short, qty=940) and
- *     strategy.exit("X", "S", stop=10.25); the short fills 04-30 09:30 @10.10;
- *   - 04-30 15:45: strategy.entry("L", long) and strategy.close("S") -- the
- *     05-01 09:30 open gaps to 10.15 and the pair is declined;
- *   - (cancel only) 05-01 09:30: strategy.cancel("X");
- *   - 05-02 09:30 the high 10.385 passes the short's margin-call level.
- * badapter-v19dp1-control: "Margin call" 12 @10.39, then X 928 @10.39 on the
- * same bar. badapter-v19dp1-cancel: "Margin call" 12 @10.39 on 05-02, a
- * second "Margin call" 92 @10.57 on 05-06 10:00, and 836 still open when the
- * chart ends -- the cancelled X never comes back. Both runs below replay the
- * same script on the same bars (the fixture) and must book exactly the tape.
+ * TradingView decides it. Paired NYSE:F 15m tapes cover the rule;
+ * this synthetic book illustrates the control and cancel sequences:
+ *   - a signal bar places strategy.entry("S", short, qty=1000) and
+ *     strategy.exit("X", "S", stop=25.25); the short later fills at 25.10;
+ *   - a close places strategy.entry("L", long) and strategy.close("S") -- the
+ *     next open gaps to 25.15 and the pair is declined;
+ *   - (cancel only) the script calls strategy.cancel("X") while it is dormant;
+ *   - a later high of 25.385 passes the short's margin-call level.
+ * Synthetic control: "Margin call" 20 @25.39, then X 980 @25.39 on the
+ * same bar. Synthetic cancel: "Margin call" 20 @25.39, followed by a
+ * later "Margin call" 80 @25.57, leaving 900 shares open when the
+ * chart ends -- the cancelled X never comes back. Assertions below use the
+ * original quantities; the numbers above only illustrate the same rule.
  *
  * R5 lane V19-FIX (audit X2): the adapter still revived an exit the script
  * cancelled while it was LIVE. strategy.cancel retired the lifecycle of a
  * dormant exit only, so once the declined pair's suspension made the
- * cancelled leg dormant on 05-01, the margin call read it as a standing exit
- * and closed 928 through it. Two more lab tv tapes on the same chart and
+ * cancelled leg dormant later, the margin call read it as a standing exit
+ * and closed the remainder through it. Two more lab tv tapes on the same chart and
  * window decide it, each the cancel tape's script with the cancel moved:
- *   - v19fix-cancel-before-pair: strategy.cancel("X") on 04-30 15:45, before
- *     the pair (tv_trades sha256 662ce8c8..., pine 1d6c305b..., range proof
- *     covered);
- *   - v19fix-cancel-at-1000: strategy.cancel("X") on 04-30 10:00, the bar
- *     after the short fills (tv_trades sha256 662ce8c8..., pine 13ed512b...,
- *     range proof covered).
+ *   - the first variant calls strategy.cancel("X") before
+ *     the pair on the same bar, while the exit remains live;
+ *     its export has the same cancellation outcome;
+ *   - the second calls strategy.cancel("X") on the bar
+ *     after the short fills, also while the exit remains live;
+ *     it has the same cancellation outcome.
  * Both book exactly the cancel tape (the same tv_trades.csv bytes): margin
- * calls 12 @10.39 and 92 @10.57, 836 open. The other spellings of the audit's
+ * calls only, with a remaining open position. The other spellings of the audit's
  * variants follow the same rule and book the same trades: strategy.cancel_all
  * on the cancel tape's bar and before the pair, and strategy.cancel after the
  * pair on its bar. The cancel now retires the lifecycle of every exit it takes
  * off the book as well as every dormant one it names.
  *
- * The adapter has a second road back. When the 05-01 open gaps through X's
+ * The adapter has a second road back. When the next open gaps through X's
  * stop, the declined reversal takes X off the book at the pair's command and
  * parks it for the next margin-call slice (apply_reversal_gap_bracket_policy,
- * pending_margin_revivals_). Three more tapes with X's stop at 10.15, which
- * the 05-01 09:30 open (10.15) gaps through:
- *   - v19fix-gapped-stop-control: no cancel -- "Margin call" 12 @10.39 and X
- *     928 @10.39 on 05-02 (tv_trades sha256 bdf3d470...);
- *   - v19fix-gapped-stop-cancel: strategy.cancel("X") on 05-01 09:30;
- *   - v19fix-gapped-stop-cancel-after-pair: strategy.cancel("X") on 04-30
- *     15:45 after the pair, in the callback that parked X;
- * both cancels book the cancel tape's file again (662ce8c8...). A cancel now
+ * pending_margin_revivals_). Three more tapes cover the gapped stop;
+ * a synthetic stop of 25.15 reached at the next open illustrates them:
+ *   - control: no cancel -- a call of 20 at 25.39, then X closes the
+ *     remaining 980 at that same price;
+ *   - cancel at the open: strategy.cancel("X") prevents the revival;
+ *   - cancel after the pair: strategy.cancel("X") acts in
+ *     the same callback that parked X, before the next opening;
+ * both cancels book the cancel tape's file again. A cancel now
  * drops the parked revival and withdraws every exit row its id names.
  *
  * A chart with no quantity grid moves the pair's hold to the command itself

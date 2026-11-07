@@ -27,7 +27,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 
 struct NativeExecutionConsumerProbe {
     using Seeds = std::vector<std::pair<native_order::EventId, native_order::RequestHandle>>;
@@ -97,7 +97,7 @@ struct NativeExecutionConsumerProbe {
     }
 };
 
-}  // inline namespace engine_script_run_v19
+}  // inline namespace engine_script_run_v20
 }  // namespace pineforge
 
 namespace {

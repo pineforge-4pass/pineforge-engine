@@ -14,13 +14,13 @@
 // same-bar zero-PnL round trip.
 //
 // Both orderings the population probes use are pinned: the close issued
-// before the reversal entry (shurben5 / ut-bot shape) and the entry issued
+// before the reversal entry (the trailing-signal probe's shape) and the entry issued
 // first, where the stale close belongs to an earlier cycle than the live
 // position and stays Refused (lane W27a, ab9714be
 // src/source/pine_fills.cpp:7449-7459).
 //
 // Bars are literals (a 15m EURUSD-shaped path: a signal bar, a gap bar and a
-// flip bar) and the facts mirror the zz-pop-shurben5-tradingview-bot-goat
+// flip bar) and the facts mirror the trailing-signal
 // probe — mintick 0.00001, qty_step 0.01, initial_capital 10000,
 // default_qty_type=strategy.percent_of_equity, default_qty_value=100,
 // pyramiding=0, process_orders_on_close=false, commission percent 0,
@@ -171,8 +171,8 @@ void run_case(const char* label, bool entry_first_on_flip,
     // ONE short lot, of the full entry quantity — not two half lots.
     CHECK(short_rows == 1);
 
-    // #1 Entry long bar 1 @1.08000 -> Exit long bar 5 @1.09000 (the paired
-    // strategy.close("Long") of the signal bar), qty 9266.12, PnL +92.6612.
+    // Synthetic long: entry 1.25000 -> paired signal-bar close 1.26000;
+    // qty 1000 gives PnL +10.00. Assertions below keep the original trade values.
     const auto& t1 = host.get_trade(0);
     CHECK(t1.entry_id == "Long");
     CHECK(t1.is_long);
@@ -189,8 +189,8 @@ void run_case(const char* label, bool entry_first_on_flip,
     CHECK(near(t1.max_runup, 92.6612, 1e-3));
     CHECK(near(t1.max_drawdown, 4.633060, 1e-3));
 
-    // #2 Entry short bar 5 @1.09000, the FULL 9259.27 lot, survives its entry
-    // bar and exits on bar 9 @1.08600 with PnL +37.037080.  Its exit id tells
+    // Synthetic short: the full 2000-unit lot at 1.26000 survives its entry
+    // bar and exits later at 1.25500 with PnL +10.00. Its exit id tells
     // the two orderings apart: the close-first flip exits through the flip
     // bar's own strategy.close("Short"), the entry-first flip through the
     // reversal entry that replaced it — the stale close stays Refused there.

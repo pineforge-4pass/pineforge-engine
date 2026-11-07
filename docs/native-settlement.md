@@ -47,8 +47,8 @@ ends THAT request with a terminal `MatchRejectedEvent` whose reason is
 `MatchRejectReason::UnrepresentableQuantity` (C:
 `PF_NATIVE_MATCH_REJECT_UNREPRESENTABLE_QUANTITY`, the `reason` of a
 `PF_NATIVE_EVENT_MATCH_REJECTED` row). Nothing moves, no fee is charged, and
-the run goes on; the host submits again if it still wants the trade (R5 lane
-K-ULP4). Until then the consumer turned the same inspection into a durable
+The run goes on; the host submits again if it still wants the trade (the
+representable-quantity refusal change). Until then the consumer turned the same inspection into a durable
 `SettlementFailure` of the whole run -- lifecycle `Failed`, code 6,
 discriminator 5, "native settlement inspection failed". A fill the request's
 own units cannot absorb is the same typed refusal: the request core checks,
@@ -67,7 +67,7 @@ sum of what they closed; that lot closes the rest `r = fl(units - C)` and keeps
 `closed_units` is the request itself, not `fl(C + r)`. That sum can land one ulp
 either side of the request (`C + r` is then a tie on the request's grid), and
 then no binary64 quantity `x` has `fl(C + x)` equal to the request, so no choice
-of rows adds up to it. Before this rule (R5 lane K-ULP2) a sum above the
+of rows adds up to it. Before this rule (the exact-sum opening rule) a sum above the
 request was refused with `UnrepresentableQuantity`, and one below left a
 2^-51 rest for a second fill, for a later lot, or as an opening beside the
 survivor. For example, lots `{fl(106/84.5), 10}` reduced by `fl(277/84.5)` close
@@ -98,7 +98,7 @@ is below half of them. The lot then kept `fl(qty - r)`, at most one ulp of the
 units (2^-55 to 2^-50 for lots near one unit). Both splits add up to the units
 exactly, so neither the charge nor the rows told them apart, yet the kept part
 stayed in the book as a dust lot, and after a close of the whole book as a dust
-position (before R5 lane K-ULP3). For example, lots
+position (before the exact-sum closing rule). For example, lots
 `{fl(80/84.5), fl(92/84.5)}` reduced by their own sum `0x1.048b5c670183cp+1`
 closed `0x1.16b8ce030792ep+0` of the second lot and kept `2^-52` of it; now
 both lots close whole, the rows add up to the units, and the book is flat.
@@ -120,7 +120,7 @@ boundary re-check below are made at execution only; and `Flatten` is never
 refused for a quantity. On a quantity grid (`NativeRunSpec::quantity_grid`) the
 book's own quantities are on the grid, for a request that settles them in one
 fill (no point budget, no group deduction pending against it that takes any; a
-pending total its units absorb takes none, R5 lane K-OCA-KEEP): a
+outstanding total its units absorb takes none, the stable group-recipient ordering): a
 `ScopeFraction` whose product is its scope's held total as it stands --
 `fraction == 1` of the gross scope -- resolves to that total, which the grid
 does not floor (a scope net of siblings' claims, or frozen at acceptance at
@@ -133,7 +133,7 @@ a boundary of the scope as it stands, or at least at the scope's held total,
 which closes every lot whole (a whole-book stop still closes the book after a
 partial close shrank it), and refuses anything else, typed, instead of
 splitting a lot off the grid; and a host-sized close answered with its scope's
-held total is admitted at the candidate (R5 lane K-ULP4). Before, such a
+held total is admitted at the candidate (the representable-quantity refusal change). Before, such a
 fraction was floored onto the grid and closed up to a step short, left a dust
 lot, or found nothing to close, and the book's own sizes were `OffGrid`. A
 `Transact` is still gridded (it can open), and so is a `Reduce` of a quantity
@@ -148,7 +148,7 @@ total, which its terms or its owner's fill later takes off the units they bind
 -- and a deduction too small to move what it is taken from (`fl(units - d)` is
 the units again: at most half an ulp of them) is absorbed. The sibling keeps
 its units, the exact binary64 result of the subtraction; the member's fill
-stands; and the event that records the deduction took nothing (R5 lane K-ULP5;
+stands; and the event that records the deduction took nothing (the absorbed-deduction rule;
 `docs/pages/native-engine.md`, "What a host gets from a quantity"). Each
 deduction is taken on its own: a hundred fills of 1 beside a 2^60 sibling are
 a hundred absorbed deductions and leave it 2^60, where one deduction of 100
@@ -217,8 +217,8 @@ Not every full exit reaches the kernel as a `Flatten`: a default
 `strategy.close(id)` on a pyramided id is a Book-scope `Reduce` of the id's
 quantity, and so are a bracket exit answered with the book's total, a margin
 liquidation of the whole position and an explicit-quantity order equal to
-it -- the closes the exact-sum rule above now closes lot by lot (R5 lane
-K-ULP3).
+it -- the closes the exact-sum rule above now closes lot by lot (the
+exact-sum closing rule).
 The Pine source host keeps one quantity rule of its own: after every applied
 execution, `source::PineStrategyHost::on_native_applied` erases any lot of at
 most `kQtyEpsilon` (`1e-10`) from the book it shares with the kernel, with no

@@ -437,7 +437,7 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
 
     security_calling_close_ms_ = 0;
 
-    // On the pump's runtime block when it has one (R5 lane D2-C).
+    // On the pump's runtime block when it has one (the per-pump state cache).
     internal::AmbientEmaSeedingScope warmup_scope(
         NativeExecutionConsumer::bound(*this).pump_ambient(),
         security_range_start_na_warmup_);

@@ -153,7 +153,7 @@ inline bool is_na(const NumericMatrix& matrix) noexcept {
 }
 
 // Deprecated spelling, kept as an exact alias so generated code and the
-// source adapter compile unchanged (R5 lane N14, the same treatment
+// source adapter compile unchanged (the source-runtime extraction, the same treatment
 // session_time.hpp / str_utils.hpp received in lane L11). New code names
 // NumericMatrix.
 using PineMatrix = NumericMatrix;

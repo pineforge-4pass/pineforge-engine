@@ -1,5 +1,9 @@
 #include <pineforge/detail/script_store.hpp>
 #include <pineforge/detail/scratch_file.hpp>
+#include <pineforge/series.hpp>
+#include <pineforge/checked_settings.hpp>
+#include <pineforge/map_capacity.hpp>
+#include <pineforge/ta.hpp>
 
 #include <cerrno>
 #include <limits>
@@ -10,13 +14,18 @@
 namespace pineforge::detail {
 namespace {
 
+thread_local std::uint64_t map_pair_default = 0;
+thread_local MapBarContext map_bar_context{};
+
 // The existing scratch file owns medium selection, I/O charging and disk
 // cache policy. This adapter adds only a page extent, not a second page cache
 // or a logical capacity policy. Explicit run owners supply their own backing.
 class ScriptScratchBacking final : public ScratchBacking {
 public:
-    ScriptScratchBacking() : ScratchBacking(selected_kind(), 4096) {
+    explicit ScriptScratchBacking(const ScratchIoPolicy& policy)
+        : ScratchBacking(selected_kind(), 4096) {
         file_.bound_cache();
+        file_.set_scratch_io_policy(policy);
         file_.open("pineforge-script-state");
     }
     std::uint64_t page_count() const noexcept override { return extent_; }
@@ -75,7 +84,64 @@ private:
 } // namespace
 
 std::unique_ptr<ScratchBacking> make_script_scratch_backing() {
-    return std::make_unique<ScriptScratchBacking>();
+    // map.new() fallback owners are created inside the same evaluation scope
+    // as numeric windows. Capture once, before opening this backing.
+    return std::make_unique<ScriptScratchBacking>(window_cache_capacity().scratch_io_policy);
+}
+
+std::uint64_t map_pair_limit() noexcept { return map_pair_default; }
+
+std::uint64_t exchange_map_pair_limit(std::uint64_t maximum) noexcept {
+    const auto previous = map_pair_default;
+    map_pair_default = maximum;
+    return previous;
+}
+
+int set_map_pair_limit_checked(const std::int64_t* maximum,
+                               char* error, std::size_t capacity) noexcept {
+    return checked_settings::boundary(error, capacity, [&] {
+        checked_settings::require(!maximum || *maximum >= 0,
+                                  "max map pairs must not be negative");
+        map_pair_default = maximum ? static_cast<std::uint64_t>(*maximum) : 0;
+    });
+}
+
+[[noreturn]] void map_capacity_error(std::uint64_t maximum, std::uint64_t current) {
+    std::int64_t bar = map_bar_context.native_bar ? *map_bar_context.native_bar : 0;
+    if (map_bar_context.use_ambient_context) {
+        const auto& context = ta::bar_context();
+        if (context.installed) bar = context.bar_index;
+    }
+    throw MapCapacityError(maximum, current, bar);
+}
+
+MapBarContext push_map_bar_context(const int* native_bar) noexcept {
+    const auto previous = map_bar_context;
+    if (native_bar) {
+        map_bar_context.native_bar = native_bar;
+        map_bar_context.use_ambient_context = false;
+    } else {
+        map_bar_context.use_ambient_context = true;
+    }
+    return previous;
+}
+
+void restore_map_bar_context(MapBarContext previous) noexcept {
+    map_bar_context = previous;
 }
 
 } // namespace pineforge::detail
+
+namespace pineforge {
+
+MapCapacityError::MapCapacityError(std::uint64_t maximum, std::uint64_t current,
+                                   std::int64_t bar)
+    : coded<std::runtime_error>(
+          RunFailureCode::pine_map_capacity_exceeded,
+          {{"code", code}, {"maxSize", maximum}, {"currSize", current}, {"bar_index", bar}},
+          "Error on bar " + std::to_string(bar) + ": A map cannot have more than " +
+              std::to_string(maximum) + " key-value pairs. The current size is " +
+              std::to_string(current) + "."),
+      maxSize(maximum), currSize(current), bar_index(bar) {}
+
+} // namespace pineforge

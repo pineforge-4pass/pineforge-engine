@@ -23,7 +23,7 @@ permissions:
 
 # A reusable workflow's github.workflow is its caller, so use a distinct prefix.
 # Only post-merge callers and main/manual runs use this workflow.
-# Native shards and both sanitizer profiles run directly in GKE toolchain pods with sudo.
+# Native shards and both sanitizer profiles run on hosted Ubuntu runners.
 concurrency:
   group: native-live-${{ github.workflow }}-${{ github.run_id }}
   cancel-in-progress: false
@@ -39,8 +39,7 @@ env:
 jobs:
   authz:
     name: authz
-    # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
-    runs-on: gke-4cpu-8gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -102,24 +101,162 @@ jobs:
   native-live:
     name: native-live (${{ matrix.profile }})
     needs: [authz]
-    # Each instrumented tree builds once on its pinned GKE size.
-    runs-on: gke-16cpu-32gb-amd64
+    # Each instrumented tree builds once on the hosted Ubuntu image.
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - profile: live-sanitizers
             build_dir: build-live-sanitizers
+            runner: ubuntu-24.04
           - profile: live-tsan
             build_dir: build-live-tsan
-    # Keep every runner row and let the platform supply its own job maximum.
+            runner: ubuntu-24.04
     env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}
+      CCACHE_DIR: /mnt/pineforge-native-sanitizers/${{ github.run_id }}-${{ matrix.profile }}/.ccache
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
           fetch-depth: 0
+
+      - name: Measure sanitizer disk space before preparation
+        if: ${{ needs.authz.result == 'success' }}
+        run: df -h / /mnt
+
+      - name: Prepare sanitizer build storage
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo install -d -m 0775 -o "$USER" -g "$(id -gn)" \
+            "/mnt/pineforge-native-sanitizers/${{ github.run_id }}-${{ matrix.profile }}/${{ matrix.build_dir }}" \
+            "/mnt/pineforge-native-sanitizers/${{ github.run_id }}-${{ matrix.profile }}/tmp" \
+            "/mnt/pineforge-native-sanitizers/${{ github.run_id }}-${{ matrix.profile }}/.ccache"
+          [[ ! -e ${{ matrix.build_dir }} && ! -L ${{ matrix.build_dir }} ]]
+          ln -s -- \
+            "/mnt/pineforge-native-sanitizers/${{ github.run_id }}-${{ matrix.profile }}/${{ matrix.build_dir }}" \
+            ${{ matrix.build_dir }}
+          resolved_build="$(readlink -f -- ${{ matrix.build_dir }})"
+          printf 'sanitizer build tree: %s\n' "$resolved_build"
+          [[ "$resolved_build" == "/mnt/pineforge-native-sanitizers/${{ github.run_id }}-${{ matrix.profile }}/${{ matrix.build_dir }}" ]]
+          stat -c '%A %U:%G %n' -- "$resolved_build" "/mnt/pineforge-native-sanitizers/${{ github.run_id }}-${{ matrix.profile }}/tmp" "$CCACHE_DIR"
+
+      - name: Inventory disposable .NET installation
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /usr/share/dotnet && ! -L /usr/share/dotnet ]]; then
+            sudo ls -ld -- /usr/share/dotnet
+            sudo du -sh -- /usr/share/dotnet
+          elif [[ -e /usr/share/dotnet || -L /usr/share/dotnet ]]; then
+            sudo ls -ld -- /usr/share/dotnet
+            echo "::warning::optional preinstall is not a real directory; no removal performed: /usr/share/dotnet"
+          else
+            echo "optional preinstall absent: /usr/share/dotnet"
+          fi
+
+      - name: Remove disposable .NET installation
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /usr/share/dotnet && ! -L /usr/share/dotnet ]]; then
+            sudo rm -rf -- /usr/share/dotnet
+          else
+            echo "no directory removal for absent or symlinked optional preinstall: /usr/share/dotnet"
+          fi
+
+      - name: Inventory disposable Android SDK
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /usr/local/lib/android && ! -L /usr/local/lib/android ]]; then
+            sudo ls -ld -- /usr/local/lib/android
+            sudo du -sh -- /usr/local/lib/android
+          elif [[ -e /usr/local/lib/android || -L /usr/local/lib/android ]]; then
+            sudo ls -ld -- /usr/local/lib/android
+            echo "::warning::optional preinstall is not a real directory; no removal performed: /usr/local/lib/android"
+          else
+            echo "optional preinstall absent: /usr/local/lib/android"
+          fi
+
+      - name: Remove disposable Android SDK
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /usr/local/lib/android && ! -L /usr/local/lib/android ]]; then
+            sudo rm -rf -- /usr/local/lib/android
+          else
+            echo "no directory removal for absent or symlinked optional preinstall: /usr/local/lib/android"
+          fi
+
+      - name: Inventory disposable GHC installation
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /opt/ghc && ! -L /opt/ghc ]]; then
+            sudo ls -ld -- /opt/ghc
+            sudo du -sh -- /opt/ghc
+          elif [[ -e /opt/ghc || -L /opt/ghc ]]; then
+            sudo ls -ld -- /opt/ghc
+            echo "::warning::optional preinstall is not a real directory; no removal performed: /opt/ghc"
+          else
+            echo "optional preinstall absent: /opt/ghc"
+          fi
+
+      - name: Remove disposable GHC installation
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /opt/ghc && ! -L /opt/ghc ]]; then
+            sudo rm -rf -- /opt/ghc
+          else
+            echo "no directory removal for absent or symlinked optional preinstall: /opt/ghc"
+          fi
+
+      - name: Inventory disposable Boost installation
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /usr/local/share/boost && ! -L /usr/local/share/boost ]]; then
+            sudo ls -ld -- /usr/local/share/boost
+            sudo du -sh -- /usr/local/share/boost
+          elif [[ -e /usr/local/share/boost || -L /usr/local/share/boost ]]; then
+            sudo ls -ld -- /usr/local/share/boost
+            echo "::warning::optional preinstall is not a real directory; no removal performed: /usr/local/share/boost"
+          else
+            echo "optional preinstall absent: /usr/local/share/boost"
+          fi
+
+      - name: Remove disposable Boost installation
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /usr/local/share/boost && ! -L /usr/local/share/boost ]]; then
+            sudo rm -rf -- /usr/local/share/boost
+          else
+            echo "no directory removal for absent or symlinked optional preinstall: /usr/local/share/boost"
+          fi
+
+      - name: Prune unused Docker images
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker image prune -af
+
+      - name: Measure sanitizer disk space after preparation
+        if: ${{ always() && needs.authz.result == 'success' }}
+        run: df -h / /mnt
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -151,7 +288,13 @@ jobs:
 
       - name: Verify (${{ matrix.profile }})
         id: verify
+        env:
+          TMPDIR: /mnt/pineforge-native-sanitizers/${{ github.run_id }}-${{ matrix.profile }}/tmp
         run: python3 scripts/ci_verify.py ${{ matrix.profile }} --build-dir ${{ matrix.build_dir }} --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache
+
+      - name: Measure sanitizer disk space after verification
+        if: ${{ always() && needs.authz.result == 'success' }}
+        run: df -h / /mnt
 
       - name: Stage and summarize diagnostics
         if: always()
@@ -175,7 +318,7 @@ jobs:
   native-live-shards:
     name: native-live-shard (${{ matrix.profile }}, ${{ matrix.shard }}/4)
     needs: [authz]
-    runs-on: gke-8cpu-16gb-amd64
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -269,7 +412,7 @@ jobs:
     name: native-live (native)
     needs: [authz, native-live-shards]
     if: always()
-    runs-on: gke-4cpu-8gb-amd64
+    runs-on: ubuntu-24.04
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -299,7 +442,7 @@ jobs:
   native-live-gate:
     needs: [authz, native-live, native-live-native]
     if: always()
-    runs-on: gke-4cpu-8gb-amd64
+    runs-on: ubuntu-24.04
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}

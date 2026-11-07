@@ -23,7 +23,7 @@
 namespace pineforge {
 namespace {
 
-// The admission journal is source-layer state (R5 lane N14): its reflected
+// The admission journal is source-layer state (the source-runtime extraction): its reflected
 // fields fold here, through the source host's extension, exactly as they
 // did when this helper lived in the kernel-internal sink header.
 void hash_admission_field(BrokerStateHashSink& f, const admission::Field& field) {
@@ -184,7 +184,7 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.b(value.sizing.at_fill);
     // Recorded only under a cash commission with a percent-of-equity default
     // quantity (the folded run configuration decides), so every other run
-    // keeps its digest (R5 lane PAR-CASHFEE).
+    // keeps its digest (the cash-sizing fee correction).
     if (!std::isnan(value.sizing.strategy_equity)) f.d(value.sizing.strategy_equity);
     f.d(value.exit_levels.limit); f.d(value.exit_levels.stop);
     f.d(value.exit_levels.trail_points); f.d(value.exit_levels.trail_offset);
@@ -464,8 +464,10 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.s(exit.exit_id); f.s(exit.from_entry); f.d(exit.trail_points); f.d(exit.trail_offset);
         f.d(exit.trail_price); f.d(exit.qty_percent); f.s(exit.comment); f.d(exit.qty);
         f.s(exit.oca_name); f.d(exit.profit_ticks); f.d(exit.loss_ticks);
+        // Folded only when set, like PlacementSnapshot::void_global_issue.
+        if (exit.void_global) f.u(0x766f6964676cULL);
     }
-    // R5 lane R4d: folded only while a leg is anchored, so every run that
+    // The anchored-leg integration: folded only while a leg is anchored, so every run that
     // anchors none keeps its established hash.
     if (!anchored_relative_legs_.empty() || anchored_relative_stats_.anchored != 0
         || materializing_parent_.incarnation != 0) {
@@ -867,7 +869,7 @@ void source::PineScheduler::fold_consumed_digests() const noexcept {
     // ab9714be test_live_state_hash_recording: a shorter run is a hash prefix
     // of the same longer feed.  Retained future input is provider transport,
     // not broker continuation state, so fold only the consumed source prefix.
-    // v3 (R5 lane V19-E): the consumed prefix as a running digest, each bar
+    // v3 (the retired-row compaction): the consumed prefix as a running digest, each bar
     // folded once, the first time a read passes it; a prefix run still reads
     // like the full run up to its last bar.
     const std::size_t consumed = std::min(

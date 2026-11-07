@@ -13,7 +13,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 { class ScriptBucketCursor; }
+inline namespace engine_script_run_v20 { class ScriptBucketCursor; }
 }
 
 namespace pineforge::source {
@@ -205,13 +205,13 @@ public:
     // The bar of the run's lower intrabar path the context is walking (its
     // sub_bar_open_ms), or nullptr when the run declares no lower path or no
     // bar of it carries that stamp. A magnified run's sub-bars are
-    // TradingView's intrabars built from the input (R5 lane MAG-INTRABAR,
+    // TradingView's intrabars built from the input (the TradingView intrabar import,
     // source::tradingview_magnifier_bars), not input bars.
     const Bar* lower_path_bar_at(const PineStrategyHost& host,
                                  const NativeDecisionContext& context) const noexcept;
     // One intrabar of a magnified run's path is done. TradingView's magnified
     // broker admits the open fill and one refill at EVERY intrabar's open,
-    // not only at the chart bar's first one (R5 lane MAG-INTRABAR,
+    // not only at the chart bar's first one (the TradingView intrabar import,
     // tests/fixtures/magnifier_intrabars/mi-coof-refill*), so the open-point
     // count starts over with the next intrabar.
     void sub_bar_complete() noexcept;
@@ -326,7 +326,7 @@ private:
     std::size_t confirmed_open_input_next_ = 0;
     std::size_t confirmed_open_input_count_ = 0;
     DeferredBoundaryInput deferred_boundary_input_{};
-    // R5 lane V19-E: running digests of the consumed input prefix -- the bars,
+    // The retired-row compaction: running digests of the consumed input prefix -- the bars,
     // their script completions and their boundary completions -- each element
     // folded once, the first time the state hash reads past it (the v2
     // scheduler fold re-read the whole prefix at every read).

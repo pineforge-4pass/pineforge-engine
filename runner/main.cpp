@@ -8,6 +8,7 @@
 #include "delivery.hpp"
 #include "report.hpp"
 #include "service.hpp"
+#include "ledger_observability.hpp"
 #include <pineforge/pineforge.h>
 #include <pineforge/native_calendar.hpp>
 #include "../src/native_calendar_memo.hpp"
@@ -47,7 +48,7 @@ static_assert(std::atomic<std::sig_atomic_t>::is_always_lock_free);
 void signal_stop(int) { stopped = 1; }
 constexpr std::size_t MAX_FRAME = 1024 * 1024;
 
-enum class ReportJsonlMode { Off, Delta, Full };
+enum class ReportJsonlMode { Off, Delta, Full, DeltaV2 };
 
 struct Config {
     std::string strategy, warmup, feed = "-", ledger, webhook, mode = "", input_tf, script_tf,
@@ -65,7 +66,9 @@ struct Config {
     std::uint64_t from_input = 0, max_events = 0, max_attempts = 8;
     std::uint64_t checkpoint_interval = kDefaultReportCheckpointInterval;
     std::uint64_t status_interval = 1, max_ledger_bytes = 0, feed_idle_timeout = 15, feed_message_timeout = 15;
+    std::uint64_t feed_connect_timeout = 0;
     std::uint64_t ratio_interval = 1;
+    double ledger_warn_fraction = kDefaultLedgerWarnFreeFraction;
     long poll_ms = 1000;
     bool check = false, allow_http = false, ledger_unbounded = false;
     ReportJsonlMode report_jsonl = ReportJsonlMode::Off;
@@ -91,13 +94,19 @@ void help() {
                  "         --check (one HTTP snapshot) --poll-ms 1000\n"
                  "         --report-jsonl[=full] (mirror cumulative reports to stdout)\n"
                  "         --report-jsonl=delta (mirror committed report deltas to stdout)\n"
+                 "         --report-jsonl=delta-v2 (change-only deltas with ratio freshness)\n"
                  "         --trade-text PATH (finished report text companion; new file only)\n"
                  "         --ratio-interval K (positive; default 1 keeps exact ratios at every input)\n"
                  "         --status-file PATH --status-interval 1 (seconds, 1..300)\n"
+                 "         --feed-connect-timeout S (network seconds; default 0 uses libcurl's largest connect option)\n"
                  "         --feed-idle-timeout S --feed-message-timeout S (seconds)\n"
-                 "           stdin: default 0 = no limit, no upper cap; network/file feeds: default 15, 1..300\n"
+                 "           stdin/network: default 0 = no limit, no upper cap; files: default 15, 1..300\n"
+                 "           network values must fit milliseconds in a long; for connect, files and stdin ignore a well-formed value\n"
+                 "           connect 0 adds no bound: ends on system/peer failure or nonzero --feed-message-timeout (includes connect)\n"
                  "         --control-dir PATH --max-ledger-bytes N (0 disables budget)\n"
                  "         --ledger-unbounded (explicit unlimited service ledger)\n"
+                 "         --ledger-warn-free-fraction F (default " << kDefaultLedgerWarnFreeFraction <<
+                 ", 0 < F <= 1; warning only)\n"
                  "JSONL: {\"type\":\"tick\",\"ts\":60000,\"seq\":1,\"price\":100,\"qty\":1}\n"
                  "       "
                  "{\"type\":\"bar\",\"bar\":{\"ts_open\":60000,\"o\":100,\"h\":102,\"l\":99,\"c\":"
@@ -107,8 +116,8 @@ void help() {
                  "File/HTTP input defaults to the full recorded prefix; --from-input declares\n"
                  "the zero-based start of a resumed tail. HTTP polls use full snapshots.\n"
                  "Usage: pineforge-live actions --ledger L --after N [--follow] [--deployment D]\n"
-                 "       pineforge-live status --ledger L [--deployment D]\n"
-                 "       pineforge-live report --ledger L [--deployment D] [--at-input N] [--verify-full]\n"
+                 "       pineforge-live status --ledger L [--deployment D] [--ledger-warn-free-fraction F]\n"
+                 "       pineforge-live report --ledger L [--deployment D] [--at-input N] [--verify-full] [--delta-base]\n"
                  "       pineforge-live probe --status-file PATH --max-age S [--ready]\n"
                  "       pineforge-live redeliver --ledger L --deployment D --target T [--from N] [--failed-only]\n"
                  "Add --control-dir PATH to redeliver to request resending from a running runner.\n"
@@ -158,6 +167,8 @@ Config args(int argc, char **argv) {
                 c.report_jsonl = ReportJsonlMode::Full;
             else if (a == "--report-jsonl=delta")
                 c.report_jsonl = ReportJsonlMode::Delta;
+            else if (a == "--report-jsonl=delta-v2")
+                c.report_jsonl = ReportJsonlMode::DeltaV2;
             else
                 throw std::runtime_error("unknown option: " + a);
             continue;
@@ -249,8 +260,15 @@ Config args(int argc, char **argv) {
         }
         else if (a == "--control-dir") c.control_dir = v;
         else if (a == "--status-interval") c.status_interval = seconds_arg(v);
+        else if (a == "--feed-connect-timeout") {
+            try { c.feed_connect_timeout = unsigned_arg(v); }
+            catch (const std::exception&) {
+                throw std::runtime_error(a + " requires nonnegative integer seconds");
+            }
+        }
         else if (a == "--feed-idle-timeout") c.feed_idle_timeout = unsigned_arg(v);
         else if (a == "--feed-message-timeout") c.feed_message_timeout = unsigned_arg(v);
+        else if (a == "--ledger-warn-free-fraction") c.ledger_warn_fraction = ledger_warn_free_fraction(v);
         else if (a == "--max-ledger-bytes") {
             c.max_ledger_bytes = unsigned_arg(v);
             if (c.max_ledger_bytes > static_cast<std::uint64_t>(INT64_MAX))
@@ -291,13 +309,20 @@ Config args(int argc, char **argv) {
         if (!seen.count("--feed-idle-timeout")) c.feed_idle_timeout = 0;
         if (!seen.count("--feed-message-timeout")) c.feed_message_timeout = 0;
     }
+    if (!c.feed_url.empty()) {
+        if (!seen.count("--feed-idle-timeout")) c.feed_idle_timeout = 0;
+        if (!seen.count("--feed-message-timeout")) c.feed_message_timeout = 0;
+    }
     const auto validate_feed_timeout = [&](const char* flag, std::uint64_t seconds) {
-        if ((!c.feed_url.empty() || c.feed != "-") && (!seconds || seconds > 300))
-            throw std::runtime_error(std::string(flag) + " must be 1..300 seconds" +
-                (c.feed_url.empty() ? " for file feeds" : "; bound stays for network feeds"));
+        if (!c.feed_url.empty() && seconds > static_cast<std::uint64_t>(LONG_MAX) / 1000)
+            throw std::runtime_error(std::string(flag) + " exceeds milliseconds range for network feeds");
+        if (c.feed_url.empty() && c.feed != "-" && (!seconds || seconds > 300))
+            throw std::runtime_error(std::string(flag) + " must be 1..300 seconds for file feeds");
     };
     validate_feed_timeout("--feed-idle-timeout", c.feed_idle_timeout);
     validate_feed_timeout("--feed-message-timeout", c.feed_message_timeout);
+    if (!c.feed_url.empty())
+        (void)feed_connect_timeout_ms(c.feed_connect_timeout, static_cast<long>(c.feed_message_timeout * 1000));
     const bool websocket = c.feed_url.rfind("ws://", 0) == 0 || c.feed_url.rfind("wss://", 0) == 0;
     if (!c.feed_url.empty() && !websocket && c.from_input)
         throw std::runtime_error("HTTP snapshots require from-input 0");
@@ -477,8 +502,15 @@ class Strategy {
                 throw std::runtime_error("native stream extension version mismatch");
             auto engine_layout = optional_symbol<decltype(&strategy_stream_engine_layout_version)>(
                 "strategy_stream_engine_layout_version");
-            has_current_engine_layout =
-                engine_layout && engine_layout() == PF_STREAM_ENGINE_LAYOUT_VERSION;
+            const auto declared_layout = engine_layout ? engine_layout() : 0u;
+            // A nonzero declaration promises a concrete BacktestEngine
+            // layout. Refuse stale promises before creating a strategy or
+            // reading a handle under the runner's compiled C++ layout.
+            if (declared_layout != 0u && declared_layout != PF_STREAM_ENGINE_LAYOUT_VERSION)
+                throw std::runtime_error(
+                    "strategy engine layout mismatch: module=" + std::to_string(declared_layout)
+                    + " runtime=" + std::to_string(PF_STREAM_ENGINE_LAYOUT_VERSION));
+            has_current_engine_layout = declared_layout == PF_STREAM_ENGINE_LAYOUT_VERSION;
             free = symbol<decltype(&strategy_free)>("strategy_free");
             error = symbol<decltype(error)>("strategy_get_last_error");
             tick = symbol<decltype(tick)>("strategy_stream_push_tick");
@@ -1086,7 +1118,7 @@ int run(Config c) {
     ledger.bind_routing(c.routing.stored_document());
     // All modes fold the same carried patches. Only cumulative output, legacy
     // verification and checkpoint equality need to serialize the document.
-    ReportDeltas report_deltas(true);
+    ReportDeltas report_deltas(true, c.report_jsonl == ReportJsonlMode::DeltaV2, c.chart_timezone);
     pineforge::LiveReportAccumulator report_accumulator(c.ratio_interval);
     const auto verify_report = [&](std::uint64_t report_cursor,
                                    const std::string& stored = std::string{},
@@ -1141,8 +1173,10 @@ int run(Config c) {
             {"verified_source_prefix", Json::boolean(false)}, {"no_unhealed_input_gap", Json::boolean(true)},
             {"storage_below_budget", Json::boolean(!c.max_ledger_bytes || ledger_bytes(c.ledger) <= c.max_ledger_bytes)}})},
         {"metrics", Json::object({{"committed_input", num(recorded)}, {"last_seq", Json{}},
-            {"source_timestamp_ms", Json{}}, {"source_lag_ms", Json{}}, {"queue_bytes", num(0)},
+            {"source_timestamp_ms", Json{}}, {"source_lag_ms", Json{}}, {"feed_idle_ms", Json{}}, {"queue_bytes", num(0)},
             {"ledger_bytes", num(ledger_bytes(c.ledger))}, {"report_cursor", num(ledger.report_cursor())}, {"targets", Json::object({})}})}});
+    recovering.members["metrics"].members["ledger_storage"] =
+        LedgerObservability(c.ledger, c.ledger_warn_fraction, false).sample(recorded);
     service.publish(recovering, true);
     for (std::uint64_t i = 0; i < recorded; ++i) {
         if (stopped)
@@ -1185,8 +1219,13 @@ int run(Config c) {
         return record.at("ts").integer<std::uint64_t>();
     };
     if (recorded) source_timestamp = source_time(parse_json(ledger.input(recorded - 1)->canonical_json), source_time);
+    // Arrival age includes processing; it is independent of the stdin deadline clock.
+    std::optional<std::chrono::steady_clock::time_point> feed_last_input;
+    const auto note_feed_input = [&] { feed_last_input = std::chrono::steady_clock::now(); };
+    LedgerObservability ledger_observability(c.ledger, c.ledger_warn_fraction);
     auto last_pulse = std::chrono::steady_clock::time_point{};
     std::string last_state;
+    std::string last_storage_state;
     bool last_ready = false;
     const auto pulse = [&](bool force = false) {
         const bool checkpoint_changed = note_checkpoint_diagnostic(ledger.checkpoint_diagnostic());
@@ -1198,11 +1237,15 @@ int run(Config c) {
         if (!service.enabled()) return;
         const std::string state = storage_stop ? "storage_budget" : stopped ? "draining" : "running";
         const bool ready = prefix_verified && !storage_stop && !stopped;
-        const bool changed = state != last_state || ready != last_ready || checkpoint_changed;
+        auto storage = ledger_observability.sample(ledger.input_count());
+        const auto storage_state = storage.at("state").text();
+        const bool changed = state != last_state || ready != last_ready || checkpoint_changed ||
+            storage_state != last_storage_state;
         if (!force && !changed && clock - last_pulse < std::chrono::seconds(c.status_interval)) return;
         last_pulse = clock;
         last_state = state;
         last_ready = ready;
+        last_storage_state = storage_state;
         const auto now = wall_time_ms();
         auto pending = parse_json(ledger.delivery_metrics_json(now));
         for (const auto& [name, target] : c.routing.targets) {
@@ -1220,7 +1263,10 @@ int run(Config c) {
             {"metrics", Json::object({{"committed_input", num(ledger.input_count())},
                 {"last_seq", cursor.seen_tick ? num(cursor.tick_seq) : Json{}},
                 {"source_timestamp_ms", num(source_timestamp)}, {"source_lag_ms", num(now > source_timestamp ? now - source_timestamp : 0)},
+                {"feed_idle_ms", feed_last_input ? num(static_cast<std::uint64_t>(
+                    std::max<std::chrono::milliseconds::rep>(0, std::chrono::duration_cast<std::chrono::milliseconds>(clock - *feed_last_input).count()))) : Json{}},
                 {"queue_bytes", num(intake_bytes + delivery.queue_bytes())}, {"ledger_bytes", num(c.max_ledger_bytes ? bytes : ledger_bytes(c.ledger))},
+                {"ledger_storage", std::move(storage)},
                 {"control_errors", num(delivery.control_errors())},
                 {"report_cursor", num(ledger.report_cursor())}, {"targets", std::move(pending)}})}}), force || changed);
     };
@@ -1273,6 +1319,7 @@ int run(Config c) {
         std::string row;
         std::uint64_t index = start;
         while (!stopped && !storage_stop && line(in, row)) {
+            if (c.feed_url.empty()) note_feed_input();
             if (blank(row))
                 continue;
             bool last = false;
@@ -1296,7 +1343,8 @@ int run(Config c) {
         // advanced the engine, so only its committed document is usable.
         const auto final_cursor = ledger.input_count();
         if (!strategy.has_current_engine_layout || c.ratio_interval <= 1) return;
-        const auto final_report = storage_stop ? report_deltas.final_ratio_refresh()
+        const auto final_report = storage_stop || c.report_jsonl == ReportJsonlMode::DeltaV2
+            ? report_deltas.final_ratio_refresh()
             : report_accumulator.ratios_as_of_input() != final_cursor
                 ? cumulative_report(strategy, deployment, final_cursor,
                     report_deltas, report_accumulator, {}, true) : std::string{};
@@ -1355,6 +1403,7 @@ int run(Config c) {
                         break;
                     }
                     last_data = std::chrono::steady_clock::now();
+                    feed_last_input = last_data;
                     if (pending.empty()) message_started = last_data;
                     pending.append(buffer, static_cast<std::size_t>(n));
                     bool consumed = false;
@@ -1388,36 +1437,29 @@ int run(Config c) {
                 consume(input, c.from_input, true);
             }
         } else if (c.feed_url.rfind("ws://", 0) == 0 || c.feed_url.rfind("wss://", 0) == 0) {
-            HttpOptions feed;
-            feed.url = c.feed_url;
-            feed.allow_insecure_http = c.allow_http;
-            feed.total_timeout_ms = static_cast<long>(c.feed_message_timeout * 1000);
-            feed.connect_timeout_ms = std::min<long>(5000, feed.total_timeout_ms);
-            feed.idle_timeout_ms = static_cast<long>(c.feed_idle_timeout * 1000);
-            feed.message_timeout_ms = static_cast<long>(c.feed_message_timeout * 1000);
+            const auto feed = feed_http_options(c.feed_url, c.allow_http, true, c.feed_connect_timeout,
+                                                c.feed_idle_timeout, c.feed_message_timeout);
             std::string subscription =
                 c.subscribe_path.empty() ? "" : read_file(c.subscribe_path, MAX_FRAME);
             std::uint64_t index = c.from_input;
             receive_websocket(
                 feed, subscription,
                 [&](std::string_view bytes) {
+                    note_feed_input();
                     consume_message(std::string(bytes), index);
                     return !stopped && !storage_stop && !(c.max_events && processed >= c.max_events);
                 },
                 [&] { delivery.check(); pulse(); return stopped != 0 || storage_stop; },
-                [&](std::size_t bytes) { intake_bytes = bytes; });
+                [&](std::size_t bytes) { intake_bytes = bytes; }, note_feed_input);
         } else {
-            HttpOptions feed;
-            feed.url = c.feed_url;
-            feed.allow_insecure_http = c.allow_http;
-            feed.total_timeout_ms = static_cast<long>(c.feed_message_timeout * 1000);
-            feed.connect_timeout_ms = std::min<long>(5000, feed.total_timeout_ms);
-            feed.idle_timeout_ms = static_cast<long>(c.feed_idle_timeout * 1000);
+            const auto feed = feed_http_options(c.feed_url, c.allow_http, false, c.feed_connect_timeout,
+                                                c.feed_idle_timeout, c.feed_message_timeout);
             do {
                 delivery.check();
                 pulse();
                 if (storage_stop || stopped) break;
-                auto snapshot = get_feed_snapshot(feed, [&] { pulse(); return stopped != 0 || storage_stop; });
+                auto snapshot = get_feed_snapshot(feed, [&] { pulse(); return stopped != 0 || storage_stop; },
+                    note_feed_input);
                 std::istringstream input(snapshot);
                 consume(input, 0, true);
                 recorded = ledger.input_count();
@@ -1508,8 +1550,9 @@ int ledger_command(int argc, char** argv) {
     const std::string command = argv[1];
     std::string path, target, deployment, control_dir;
     std::uint64_t after = 0, from = 1, max_ledger_bytes = 0;
+    double ledger_warn_fraction = kDefaultLedgerWarnFreeFraction;
     std::optional<std::uint64_t> at_input;
-    bool follow = false, failed_only = false, verify_full = false;
+    bool follow = false, failed_only = false, verify_full = false, delta_base = false;
     std::set<std::string> seen;
     for (int index = 2; index < argc; ++index) {
         const std::string option = argv[index];
@@ -1517,12 +1560,15 @@ int ledger_command(int argc, char** argv) {
         if (command == "actions" && option == "--follow") { follow = true; continue; }
         if (command == "redeliver" && option == "--failed-only") { failed_only = true; continue; }
         if (command == "report" && option == "--verify-full") { verify_full = true; continue; }
+        if (command == "report" && option == "--delta-base") { delta_base = true; continue; }
         if (index + 1 == argc) throw std::runtime_error("missing option value: " + option);
         const std::string value = argv[++index];
         if (option == "--ledger") path = value;
         else if (option == "--deployment") deployment = value;
         else if (command == "actions" && option == "--after") after = unsigned_arg(value);
         else if (command == "report" && option == "--at-input") at_input = unsigned_arg(value);
+        else if (command == "status" && option == "--ledger-warn-free-fraction")
+            ledger_warn_fraction = ledger_warn_free_fraction(value);
         else if (command == "redeliver" && option == "--from") from = unsigned_arg(value);
         else if (command == "redeliver" && option == "--target") target = value;
         else if (command == "redeliver" && option == "--control-dir") control_dir = value;
@@ -1540,13 +1586,16 @@ int ledger_command(int argc, char** argv) {
     if (!deployment.empty() && deployment != view.identity())
         throw std::runtime_error("ledger deployment identity mismatch");
     if (command == "report") {
-        const auto report = verify_full ? view.report_json_full(at_input) : view.report_json(at_input);
+        const auto report = delta_base ? view.report_delta_base_json(at_input, verify_full)
+            : verify_full ? view.report_json_full(at_input) : view.report_json(at_input);
         log_checkpoint_diagnostic(view.checkpoint_diagnostic());
         std::cout << report << '\n';
         return 0;
     }
     if (command == "status") {
-        std::cout << view.status_json() << '\n';
+        auto status = parse_json(view.status_json());
+        status.members["ledger_storage"] = LedgerObservability(path, ledger_warn_fraction, false).sample(view.input_count());
+        std::cout << status.dump() << '\n';
         return 0;
     }
     if (command == "actions") {

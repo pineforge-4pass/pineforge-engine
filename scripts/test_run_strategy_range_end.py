@@ -3,11 +3,11 @@
 
 The engine books a position still open after its FINAL bar as TradingView's
 range-end close (open_at_end, at that bar's close). That final bar must be
-TV's last bar, not the feed's: the BINANCE:ETHUSDT.P 15 chart feed runs on
-to 2026-05-04 15:00 UTC while every ETH tape's range ends 2026-05-01 (228 of
-397 reference tapes with an Open row at 05-01 08:00 (+8) = 05-01 00:00 UTC @
-2261.44 = that bar's close). Unbounded, the row would be booked on 05-04
-15:00 @ 2365.09, a different bar ~4.6% off TV's, and fail exit/pnl against
+TV's last bar, not the feed's: consider a synthetic BINANCE:ETHUSDT.P 15 feed
+continuing beyond TradingView's range end T into a later session.
+An Open row at T marks 2000.00, the final included bar's close.
+Unbounded, the row would instead book at a later close of 2200.00:
+a different bar 10% off the range-end mark, failing exit/pnl against
 TV's Open row where it was previously simply absent.
 
 run_strategy.py therefore bounds the feed (``ohlcv_end_ms``) to
@@ -17,14 +17,14 @@ when the tape records it, else the ``to`` date) — and writes the
 range-end close rows, each marked "open" in the CSV's trailing ``Engine
 range-end`` column. Not the tape's last trade row: a first cut did that
 and the full-population gate failed hard.regression on
-waranyutrkm-asian-box-breakout-eda-tuned (110 -> 109 trades) — its last
-trade closes 04-29 18:00 UTC, the feed was cut mid-day, and the strategy
-reads the 04-29 daily close/EMA through a lookahead_on projection that sees
+the session-breakout probe (110 -> 109 trades) — its last
+closed trade ends mid-day, the feed was cut there, and the strategy
+reads that day's daily close/EMA through a lookahead_on projection that sees
 the day's FINAL value; the partial day flipped the trend filter and TV's
-trade 110 (entered 04-29 09:45) never happened. The tape's last row is only
+later entry never happened. The tape's last row is only
 the fallback for a metrics.json with no range. Under this (v2) behaviour
 every unmarked lane measured was clean: f-1d 10/10 engine-0 -> excellent,
-waranyutrkm 110/110 at 100%, the 8 unmarked range-end ETH tapes unchanged.
+the session-breakout probe 110/110 at 100%, the 8 unmarked range-end ETH tapes unchanged.
 
 The same for every tape. The reference tape prints the range-end
 position as an ordinary closed trade with an empty Signal (every 1D lane,
@@ -33,8 +33,8 @@ of the 396 reference ETH tapes). Under v4 a marked tape was measured as the
 baseline had measured it — unbounded, the marks withheld — because the
 canonical grader paired the baseline's post-range closes with TV's Open
 rows on entry time, and v2 (bound + emit) moved pnlP90 on the three
-3commas grid bots by the cent rounding of TV's Net PnL summed into the
-schedule aggregate (22/22/28 open lots each; round 3, 2026-09-02). The
+grid-bot probes by the cent rounding of TV's Net PnL summed into the
+schedule aggregate across their open lots (round 3, 2026-09-02). The
 grader now pairs the engine's marked rows with the tape's Open rows lot
 for lot and keeps both out of every aggregate (verify_corpus.py
 pair_range_end_marks, test_verify_corpus_open_mark.py), so the marker in
@@ -82,17 +82,17 @@ def _utc_ms(y: int, m: int, d: int, hh: int = 0, mm: int = 0) -> int:
     return int(datetime(y, m, d, hh, mm, tzinfo=timezone.utc).timestamp() * 1000)
 
 
-# Every campaign tape: from 2025-04-01 to 2026-05-01, i.e. the tape's own
-# requestedRange {from: 1743465600000, to: 1777593600000}.
+# Each fixture tape has a requested start and end independent of its rows.
+# The requested range, not the feed's tail, bounds a closed last trade.
 RANGE_TO_MS = 1777593600000
 assert RANGE_TO_MS == _utc_ms(2026, 5, 1)
 
-# The ETH chart feed: 15m bars from 04-29 00:00 UTC past the range end to
-# 05-04 15:00 UTC. TV's last bar is 05-01 00:00 UTC (close 2261.44).
+# The ETH chart feed has 15m bars starting before the requested range end
+# and extending past it. TV's last bar lies exactly on the range end.
 FEED_START = _utc_ms(2026, 4, 29, 0, 0)
 TV_LAST_BAR = RANGE_TO_MS
 FEED_END = _utc_ms(2026, 5, 4, 15, 0)
-# The asian-box shape: the tape's last trade closes 04-29 18:00 UTC.
+# The range-bound fixture's last trade closes before the requested end.
 LAST_EXIT = _utc_ms(2026, 4, 29, 18, 0)
 
 
@@ -291,8 +291,8 @@ class CalendarProvenanceTests(unittest.TestCase):
 
 class LoadTvRangeEndTests(unittest.TestCase):
     def test_closed_last_trade_bounds_at_the_range_end_not_the_tape(self) -> None:
-        # The asian-box shape: the tape's last row is a closed exit 30 h
-        # before the range end; the bound is the range end.
+        # A closed last exit can precede the range end by many bars;
+        # the bound is still the range end.
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             _write_tape(d / "tv_trades.csv", ASIAN_BOX_TAPE)
@@ -301,7 +301,7 @@ class LoadTvRangeEndTests(unittest.TestCase):
             self.assertNotEqual(_load_tv_range_end_ms(d, TZ8), LAST_EXIT)
 
     def test_open_position_row_sits_on_the_range_end(self) -> None:
-        # Date-only reference: the Open row at 05-01 08:00 (+8) IS the range end.
+        # Date-only reference: the Open row lies exactly on the range end.
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             _write_tape(d / "tv_trades.csv", [
@@ -314,9 +314,9 @@ class LoadTvRangeEndTests(unittest.TestCase):
             self.assertEqual(_load_tv_range_end_ms(d, TZ8), TV_LAST_BAR)
 
     def test_ws_tape_bound_is_the_requested_to(self) -> None:
-        # orb-lite NYSE:F 1D: the range-end row (no Signal) sits on 04-30
-        # 13:30 UTC, TV's returnedRange.to; the bound is requestedRange.to,
-        # 05-01 00:00 UTC, which keeps that bar and excludes 05-01 13:30.
+        # NYSE:F daily: the range-end row (no Signal) lies on the final
+        # returned bar; requestedRange.to lies after it but before the
+        # next session's open, keeping only the in-range bar.
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             _write_tape(d / "tv_trades.csv", [
@@ -510,9 +510,9 @@ class FeedBoundTests(unittest.TestCase):
 
 # --- the range-end row and the tape's marker --------------------------
 
-# The 3commas grid-bot shape (date-only reference): closed lots, then the lots
+# The grid-bot probes' shape (date-only reference): closed lots, then the lots
 # still open at the range end, each marked "Open" on its exit row at
-# 05-01 08:00 (+8) @ 2261.44.
+# the final bar's close; the original fixture values remain below.
 BROWSER_OPEN_TAPE = [
     (3, "Exit long", "2026-05-01 08:00", "Open", "2261.44"),
     (3, "Entry long", "2026-04-30 20:45", "B", "2189.13"),

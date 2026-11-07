@@ -1187,7 +1187,7 @@ void test_historical_barstate_and_committed_state_rollback_hooks() {
 // historical bar's terminal C tick. There is no later broker tick on which to
 // run a fill-triggered body for that bar. In particular, such a body must not
 // create a priced order that wakes over the next bar before its ordinary close
-// execution can issue the durable order. This is the Fran470 production shape.
+// execution can issue the durable order. This is the terminal-fill probe's shape.
 class PoocTerminalBracketProbe final : public CoofBase {
 public:
     explicit PoocTerminalBracketProbe(bool is_long) : is_long_(is_long) {

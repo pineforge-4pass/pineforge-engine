@@ -137,7 +137,7 @@ NOISE_STRINGS = [
 NOISE_NM = [
     "T pineforge::ta::ema_na_warmup_flag()",
     "s pineforge::ta::ema_na_warmup_flag()::flag",
-    "T pineforge::engine_script_run_v19::NativeStrategyHost::on_native_margin_call("
+    "T pineforge::engine_script_run_v20::NativeStrategyHost::on_native_margin_call("
     "pineforge::native_order::native_order_v8::MarginCallEvent const&)",
     "libpineforge_kernel.a(pending_order_mirror.cpp.o):",
 ]
@@ -145,7 +145,7 @@ NOISE_NM = [
 # reads, and which ADR-0001 rules by name (Mach-O and ELF spellings both).
 RULED_SYMINFO_STRINGS = ["_strategy_set_syminfo_type", "strategy_set_syminfo_type"]
 RULED_SYMINFO_NM = [
-    "T pineforge::engine_script_run_v19::BacktestEngine::set_syminfo_metadata("
+    "T pineforge::engine_script_run_v20::BacktestEngine::set_syminfo_metadata("
     "std::__1::basic_string<char> const&, double)",
     "T _strategy_set_syminfo_type",
 ]
@@ -389,7 +389,7 @@ class SanitizerAndDebugBuildTests(unittest.TestCase):
         self.assertEqual(findings, [], [str(f) for f in findings])
         findings, summary = evaluate_table(strings + [text], nm)   # a debug archive: covered
         self.assertEqual(findings, [], [str(f) for f in findings])
-        self.assertEqual(summary["phraseHits"], 22)
+        self.assertEqual(summary["phraseHits"], 23)
 
     def test_only_a_marked_row_may_be_absent(self) -> None:
         adr = guard.ADR.read_text(encoding="utf-8")
@@ -450,7 +450,7 @@ class EvaluatorTests(unittest.TestCase):
                          sum(1 for n in RULED.identifiers
                              if any(p.search(n) for _, p in guard.IDENTIFIER_PATTERNS)
                              or guard.SENTINEL[1].match(n)))
-        self.assertEqual(summary["phraseHits"], 21)
+        self.assertEqual(summary["phraseHits"], 22)
 
     def test_a_name_outside_the_table_fails(self) -> None:
         for intruder in ("market_admission_observation_bogus", "coof_bogus", "pooc_bogus",
@@ -1516,7 +1516,7 @@ class ReachTests(unittest.TestCase):
         installed headers alone: the same name in the archive or a kernel
         literal is a finding (PineMap, round 3's blind probe, now flags there)."""
         self.assertIn("PineMap", RULED.header_only)
-        self.assertIn("map.size: result exceeds int range", RULED.header_only)
+        self.assertIn("map.size: result exceeds int64 range", RULED.header_only)
         self.assertNotIn("tv_carry_qty", RULED.header_only)
         for surface in ("strings", "nm", "source-literal"):
             with self.subTest(surface=surface):
@@ -1530,8 +1530,8 @@ class ReachTests(unittest.TestCase):
                                          source_literals=(["PineMap"], ["src/probe.cpp:1"]))
                 self.assertIn("PineMap", found)
         strings, nm = table_archive()
-        self.assertIn("map.size: result exceeds int range",
-                      self.unruled(strings + ["map.size: result exceeds int range"], nm))
+        self.assertIn("map.size: result exceeds int64 range",
+                      self.unruled(strings + ["map.size: result exceeds int64 range"], nm))
         # Where the row puts them, they pass.
         findings, _ = evaluate_table(*table_archive())
         self.assertEqual(findings, [], [str(f) for f in findings])

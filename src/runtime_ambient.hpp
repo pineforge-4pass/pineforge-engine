@@ -2,7 +2,7 @@
 /*
  * runtime_ambient.hpp -- RUNTIME-PRIVATE header (src/, never installed).
  *
- * The library's per-thread runtime state, kept in one block (R5 lane D2-C):
+ * The library's per-thread runtime state, kept in one block (the per-pump state cache):
  * the TA bar context (ta::bar_context), the EMA seeding default
  * (ta::ema_na_warmup_flag) and the chart's native day partition
  * (active_native_day_partition). Their accessors keep their signatures and
@@ -30,6 +30,7 @@
 
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
+#include <pineforge/map_capacity.hpp>
 
 namespace pineforge {
 namespace internal {
@@ -129,6 +130,7 @@ public:
 private:
     RuntimeAmbient* block_;
     ta::BarContext prior_;
+    detail::MapBarContextScope map_context_;
 };
 
 }  // namespace internal

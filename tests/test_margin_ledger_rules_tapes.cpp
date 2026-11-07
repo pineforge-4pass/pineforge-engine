@@ -85,7 +85,7 @@ constexpr std::size_t kTvRows = 43088;
 // is removed.
 const char kHistoryResidual[] = "G+L residual call: history regime unpinned";
 const std::vector<std::pair<std::string, std::string>> kKnownDivergences = {
-    // The residual call on a history: these proozac ledgers need the 1x long
+    // The residual call on a history: these history-residual probe ledgers need the 1x long
     // residual call on the G + L cash after their trade history, which the
     // tree keeps in its earlier scope (net profit with no tracked roundoff).
     {"proozac-history-k0-after-v2/r1", kHistoryResidual},

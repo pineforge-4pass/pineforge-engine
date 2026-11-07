@@ -220,12 +220,16 @@ void compare_delivery_recount(Ledger& ledger, const std::string& path) {
     CHECK(LedgerView(path).status_json() == Json::object({{"schema_version", count_json(1)},
         {"actions", count_json(events.size())}, {"targets", status}}).dump());
     std::uint64_t after = 0;
+    std::size_t visited = 0;
     while (const auto next = ledger.next_delivery_event(after)) {
-        CHECK(next->event.ordinal == after + 1);
-        CHECK(next->unsent == std::binary_search(unsent_ordinals.begin(), unsent_ordinals.end(), next->event.ordinal));
+        CHECK(visited < unsent_ordinals.size());
+        if (visited < unsent_ordinals.size())
+            CHECK(next->event.ordinal == unsent_ordinals[visited]);
+        CHECK(next->unsent && next->event.ordinal > after);
         after = next->event.ordinal;
+        ++visited;
     }
-    CHECK(after == events.size());
+    CHECK(visited == unsent_ordinals.size());
 }
 
 using LedgerFiles = std::vector<std::optional<std::string>>;
@@ -1622,6 +1626,14 @@ void native_http() {
     CHECK(server.requests[3].find("GET /synthetic HTTP/") == 0);
     CHECK(server.requests[3].find("X-PineForge-") == std::string::npos);
     CHECK(server.requests[3].find("Idempotency-Key") == std::string::npos);
+    constexpr int snapshot_silence_stimulus_ms = 120;
+    const std::string delayed_snapshot = "{\"type\":\"time\",\"ts\":120000}\n";
+    Receiver unlimited_snapshot({{200, delayed_snapshot, "", snapshot_silence_stimulus_ms}});
+    auto unlimited = options;
+    unlimited.url = unlimited_snapshot.url();
+    unlimited.total_timeout_ms = 0;
+    CHECK(get_feed_snapshot(unlimited) == delayed_snapshot);
+    unlimited_snapshot.finish();
     auto invalid = options;
     invalid.url = "file:///etc/passwd";
     CHECK(throws([&] { get_feed_snapshot(invalid); }));

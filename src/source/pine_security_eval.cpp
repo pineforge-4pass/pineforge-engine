@@ -33,10 +33,35 @@ using namespace internal;
 
 namespace {
 
+// The request door owns literal parse failures. Catch only the numeric
+// parser's failures here; registration and other arguments keep their codes.
+int request_timeframe_seconds(const std::string& tf, bool lower_tf_array_requested) {
+    int requested_seconds = 0;
+    try {
+        requested_seconds = tf_to_seconds(tf);
+    } catch (const std::invalid_argument&) {
+        // Refuse the unparseable request below.
+    } catch (const std::out_of_range&) {
+        // Refuse the unrepresentable request below.
+    }
+    // Calendar month has no fixed second count: -1 is its parsed marker,
+    // valid for scalar HTF requests but never for the intrabar array API.
+    const bool is_calendar_month = requested_seconds == -1 && !lower_tf_array_requested;
+    if (requested_seconds <= 0 && !is_calendar_month) {
+        const char* api = lower_tf_array_requested
+            ? "request.security_lower_tf" : "request.security";
+        throw coded<std::runtime_error>(
+            RunFailureCode::request_timeframe_invalid, {{"api", api}},
+            std::string(api) + ": invalid timeframe literal '" + tf + "'"
+        );
+    }
+    return requested_seconds;
+}
+
 // TradingView's request.security_lower_tf accepts only the default merge
 // flags: lookahead_on and gaps_on are refused at validation. This is a rule
 // of the source language, not of the kernel's sub-bar synthesis, so it lives
-// here beside the evaluator that applies it (R5 lane N14: it used to be
+// here beside the evaluator that applies it (the source-runtime extraction: it used to be
 // internal::ensure_supported_lower_tf_emulation_flags in engine_lower_tf.cpp;
 // the message and the refusal are unchanged).
 void ensure_supported_lower_tf_emulation_flags(bool lookahead_on, bool gaps_on) {
@@ -55,6 +80,13 @@ void ensure_supported_lower_tf_emulation_flags(bool lookahead_on, bool gaps_on) 
 void source::PineStrategyHost::register_security_eval(
         int sec_id, const std::string& requested_tf, const std::string& input_tf,
         bool lookahead_on, bool gaps_on, bool heikinashi) {
+    const std::string& evaluator_input_tf =
+        security_input_tf_.empty() ? input_tf : security_input_tf_;
+    // Match the kernel's parse condition. With no input yet, validation
+    // remains deferred; an empty request retains its existing passthrough.
+    if (!evaluator_input_tf.empty() && !requested_tf.empty()) {
+        request_timeframe_seconds(requested_tf, false);
+    }
     const std::size_t before = security_eval_states_.size();
     // Generated configure_security_evaluators() opens with
     // security_eval_states_.clear(): the first site registered into an empty
@@ -69,8 +101,6 @@ void source::PineStrategyHost::register_security_eval(
     pine.lookahead_on = lookahead_on;
     pine.heikinashi = heikinashi;
 
-    const std::string& evaluator_input_tf =
-        security_input_tf_.empty() ? input_tf : security_input_tf_;
     if (evaluator_input_tf.empty()) return;
     int lower_ratio = 0;
     int lower_seconds = 0;
@@ -104,6 +134,13 @@ void source::PineStrategyHost::register_security_lower_tf_eval(
     const std::string& requested_tf,
     const std::string& input_tf
 ) {
+    const std::string& evaluator_input_tf =
+        security_input_tf_.empty() ? input_tf : security_input_tf_;
+    // The lower-TF door must own a malformed literal before delegating to
+    // scalar registration, which does not yet know this site's array API.
+    if (!evaluator_input_tf.empty() && !requested_tf.empty()) {
+        request_timeframe_seconds(requested_tf, true);
+    }
     auto before = security_eval_states_.size();
     register_security_eval(sec_id, requested_tf, input_tf, false, false);
     if (security_eval_states_.size() > before) {
@@ -200,6 +237,11 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
         pine.deferred_aux.clear();
         if (state.tf.empty()) continue;
 
+        // Deferred requests must also be checked before the emulation
+        // predicate can parse their timeframe.
+        const int requested_seconds =
+            request_timeframe_seconds(state.tf, pine.lower_tf_array_requested);
+        const bool is_calendar_month = requested_seconds == -1;
         int lower_ratio = 0;
         int lower_seconds = 0;
         bool ltf_supported = supports_lower_tf_emulation(
@@ -214,26 +256,6 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
             pine.lower_tf_ratio = lower_ratio;
             pine.lower_tf_seconds = lower_seconds;
             continue;
-        }
-
-        // Parse the requested TF defensively so a garbage literal like
-        // "abc" produces a precise diagnostic instead of an opaque
-        // std::invalid_argument from stoi.
-        int requested_seconds = safe_tf_to_seconds(state.tf);
-        // Calendar month ("M" / "NM") has no fixed second count; tf_to_seconds
-        // returns -1 as a calendar marker (a genuine parse failure returns 0).
-        // Month is always a COARSER HTF, so admit it for request.security and
-        // let the CALENDAR TimeframeAggregator (tf_ratio == -1) aggregate it.
-        // request.security_lower_tf("M") stays invalid — month is never an
-        // intrabar TF. (Weekly/daily already pass: they return positive seconds.)
-        bool is_calendar_month = (requested_seconds == -1 && !pine.lower_tf_array_requested);
-        if (requested_seconds <= 0 && !is_calendar_month) {
-            const char* api = pine.lower_tf_array_requested
-                ? "request.security_lower_tf" : "request.security";
-            throw coded<std::runtime_error>(
-                RunFailureCode::request_timeframe_invalid, {{"api", api}},
-                std::string(api) + ": invalid timeframe literal '" + state.tf + "'"
-            );
         }
 
         if (!is_calendar_month && requested_seconds < input_seconds) {
@@ -350,11 +372,11 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
             // exposed value (and any ``[k]`` offset off it) advances at
             // the security's own finer cadence — one push per completed
             // security period, exactly the ungated behavior. Gating it
-            // regressed masayanfx-multi-time-score-strategy
+            // regressed the multi-timeframe scoring probe
             // (request.security(sym, "5", ta.highest(high, 20)[1],
             // barmerge.gaps_off, barmerge.lookahead_off) on a 15m chart)
             // from 100.0% to 93.7% trade parity vs TradingView, while
-            // the gated lookahead_on case (3commas triple-RSI DCA,
+            // the gated lookahead_on case (the triple-RSI DCA probe,
             // so2Rsi = request.security(sym, "5", ta.rsi(close,7)[1],
             // lookahead=barmerge.lookahead_on)) needs the latch to hold
             // 100.0%.
@@ -382,7 +404,7 @@ void source::PineStrategyHost::validate_security_timeframes(const std::string& i
             // finer than the script/chart TF, served by the auxiliary finer
             // feed: TV's merge takes the LAST intrabar of the calling bar,
             // whatever its sub-bar count -- see the field's note. The
-            // aggregator's own completions stay ungated (masayanfx above);
+            // aggregator's own completions stay ungated (the multi-timeframe scoring probe above);
             // only a bucket still partial on the calling bar's last
             // auxiliary bar is finalized and published there.
             pine.calling_close_completes_partial = true;
@@ -443,7 +465,7 @@ bool source::PineStrategyHost::security_input_precedes_range_start(
         // first IN-RANGE stamp -- Tue 2025-04-01 for the week that opened Mon
         // 03-31 -- so the bucket-open cut above keeps it as bar 0 and every
         // SMA-seeded weekly EMA runs one bar early (round 8, family P:
-        // hungpixi-macd-enhanced-mtf on BINANCE:BTCUSDT 1D under the ladder's
+        // the weekly MACD probe on BINANCE:BTCUSDT 1D under the ladder's
         // range-start-na-warmup candidate, lab tv famp-sense-hp-btc1d
         // 2026-09-05: TradingView's weekly EMA26 first reads on the 09-29
         // week and its signal EMA9 on the 11-24 week -- weekly bar 0 is the
@@ -583,7 +605,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
     // No bar of the requested timeframe is loaded (no_loaded_bars): the
     // site is never evaluated, so it and its TA read na throughout.
     if (pine.no_loaded_bars) return;
-    // On the pump's runtime block when it has one (R5 lane D2-C).
+    // On the pump's runtime block when it has one (the per-pump state cache).
     internal::AmbientEmaSeedingScope _na_warmup_scope(
         NativeExecutionConsumer::bound(*this).pump_ambient(),
         security_range_start_na_warmup_);
@@ -903,7 +925,7 @@ void source::PineStrategyHost::pine_feed_security_eval_state(
         // for a calendar W / M bucket -- so every weekly completion on its
         // last daily bar looked like a boundary and committed a phantom copy
         // of the week as one more requested bar (round 7, family I: the
-        // hungpixi weekly f_count carry decayed twice per week, hist ties
+        // weekly MACD probe's f_count carry decayed twice per week, hist ties
         // compared the week with its own copy).
         const bool boundary_emission = pine.lookahead_on
             && state.aggregator.is_active()

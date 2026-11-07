@@ -156,6 +156,12 @@ if(PINEFORGE_BUILD_TESTS)
     target_compile_definitions(live_contract_unknown PRIVATE PF_LIVE_CONTRACT_UNKNOWN=1)
     target_compile_definitions(live_contract_native_no_export PRIVATE PF_LIVE_CONTRACT_NATIVE_NO_EXPORT=1)
     target_compile_definitions(live_contract_native_stub PRIVATE PF_LIVE_CONTRACT_NATIVE_STUB=1)
+    add_library(live_contract_old_layout MODULE
+        ${PROJECT_SOURCE_DIR}/tests/test_live_contract_old_layout_plugin.cpp)
+    target_include_directories(live_contract_old_layout PRIVATE
+        ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+    target_compile_options(live_contract_old_layout PRIVATE -fvisibility=hidden)
+    set_target_properties(live_contract_old_layout PROPERTIES PREFIX "")
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME native_live_startup_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_startup_e2e.py $<TARGET_FILE:pineforge-live>
@@ -606,6 +612,10 @@ target_link_libraries(pineforge_live_startup PUBLIC pineforge_live_report)
 target_compile_options(pineforge_live_support PRIVATE -ffp-contract=off)
 
 if(PINEFORGE_BUILD_TESTS)
+    add_test(NAME ledger_observability_check_selftest COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/native_live_ledger_behavior_e2e.py ledger_observability_check_selftest)
+    set_tests_properties(ledger_observability_check_selftest PROPERTIES
+        LABELS "live_ledger" TIMEOUT 120)
     target_compile_options(pineforge_live_legacy_test_support PRIVATE -ffp-contract=off)
     add_executable(test_live_report ${PROJECT_SOURCE_DIR}/tests/test_live_report.cpp)
     target_include_directories(test_live_report PRIVATE
@@ -707,4 +717,59 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
     set_tests_properties(native_live_engine_layout_e2e native_live_opaque_report_e2e
         PROPERTIES TIMEOUT 180)
     add_dependencies(test_native_live_report_cli live_contract_native_stub)
+    add_test(NAME native_live_old_layout_report_e2e COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/native_live_startup_e2e.py $<TARGET_FILE:pineforge-live>
+        $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_market_example>
+        $<TARGET_FILE:live_contract_absent> $<TARGET_FILE:live_contract_unknown>
+        $<TARGET_FILE:live_contract_native_no_export> $<TARGET_FILE:live_contract_old_layout>
+        $<TARGET_FILE:test_native_live_report_cli> old-layout-report)
+    add_dependencies(test_native_live_report_cli live_contract_old_layout)
+endif()
+
+if(PINEFORGE_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    # The real CLI entry and libraries, with external link observers only.
+    # This target can also be linked against the frozen runner implementation.
+    add_executable(pineforge-live-observed main.cpp
+        ${PROJECT_SOURCE_DIR}/tests/native_live_ledger_work_observer.cpp)
+    target_link_libraries(pineforge-live-observed PRIVATE pineforge_live_startup ${CMAKE_DL_LIBS})
+    target_compile_options(pineforge-live-observed PRIVATE -Wall -Wextra -Wpedantic -ffp-contract=off)
+    set(_pf_live_ratio_symbol
+        "_ZN9pineforge7metrics20compute_equity_statsEPK17pf_equity_point_sldRKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEddld")
+    target_link_options(pineforge-live-observed PRIVATE
+        "LINKER:--wrap=sqlite3_step" "LINKER:--wrap=sqlite3_finalize"
+        "LINKER:--wrap=${_pf_live_ratio_symbol}")
+    add_library(native_live_ledger_work_strategy MODULE
+        ${PROJECT_SOURCE_DIR}/tests/native_live_ledger_work_strategy.cpp)
+    target_link_libraries(native_live_ledger_work_strategy PRIVATE PineForge::pineforge)
+    target_compile_options(native_live_ledger_work_strategy PRIVATE -fvisibility=hidden -ffp-contract=off -UNDEBUG)
+    set_target_properties(native_live_ledger_work_strategy PROPERTIES PREFIX "")
+    add_dependencies(pineforge-live-observed native_live_ledger_fixture_writer native_live_ledger_work_strategy)
+    foreach(_pf_ledger_row delivery_pending_tail_work ledger_observability_status
+            report_default_delta_work)
+        add_test(NAME ${_pf_ledger_row} COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/tests/native_live_ledger_behavior_e2e.py ${_pf_ledger_row}
+            --runner $<TARGET_FILE:pineforge-live-observed>
+            --strategy $<TARGET_FILE:native_live_ledger_work_strategy>
+            --fixture-writer $<TARGET_FILE:native_live_ledger_fixture_writer>
+            --artifacts ${PROJECT_BINARY_DIR}/ledger-behavior-artifacts)
+        set_tests_properties(${_pf_ledger_row} PROPERTIES LABELS "slow;live_ledger" TIMEOUT 7200)
+    endforeach()
+    add_test(NAME ledger_observability_status_concurrent_write COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/native_live_ledger_behavior_e2e.py ledger_observability_status
+        --runner $<TARGET_FILE:pineforge-live-observed>
+        --strategy $<TARGET_FILE:native_live_ledger_work_strategy>
+        --fixture-writer $<TARGET_FILE:native_live_ledger_fixture_writer>
+        --artifacts ${PROJECT_BINARY_DIR}/ledger-behavior-artifacts
+        --force-write-between-samples-bytes 201326592)
+    set_tests_properties(ledger_observability_status_concurrent_write PROPERTIES
+        LABELS "slow;live_ledger" TIMEOUT 7200 RUN_SERIAL TRUE)
+    add_test(NAME native_live_ledger_behavior_e2e COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/native_live_ledger_behavior_e2e.py report_jsonl_delta_v2_contract
+        --runner $<TARGET_FILE:pineforge-live-observed>
+        --strategy $<TARGET_FILE:native_live_ledger_work_strategy>
+        --fixture-writer $<TARGET_FILE:native_live_ledger_fixture_writer>
+        --artifacts ${PROJECT_BINARY_DIR}/ledger-behavior-artifacts)
+    set_tests_properties(native_live_ledger_behavior_e2e PROPERTIES
+        LABELS "slow;live_ledger" TIMEOUT 7200)
 endif()

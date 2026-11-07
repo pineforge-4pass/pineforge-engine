@@ -65,7 +65,8 @@ bytes and field order. `run --report-jsonl=full` is an explicit alias with
 identical output. The new opt-in `run --report-jsonl=delta` mirrors the ledger's
 `pineforge-native-report-delta/v1` patch with an additional top-level integer
 `input_cursor` as the FIRST key of the line (the stored ledger row has no such
-key and begins with `schema_version`). Other option values are refused.
+transport key). `--report-jsonl=delta-v2` selects the separate
+[versioned change-only format](#delta-v2-report-stream). Other option values are refused.
 Both streams begin after startup reads, warmup, recovery and the first new
 input's commit; the first committed input has cursor 1. Neither warmup nor
 replay of source-prefix messages is mirrored. To apply delta output, start with
@@ -100,11 +101,14 @@ these rows through the selected cursor into byte-identical canonical report JSON
 
 The accumulator and ratio-interval scheduling described below apply only to
 modules whose optional `strategy_stream_engine_layout_version()` export matches
-`PF_STREAM_ENGINE_LAYOUT_VERSION`. A module without a matching stamp keeps the
-public-report path: full `strategy_stream_fill_report` snapshots and exact
+`PF_STREAM_ENGINE_LAYOUT_VERSION`. A module omitting the stamp or returning 0
+keeps the public-report path: full `strategy_stream_fill_report` snapshots and exact
 ratios at every input, even for K > 1. It adds neither `ratios_as_of_input` nor
 `ratio_context` and emits no terminal interval refresh. The runner prints no
-warning about a missing or mismatched stamp.
+warning about a missing stamp. A nonzero mismatched stamp is refused during
+module admission, before `strategy_create` or any C++ handle read. Runtime
+contexts require stamp 4; modules declaring stamp 3 must be rebuilt with the
+exact paired engine and its script-run epoch.
 
 The runner-owned accumulator carries trade-stat folds and the equity series
 needed for exact ratios. For modules with the matching stamp, every mode,
@@ -178,7 +182,7 @@ payload length supplies the extra-payload reservation. After the input commits,
 the checkpoint is inserted in its own admitted transaction while retaining the
 writer mutex, with a byte ceiling no greater than the input's reservation.
 Charging that payload to the boundary input is intended
-(`Ledger::commit_input`, `runner/store.cpp:1099`): the boundary input can hit a
+(`Ledger::commit_input`, `runner/store.cpp:1140`): the boundary input can hit a
 storage stop when the input alone would fit, up to the cumulative payload's
 reservation earlier than strictly necessary. This cost buys the guarantee that
 no input commits with a checkpoint admitted without room in its reservation.
@@ -233,8 +237,8 @@ document memory. Ledgers that first need reports or integrity digests populated
 retry after startup replay, before new inputs. Later opens add no startup copy
 when a checkpoint already exists.
 Startup and post-replay checkpoints intentionally have no input reservation
-behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1225`;
-the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1053`).
+behind them (`Ledger::checkpoint_recovered_report`, `runner/store.cpp:1266`;
+the post-replay call is `checkpoint_recovered_report`, `runner/main.cpp:1147`).
 With a large budget, either can spend most of the remaining headroom on an
 O(T) payload before the first live input. The run can stop sooner, never over
 budget; this is the intended cost of preparing the report shortcut at startup.
@@ -337,15 +341,16 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   not for unrelated malformed input, delivery or timeout failures.
 - Metrics are `committed_input`, `last_seq` (tick sequence, null for bars),
   `source_timestamp_ms`, `source_lag_ms` (wall-clock lag from the latest
-  committed source time), `queue_bytes`, `ledger_bytes`, `report_cursor`,
+  committed source time), `feed_idle_ms` (milliseconds since the last byte or control frame from the feed;
+  null before the first; not data freshness, which `source_lag_ms` and `committed_input` show), `queue_bytes`, `ledger_bytes`, `report_cursor`,
   `control_errors` (ignored control entries and directory-error transitions this run) and
   per-target `pending_count` / `oldest_age_ms`. Queue bytes cover the buffered
   stdin/WebSocket fragment and bounded delivery queue; engine state and finite feed
   snapshots are not queue bytes. Pending includes failed and never-completed
   routed actions, not journal-only actions; age is null for legacy rows with
   no known creation/attempt time. No secrets, URLs or receiver response text
-  are written to this status file. Storage/delivery metrics are sampled at the
-  status interval, not on every control-loop heartbeat.
+  are written to this status file. Metrics are sampled at the status interval, not on every control-loop heartbeat.
+  `metrics.ledger_storage` adds the advisory [disk observations](#ledger-disk-observations).
   Each ignored request is counted once per run. A directory failure is counted
   again if it recurs after a successful poll; removing an acknowledgement during
   directory enumeration can cause a transient `directory_io_failure` that heals
@@ -370,16 +375,16 @@ pineforge-live probe --status-file status.json --max-age 3 --ready
   alive control-loop heartbeat no older than S seconds (integer 1..86400).
   Add `--ready` to also require readiness. Missing, malformed, future-dated,
   stale, stopped or unready status exits 1. It opens no listener.
-- `--feed-idle-timeout S` and `--feed-message-timeout S`: integer seconds; stdin defaults to 0 (no limit).
-  Network/file defaults: 15 each (1..300); stdin has no upper cap and its idle bound excludes consume time.
-  A nonzero message timeout bounds a partial line from its first byte or the end of the preceding consume pass.
-  WebSocket idle resets on text or PING/PONG; assembly runs from the first
-  text fragment through the final fragment and control frames never extend
-  it. A feed server's unsolicited PONG every 5 seconds is compatible with
-  the default idle deadline. HTTP idle limits lack of response-body progress;
-  its message timeout bounds the entire finite snapshot request, including
-  connection. Local files are finite and have no idle deadline. These flags
-  do not change webhook delivery timeouts or deployment identity.
+- `--feed-idle-timeout S` and `--feed-message-timeout S`: integer seconds.
+  Stdin and network feeds default to 0 (no deadline); positive values have no upper cap.
+  Network seconds must fit milliseconds in a `long`; local files retain defaults of 15 and the 1..300 rule, refusing 0.
+  Stdin idle excludes consume time; a nonzero message timeout bounds a partial line from its first byte or the end of the preceding consume pass.
+  WebSocket idle resets on text or PING/PONG; assembly runs from the first text fragment through the final fragment.
+  Control frames never extend assembly; zero idle/message deadlines are independent of the connection/subscription timeout.
+  HTTP idle limits lack of response-body progress; its message timeout bounds the entire finite snapshot, including connection.
+  `--feed-connect-timeout S` (network feeds, integer seconds, default 0) bounds the TCP/TLS connect; 0 sets the connect option to the largest value libcurl accepts, so the runner adds no connect bound and connecting ends only on a system or peer failure unless a nonzero `--feed-message-timeout` ends it sooner (that total timeout covers connecting). Files and stdin ignore a well-formed value; malformed values are refused for every feed kind.
+  The engine only reports arrival age; the consumer owns freshness. Local files are finite and have no idle deadline.
+  These flags do not change webhook delivery timeouts or deployment identity.
 - SIGTERM/SIGINT stop intake. An already-started atomic message finishes or
   rolls back; incomplete transport messages are not committed. Cursor,
   actions and report remain in the same transaction. The delivery drain is
@@ -1075,3 +1080,95 @@ The legacy `--max-attempts` option remains accepted; when explicitly supplied
 without a routes file, it caps transport retries to `min(2, N-1)`. HTTP errors
 are always final. Delivery failures do not stop feed computation or change
 the run exit status; they are reported in stderr, the audit log and status.
+
+## Delta-v2 report stream
+
+`run --report-jsonl=delta-v2` opts into `pineforge-native-report-delta/v2`.
+Plain `--report-jsonl`, explicit `full`, and `delta` retain their existing
+formats and bytes. There is one `kind:"input"` record per newly committed
+message, with no warmup or replay records. Each line starts with integer
+`input_cursor`; its remaining keys are canonical:
+
+```json
+{"input_cursor":1,"arrays":{},"fields":{"input_cursor":1},"kind":"input","ratios":{"as_of_input":1,"chart_timezone":"UTC","exact":true},"schema_version":"pineforge-native-report-delta/v2"}
+```
+
+The example illustrates the envelope; actual records carry their changes.
+`fields` recursively merges scalar/object changes; an absent field is
+unchanged and JSON null is an explicit null. The seven report arrays never
+appear in `fields`. `arrays` uses the names `closed_trades`, `trades`,
+`equity_curve`, `security_diag`, `trace`, `trace_names`, `broker_state_hash`.
+Each present entry is `{"offset":k,"items":[...]}` and replaces the complete
+suffix from `k`, including truncation. `k` cannot exceed the preceding length.
+Unchanged arrays and unchanged leading suffix items are omitted. `closed_trades`
+belongs at the document root; the other arrays belong under `report`.
+
+Every v2 record carries `ratios.as_of_input`, the cursor where the four
+Sharpe/Sortino values were computed. This control metadata stays outside the
+cumulative document; `ratios.exact` states whether it equals this record's
+cursor, and `ratios.chart_timezone` is constant for the deployment. An empty chart clock is reported as UTC in this metadata.
+This change delivers the change-only envelope, with bounded emitted bytes and
+serialized rows per input on the 10,000/100,000-input work populations.
+Ratio scheduling is a separate later change. The existing `--ratio-interval`
+policy remains: its default computes exact ratios at every input, and a larger
+positive interval can produce stale ratios between computations.
+Whole-curve ratio passes and resident report history remain.
+
+If EOF, shutdown or a storage stop reveals a stale last committed cursor,
+the stream emits at most one `kind:"final"` patch at that same cursor. It has
+no array changes or new input/action, and refreshes only changed ratio fields.
+The refresh reads the retained committed report, including after an advanced
+input was refused. A known finite-feed final input refreshes before commit,
+so it needs no duplicate terminal record. The operational summary still ends
+the stream and has no delta schema identifier.
+
+Bootstrap with `report --delta-base --ledger PATH --at-input C`. It returns
+`pineforge-native-report-base/v2`, with first member `input_cursor:C`, then
+canonical `document`, `ratios`, `schema_version` members. It preserves raw
+stored ratios; ordinary `report` refreshes exact ratios. Apply the next input
+at C+1, permitting only a terminal `final` at the current cursor. A cursor gap
+or regression requires another base. The base option currently requires v2
+rows, which record the ratio clock; a legacy exact report does not supply it.
+`--verify-full` also works with the base and retains full-chain verification.
+
+The stored report payload is this v2 object without the first transport
+`input_cursor` member. `fields.input_cursor` still updates the cumulative
+document. Tables, columns, schema version and checkpoint layout do not change.
+Use a v2-aware runner for these report rows and replay with the same format
+and ratio interval. Existing readers do not understand the new payload;
+an unchanged database schema does not guarantee an old reader will refuse it.
+
+## Ledger disk observations
+
+`run --ledger-warn-free-fraction F` and `status --ledger-warn-free-fraction F`
+accept finite `0 < F <= 1`; the default is **0.8**, defined once in
+`kDefaultLedgerWarnFreeFraction` in `ledger_observability.hpp`. This parameter
+is transient and does not change deployment identity or persistent settings.
+The default ledger allowance remains unlimited.
+
+The service status file reports `metrics.ledger_storage`; the read-only
+`status` command reports the same object at `ledger_storage`:
+
+| Member | Measurement |
+|---|---|
+| `used_bytes` | Current database file size plus WAL file size; an absent WAL counts as zero. |
+| `bytes_per_input` | `used_bytes / committed inputs`, including existing ledger overhead; null with no inputs. |
+| `free_disk_bytes` | Space available to this process on the ledger's filesystem. |
+| `growth_bytes_per_second` | Positive net footprint growth divided by elapsed steady-clock seconds since recovery finished for this invocation. |
+| `seconds_to_disk_exhaustion` | Available free disk divided by that measured growth rate. |
+| `warn_free_fraction` | The effective operator parameter. |
+| `state` | `WARNING` when `used_bytes >= F * free_disk_bytes`; otherwise `OK`, or `UNKNOWN` if measurement failed. |
+| `growth_start_bytes`, `growth_elapsed_seconds` | The measurement baseline and elapsed interval. |
+
+The rate and projection are null without a positive measured growth interval.
+A one-shot `status` has no running interval and reports null rate/projection.
+Filesystem measurement errors produce null figures and `UNKNOWN`. Growth is
+a running average for this invocation; WAL reuse and checkpointing can reduce
+net file growth, and future input rates or row sizes can change the projection.
+The comparison uses currently free disk, not total disk capacity.
+
+`WARNING` forces status publication but leaves `ready`, all readiness predicates,
+input admission, delivery and exit status unchanged. It never stops the runner.
+The existing `ledger_bytes` metric and explicit `--max-ledger-bytes` admission
+continue to include SHM; the new advisory footprint uses database plus WAL.
+No database cache, WAL or ledger size limit is introduced by these observations.

@@ -25,6 +25,7 @@
 #include "../src/report_scratch.hpp"
 #include "../src/selected_report_view.hpp"
 #include "equity_stats_reference.hpp"
+#include "ledger_default_cache_rows.hpp"
 #include "trade_stats_reference.hpp"
 
 #include <algorithm>
@@ -47,7 +48,7 @@
 #include <unistd.h>
 
 namespace pineforge {
-inline namespace engine_script_run_v19 {
+inline namespace engine_script_run_v20 {
 int native_set_selected_window_v1(BacktestEngine*, const pf_selected_window_config_v1*) noexcept;
 int native_selected_window_counts_v1(const BacktestEngine*, pf_selected_window_counts_v1*) noexcept;
 }
@@ -1837,7 +1838,9 @@ CaptureStorage trade_capture_and_read_storage(
     CaptureStorage storage = measured_capture;
     streamed.capture_scope.reset();
     storage.ledger_cache_bytes = streamed.ledger_cache_bytes();
-    CHECK(streamed.ledger_cache_rows() == TradeLedger::kSinkCacheRows);
+    // A sink run holds the provisional byte default's geometry, not the legacy
+    // sink rows (ledger_default_cache_rows.hpp).
+    CHECK(streamed.ledger_cache_rows() == ledger_oracle::default_cache_rows());
     CHECK(measured == !host_recorded);
     CHECK(streamed.native_state().kind == NativeLifecycleKind::Completed);
     CHECK(streamed.calculations == count);
@@ -1926,19 +1929,29 @@ CaptureStorage trade_capture_and_read_storage(
 
 void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
     CHECK(TradeLedger::kSinkCacheRows == 65536);
+    // A sink run holds the provisional byte default's geometry; the legacy sink
+    // rows are only the explicit row setting's case (ledger_default_cache_rows.hpp).
+    const auto rows = ledger_oracle::default_cache_rows();
     const TradeLedger empty;
     const auto fixed_bytes = empty.cache_resident_bytes();
-    const auto cache_bound = TradeLedger::resident_cache_bytes(TradeLedger::kSinkCacheRows);
-    // The page table (one pointer per 256 slots) is part of the charge.
-    const auto page_table_bytes = (TradeLedger::kSinkCacheRows / 256) * sizeof(void*);
-    CHECK(cache_bound == fixed_bytes + 20447232 + page_table_bytes);
-    CHECK(cache_bound <= TradeLedger::resident_cache_bytes(TradeLedger::kDefaultCacheRows));
+    const auto cache_bound = TradeLedger::resident_cache_bytes(rows);
+    // The page table (one pointer per 256 slots, the last page clipped) is part
+    // of the charge.
+    const auto page_table_bytes = ((rows + 255) / 256) * sizeof(void*);
+    CHECK(cache_bound == fixed_bytes + rows * TradeLedger::kLedgerEntryBytes + page_table_bytes);
+    CHECK(cache_bound - fixed_bytes <= TradeLedger::kDefaultLedgerCacheMaxBytes);
     const auto point_bytes = sizeof(pf_equity_point_t);
     const auto curve_line_bytes = detail::ReadThroughCache::line_bytes(point_bytes);
     const CacheDefaults defaults;
     CHECK(defaults.equity_curve_pages.capacity_bytes
           == report_sink::kScratchWindowPoints * curve_line_bytes);
+    CHECK(defaults.ledger_rows.automatic());
+    CHECK(defaults.ledger_cache_max_bytes == TradeLedger::kDefaultLedgerCacheMaxBytes);
     CHECK(CacheDefaults::ledger_cache_rows(defaults.ledger_rows) == TradeLedger::kSinkCacheRows);
+    // 1,000 consecutive ordinals fill 1,000 sets, sixty-four to a page: sixteen
+    // whole pages of 256 slots (4,096 slots) behind the page table.
+    const auto small_slots = ledger_oracle::touched_slots(rows, 0, 1000);
+    CHECK(small_slots == 16 * 256);
     for (int mode = 0; mode < 3; ++mode) {
         const bool selected = mode == 1;
         const bool observed = mode == 2;
@@ -1963,11 +1976,11 @@ void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
                     large.largest_request, large.peak_live);
         // Count EVERY replaceable allocation and temporary buffer. A cache
         // allocated before this interval is covered by the exact resident-byte
-        // assertions too. The 1k run must retain only 1,024 cache entries;
-        // 70k and 100k must both stop at the declared constant, not trade count.
-        // 1,024 slots are four whole 256-slot pages behind the page table.
+        // assertions too. The 1k run must retain only the sixteen pages its
+        // 1,000 ordinals reach; 70k and 100k reach every set and must both stop
+        // at the declared constant, not trade count.
         CHECK(small.ledger_cache_bytes
-              == fixed_bytes + page_table_bytes + 1024 * TradeLedger::kLedgerEntryBytes);
+              == fixed_bytes + page_table_bytes + small_slots * TradeLedger::kLedgerEntryBytes);
         CHECK(capped.ledger_cache_bytes == cache_bound);
         CHECK(large.ledger_cache_bytes == cache_bound);
         const auto window = report_sink::kScratchWindowBytes;
@@ -1980,7 +1993,7 @@ void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
             : report_sink::kScratchWindowPoints * (curve_line_bytes - point_bytes);
         const auto curve_workspace = selected || observed ? std::size_t{0}
             : report_sink::kScratchWindowPoints * point_bytes;
-        const auto small_budget = page_table_bytes + 1024 * TradeLedger::kLedgerEntryBytes
+        const auto small_budget = page_table_bytes + small_slots * TradeLedger::kLedgerEntryBytes
             + 2 * window + curve_metadata + curve_workspace;
         const auto budget = cache_bound - fixed_bytes + 2 * window + curve_metadata
             + curve_workspace;

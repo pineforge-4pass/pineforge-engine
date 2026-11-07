@@ -33,7 +33,7 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) is source-available under the PineForge Source License 1.2 from its release 1.3.0 (release 1.2.0 keeps the PineForge Source License 1.1, and releases up to 1.1.0 keep the PolyForm Noncommercial terms they shipped with); personal trading is free, and commercial use requires a separate license; the capital in an account a proprietary-trading firm or funded-trader program provides or allocates, including a challenge, evaluation or simulated account, is investment capital. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
 - **Fast.** In-process, no interpreter: median **36× faster than PyneCore** on the 200 strategies both engines time (100 corpus probes and 100 held-out private strategies), measured at engine `35db01c8` on 2026-09-29 on an AWS c7a.8xlarge with PyneCore timed as a subprocess, its interpreter start-up included (PineForge runs a median 807k bars/s per strategy over its 201 slots with the bar magnifier on; [method](benchmarks/results/speed.md)). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists.
-- **Yours to embed.** 167 `PF_API` declarations across six installed headers — `pineforge.h`'s 111 (91 of the 102 runtime exports and up to 20 per-strategy functions a generated module defines), eleven more runtime declarations in `execution_observer.h`, `selected_window.h` and `report_sink.h` (three, three and five), `native_c_api.h`'s 43 native-host declarations and `selected_window_plan.h`'s two planner declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
+- **Yours to embed.** 169 `PF_API` declarations across six installed headers — `pineforge.h`'s 113 (93 of the 104 runtime exports and up to 20 per-strategy functions a generated module defines), eleven more runtime declarations in `execution_observer.h`, `selected_window.h` and `report_sink.h` (three, three and five), `native_c_api.h`'s 43 native-host declarations and `selected_window_plan.h`'s two planner declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
 Recorded outputs and their additional API declarations described here are
 part of **1.5.0**.
@@ -128,6 +128,18 @@ The [shared local/CI verifier](docs/ci.md) includes source guards, tests and ins
 **Supported platforms: Linux x86_64 and arm64.** From 1.8.0 the engine's release archives are built, and CI runs, for Linux only (`linux-x86_64` and `linux-aarch64` archives; no macOS archive). Other platforms build from source and are not tested or supported.
 
 Prerequisites: CMake ≥ 3.16 to build (the verifier and `ctest --test-dir` need 3.20), a C++17 compiler whose standard library has floating-point `std::to_chars` (libstdc++ from GCC 11 or later, or libc++ 14 or later; CI builds with GCC on Ubuntu 24.04), Eigen 3.3+ (fetched automatically if absent), Python 3 for the tests (`-DPINEFORGE_BUILD_TESTS=OFF -DPINEFORGE_BUILD_TUTORIAL=OFF` for a library-only build). `cmake --install build --prefix /usr/local` installs `lib/libpineforge.a` and `lib/libpineforge_kernel.a`, `include/pineforge/`, and the `find_package(PineForge)` config.
+
+Script maps have no pair limit by default. Their entry arenas grow in steps of
+4,096 slots over the spilling Store, and their bucket tables scale with capacity.
+Map sizes and slot links use 64-bit integers.
+Use `docker/run_json.py --limit-map-pairs 50000` for TradingView's pair policy;
+omitted or zero selects unlimited. C callers install the same creation policy
+with `pf_map_pairs_limit_set_checked` before the strategy factory and restore
+NULL afterward. C++ callers can override one map with
+`PineMap<Key, Value>::new_(maximum)`. A refused distinct insertion raises
+`MapCapacityError` with `RE10070`, `maxSize`, `currSize` and `bar_index`, exposed
+through the `pine_map_capacity_exceeded` run-failure code. Replacing an existing
+key remains valid at the configured maximum.
 
 ### Prebuilt library
 
@@ -281,7 +293,7 @@ workaround for those versions.
 
 ## Validation scoreboard
 
-**Measured <!-- pf:scoreboard.date -->2026-10-07<!-- /pf -->** on main engine <!-- pf:scoreboard.engineCommit|short-code -->`b3192bfc`<!-- /pf --> with codegen-oss <!-- pf:scoreboard.codegenCommit|short-code -->`bfc4ddce`<!-- /pf --> (baseline <!-- pf:scoreboard.id|code -->`pineforge-parity-baseline-20261007-engine-b3192bfc`<!-- /pf -->, snapshot <!-- pf:scoreboard.snapshotSha256|short-code -->`28ba8dbd`<!-- /pf -->): **<!-- pf:scoreboard.graded|int -->7,989<!-- /pf --> graded probes, <!-- pf:scoreboard.excellent|int -->7,983<!-- /pf --> excellent + <!-- pf:scoreboard.strong|int -->6<!-- /pf --> strong**, <!-- pf:scoreboard.belowStrong|int -->0<!-- /pf --> below strong and <!-- pf:scoreboard.engineErrors|int -->0<!-- /pf --> engine errors across <!-- pf:scoreboard.lanes|int -->18<!-- /pf --> market/timeframe lanes. The historical release 1.0.1 inventory holds <!-- pf:inventory.tvTrades|int -->4,776,328<!-- /pf --> trades.
+**Measured <!-- pf:scoreboard.date -->2026-11-01<!-- /pf -->** on main engine <!-- pf:scoreboard.engineCommit|short-code -->`a3e7822e`<!-- /pf --> with codegen-oss <!-- pf:scoreboard.codegenCommit|short-code -->`c1cc532b`<!-- /pf --> (baseline <!-- pf:scoreboard.id|code -->`pineforge-parity-baseline-20261101-engine-a3e7822e`<!-- /pf -->, snapshot <!-- pf:scoreboard.snapshotSha256|short-code -->`bdda9ac6`<!-- /pf -->): **<!-- pf:scoreboard.graded|int -->7,989<!-- /pf --> graded probes, <!-- pf:scoreboard.excellent|int -->7,983<!-- /pf --> excellent + <!-- pf:scoreboard.strong|int -->6<!-- /pf --> strong**, <!-- pf:scoreboard.belowStrong|int -->0<!-- /pf --> below strong and <!-- pf:scoreboard.engineErrors|int -->0<!-- /pf --> engine errors across <!-- pf:scoreboard.lanes|int -->18<!-- /pf --> market/timeframe lanes. The historical release 1.0.1 inventory holds <!-- pf:inventory.tvTrades|int -->4,776,328<!-- /pf --> trades.
 
 Release **1.4.0 (2026-10-08)** maps to **<!-- pf:releases[1.4.0].scoreboard.excellent|int -->7,983<!-- /pf --> excellent / <!-- pf:releases[1.4.0].scoreboard.strong|int -->6<!-- /pf --> strong** on <!-- pf:releases[1.4.0].scoreboard.graded|int -->7,989<!-- /pf --> graded probes (baseline <!-- pf:releases[1.4.0].scoreboard.id|code -->`pineforge-parity-baseline-20261007-engine-b3192bfc`<!-- /pf -->, promoted <!-- pf:releases[1.4.0].scoreboard.date -->2026-10-07<!-- /pf --> UTC), with <!-- pf:releases[1.4.0].scoreboard.belowStrong|int -->0<!-- /pf --> below strong and <!-- pf:releases[1.4.0].scoreboard.engineErrors|int -->0<!-- /pf --> engine errors. These are recorded grading outcomes for that pair and population.
 
@@ -296,7 +308,7 @@ The quantities above render from the public [facts tokens](https://github.com/pi
 
 ### Lane by lane
 
-<!-- pf:scoreboard.pairs|lanes -->
+<!-- pf:scoreboard|lanes-all -->
 
 | Market · timeframe | Probes graded | Excellent | Strong | Below strong |
 |---|---:|---:|---:|---:|
@@ -304,20 +316,7 @@ The quantities above render from the public [facts tokens](https://github.com/pi
 | BINANCE:BTCUSDT · 15m | 668 | 666 | 2 | 0 |
 | BINANCE:BTCUSDT · 1D | 516 | 516 | 0 | 0 |
 | BINANCE:ETHUSDT.P · 1D | 540 | 540 | 0 | 0 |
-| CME_MINI:ES1! · 15m | 76 | 76 | 0 | 0 |
-| CME_MINI:ES1! · 1D | 35 | 35 | 0 | 0 |
-| CME_MINI:NQ1! · 15m | 74 | 74 | 0 | 0 |
-| CME_MINI:NQ1! · 1D | 37 | 37 | 0 | 0 |
-| NASDAQ:AAPL · 15m | 632 | 631 | 1 | 0 |
-| NASDAQ:AAPL · 1D | 464 | 464 | 0 | 0 |
-| NSE:NIFTY · 15m | 314 | 314 | 0 | 0 |
-| NSE:NIFTY · 1D | 225 | 225 | 0 | 0 |
-| NYSE:F · 15m | 637 | 636 | 1 | 0 |
-| NYSE:F · 1D | 505 | 505 | 0 | 0 |
-| OANDA:EURUSD · 15m | 653 | 652 | 1 | 0 |
-| OANDA:EURUSD · 1D | 453 | 453 | 0 | 0 |
-| OANDA:XAUUSD · 15m | 695 | 694 | 1 | 0 |
-| OANDA:XAUUSD · 1D | 456 | 456 | 0 | 0 |
+| All other markets (7 markets, 14 lanes) | 5,256 | 5,252 | 4 | 0 |
 | **Total** | **7,989** | **7,983** | **6** | **0** |
 
 <!-- /pf -->
@@ -328,7 +327,7 @@ The hard lane combines <!-- pf:scoreboard.hardLane.corpusProbes|int -->309<!-- /
 
 Every script is exported from TradingView as-is (its own inputs, its own defaults) with the chart's trade list at full precision, transpiled with [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss), and run by this engine on the same OHLCV bars. The two trade lists are aligned trade-for-trade and graded by [`scripts/verify_corpus.py`](scripts/verify_corpus.py):
 
-- **excellent** — the same number of trades, ≥ 99% of TradingView's trades matched, the distinct-entry identity check passed, entry and exit prices within 0.01% and PnL within 1% at the 90th percentile (trailing-stop scripts are graded on the *production* profile: exits within 0.05% and PnL within 100%, since a trail fill depends on TradingView's sub-bar path);
+- **excellent** — the same number of trades, ≥ 99% of TradingView's trades matched, the distinct-entry identity check passed, entry and exit prices within 0.01% and PnL within 1% at the 90th percentile (trailing-stop scripts are graded on the *production* profile: exits within 0.02% and PnL within 1%, since a trail fill depends on TradingView's sub-bar path);
 - **strong** — ≥ 95% matched, trade count within 6%, entries within 0.1% and exits within 0.5% at p90;
 - **moderate** — ≥ 75% coverage with ≥ 90% of the in-window trades matched; **weak** — at least one match; **minimal** — none.
 
@@ -542,11 +541,11 @@ is in [CHANGELOG.md](CHANGELOG.md).
 
 The counts below describe the current API, including recorded outputs, the report sink and scratch-table selection; recorded outputs are not part of 1.4.0.
 
-A newly generated strategy `.so` exposes 118 compiled-strategy `PF_API` declarations
-(102 runtime implementations plus sixteen generated exports) plus 43 native-host
-declarations: 161 `PF_API` exports in total; `use_bar_magnifier = true` adds
+A newly generated strategy `.so` exposes 120 compiled-strategy `PF_API` declarations
+(104 runtime implementations plus sixteen generated exports) plus 43 native-host
+declarations: 163 `PF_API` exports in total; `use_bar_magnifier = true` adds
 `strategy_declares_bar_magnifier` and a module that records [outputs](docs/outputs.md) its
-three outputs exports, bringing the inventories to at most 122 and 165. Older modules lack the six opt-in
+three outputs exports, bringing the inventories to at most 124 and 167. Older modules lack the six opt-in
 [checked-settings exports](docs/checked-settings.md). Older modules can also lack
 the two opt-in [execution-capability exports](docs/strategy-capabilities.md).
 In an optimized build `nm -gU` also shows libc++'s
@@ -584,6 +583,7 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 | `strategy_execution_contract` / `strategy_configure_native_v1` / `strategy_configure_native_fx_curve_v1` / `_fx_curve_ext_v1` | Query Legacy vs NativeMarketV1; apply the versioned native run specification (an invalid or refused base call returns `-1` and leaves the handle Failed; a cooperative `Aborted` handle may be reused with the same key and a higher run number); stage or clear an immutable native FX curve, `_fx_curve_ext_v1` also writing the typed refusal (`pf_native_fx_curve_error_e`) and the offending point's index |
 | `strategy_request_abort` / `strategy_last_run_status` | Cooperative abort of a run in progress; `0`=completed, `1`=aborted |
 | `strategy_set_scratch_tables_v1` | Copy disk-scratch or bounded-memory table policy and its eleven admission maxima while idle; NULL restores disk defaults (since 1.7.0) |
+| `pf_map_pairs_limit_set_checked` | Set the calling thread's creation-time limit for distinct pairs in each map before the strategy factory; NULL or zero selects unlimited. Restore NULL after the factory; existing hosts retain their captured policy |
 | `strategy_set_cache_policy_v1` | Copy optional per-kind resident cache bytes before run admission; omitted kinds use internal defaults, zero bypasses, and idle changes apply to the next run. See [memory controls](docs/pages/memory-management.md#memory_controls) for supported kinds |
 | `pf_run_abort_install_sigterm_v1` / `pf_run_abort_requested_v1` / `pf_run_abort_restore_sigterm_v1` | Opt-in child invocation SIGTERM flag; stop after a completed input bar, retaining typed progress and an incomplete sink; install/restore with SIGTERM blocked |
 | `strategy_set_realtime_tail` | Live-runtime surface (ABI v4): the array's last bar is a still-forming tail — `barstate.islast=false`, `last_bar_index`/`last_bar_time` frozen at the horizon bar, no range-end row |
@@ -721,7 +721,7 @@ Documentation: [C ABI reference](https://cdocs.pineforge.dev) · [Getting starte
 
 ## Releases
 
-- **[v1.7.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.7.0)** (2026-10-25) — report-sink transport, scratch-backed history and bounded storage admission, with new C++ views and command-line report routes. `get_trade()` and `closed_trade()` now return `Trade` by value, working-book, journal and cohort accessors return views, and some reads can throw on scratch I/O; closing a trade writes `TradeLedger` scratch even without a report sink, so a run needs a disk-backed `TMPDIR` or an explicit scratch directory; the C++ epoch namespace is still `engine_script_run_v19` although the layout of `BacktestEngine` changed, so rebuild every C++ object that includes an engine header, regenerate strategy C++ with the matching codegen and relink. Pair with [codegen 1.7.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.7.0). The known limits of this release (slower than 1.6.3 on some scripts, the closed-trade cache and its size by entry point) are in [CHANGELOG.md](CHANGELOG.md#170--2026-10-25), section "Costs that remain".
+- **[v1.7.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.7.0)** (2026-10-25) — report-sink transport, scratch-backed history and bounded storage admission, with new C++ views and command-line report routes. `get_trade()` and `closed_trade()` now return `Trade` by value, working-book, journal and cohort accessors return views, and some reads can throw on scratch I/O; closing a trade writes `TradeLedger` scratch even without a report sink, so a run needs a disk-backed `TMPDIR` or an explicit scratch directory; the C++ epoch namespace was still `engine_script_run_v19` although the layout of `BacktestEngine` changed, so rebuild every C++ object that includes an engine header, regenerate strategy C++ with the matching codegen and relink. Pair with [codegen 1.7.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.7.0). The known limits of this release (slower than 1.6.3 on some scripts, the closed-trade cache and its size by entry point) are in [CHANGELOG.md](CHANGELOG.md#170--2026-10-25), section "Costs that remain". <!-- verified HEAD -->
 - **[v1.6.3](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.3)** (2026-10-23) — CI, release-gate and test-only changes after 1.6.2: the engine's CI runs on the GCP fleet (`pf-gcp-pr`, `pf-gcp-main`), fork-gated; the PR wall is split from full-event verification (the CI split); a release requires full verify and parity green first (C2); the live test matches delivery receipts by request sequence; a session tape comment no longer names a private repository. Nothing under `src/`, `include/`, `cmake/` or `runner/` changed since v1.6.2, and in `docker/` only the run-failure code catalog diff (`run_failure_codes_diff.json`) did. Pair with codegen 1.6.3. See [CHANGELOG.md](CHANGELOG.md#163--2026-10-23).
 - **[v1.6.2](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.2)** (2026-10-21) — selected-window contract revision `1.3` again, declared with the completeness proof (`capabilities.selected_window_contract_revisions: ["1.3"]` on a supported runtime and `[]` otherwise; 1.6.1 declared `1.3-parity`); proportional annualisation for runs shorter than a day, never null (short-run annualisation); the ownership probes fixed so proof B reads 118/118 and the ownership manifest-controls test sharded four ways; CI changes: Linux x64 jobs on the pf-ci-spot pool and release jobs on pf-ci-release, `timeout-minutes` removed, the actions of `promote-baseline.yml` pinned by SHA, the PR tier skipping the slow rows (D1). It ships the [v1.6.2-rc.1](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.2-rc.1) candidate (2026-10-19). Pair with codegen 1.6.2, regenerate and relink. See [CHANGELOG.md](CHANGELOG.md#162--2026-10-21).
 - **[v1.6.1](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.1)** (2026-10-18) — selected-window contract revision `1.3-parity` (`capabilities.selected_window_contract_revisions: ["1.3-parity"]` on a supported runtime and `[]` otherwise) rather than `1.3` until a completeness proof exists (EN-115), with the four typed value-ownership codes (`strategy_value_invalid`, `engine_command_value_invalid`, `report_result_invalid` and `report_post_execution_failed`) emitted and value parity with the 1.4.0 reference on the tested cases; per-stage `startedAt` and `seconds` in `preflight-summary.json`; `noindex` on raw Doxygen source listings and their omission from `sitemap.xml`; verifier-tests sharded across parallel `unittest` subprocesses; the lower-feed timing ratio skipped only under AddressSanitizer. The C layouts stayed at ABI 4, `PF_ABI_VERSION` was still 4, the selected-window wire version stayed 1, the phase version 1 and the fingerprint/schema version 2. Pair with codegen 1.6.1, regenerate and relink. See [CHANGELOG.md](CHANGELOG.md#161--2026-10-18). <!-- verified HEAD -->

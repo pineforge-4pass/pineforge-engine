@@ -26,8 +26,7 @@ concurrency:
 jobs:
   authz:
     name: authz
-    # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
-    runs-on: gke-2cpu-4gb-amd64
+    runs-on: ubuntu-24.04
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -88,7 +87,7 @@ jobs:
 
   build:
     needs: [authz]
-    runs-on: ["self-hosted", "pf-gcp-post"]
+    runs-on: ubuntu-24.04
     env:
       CF_PROJECT: ${{ vars.CF_PAGES_PROJECT || 'pineforge-docs' }}
       DEPLOY_BRANCH: ${{ github.ref_name }}
@@ -136,6 +135,13 @@ jobs:
           # CF Pages branch names: alphanumerics, dashes, underscores, slashes.
           SAFE="$(printf '%s' "$DEPLOY_BRANCH" | tr -c 'A-Za-z0-9._/-' '-')"
           echo "branch=$SAFE" >> "$GITHUB_OUTPUT"
+
+      # Pin Node before wrangler-action installs wrangler with npm
+      # (the same setup-node pin as promote-baseline).
+      - name: Set up Node for wrangler
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0

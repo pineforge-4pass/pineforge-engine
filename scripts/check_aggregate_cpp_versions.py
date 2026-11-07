@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed v19 ownership guard, with an optional real ABI pair control."""
+"""Fail-closed v20 ownership guard, with an optional real ABI pair control."""
 from __future__ import annotations
 
 import argparse
@@ -45,10 +45,10 @@ def check(root: Path = ROOT) -> None:
     # The row source forward-declares its owner in the first block; the
     # aggregate and public hash sink live in the second block of the SAME
     # epoch. Pin both blocks so either one drifting still fails closed.
-    if epochs != ["engine_script_run_v19", "engine_script_run_v19"]:
-        raise ValueError("BacktestEngine requires engine_script_run_v19")
-    if "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19 1" not in native:
-        raise ValueError("native host capability must remain v19")
+    if epochs != ["engine_script_run_v20", "engine_script_run_v20"]:
+        raise ValueError("BacktestEngine requires engine_script_run_v20")
+    if "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V20 1" not in native:
+        raise ValueError("native host capability must remain v20")
     if "class PineStrategyHost : public NativeStrategyHost" not in (
             root / "include/pineforge/source/pine_strategy_host.hpp").read_text():
         raise ValueError("source host must remain native-bound")
@@ -66,7 +66,7 @@ def check(root: Path = ROOT) -> None:
     for name in ("hash_host_extension", "hash_source_extension"):
         if len(re.findall(r"\bvirtual\s+void\s+" + name
                           + r"\(BrokerStateHashSink&\)\s+const\s*;", engine_clean)) != 1:
-            raise ValueError(name + " must be a v19 BacktestEngine virtual")
+            raise ValueError(name + " must be a v20 BacktestEngine virtual")
     if len(re.findall(r"\bclass\s+BrokerStateHashSink\s*\{", engine_clean)) != 1:
         raise ValueError("BrokerStateHashSink must be a complete public type")
     if re.search(r"\bclass\s+BrokerStateHashSink\s*\{", clean(
@@ -156,7 +156,7 @@ def main() -> int:
                 args.receipt.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     except (PairingError, ValueError) as error:
         raise SystemExit("aggregate C++ versions: " + str(error))
-    print("aggregate v19 ownership" + (" and v18/v19 ABI pairs" if args.compiler else "") + " verified")
+    print("aggregate v20 ownership" + (" and v18/v20 ABI pairs" if args.compiler else "") + " verified")
     return 0
 
 

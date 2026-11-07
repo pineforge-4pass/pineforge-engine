@@ -7,6 +7,35 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- `ta.percentile_nearest_rank` now accepts a series length at runtime. Each
+  call site retains its own appended source history and computes the
+  nearest-rank percentile over the requested recent values, within the
+  documented historical limit.
+- An exit given in ticks and without `from_entry` that follows a market entry in
+  the same execution now takes effect when that entry fills, as a named exit does.
+- **Strategy modules built against 1.10.x must be rebuilt.** The C++ script
+  ABI epoch moves from `engine_script_run_v19` to `engine_script_run_v20`
+  (and `PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19` to `..._V20`) because
+  `PF_STREAM_ENGINE_LAYOUT_VERSION` moves from 3 to 4 and the layout of
+  `CacheDefaults` changed. This is an explicit exception to the earlier
+  promise of one epoch throughout 1.x, and the existing engine and codegen
+  pairing rule applies. The C API only gains functions; the caller-allocated
+  C report and trade layouts are unchanged, and the state-hash domain tags
+  keep their names.
+- `pineforge-live` status files now report `metrics.feed_idle_ms`, the
+  milliseconds since the last feed arrival, or null before the first; the
+  consumer owns freshness. HTTP and WebSocket feeds now also default to no
+  idle or message deadline, with 0 meaning none and positive seconds accepted
+  when their milliseconds fit a `long`. A caller relying on the former
+  15 second network default to end a run must set the timeout flag or close
+  the connection. The TCP/TLS connect no longer has a fixed 5000 ms bound:
+  the new `--feed-connect-timeout S` (integer seconds, network feeds only)
+  defaults to 0, which sets the connect option to the largest value libcurl
+  accepts, so the runner adds no connect bound: connecting ends only on a
+  system or peer failure, unless a nonzero `--feed-message-timeout` ends it
+  sooner (that total timeout covers connecting). A positive value sets the
+  connect bound in seconds. Files and stdin ignore a well-formed value;
+  malformed values are refused for every feed kind.
 - `pineforge-live run --trade-text PATH` optionally writes a separate finished
   report companion with all four trade text fields, run and row identity,
   and a count/SHA-256 trailer. It is off by default and has no text size cap;
@@ -27,6 +56,21 @@ version number follows semantic versioning over the surfaces the
   first byte or from the end of the pass that precedes it, so a sender that
   dribbles bytes cannot keep an unfinished line alive past a set message
   timeout.
+- **Validation grading ([#664]).** Strategies whose `strategy.exit` uses a
+  `trail_points`, `trail_offset` or `trail_price` parameter now use the
+  production profile with the existing count and entry limits, a 0.02% exit
+  limit and a 1% P&L limit. The exit-coupled P&L forgiveness window narrows
+  with that exit limit from 0.05% to 0.02% for trail_* probes. The exit and
+  P&L gates remain per-strategy 90th-percentile measurements.
+- Full and transpile-only runs with `PINEFORGE_WORK_DIR` set are refused with exit status 4.
+
+- The container entrypoint accepts `PINEFORGE_BUILD_ONLY=1` with an empty
+  caller-owned `PINEFORGE_WORK_DIR`, retaining the compiled artifacts and an
+  `engine-step.json` manifest for a separate engine invocation. The manifest
+  records the exact arguments, working directory, artifact hashes,
+  inherited-descriptor contract and structured status mapping distinguishing
+  engine exits from build-phase failures; the two-phase run documentation
+  describes the caller's integrity checks and read-only execution boundary.
 - An opt-in supervised report channel separates report and diagnostic output
   and records terminal delivery facts. It is not yet host-attested and needs
   an external sink for now, while the internal snapshot handoff is pending.
@@ -107,6 +151,33 @@ version number follows semantic versioning over the surfaces the
   `copy`, `snapshot` or `restore`) instead of at creation, with the same typed failure
   `report_sink_failed` and `reason: arena_exhausted`. Scripts that create maps
   they never fill can now run where they used to fail at `map.new`.
+- The native runner seeks the next unsent delivery through the existing
+  partial index, excluding delivered, journal-only and completed-failure
+  history from the scheduler's cursor walk.
+- Native runner status reports database + WAL bytes, measured bytes per
+  committed input, available disk and a growth-based exhaustion projection.
+  `--ledger-warn-free-fraction F` (default 0.8) reports an advisory `WARNING`
+  without changing readiness or exit status. The default allowance stays
+  unlimited.
+- `--report-jsonl=delta-v2` adds versioned change-only report records with
+  `ratios.as_of_input` on every record, outside the cumulative document, and
+  a raw `--delta-base` bootstrap. The envelope bounds emitted bytes and rows
+  serialized per input on the 10,000/100,000-input work populations.
+  Ratio scheduling is a separate later change; whole-curve passes remain.
+  Plain/full and v1 delta bytes are preserved. Ledger tables and checkpoint
+  layout are unchanged.
+- New run option `series_origin_ms`: the open time, in epoch milliseconds, of
+  the first bar of the series the reference ran on. The source host takes it
+  as a metadata key (a value that is not finite or not positive changes
+  nothing) and the `--syminfo` document of `docker/run_json.py` as a positive
+  JSON integer (`0`, a negative number, a float, a string, a boolean, `NaN` or
+  `Infinity` fails with `syminfo_unreadable`; absent or `null` applies nothing).
+  Declaring it makes `ta.ema`, and the EMAs inside `ta.macd`, `ta.kc` and
+  `ta.tsi`, answer `na` for the first `length - 1` inputs and then start from an
+  SMA seed, as TradingView does at the start of its series, and starts
+  `request.security` at the first whole bucket opening at or after the origin.
+  A run that does not declare it is unchanged. The option has no defined
+  meaning in a live run. See `docker/README.md`.
 
 ## 1.9.1 — 2026-10-31
 
@@ -1386,13 +1457,13 @@ deployments using Docker `--tmpfs /tmp` or Kubernetes `emptyDir` with
   effect. The release image's `docker/run_json.py` default (unjailed)
   profile installs a temporary report sink on every handle, so there the
   cache holds 128 rows and a script that loops over its closed trades reads
-  them from scratch files on every pass: hungpixi (24,238 closed trades),
+  them from scratch files on every pass: one measured example,
   one run each started together on one 16 vCPU machine, took 74.18 s on
   1.6.3 and did not finish within 1800 s on 1.7.0, where the run was
   stopped at that limit. The trigger is a report sink installed together
   with a loop over more than 128 closed trades. Not affected:
   `scripts/run_strategy.py` without a sink, which the hosted case runner,
-  the verifier and the sweep run (hungpixi takes 107.2 s there, mean of
+  the verifier and the sweep run (the same example takes 107.2 s there, mean of
   three runs; the corpus-parity canary pass sets
   `PINEFORGE_REPORT_SINK=1`), and the HPO native adapter, which installs no
   sink.
@@ -1686,8 +1757,8 @@ library.
   - **Verifier tests run in parallel shards ([#404]).**
     `scripts/ci_preflight.py` runs `verifier-tests` (`scripts/test_ci_verify.py`)
     across parallel `unittest` subprocess shards with per-shard `TMPDIR`
-    isolation via `scripts/run_unittest_shards.py`
-    (`scripts/test_run_unittest_shards.py`).
+    isolation via `scripts/ci_run_unittest_shards.py`
+    (`scripts/ci_test_run_unittest_shards.py`).
   - **Release-candidate notes link and tag commit ([#405]).**
     The `1.6.1-rc.1` entry links its release and names its tag commit
     `196592dd`.
@@ -3391,6 +3462,7 @@ The JSON report of `docker/run_json.py`, the release image's
 [#324]: https://github.com/pineforge-4pass/pineforge-engine/pull/324
 [#325]: https://github.com/pineforge-4pass/pineforge-engine/pull/325
 [#327]: https://github.com/pineforge-4pass/pineforge-engine/pull/327
+[#664]: https://github.com/pineforge-4pass/pineforge-engine/issues/664
 
 ## 1.0.1 — 2026-10-02
 

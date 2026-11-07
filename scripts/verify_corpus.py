@@ -34,6 +34,7 @@ import re
 import sys
 from collections import Counter
 from collections.abc import Iterable
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -46,9 +47,10 @@ from parity_paths import resolve_paths
 # Two profiles available:
 #  - STRICT: tight on all four dims (indicator-style strategies whose exits
 #    land on deterministic OHLC levels).
-#  - PRODUCTION: relaxes exit (5x) and per-trade pnl (~100x) to absorb TV's
-#    broker-emulator sub-bar fill drift. Auto-applied when strategy.pine uses
-#    any trail_* parameter on strategy.exit.
+#  - PRODUCTION: keeps count and entry at the strict limits, relaxes exit to
+#    0.02% and keeps per-strategy P&L at 1.0% to absorb trail fill drift.
+#    Auto-applied when strategy.pine uses any trail_* parameter on
+#    strategy.exit.
 STRICT_COUNT_DELTA = 0.01      # 1.0%
 STRICT_ENTRY_DELTA = 0.0001    # 0.01%
 STRICT_EXIT_DELTA  = 0.0001    # 0.01%
@@ -56,8 +58,8 @@ STRICT_PNL_DELTA   = 0.01      # 1.0%
 
 PRODUCTION_COUNT_DELTA = 0.01    # 1.0%   — same as strict
 PRODUCTION_ENTRY_DELTA = 0.0001  # 0.01%  — entries must stay tight
-PRODUCTION_EXIT_DELTA  = 0.0005  # 0.05%  — exits absorb sub-bar broker drift
-PRODUCTION_PNL_DELTA   = 1.0     # 100%   — gate only catastrophic divergence
+PRODUCTION_EXIT_DELTA  = 0.0002  # 0.02%  — exits absorb trail fill drift
+PRODUCTION_PNL_DELTA   = 0.01    # 1.0%   — same P&L limit as strict
 
 STRONG_COUNT_DELTA = 0.06
 STRONG_ENTRY_DELTA = 0.001
@@ -279,10 +281,12 @@ class TradePair:
     # physical multiplicity at a TV-proven collision key.
     entry_identity: str = ""
     # Report-only fields (compared but NOT gated — see the field-coverage
-    # disclosure). pnl_pct is in percent. mfe/mae are TOTAL USD excursions
-    # ((price diff) * qty, summed over pyramid entries) in TV's export
-    # convention: mfe (favorable) >= 0, mae (adverse) <= 0.
-    pnl_pct: float = 0.0
+    # disclosure). pnl_pct is in percent, or None when the export carries no
+    # percent for the trade: a missing percent is "not observed", never 0.0,
+    # and the report-only delta skips a pair with a None side. mfe/mae are
+    # TOTAL USD excursions ((price diff) * qty, summed over pyramid entries)
+    # in TV's export convention: mfe (favorable) >= 0, mae (adverse) <= 0.
+    pnl_pct: float | None = None
     mfe: float = 0.0
     mae: float = 0.0
     # The exit leg is a mark of a position still open at the range's end,
@@ -364,13 +368,27 @@ class VerificationResult:
     pnl_deltas: list[float] = field(default_factory=list, repr=False)
     qty_deltas: list[float] = field(default_factory=list, repr=False)
     pnlpct_deltas: list[float] = field(default_factory=list, repr=False)
+    # Applied profile policy; early returns never reach the metric gates.
+    grading_policy: dict | None = field(default=None, repr=False)
 
     @property
     def tier(self) -> str:
         return self.label
 
     def report_row(self) -> dict:
-        """Return the canonical report-facing fields without re-analysis."""
+        """Return the canonical report-facing fields without re-analysis.
+
+        Observation counts describe the effective metric arrays, including
+        any FIFO schedule replacement, rather than a shared trade population.
+        Missing means no eligible metric observations, not missing CSV cells.
+        Legacy p90 fields retain their numeric empty default; p100 is None
+        when unobserved, so an observed zero worst delta remains distinct.
+        """
+        metric_observations = {
+            "entry": len(self.entry_deltas),
+            "exit": len(self.exit_deltas),
+            "pnl": len(self.pnl_deltas),
+        }
         return {
             "slug": self.strategy_dir.name,
             "rel": self.rel,
@@ -383,9 +401,20 @@ class VerificationResult:
             "entry_p90": self.entry_p90,
             "exit_p90": self.exit_p90,
             "pnl_p90": self.pnl_p90,
+            "entry_p100": self.entry_p100 if metric_observations["entry"] else None,
+            "exit_p100": self.exit_p100 if metric_observations["exit"] else None,
+            "pnl_p100": self.pnl_p100 if metric_observations["pnl"] else None,
             "distinct_entry_identity_ok": self.distinct_entry_identity_ok,
             "distinct_entry_mismatches": self.distinct_entry_mismatches,
             "profile": self.profile,
+            "grading_policy": deepcopy(self.grading_policy),
+            "metric_observations": metric_observations,
+            "metric_missing": {
+                metric: count == 0 for metric, count in metric_observations.items()
+            },
+            "tv_exists": self.tv_exists,
+            "eng_exists": self.eng_exists,
+            "no_aligned_trades": self.no_aligned_trades,
             "notes": self.notes,
         }
 
@@ -436,6 +465,22 @@ def _is_open_mark(value) -> bool:
     return str(value or "").strip().lower() == "open"
 
 
+# A trade's percent return, in percent: TradingView's export names the column
+# "Return %"; the engine's CSV (and older exports) spell it "Net PnL %" /
+# "Net P&L %". A blank or absent cell is None, never 0.0 — a percent the
+# tape does not carry is not observed, and a 0.0 would be compared as if it
+# were. An explicit "0" or "0.00" is observed and stays 0.0.
+PNL_PCT_COLUMNS = ("Net P&L %", "Net PnL %", "Return %")
+
+
+def _pnl_pct_cell(row: dict) -> float | None:
+    for name in PNL_PCT_COLUMNS:
+        cell = row.get(name)
+        if cell is not None and cell.strip():
+            return float(cell)
+    return None
+
+
 def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
     by_num: dict[int, dict] = {}
     # TradingView exports include a UTF-8 BOM; utf-8-sig strips it.
@@ -480,9 +525,7 @@ def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
                 return None
             pnl = float(_ccy_col(row, "Net P&L", "Net PnL") or 0.0)
             # Report-only fields (TV vs engine column spellings differ).
-            pnl_pct = float(
-                row.get("Net P&L %") or row.get("Net PnL %") or 0.0
-            )
+            pnl_pct = _pnl_pct_cell(row)
             mfe = float(_ccy_col(row, "Favorable excursion") or row.get("MFE") or 0.0)
             # TV exports adverse excursion as a NEGATIVE USD value; current
             # engine CSVs use the same name + convention. Legacy engine CSVs
@@ -497,7 +540,10 @@ def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
             r["direction"] = direction
             r["qty"] = qty
             r["pnl"] = pnl
-            r["pnl_pct"] = pnl_pct
+            # A blank percent on one row of a trade must not erase the one
+            # its other row carries: the last percent observed wins.
+            if pnl_pct is not None or "pnl_pct" not in r:
+                r["pnl_pct"] = pnl_pct
             r["mfe"] = mfe
             r["mae"] = mae
             if kind.startswith("Entry"):
@@ -533,7 +579,7 @@ def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
             trade_num=n,
             entry_signal=r.get("entry_signal", ""),
             entry_identity=r.get("entry_identity", ""),
-            pnl_pct=r.get("pnl_pct", 0.0),
+            pnl_pct=r.get("pnl_pct"),
             mfe=r.get("mfe", 0.0),
             mae=r.get("mae", 0.0),
             open_mark=bool(r.get("open_mark", False)),
@@ -552,10 +598,10 @@ def pair_range_end_marks(
 
     A date-only TradingView tape prints a position still open at the range's end as a
     trade whose exit row is Signal "Open", priced at the range end's last
-    close and netted of commission on both legs, to the cent (3commas-xlm
-    #615: qty 0.0912, entry 2189.13, mark 2261.44 -> 6.3511, TV 6.35). The
+    close and netted of commission on both legs, to the cent (synthetic XLM qty 0.1,
+    entry 102.61, mark 166.39, 0.1% per leg: 6.378 - 0.0269 = 6.3511 -> 6.35). The
     engine, fed to TradingView's range end, books the same lot as its
-    range-end close (open_at_end) — 6.351137 for that lot — and marks the
+    range-end close (open_at_end) — 6.3511 in that illustration — and marks the
     exit row in ENGINE_RANGE_END_COLUMN. The two rows are one lot marked
     twice, so they are paired here, lot for lot, by the alignment every
     other trade gets (:func:`align_by_time`: same direction, entry within
@@ -567,9 +613,9 @@ def pair_range_end_marks(
     counts on both sides, it covers, its entry is gated like any other —
     whose exit and P&L are compared nowhere that is gated. The engine's
     P&L is exact and TradingView's is rounded to cents, and on a grid bot
-    with 22 open lots that rounding, summed into the schedule aggregate
+    with open lots that rounding, summed into the schedule aggregate
     that scores pnlP90 on such probes, moved the metric by itself (round
-    3, 2026-09-02: 0.5536 -> 0.6675 on 3commas-xlm). So the pairs leave
+    3, 2026-09-02: 0.5536 -> 0.6675 on the XLM grid probe). So the pairs leave
     both raw lists before consolidation, alignment, the trim window, the
     schedule path and every report-only percentile, and their P&L
     agreement is reported at TradingView's own precision instead
@@ -876,6 +922,10 @@ def consolidate_fragments(
             # average exit price, settled at the final close time.
             exit_price = sum(m.exit_price * m.qty for m in members) / denom
             exit_time = max(m.exit_time for m in members)
+        # One fragment without a percent leaves the merged deal's percent
+        # not observed: the average of the others would not be the deal's.
+        pnl_pct = (None if any(m.pnl_pct is None for m in members)
+                   else sum(m.pnl_pct * m.qty for m in members) / denom)
         out.append(TradePair(
             direction=rep.direction,
             entry_time=rep.entry_time,
@@ -887,7 +937,7 @@ def consolidate_fragments(
             trade_num=min(m.trade_num for m in members),
             entry_signal=rep.entry_signal,
             entry_identity=rep.entry_identity,
-            pnl_pct=sum(m.pnl_pct * m.qty for m in members) / denom,
+            pnl_pct=pnl_pct,
             mfe=sum(m.mfe for m in members),
             mae=sum(m.mae for m in members),
         ))
@@ -1198,7 +1248,19 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
 
     # Resolve parity profile (strict vs production) per probe.
     profile = resolve_profile(strategy_dir, meta)
-    thresh = parity_for_profile(profile)
+    # Grade from an owned snapshot, then retain that same configuration for
+    # reporting. A resolver or report consumer cannot change this receipt.
+    thresh = dict(parity_for_profile(profile))
+    grading_policy = {
+        "profile": profile,
+        "thresholds": thresh,
+        "aggregation": "p90",
+        "percentile": 0.90,
+        "scope": "per_probe",
+        "comparison": "<",
+        "count_rule": "exact",
+    }
+    grade_percentile = grading_policy["percentile"]
 
     # Optional interior trim: drop edge / warmup bars from the headline stats.
     trim_bars = int(meta.get("trim_bars", 0) or 0)
@@ -1289,9 +1351,9 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
             continue
         pnl_deltas.append(abs_diff / abs(t.pnl))
 
-    entry_p90 = percentile(entry_deltas, 0.90)
-    exit_p90  = percentile(exit_deltas,  0.90)
-    pnl_p90   = percentile(pnl_deltas,   0.90) if pnl_deltas else 0.0
+    entry_p90 = percentile(entry_deltas, grade_percentile)
+    exit_p90  = percentile(exit_deltas,  grade_percentile)
+    pnl_p90   = percentile(pnl_deltas,   grade_percentile) if pnl_deltas else 0.0
 
     # Fragmented FIFO grids can have exact entry/count parity and exact
     # position-level close events while entry-grouped consolidation smears exit
@@ -1307,12 +1369,12 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     if fragmented_fifo and entry_p90 < 1e-12 and count_delta < STRONG_COUNT_DELTA:
         sched_exit_deltas, sched_pnl_deltas = schedule_exit_metrics(tv_sched_rows, eng_sched_rows)
         if sched_exit_deltas:
-            sched_exit_p90 = percentile(sched_exit_deltas, 0.90)
+            sched_exit_p90 = percentile(sched_exit_deltas, grade_percentile)
             if sched_exit_p90 <= exit_p90:
                 exit_deltas = sched_exit_deltas
                 exit_p90 = sched_exit_p90
         if sched_pnl_deltas:
-            sched_pnl_p90 = percentile(sched_pnl_deltas, 0.90)
+            sched_pnl_p90 = percentile(sched_pnl_deltas, grade_percentile)
             if sched_pnl_p90 <= pnl_p90:
                 pnl_deltas = sched_pnl_deltas
                 pnl_p90 = sched_pnl_p90
@@ -1327,7 +1389,11 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     # below: the engine's exact P&L rounded to cents against TV's cents.
     qty_deltas    = ([relative_max(t.qty, e.qty) for t, e in gating_matched]
                      + [relative_max(t.qty, e.qty) for t, e in gate_marks])
-    pnlpct_deltas = [abs(t.pnl_pct - e.pnl_pct) for t, e in gating_matched]  # pct-points
+    # A pair whose percent is missing on either side (None: the export does
+    # not carry it) is not observed, so it is skipped rather than compared.
+    pnlpct_deltas = [abs(t.pnl_pct - e.pnl_pct)  # pct-points
+                     for t, e in gating_matched
+                     if t.pnl_pct is not None and e.pnl_pct is not None]
     open_mark_pnl_misses = [abs(round(e.pnl, 2) - t.pnl) for t, e in mark_pairs]
     open_mark_pnl_cent_exact = sum(
         1 for miss in open_mark_pnl_misses if miss < TV_PNL_ROUNDING_EPSILON_USD)
@@ -1500,6 +1566,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         pnl_deltas=pnl_deltas,
         qty_deltas=qty_deltas,
         pnlpct_deltas=pnlpct_deltas,
+        grading_policy=grading_policy,
     )
 
 

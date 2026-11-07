@@ -17,7 +17,7 @@ import unicodedata
 import unittest
 from unittest import mock
 
-from ci_preflight import _jobs, _steps
+from ci_preflight import _jobs, _steps, release_prebuilt_workflow_findings
 import ci_release_gate
 
 
@@ -126,13 +126,14 @@ def ci_post_jobs():
 
 def linux_ci_post_jobs():
     # Keep these regression inputs Linux-only even against the previous gate.
-    # Derive arm64 rows from amd64, without copying the required-name tuple.
+    # Derive all arm64 shards from amd64, without copying the required-name tuple.
     amd64 = [job for job in ci_post_jobs()
              if job["name"].startswith("build (ubuntu-24.04, ")]
     return amd64 + [
-        {**job, "id": job["id"] + len(amd64),
-         "name": job["name"].replace("ubuntu-24.04,", "ubuntu-24.04-arm,")}
-        for job in amd64]
+        {**job, "id": len(amd64) + 4 * index + shard,
+         "name": job["name"].replace("build (ubuntu-24.04,", "build-shard (ubuntu-24.04-arm,")[:-1]
+                 + f", {shard}/4)"}
+        for index, job in enumerate(amd64) for shard in range(1, 5)]
 
 
 def jobs_page(rows, *, total=None):
@@ -1992,25 +1993,24 @@ class RulesetsProbeTests(unittest.TestCase):
     def test_probe_dispatch_branch_and_fleets_are_documented(self):
         docs = (ROOT / "docs/ci.md").read_text()
         requirements = (
-            'admit is hosted, while PR preflight, proof legs and parity use bare GKE scale-set names;\n'
-            'credentialed post work keeps its protected `["self-hosted","pf-gcp-post"]` fleet.\n'
-            'Post Release/Debug/kernel and native shards, post sanitizers and both native-live sanitizer\n'
-            'profiles use fixed bare GKE scale-set names directly in runner pods carrying the engine toolchain image and sudo. No job routes by event.',
-            "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
-            'bare scalar `gke-2cpu-4gb-amd64` and `probe` on `["self-hosted","pf-gcp-post"]`.',
-            "Release and promotion use the isolated release fleet:\n"
-            "`release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use\n"
-            '`["self-hosted","pf-gcp-main"]`.\n'
-            'The release ruleset probe runs secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64` and\n'
-            '`probe` on `["self-hosted","pf-gcp-post"]`.',
+            'job runs on a standard hosted image, `ubuntu-24.04` for x86 and `ubuntu-24.04-arm` for arm64.\n'
+            'Only the unchanged `release.yml` keeps its protected `gkp-od-*` scale sets in runner group 15.\n'
+            'The two native-live sanitizer profiles use an exact runner matrix with both rows on `ubuntu-24.04`. '
+            'No job routes by event.',
+            "The manual `release-ruleset-probe.yml` workflow runs `authz` and `probe` on\n"
+            'the hosted `ubuntu-24.04` image; `probe` keeps its `release` environment.',
+            "Release uses protected GKE runner group 15 for its x64 artifact only:\n"
+            "`release` and `notify-hub` run on hosted `ubuntu-24.04` and keep their `release` environment;\n"
+            'Linux x64 `prebuilt` uses `gkp-od-16cpu-32gb-amd64-128gb`; baseline `promote` uses hosted `ubuntu-24.04`.\n'
+            'The release ruleset probe runs `authz` and `probe` on hosted `ubuntu-24.04`.',
             "Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from\n"
             "`main` to check actual ruleset visibility with the same App token mint as\n"
             "`release.yml`. The workflow file must be on the default branch, and the run\n"
             "must use `main`'s copy.\n"
-            'The credentialed probe job runs on `["self-hosted","pf-gcp-post"]`, with\n'
-            'secret-free `authz` on bare scalar `gke-2cpu-4gb-amd64`.',
-            "`pf-gcp-main` admits only allowlisted workflows (an org runner-group restriction),\n"
-            "so the one-time probe uses `pf-gcp-post`.",
+            'The credentialed probe job runs on hosted `ubuntu-24.04`, with\n'
+            'secret-free `authz` on hosted `ubuntu-24.04`.',
+            "Protected runner group 15 admits only allowlisted workflow refs at `refs/heads/main`;\n"
+            "the probe keeps its `release` environment and main-ref refusal before App minting.",
             "The dispatch must run from `main`; the workflow itself refuses any other ref\n"
             "before minting the App token or checking out repository code.",
         )
@@ -2301,9 +2301,148 @@ class WorkflowPinTests(unittest.TestCase):
     def workflow(self):
         return (ROOT / ".github/workflows/release.yml").read_text()
 
+    def test_bookworm_image_is_bound_only_to_the_repository_variable(self):
+        workflow = self.workflow()
+        body = _jobs(workflow)["prebuilt"]
+        builder = next(step for step in _steps(body)
+                       if step.startswith("      - name: Build x86_64 in preloaded Bookworm\n"))
+        binding = "          ENGINE_TOOLCHAIN_IMAGE: ${{ vars.ENGINE_TOOLCHAIN_IMAGE }}\n"
+        self.assertEqual(builder.count(binding), 1)
+        self.assertEqual(workflow.count("vars.ENGINE_TOOLCHAIN_IMAGE"), 2)
+        self.assertEqual(release_prebuilt_workflow_findings(workflow), [])
+        helper = (ROOT / "scripts/build_prebuilt_bookworm.sh").read_text()
+        self.assertNotIn("docker.pkg.dev/", workflow + helper)
+        for replacement in ("", "          ENGINE_TOOLCHAIN_IMAGE: ''\n",
+                            "          ENGINE_TOOLCHAIN_IMAGE: example.invalid/toolchain:latest\n",
+                            "          ENGINE_TOOLCHAIN_IMAGE: ${{ vars.OTHER_IMAGE }}\n",
+                            "          ENGINE_TOOLCHAIN_IMAGE: ${{ secrets.ENGINE_TOOLCHAIN_IMAGE }}\n",
+                            binding * 2):
+            with self.subTest(binding=replacement):
+                changed = workflow.replace(binding, replacement, 1)
+                self.assertNotEqual(changed, workflow)
+                self.assertTrue(release_prebuilt_workflow_findings(changed))
+
+    def test_bookworm_build_and_all_library_gate_are_binding_for_both_release_modes(self):
+        workflow = self.workflow()
+        self.assertEqual(release_prebuilt_workflow_findings(workflow), [])
+        steps = _steps(_jobs(workflow)["prebuilt"])
+        names = [step.splitlines()[0] for step in steps]
+        baseline_fetch = "Fetch the v1.10.0 baseline archive for the glibc comparison"
+        for earlier, later in (
+                ("Build x86_64 in preloaded Bookworm", "Verify the staged version"),
+                ("Install to staging", "Check every staged library's glibc floor"),
+                ("Verify the staged version", baseline_fetch),
+                (baseline_fetch, "Check every staged library's glibc floor"),
+                ("Check every staged library's glibc floor", "Pack tarball + sha256"),
+                ("Pack tarball + sha256", "Consume packed x86_64 archive"),
+                ("Consume packed x86_64 archive", "Upload to release")):
+            self.assertLess(names.index("      - name: " + earlier),
+                            names.index("      - name: " + later))
+        gate = next(step for step in steps if "      - name: Check every staged library's glibc floor" in step)
+        self.assertNotIn("        if:", gate)
+        self.assertIn('python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}"', gate)
+        self.assertIn('--baseline-root "${BASELINE_DIR}"', gate)
+        self.assertIn('exit "${checker_rc}"', gate)
+        # Both release modes and both triples fetch the baseline: no condition on the step.
+        fetch = next(step for step in steps if "      - name: " + baseline_fetch in step)
+        self.assertNotIn("        if:", fetch)
+
+    def test_glibc_invocation_rejects_raw_blank_and_comment_continuations(self):
+        workflow = self.workflow()
+        command = ('          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" '
+                   '--baseline-root "${BASELINE_DIR}" '
+                   '> "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then')
+        finding = ('release.yml prebuilt must retain the raw single-line all-library '
+                   'glibc checker invocation and its run context')
+        self.assertEqual(workflow.count(command), 1)
+        self.assertEqual(release_prebuilt_workflow_findings(workflow), [])
+        for separator in ("\n", "            # disabled continuation\n"):
+            with self.subTest(separator=separator):
+                changed = workflow.replace(command, command.replace(
+                    ' > "${log}/stdout.jsonl"', ' \\\n' + separator
+                    + '            > "${log}/stdout.jsonl"', 1), 1)
+                self.assertNotEqual(changed, workflow)
+                self.assertIn(finding, release_prebuilt_workflow_findings(changed))
+        for changed in (workflow.replace(command, "", 1),
+                        workflow.replace(command, command.replace('"${STAGE_DIR}"',
+                                                                  '"${STAGE_DIR}/lib/libpineforge.a"'), 1),
+                        workflow.replace(command, "          # " + command.lstrip(), 1)):
+            self.assertIn(finding, release_prebuilt_workflow_findings(changed))
+
+    def test_bookworm_workflow_controls_consume_each_mutated_workflow(self):
+        workflow = self.workflow()
+        body = _jobs(workflow)["prebuilt"]
+        for before, after in (
+                ('bash scripts/build_prebuilt_bookworm.sh', 'cmake -B host-build'),
+                ("SOURCE_SHA: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}",
+                 "SOURCE_SHA: ${{ github.sha }}"),
+                ("matrix.triple == 'linux-x86_64'", "matrix.triple == 'linux-aarch64'"),
+                ("matrix.triple == 'linux-aarch64'", "runner.os == 'Linux'"),
+                ('python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}"', 'true'),
+                ('python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}"',
+                 'python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}/lib/libpineforge.a"'),
+                ('python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}"',
+                 'python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" || true'),
+                ('exit "${checker_rc}"', "exit 0"),
+                ('else checker_rc=$?; fi', 'else checker_rc=0; fi'),
+                # The released baseline is part of the gate: drop it, aim it at the
+                # staged tree, retarget the release, break its digest check or digest.
+                ('--baseline-root "${BASELINE_DIR}" ', ''),
+                ('--baseline-root "${BASELINE_DIR}"', '--baseline-root "${STAGE_DIR}"'),
+                ('gh release download v1.10.0', 'gh release download v1.9.1'),
+                ('archive="pineforge-v1.10.0-${TRIPLE}.tar.gz"',
+                 'archive="pineforge-v1.9.1-${TRIPLE}.tar.gz"'),
+                ('| sha256sum -c -', '| cat'),
+                ('cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543',
+                 'cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3544'),
+                ('982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bb',
+                 '982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bc'),
+                ('echo "BASELINE_DIR=${root}/tree"', 'echo "BASELINE_DIR=${root}/download"'),
+                ("          fetch-depth: 0", "          fetch-depth: 1"),
+                ("          persist-credentials: false", "          persist-credentials: true"),
+        ):
+            with self.subTest(before=before):
+                self.assertIn(before, body)
+                changed = workflow.replace(body, body.replace(before, after, 1), 1)
+                self.assertNotEqual(changed, workflow)
+                self.assertTrue(release_prebuilt_workflow_findings(changed))
+        gate = next(step for step in _steps(body)
+                    if step.startswith("      - name: Check every staged library's glibc floor\n"))
+        moved = body.replace(gate, "", 1)
+        anchor = "      - name: Upload to release"
+        moved = moved.replace(anchor, gate + "\n" + anchor, 1)
+        self.assertTrue(release_prebuilt_workflow_findings(workflow.replace(body, moved, 1)))
+        self.assertTrue(release_prebuilt_workflow_findings(
+            workflow.replace(body, body.replace(gate, "", 1), 1)))
+        self.assertTrue(release_prebuilt_workflow_findings(
+            workflow.replace(body, body.replace(gate, gate + "\n" + gate, 1), 1)))
+        for bypass in ("        if: false\n", "        continue-on-error: true\n"):
+            changed = body.replace(gate, gate.splitlines()[0] + "\n" + bypass
+                                   + "\n".join(gate.splitlines()[1:]), 1)
+            self.assertTrue(release_prebuilt_workflow_findings(workflow.replace(body, changed, 1)))
+        for step in (
+                "      - run: docker pull example:latest\n",
+                "      - run: docker login example\n",
+                "      - run: cmake -B host-build\n",
+                "      - run: docker run --privileged -v /var/run/docker.sock:/socket example\n",
+                "      - run: docker run -v ~/.aws:/credentials example\n"):
+            changed = body.replace("    steps:\n", "    steps:\n" + step, 1)
+            self.assertTrue(release_prebuilt_workflow_findings(workflow.replace(body, changed, 1)))
+
+    def test_prebuilt_cannot_override_docker_shell_or_path_inputs(self):
+        workflow = self.workflow()
+        body = _jobs(workflow)["prebuilt"]
+        for name, value in (("BASH_ENV", "/outside/script"), ("DOCKER_HOST", "tcp://outside:2375"),
+                            ("CXX", "/host/g++"), ("RUNNER_TEMP", "/tmp"),
+                            ("GITHUB_WORKSPACE", "/outside"), ("CMAKE_TOOLCHAIN_FILE", "/host/toolchain")):
+            with self.subTest(name=name):
+                changed = body.replace("    steps:\n",
+                                       f"    env:\n      {name}: {value}\n    steps:\n", 1)
+                self.assertTrue(release_prebuilt_workflow_findings(workflow.replace(body, changed, 1)))
+
     def assert_gke_build(self, body, label):
         self.assertIn("    runs-on: " + label + "\n",
-                      body, "required build jobs must keep GKE routing")
+                      body, "required build jobs must keep hosted routing")
         self.assertNotRegex(body, r'''(?m)^    ['"]?container['"]?\s*:''',
                             "required build jobs must run directly in the runner pod")
 
@@ -2328,8 +2467,8 @@ class WorkflowPinTests(unittest.TestCase):
             self.assertEqual([value.strip() for value in types[1].split(",")], [build_type])
             platforms = re.findall(r"(?m)^          - os: (\S+)$", matrix[1])
             self.assertEqual(platforms, ["ubuntu-24.04"])
-            self.assert_gke_build(body, {"build": "gke-32cpu-64gb-amd64",
-                                         "build-debug": "gke-16cpu-32gb-amd64"}[job_id])
+            self.assert_gke_build(body, {"build": "ubuntu-24.04",
+                                         "build-debug": "ubuntu-24.04"}[job_id])
             shards = re.findall(r"(?m)^        shard: \[([0-9, ]+)\]$", matrix[1])
             self.assertEqual(len(shards), 1)
             self.assertEqual([int(value.strip()) for value in shards[0].split(",")],
@@ -2350,20 +2489,28 @@ class WorkflowPinTests(unittest.TestCase):
         body = _without_comments(jobs["build-arm"])
         matrix = re.search(r"(?ms)^      matrix:\n(.*?)(?=^ {0,6}\S|\Z)", body)
         self.assertIsNotNone(matrix)
-        self.assertEqual(re.findall(r"(?m)^        (\w+):", matrix[1]), ["build_type"],
+        self.assertEqual(re.findall(r"(?m)^        (\w+):", matrix[1]), ["build_type", "shard"],
                          "new axes/include/exclude need a gate review")
         types = re.search(r"(?m)^        build_type: \[([^\n]+)\]$", matrix[1])
         self.assertIsNotNone(types)
         build_types = [value.strip() for value in types[1].split(",")]
         self.assertCountEqual(build_types, ["Release", "Debug"])
-        self.assert_gke_build(body, "gke-16cpu-32gb-arm64")
+        self.assert_gke_build(body, "ubuntu-24.04-arm")
+        shards = re.findall(r"(?m)^        shard: \[([0-9, ]+)\]$", matrix[1])
+        self.assertEqual(len(shards), 1)
+        indices = [int(value.strip()) for value in shards[0].split(",")]
+        self.assertEqual(indices, [1, 2, 3, 4], "no required shard may be dropped")
+        denominators = re.findall(r"--ctest-shard \$\{\{ matrix.shard \}\}/(\d+)", body)
+        self.assertEqual(denominators, ["4"])
         name = re.search(r"(?m)^    name: (.+)$", body)
         self.assertIsNotNone(name)
         for build_type in build_types:
-            displayed = name[1].replace("${{ matrix.build_type }}", build_type)
-            self.assertNotIn("${{", displayed, "every name axis must be expanded")
-            self.assertEqual(displayed, f"build (ubuntu-24.04-arm, {build_type})")
-            expanded.append(displayed)
+            for shard in indices:
+                displayed = (name[1].replace("${{ matrix.build_type }}", build_type)
+                             .replace("${{ matrix.shard }}", str(shard)))
+                self.assertNotIn("${{", displayed, "every name axis must be expanded")
+                self.assertEqual(displayed, f"build-shard (ubuntu-24.04-arm, {build_type}, {shard}/4)")
+                expanded.append(displayed)
         return expanded
 
     def test_ci_post_required_build_jobs_match_workflow_matrices(self):
@@ -2375,7 +2522,7 @@ class WorkflowPinTests(unittest.TestCase):
     def test_ci_post_required_build_jobs_reject_dropped_shard(self):
         workflow = (ROOT / ".github/workflows/ci-post.yml").read_text()
         self.ci_post_build_names(_jobs(workflow))
-        for job_id, count in (("build", 4), ("build-debug", 2)):
+        for job_id, count in (("build", 4), ("build-debug", 2), ("build-arm", 4)):
             with self.subTest(job=job_id):
                 jobs = _jobs(workflow)
                 before = "        shard: [" + ", ".join(str(i) for i in range(1, count + 1)) + "]"
@@ -2387,12 +2534,12 @@ class WorkflowPinTests(unittest.TestCase):
     def test_ci_post_required_build_jobs_reject_runner_or_container_drift(self):
         workflow = (ROOT / ".github/workflows/ci-post.yml").read_text()
         self.ci_post_build_names(_jobs(workflow))
-        for job, label in (("build", "gke-32cpu-64gb-amd64"),
-                           ("build-debug", "gke-16cpu-32gb-amd64"),
-                           ("build-arm", "gke-16cpu-32gb-arm64")):
+        for job, label in (("build", "ubuntu-24.04"),
+                           ("build-debug", "ubuntu-24.04"),
+                           ("build-arm", "ubuntu-24.04-arm")):
             for before, after, finding in (
-                    ("    runs-on: " + label, "    runs-on: pf-linux-x64-16",
-                     "required build jobs must keep GKE routing"),
+                    ("    runs-on: " + label + "\n", "    runs-on: pf-linux-x64-16\n",
+                     "required build jobs must keep hosted routing"),
                     ("    steps:\n", "    container:\n      image: ubuntu:24.04\n    steps:\n",
                      "required build jobs must run directly in the runner pod")):
                 with self.subTest(job=job, replacement=after):
@@ -3050,19 +3197,19 @@ class CiPostGateTests(unittest.TestCase):
 
     def test_four_green_linux_legs_without_macos_prove_the_release(self):
         jobs = linux_ci_post_jobs()
-        self.assertEqual(len(jobs), 4)
+        self.assertEqual(len(jobs), 10)
         self.api.ci_post(self.post_run, jobs)
         self.assert_green(self.post_run)
         self.assertEqual(self.history.calls, [self.post_run["head_sha"]])
 
     def test_each_missing_linux_leg_is_the_only_missing_job_reported(self):
         complete = linux_ci_post_jobs()
-        self.assertEqual(len(complete), 4)
+        self.assertEqual(len(complete), 10)
         for original in complete:
             with self.subTest(job=original["name"]):
                 self.reset_ci_post()
                 jobs = [job for job in complete if job["name"] != original["name"]]
-                self.assertEqual(len(jobs), 3)
+                self.assertEqual(len(jobs), 9)
                 self.api.ci_post(self.post_run, jobs)
                 stderr = self.assert_no_full_run(
                     [self.post_run], f"missing job {original['name']}")

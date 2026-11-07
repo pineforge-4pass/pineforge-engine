@@ -110,11 +110,11 @@
 #                        checks is the inventory's own, never one read from the strategy code.
 #
 # Exit codes:
-#   0  success (JSON report, or C++ in transpile-only mode, on stdout)
+#   0  success (JSON report, C++ in transpile-only mode, or empty build-only stdout)
 #   2  missing input mount
 #   3  compile failure (g++; on the selected path also copying a pre-transpiled strategy.cpp
 #      into the work dir, or binding the request-feed inventory)
-#   4  backtest failure, or an opt-in compile guard's usage/limit/channel failure
+#   4  backtest, compile-guard or build-only request/manifest failure
 #   5  transpile failure (unsupported Pine construct or syntax error)
 #
 # Memory and scratch controls (environment): PINEFORGE_COMMAND_SCRATCH_MAX_BYTES
@@ -132,10 +132,182 @@ IN_DIR="${PINEFORGE_IN_DIR:-/in}"
 PINE="${IN_DIR}/strategy.pine"
 SRC_CPP="${IN_DIR}/strategy.cpp"
 OHLCV="${IN_DIR}/ohlcv.csv"
+BUILD_ONLY=false
+if [[ "${PINEFORGE_BUILD_ONLY:-}" == "1" || "${PINEFORGE_BUILD_ONLY:-}" == "true" ]]; then
+    BUILD_ONLY=true
+fi
+if [[ "${BUILD_ONLY}" == "true" || -n "${PINEFORGE_WORK_DIR+x}" ]]; then
+    run_engine_step() {
+        python3 - "$@" <<'PY'
+"""Validate a persistent build request and publish its engine-step manifest."""
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+
+FORBIDDEN_ENVIRONMENT_SPAWNING = (
+    "PINEFORGE_REPORT_CHANNEL",
+    "PINEFORGE_TERMINAL_STATUS_FD",
+    "PINEFORGE_REPORT_MAX_BYTES",
+    "PINEFORGE_DIAGNOSTIC_MAX_BYTES",
+    "PINEFORGE_CHANNEL_WALL_MS",
+    "PINEFORGE_CHANNEL_STALL_MS",
+    "PINEFORGE_CHANNEL_POST_EXIT_DRAIN_MS",
+    "PINEFORGE_CHANNEL_STOP_GRACE_MS",
+    "PINEFORGE_REPORT_PLANNED_SINK_BYTES",
+    "PINEFORGE_REPORT_ATTEMPT_ID",
+    "PINEFORGE_REPORT_HOST_ATTESTATION_FD",
+)
+FORBIDDEN_ENVIRONMENT_PRODUCER = (
+    "PINEFORGE_REPORT_PRODUCER",
+    "PINEFORGE_REPORT_CANDIDATE_FD",
+    "PINEFORGE_REPORT_NATIVE_SINK_FD",
+)
+FORBIDDEN_FLAGS = (
+    "--report-channel", "--terminal-status-fd", "--report-max-bytes",
+    "--diagnostic-max-bytes", "--channel-wall-ms", "--channel-stall-ms",
+    "--post-exit-drain-ms", "--stop-grace-ms", "--planned-sink-bytes",
+    "--attempt-id", "--host-attestation-fd", "--test-only-host-attestation-fd",
+)
+
+
+def failure(message, code="run_request_invalid", option="arguments"):
+    text = "entrypoint.sh: error: " + message
+    sys.stderr.write(text + "\n")
+    print(json.dumps({
+        "engine": "pineforge", "error": text, "code": code,
+        "args": {} if code == "harness_internal_error" else {"option": option},
+    }, ensure_ascii=True, allow_nan=False, separators=(",", ":")))
+    return 4
+
+
+def validate():
+    enabled = os.environ.get("PINEFORGE_BUILD_ONLY") in ("1", "true")
+    if not enabled:
+        return failure("PINEFORGE_WORK_DIR requires PINEFORGE_BUILD_ONLY=1 or true",
+                       option="work_dir")
+    if os.environ.get("PINEFORGE_TRANSPILE_ONLY") in ("1", "true"):
+        return failure("PINEFORGE_BUILD_ONLY and PINEFORGE_TRANSPILE_ONLY cannot be combined")
+    for name in (*FORBIDDEN_ENVIRONMENT_SPAWNING, *FORBIDDEN_ENVIRONMENT_PRODUCER):
+        if name in os.environ:
+            return failure("PINEFORGE_BUILD_ONLY cannot be combined with " + name)
+    work = os.environ.get("PINEFORGE_WORK_DIR", "")
+    if (not os.path.isabs(work) or not os.path.isdir(work) or os.path.islink(work)
+            or not os.access(work, os.W_OK | os.X_OK)):
+        return failure("PINEFORGE_WORK_DIR must name an absolute existing empty directory "
+                       "that is writable, searchable and not a symlink",
+                       option="work_dir")
+    try:
+        with os.scandir(work) as entries:
+            empty = next(entries, None) is None
+    except OSError:
+        empty = False
+    if not empty:
+        return failure("PINEFORGE_WORK_DIR must be empty and readable", option="work_dir")
+    return 0
+
+
+def artifact(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return {"path": path, "sha256": digest.hexdigest()}
+
+
+def manifest(arguments):
+    work, cpp, so, ohlcv, inventory, status, *argv = arguments
+    if not argv or not os.path.isabs(argv[0]):
+        return failure("the resolved python3 path must be absolute",
+                       code="harness_internal_error")
+    temporary = None
+    try:
+        for token in argv:
+            if token.partition("=")[0] in FORBIDDEN_FLAGS:
+                Path(so).unlink(missing_ok=True)
+                return failure("PINEFORGE_BUILD_ONLY cannot use channel argument " + repr(token))
+        document = {
+            "schema": "pineforge-engine-step/v1",
+            "argv": argv,
+            "cwd": os.getcwd(),
+            "work_dir": work,
+            "artifacts": {
+                "so": artifact(so),
+                "cpp": artifact(cpp),
+                "ohlcv": {"path": ohlcv, "sha256": None},
+                "request_feed_inventory": artifact(inventory) if inventory else None,
+            },
+            "inherits": {
+                "environment": "unchanged",
+                "descriptors": ([os.environ["PINEFORGE_REPORT_SINK_FD"]]
+                                if "PINEFORGE_REPORT_SINK_FD" in os.environ else []),
+            },
+            "forbidden_environment_spawning": FORBIDDEN_ENVIRONMENT_SPAWNING,
+            "forbidden_environment_producer": FORBIDDEN_ENVIRONMENT_PRODUCER,
+            "forbidden_flags": FORBIDDEN_FLAGS,
+            "status_mapping": {
+                "engine_step_statuses": [0, 1, 2],
+                "engine_step_meaning": {
+                    "0": "report written, run complete",
+                    "1": "failed run, harness fault or a report that could not be written whole",
+                    "2": "a command line argparse refuses or an explicit request validation failure",
+                },
+                "build_phase_only": [3, 5],
+                "entrypoint_only_codes": {
+                    "2": "missing input or C++ attestation failure "
+                         "(a different meaning from the engine step's 2)",
+                    "3": "compile/bind",
+                    status: "full-run mapping of ANY non-zero engine status, or a usage/limit "
+                            "failure of an opt-in compile guard or of build-only",
+                    "5": "transpile",
+                },
+                "full_run_mapping": (
+                    "the entrypoint reports any non-zero engine-step status as " + status
+                ),
+                "signals": "a process killed by a signal has no status of its own; "
+                           "the caller reports it (conventionally 128+N)",
+            },
+        }
+        # The temporary file is private from creation; replacement publishes one complete object.
+        fd, temporary = tempfile.mkstemp(prefix="engine-step.", suffix=".json.tmp", dir=work)
+        with os.fdopen(fd, "w", encoding="ascii") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            json.dump(document, handle, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, Path(work) / "engine-step.json")
+    except Exception:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+        return failure("the engine-step manifest could not be written",
+                       code="harness_internal_error")
+    return 0
+
+
+if __name__ == "__main__":
+    if sys.argv[1] == "validate":
+        raise SystemExit(validate())
+    raise SystemExit(manifest(sys.argv[2:]))
+PY
+    }
+    run_engine_step validate || exit "$?"
+fi
+if [[ "${BUILD_ONLY}" == "true" ]]; then
+    WORK="${PINEFORGE_WORK_DIR}"
+else
 # Per-run work dir so parallel in-process invocations never collide on the
 # generated TU / shared object. Cleaned up on exit. (Was fixed /tmp/strategy.*)
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/pf-work.XXXXXXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
+fi
 GEN="${WORK}/strategy.cpp"
 SO="${WORK}/strategy.so"
 
@@ -680,7 +852,9 @@ sys.exit(status)
 PY
 fi
 
-echo "[pineforge] running backtest ..." >&2
+if [[ "${BUILD_ONLY}" != "true" ]]; then
+    echo "[pineforge] running backtest ..." >&2
+fi
 
 # Optional per-run knobs (mirror scripts/run_strategy.py). Built conditionally so
 # unset env never passes an empty/invalid flag; set limits are forwarded even empty.
@@ -724,7 +898,12 @@ if [[ -n "${BOUND_INVENTORY}" ]]; then
     extra+=(--request-feed-inventory "${BOUND_INVENTORY}")
 fi
 
-python3 "${PREFIX}/bin/run_json.py" \
+readonly ENGINE_FAILURE_STATUS=4
+ENGINE_PYTHON=python3
+if [[ "${BUILD_ONLY}" == "true" ]]; then
+    ENGINE_PYTHON="$(command -v python3)"
+fi
+ENGINE_ARGV=("${ENGINE_PYTHON}" "${PREFIX}/bin/run_json.py"
     --so "${SO}" \
     --ohlcv "${OHLCV}" \
     --inputs    "${PINEFORGE_INPUTS:-}" \
@@ -736,5 +915,13 @@ python3 "${PREFIX}/bin/run_json.py" \
     --magnifier-dist    "${PINEFORGE_MAGNIFIER_DIST:-endpoints}" \
     --generated-cpp     "${SRC}" \
     --transpiled        "${TRANSPILED}" \
-    ${extra[@]+"${extra[@]}"} \
-    || { echo "[pineforge] backtest failed" >&2; exit 4; }
+    ${extra[@]+"${extra[@]}"})
+if [[ "${BUILD_ONLY}" == "true" ]]; then
+    run_engine_step manifest "${WORK}" "${SRC}" "${SO}" \
+        "${OHLCV}" "${BOUND_INVENTORY}" "${ENGINE_FAILURE_STATUS}" "${ENGINE_ARGV[@]}" \
+        || exit "$?"
+    echo "[pineforge] build complete; engine step not started" >&2
+    exit 0
+fi
+"${ENGINE_ARGV[@]}" \
+    || { echo "[pineforge] backtest failed" >&2; exit "${ENGINE_FAILURE_STATUS}"; }

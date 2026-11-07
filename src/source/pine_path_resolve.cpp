@@ -1,8 +1,8 @@
 /*
  * pine_path_resolve.cpp — the TradingView half of the modeled OHLC path.
  *
- * Moved verbatim out of src/engine_path_resolve.cpp (R5 lane L12, 2.ii g).
- * R5 lane N10 then deleted every symbol of that move whose only remaining
+ * Moved verbatim out of src/engine_path_resolve.cpp (the kernel/source boundary extraction, 2.ii g).
+ * The unused source-symbol cleanup then deleted every symbol of that move whose only remaining
  * references were its own declaration and the tests: the priced-entry
  * activation, the cross-event list, the tick-quantized trail machinery and
  * the whole exit-path resolver were a second fill simulation beside the
@@ -11,7 +11,7 @@
  * is left is the one function a live caller still reaches:
  * `entry_stop_first_touch`, the direction-aware first-touch position a
  * TradingView stop ENTRY fires at (pine_adapter.cpp), walked in the leg order
- * its caller asked the kernel for (R5 lane F7 removed the overload that read
+ * its caller asked the kernel for (the margin and cancellation comparison removed the overload that read
  * the sampler's thread-local override instead).  The generic helper it calls
  * (`fill_bar_path_points_ordered`) stays in the kernel TU and is reached
  * through the same engine_internal.hpp declaration as before.

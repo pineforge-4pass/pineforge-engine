@@ -51,7 +51,7 @@ bool& ema_na_warmup_flag();
 // slots are skipped, and the result is na iff ``bar_index < length - 1`` — NOT
 // until ``length`` executions have accumulated. Pinned 2026-09-03 with
 // ``lab tv`` on NYSE:F 1D (``if bar_index % 7 == 3: v = ta.highest(high, 5)``
-// 39/39 entry sizes exact, cadence 9 30/30; production: colasbreugnon-sma
+// 39/39 entry sizes exact, cadence 9 30/30; a third-party SMA strategy on
 // F@1D 31/31 only with K = 6). ``ta.sma`` inside ``if`` is NOT ring-addressed
 // (per-execution buffer, pinned separately) and is untouched.
 //
@@ -77,13 +77,13 @@ bool& ema_na_warmup_flag();
 // ``(best, b - k_best)``; otherwise the cache is kept. The output is the
 // cached value (the *Bars offset is ``b - bar``). Pinned 2026-09-04 with 8
 // ``lab tv`` tapes on NYSE:F 1D (696/696 entries), the BINANCE:ETHUSDT.P
-// geometry pin (82/82) and the jayentriken BBWP ETH replay (593/593):
+// geometry pin (82/82) and a third-party BBWP ETH replay (593/593):
 // ``m = bar_index % 49; if m < 4 or 37 <= m < 47 or m == 48: v =
-// ta.lowest(low, 10)`` answers 9.88 (cached from bar 42) on bars 48..51
-// although bar 3's stale 9.20 sits one slot behind bar 48 — the plain ring
-// would say 9.20 — and rescans to 9.20 on bar 52 once the cache has aged;
-// on ETH the run-start bar 4990 (low 2648.62 < the expired cache 2650.47)
-// answers its own low and never reads the aliased 08:15 slot the plain ring
+// ta.lowest(low, 10)`` can answer synthetic 25.00 from bar 42 on bars 48..51
+// although bar 3's stale 24.00 sits one slot behind bar 48 — the plain ring
+// would say 24.00 — and rescans to 24.00 on bar 52 once the cache has aged;
+// a synthetic ETH run-start low of 2000.00 below an expired cache of 2010.00
+// answers its own low and never reads the aliased slot the plain ring
 // returned. For an every-bar caller the cache is exactly the positional
 // window, so nothing changes there.
 //
@@ -100,19 +100,21 @@ bool& ema_na_warmup_flag();
 // 0 slots among them included) and na when the newest slot is itself na; the
 // na write also poisons the cache to ``(na, b)``, so the next valid call
 // restarts from its own src without reading the slots. ``ta.lowest(
-// sma(close, 14), 10)`` at cadence 13 answers na (bar 5 writes na), 2998
+// sma(close, 14), 10)`` at cadence 13 can answer na (bar 5 writes na), then 2000
 // (bar 18: restart on src, the never-written slot behind it unread), 0, 0,
-// 0, 0 (rescans: never-written slots newer than the na slot), 3357.6 (bar
-// 83: the na slot re-entered at k = 1, src is the only live member), 3327.4
-// (new minimum), 2998, 2998, 2998, 2998 (the stale first valid write, once
-// newer than the na slot), 3112. Every-bar ``x = bar_index % 4 == 0 ? na :
+// 0, 0 (rescans: never-written slots newer than the na slot), 2200 (bar
+// 83: the na slot re-entered at k = 1, src is the only live member), 2100
+// (new minimum), 2000, 2000, 2000, 2000 (the stale first valid write, once
+// newer than the na slot), 2050. Every-bar ``x = bar_index % 4 == 0 ? na :
 // low``: ``ta.lowest(x, 5) == ta.highest(x, 5)`` on the bar after every na
 // bar — a single live member — where the old "skip the gap" reading kept
-// the pre-gap extremum (bar 9: TV 9.20, the untouched cache 8.44).
+// the pre-gap extremum (synthetic bar 9: 25.00, the untouched cache 24.00).
 struct BarContext {
     bool installed = false;
     long long bar_index = 0;   // ring address: the context's current bar index
     long long origin = 0;      // warmup reference: the context's first bar index
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 BarContext& bar_context();
 
@@ -127,6 +129,9 @@ public:
     ~BarContextScope();
     BarContextScope(const BarContextScope&) = delete;
     BarContextScope& operator=(const BarContextScope&) = delete;
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 // Bar-addressed extremum ring shared by Highest / Lowest / HighestBars /
@@ -167,6 +172,10 @@ private:
     bool saved_cached_ = false;
     double saved_cval_ = 0.0;
     long long saved_cbar_ = 0;
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, values_);
+    }
 };
 
 class RMA {
@@ -186,6 +195,9 @@ public:
     void save();
     void restore();
     double recompute(double src);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 class RSI {
@@ -202,6 +214,10 @@ public:
     explicit RSI(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, rma_up, rma_down);
+    }
 };
 
 class Crossover {
@@ -214,6 +230,9 @@ public:
     Crossover();
     bool compute(double a, double b);
     bool recompute(double a, double b);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 class Crossunder {
@@ -226,6 +245,9 @@ public:
     Crossunder();
     bool compute(double a, double b);
     bool recompute(double a, double b);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 // --- SMA ---
@@ -239,6 +261,10 @@ public:
     explicit SMA(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, window_);
+    }
 };
 
 // --- EMA ---
@@ -274,6 +300,9 @@ public:
     void save();
     void restore();
     double recompute(double src);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 // --- MACD ---
@@ -282,6 +311,8 @@ struct MACDResult {
     double macd_line;
     double signal_line;
     double histogram;
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 class MACD {
@@ -293,6 +324,10 @@ public:
     MACD(int fast_length, int slow_length, int signal_length);
     MACDResult compute(double src);
     MACDResult recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, fast_ema, slow_ema, signal_ema);
+    }
 };
 
 // --- Highest ---
@@ -304,6 +339,10 @@ public:
     explicit Highest(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, ring_);
+    }
 };
 
 // --- Lowest ---
@@ -315,6 +354,10 @@ public:
     explicit Lowest(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, ring_);
+    }
 };
 
 // --- ATR ---
@@ -341,6 +384,10 @@ public:
     // the chart's previous close (BacktestEngine::prev_chart_close()).
     double compute(double high, double low, double close, double prev_chart_close);
     double recompute(double high, double low, double close, double prev_chart_close);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, rma);
+    }
 };
 
 // --- Stoch ---
@@ -353,18 +400,26 @@ public:
     explicit Stoch(int length);
     double compute(double src, double high, double low);
     double recompute(double src, double high, double low);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, highest, lowest);
+    }
 };
 
 // --- Change ---
 
 class Change {
-    std::deque<double> history;
+    OwnedDeque<double> history;
     int max_length_;
 
 public:
     explicit Change(int max_length = 1);
     double compute(double src, int length = 1);
     double recompute(double src, int length = 1);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, history);
+    }
 };
 
 // --- Cross ---
@@ -385,6 +440,9 @@ public:
     Cross();
     bool compute(double a, double b);
     bool recompute(double a, double b);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 // --- WMA (Weighted Moving Average) ---
@@ -403,6 +461,10 @@ public:
     double compute(double src);
     double recompute(double src);
     WindowCacheStats cache_stats() const { return buffer_.cache_stats(); }
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_);
+    }
 };
 
 // --- HMA (Hull Moving Average) ---
@@ -416,6 +478,10 @@ public:
     explicit HMA(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, wma_half_, wma_full_, wma_sqrt_);
+    }
 };
 
 // --- StdDev (Standard Deviation) ---
@@ -432,7 +498,7 @@ public:
 class StdDev {
     int length_;
     bool biased_;
-    std::deque<double> buffer_;      // unbiased path only
+    OwnedDeque<double> buffer_;      // unbiased path only
     KahanWindowSum sum_x_;           // Sx  (biased path)
     KahanWindowSum sum_xx_;          // Sxx (biased path)
     int bar_count_;
@@ -445,6 +511,10 @@ public:
 private:
     double held_stdev() const;
     double biased_value() const;
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_, sum_x_, sum_xx_);
+    }
 };
 
 // --- Supertrend ---
@@ -452,6 +522,8 @@ private:
 struct SupertrendResult {
     double value;
     double direction;
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 class Supertrend {
@@ -474,6 +546,10 @@ public:
 
 private:
     SupertrendResult step(double high, double low, double close, bool again);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, atr_);
+    }
 };
 
 // --- DMI (Directional Movement Index) ---
@@ -482,6 +558,8 @@ struct DMIResult {
     double diplus;
     double diminus;
     double adx;
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 class DMI {
@@ -498,6 +576,10 @@ public:
     DMI(int di_length, int adx_smoothing);
     DMIResult compute(double high, double low, double close);
     DMIResult recompute(double high, double low, double close);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, rma_plus_, rma_minus_, rma_tr_, rma_adx_);
+    }
 };
 
 // --- SAR (Parabolic SAR) ---
@@ -520,6 +602,9 @@ public:
     SAR(double start, double increment, double maximum);
     double compute(double high, double low, double close);
     double recompute(double high, double low, double close);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 // --- BB (Bollinger Bands) ---
@@ -528,6 +613,8 @@ struct BBResult {
     double middle;
     double upper;
     double lower;
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 class BB {
@@ -539,6 +626,10 @@ public:
     BB(int length, double mult);
     BBResult compute(double src);
     BBResult recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, sma_, stdev_);
+    }
 };
 
 // --- KC (Keltner Channels) ---
@@ -547,6 +638,8 @@ struct KCResult {
     double middle;
     double upper;
     double lower;
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 // middle = EMA(src); the bands are middle +/- mult * EMA(range), where the
@@ -567,128 +660,172 @@ public:
     KC(int length, double mult, bool use_true_range = true);
     KCResult compute(double src, double high, double low, double close);
     KCResult recompute(double src, double high, double low, double close);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, ema_, range_ema_);
+    }
 };
 
 // --- PivotHigh ---
 
 class PivotHigh {
     int left_bars_, right_bars_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
 
 public:
     PivotHigh(int left_bars, int right_bars);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_);
+    }
 };
 
 // --- PivotLow ---
 
 class PivotLow {
     int left_bars_, right_bars_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
 
 public:
     PivotLow(int left_bars, int right_bars);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_);
+    }
 };
 
 // --- Linreg (Linear Regression) ---
 
 class Linreg {
     int length_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
 
 public:
     explicit Linreg(int length);
     double compute(double src, double offset);
     double recompute(double src, double offset);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_);
+    }
 };
 
 // --- PercentRank ---
 
 class PercentRank {
     int length_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
 
 public:
     explicit PercentRank(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_);
+    }
 };
 
 // --- VWMA (Volume-Weighted Moving Average) ---
 
 class VWMA {
     int length_;
-    std::deque<double> sv_buffer_;
-    std::deque<double> v_buffer_;
+    OwnedDeque<double> sv_buffer_;
+    OwnedDeque<double> v_buffer_;
     double sv_sum_, v_sum_;
 
 public:
     explicit VWMA(int length);
     double compute(double src, double vol);
     double recompute(double src, double vol);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, sv_buffer_, v_buffer_);
+    }
 };
 
 // --- Mom (Momentum) ---
 
 class Mom {
     int length_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
 
 public:
     explicit Mom(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_);
+    }
 };
 
 // --- ROC (Rate of Change) ---
 
 class ROC {
     int length_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
 
 public:
     explicit ROC(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_);
+    }
 };
 
 // --- Rising ---
 
 class Rising {
     int length_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
 
 public:
     explicit Rising(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_);
+    }
 };
 
 // --- Falling ---
 
 class Falling {
     int length_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
 
 public:
     explicit Falling(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_);
+    }
 };
 
 // --- CCI (Commodity Channel Index) ---
 
 class CCI {
     int length_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
 
 public:
     explicit CCI(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_);
+    }
 };
 
 // --- Cum (Cumulative Sum) ---
@@ -702,6 +839,9 @@ public:
     Cum();
     double compute(double src);
     double recompute(double src);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 // --- Chart all-time max/min of a series (ta.max / ta.min single-arg) ---
@@ -717,6 +857,9 @@ public:
     AllTimeMax();
     double compute(double src);
     double recompute(double src);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 class AllTimeMin {
@@ -730,13 +873,16 @@ public:
     AllTimeMin();
     double compute(double src);
     double recompute(double src);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 // --- RCI (Rank Correlation Index, Spearman × 100) ---
 
 class RCI {
     int length_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
     std::vector<double> prices_;
     std::vector<int> order_;
     std::vector<double> price_rank_;
@@ -747,6 +893,10 @@ public:
     explicit RCI(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_, prices_, order_, price_rank_);
+    }
 };
 
 // --- Variance ---
@@ -754,19 +904,23 @@ public:
 class Variance {
     int length_;
     bool biased_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
 
 public:
     explicit Variance(int length, bool biased = true);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_);
+    }
 };
 
 // --- Median ---
 
 class Median {
     int length_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
     std::vector<double> scratch_;
 
     double calculate();
@@ -775,6 +929,10 @@ public:
     explicit Median(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_, scratch_);
+    }
 };
 
 // --- HighestBars ---
@@ -786,6 +944,10 @@ public:
     explicit HighestBars(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, ring_);
+    }
 };
 
 // --- LowestBars ---
@@ -797,6 +959,10 @@ public:
     explicit LowestBars(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, ring_);
+    }
 };
 
 // --- ALMA (Arnaud Legoux Moving Average) ---
@@ -808,13 +974,17 @@ class ALMA {
     int length_;
     double offset_, sigma_;
     bool floor_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
     std::vector<double> weights_;
 
 public:
     ALMA(int length, double offset = 0.85, double sigma = 6.0, bool floor = false);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_, weights_);
+    }
 };
 
 // Feature macro: ALMA takes the floor input (a fourth constructor argument).
@@ -823,12 +993,16 @@ public:
 // --- SWMA (Symmetrically Weighted Moving Average, period=4) ---
 
 class SWMA {
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
 
 public:
     SWMA();
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_);
+    }
 };
 
 // --- MFI (Money Flow Index) ---
@@ -848,6 +1022,10 @@ public:
     explicit MFI(int length);
     double compute(double src, double vol);
     double recompute(double src, double vol);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, pos_buffer_, neg_buffer_, saved_pos_buffer_, saved_neg_buffer_);
+    }
 };
 
 // --- CMO (Chande Momentum Oscillator) ---
@@ -867,6 +1045,10 @@ public:
     explicit CMO(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, up_buffer_, down_buffer_, saved_up_buffer_, saved_down_buffer_);
+    }
 };
 
 // --- TSI (True Strength Index) ---
@@ -886,6 +1068,10 @@ public:
     TSI(int short_length, int long_length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, ema_long_, ema_short_, ema_abs_long_, ema_abs_short_);
+    }
 };
 
 // --- WPR (Williams %R) ---
@@ -898,18 +1084,26 @@ public:
     explicit WPR(int length);
     double compute(double close, double high, double low);
     double recompute(double close, double high, double low);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, highest_, lowest_);
+    }
 };
 
 // --- COG (Center of Gravity) ---
 
 class COG {
     int length_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
 
 public:
     explicit COG(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_);
+    }
 };
 
 // --- BBW (Bollinger Bands Width) ---
@@ -921,6 +1115,10 @@ public:
     BBW(int length, double mult);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, bb_);
+    }
 };
 
 // --- KCW (Keltner Channel Width) ---
@@ -932,6 +1130,10 @@ public:
     KCW(int length, double mult, bool use_true_range = true);
     double compute(double src, double high, double low, double close);
     double recompute(double src, double high, double low, double close);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, kc_);
+    }
 };
 
 // Feature macro: KC and KCW take the range choice (a third constructor
@@ -951,32 +1153,43 @@ public:
     BarsSince();
     double compute(bool condition);
     double recompute(bool condition);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 // --- ValueWhen ---
 
 class ValueWhen {
-    std::deque<double> values_;
+    OwnedDeque<double> values_;
     int max_occurrence_;
 
-    std::deque<double> saved_values_;
+    OwnedDeque<double> saved_values_;
 
 public:
     explicit ValueWhen(int max_occurrence = 1);
     double compute(bool condition, double source, int occurrence);
     double recompute(bool condition, double source, int occurrence);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, values_, saved_values_);
+    }
 };
 
 // --- Correlation ---
 
 class Correlation {
     int length_;
-    std::deque<double> x_buffer_, y_buffer_;
+    OwnedDeque<double> x_buffer_, y_buffer_;
 
 public:
     explicit Correlation(int length);
     double compute(double src1, double src2);
     double recompute(double src1, double src2);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, x_buffer_, y_buffer_);
+    }
 };
 
 // --- TR (True Range as function) ---
@@ -997,6 +1210,9 @@ public:
     // CHART bar's close (na on the first chart bar: handle_na decides).
     double compute(double high, double low, double close, double prev_chart_close);
     double recompute(double high, double low, double close, double prev_chart_close);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 // --- PercentileWindow ---
@@ -1009,7 +1225,7 @@ public:
 // greater than it, enters last.
 class PercentileWindow {
     int length_;
-    std::deque<double> history_;
+    OwnedDeque<double> history_;
     std::vector<double> ranked_;
     // The last push, which a recompute of its bar undoes: where its value
     // entered, and the value that left and where it stood (-1: none left).
@@ -1023,7 +1239,16 @@ public:
     const std::vector<double>* push(double src);
     // The bar's value replaced by `src` (a push when nothing was pushed yet).
     const std::vector<double>* repush(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, history_, ranked_);
+    }
 };
+
+// Shared nearest-rank selection for percentile windows. A null ranked window
+// answers na, and a non-null window is already sorted as PercentileWindow
+// maintains it.
+double nearest_rank_of(const std::vector<double>* ranked, double percentage);
 
 // --- PercentileNearestRank ---
 
@@ -1034,6 +1259,10 @@ public:
     explicit PercentileNearestRank(int length);
     double compute(double src, double percentage);
     double recompute(double src, double percentage);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, window_);
+    }
 };
 
 // --- PercentileLinearInterpolation ---
@@ -1045,6 +1274,10 @@ public:
     explicit PercentileLinearInterpolation(int length);
     double compute(double src, double percentage);
     double recompute(double src, double percentage);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, window_);
+    }
 };
 
 // --- Volume indicators ---
@@ -1062,6 +1295,9 @@ public:
     OBV() = default;
     double compute(double close, double volume);
     double recompute(double close, double volume);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 class AccDist {
@@ -1075,6 +1311,9 @@ public:
     AccDist() = default;
     double compute(double high, double low, double close, double volume);
     double recompute(double high, double low, double close, double volume);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 class NVI {
@@ -1093,6 +1332,9 @@ public:
     NVI() = default;
     double compute(double close, double volume);
     double recompute(double close, double volume);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 class PVI {
@@ -1111,6 +1353,9 @@ public:
     PVI() = default;
     double compute(double close, double volume);
     double recompute(double close, double volume);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 class PVT {
@@ -1125,6 +1370,9 @@ public:
     PVT() = default;
     double compute(double close, double volume);
     double recompute(double close, double volume);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 class WAD {
@@ -1139,6 +1387,9 @@ public:
     WAD() = default;
     double compute(double high, double low, double close);
     double recompute(double high, double low, double close);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 class WVAD {
@@ -1146,6 +1397,9 @@ public:
     WVAD() = default;
     double compute(double open, double high, double low, double close, double volume);
     double recompute(double open, double high, double low, double close, double volume);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 class III {
@@ -1153,6 +1407,9 @@ public:
     III() = default;
     double compute(double high, double low, double close, double volume);
     double recompute(double high, double low, double close, double volume);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 // --- VWAP Bands result (3-tuple: vwap, upper_band, lower_band) ---
@@ -1160,6 +1417,8 @@ struct VWAPBandsResult {
     double vwap;
     double upper;
     double lower;
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 class VWAP {
@@ -1204,6 +1463,9 @@ public:
                                   const std::string& tz, const std::string& session);
     VWAPBandsResult recompute_bands(double src, double volume, int64_t timestamp_ms, double stdev_mult,
                                     const std::string& tz, const std::string& session);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 // Feature macro: the emitted prelude's PF_VWAP_SESSION_ANCHOR_ARGS(tz, s)
@@ -1232,6 +1494,10 @@ public:
     VWAPBandsResult recompute(double src, double volume, int64_t timestamp_ms,
                               const std::string& tz, const std::string& session) {
         return vwap_.recompute_bands(src, volume, timestamp_ms, stdev_mult_, tz, session);
+    }
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, vwap_);
     }
 };
 
@@ -1268,6 +1534,9 @@ public:
     double recompute(double src, double volume, bool anchor);
     VWAPBandsResult compute_bands(double src, double volume, bool anchor, double stdev_mult);
     VWAPBandsResult recompute_bands(double src, double volume, bool anchor, double stdev_mult);
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 // The 3-tuple form with a construction-time stdev_mult, for the standard
@@ -1284,6 +1553,10 @@ public:
     VWAPBandsResult recompute(double src, double volume, bool anchor) {
         return vwap_.recompute_bands(src, volume, anchor, stdev_mult_);
     }
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, vwap_);
+    }
 };
 
 // Feature macro: AnchoredVWAP / AnchoredVWAPBands exist (generated code may
@@ -1297,10 +1570,11 @@ class Mode {
         double value = na<double>();
         int count = 0;
         unsigned char state = 0;  // 0 empty, 1 occupied, 2 deleted
+        void observe_owned_storage(OwnedStorage&) const noexcept {} // scalar record
     };
 
     int length_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
     std::vector<CountEntry> counts_;
 
     void add_count(double value);
@@ -1311,6 +1585,10 @@ public:
     explicit Mode(int length);
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_, counts_);
+    }
 };
 
 class Range {
@@ -1320,15 +1598,23 @@ public:
     explicit Range(int length) : highest_(length), lowest_(length) {}
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, highest_, lowest_);
+    }
 };
 
 class Dev {
     int length_;
-    std::deque<double> buffer_;
+    OwnedDeque<double> buffer_;
 public:
     explicit Dev(int length) : length_(length) {}
     double compute(double src);
     double recompute(double src);
+public:
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, buffer_);
+    }
 };
 
 // --- pivot_point_levels (free function) ---
@@ -1429,6 +1715,9 @@ private:
     Levels held_ = no_levels();            // the levels of the last closed period
     Period saved_period_;
     Levels saved_held_ = no_levels();
+public:
+    // All retained fields are inline scalars (or scalar-only aggregates).
+    void observe_owned_storage(OwnedStorage&) const noexcept {}
 };
 
 // Feature macro: PivotPointLevels / PivotLevelsType / pivot_levels_type exist.

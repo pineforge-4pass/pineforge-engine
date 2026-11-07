@@ -171,9 +171,9 @@ typedef struct pf_trade_s {
     double  pnl;            /**< Net realized PnL in account currency (commission-inclusive). */
     double  pnl_pct;        /**< Net return-on-cost in percent: pnl (NET of commission) /
                              *   entry cost (entry_price * qty * pointvalue) * 100. This is
-                             *   TradingView's "Net P&L %" convention, arbitrated 2026-06-12
-                             *   against a real TV export (trade #258 short: 102.44 USD on a
-                             *   2276.66 entry => 4.50%). Degenerates to the old gross
+                             *   TradingView's "Net P&L %" convention (synthetic one-unit
+                             *   short: 90.00 net PnL on a 2000.00 entry cost =>
+                             *   4.50%). Degenerates to the old gross
                              *   (exit/entry-1)*100 form for longs with zero commission;
                              *   the previous short form (entry/exit-1)*100 was wrong on
                              *   large moves. Sign always matches pnl. */
@@ -192,8 +192,8 @@ typedef struct pf_trade_s {
                              *   open: it reports it as a closed trade whose exit leg is
                              *   the range's last bar at that bar's CLOSE, with an
                              *   empty exit Signal, and counts it in closedTrades
-                             *   (orb-lite on NYSE:F 1D: Entry short 2026-03-16 @ 11.82,
-                             *   Exit 2026-04-30 @ 12.08 = the last close,
+                             *   (synthetic NYSE:F daily example: Entry short @ 25.00,
+                             *   Exit @ 26.00 on the final daily bar = the last close,
                              *   closedTrades:1). The engine emulates that row
                              *   (operator decision 2026-09-02): exit_time is the last
                              *   script bar's label, exit_price its mintick-rounded
@@ -865,7 +865,7 @@ PF_API void strategy_stream_order_actions_clear(pf_strategy_t s);
  *  Fresh replay must use deterministic strategy code, the same pinned engine
  *  build and configuration. The fingerprint's recipe belongs to the script
  *  ABI epoch: from 1.0.0 it is fixed for every 1.x engine
- *  (engine_script_run_v19), and a new recipe is a new epoch; a value from a
+ *  (engine_script_run_v19 to 1.10, then v20), and a new recipe is a new epoch; a value from a
  *  build before 1.0.0 is not comparable. Returns 0 for NULL.
  *
  *  A refused read also returns 0, so a 0 alone does not tell it from an
@@ -944,7 +944,14 @@ typedef uint32_t pf_cache_kind_t;
  *  selects the largest row count R with
  *  R * TradeLedger::kLedgerEntryBytes + ceil(R / 256) * sizeof(void*) <= capacity_bytes
  *  (312 bytes per decoded entry and 8 bytes per page pointer on LP64).
- *  The default is 20,449,280 bytes for 65,536 rows on LP64.
+ *  Omitting this entry selects the provisional default of 67,108,864 bytes
+ *  (64 MiB), which holds 215,070 entries on LP64 and never grows with the
+ *  retained history; a failed optional allocation retries only after the
+ *  retained population has doubled since the failed attempt, and the first
+ *  failure remains observable until clear. Retirement and a rewind release
+ *  every optional page. Every present ledger entry selects an explicit finite
+ *  row policy, including an allowance equal to the default or to 65,536 rows
+ *  (20,449,280 bytes on LP64).
  *  Zero selects the existing zero-row
  *  bypass minimum. A nonzero capacity converting to fewer than one row fails
  *  with setting_rejected, input="cache_policy", reason="value_below_minimum";
@@ -952,8 +959,11 @@ typedef uint32_t pf_cache_kind_t;
  *  reason="value_above_maximum". No clamping or sub-row bypass occurs.
  *  The ledger keeps private pages; its allowance includes their page directory.
  *  Allocated pointers and pages are reported once in cache resident bytes.
- *  Optional directory/page allocation failure permanently bypasses further
- *  cache allocation for that ledger, preserving backing reads and writes.
+ *  A finite policy's optional directory/page allocation failure permanently
+ *  bypasses further allocation for that ledger, preserving backing reads and
+ *  writes. The omitted default keeps its old hits on a failed allocation and
+ *  retries as described above; its first allocation failure remains
+ *  observable until clear. Required backing I/O failures still propagate.
  *  Other kinds include optional line metadata in their byte allowances and
  *  bypass when below one line. Reads still use backing at zero capacity.
  *  reserved must be zero; a nonzero word is a typed setting_rejected error. */
@@ -971,7 +981,8 @@ typedef struct pf_cache_policy_entry_v1 {
  *  values before returning and retains neither pointer.
  *  entry_count is a uint64_t count; entries may be NULL only when it is zero.
  *  Each successful replacement starts from internal defaults, then applies
- *  the entries. Omitted kinds use defaults; duplicate and unknown kinds fail.
+ *  the entries. Omitted kinds use defaults (the 64 MiB ledger default); duplicate
+ *  and unknown kinds fail. NULL/empty descriptors restore the ledger default.
  *  No entry limits logical records, retained history or backing extent. */
 typedef struct pf_cache_policy_v1 {
     uint32_t struct_size;
@@ -996,6 +1007,34 @@ typedef struct pf_cache_policy_v1 {
  *  failure. This policy does not change scratch-table maxima or arena shares. */
 PF_API int strategy_set_cache_policy_v1(pf_strategy_t s,
                                         const pf_cache_policy_v1* policy);
+
+/** Disk scratch write batching, independent of resident cache policy.
+ *  Set struct_size = sizeof(pf_scratch_io_policy_v1), version = 1 and both
+ *  reserved words to zero. write_batch_bytes is successful write traffic in
+ *  bytes: default 65536; every uint64_t value is valid. Positive values retain
+ *  the before-next-batch sync/discard order. Zero syncs/discards each positive
+ *  transfer before write/write_some returns success, including short writes.
+ *  This is not a logical history limit or a physical-memory guarantee.
+ *  The fixed clean-read and userspace sequence windows remain unchanged. */
+typedef struct pf_scratch_io_policy_v1 {
+    uint32_t struct_size;
+    uint32_t version;
+    uint64_t write_batch_bytes;
+    uint64_t reserved[2];
+} pf_scratch_io_policy_v1;
+
+/** Copy settings before admission; NULL restores the 65536-byte default.
+ *  The descriptor is copied and no pointer is retained. Active begin,
+ *  callback, execution and stream calls reject atomically. Idle replacement
+ *  affects the next run and does not retune retained stores.
+ *  Returns 0 on success, -1 for a null handle, invalid descriptor or frozen
+ *  settings. Valid handles report setting_rejected, input="scratch_io_policy":
+ *  size/reserved errors use reason="unparseable_value", unsupported version
+ *  uses "invalid_enum_option", and active handles use "frozen".
+ *  A loader must resolve this symbol and fail if it is missing/incompatible,
+ *  including when requesting a NULL reset. */
+PF_API int strategy_set_scratch_io_policy_v1(pf_strategy_t s,
+                                             const pf_scratch_io_policy_v1* policy);
 
 /** Storage policy for the nine historical scratch-table regions. */
 typedef enum pf_scratch_table_backend_e {
@@ -1236,7 +1275,7 @@ PF_API void strategy_set_broker_state_hash_recording(pf_strategy_t s, int on);
  *  pf_report_t::broker_state_hash for the per-bar recording; this accessor
  *  works whether or not recording was enabled). Compare runs of one
  *  configuration: the recipe belongs to the script ABI epoch, fixed from 1.0.0
- *  for every 1.x engine (engine_script_run_v19), so two values differ only
+ *  for every 1.x engine (engine_script_run_v19 to 1.10, then v20), so two values differ only
  *  when the states they fold differ. This is not a serialized checkpoint.
  *  Returns 0 when @p s is NULL.
  *
@@ -1517,7 +1556,7 @@ typedef enum pf_close_cause_e {
  *  a kernel margin model now reads `3` for its own liquidation rows (and `4`
  *  for a kernel risk flatten) where the retired string derivation, which only
  *  recognised the adapter's sentinels, answered `1`, and it reads `2` for a
- *  bracket leg its owner armed, where it read `1` before R5 lane F3.
+ *  bracket leg its parent request armed, where it read `1` before the host excursion and bracket-cause integration.
  *  `-1` when @p s is NULL, or when @p trade_index is out of range (final
  *  review F7: matches every sibling indexed live accessor's -1-on-bad-index
  *  convention -- #strategy_pending_order_fill_qty,
@@ -1579,14 +1618,15 @@ PF_API int64_t strategy_script_bars_processed(pf_strategy_t s);
  *  wall-clock for the chart's timezone — TV exports trade rows in chart
  *  TZ too. Engine bars are stored as Unix-ms (UTC), so without this
  *  override these builtins return UTC and silently diverge from TV by N
- *  hours when the chart is on a non-UTC zone (Asia/Taipei = UTC+8 is the
+ *  hours when the chart is on a non-UTC zone (Asia/Hong_Kong = UTC+8 is the
  *  validator default).
  *
  *  Pass `NULL`, `""`, `"UTC"` or `"Etc/UTC"` for the legacy UTC
  *  behaviour (cheap, mutex-free). Any other value names a TZ resolved by
- *  the system tzdata; the per-bar decomposition then runs under a
- *  process-global mutex so multi-threaded harnesses don't corrupt each
- *  other's wall time.
+ *  the system tzdata; uncached decomposition uses the engine image's mutex
+ *  and checks the process's actual TZ. Sequential switches between engine
+ *  images are coherent. Independent images do not share that mutex;
+ *  concurrent conversions across images are not serialized by it.
  *
  *  Should be called before #run_backtest / #run_backtest_full. Persists
  *  across runs on the same strategy handle until overridden. */
@@ -1631,10 +1671,13 @@ PF_API void strategy_set_syminfo_mintick(pf_strategy_t s, double mintick);
  *  (e.g. 50 for ES). Non-positive ignored. Call before #run_backtest / #run_backtest_full. */
 PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue);
 
-/** Inject a fundamental/exchange metadata value by Pine member name
- *  (e.g. "shares_outstanding_total", "target_price_average"). These have
- *  no OHLCV source; reads of un-injected members return na. Call before
- *  #run_backtest / #run_backtest_full. */
+/** Inject a fundamental/exchange metadata value by Pine member name (e.g.
+ *  "shares_outstanding_total"); un-injected reads return na. Quantity step: a
+ *  declared "qty_step", or a finite "mincontract" > 0 while no "qty_step" is
+ *  declared, sets the order quantity grid. Call before #run_backtest[_full].
+ *  series_origin_ms declares the reference series' first bar open
+ *  in epoch ms and enables chart EMA SMA seeding plus request.security warmup
+ *  from the first whole bucket opening at/after that origin. */
 PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
                                           double value);
 
@@ -2115,14 +2158,16 @@ PF_API int strategy_set_symbol_feed_borrowed_v1(
 
 /** Exact C++ engine layout accepted by the live report accumulator.
  *  Bump whenever that layout changes, independently of #PF_ABI_VERSION. */
-#define PF_STREAM_ENGINE_LAYOUT_VERSION 2u
+#define PF_STREAM_ENGINE_LAYOUT_VERSION 4u
 
 /** Optional module declaration that its strategy handles point directly to
  *  a BacktestEngine with the returned #PF_STREAM_ENGINE_LAYOUT_VERSION.
  *  The engine runtime exports this with its streaming implementation.
  *  Modules with opaque or wrapped handles must omit it or return 0.
- *  Absence or a different version requires using #strategy_stream_fill_report;
- *  stream ABI and execution-capabilities versions alone do not prove layout.
+ *  Absence or 0 requires using #strategy_stream_fill_report. A nonzero
+ *  different version is refused by the native runner before strategy creation;
+ *  rebuild the module with the exact paired engine. Stream ABI and
+ *  execution-capabilities versions alone do not prove layout.
  *  This query reads no strategy state and changes no report or hash. */
 PF_API uint32_t strategy_stream_engine_layout_version(void);
 
@@ -2147,11 +2192,26 @@ PF_API int pf_output_series_limit_set_checked(const int64_t* maximum,
  *  the default. No exception or allocation crosses the ABI. */
 PF_API int pf_output_series_limit_failure(int64_t* maximum);
 
+/** Set this module's map-pair creation policy on the calling thread.
+ *  Call before strategy_create/strategy_create_checked (or C++ construction).
+ *  NULL or 0 means unlimited, the default. A positive value is the maximum
+ *  number of distinct pairs in EACH map; replacement never consumes a pair.
+ *  Each host captures the policy and installs it during script preparation
+ *  and callbacks, including maps first created on a later bar. Each map then
+ *  retains its own limit through copy, clear and rollback.
+ *  Restore NULL after the factory call; existing hosts keep their policy.
+ *  Returns a pf_settings_status_t and follows the checked-settings buffer
+ *  protocol. A negative maximum returns #PF_SETTINGS_INVALID_ARGUMENT
+ *  atomically. A refused put raises RE10070 with maxSize/currSize/bar_index
+ *  through the pine_map_capacity_exceeded run-failure catalog entry. */
+PF_API int pf_map_pairs_limit_set_checked(const int64_t* maximum,
+                                         char* error, size_t error_capacity);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
 
-/* The C-level native host API (R5 lane L13). Included last, after the PODs
+/* The C-level native host API (the versioned C host API). Included last, after the PODs
  * it builds on (pf_bar_t, pf_report_t, pf_strategy_t) and outside this
  * header's `extern "C"` block, which it opens for itself. Both headers guard
  * their own include, so either include order resolves. Its PF_API symbols are

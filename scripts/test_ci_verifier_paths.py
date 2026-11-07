@@ -35,7 +35,7 @@ class VerifierPaths(unittest.TestCase):
                 'runner/transport.cpp', 'runner/CMakeLists.txt',
                 'scripts/collect_ci_diagnostics.py', 'scripts/ci_verify.py',
                 'scripts/ci_preflight.py', 'scripts/test_ci_verify.py',
-                'scripts/run_unittest_shards.py', 'scripts/check_twin_parity.py',
+                'scripts/ci_run_unittest_shards.py', 'scripts/check_twin_parity.py',
                 'scripts/cxxlex.py', '.github/workflows/ci.yml',
                 '.github/workflows/new.yml', '.github/actions/setup-live-curl/action.yml',
                 'examples/native/host.cpp', 'docker/run_failure_codes.json',

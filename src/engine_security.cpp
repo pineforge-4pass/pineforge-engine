@@ -22,6 +22,24 @@ namespace pineforge {
 
 using namespace internal;
 
+std::optional<RuntimeSubdivision> runtime_subdivision(
+        const std::string& input_timeframe, const std::string& requested_timeframe) {
+    int ratio = 0, seconds = 0;
+    if (!internal::supports_lower_tf_emulation(
+            input_timeframe, requested_timeframe, &ratio, &seconds)) return std::nullopt;
+    return RuntimeSubdivision{ratio, seconds};
+}
+
+std::vector<Bar> runtime_subdivide(const Bar& bar, RuntimeSubdivision subdivision) {
+    if (subdivision.ratio <= 0 || subdivision.seconds <= 0)
+        throw std::invalid_argument("invalid runtime bar subdivision");
+    return internal::synthesize_lower_tf_bars(bar, subdivision.ratio, subdivision.seconds);
+}
+
+bool BacktestEngine::runtime_context_early_close_completes() const {
+    return session_template_knows_early_close();
+}
+
 
 // --- register_security_eval ---
 void BacktestEngine::register_security_eval(int sec_id, const std::string& requested_tf,
@@ -54,7 +72,7 @@ void BacktestEngine::register_security_eval(int sec_id, const std::string& reque
 // SymInfo::type -- the vocabulary the frozen C ABI's strategy_set_syminfo_type
 // fixes ("stock" / "futures" / "index" / "fund" vs the continuous-session
 // OTC classes "forex" / "cfd" / "crypto"), so the rule is the kernel's own
-// market-structure classification, not a source-language one (R5 lane N14
+// market-structure classification, not a source-language one (the source-runtime extraction
 // ruling, ADR-0001). OTC classes never close a day early: their session
 // template has no holiday knowledge, so the period completes on the next
 // session's first bar instead (the OANDA pins in timeframe.hpp).
@@ -73,7 +91,7 @@ void BacktestEngine::dispatch_security_eval(SecurityEvalState& state,
     state.ta_bar_index = bar_index;
     // The requested context starts at its own bar 0 (origin 0): its TA members
     // warm up over the first `length` evaluated bars, exactly as before. On the
-    // pump's runtime block when it has one (R5 lane D2-C).
+    // pump's runtime block when it has one (the per-pump state cache).
     AmbientBarContextScope bar_scope(NativeExecutionConsumer::bound(*this).pump_ambient(),
                                      static_cast<long long>(bar_index), 0);
     evaluate_security(state.sec_id, bar, publish);
