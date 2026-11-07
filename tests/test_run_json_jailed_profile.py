@@ -581,22 +581,43 @@ def test_jailed_fd_requires_admission_before_installing_the_sink(
 
 
 @pytest.mark.parametrize("mode", ["ordinary", "selected"])
-def test_jailed_fd_arena_refusal_preserves_caller_ownership(tmp_path, mode):
+@pytest.mark.parametrize("request_limit", [False, True], ids=["unrequested", "u9"])
+def test_jailed_fd_arena_refusal_preserves_caller_ownership(tmp_path, mode, request_limit):
     factory = SelectedProfileFdLibrary if mode == "selected" else ProfileFdLibrary
     library = factory()
     library.arena_status = -1
+    limit = 9
     with fd_sinks.Stream() as stream:
-        status, text, stderr = invoke_profile_sink(tmp_path, mode, library, [
-            "--profile", "jailed", "--report-sink-fd", str(stream.writer)])
+        options = ["--profile", "jailed", "--report-sink-fd", str(stream.writer)]
+        if request_limit:
+            options += ["--scratch-u", str(limit)]
+        status, text, stderr = invoke_profile_sink(tmp_path, mode, library, options)
         fd_sinks.os.fstat(stream.writer)
     assert status == 1 and stderr == "", text
     document = reports.strict_line(text)
     assert (document["code"], document["args"]) == (
         "report_sink_failed", {"reason": "arena_backing"})
     sinks.assert_no_run_profile(document)
-    assert [row[0] for row in library.history] == ["create", "scratch", "free"]
     assert len(library.arena_admissions) == 1 and library.arena_admissions[0][0] == library.created[0]
+    state, before_arena = library.arena_admissions[0]
+    assert before_arena == tuple(library.history[:-1])
+    assert all(row[1] == state for row in library.history)
+    if request_limit:
+        assert [row[0] for row in library.history] == ["create", "scratch", "free"]
+        admission = before_arena[1]
+        assert admission[2] == (112, 2, 1 << 6, 0)  # v2; only U is active.
+        assert len(admission[3]) == len(FIELDS)
+        maxima = dict(zip(FIELDS, admission[3]))
+        assert maxima["U"] == limit
+        assert all(value == 0 for field, value in maxima.items() if field != "U")
+    else:
+        # expectation corrected: implicit P0 setter -> no setter, because
+        # no-flags arena failure must not acquire a removed implicit policy.
+        assert [row[0] for row in library.history] == ["create", "free"]
+        assert not any(row[0] == "scratch" for row in before_arena)
     assert library.released == library.created and not library.installed
+    assert len(library.created) == 1 and not library.configured
+    assert library.queried == library.summary_queries == 0
     assert stream.data == b"" and "summary" not in document
 
 
