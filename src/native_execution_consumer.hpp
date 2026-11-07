@@ -2666,8 +2666,10 @@ public:
 
 private:
     struct CalcGroup {
+        CalcGroup() noexcept : state{}, run_generation(0) {}
+
         native_calc::State state;
-        std::uint64_t run_generation = 0;
+        std::uint64_t run_generation;
     };
     std::optional<CalcGroup> calc_group_;
     bool calc_slot_at(std::int64_t at_ms, native_calc::Slot& slot) const;
