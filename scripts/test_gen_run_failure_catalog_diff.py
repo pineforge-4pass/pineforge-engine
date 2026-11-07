@@ -322,6 +322,32 @@ class CatalogDiff(unittest.TestCase):
         self.fails(self.repo.run("--check", env={REQUIRE_TAGS: "1"}), 1,
                    "minor")
 
+    def test_pending_stamp_rebuilds_the_original_assets_before_and_after_tagging(self) -> None:
+        self.pending_release()
+        pending = self.tmp / "pending.json"
+        published = self.tmp / "published.json"
+        self.ok(self.repo.run("--stamp", "--to-version", "1.1.0",
+                              "--previous-tag", "v1.0.0", "--output", str(pending)))
+        diff = json.loads(pending.read_bytes())
+        self.assertEqual([item["code"] for item in diff["added"]], ["alpha"])
+        self.assertEqual(diff["from"]["tag"], "v1.0.0")
+        self.assertEqual(diff["to"]["version"], "1.1.0")
+        self.repo.tag("v1.1.0")
+        self.ok(self.repo.run("--stamp", "--to-tag", "v1.1.0",
+                              "--previous-tag", "v1.0.0", "--output", str(published)))
+        self.assertEqual(pending.read_bytes(), published.read_bytes())
+
+    def test_untagged_transition_requires_regular_modes_on_both_version_paths(self) -> None:
+        self.pending_release()
+        for path in ("VERSION", DIFF):
+            with self.subTest(path=path):
+                for restore in ("VERSION", DIFF):
+                    self.repo.git("update-index", "--chmod=-x", restore)
+                self.repo.git("update-index", "--chmod=+x", path)
+                self.repo.git("commit", "--amend", "--no-edit")
+                self.fails(self.repo.run("--check", env={REQUIRE_TAGS: "1"}), 1,
+                           "regular files")
+
     def test_release_cycle(self) -> None:
         self.start({"alpha": code("1.1.0")})
         diff = self.repo.diff()
