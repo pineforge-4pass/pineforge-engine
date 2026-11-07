@@ -62,6 +62,7 @@ public:
         return file_.scratch_owner() && file_.scratch_resource() == ScratchResource::cohort;
     }
     void set_directory(const std::string& directory) { file_.set_directory(directory); }
+    void open_for_insert() { file_.open("pineforge-ids"); }
     void bind_scratch(const std::shared_ptr<ScratchSlab>& slab, ScratchResource resource) {
         if (size_ != 0)
             throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},

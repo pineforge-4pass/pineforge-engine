@@ -802,7 +802,8 @@
       "max_bars_back",
       "matrix_elements",
       "udt_objects",
-      "drawing_ids"
+      "drawing_ids",
+      "live_drawings"
      ]
     },
     "max": {
@@ -822,7 +823,8 @@
     "box drawing ID domain exhausted",
     "label drawing ID domain exhausted",
     "linefill drawing ID domain exhausted",
-    "generic drawing ID domain exhausted"
+    "generic drawing ID domain exhausted",
+    "The script keeps more than {max} live drawings of one type; the configured drawing capacity is exceeded."
    ],
    "retryable": false,
    "since": "1.4.0"
