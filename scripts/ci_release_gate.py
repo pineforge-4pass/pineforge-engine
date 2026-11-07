@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse a release without full verification and parity evidence.
+"""Refuse a release without authenticated parity and full post-merge evidence.
 
 Usage: ci_release_gate.py gate --repo OWNER/REPO --sha SHA --ref refs/heads/main
        ci_release_gate.py rulesets-probe --repo OWNER/REPO
@@ -7,11 +7,13 @@ Usage: ci_release_gate.py gate --repo OWNER/REPO --sha SHA --ref refs/heads/main
 Every GitHub API call is a read (GET), using the release job's own GH_TOKEN.
 Each gate endpoint/page is read at most once; failures refuse without retry or sleep.
 The probe measures the inventory before an independent verdict read.
-Phase 1 checks a unique tree-matching merged PR head or one authenticated,
-two-file release bump on that gated parent. Phase 2 requires the exact main
-sha's proof receipt after the fixed watcher cut-over, with no PR/bump fallback.
-Both paths also require a fully green ci-post run, walking only over docs-only
-commits to select its proof sha.
+The explicit bump phase checks the dispatched main commit. The tag phase
+requires an authenticated two-file bump on the named phase-1 dispatch,
+that parent's authenticated parity and the bump's own fully green ci-post.
+The fixed main-proof cut-over still governs parity admission, without fallback.
+Calls without a phase retain the legacy read-only admission interface.
+Documentation ancestry is checked without transferring CI evidence between shas.
+pineforge/verify is advisory.
 Tests inject API, git and history callables and patch the read_main_proof seam.
 """
 from __future__ import annotations
@@ -19,6 +21,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import json
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -26,9 +29,11 @@ from typing import Callable
 from urllib.parse import parse_qs, urlsplit
 
 from ci_docs_only import is_documentation
+import gen_run_failure_catalog_diff as catalog_diff
+import release_version
 
 
-CONTEXTS = ("pineforge/verify", "pineforge/parity")
+CONTEXTS = ("pineforge/parity",)
 # ci-post.yml's amd64 leg aggregates and arm shard names; the workflow pin test
 # expands their displayed names independently and checks this required-name tuple.
 CI_POST_BUILD_JOBS = (
@@ -535,7 +540,8 @@ def _tree_files(api: API, repo: str, tree: str) -> dict[str, tuple[str, str, str
     return files
 
 
-def _release_bump(api: API, repo: str, sha: str) -> str:
+def _release_bump(api: API, repo: str, sha: str, *, expected_parent: str | None = None,
+                  git: Git | None = None) -> str:
     _require_release_push(api, repo, sha)
     _require_release_rulesets(api, repo)
     candidate = _commit_info(api, repo, sha)
@@ -545,10 +551,17 @@ def _release_bump(api: API, repo: str, sha: str) -> str:
             or parents[0]["sha"] == sha):
         raise ReleaseGateError("release bump requires exactly one valid parent")
     parent = parents[0]["sha"]
+    if expected_parent is not None and parent != expected_parent:
+        raise ReleaseGateError("release bump parent does not equal the phase1 dispatch SHA")
     trees = {sha: candidate["commit"]["tree"]["sha"]}
-    # This helper requires a merged PR, never another bump or main-proof fallback.
-    # It caches every commit tree so each endpoint is still read at most once.
-    evidence = _phase_one(api, repo, parent, trees=trees)
+    # The legacy path requires a merged PR, never another bump. Explicit tag
+    # admission honors the parent's fixed receipt cut-over without fallback.
+    # Cache commit trees so each endpoint is still read at most once.
+    if expected_parent is not None and _uses_main_proof(parent, git or git_is_ancestor):
+        evidence = _main_proof_evidence(repo, parent)
+        trees[parent] = _commit_tree(api, repo, parent)
+    else:
+        evidence = _phase_one(api, repo, parent, trees=trees)
     before = _tree_files(api, repo, trees[parent])
     after = before if trees[parent] == trees[sha] else _tree_files(api, repo, trees[sha])
     changed = {path for path in before.keys() | after.keys()
@@ -609,6 +622,7 @@ def git_history(sha: str) -> tuple[str | None, list[str]]:
 
 
 def _ci_post_proof(sha: str, history: History) -> tuple[str, list[str]]:
+    """Keep the requested CI identity while validating documentation ancestry."""
     proof, skipped = sha, []
     while True:
         try:
@@ -625,7 +639,7 @@ def _ci_post_proof(sha: str, history: History) -> tuple[str, list[str]]:
             raise ReleaseGateError(
                 f"ci-post: walk-blocked {proof}: unreadable changed-path list")
         if not paths or not all(is_documentation(path) for path in paths):
-            return proof, skipped
+            return sha, skipped
         skipped.append(proof)
         if len(skipped) > DOCS_ONLY_WALK_LIMIT:
             raise ReleaseGateError(
@@ -662,6 +676,8 @@ def _ci_post_runs(api: API, repo: str, sha: str) -> list[dict]:
             except (TypeError, ValueError) as exc:
                 raise ReleaseGateError(
                     f"API {endpoint} returned invalid created_at: {row.get('created_at')!r}") from exc
+            if row["event"] not in ("push", "schedule", "workflow_dispatch"):
+                continue
             seen.add(row["id"])
             matches.append((created, row["id"], row))
         return [row for _, _, row in sorted(matches, key=lambda item: item[:2], reverse=True)]
@@ -677,21 +693,28 @@ def _ci_post_jobs(api: API, repo: str, run_id: int) -> list[dict]:
                 or type(payload.get("total_count")) is not int or payload["total_count"] < 0):
             raise ReleaseGateError(f"API {endpoint} returned an invalid jobs page")
         jobs = payload["jobs"]
-        if payload["total_count"] > len(jobs):
+        if payload["total_count"] != len(jobs):
             raise ReleaseGateError(
                 f"API {endpoint} returned incomplete jobs: "
                 f"expected {payload['total_count']} rows, got {len(jobs)}")
         if any(not isinstance(job, dict) or not isinstance(job.get("name"), str)
                or not job["name"] for job in jobs):
             raise ReleaseGateError(f"API {endpoint} returned an invalid job row")
+        seen = set()
+        for job in jobs:
+            job_id = job.get("id")
+            if type(job_id) is not int or job_id <= 0 or job_id in seen:
+                raise ReleaseGateError(f"API {endpoint} returned invalid or duplicate job id")
+            seen.add(job_id)
         return jobs
     except ReleaseGateError as exc:
         raise ReleaseGateError(f"ci-post: unreadable {exc}") from exc
 
 
 def _require_ci_post(api: API, repo: str, sha: str, history: History) -> str:
-    proof, docs_skipped = _ci_post_proof(sha, history)
-    for docs_sha in docs_skipped:
+    proof, docs_checked = _ci_post_proof(sha, history)
+    runs = None
+    for docs_sha in docs_checked:
         docs_runs = _ci_post_runs(api, repo, docs_sha)
         if not docs_runs:
             raise ReleaseGateError(f"ci-post: docs-commit-no-run sha {docs_sha}")
@@ -702,7 +725,10 @@ def _require_ci_post(api: API, repo: str, sha: str, history: History) -> str:
                 f"ci-post: docs-commit-red {docs_run['id']} sha {docs_sha}: "
                 f"status {docs_run.get('status')} "
                 f"conclusion {docs_run.get('conclusion')} event {docs_run['event']}")
-    runs = _ci_post_runs(api, repo, proof)
+        if docs_sha == proof:
+            runs = docs_runs
+    if runs is None:
+        runs = _ci_post_runs(api, repo, proof)
     if not runs:
         raise ReleaseGateError(f"ci-post: no-run {proof}")
     reasons, newer_skipped = [], 0
@@ -712,15 +738,22 @@ def _require_ci_post(api: API, repo: str, sha: str, history: History) -> str:
             raise ReleaseGateError(
                 f"ci-post: run-in-progress {identity}: status {run.get('status')}")
         required = {name: [] for name in CI_POST_BUILD_JOBS}
-        for job in _ci_post_jobs(api, repo, run["id"]):
+        jobs = _ci_post_jobs(api, repo, run["id"])
+        for job in jobs:
             name, conclusion = job["name"], job.get("conclusion")
-            if name not in required:
-                continue
-            # Check every row: a duplicate success cannot mask a failed job.
+            # A failed leg anywhere in the returned inventory vetoes the run.
+            # Keep failure diagnostics ahead of duplicate-name diagnostics.
             if conclusion in CI_POST_FAILURES:
                 raise ReleaseGateError(
                     f"ci-post: newer-run-failed {identity}: job {name}={conclusion}")
-            required[name].append(conclusion)
+        seen = set()
+        for job in jobs:
+            name = job["name"]
+            if name in seen:
+                raise ReleaseGateError(f"ci-post: duplicate-job {identity}: job {name}")
+            seen.add(name)
+            if name in required:
+                required[name].append(job.get("conclusion"))
         full = all(values and all(value == "success" for value in values)
                    for values in required.values())
         conclusion = run.get("conclusion")
@@ -760,9 +793,8 @@ def _require_ci_post(api: API, repo: str, sha: str, history: History) -> str:
                 + (f": {', '.join(contradiction)}" if contradiction else ""))
         if full and conclusion == "success":
             evidence = f"ci-post run {run['id']} for {proof}"
-            if docs_skipped:
-                evidence += (f"; release {sha}; "
-                             f"{len(docs_skipped)} docs-only commit(s) skipped")
+            if docs_checked:
+                evidence += f"; {len(docs_checked)} docs-only commit(s) checked"
             if newer_skipped:
                 evidence += f"; {newer_skipped} newer skipped-only run(s) skipped"
             return evidence
@@ -829,14 +861,46 @@ def _require_full_contexts(latest: dict, subject: str) -> str:
     return "; ".join(f"{context}={latest[context]}" for context in CONTEXTS)
 
 
+def _main_proof_evidence(repo: str, sha: str) -> str:
+    subject = f"main-proof receipt for {sha}"
+    try:
+        proof = read_main_proof(repo, sha)
+    except Exception as exc:
+        raise ReleaseGateError(f"{subject} unreadable: {exc}") from exc
+    if proof is None:
+        raise ReleaseGateError(f"main-proof receipt is missing for {sha}")
+    if (not isinstance(proof, dict) or not proof
+            or any(not isinstance(context, str) or not context
+                   or not isinstance(state, str) or not state
+                   for context, state in proof.items())):
+        raise ReleaseGateError(f"{subject}: invalid or empty context map")
+    return f"{subject}; {_require_full_contexts(proof, subject)}"
+
+
+def _release_checkout(sha: str, release_git=None):
+    snapshot = release_git if release_git is not None else catalog_diff.Git(
+        Path(__file__).resolve().parents[1], sha)
+    if snapshot.resolve("HEAD") != sha or snapshot.resolve(snapshot.ref) != sha:
+        raise ReleaseGateError("release checkout is not the exact dispatch SHA")
+    return snapshot
+
+
 def gate(repo: str, sha: str, ref: str, *, api: API, git: Git = git_is_ancestor,
-         history: History = git_history) -> str:
+         history: History = git_history, phase: str | None = None,
+         dispatch_sha: str = "", release_git=None) -> str:
     if ref != "refs/heads/main":
         raise ReleaseGateError(f"release requires refs/heads/main, got {ref}")
     if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) is None:
         raise ReleaseGateError("invalid --repo: expected OWNER/REPO")
     if not _is_sha(sha):
         raise ReleaseGateError(f"invalid release sha: {sha!r}")
+    if phase not in (None, "bump", "tag"):
+        raise ReleaseGateError("release phase must be bump or tag")
+    if phase == "tag":
+        if not _is_sha(dispatch_sha) or dispatch_sha == sha:
+            raise ReleaseGateError("tag phase requires the phase1 dispatch SHA")
+    elif dispatch_sha:
+        raise ReleaseGateError("phase1 dispatch SHA is only an input to the tag phase")
 
     endpoint = f"repos/{repo}/branches/main"
     current = _read_text(api, endpoint, jq=".commit.sha")
@@ -845,24 +909,20 @@ def gate(repo: str, sha: str, ref: str, *, api: API, git: Git = git_is_ancestor,
     if current != sha:
         raise ReleaseGateError(f"release sha {sha} is not current main head {current}")
 
-    if _uses_main_proof(sha, git):
-        subject = f"main-proof receipt for {sha}"
-        try:
-            proof = read_main_proof(repo, sha)
-        except Exception as exc:
-            raise ReleaseGateError(f"{subject} unreadable: {exc}") from exc
-        if proof is None:
-            raise ReleaseGateError(f"main-proof receipt is missing for {sha}")
-        if (not isinstance(proof, dict) or not proof
-                or any(not isinstance(context, str) or not context
-                       or not isinstance(state, str) or not state
-                       for context, state in proof.items())):
-            raise ReleaseGateError(f"{subject}: invalid or empty context map")
-        states = _require_full_contexts(proof, subject)
-        evidence = f"{subject}; {states}"
+    if phase == "tag":
+        evidence = _release_bump(api, repo, sha, expected_parent=dispatch_sha, git=git)
+        snapshot = _release_checkout(sha, release_git)
+        catalog_diff.validate_release_transition(
+            catalog_diff.default_config(Path(__file__).resolve().parents[1]),
+            snapshot, expected_parent=dispatch_sha, allow_tagged=True)
+    elif _uses_main_proof(sha, git):
+        evidence = _main_proof_evidence(repo, sha)
     else:
         evidence = _phase_one(api, repo, sha, allow_missing_pr=True)
         if evidence is None:
+            if phase == "bump":
+                raise ReleaseGateError(f"no merged pull request associated with {sha}; "
+                                       "dispatch its existing bump with phase tag")
             try:
                 evidence = _release_bump(api, repo, sha)
             except ReleaseGateError as exc:
@@ -870,6 +930,31 @@ def gate(repo: str, sha: str, ref: str, *, api: API, git: Git = git_is_ancestor,
                     f"no merged pull request associated with {sha}; release bump refused: {exc}") from exc
     post = _require_ci_post(api, repo, sha, history)
     return f"release gate green: {evidence}; {post}"
+
+
+def release_plan(sha: str, phase: str, bump: str, override: str,
+                 dispatch_sha: str, *, release_git=None) -> dict[str, str]:
+    """Plan one phase; tag reads the committed VERSION and never increments it."""
+    if not _is_sha(sha):
+        raise ReleaseGateError("invalid dispatch SHA")
+    snapshot = _release_checkout(sha, release_git)
+    current = catalog_diff._snapshot_file(snapshot, sha, "VERSION").decode("utf-8").strip()
+    tags = snapshot.tags()
+    if phase == "bump":
+        if dispatch_sha:
+            raise ReleaseGateError("phase1 dispatch SHA is only an input to the tag phase")
+        return release_version.plan(current, bump, override, tags)
+    if phase != "tag" or not _is_sha(dispatch_sha) or dispatch_sha == sha:
+        raise ReleaseGateError("tag phase requires the phase1 dispatch SHA")
+    if override or bump != "patch":
+        raise ReleaseGateError("override and non-default bump apply only to phase bump")
+    _, version = catalog_diff.validate_release_transition(
+        catalog_diff.default_config(Path(__file__).resolve().parents[1]),
+        snapshot, expected_parent=dispatch_sha, allow_tagged=True)
+    parsed = release_version.parse_version(version)
+    return {"current": current, "next": version, "tag": "v" + version,
+            "prerelease": "true" if parsed.prerelease else "false",
+            "previous": release_version.previous_tag(parsed, release_version.parse_tags(tags))}
 
 
 def _phase_one(api: API, repo: str, sha: str, *, allow_missing_pr: bool = False,
@@ -926,24 +1011,42 @@ def _phase_one(api: API, repo: str, sha: str, *, allow_missing_pr: bool = False,
 
 
 def main(argv=None, *, api: API | None = None, git: Git | None = None,
-         history: History | None = None) -> int:
+         history: History | None = None, release_git=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_subparsers(dest="mode", required=True)
     check = modes.add_parser("gate", help="require full release proof for the current main sha")
     check.add_argument("--repo", required=True)
     check.add_argument("--sha", required=True)
     check.add_argument("--ref", required=True)
+    check.add_argument("--phase", choices=("bump", "tag"))
+    check.add_argument("--dispatch-sha", default="")
+    plan = modes.add_parser("plan", help="plan the bump or read the admitted tag-phase VERSION")
+    plan.add_argument("--sha", required=True)
+    plan.add_argument("--phase", choices=("bump", "tag"), required=True)
+    plan.add_argument("--bump", choices=("patch", "minor", "major"), default="patch")
+    plan.add_argument("--override", default="")
+    plan.add_argument("--dispatch-sha", default="")
+    plan.add_argument("--github-output", type=Path, required=True)
     probe = modes.add_parser("rulesets-probe", help="read the release bump's ruleset barrier only")
     probe.add_argument("--repo", required=True)
     args = parser.parse_args(argv)
     try:
         if args.mode == "rulesets-probe":
             green = rulesets_probe(args.repo, api=api if api is not None else gh_api)
+        elif args.mode == "plan":
+            fields = release_plan(args.sha, args.phase, args.bump, args.override,
+                                  args.dispatch_sha, release_git=release_git)
+            green = "\n".join(f"{key}={value}" for key, value in fields.items())
+            with args.github_output.open("a", encoding="utf-8") as output:
+                output.write(green + "\n")
         else:
             green = gate(args.repo, args.sha, args.ref, api=api if api is not None else gh_api,
                          git=git if git is not None else git_is_ancestor,
-                         history=history if history is not None else git_history)
-    except ReleaseGateError as exc:
+                         history=history if history is not None else git_history,
+                         phase=args.phase, dispatch_sha=args.dispatch_sha,
+                         release_git=release_git)
+    except (ReleaseGateError, catalog_diff.Finding, catalog_diff.InputError,
+            release_version.ReleaseError, OSError, UnicodeError) as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1
     print(green)

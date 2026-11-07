@@ -8692,16 +8692,18 @@ finally:
         release = others['release.yml']
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
         finding = ('release.yml job notify-hub must carry '
-                   'if: ${{ !inputs.dry_run }} so a dry run dispatches nothing')
+                   "if: ${{ inputs.phase == 'tag' && !inputs.dry_run }} "
+                   'so phase 1 and dry runs dispatch nothing')
         self.assertEqual(ci_preflight._jobs(release)['notify-hub'].count(
-            '    if: ${{ !inputs.dry_run }}\n'), 1)
+            "    if: ${{ inputs.phase == 'tag' && !inputs.dry_run }}\n"), 1)
         for after in ('', '    if: ${{ always() }}\n',
                       '    if: ${{ inputs.dry_run }}\n',
                       '    if: ${{ !inputs.dry_run || inputs.dry_run }}\n',
                       "    if: '!inputs.dry_run'\n"):
             with self.subTest(after=after):
                 changed = in_job(release, 'notify-hub',
-                                 '    if: ${{ !inputs.dry_run }}\n', after)
+                                 "    if: ${{ inputs.phase == 'tag' && !inputs.dry_run }}\n",
+                                 after)
                 findings = ci_workflow_findings(
                     *original, others=dict(others, **{'release.yml': changed}))
                 self.assertIn(finding, findings)
@@ -9115,8 +9117,8 @@ finally:
     def test_release_bump_publication_mutations_refuse(self):
         original, others = self.ci_sources(), self.other_sources()
         release = others['release.yml']
-        finding = ('release.yml must keep the exact two-file release bump writer, '
-                   'commit and atomic push')
+        finding = ('release.yml must keep the exact two-phase release writer, '
+                   'untagged bump push and same-SHA tag retry')
         for before, after in (
                 ('git add VERSION docker/run_failure_codes_diff.json',
                  'git add VERSION docker/run_failure_codes_diff.json README.md'),
@@ -9127,12 +9129,33 @@ finally:
                  "printf '%s\\n' \"${NEXT}\" > VERSION\n          chmod +x VERSION"),
                 ('git commit -m "chore(release): ${TAG}"',
                  'git commit --amend -m "chore(release): ${TAG}"'),
-                ('git push --atomic origin HEAD "${TAG}"', 'git push origin HEAD "${TAG}"')):
+                ('git push origin "${sha}:refs/heads/main"',
+                 'git push origin "${sha}:refs/heads/main" "${TAG}"'),
+                ('git push origin "refs/tags/${TAG}"', 'git push --force origin "refs/tags/${TAG}"'),
+                ('if [[ "${PHASE}" == bump ]]; then', 'if true; then')):
             with self.subTest(after=after):
                 changed = in_step(release, 'release', 'Write bumped VERSION, commit, tag, push',
                                   before, after)
                 self.assertNotEqual(changed, release)
                 self.assertIn(finding, ci_workflow_findings(
+                    *original, others={**others, 'release.yml': changed}))
+
+    def test_release_phase_input_and_downstream_boundaries_are_pinned(self):
+        original, others = self.ci_sources(), self.other_sources()
+        release = others['release.yml']
+        self.assertEqual(ci_workflow_findings(*original, others=others), [])
+        for before, after in (
+                ('      phase:\n', '      disabled_phase:\n'),
+                ('        default: bump\n', '        default: tag\n'),
+                ('            --phase "${PHASE}" --dispatch-sha "${DISPATCH_SHA}"',
+                 '            --phase bump'),
+                ("    if: ${{ inputs.phase == 'tag' }}\n", ''),
+                ("        if: ${{ inputs.phase == 'tag' && !inputs.dry_run }}\n",
+                 '        if: ${{ !inputs.dry_run }}\n')):
+            with self.subTest(after=after):
+                changed = release.replace(before, after, 1)
+                self.assertNotEqual(changed, release)
+                self.assertTrue(ci_workflow_findings(
                     *original, others={**others, 'release.yml': changed}))
 
     def test_release_bump_app_token_mutations_refuse(self):
@@ -9154,7 +9177,7 @@ finally:
     def test_release_ruleset_reader_token_and_invocation_mutations_refuse(self):
         original, others = self.ci_sources(), self.other_sources()
         release = others['release.yml']
-        gate_name = 'Refuse unless pineforge/verify and pineforge/parity are green'
+        gate_name = 'Refuse unless authenticated parity and exact-SHA full CI are green'
         for before, after in (
                 ('GH_TOKEN: ${{ steps.app.outputs.token }}', 'GH_TOKEN: ${{ github.token }}'),
                 ('        id: gate', '        id: gate\n        if: inputs.dry_run'),
