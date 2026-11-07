@@ -1133,6 +1133,30 @@
    "scope": [
     "namespace pineforge :: detail #1",
     "template < class Value > class DiskResidentIdTable #1",
+    "std :: pair < iterator , bool > place ( const std :: string & key , Value value ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "index_ . insert ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "row",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
+    "std :: pair < iterator , bool > place ( const std :: string & key , Value value ) #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_shared",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/disk_resident_id_table.hpp",
+   "symbol": "index_",
+   "scope": [
+    "namespace pineforge :: detail #1",
+    "template < class Value > class DiskResidentIdTable #1",
     "std :: pair < iterator , bool > emplace ( const std :: string & key , Value value ) #1"
    ],
    "cls": "grow",
@@ -31111,17 +31135,6 @@
    ],
    "cls": "assign",
    "spelling": "result = . . .",
-   "ordinal": 1
-  },
-  {
-   "file": "src/source/pine_adapter.cpp",
-   "symbol": "cohorts_by_id_",
-   "scope": [
-    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "native_order :: CohortHandle PineExecutionAdapter :: cohort_for ( const SourceId & id ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "cohorts_by_id_ . emplace ( . . . )",
    "ordinal": 1
   },
   {

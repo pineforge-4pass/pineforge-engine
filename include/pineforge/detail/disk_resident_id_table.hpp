@@ -440,17 +440,30 @@ public:
         const auto row = resident_.find(at->second);
         return {this, row->first, row->second.owner};
     }
-    std::pair<iterator, bool> emplace(const std::string& key, Value value) {
+    void admit(const std::string& key, bool spillable) {
         // A refused new logical row must not first overwrite/evict an eligible
         // resident row. This search reads index bytes only, without restoring.
         index_.require_insert(key);
         std::size_t extra = 0;
-        if (index_.bounded_cohorts() && !value.spillable() && !index_.find(key)) {
+        if (index_.bounded_cohorts() && !spillable && !index_.find(key)) {
             extra = 1; // An existing logical row ignores the incoming value.
             require_live_growth(extra);
         }
         spill_before_admission(extra);
         spill_implicitly();
+        index_.open_for_insert();
+    }
+    std::pair<iterator, bool> place(const std::string& key, Value value) {
+        const auto placed = index_.insert(key, value.retired_record());
+        if (!placed.second)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "resident id placement found duplicate after admission");
+        auto row = std::make_shared<Row>(key, std::move(value));
+        insert_resident(placed.first, row);
+        return {{this, placed.first, std::move(row)}, true};
+    }
+    std::pair<iterator, bool> emplace(const std::string& key, Value value) {
+        admit(key, value.spillable());
         const auto placed = index_.insert(key, value.retired_record());
         if (!placed.second) return {{this, placed.first, load(placed.first)}, false};
         auto row = std::make_shared<Row>(key, std::move(value));

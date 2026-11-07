@@ -3217,16 +3217,16 @@ native_order::CohortHandle PineExecutionAdapter::cohort_for(const SourceId& id) 
     auto found = cohorts_by_id_.find(id);
     if (found != cohorts_by_id_.end()) return found->second.handle;
     CohortFacts facts;
+    cohorts_by_id_.admit(id, facts.spillable());
     facts.handle = require_host().cohort_open();
     if (facts.handle.value == 0) {
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "native cohort allocation refused");
     }
     const auto result = facts.handle;
-    cohorts_by_id_.emplace(id, std::move(facts));
+    cohorts_by_id_.place(id, std::move(facts));
     return result;
 }
-
 PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
     PineSizingSnapshot snapshot;
     const auto& host = require_host();
