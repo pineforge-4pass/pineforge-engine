@@ -4471,7 +4471,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     # installed unchanged. Main's own copy runs on push to main and resolves
     # exactly one merged PR in the guard before authorizing its API identities.
     # PR objects are fetched only for tree comparison. Both events retain
-    # the newest two engine head statuses and the codegen check-run rule.
+    # the newest engine head parity status and the codegen check-run rule.
     promote_job = _jobs(promote).get('promote', '')
     guard_job = _jobs(promote).get('promote-guard', '')
     guard_steps = _steps(guard_job)
@@ -4534,6 +4534,15 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or any(_step_values(step, 'if') != ["steps.ci.outputs.green == 'true'"]
                    for step in promote_steps[4:])):
         findings.append('baseline promotion must guard resolution, tree and gate checks before credentials')
+    head_predicates = re.findall(r'^[ \t]*\|[ \t]*(.*?)\s*\' <<< "\$statuses"',
+                                 head_gate, re.MULTILINE | re.DOTALL)
+    for index, predicate in enumerate(head_predicates):
+        predicate = predicate.strip()
+        # Only whole-expression wrappers may surround the exact parity atom.
+        # Unbalanced wrappers and compound expressions cannot reduce to it.
+        while predicate.startswith('(') and predicate.endswith(')'):
+            predicate = predicate[1:-1].strip()
+        head_predicates[index] = predicate
     if (_events(promote) != {'push', 'workflow_dispatch'}
             or re.search(r'^  pull_request(?:_target)?:', promote, re.MULTILINE)
             or '  statuses: read' not in promote
@@ -4546,10 +4555,10 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or 'gh api --paginate' not in head_gate
             or 'reduce (.[][]) as $s' not in head_gate
             or 'if has($s.context) then . else .[$s.context] = $s.state end' not in head_gate
-            or '.["pineforge/verify"] == "success"' not in head_gate
-            or '.["pineforge/parity"] == "success"' not in head_gate
+            or head_predicates != ['.["pineforge/parity"] == "success"']
             or head_gate.count('echo "green=false" >> "$GITHUB_OUTPUT"; exit 0') != 2):
-        findings.append("baseline promotion must run main's copy and require the latest two head statuses")
+        findings.append("baseline promotion must run main's copy and require "
+                        "the latest head parity status only (verify is advisory)")
     # The job pin cannot see inherited workflow settings.
     for key in ('defaults', 'env'):
         if _job_values(promote, key):
