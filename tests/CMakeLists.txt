@@ -424,6 +424,7 @@ set(TEST_SOURCES
     test_pointvalue
     test_metrics
     test_drawing
+    test_drawing_bound_checkpoint_cost
     test_drawing_bound_status
     test_drawing_bounded_builtins
     test_drawing_bounded_creation_failure
@@ -7590,6 +7591,7 @@ set(PINEFORGE_PR_FAST_TESTS
     test_native_run_spec
     test_native_bare_host_contracts
     test_native_kernel_edge
+    test_abi_layout_probe
 )
 
 # CR-150 P00: append after the pre-existing line-pinned registrations.
