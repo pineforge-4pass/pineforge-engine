@@ -25,7 +25,7 @@ Tests inject API, git and history callables and patch the read_main_proof seam.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -120,7 +120,7 @@ def _new_receipt(repo: str, sha: str, phase: str | None, dispatch: str,
                  dry_run: bool = False) -> dict:
     return {
         "schema": "pineforge-release-gate/v1", "repository": repo, "phase": phase,
-        "dry_run": dry_run, "created_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "dry_run": dry_run, "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "requested": {"sha": sha, "tree": None}, "dispatch_sha": dispatch or None,
         "parent_sha": None, "parent_tree": None, "dispatch_tree": None,
         "observed_main": None, "observed_main_tree": None, "contexts": {},

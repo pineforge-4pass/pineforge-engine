@@ -2046,7 +2046,7 @@ class ReleaseBumpTests(unittest.TestCase):
         self.api = FakeAPI()
         self.api.release_bump()
 
-    def assert_bump_green(self):
+    def assert_bump_green(self, expected_verify="success"):
         code, stdout, stderr = self.run_gate()
         self.assertEqual(code, 0, (stdout, stderr))
         self.assertEqual(stderr, "")
@@ -2054,7 +2054,7 @@ class ReleaseBumpTests(unittest.TestCase):
         self.assertEqual(stdout, (
             f"release gate green: release bump {SHA}; parent {BUMP_PARENT}; "
             f"PR #17 head {HEAD}; pineforge/parity=success; tree {TREE}; "
-            "pineforge/verify=success (advisory); "
+            f"pineforge/verify={expected_verify} (advisory); "
             f"ci-post run {self.post_run['id']} for {self.post_run['head_sha']}\n"))
 
     def test_bump_on_a_gated_parent_passes(self):
@@ -2303,7 +2303,7 @@ class ReleaseBumpTests(unittest.TestCase):
                 if context == "pineforge/parity":
                     self.assert_refused(f"PR #17 head {HEAD}: missing {context}")
                 else:
-                    self.assert_bump_green()
+                    self.assert_bump_green(expected_verify="missing")
 
     def test_parent_still_requires_trusted_newest_success_and_matching_tree(self):
         for variant, fragment in (
@@ -2844,6 +2844,7 @@ class ReleaseRulesetTests(unittest.TestCase):
                 self.assertEqual(green, (
                     f"release gate green: release bump {SHA}; parent {BUMP_PARENT}; "
                     f"PR #17 head {HEAD}; pineforge/parity=success; tree {TREE}; "
+                    "pineforge/verify=success (advisory); "
                     f"ci-post run {self.post_run['id']} for {self.post_run['head_sha']}"))
 
 
