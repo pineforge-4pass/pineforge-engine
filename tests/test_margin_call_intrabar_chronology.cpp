@@ -78,6 +78,8 @@ public:
     std::string exit_comment(int i) const { return closed_trade_exit_comment(i); }
     double exit_price(int i) const { return closed_trade_exit_price(i); }
     double entry_price(int i) const { return closed_trade_entry_price(i); }
+    // expectation corrected: short +quantity -> -quantity, because Pine size
+    // encodes the side; the fill-derived magnitudes below are unchanged.
     double trade_size(int i) const { return closed_trade_size(i); }
     int exit_bar(int i) const { return closed_trade_exit_bar_index(i); }
     double position_size() const { return signed_position_size(); }
@@ -168,12 +170,12 @@ static void test_gap_event_slices_before_tp_exit() {
     CHECK(eng.trade_count() == 2);
     CHECK(margin_call_rows(eng) == 1);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(eng.trade_size(0), 0.0084, 1e-9));
+    CHECK(near(eng.trade_size(0), -0.0084, 1e-9));
     CHECK(near(eng.exit_price(0), 3721.62));
     CHECK(near(eng.entry_price(0), 3706.26));
     CHECK(eng.exit_bar(0) == 2);
     CHECK(eng.exit_comment(1) != std::string("Margin call"));
-    CHECK(near(eng.trade_size(1), 2.5021, 1e-9));
+    CHECK(near(eng.trade_size(1), -2.5021, 1e-9));
     CHECK(near(eng.exit_price(1), 3664.69));
     CHECK(near(eng.position_size(), 0.0));
 }
@@ -196,7 +198,7 @@ static void test_low_first_large_deficit_stays_quiet() {
 
     CHECK(eng.trade_count() == 1);
     CHECK(margin_call_rows(eng) == 0);
-    CHECK(near(eng.trade_size(0), 2.5105, 1e-9));
+    CHECK(near(eng.trade_size(0), -2.5105, 1e-9));
     CHECK(near(eng.exit_price(0), 3664.69));
     CHECK(near(eng.position_size(), 0.0));
 }
@@ -215,7 +217,7 @@ static void test_exit_at_extreme_ties_to_exit_first() {
 
     CHECK(eng.trade_count() == 1);
     CHECK(margin_call_rows(eng) == 0);
-    CHECK(near(eng.trade_size(0), 2.5105, 1e-9));
+    CHECK(near(eng.trade_size(0), -2.5105, 1e-9));
     CHECK(near(eng.exit_price(0), 3721.62));
     CHECK(near(eng.position_size(), 0.0));
 }
@@ -234,7 +236,7 @@ static void test_sl_stop_before_extreme_stays_quiet() {
 
     CHECK(eng.trade_count() == 1);
     CHECK(margin_call_rows(eng) == 0);
-    CHECK(near(eng.trade_size(0), 2.5105, 1e-9));
+    CHECK(near(eng.trade_size(0), -2.5105, 1e-9));
     CHECK(near(eng.exit_price(0), 3715.0));
     CHECK(near(eng.position_size(), 0.0));
 }
@@ -267,9 +269,9 @@ static void test_partial_exit_single_slice_per_bar() {
     CHECK(event_bar_mc_rows == 1);
     CHECK(eng.trade_count() >= 2);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(eng.trade_size(0), 0.0084, 1e-9));
+    CHECK(near(eng.trade_size(0), -0.0084, 1e-9));
     CHECK(near(eng.exit_price(0), 3721.62));
-    CHECK(near(eng.trade_size(1), 0.0251, 1e-9));
+    CHECK(near(eng.trade_size(1), -0.0251, 1e-9));
     CHECK(near(eng.exit_price(1), 3664.69));
     CHECK(eng.position_size() < 0.0);  // survivor carried past the event bar
 }
@@ -288,7 +290,7 @@ static void test_disabled_emulator_stays_quiet() {
 
     CHECK(eng.trade_count() == 1);
     CHECK(margin_call_rows(eng) == 0);
-    CHECK(near(eng.trade_size(0), 2.5105, 1e-9));
+    CHECK(near(eng.trade_size(0), -2.5105, 1e-9));
 }
 
 // ---- G: handle reuse reproduces the same rows ------------------------------
@@ -307,9 +309,9 @@ static void test_rerun_reproduces_slice() {
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.trade_count() == 2);
     CHECK(margin_call_rows(eng) == 1);
-    CHECK(near(eng.trade_size(0), 0.0084, 1e-9));
+    CHECK(near(eng.trade_size(0), -0.0084, 1e-9));
     CHECK(near(eng.exit_price(0), 3721.62));
-    CHECK(near(eng.trade_size(1), 2.5021, 1e-9));
+    CHECK(near(eng.trade_size(1), -2.5021, 1e-9));
 }
 
 }  // namespace

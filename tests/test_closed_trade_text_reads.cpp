@@ -1155,7 +1155,9 @@ struct SealedReader : Reader {
         SEALED_EXPECT(double_bytes(closed_trade_exit_price(i), expected.exit_price));
         SEALED_EXPECT(closed_trade_entry_time(i) == expected.entry_time);
         SEALED_EXPECT(closed_trade_exit_time(i) == expected.exit_time);
-        SEALED_EXPECT(double_bytes(closed_trade_size(i), expected.qty));
+        // The fixture's raw quantity stays unchanged; Pine adds its direction.
+        SEALED_EXPECT(double_bytes(closed_trade_size(i),
+                                   expected.is_long ? expected.qty : -expected.qty));
         SEALED_EXPECT(double_bytes(closed_trade_max_runup(i), expected.max_runup));
         SEALED_EXPECT(double_bytes(closed_trade_max_drawdown(i), expected.max_drawdown));
         // Independent cost = input entry price * input quantity * pointvalue(2).

@@ -345,7 +345,8 @@ void migrated_historical_readers() {
         CHECK(same_double(host.closed_trade_exit_price(i), value.exit_price));
         CHECK(host.closed_trade_entry_time(i) == value.entry_time);
         CHECK(host.closed_trade_exit_time(i) == value.exit_time);
-        CHECK(same_double(host.closed_trade_size(i), value.qty));
+        // Pine signs the independently stored magnitude by the fixture side.
+        CHECK(same_double(host.closed_trade_size(i), value.is_long ? value.qty : -value.qty));
         CHECK(same_double(host.closed_trade_max_runup(i), value.max_runup));
         CHECK(same_double(host.closed_trade_max_drawdown(i), value.max_drawdown));
         const double cost = value.entry_price * value.qty;

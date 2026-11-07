@@ -121,7 +121,8 @@ struct Reader : Host {
         CHECK(same_bits(closed_trade_exit_price(i), expected.exit_price));
         CHECK(closed_trade_entry_time(i) == expected.entry_time);
         CHECK(closed_trade_exit_time(i) == expected.exit_time);
-        CHECK(same_bits(closed_trade_size(i), expected.qty));
+        // Keep the quantity bits, including zero, and apply the fixture side.
+        CHECK(same_bits(closed_trade_size(i), expected.is_long ? expected.qty : -expected.qty));
         CHECK(same_bits(closed_trade_max_runup(i), expected.max_runup));
         CHECK(same_bits(closed_trade_max_drawdown(i), expected.max_drawdown));
         const double cost = expected.entry_price * expected.qty;
