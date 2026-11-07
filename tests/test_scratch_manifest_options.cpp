@@ -5,6 +5,9 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/detail/disk_id_table.hpp>
 #include <pineforge/detail/id_pair_store.hpp>
+#ifndef PINEFORGE_SCRATCH_MANIFEST_MODULE
+#include "../src/native_execution_consumer.hpp"
+#endif
 
 #include <array>
 #include <cstdint>
@@ -165,6 +168,7 @@ class ManifestHost final : public source::PineStrategyHost {
 public:
     std::uint64_t completed = 0;
     std::string workload = "cohorts";
+    bool has_run_slab() const noexcept { return static_cast<bool>(scratch_tables_for_run()); }
     ManifestHost() {
         source::PineStrategyConfig config;
         config.initial_capital = 1000000;
@@ -203,6 +207,26 @@ public:
 };
 
 #ifndef PINEFORGE_SCRATCH_MANIFEST_MODULE
+void require_source_completion(ManifestHost& host, std::uint64_t expected, const char* phase,
+                               bool expected_optional) {
+    const auto state = host.native_state().kind;
+    const auto& current = NativeExecutionConsumer::bound(host).scratch_bounds_for_run();
+    if (host.completed == expected && host.last_run_status() == 0
+        && host.last_error().empty() && state == NativeLifecycleKind::Completed
+        && static_cast<bool>(current) == expected_optional && !host.has_run_slab()) return;
+    throw std::runtime_error(std::string(phase)
+        + ": completed=" + std::to_string(host.completed)
+        + ", expected=" + std::to_string(expected)
+        + ", status=" + std::to_string(host.last_run_status())
+        + ", state=" + std::to_string(static_cast<unsigned>(state))
+        + ", consumed=" + std::to_string(host.native_consumed_high_water())
+        + ", current_mask=" + std::to_string(current ? current->active_fields : 0)
+        + ", expected_optional=" + std::to_string(expected_optional)
+        + ", slab=" + std::to_string(host.has_run_slab())
+        + ", code=" + strategy_get_last_error_code(&host)
+        + ", error=" + host.last_error());
+}
+
 std::vector<Bar> chart(int count) {
     std::vector<Bar> rows(static_cast<std::size_t>(count));
     for (int i = 0; i < count; ++i)
@@ -235,11 +259,32 @@ void source_bridge() {
     require(std::strcmp(strategy_get_last_error_args(&bytes), "{\"resource\":\"cohort_ids_total\"}") == 0,
             "source byte failure remains typed");
 
-    // A v1 replacement must detach v2, including its finite-zero policy.
+    // A setting replacement does not revive this terminal failed run.
     require(strategy_set_scratch_tables_v1(&bytes, nullptr) == 0, "v1 NULL restores legacy disk default");
-    bytes.completed = 0;
-    bytes.run(rows.data(), 5);
-    require(bytes.completed == 5 && bytes.last_run_status() == 0, "v1 reset removes optional bounds");
+    require(bytes.native_state().kind == NativeLifecycleKind::Failed,
+            "scratch reset does not revive a terminal failed host");
+
+    // Use a completed run for reuse: entry-0 and entry-1 exactly fill B_U=14.
+    // PineStrategyHost projects the next run number when a completed host begins.
+    ManifestHost reset;
+    require(strategy_set_scratch_tables_v2(&reset, &config) == 0, "install bounds on reusable source host");
+    reset.run(rows.data(), 2);
+    require_source_completion(reset, 2, "bounded source prefix", true);
+    const auto preceding = NativeExecutionConsumer::bound(reset).scratch_bounds_for_run();
+    require(preceding && preceding->active(sd::ScratchBound::B_U) && preceding->manifest.B_U == config.B_U,
+            "completed prefix retains the requested byte policy");
+    const auto consumed = reset.native_consumed_high_water();
+    require(strategy_set_scratch_tables_v1(&reset, nullptr) == 0, "v1 NULL replaces completed v2 policy");
+    require(NativeExecutionConsumer::bound(reset).scratch_bounds_for_run() == preceding,
+            "idle replacement leaves the preceding run owner intact");
+    reset.completed = 0;
+    reset.run(rows.data(), 5);
+    require_source_completion(reset, 5, "v1 reset source run", false);
+    require(reset.completed == 5 && reset.last_run_status() == 0, "v1 reset removes optional bounds");
+    require(reset.native_consumed_high_water() > consumed
+                && !NativeExecutionConsumer::bound(reset).scratch_bounds_for_run()
+                && !reset.has_run_slab() && preceding->manifest.B_U == config.B_U,
+            "next legitimate source run uses disk defaults and preserves the old immutable owner");
 
     // Exercise every remaining active field through the actual native C
     // setter, source begin binders, and real order/settlement counters.

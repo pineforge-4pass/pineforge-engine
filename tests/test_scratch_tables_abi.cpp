@@ -16,6 +16,7 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -316,7 +317,33 @@ public:
         slab = static_cast<bool>(scratch_tables_for_run());
     }
     void on_native_bar(const Bar&, const NativeDecisionContext&) override { ++calls; }
+    const std::shared_ptr<detail::ScratchSlab>& run_slab() const noexcept {
+        return scratch_tables_for_run();
+    }
 };
+
+void require_optional_completion(OptionalHost& host, int expected_calls, const char* phase,
+                                 bool expected_optional, bool expected_slab) {
+    const auto state = host.native_state().kind;
+    if (host.calls == expected_calls && host.last_run_status() == 0
+        && host.last_error().empty() && state == NativeLifecycleKind::Completed
+        && static_cast<bool>(host.observed) == expected_optional
+        && host.slab == expected_slab
+        && static_cast<bool>(host.run_slab()) == expected_slab) return;
+    throw std::runtime_error(std::string(phase)
+        + ": callbacks=" + std::to_string(host.calls)
+        + ", expected=" + std::to_string(expected_calls)
+        + ", status=" + std::to_string(host.last_run_status())
+        + ", state=" + std::to_string(static_cast<unsigned>(state))
+        + ", consumed=" + std::to_string(host.native_consumed_high_water())
+        + ", observed_mask=" + std::to_string(host.observed ? host.observed->active_fields : 0)
+        + ", expected_optional=" + std::to_string(expected_optional)
+        + ", observed_slab=" + std::to_string(host.slab)
+        + ", slab=" + std::to_string(static_cast<bool>(host.run_slab()))
+        + ", expected_slab=" + std::to_string(expected_slab)
+        + ", code=" + strategy_get_last_error_code(handle(host))
+        + ", error=" + host.last_error());
+}
 
 void optional_v2_layout_copy_and_atomic_replacement() {
     static_assert(std::is_standard_layout<pf_scratch_tables_v2>::value, "v2 is a C POD");
@@ -332,8 +359,21 @@ void optional_v2_layout_copy_and_atomic_replacement() {
     static_assert(static_cast<std::uint64_t>(detail::ScratchBound::R) == PF_SCRATCH_BOUND_R,
                   "C and C++ root bit");
     OptionalHost host;
-    require(host.configure_native(spec("scratch-abi-v2")).status == NativeSetupStatus::Applied,
-            "v2 compatibility host uses a real configured native run");
+    const auto configure_next_run = [&] {
+        auto next = spec("scratch-abi-v2");
+        next.identity.run_number = host.native_consumed_high_water() + 1;
+        require(host.configure_native(next).status == NativeSetupStatus::Applied,
+                "v2 compatibility host configures the next legitimate native run");
+        require(host.native_state().kind == NativeLifecycleKind::Ready,
+                "configured compatibility host is Ready before execution");
+    };
+    configure_next_run();
+    int expected_calls = 0;
+    const auto run_configured = [&](const char* phase, bool optional, bool slab) {
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        expected_calls += static_cast<int>(bars.size());
+        require_optional_completion(host, expected_calls, phase, optional, slab);
+    };
     pf_scratch_tables_v2 config{};
     config.struct_size = sizeof(config);
     config.version = 2;
@@ -365,7 +405,7 @@ void optional_v2_layout_copy_and_atomic_replacement() {
     reject(bad, "setting_unsupported");
     bad = installed; bad.active_fields |= PF_SCRATCH_BOUND_V; bad.V = 28;
     reject(bad, "setting_unsupported");
-    host.run(bars.data(), 2);
+    run_configured("v2 optional run", true, false);
     require(host.calls == 2 && host.observed && !host.slab, "v2 uses real disk path, never P0 slab");
     require(host.observed->active_fields == installed.active_fields
             && host.observed->manifest.U == 0 && host.observed->manifest.B_c == 123,
@@ -376,19 +416,26 @@ void optional_v2_layout_copy_and_atomic_replacement() {
     const auto preceding = host.observed;
     auto legacy = descriptor();
     require(setter(handle(host), &legacy) == 0, "explicit v1 replaces v2");
-    host.run(bars.data(), 2);
+    configure_next_run();
+    run_configured("v1 replacement run", false, true);
     require(host.slab && !host.observed && preceding->manifest.B_c == 123,
             "v1 preserves its fixed slab and old policy owners stay valid");
+    const auto preceding_slab = host.run_slab();
     require(strategy_set_scratch_tables_v2(handle(host), nullptr) == 0, "v2 NULL replaces v1 with disk");
-    host.run(bars.data(), 2);
+    require(host.run_slab() == preceding_slab, "idle v2 reset retains the preceding run's slab");
+    configure_next_run();
+    run_configured("NULL v2 reset run", false, false);
     require(!host.slab && !host.observed && host.calls == 6, "NULL v2 reset completed on real host");
+    require(preceding_slab && preceding_slab->manifest().R == legacy.R,
+            "previous v1 owner remains valid after a completed disk run");
     for (const auto roots : {UINT64_C(0), UINT64_C(1), UINT64_C(65)}) {
         auto with_roots = installed;
         with_roots.active_fields |= PF_SCRATCH_BOUND_R;
         with_roots.R = roots;
         require(strategy_set_scratch_tables_v2(handle(host), &with_roots) == 0,
                 "v2 supports an independent finite root maximum, including zero");
-        host.run(bars.data(), 2); // Native bootstrap itself consumes no roots.
+        configure_next_run();
+        run_configured("optional R bootstrap", true, false); // Bootstrap consumes no roots.
         require(host.observed && host.observed->active(detail::ScratchBound::R)
                     && host.observed->manifest.R == roots && !host.slab,
                 "copied R policy reaches a completed native begin");
