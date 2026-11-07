@@ -432,7 +432,7 @@ jobs:
           test ! -L .github/engine-toolchain-image.txt
           test "$(wc -l < .github/engine-toolchain-image.txt)" -eq 1
           IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt
-          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/gke-runner-images/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
+          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/engine-release-toolchains/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
           export ENGINE_TOOLCHAIN_IMAGE
           started=$(date +%s)
           if docker pull "${ENGINE_TOOLCHAIN_IMAGE}"; then pull_rc=0; else pull_rc=$?; fi
@@ -452,7 +452,7 @@ jobs:
           test ! -L .github/engine-toolchain-image.txt
           test "$(wc -l < .github/engine-toolchain-image.txt)" -eq 1
           IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt
-          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/gke-runner-images/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
+          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/engine-release-toolchains/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
           export ENGINE_TOOLCHAIN_IMAGE
           bash scripts/build_prebuilt_bookworm.sh \
             "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" "${SOURCE_SHA}" "${NEXT}" "${TAG}" "${DRY_RUN}"
@@ -536,7 +536,7 @@ jobs:
           test ! -L .github/engine-toolchain-image.txt
           test "$(wc -l < .github/engine-toolchain-image.txt)" -eq 1
           IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt
-          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/gke-runner-images/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
+          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/engine-release-toolchains/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
           export ENGINE_TOOLCHAIN_IMAGE
           bash scripts/build_prebuilt_bookworm.sh \
             --consume "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" \

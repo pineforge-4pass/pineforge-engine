@@ -1804,6 +1804,58 @@ class OptionCAdmission(unittest.TestCase):
         self.assertTrue(ci_preflight.release_prebuilt_workflow_findings(hybrid))
         self.assertTrue(self.findings(hybrid))
 
+    def test_option_c_image_pin_requires_the_new_origin_and_canonical_manifest(self):
+        expected = ('us-central1-docker.pkg.dev/gen-lang-client-0864094636/'
+                    'engine-release-toolchains/engine-toolchain-bookworm@sha256:'
+                    '72fb3f2a4d3409e6050b17530585992784a21a4955b368cb8f8b392981abc780\n')
+        actual = (ROOT / '.github/engine-toolchain-image.txt').read_bytes().decode('utf-8')
+        self.assertEqual(actual, expected)
+        self.assertEqual(ci_preflight.release_prebuilt_image_findings(actual), [])
+        for changed in (
+                '',
+                expected.replace('engine-release-toolchains', 'gke-runner-images'),
+                expected.replace('engine-release-toolchains', 'other-toolchains'),
+                expected.replace('gen-lang-client-0864094636', 'other-project'),
+                expected.replace('us-central1-docker.pkg.dev', 'other.pkg.dev'),
+                expected.replace('engine-toolchain-bookworm', 'other-toolchain'),
+                expected.replace(expected.split('@sha256:')[1].strip(), '0' * 64),
+                expected.split('@sha256:')[0] + '\n',
+                expected.split('@sha256:')[0] + '@sha256:\n',
+                expected.split('@sha256:')[0] + ':latest\n',
+                expected.rstrip('\n'),
+                expected + '\n',
+                expected.replace('\n', '\r\n'),
+                ' ' + expected):
+            with self.subTest(source=changed):
+                self.assertNotEqual(changed, actual)
+                self.assertTrue(ci_preflight.release_prebuilt_image_findings(changed))
+
+    def test_option_c_all_three_image_reads_require_the_new_origin_guard(self):
+        self.assertEqual(self.findings(self.workflow), [])
+        x86 = _jobs(self.workflow)['prebuilt-x86']
+        read = '          IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt\n'
+        guard = (r'          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/'
+                 r'gen-lang-client-0864094636/engine-release-toolchains/'
+                 r'engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]' + '\n')
+        self.assertEqual(x86.count(read), 3)
+        self.assertEqual(x86.count(guard), 3)
+        for name in ('Pull the private pinned toolchain and record observations',
+                     'Build x86_64 in pinned Bookworm', 'Consume packed x86_64 archive'):
+            step = ci_preflight._step_named(ci_preflight._steps(x86), '      - name: ' + name)
+            self.assertIn(read + guard, step)
+            for changed_guard in (
+                    '',
+                    guard.replace('engine-release-toolchains', 'gke-runner-images'),
+                    guard.replace('engine-release-toolchains', 'other-toolchains'),
+                    guard.replace('us-central1-docker\\.pkg\\.dev/'
+                                  'gen-lang-client-0864094636/engine-release-toolchains/', ''),
+                    guard.replace('@sha256:[0-9a-f]{64}', '.*')):
+                with self.subTest(step=name, guard=changed_guard):
+                    changed = self.workflow.replace(step, step.replace(guard, changed_guard, 1), 1)
+                    self.assertNotEqual(changed, self.workflow)
+                    self.assertTrue(ci_preflight.release_prebuilt_workflow_findings(changed))
+                    self.assertTrue(self.findings(changed))
+
     def test_option_c_auth_caller_permissions_and_token_custody_mutations_refuse(self):
         self.assertEqual(self.findings(self.workflow), [])
         x86 = _jobs(self.workflow)['prebuilt-x86']

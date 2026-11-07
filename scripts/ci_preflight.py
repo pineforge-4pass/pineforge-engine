@@ -3641,7 +3641,7 @@ RELEASE_OPTION_C_JOBS = {
           test ! -L .github/engine-toolchain-image.txt
           test "$(wc -l < .github/engine-toolchain-image.txt)" -eq 1
           IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt
-          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/gke-runner-images/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
+          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/engine-release-toolchains/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
           export ENGINE_TOOLCHAIN_IMAGE
           started=$(date +%s)
           if docker pull "${ENGINE_TOOLCHAIN_IMAGE}"; then pull_rc=0; else pull_rc=$?; fi
@@ -3661,7 +3661,7 @@ RELEASE_OPTION_C_JOBS = {
           test ! -L .github/engine-toolchain-image.txt
           test "$(wc -l < .github/engine-toolchain-image.txt)" -eq 1
           IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt
-          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/gke-runner-images/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
+          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/engine-release-toolchains/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
           export ENGINE_TOOLCHAIN_IMAGE
           bash scripts/build_prebuilt_bookworm.sh \
             "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" "${SOURCE_SHA}" "${NEXT}" "${TAG}" "${DRY_RUN}"
@@ -3745,7 +3745,7 @@ RELEASE_OPTION_C_JOBS = {
           test ! -L .github/engine-toolchain-image.txt
           test "$(wc -l < .github/engine-toolchain-image.txt)" -eq 1
           IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt
-          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/gke-runner-images/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
+          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/engine-release-toolchains/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
           export ENGINE_TOOLCHAIN_IMAGE
           bash scripts/build_prebuilt_bookworm.sh \
             --consume "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" \
@@ -4085,9 +4085,12 @@ RELEASE_BOOKWORM_CONSUMER_BLOB = 'd066968913c0d4ff7358e6fd4dde2a794e1be600'
 
 def release_prebuilt_image_findings(source: str) -> list[str]:
     """Bind the tracked one-line image input to the approved immutable source."""
-    payload = source.encode('utf-8')
-    actual = hashlib.sha1(b'blob ' + str(len(payload)).encode('ascii') + b'\0' + payload).hexdigest()
-    if actual != '2199f116b530dc61c4eada61bfbb62dc44b21c71':
+    # expectation corrected: gke-runner-images -> engine-release-toolchains,
+    # because the approved origin is now the self-managed release registry.
+    # Compare the full literal, including the unchanged manifest and final LF.
+    if source != ('us-central1-docker.pkg.dev/gen-lang-client-0864094636/'
+                  'engine-release-toolchains/engine-toolchain-bookworm@sha256:'
+                  '72fb3f2a4d3409e6050b17530585992784a21a4955b368cb8f8b392981abc780\n'):
         return ['release prebuilt toolchain pin must contain exactly the approved private '
                 'Bookworm repository@sha256 line']
     return []
