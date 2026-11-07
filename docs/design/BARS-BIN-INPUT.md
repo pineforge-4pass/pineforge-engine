@@ -205,8 +205,8 @@ Selected-window selection includes a report policy, any window option or
 `--validate-window-only` (`_selected_requested` docker/run_json.py:4699).
 The refusals above use the ordinary request code, not a window-specific
 code (`_request_invalid` docker/run_json.py:4465). The catalog names
-`run_request_invalid` docker/run_failure_codes.json:1538 and includes the
-option `ohlcv_bin` docker/run_failure_codes.json:1563.
+`run_request_invalid` docker/run_failure_codes.json:1558 and includes the
+option `ohlcv_bin` docker/run_failure_codes.json:1583.
 These request refusals exit 1 and emit the failure JSON line on stdout
 (`exit_status` docker/run_json.py:4465; `write_failure`
 docker/run_json.py:2366).
@@ -224,7 +224,7 @@ Read-only searches covered `docker/`, `scripts/`, `runner/` and repository
 filenames/release notes; `campaign/` and `cloudrun/` are absent. The local
 backtest entry is `main` docker/run_json.py:5345; the catalog itself
 identifies the optimizer-only refusal separately (`description`
-docker/run_failure_codes.json:2593). Neither establishes the production HPO
+docker/run_failure_codes.json:2613). Neither establishes the production HPO
 runner's input support.
 
 Check the separate **pineforge-hpo** repository named by this repository's
@@ -336,8 +336,8 @@ Failure JSON uses `engine`, `error`, `code`, `args` (`doc`
 docker/run_json.py:2322; `code` docker/run_json.py:2325; `args`
 docker/run_json.py:2326). The catalog entries are `chart_bars_unreadable`
 docker/run_failure_codes.json:60, `symbol_feeds_refused`
-docker/run_failure_codes.json:2178 and `run_request_invalid`
-docker/run_failure_codes.json:1538. Shared binary-reader helpers additionally
+docker/run_failure_codes.json:2198 and `run_request_invalid`
+docker/run_failure_codes.json:1558. Shared binary-reader helpers additionally
 refuse malformed file `size`, metadata/digests as `sidecar`, and a bad feed
 companion as `close_file` (`bar_count` docker/pf_bars.py:101;
 `check_sidecar` docker/pf_bars.py:137; `check_close_size`

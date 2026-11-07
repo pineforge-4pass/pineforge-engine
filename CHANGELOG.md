@@ -7,6 +7,10 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- `pineforge-live` automatically creates or revalidates a verified pre-upgrade
+  ledger image and manifest in the sibling `<ledger>.backups` directory.
+  Copy and separate restore space admission is reported on stderr; backup
+  failures stop startup with `live_ledger_backup_failed` and exit status 1.
 - `ta.percentile_nearest_rank` now accepts a series length at runtime. Each
   call site retains its own appended source history and computes the
   nearest-rank percentile over the requested recent values, within the
