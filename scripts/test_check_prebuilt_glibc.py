@@ -327,19 +327,40 @@ class RealArtifacts(unittest.TestCase):
                 self.assertGreater(index, inventory_index)
 
     def test_older_numeric_versions_are_accepted(self):
-        for version in ("2.2.5", "2.9", "2.34", "2.36", "2.36.0"):
+        # expectation corrected: 2.36/2.36.0 -> 2.35/2.35.0, because the supported
+        # runtime floor requires a fixed GLIBC_2.35 candidate ceiling.
+        for version in ("2.2.5", "2.9", "2.34", "2.35", "2.35.0"):
             with self.subTest(version=version):
-                path = self.shared(f"older/{version}/provider.so", ("GLIBC_" + version,))
-                records = self.assert_verdict(self.run_checker(), True)
-                self.assertEqual(self.targets(records)[str(path)]["max_glibc"], version)
+                staged = self.tree(
+                    "older " + version,
+                    lambda version=version: self.shared("lib/provider.so", ("GLIBC_" + version,)))
+                records = self.assert_verdict(self.run_checker(staged), True)
+                target = self.targets(records)[str(staged / "lib/provider.so")]
+                self.assertTrue(target["inspected"])
+                self.assertEqual(target["max_glibc"], version)
+                self.assertEqual(target["versions"], ["GLIBC_" + version])
+                self.assertTrue(target["glibc_references"])
+                self.assertTrue(all(ref["section"] == "UND"
+                                    for ref in target["glibc_references"]))
 
     def test_future_minor_patch_and_major_versions_are_rejected(self):
-        for version in ("2.37", "2.38", "2.39", "2.40", "2.100", "3.0", "10.0", "2.36.1"):
+        for version in ("2.35.1", "2.36", "2.36.0", "2.37", "2.38", "2.39",
+                        "2.40", "2.100", "3.0", "10.0", "2.36.1"):
             with self.subTest(version=version):
-                path = self.shared(f"future/{version}/library.so.9", ("GLIBC_" + version,))
-                records = self.assert_verdict(self.run_checker(), False)
-                self.assert_issue(records, path, "GLIBC_" + version)
-                self.assertEqual(self.targets(records)[str(path)]["max_glibc"], version)
+                staged = self.tree(
+                    "future " + version,
+                    lambda version=version: self.shared("lib/library.so.9", ("GLIBC_" + version,)))
+                path = staged / "lib/library.so.9"
+                records = self.assert_verdict(self.run_checker(staged), False)
+                self.assert_issue(records, path,
+                                  "GLIBC_" + version + " exceeds fixed GLIBC_2.35 ceiling")
+                target = self.targets(records)[str(path)]
+                self.assertTrue(target["inspected"])
+                self.assertEqual(target["max_glibc"], version)
+                self.assertEqual(target["versions"], ["GLIBC_" + version])
+                self.assertTrue(target["glibc_references"])
+                self.assertTrue(all(ref["section"] == "UND"
+                                    for ref in target["glibc_references"]))
 
     def test_maximum_is_numeric_and_reports_all_violations(self):
         path = self.shared("lib/all.so", ("GLIBC_2.9", "GLIBC_2.40", "GLIBC_2.100"))
@@ -351,12 +372,31 @@ class RealArtifacts(unittest.TestCase):
             self.assert_issue(records, path, version)
 
     def test_version_definitions_are_inspected_as_well_as_requirements(self):
-        clean = self.shared("lib/clean definition.so", ("GLIBC_2.36",), definitions=True)
-        records = self.assert_verdict(self.run_checker(), True)
-        self.assertEqual(self.targets(records)[str(clean)]["max_glibc"], "2.36")
-        bad = self.shared("lib/high definition.so", ("GLIBC_3.0",), definitions=True)
-        records = self.assert_verdict(self.run_checker(), False)
-        self.assert_issue(records, bad, "GLIBC_3.0")
+        # expectation corrected: accepted definition 2.36 -> 2.35, because
+        # definitions obey the same fixed GLIBC_2.35 ceiling as requirements.
+        for success, versions in (
+                (True, ("2.2.5", "2.9", "2.34", "2.35", "2.35.0")),
+                (False, ("2.35.1", "2.36", "2.36.0", "2.37", "2.38", "2.39",
+                         "2.40", "2.100", "3.0", "10.0", "2.36.1"))):
+            for version in versions:
+                with self.subTest(version=version, success=success):
+                    staged = self.tree(
+                        "definition " + version,
+                        lambda version=version: self.shared(
+                            "lib/definition.so", ("GLIBC_" + version,), definitions=True))
+                    path = staged / "lib/definition.so"
+                    records = self.assert_verdict(self.run_checker(staged), success)
+                    target = self.targets(records)[str(path)]
+                    self.assertTrue(target["inspected"])
+                    self.assertEqual(target["max_glibc"], version)
+                    self.assertEqual(target["versions"], ["GLIBC_" + version])
+                    self.assertTrue(target["glibc_references"])
+                    self.assertTrue(all(ref["section"] != "UND"
+                                        for ref in target["glibc_references"]))
+                    if not success:
+                        self.assert_issue(
+                            records, path,
+                            "GLIBC_" + version + " exceeds fixed GLIBC_2.35 ceiling")
 
     def test_private_and_unknown_glibc_grammar_are_rejected(self):
         for version in ("GLIBC_PRIVATE", "GLIBC_FUTURE", "GLIBC_2.bad", "GLIBC_2"):
@@ -435,6 +475,37 @@ class RealArtifacts(unittest.TestCase):
         self.assertEqual([row["name"] for row in members], ["same.o", "same.o"])
         self.assertEqual([row["ordinal"] for row in members], [1, 2])
         self.assert_issue(records, path, "__isoc23_strtol")
+
+    def test_late_archive_ceiling_violation_retains_complete_ordered_inventory(self):
+        entries = [
+            ("first.o", "2.9"), ("same.o", "2.35"), ("middle.o", "2.34"),
+            ("same.o", "2.36"), ("last.o", "2.35.0"),
+        ]
+        path = self.archive("lib/boundary.a", [
+            self.object(name, version="GLIBC_" + version) for name, version in entries
+        ], duplicate=True)
+        records = self.assert_verdict(self.run_checker(), False)
+        target = self.targets(records)[str(path)]
+        expected = [{"ordinal": index, "name": name}
+                    for index, (name, _) in enumerate(entries, 1)]
+        inventory = next(row for row in records if row["event"] == "archive_inventory")
+        self.assertEqual(inventory["path"], str(path))
+        self.assertEqual(inventory["members"], expected)
+        self.assertEqual(target["expected_members"], [name for name, _ in entries])
+        self.assertEqual([{"ordinal": member["ordinal"], "name": member["name"]}
+                          for member in target["members"]], expected)
+        self.assertTrue(target["inspected"])
+        self.assertTrue(all(member["inspected"] for member in target["members"]))
+        self.assertEqual([member["max_glibc"] for member in target["members"]],
+                         [version for _, version in entries])
+        self.assertEqual([member["versions"] for member in target["members"]],
+                         [["GLIBC_" + version] for _, version in entries])
+        self.assertEqual(target["max_glibc"], "2.36")
+        self.assertEqual(records[-1]["archive_members"], len(entries))
+        issues = [row for row in records if row["event"] == "issue"]
+        self.assertEqual([(row["path"], row["member"], row["ordinal"]) for row in issues],
+                         [(str(path), "same.o", 4)])
+        self.assert_issue(records, path, "GLIBC_2.36 exceeds fixed GLIBC_2.35 ceiling")
 
     def test_no_libraries_and_missing_root_fail(self):
         records = self.assert_verdict(self.run_checker(), False)
@@ -810,6 +881,46 @@ class RealArtifacts(unittest.TestCase):
         ast.fix_missing_locations(tree)
         return self.source(self.area / (predicate + "_mutant.py"), ast.unparse(tree) + "\n")
 
+    def relaxed_ceiling_mutant(self) -> Path:
+        declare(CHECKER)
+        safe_path(CHECKER)
+        tree = ast.parse(CHECKER.read_text(encoding="utf-8"))
+        count = 0
+        for node in tree.body:
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id == "CEILING"):
+                node.value = ast.Tuple(
+                    elts=[ast.Constant(value=2), ast.Constant(value=36)], ctx=ast.Load())
+                count += 1
+        self.assertEqual(count, 1, "must relax exactly one fixed ceiling assignment")
+        ast.fix_missing_locations(tree)
+        return self.source(self.area / "relaxed_ceiling_mutant.py", ast.unparse(tree) + "\n")
+
+    def test_ceiling_relaxation_mutation_breaks_real_2_36_rejection(self):
+        mutant = self.relaxed_ceiling_mutant()
+        for kind in ("requirements", "definitions", "archive"):
+            with self.subTest(kind=kind):
+                def build():
+                    if kind == "archive":
+                        self.archive("lib/payload.a", [
+                            self.object("member.o", version="GLIBC_2.36")])
+                    else:
+                        self.shared("lib/payload.so", ("GLIBC_2.36",),
+                                    definitions=kind == "definitions")
+
+                staged = self.tree("relaxation " + kind, build)
+                self.assert_verdict(self.run_checker(staged), False)
+                changed = self.run_checker(staged, checker=mutant)
+                self.assert_verdict(changed, True)
+                with self.assertRaises(AssertionError):
+                    self.assert_verdict(changed, False)
+        above = self.tree(
+            "above relaxed ceiling",
+            lambda: self.shared("lib/payload.so", ("GLIBC_2.36.1",)))
+        records = self.assert_verdict(self.run_checker(above, checker=mutant), False)
+        self.assert_issue(records, above / "lib/payload.so", "GLIBC_2.36.1")
+
     def test_version_policy_mutation_breaks_real_rejection_assertion(self):
         self.shared("lib/arbitrary name.so.7", ("GLIBC_2.100",))
         self.assert_verdict(self.run_checker(), False)
@@ -866,8 +977,10 @@ class RealArtifacts(unittest.TestCase):
                          [self.object("early.o", reference="__isoc23_strtol")])
 
         released = self.tree("released baseline", build)
+        # expectation corrected: candidate 2.34 -> 2.35, because the exact
+        # new boundary must remain valid below a historical 2.38 baseline.
         staged = self.tree("staged below",
-                           lambda: self.shared("lib/staged.so", ("GLIBC_2.34",)))
+                           lambda: self.shared("lib/staged.so", ("GLIBC_2.35",)))
         records = self.assert_verdict(self.run_checker(staged, baseline=released), True)
         rows = {row["path"]: row for row in records
                 if row["event"] == "target" and row.get("role") == "baseline"}
@@ -879,7 +992,25 @@ class RealArtifacts(unittest.TestCase):
         self.assertEqual([row for row in records if row["event"] == "issue"], [])
         comparison = next(row for row in records if row["event"] == "baseline_comparison")
         self.assertEqual((comparison["staged_max_glibc"], comparison["baseline_max_glibc"]),
-                         ("2.34", "2.38"))
+                         ("2.35", "2.38"))
+
+    def test_fixed_ceiling_rejects_2_36_below_released_2_38(self):
+        released = self.tree("released baseline",
+                             lambda: self.shared("lib/released.so", ("GLIBC_2.38",)))
+        staged = self.tree("staged below baseline",
+                           lambda: self.shared("lib/staged.so", ("GLIBC_2.36",)))
+        path = staged / "lib/staged.so"
+        records = self.assert_verdict(self.run_checker(staged, baseline=released), False)
+        comparison = next(row for row in records if row["event"] == "baseline_comparison")
+        self.assertEqual((comparison["staged_max_glibc"], comparison["baseline_max_glibc"],
+                          comparison["exceeds"]), ("2.36", "2.38", False))
+        targets = self.targets(records)
+        self.assertTrue(targets[str(path)]["inspected"])
+        self.assertTrue(targets[str(released / "lib/released.so")]["inspected"])
+        self.assertEqual(targets[str(path)]["versions"], ["GLIBC_2.36"])
+        self.assertEqual(targets[str(released / "lib/released.so")]["versions"], ["GLIBC_2.38"])
+        self.assertEqual(records[-1]["issues"], 1)
+        self.assert_issue(records, path, "GLIBC_2.36 exceeds fixed GLIBC_2.35 ceiling")
 
     def test_released_baseline_input_decides_the_verdict(self):
         # The same two trees give opposite verdicts when their roles swap, so the
