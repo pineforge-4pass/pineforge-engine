@@ -72,6 +72,8 @@ public:
     std::string exit_comment(int i) const { return closed_trade_exit_comment(i); }
     double exit_price(int i) const { return closed_trade_exit_price(i); }
     double entry_price(int i) const { return closed_trade_entry_price(i); }
+    // expectation corrected: short +quantity -> -quantity, because Pine size
+    // encodes the side; the fill-derived magnitudes below are unchanged.
     double trade_size(int i) const { return closed_trade_size(i); }
     int exit_bar(int i) const { return closed_trade_exit_bar_index(i); }
     double position_size() const { return signed_position_size(); }
@@ -149,7 +151,7 @@ static void test_gap_open_single_slice_at_open() {
         CHECK(eng.exit_comment(0) == std::string("Margin call"));
         CHECK(eng.exit_bar(0) == 1);
         CHECK(near(eng.exit_price(0), 104.0));          // AT THE OPEN, not the high
-        CHECK(near(eng.trade_size(0), 3.0769230769, 1e-6));  // open-priced 4x shortfall
+        CHECK(near(eng.trade_size(0), -3.0769230769, 1e-6));  // open-priced 4x shortfall
     }
     CHECK(near(eng.position_size(), -(10.0 - 3.0769230769), 1e-6));
 }
@@ -175,9 +177,9 @@ static void test_gap_open_then_extreme_second_slice() {
         CHECK(eng.exit_bar(0) == 1);
         CHECK(eng.exit_bar(1) == 1);
         CHECK(near(eng.exit_price(0), 104.0));
-        CHECK(near(eng.trade_size(0), 3.0769230769, 1e-6));
+        CHECK(near(eng.trade_size(0), -3.0769230769, 1e-6));
         CHECK(near(eng.exit_price(1), 130.0));
-        CHECK(near(eng.trade_size(1), 3.6923076923, 1e-6));
+        CHECK(near(eng.trade_size(1), -3.6923076923, 1e-6));
     }
 }
 
@@ -197,7 +199,7 @@ static void test_no_open_breach_keeps_extreme_only() {
     CHECK(count_margin_calls(eng) == 1);
     if (eng.trade_count() >= 1) {
         CHECK(near(eng.exit_price(0), 105.0));
-        CHECK(near(eng.trade_size(0), 3.80952381, 1e-4));
+        CHECK(near(eng.trade_size(0), -3.80952381, 1e-4));
         CHECK(eng.exit_bar(0) == 1);
     }
 }
@@ -219,7 +221,7 @@ static void test_gap_open_whole_share_grid() {
         if (eng.trade_count() >= 1) {
             CHECK(eng.exit_comment(0) == std::string("Margin call"));
             CHECK(near(eng.exit_price(0), 104.0));
-            CHECK(near(eng.trade_size(0), 1.0));
+            CHECK(near(eng.trade_size(0), -1.0));
             CHECK(eng.exit_bar(0) == 1);
         }
     }
@@ -238,7 +240,7 @@ static void test_gap_open_whole_share_grid() {
         if (eng.trade_count() >= 1) {
             CHECK(eng.exit_comment(0) == std::string("Margin call"));
             CHECK(near(eng.exit_price(0), 112.0));
-            CHECK(near(eng.trade_size(0), 8.0));
+            CHECK(near(eng.trade_size(0), -8.0));
         }
         // Survivor 2 @112.5: equity = 1000 - 12*8 - 12.5*2 = 879, required
         // 225 -> no second slice on this bar.

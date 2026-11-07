@@ -108,6 +108,7 @@ public:
     std::string entry_id(int i) const { return closed_trade_entry_id(i); }
     std::string exit_id(int i) const { return closed_trade_exit_id(i); }
     double exit_price(int i) const { return closed_trade_exit_price(i); }
+    // expectation corrected: 1/2 -> -1/-2, because these cycles are short.
     double size(int i) const { return closed_trade_size(i); }
     double position_size() const { return signed_position_size(); }
 
@@ -279,7 +280,7 @@ static void test_orphaned_bucket_leg_still_fires() {
     CHECK(eng.rows_with_exit_id("T2") == 1);   // the orphaned leg fired
     CHECK(eng.rows_at_exit_price(96.0) == 2);
     CHECK(eng.rows_at_exit_price(90.0) == 2);
-    for (int i = 0; i < 4; ++i) CHECK(near(eng.size(i), 1.0));
+    for (int i = 0; i < 4; ++i) CHECK(near(eng.size(i), -1.0));
 }
 
 // ---- B: reaching flat re-admits the next cycle's same-id entry -------------
@@ -297,7 +298,7 @@ static void test_flat_readmits_next_cycle_entry() {
     CHECK(eng.trade_count() == 5);
     if (eng.trade_count() < 5) return;
     CHECK(eng.entry_id(4) == std::string("S"));
-    CHECK(near(eng.size(4), 2.0));
+    CHECK(near(eng.size(4), -2.0));
     CHECK(near(eng.position_size(), 0.0));
 }
 
@@ -316,7 +317,7 @@ static void test_leg_for_unfilled_entry_id_is_removed() {
     CHECK(eng.trade_count() == 1);
     if (eng.trade_count() < 1) return;
     CHECK(eng.exit_id(0) == std::string("REAL"));
-    CHECK(near(eng.size(0), 2.0));
+    CHECK(near(eng.size(0), -2.0));
     CHECK(near(eng.exit_price(0), 90.0));
     CHECK(near(eng.position_size(), 0.0));
 }

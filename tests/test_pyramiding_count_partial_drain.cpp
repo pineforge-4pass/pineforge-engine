@@ -437,7 +437,9 @@ static void test_owned_slot_full_zero_and_reuse() {
             CHECK(p.slots==1);
             CHECK(near(p.position_size(),is_long?4:-4));
             CHECK(p.trade_count()==1);
-            CHECK(near(p.size(0),2));
+            // expectation corrected: 2 -> -2 for the short mirror, because
+            // Pine sizes encode the configured side; long remains +2.
+            CHECK(near(p.size(0),is_long?2:-2));
         }
         OwnedHistoryProbe reuse;reuse.is_long=is_long;reuse.cross_first=true;
         reuse.run(bars.data(),static_cast<int>(bars.size()));

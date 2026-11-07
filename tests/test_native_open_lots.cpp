@@ -124,7 +124,7 @@ void observe(LotHost& h) {
         CHECK(row.entry_bar_index == h.p_entry_bar(k));
         CHECK(row.entry_label == h.p_entry_id(k));
         CHECK(row.entry_comment == h.p_entry_comment(k));
-        CHECK(bits_eq(std::abs(row.signed_units), h.p_size(k)));
+        CHECK(bits_eq(row.signed_units, h.p_size(k)));
         CHECK(bits_eq(row.favorable_excursion, h.p_runup(k)));
         CHECK(bits_eq(row.adverse_excursion, h.p_drawdown(k)));
         CHECK((row.side == no::Side::Long) == (h.p_direction(k) == "long"));
