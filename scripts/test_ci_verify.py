@@ -373,7 +373,7 @@ class Scripted:
         if argv[0] == 'cmake' and '--build' in argv and str(self.build_dir / 'ci-smoke') in argv:
             return Completed(int(self.exits.get('smoke-build', 0)), b'ok\n', b'')
         if argv[0] == 'cmake' and '--build' in argv:
-            return self._build()
+            return self._build(argv)
         if argv[0] == 'cmake' and '--install' in argv:
             return self._install()
         if argv[0] == 'ctest':
@@ -382,7 +382,7 @@ class Scripted:
                 names = list(registry)
                 if '--show-only=json-v1' in argv:
                     return Completed(0, json.dumps({
-                        'tests': [{'name': name} for name in names],
+                        'tests': [{'name': name, 'command': self._row_command(name)} for name in names],
                     }).encode())
                 labelled = set(self.exits.get('ctest_shard_labelled', ()))
                 if '-L' in argv:
@@ -401,6 +401,11 @@ class Scripted:
                 return Completed(int(self.exits.get('ctest', 0)),
                                  named_ctest_output(names, skipped=skipped))
             if '--show-only=json-v1' in argv:
+                if self.profile == 'live-sanitizers':
+                    return Completed(0, json.dumps({'tests': [
+                        {'name': name, 'command': self._row_command(name)}
+                        for name in self._live_registry()
+                    ]}).encode())
                 names = {'native_live_help', 'test_live_json',
                          'test_native_live_startup', 'test_native_live_store',
                          'test_native_live_routing',
@@ -420,6 +425,8 @@ class Scripted:
                 ci_verify.EXCLUDED_REGISTERED_MIN.get(
                     self.profile, ci_verify.profile_min_tests(
                         ci_verify.PROFILE[self.profile], self.source) or KERNEL_MIN_TESTS))
+            if self.profile == 'live-sanitizers':
+                registered = len(self._live_registry())
             labelled = self.exits.get('ctest_labelled', 5)
             if '-N' in argv:
                 stage = ('ctest-list-excluded' if '-L' in argv else
@@ -436,6 +443,8 @@ class Scripted:
                 # registered by its own row, exactly as a real `ctest -N`
                 # lists it; the rest of the registry is filler names.
                 names = list(self.exits.get('ctest_registered_names', ()))
+                if self.profile == 'live-sanitizers':
+                    names = list(self._live_registry())
                 for implied in (self.exits.get('ctest_skipped', ()),
                                 self.exits.get('ctest_not_run', ()),
                                 self.exits.get('ctest_disabled', ())):
@@ -466,11 +475,17 @@ class Scripted:
             if 'ctest_raw' in self.exits:
                 return Completed(int(self.exits.get('ctest', 0)), self.exits['ctest_raw'], b'')
             default_rows = (registered - labelled if '-LE' in argv else
+                            registered if self.profile == 'live-sanitizers' else
                             ci_verify.profile_min_tests(
                                 ci_verify.PROFILE[self.profile], self.source) or KERNEL_MIN_TESTS)
             rows = self.exits.get('ctest_rows', default_rows)
             if rows == 'absent':
                 return Completed(int(self.exits.get('ctest', 0)), b'tests\n', b'')
+            if self.profile == 'live-sanitizers' and rows == registered:
+                return Completed(int(self.exits.get('ctest', 0)), named_ctest_output(
+                    self._live_registry(), skipped=self.exits.get('ctest_skipped', ()),
+                    not_run=self.exits.get('ctest_not_run', ()),
+                    disabled=self.exits.get('ctest_disabled', ())))
             summary = ctest_output(rows, self.exits.get('ctest_skipped', ()),
                                    self.exits.get('ctest_not_run', ()),
                                    self.exits.get('ctest_disabled', ()))
@@ -486,6 +501,34 @@ class Scripted:
         if '--version' in argv:
             return Completed(0, b'version\n', b'')
         return Completed(1, b'', f'unhandled command: {argv}\n'.encode())
+
+    def _row_command(self, name):
+        if self.profile == 'live-sanitizers' and name == 'test_native_live_websocket':
+            return [str(self.build_dir / 'bin/test_native_live_websocket')]
+        return self.exits.get('ctest_build_commands', {}).get(
+            name, [str(self.build_dir / 'tests' / name)])
+
+    def _live_registry(self):
+        # A scripted registry has independently named rows, not a floor
+        # masquerading as discovery. Count controls may pad, never trim it.
+        names = {'native_live_help', 'test_live_json',
+                 'test_native_live_startup', 'test_native_live_store', 'test_native_live_routing',
+                 'test_native_example_batch', 'test_native_example_selected',
+                 'test_native_live_equivalence_split'}
+        if (self.source / 'runner/transport.cpp').is_file():
+            names.add('test_native_live_websocket')
+        names.update(ci_verify.runner_e2e_test_names(self.source))
+        names.update(self.exits.get('ctest_registered_names', ()))
+        for key in ('ctest_skipped', 'ctest_not_run', 'ctest_disabled'):
+            names.update(self.exits.get(key, ()))
+        count = self.exits.get('ctest_registered', ci_verify.profile_min_tests(
+            ci_verify.PROFILE[self.profile], self.source))
+        index = 0
+        while len(names) < count:
+            names.add(f'test_live_fixture_{index}')
+            index += 1
+        names.discard(self.exits.get('live_missing_test'))
+        return tuple(sorted(names))
 
     def _cache_values(self) -> dict[str, str]:
         profile = ci_verify.PROFILE[self.profile]
@@ -528,6 +571,41 @@ class Scripted:
             # A real, empty CTest inventory proves the no-test exit policy.
             # Configure/build remain scripted; no engine executable is run.
             (self.build_dir / 'CTestTestfile.cmake').write_text('# deliberately empty inventory\n')
+        if (self.profile == 'live-sanitizers'
+                or self.profile == 'sanitizers' and 'ctest_shard_inventory' in self.exits):
+            registry = self.exits.get('ctest_shard_inventory', ())
+            if self.profile == 'live-sanitizers':
+                registry = self._live_registry()
+            target_names = self.exits.get('ctest_build_target_names', {})
+            self.link_outputs = {
+                target_names.get(name, name): self.build_dir / 'tests' / name for name in registry}
+            self.link_outputs.update({
+                'pineforge': self.build_dir / 'lib/libpineforge.a',
+                'pineforge_kernel': self.build_dir / 'lib/libpineforge_kernel.a',
+                'pineforge_window_plan': self.build_dir / 'lib/libpineforge_window_plan.so'})
+            installed = ('pineforge', 'pineforge_kernel', 'pineforge_window_plan')
+            if self.profile == 'live-sanitizers':
+                self.link_outputs['pineforge-live'] = self.build_dir / 'bin/pineforge-live'
+                if (self.source / 'runner/transport.cpp').is_file():
+                    # The direct WebSocket gate and its CTest row share a
+                    # real producer in this command-dispatch fixture.
+                    self.link_outputs['test_native_live_websocket'] = (
+                        self.build_dir / 'bin/test_native_live_websocket')
+                installed += ('pineforge-live',)
+            self.link_outputs.update({
+                target: Path(path) for target, path in self.exits.get('ctest_build_outputs', {}).items()})
+            directories = []
+            for target, output in self.link_outputs.items():
+                directory = self.build_dir / 'CMakeFiles' / (target + '.dir')
+                directory.mkdir(parents=True, exist_ok=True)
+                directories.append(str(directory))
+                (directory / 'link.txt').write_text(f'c++ -o "{output}"\n')
+            (self.build_dir / 'CMakeFiles/TargetDirectories.txt').write_text(
+                '\n'.join(directories) + '\n')
+            (self.build_dir / 'cmake_install.cmake').write_text('\n'.join(
+                'file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/lib" '
+                f'TYPE SHARED_LIBRARY FILES "{self.link_outputs[target]}")'
+                for target in installed) + '\n')
         # 'example_commands' == 'absent' scripts a configure that wrote no
         # compile database at all.
         if self.exits.get('example_commands') != 'absent':
@@ -617,10 +695,19 @@ class Scripted:
                              'arguments': [self.cxx, *flags.split(), '-o', obj, '-c', str(unit)]})
         return commands
 
-    def _build(self) -> Completed:
+    def _build(self, argv) -> Completed:
         code = int(self.exits.get('build', 0))
         if code != 0:
             return Completed(code, b'', b'build failed\n')
+        if hasattr(self, 'link_outputs'):
+            targets = (argv[argv.index('--target') + 1:] if '--target' in argv
+                       else self.link_outputs)
+            for target in targets:
+                product = self.link_outputs[target]
+                if target == self.exits.get('ctest_build_omit_output'):
+                    continue
+                product.parent.mkdir(parents=True, exist_ok=True)
+                product.write_bytes(b'command-dispatch fixture, not an engine binary\n')
         # Both archives every profile builds. 'stale_archive' names one the
         # scripted build leaves older than the sources it is compiled from.
         for name in ('libpineforge.a', 'libpineforge_kernel.a'):
@@ -2484,6 +2571,312 @@ class ProfileOptions(unittest.TestCase):
         self.assertIn('Ninja', argv)
 
 
+class CTestTargetMapping(unittest.TestCase):
+    """Exercise generated registries and real producers, including unbuilt commands."""
+
+    def project(self, generator):
+        temporary = tempfile.TemporaryDirectory(prefix='ci-selected-build-')
+        self.addCleanup(temporary.cleanup)
+        source = Path(temporary.name) / 'source'
+        build = Path(temporary.name) / 'build with spaces'
+        source.mkdir()
+        (source / 'reader.cpp').write_text(
+            '#include <fstream>\n#include <string>\n'
+            'int main(int argc, char** argv) {\n'
+            '  if (argc != 3) return 2;\n'
+            '  std::ifstream input(argv[1]); int value = 0;\n'
+            '  if (!(input >> value)) return 3;\n'
+            '  return value == std::stoi(argv[2]) ? 0 : 4;\n}\n')
+        (source / 'module.cpp').write_text(
+            'extern "C" int selected_fixture_value(int value) { return value + 1; }\n')
+        (source / 'CMakeLists.txt').write_text(
+            'cmake_minimum_required(VERSION 3.16)\nproject(closure LANGUAGES CXX)\n'
+            'if(POLICY CMP0110)\n  cmake_policy(SET CMP0110 NEW)\nendif()\n'
+            'enable_testing()\n'
+            'add_executable(reader reader.cpp)\n'
+            'set_target_properties(reader PROPERTIES OUTPUT_NAME renamed-reader)\n'
+            'add_executable(unrelated reader.cpp)\n'
+            'add_library(required_module MODULE module.cpp)\n'
+            'set_target_properties(required_module PROPERTIES OUTPUT_NAME "required module")\n'
+            'add_library(environment_module MODULE module.cpp)\n'
+            'add_library(package_only MODULE module.cpp)\n'
+            'install(TARGETS package_only LIBRARY DESTINATION lib)\n'
+            'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/input.txt" "41\\n")\n'
+            'add_test(NAME "row [reader]" COMMAND reader '
+            '"${CMAKE_CURRENT_BINARY_DIR}/input.txt" 41)\n'
+            'set_tests_properties("row [reader]" PROPERTIES '
+            'REQUIRED_FILES "$<TARGET_FILE:required_module>" '
+            'ENVIRONMENT "SELECTED_MODULE=$<TARGET_FILE:environment_module>")\n'
+            'add_test(NAME other COMMAND unrelated '
+            '"${CMAKE_CURRENT_BINARY_DIR}/input.txt" 42)\n')
+        configured = default_runner(
+            ['cmake', '-S', str(source), '-B', str(build), '-G', generator],
+            stream_output=False)
+        self.assertEqual(configured.returncode, 0, configured.stdout.decode())
+        return source, build
+
+    def inventory(self, build, *filters):
+        result = default_runner(
+            ['ctest', '--test-dir', str(build), '--show-only=json-v1', *filters],
+            stream_output=False)
+        self.assertEqual(result.returncode, 0, result.stdout.decode())
+        return result.stdout
+
+    def test_real_make_and_ninja_build_only_selected_producers_and_install_inputs(self):
+        # These are real configure/build/CTest/install operations over a tiny
+        # independent project. They are not a replacement for engine runtime proof.
+        for generator in ('Unix Makefiles', 'Ninja'):
+            with self.subTest(generator=generator):
+                _, build = self.project(generator)
+                before = self.inventory(build)
+                names = tuple(test['name'] for test in json.loads(before)['tests'])
+                plan = ci_verify.ctest_build_inventory(
+                    before, build, names, ('row [reader]',), include_install=True,
+                    archive_targets=())
+                self.assertEqual(plan['buildTargets'],
+                                 ['environment_module', 'package_only', 'reader', 'required_module'])
+                self.assertEqual(plan['targetMap']['row [reader]'],
+                                 ['environment_module', 'reader', 'required_module'])
+                self.assertEqual(plan['installTargets'], ['package_only'])
+                self.assertFalse((build / 'renamed-reader').exists())
+                built = default_runner(
+                    ['cmake', '--build', str(build), '--parallel', '2',
+                     '--target', *plan['buildTargets']], stream_output=False)
+                self.assertEqual(built.returncode, 0, built.stdout.decode())
+                self.assertFalse((build / 'unrelated').exists())
+                after = ci_verify.ctest_build_inventory(
+                    self.inventory(build), build, names, ('row [reader]',),
+                    include_install=True, archive_targets=())
+                self.assertEqual(after, plan)
+                ci_verify.check_ctest_build_outputs(plan, build)
+                ran = default_runner(
+                    ['ctest', '--test-dir', str(build), '--output-on-failure',
+                     '--no-tests=error', '-R', r'^row \[reader\]$'], stream_output=False)
+                self.assertEqual(ran.returncode, 0, ran.stdout.decode())
+                self.assertEqual(ci_verify.ctest_shard_evidence(
+                    ran.stdout, ('row [reader]',))['ran'], ['row [reader]'])
+                installed = default_runner(
+                    ['cmake', '--install', str(build), '--prefix', str(build / 'prefix')],
+                    stream_output=False)
+                self.assertEqual(installed.returncode, 0, installed.stdout.decode())
+                # A genuine wrong-input mutation must fail the very executable
+                # just built; no CTest output or success predicate is replaced.
+                (build / 'input.txt').write_text('40\n')
+                negative = default_runner(
+                    ['ctest', '--test-dir', str(build), '--output-on-failure',
+                     '--no-tests=error', '-R', r'^row \[reader\]$'], stream_output=True)
+                self.assertNotEqual(negative.returncode, 0, negative.stdout.decode())
+
+    def test_unmapped_commands_properties_and_install_inputs_fail_closed(self):
+        _, build = self.project('Unix Makefiles')
+        document = json.loads(self.inventory(build))
+        names = tuple(row['name'] for row in document['tests'])
+        selected = ('row [reader]',)
+        for location in ('command', 'REQUIRED_FILES', 'ENVIRONMENT'):
+            changed = json.loads(json.dumps(document))
+            row = next(row for row in changed['tests'] if row['name'] == selected[0])
+            if location == 'command':
+                row['command'] = [str(build / 'missing-reader')]
+            else:
+                prop = next(prop for prop in row['properties'] if prop['name'] == location)
+                prop['value'] = (str(build / 'missing.so') if location == 'REQUIRED_FILES'
+                                 else 'SELECTED_MODULE=' + str(build / 'missing.so'))
+            with self.subTest(location=location), self.assertRaisesRegex(
+                    ValueError, 'producer'):
+                ci_verify.ctest_build_inventory(
+                    json.dumps(changed).encode(), build, names, selected,
+                    include_install=True, archive_targets=())
+        install = build / 'cmake_install.cmake'
+        install.write_text(install.read_text().replace('libpackage_only.so', 'libmissing.so'))
+        with self.assertRaisesRegex(ValueError, 'install.*producer'):
+            ci_verify.ctest_build_inventory(
+                json.dumps(document).encode(), build, names, selected,
+                include_install=True, archive_targets=())
+
+    def test_registry_and_command_changes_cannot_reuse_a_build_plan(self):
+        _, build = self.project('Unix Makefiles')
+        output = self.inventory(build)
+        document = json.loads(output)
+        names = tuple(row['name'] for row in document['tests'])
+        plan = ci_verify.ctest_build_inventory(
+            output, build, names, ('row [reader]',), archive_targets=())
+        with self.assertRaisesRegex(ValueError, 'registry'):
+            ci_verify.ctest_build_inventory(
+                output, build, (*names, 'lost row'), ('row [reader]',), archive_targets=())
+        changed = json.loads(output)
+        row = next(row for row in changed['tests'] if row['name'] == 'row [reader]')
+        row['command'] = [str(build / 'unrelated'), str(build / 'input.txt'), '41']
+        other = ci_verify.ctest_build_inventory(
+            json.dumps(changed).encode(), build, names, ('row [reader]',), archive_targets=())
+        self.assertNotEqual(other, plan)
+        self.assertIn('unrelated', other['buildTargets'])
+        self.assertNotIn('reader', other['buildTargets'])
+        with self.assertRaisesRegex(ValueError, 'missing build output'):
+            ci_verify.check_ctest_build_outputs(plan, build)
+
+    def test_relative_product_arguments_use_ctest_working_directory(self):
+        _, build = self.project('Ninja')
+        document = json.loads(self.inventory(build))
+        names = tuple(row['name'] for row in document['tests'])
+        outputs = ci_verify.ctest_target_output_manifest(build)
+        relative = {target: os.path.relpath(path, build) for path, target in outputs.items()}
+        row = next(row for row in document['tests'] if row['name'] == 'row [reader]')
+        row['command'] = ['./' + relative['reader'], str(build / 'input.txt'), '41']
+        environment = next(prop for prop in row['properties'] if prop['name'] == 'ENVIRONMENT')
+        environment['value'] = ['SELECTED_MODULE=' + relative['environment_module']]
+        plan = ci_verify.ctest_build_inventory(
+            json.dumps(document).encode(), build, names, ('row [reader]',), archive_targets=())
+        self.assertEqual(plan['buildTargets'], ['environment_module', 'reader', 'required_module'])
+        environment['value'] = ['SELECTED_MODULE=unowned-module.so']
+        with self.assertRaisesRegex(ValueError, 'relative binary input has no producer'):
+            ci_verify.ctest_build_inventory(
+                json.dumps(document).encode(), build, names, ('row [reader]',), archive_targets=())
+
+    def test_generated_command_recovery_follows_only_the_active_registry(self):
+        with tempfile.TemporaryDirectory(prefix='ci-ctest-source-') as temporary:
+            build = Path(temporary)
+            (build / 'child').mkdir()
+            (build / 'old-provider').mkdir()
+            (build / 'CTestTestfile.cmake').write_text(
+                '# add_test(ignored bad)\nsubdirs("child")\n')
+            (build / 'child/CTestTestfile.cmake').write_text(
+                'add_test([=[row (one)]=] "/python with spaces" '
+                '"a\\\"b" [==[literal;argument]==])\n')
+            (build / 'old-provider/CTestTestfile.cmake').write_text(
+                'add_test([=[row (one)]=] "/wrong")\n')
+            self.assertEqual(ci_verify.ctest_configure_commands(build), {
+                'row (one)': ('/python with spaces', 'a"b', 'literal;argument')})
+            (build / 'child/CTestTestfile.cmake').write_text('add_test("broken" "unterminated)\n')
+            with self.assertRaisesRegex(ValueError, 'unterminated'):
+                ci_verify.ctest_configure_commands(build)
+
+    def test_fixture_rows_are_built_and_an_incomplete_fixture_selection_is_refused(self):
+        _, build = self.project('Ninja')
+        document = json.loads(self.inventory(build))
+        by_name = {row['name']: row for row in document['tests']}
+        by_name['row [reader]']['properties'].append(
+            {'name': 'FIXTURES_REQUIRED', 'value': ['input_fixture']})
+        by_name['other'].setdefault('properties', []).append(
+            {'name': 'FIXTURES_SETUP', 'value': ['input_fixture']})
+        output = json.dumps(document).encode()
+        names = tuple(by_name)
+        with self.assertRaisesRegex(ValueError, 'fixture.*selection'):
+            ci_verify.ctest_build_inventory(
+                output, build, names, ('row [reader]',), archive_targets=())
+        plan = ci_verify.ctest_build_inventory(
+            output, build, names, names, archive_targets=())
+        self.assertIn('unrelated', plan['buildTargets'])
+        self.assertEqual(plan['fixtures']['input_fixture']['setup'], ['other'])
+
+    def dispatch(self, profile, *, shard=None, **exits):
+        temporary = tempfile.TemporaryDirectory(prefix='ci-build-dispatch-')
+        self.addCleanup(temporary.cleanup)
+        build = Path(temporary.name) / 'build'
+        commands = {name: 0 for name in LAB_SHARD_GUARDS | {'source-guard-twin-parity'}}
+        commands.update(exits)
+        if profile == 'sanitizers':
+            commands.setdefault('ctest_shard_inventory', (
+                *(f'public_build_{index}' for index in range(1024)), *SHARD_SLOW_FIXTURE_NAMES))
+            commands.setdefault('ctest_shard_labelled', SHARD_SLOW_FIXTURE_NAMES)
+        scripted = Scripted(build, ROOT, profile, **commands)
+        code = run_driver(profile, build, scripted,
+                          extra=[] if shard is None else ['--ctest-shard', shard])
+        return code, load_summary(build), scripted, build
+
+    def test_driver_build_argv_matches_selected_closure_before_running_ctest(self):
+        for profile, shard in (('sanitizers', '1/2'), ('sanitizers', '2/2'),
+                               ('live-sanitizers', None)):
+            with self.subTest(profile=profile, shard=shard):
+                code, summary, scripted, _ = self.dispatch(profile, shard=shard)
+                self.assertEqual(code, 0, summary['failures'])
+                plan = summary['ctestBuildInventory']
+                build = next(stage for stage in summary['stages'] if stage['name'] == 'build')
+                self.assertEqual(build['argv'][build['argv'].index('--target') + 1:],
+                                 plan['buildTargets'])
+                self.assertEqual(summary['ctestBuildInventoryAfter'], plan)
+                results = summary['ctestBuildResults']
+                self.assertEqual(sorted(results['ran'] + results['skipped']), plan['selectedNames'])
+                expected = set(ci_verify.ARCHIVE_TARGETS)
+                expected.update(plan['installTargets'])
+                for name in plan['selectedNames']:
+                    expected.update(plan['targetMap'][name])
+                self.assertEqual(set(plan['buildTargets']), expected)
+                stages = stage_names(summary)
+                self.assertLess(stages.index('ctest-build-mapping'), stages.index('build'))
+                self.assertLess(stages.index('ctest-build-coverage'), stages.index('ctest'))
+                self.assertEqual(len(stages), len(set(stages)))
+                if shard:
+                    self.assertLess(len(plan['selectedNames']), len(plan['registeredNames']))
+                    self.assertNotEqual(set(plan['buildTargets']), set(scripted.link_outputs))
+
+    def test_driver_refuses_changed_inputs_missing_outputs_and_wrong_result_names(self):
+        for defect in ('command', 'property', 'registry', 'output', 'result'):
+            with self.subTest(defect=defect):
+                temporary = tempfile.TemporaryDirectory(prefix='ci-build-defect-')
+                self.addCleanup(temporary.cleanup)
+                build = Path(temporary.name) / 'build'
+                control = 'additional_selected_row'
+                commands = {name: 0 for name in LAB_SHARD_GUARDS | {'source-guard-twin-parity'}}
+                scripted = Scripted(build, ROOT, 'live-sanitizers',
+                                    ctest_registered_names=(control,),
+                                    ctest_build_omit_output=control if defect == 'output' else None,
+                                    **commands)
+                built = False
+
+                def runner(argv, **kwargs):
+                    nonlocal built
+                    result = scripted(argv, **kwargs)
+                    if argv[0] == 'cmake' and '--build' in argv:
+                        built = True
+                    if built and argv[0] == 'ctest' and '--show-only=json-v1' in argv:
+                        document = json.loads(result.stdout)
+                        row = next(row for row in document['tests'] if row['name'] == control)
+                        if defect == 'command':
+                            row['command'].append('--changed-input')
+                        elif defect == 'property':
+                            row['properties'] = [{'name': 'PROCESSORS', 'value': 2}]
+                        elif defect == 'registry':
+                            document['tests'].remove(row)
+                        return Completed(result.returncode, json.dumps(document).encode())
+                    if (defect == 'result' and argv[0] == 'ctest'
+                            and '-N' not in argv and '--show-only=json-v1' not in argv
+                            and '--help' not in argv):
+                        return Completed(result.returncode,
+                                         result.stdout.replace(control.encode(), b'wrong-result-name'))
+                    return result
+
+                code = main(['live-sanitizers', '--build-dir', str(build), '--jobs', '2'],
+                            runner=runner, stream_output=False)
+                summary = load_summary(build)
+                self.assertEqual(code, 1, summary)
+                self.assertIn('ctest-build-accounting' if defect == 'result'
+                              else 'ctest-build-coverage', failure_stages(summary))
+                self.assertEqual('ctest' in scripted.names(), defect == 'result')
+
+    def test_disk_telemetry_retains_failed_observations_and_actual_intervals(self):
+        with tempfile.TemporaryDirectory(prefix='ci-disk-observer-') as temporary:
+            cfg = ci_verify.build_config(['sanitizers', '--build-dir', temporary])
+            driver = ci_verify.Driver(cfg)
+            driver.logs.mkdir()
+            usage = mock.Mock(total=1000, used=900, free=100)
+            finish = mock.Mock(total=1000, used=950, free=50)
+            with mock.patch('ci_verify.threading.Thread'), mock.patch(
+                    'ci_verify.shutil.disk_usage',
+                    side_effect=[usage, OSError('observation unavailable'), finish]):
+                driver.start_disk_telemetry()
+                driver.sample_disk('interval')
+                driver.finish_disk_telemetry()
+            telemetry = driver.summary['diskTelemetry']
+            self.assertFalse(telemetry['observationsComplete'])
+            self.assertEqual(telemetry['sampleCount'], 3)
+            self.assertEqual(telemetry['sampledMinimum']['freeBytes'], 50)
+            self.assertEqual(telemetry['finish']['freeBytes'], 50)
+            self.assertGreaterEqual(telemetry['largestIntervalSeconds'], 0)
+            samples = [json.loads(line) for line in
+                       (driver.logs / 'disk-telemetry.log').read_text().splitlines()]
+            self.assertEqual(samples[1]['error'], 'observation unavailable')
+
+
 class RunnerSanitizerCoverage(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -3733,9 +4126,10 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                 self.assertIn('abi-providers-skipped', stage_names(summary))
                 self.assertEqual(summary['requireWebsocket'], present)
                 self.assertEqual(summary['minTests'], LIVE_SANITIZERS_MIN_TESTS - int(not present))
-                self.assertEqual(summary['ctestRows'], summary['minTests'])
-                self.assertEqual(summary['ctestRegistered'], summary['minTests'])
-                self.assertEqual(summary['ctestSelected'], summary['minTests'])
+                population = len(scripted._live_registry())
+                self.assertEqual(summary['ctestRows'], population)
+                self.assertEqual(summary['ctestRegistered'], population)
+                self.assertEqual(summary['ctestSelected'], population)
                 inventory = next(stage for stage in summary['stages']
                                  if stage['name'] == 'live-test-inventory-required')
                 inventory_log = (build_dir / inventory['log']).read_text()

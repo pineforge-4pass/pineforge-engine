@@ -542,7 +542,9 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
             --out ${CMAKE_CURRENT_BINARY_DIR}/native_live_equivalence_e2e/${_pf_equivalence_probe}/output
             ${_pf_genuine_retry_sanitizer_args})
         set_tests_properties(native_live_equivalence_e2e_${_pf_equivalence_probe} PROPERTIES
-            SKIP_RETURN_CODE 77 LABELS private_fixtures)
+            SKIP_RETURN_CODE 77 LABELS private_fixtures
+            # The wrapper resolves these products through --build-dir.
+            REQUIRED_FILES "$<TARGET_FILE:pineforge-live>;$<TARGET_FILE:pineforge>")
         list(APPEND _pf_equivalence_rows native_live_equivalence_e2e_${_pf_equivalence_probe})
     endforeach()
     add_test(NAME test_native_live_equivalence_split COMMAND ${Python3_EXECUTABLE} -B
