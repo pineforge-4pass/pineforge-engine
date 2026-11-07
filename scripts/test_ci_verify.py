@@ -2622,6 +2622,147 @@ class CTestTargetMapping(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout.decode())
         return result.stdout
 
+    def archive_project(self, generator):
+        temporary = tempfile.TemporaryDirectory(prefix='ci-static-install-')
+        self.addCleanup(temporary.cleanup)
+        source = Path(temporary.name) / 'source'
+        build = Path(temporary.name) / 'build'
+        source.mkdir()
+        (source / 'value.cpp').write_text('int transform(int value) { return value * 3 + 1; }\n')
+        (source / 'reader.cpp').write_text(
+            '#include <string>\nint transform(int);\n'
+            'int main(int argc, char** argv) {\n'
+            '  if (argc != 3) return 2;\n'
+            '  return transform(std::stoi(argv[1])) == std::stoi(argv[2]) ? 0 : 3;\n}\n')
+        (source / 'CMakeLists.txt').write_text(
+            'cmake_minimum_required(VERSION 3.16)\nproject(archives LANGUAGES CXX)\n'
+            'if(POLICY CMP0110)\n  cmake_policy(SET CMP0110 NEW)\nendif()\n'
+            'enable_testing()\n'
+            'add_library(archive_core STATIC value.cpp)\n'
+            'set_target_properties(archive_core PROPERTIES OUTPUT_NAME renamed-core '
+            'ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/lib")\n'
+            'add_executable(archive_reader reader.cpp)\n'
+            'target_link_libraries(archive_reader PRIVATE archive_core)\n'
+            'set_target_properties(archive_reader PROPERTIES OUTPUT_NAME renamed-reader '
+            'RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")\n'
+            'add_executable(install_tool reader.cpp)\n'
+            'target_link_libraries(install_tool PRIVATE archive_core)\n'
+            'set_target_properties(install_tool PROPERTIES OUTPUT_NAME shipped-tool '
+            'RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")\n'
+            'add_executable(unrelated reader.cpp)\n'
+            'target_link_libraries(unrelated PRIVATE archive_core)\n'
+            'install(TARGETS archive_core install_tool '
+            'ARCHIVE DESTINATION lib RUNTIME DESTINATION bin)\n'
+            'add_test(NAME "archive [reader]" COMMAND archive_reader 7 22)\n'
+            'set_tests_properties("archive [reader]" PROPERTIES '
+            'REQUIRED_FILES "$<TARGET_FILE:archive_core>")\n'
+            'add_test(NAME other-archive COMMAND unrelated 8 25)\n')
+        configured = default_runner(
+            ['cmake', '-S', str(source), '-B', str(build), '-G', generator],
+            stream_output=False)
+        self.assertEqual(configured.returncode, 0, configured.stdout.decode())
+        return build
+
+    def test_real_static_archive_and_executable_install_inputs_under_both_generators(self):
+        for generator in ('Unix Makefiles', 'Ninja'):
+            with self.subTest(generator=generator):
+                build = self.archive_project(generator)
+                before = self.inventory(build)
+                names = ('archive [reader]', 'other-archive')
+                self.assertEqual(sorted(row['name'] for row in json.loads(before)['tests']),
+                                 sorted(names))
+                # These paths and producers are declared in the project above,
+                # independently of the manifest and inventory being checked.
+                self.assertEqual(ci_verify.ctest_target_output_manifest(build), {
+                    build / 'lib/librenamed-core.a': 'archive_core',
+                    build / 'bin/renamed-reader': 'archive_reader',
+                    build / 'bin/shipped-tool': 'install_tool',
+                    build / 'unrelated': 'unrelated',
+                })
+                plan = ci_verify.ctest_build_inventory(
+                    before, build, names, ('archive [reader]',), include_install=True,
+                    archive_targets=('archive_core',))
+                self.assertEqual(plan['targetMap'], {
+                    'archive [reader]': ['archive_core', 'archive_reader'],
+                    'other-archive': ['unrelated'],
+                })
+                self.assertEqual(plan['installOutputs'], {
+                    'lib/librenamed-core.a': 'archive_core', 'bin/shipped-tool': 'install_tool'})
+                self.assertEqual(plan['installTargets'], ['archive_core', 'install_tool'])
+                self.assertEqual(plan['buildTargets'],
+                                 ['archive_core', 'archive_reader', 'install_tool'])
+                self.assertFalse((build / 'lib/librenamed-core.a').exists())
+                built = default_runner(
+                    ['cmake', '--build', str(build), '--parallel', '2', '--verbose',
+                     '--target', *plan['buildTargets']], stream_output=False)
+                self.assertEqual(built.returncode, 0, built.stdout.decode())
+                self.assertTrue((build / 'lib/librenamed-core.a').read_bytes().startswith(b'!<arch>\n'))
+                self.assertFalse((build / 'unrelated').exists())
+                after = ci_verify.ctest_build_inventory(
+                    self.inventory(build), build, names, ('archive [reader]',),
+                    include_install=True, archive_targets=('archive_core',))
+                self.assertEqual(after, plan)
+                ci_verify.check_ctest_build_outputs(plan, build)
+                ran = default_runner(
+                    ['ctest', '--test-dir', str(build), '--output-on-failure',
+                     '--no-tests=error', '-R', r'^archive \[reader\]$'], stream_output=False)
+                self.assertEqual(ran.returncode, 0, ran.stdout.decode())
+                self.assertEqual(ci_verify.ctest_shard_evidence(
+                    ran.stdout, ('archive [reader]',))['ran'], ['archive [reader]'])
+                prefix = build / 'prefix'
+                installed = default_runner(
+                    ['cmake', '--install', str(build), '--prefix', str(prefix)],
+                    stream_output=False)
+                self.assertEqual(installed.returncode, 0, installed.stdout.decode())
+                self.assertEqual((prefix / 'lib/librenamed-core.a').read_bytes(),
+                                 (build / 'lib/librenamed-core.a').read_bytes())
+                checked = default_runner(
+                    [str(prefix / 'bin/shipped-tool'), '11', '34'], stream_output=False)
+                self.assertEqual(checked.returncode, 0, checked.stdout.decode())
+                wrong = default_runner(
+                    [str(prefix / 'bin/shipped-tool'), '11', '35'], stream_output=False)
+                self.assertNotEqual(wrong.returncode, 0, wrong.stdout.decode())
+
+    def ninja_project(self, raw_outputs):
+        temporary = tempfile.TemporaryDirectory(prefix='ci-ninja-paths-')
+        self.addCleanup(temporary.cleanup)
+        build = Path(temporary.name)
+        directory = build / 'CMakeFiles/ninja_product.dir'
+        directory.mkdir(parents=True)
+        (build / 'CMakeFiles/TargetDirectories.txt').write_text(str(directory) + '\n')
+        (build / 'build.ninja').write_text(
+            f'build {raw_outputs}: CXX_MODULE_LIBRARY_LINKER__ninja_product_ object.o\n'
+            '  OBJECT_DIR = CMakeFiles/ninja_product.dir\n'
+            '  TARGET_FILE = "shell formatted product.so"\n')
+        return build
+
+    def test_ninja_declared_outputs_decode_supported_escapes_and_separators(self):
+        for raw, paths in (
+                ('libescaped$ space.so', ('libescaped space.so',)),
+                ('libescaped$:colon.so', ('libescaped:colon.so',)),
+                ('libfirst.so libsecond.so', ('libfirst.so', 'libsecond.so')),
+                ('libexplicit.so | libimplicit.so', ('libexplicit.so', 'libimplicit.so'))):
+            with self.subTest(outputs=raw):
+                build = self.ninja_project(raw)
+                self.assertEqual(ci_verify.ctest_target_output_manifest(build),
+                                 {build / path: 'ninja_product' for path in paths})
+
+    def test_ninja_unresolved_invalid_and_dollar_paths_fail_closed(self):
+        for raw, message in (
+                ('lib$variable.so', 'unresolved generated Ninja link path'),
+                ('lib${variable}.so', 'unresolved generated Ninja link path'),
+                ('libbad$/escape.so', 'unresolved generated Ninja link path'),
+                # $$ is valid Ninja syntax, but register() currently refuses
+                # the decoded dollar. This pins that supported-scope limit.
+                ('libliteral$$dollar.so', 'unresolved generated output'),
+                # The dangling dollar consumes the edge colon as an escape,
+                # leaving no supported link edge; it must not yield a manifest.
+                ('libdangling$', 'no supported generated link producers')):
+            with self.subTest(outputs=raw):
+                build = self.ninja_project(raw)
+                with self.assertRaisesRegex(ValueError, message):
+                    ci_verify.ctest_target_output_manifest(build)
+
     def test_real_make_and_ninja_build_only_selected_producers_and_install_inputs(self):
         # These are real configure/build/CTest/install operations over a tiny
         # independent project. They are not a replacement for engine runtime proof.
@@ -2787,7 +2928,12 @@ class CTestTargetMapping(unittest.TestCase):
         for profile, shard in (('sanitizers', '1/2'), ('sanitizers', '2/2'),
                                ('live-sanitizers', None)):
             with self.subTest(profile=profile, shard=shard):
-                code, summary, scripted, _ = self.dispatch(profile, shard=shard)
+                # Explicit aliases make the producer pin independent of a row's
+                # name. The remaining fixture rows declare same-named producers.
+                aliases = {'public_build_0': 'driver_public_producer',
+                           'test_live_json': 'driver_json_producer'}
+                code, summary, scripted, _ = self.dispatch(
+                    profile, shard=shard, ctest_build_target_names=aliases)
                 self.assertEqual(code, 0, summary['failures'])
                 plan = summary['ctestBuildInventory']
                 build = next(stage for stage in summary['stages'] if stage['name'] == 'build')
@@ -2801,6 +2947,30 @@ class CTestTargetMapping(unittest.TestCase):
                 for name in plan['selectedNames']:
                     expected.update(plan['targetMap'][name])
                 self.assertEqual(set(plan['buildTargets']), expected)
+                # Read the test fixture's input registry, never the produced
+                # plan, to pin every row's independently declared producer.
+                declared_rows = (scripted.exits['ctest_shard_inventory'] if shard
+                                 else scripted._live_registry())
+                expected_mapping = {name: [aliases.get(name, name)] for name in declared_rows}
+                self.assertEqual(plan['targetMap'], expected_mapping)
+                if shard:
+                    index = int(shard[0]) - 1
+                    expected_selected = sorted(
+                        name for name in declared_rows if name not in SHARD_SLOW_FIXTURE_NAMES
+                        and int.from_bytes(hashlib.sha256(name.encode('utf-8')).digest(),
+                                           'big') % 2 == index)
+                    expected_installed = ([] if shard == '2/2' else
+                                          ['pineforge', 'pineforge_kernel', 'pineforge_window_plan'])
+                else:
+                    expected_selected = sorted(declared_rows)
+                    expected_installed = [
+                        'pineforge', 'pineforge-live', 'pineforge_kernel', 'pineforge_window_plan']
+                self.assertEqual(plan['selectedNames'], expected_selected)
+                self.assertEqual(plan['installTargets'], expected_installed)
+                independent_targets = {'pineforge', 'pineforge_kernel', *expected_installed}
+                for name in expected_selected:
+                    independent_targets.update(expected_mapping[name])
+                self.assertEqual(plan['buildTargets'], sorted(independent_targets))
                 stages = stage_names(summary)
                 self.assertLess(stages.index('ctest-build-mapping'), stages.index('build'))
                 self.assertLess(stages.index('ctest-build-coverage'), stages.index('ctest'))
@@ -2808,6 +2978,34 @@ class CTestTargetMapping(unittest.TestCase):
                 if shard:
                     self.assertLess(len(plan['selectedNames']), len(plan['registeredNames']))
                     self.assertNotEqual(set(plan['buildTargets']), set(scripted.link_outputs))
+
+    def test_union_refuses_a_selected_producer_omitted_from_both_build_plans(self):
+        summaries = []
+        for shard in ('1/2', '2/2'):
+            code, summary, _, _ = self.dispatch('sanitizers', shard=shard)
+            self.assertEqual(code, 0, summary['failures'])
+            summaries.append(summary)
+        self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries))
+        # This producer and output are declared by dispatch's input fixture,
+        # not obtained from the plan whose completeness the validator must check.
+        row = 'public_build_0'
+        owner = int.from_bytes(hashlib.sha256(row.encode('utf-8')).digest(), 'big') % 2
+        changed = json.loads(json.dumps(summaries))
+        summary = changed[owner]
+        self.assertIn(row, summary['ctestRan'])
+        for key in ('ctestBuildInventory', 'ctestBuildInventoryAfter'):
+            plan = summary[key]
+            self.assertEqual(plan['targetMap'][row], ['public_build_0'])
+            plan['buildTargets'].remove('public_build_0')
+            self.assertEqual(plan['targetOutputs'].pop('tests/public_build_0'), 'public_build_0')
+        build = next(stage for stage in summary['stages'] if stage['name'] == 'build')
+        build['argv'].remove('public_build_0')
+        self.assertEqual(summary['ctestBuildInventory'], summary['ctestBuildInventoryAfter'])
+        self.assertEqual(build['argv'][build['argv'].index('--target') + 1:],
+                         summary['ctestBuildInventory']['buildTargets'])
+        with self.assertRaisesRegex(
+                ValueError, 'selected build targets/inputs differ from shard execution'):
+            ci_verify.validate_ctest_shard_union(changed)
 
     def test_driver_refuses_changed_inputs_missing_outputs_and_wrong_result_names(self):
         for defect in ('command', 'property', 'registry', 'output', 'result'):
