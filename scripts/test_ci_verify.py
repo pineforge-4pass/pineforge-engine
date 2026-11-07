@@ -409,20 +409,20 @@ class Scripted:
                     return Completed(0, (listing + f'Total Tests: {len(names)}\n').encode())
                 skipped = tuple(name for name in self.exits.get('ctest_skipped', ())
                                 if name in names)
+                not_run = tuple(name for name in self.exits.get('ctest_not_run', ())
+                                if name in names)
+                disabled = tuple(name for name in self.exits.get('ctest_disabled', ())
+                                 if name in names)
+                if 'ctest_raw' in self.exits:
+                    return Completed(int(self.exits.get('ctest', 0)), self.exits['ctest_raw'])
                 return Completed(int(self.exits.get('ctest', 0)),
-                                 named_ctest_output(names, skipped=skipped))
+                                 named_ctest_output(names, skipped=skipped,
+                                                    not_run=not_run, disabled=disabled))
             if '--show-only=json-v1' in argv:
-                names = {'native_live_help', 'test_live_json',
-                         'test_native_live_startup', 'test_native_live_store',
-                         'test_native_live_routing',
-                         'test_native_example_batch', 'test_native_example_selected',
-                         'test_native_live_equivalence_split'}
-                if (self.source / 'runner' / 'transport.cpp').is_file():
-                    names.add('test_native_live_websocket')
-                names.update(ci_verify.runner_e2e_test_names(self.source))
-                names.discard(self.exits.get('live_missing_test'))
-                return Completed(0, json.dumps({'tests': [{'name': name}
-                                  for name in sorted(names)]}).encode(), b'')
+                return Completed(0, json.dumps({'tests': [
+                    {'name': name, 'command': [str(self.build_dir / 'tests' / name)]}
+                    for name in self._live_registry()
+                ]}).encode(), b'')
             if self.exits.get('actual_empty_ctest'):
                 return default_runner(argv, extra_env=extra_env,
                                       combine_stderr=combine_stderr, stream_output=False)
@@ -431,6 +431,8 @@ class Scripted:
                 ci_verify.EXCLUDED_REGISTERED_MIN.get(
                     self.profile, ci_verify.profile_min_tests(
                         ci_verify.PROFILE[self.profile], self.source) or KERNEL_MIN_TESTS))
+            if self.profile in ci_verify.LIVE_ONLY_PROFILES:
+                registered = len(self._live_registry())
             labelled = self.exits.get('ctest_labelled', 5)
             if '-N' in argv:
                 stage = ('ctest-list-excluded' if '-L' in argv else
@@ -447,6 +449,8 @@ class Scripted:
                 # registered by its own row, exactly as a real `ctest -N`
                 # lists it; the rest of the registry is filler names.
                 names = list(self.exits.get('ctest_registered_names', ()))
+                if self.profile in ci_verify.LIVE_ONLY_PROFILES:
+                    names = list(self._live_registry())
                 for implied in (self.exits.get('ctest_skipped', ()),
                                 self.exits.get('ctest_not_run', ()),
                                 self.exits.get('ctest_disabled', ())):
@@ -477,11 +481,23 @@ class Scripted:
             if 'ctest_raw' in self.exits:
                 return Completed(int(self.exits.get('ctest', 0)), self.exits['ctest_raw'], b'')
             default_rows = (registered - labelled if '-LE' in argv else
+                            registered if self.profile in ci_verify.LIVE_ONLY_PROFILES else
                             ci_verify.profile_min_tests(
                                 ci_verify.PROFILE[self.profile], self.source) or KERNEL_MIN_TESTS)
             rows = self.exits.get('ctest_rows', default_rows)
             if rows == 'absent':
                 return Completed(int(self.exits.get('ctest', 0)), b'tests\n', b'')
+            # A live profile's transcript names every registered row only when
+            # the total is the registry's own size, which is the default. Any
+            # other total is a count-only transcript naming just the skipped,
+            # not-run and disabled rows; live-ctest-accounting must refuse it
+            # by name. The policy floor and a declared count are never the
+            # collection's size (LiveProfilesWithFixturesAbsent pins that).
+            if self.profile in ci_verify.LIVE_ONLY_PROFILES and rows == registered:
+                return Completed(int(self.exits.get('ctest', 0)), named_ctest_output(
+                    self._live_registry(), skipped=self.exits.get('ctest_skipped', ()),
+                    not_run=self.exits.get('ctest_not_run', ()),
+                    disabled=self.exits.get('ctest_disabled', ())))
             summary = ctest_output(rows, self.exits.get('ctest_skipped', ()),
                                    self.exits.get('ctest_not_run', ()),
                                    self.exits.get('ctest_disabled', ()))
@@ -497,6 +513,35 @@ class Scripted:
         if '--version' in argv:
             return Completed(0, b'version\n', b'')
         return Completed(1, b'', f'unhandled command: {argv}\n'.encode())
+
+    def _live_registry(self) -> tuple[str, ...]:
+        """Every runner row the scripted tree registers, sorted.
+
+        The names are the tree's own: the required rows, each e2e driver and
+        equivalence probe it holds, and every row a control scripts as
+        skipped, not-run or disabled. `ctest_registered` only pads upward
+        with generic names; it never trims or replaces a real name, so the
+        registry can be larger than any count a control declares.
+        """
+        names = {'native_live_help', 'test_live_json',
+                 'test_native_live_startup', 'test_native_live_store',
+                 'test_native_live_routing',
+                 'test_native_example_batch', 'test_native_example_selected',
+                 'test_native_live_equivalence_split'}
+        if (self.source / 'runner' / 'transport.cpp').is_file():
+            names.add('test_native_live_websocket')
+        names.update(ci_verify.runner_e2e_test_names(self.source))
+        names.update(self.exits.get('ctest_registered_names', ()))
+        for key in ('ctest_skipped', 'ctest_not_run', 'ctest_disabled'):
+            names.update(self.exits.get(key, ()))
+        count = self.exits.get('ctest_registered', ci_verify.profile_min_tests(
+            ci_verify.PROFILE[self.profile], self.source))
+        index = 0
+        while len(names) < count:
+            names.add(f'test_live_fixture_{index}')
+            index += 1
+        names.discard(self.exits.get('live_missing_test'))
+        return tuple(sorted(names))
 
     def _cache_values(self) -> dict[str, str]:
         profile = ci_verify.PROFILE[self.profile]
@@ -539,22 +584,28 @@ class Scripted:
             # A real, empty CTest inventory proves the no-test exit policy.
             # Configure/build remain scripted; no engine executable is run.
             (self.build_dir / 'CTestTestfile.cmake').write_text('# deliberately empty inventory\n')
-        if (self.profile == 'sanitizers'
-                and 'ctest_shard_inventory' in self.exits
+        if ((self.profile == 'sanitizers' and 'ctest_shard_inventory' in self.exits
+             or self.profile in ci_verify.LIVE_ONLY_PROFILES)
                 and not self.exits.get('actual_empty_ctest')):
             no_targets = set(self.exits.get('ctest_shard_no_targets', ()))
             target_names = self.exits.get('ctest_shard_target_names', {})
-            link_outputs = self.exits.get('ctest_shard_link_outputs', {})
-            for name in self.exits['ctest_shard_inventory']:
+            link_outputs = dict(self.exits.get('ctest_shard_link_outputs', {}))
+            registry = self.exits.get('ctest_shard_inventory', self._live_registry()
+                                      if self.profile in ci_verify.LIVE_ONLY_PROFILES else ())
+            for name in registry:
                 if name in no_targets:
                     continue
                 target = target_names.get(name, name)
-                output = link_outputs.get(
-                    target, str(self.build_dir / 'tests' / name))
+                link_outputs.setdefault(target, str(self.build_dir / 'tests' / name))
+            if self.profile in ci_verify.LIVE_ONLY_PROFILES:
+                for target in ('pineforge', 'pineforge_kernel', 'pineforge_window_plan',
+                               'pineforge-live', 'test_native_live_websocket'):
+                    link_outputs.setdefault(target, str(self.build_dir / 'products' / target))
+            for target, output in link_outputs.items():
                 link = self.build_dir / 'tests' / 'CMakeFiles' / f'{target}.dir' / 'link.txt'
                 link.parent.mkdir(parents=True, exist_ok=True)
                 with open(link, 'w', encoding='utf-8') as stream:
-                    stream.write(f'c++ -o {output}\n')
+                    stream.write(f'c++ -o "{output}"\n')
         # 'example_commands' == 'absent' scripts a configure that wrote no
         # compile database at all.
         if self.exits.get('example_commands') != 'absent':
@@ -1596,7 +1647,9 @@ class RowFloorConfig(unittest.TestCase):
                     shared |= {'source-guard-twin-parity', 'native-include-independence'}
                 else:
                     local |= {'abi-providers-skipped', 'live-test-inventory',
-                              'live-test-inventory-required'}
+                              'live-test-inventory-required', 'live-ctest-list-build',
+                              'live-ctest-target-mapping', 'live-test-inventory-after-build',
+                              'live-ctest-build-coverage'}
                 if profile == 'live-sanitizers':
                     local |= {'sanitizer-public-flag', 'live-sanitizer-coverage'}
                 if profile == 'live-tsan':
@@ -2508,6 +2561,33 @@ class ProfileOptions(unittest.TestCase):
         self.assertEqual(ci_verify.runner_e2e_test_names(ROOT),
                          expected)
 
+    def test_compact_debug_info_flags_stay_scoped_to_the_asan_ubsan_profiles(self):
+        # SANITIZER_DEBUG_INFO_FLAGS is a footprint control for the two
+        # ASan/UBSan profiles only. Every other profile -- live-tsan included,
+        # a Debug build that deliberately keeps the default Debug flags --
+        # must leave both Debug flag entries out of the returned cache values
+        # and pass no -D override for either. Both are read from the real
+        # profile-dependent functions by key, whatever value a scope
+        # expansion would give them, so a profile that starts to carry any
+        # value for either flag is noticed; the profile list must also stay
+        # complete, so a new profile has to be placed in one group.
+        carriers = ('sanitizers', 'live-sanitizers')
+        bystanders = ('debug', 'release', 'native', 'kernel', 'live-tsan')
+        self.assertEqual(set(carriers) | set(bystanders), set(PROFILES))
+        for profile in bystanders:
+            with self.subTest(profile=profile):
+                values, argv = self.definitions(profile)
+                for key in ('CMAKE_C_FLAGS_DEBUG', 'CMAKE_CXX_FLAGS_DEBUG'):
+                    self.assertNotIn(key, values)
+                    self.assertEqual([item for item in argv if item.startswith('-D' + key)], [])
+        for profile in carriers:
+            with self.subTest(profile=profile):
+                values, argv = self.definitions(profile)
+                for key in ('CMAKE_C_FLAGS_DEBUG', 'CMAKE_CXX_FLAGS_DEBUG'):
+                    self.assertIn(key, values)
+                    self.assertEqual([item for item in argv if item.startswith('-D' + key)],
+                                     [f'-D{key}={values[key]}'])
+
     def test_kernel_drops_the_source_layer_and_keeps_the_live_runner(self):
         values, argv = self.definitions('kernel')
         self.assertEqual(values['CMAKE_BUILD_TYPE'], 'Release')
@@ -3018,6 +3098,143 @@ class GitObjectDiscovery(unittest.TestCase):
 
 
 class CTestTargetMapping(unittest.TestCase):
+    def test_ninja_link_outputs_map_real_target_names_and_reject_missing_evidence(self):
+        with tempfile.TemporaryDirectory(prefix='ci-ninja-products-') as temporary:
+            build = Path(temporary)
+            ninja = build / 'build.ninja'
+            recipe = (
+                'build runner/renamed$ module.so: CXX_MODULE_LIBRARY_LINKER__module_Release '
+                'runner/CMakeFiles/module.dir/source.cpp.o\n'
+                '  OBJECT_DIR = runner/CMakeFiles/module.dir\n'
+                '  TARGET_FILE = runner/renamed$ module.so\n'
+                '  POST_BUILD = :\n\n'
+                'build lib/libarchive.a: CXX_STATIC_LIBRARY_LINKER__archive_Release '
+                'CMakeFiles/archive.dir/source.cpp.o\n'
+                '  OBJECT_DIR = CMakeFiles/archive.dir\n'
+                '  TARGET_FILE = lib/libarchive.a\n\n'
+                'build unrelated_alias: phony runner/renamed$ module.so\n')
+            ninja.write_text(recipe)
+            expected = {
+                (build / 'runner/renamed module.so').resolve(): 'module',
+                (build / 'lib/libarchive.a').resolve(): 'archive',
+            }
+            self.assertEqual(ci_verify.ctest_target_output_manifest(build), expected)
+            mapping, data = ci_verify.ctest_target_mapping(json.dumps({'tests': [{
+                'name': 'wrapper', 'command': [sys.executable],
+                'properties': [{'name': 'REQUIRED_FILES',
+                                'value': str(build / 'runner/renamed module.so')}],
+            }]}).encode(), build)
+            self.assertEqual(mapping, {'wrapper': ('module',)})
+            self.assertEqual(data, {'wrapper': ()})
+            for before, after, diagnostic in (
+                    ('  TARGET_FILE = runner/renamed$ module.so\n', '', 'lacks.*TARGET_FILE'),
+                    ('runner/CMakeFiles/module.dir', 'unowned', 'no CMake target'),
+                    ('runner/renamed$ module.so', '$unknown/output', 'unresolved'),
+                    ('  TARGET_FILE = lib/libarchive.a', '  TARGET_FILE = runner/renamed$ module.so',
+                     'belongs to both')):
+                with self.subTest(diagnostic=diagnostic):
+                    changed = recipe.replace(before, after)
+                    self.assertNotEqual(changed, recipe)
+                    ninja.write_text(changed)
+                    with self.assertRaisesRegex(ValueError, diagnostic):
+                        ci_verify.ctest_target_output_manifest(build)
+
+    def live_outputs(self, build: Path) -> dict[str, Path]:
+        outputs = {
+            target: build / 'products' / target
+            for target in ('pineforge', 'pineforge_kernel', 'pineforge_window_plan',
+                           'pineforge-live', 'test_native_live_websocket',
+                           'command_producer', 'property_producer', 'unrelated_engine_test')
+        }
+        for target, output in outputs.items():
+            link = build / 'runner' / 'CMakeFiles' / f'{target}.dir' / 'link.txt'
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.write_text(f'c++ -o "{output}"\n')
+        return outputs
+
+    def test_live_closure_tracks_command_and_property_producers_without_partitioning(self):
+        with tempfile.TemporaryDirectory(prefix='ci-live-closure-') as temporary:
+            build = Path(temporary)
+            outputs = self.live_outputs(build)
+            registry = ('wrapped row', 'placeholder')
+            # Missing JSON commands must use the same generated-command
+            # recovery as the ordinary mapper, retaining JSON properties.
+            (build / 'CTestTestfile.cmake').write_text(
+                'subdirs("runner")\n')
+            (build / 'runner/CTestTestfile.cmake').write_text(
+                f'add_test([=[wrapped row]=] "{sys.executable}" '
+                f'"--module={outputs["command_producer"]}")\n')
+            inventory = {'tests': [
+                {'name': 'wrapped row', 'properties': [{
+                    'name': 'REQUIRED_FILES', 'value': [str(outputs['property_producer'])],
+                }]},
+                {'name': 'placeholder', 'command': ['cmake', '-E', 'echo', 'SKIP']},
+            ]}
+            base = {'pineforge', 'pineforge_kernel', 'pineforge_window_plan', 'pineforge-live'}
+            for websocket in (False, True):
+                with self.subTest(websocket=websocket):
+                    evidence = ci_verify.ctest_live_build_inventory(
+                        json.dumps(inventory).encode(), registry, build,
+                        require_websocket=websocket)
+                    self.assertEqual(evidence['registeredNames'], sorted(registry))
+                    self.assertEqual(evidence['targetMap'], {
+                        'wrapped row': ['command_producer', 'property_producer'],
+                        'placeholder': [],
+                    })
+                    expected = base | {'command_producer', 'property_producer'}
+                    if websocket:
+                        expected.add('test_native_live_websocket')
+                    self.assertEqual(evidence['buildTargets'], sorted(expected))
+                    self.assertEqual(set(evidence['targetOutputs'].values()), expected)
+                    self.assertNotIn('unrelated_engine_test', evidence['buildTargets'])
+                    # CTest supplies this command after its executable exists.
+                    # Source recovery before the build must bind identical inputs.
+                    built_inventory = json.loads(json.dumps(inventory))
+                    built_inventory['tests'][0]['command'] = [
+                        sys.executable, '--module=' + str(outputs['command_producer'])]
+                    self.assertEqual(ci_verify.ctest_live_build_inventory(
+                        json.dumps(built_inventory).encode(), registry, build,
+                        require_websocket=websocket), evidence)
+            # Change each input independently. No row/target-name whitelist
+            # can satisfy both mutations.
+            for field in ('command', 'properties'):
+                document = json.loads(json.dumps(inventory))
+                if field == 'command':
+                    document['tests'][0]['command'] = [sys.executable]
+                    expected_targets = ['property_producer']
+                else:
+                    document['tests'][0]['properties'][0]['value'] = [
+                        str(build / 'runner/output-data')]
+                    expected_targets = ['command_producer']
+                evidence = ci_verify.ctest_live_build_inventory(
+                    json.dumps(document).encode(), registry, build, require_websocket=False)
+                self.assertEqual(evidence['targetMap']['wrapped row'], expected_targets)
+                self.assertEqual(evidence['buildTargets'], sorted(base | set(expected_targets)))
+                self.assertEqual(evidence['unmappedBuildPaths']['wrapped row'],
+                                 ['runner/output-data'] if field == 'properties' else [])
+
+    def test_live_closure_refuses_missing_registry_and_product_evidence(self):
+        with tempfile.TemporaryDirectory(prefix='ci-live-closure-missing-') as temporary:
+            build = Path(temporary)
+            outputs = self.live_outputs(build)
+            row = {'name': 'runner row', 'command': [str(outputs['command_producer'])]}
+            for tests, registry, reason in (
+                    ([row], ('runner row', 'lost row'), 'missing.*lost row'),
+                    ([row], ('other row',), 'extra.*runner row'),
+                    ([row, row], ('runner row',), 'duplicate'),
+                    ([{'name': 'runner row', 'command': [str(build / 'bin/unowned')]}],
+                     ('runner row',), 'runner row.*bin/unowned.*no producer')):
+                with self.subTest(reason=reason), self.assertRaisesRegex(ValueError, reason):
+                    ci_verify.ctest_live_build_inventory(
+                        json.dumps({'tests': tests}).encode(), registry, build,
+                        require_websocket=False)
+            link = build / 'runner/CMakeFiles/pineforge_window_plan.dir/link.txt'
+            link.write_text('# no output produced\n')
+            with self.assertRaisesRegex(ValueError, 'prerequisites.*pineforge_window_plan'):
+                ci_verify.ctest_live_build_inventory(
+                    json.dumps({'tests': [row]}).encode(), ('runner row',), build,
+                    require_websocket=False)
+
     def test_generated_ctest_command_parser_preserves_names_and_every_argument(self):
         with tempfile.TemporaryDirectory(prefix='ci-ctest-quoted-') as temporary:
             build = Path(temporary)
@@ -3248,6 +3465,8 @@ class CTestTargetMapping(unittest.TestCase):
                         mock.Mock(total=100, used=20, free=80),
                         mock.Mock(total=100, used=60, free=40),
                         mock.Mock(total=100, used=60, free=40),
+                        mock.Mock(total=100, used=30, free=70),
+                        mock.Mock(total=100, used=30, free=70),
                     ]):
                 driver.start_disk_sampling()
                 driver.write_disk_telemetry()
@@ -3257,11 +3476,60 @@ class CTestTargetMapping(unittest.TestCase):
             self.assertIn('archives.bytes=5', receipt)
             self.assertIn('test-binaries.bytes=7', receipt)
             self.assertIn('tests/test_alpha', receipt)
-            self.assertIn('peak {"archivesBytes": 5, "label": "interval"', receipt)
-            self.assertIn('df shard=unsharded label=shard-start mount=root', receipt)
-            self.assertIn('df shard=unsharded label=peak mount=root', receipt)
+            self.assertIn('sampled-minimum {"archivesBytes": 5, "label": "interval"', receipt)
+            self.assertIn('df shard=unsharded label=leg-start mount=root', receipt)
+            self.assertIn('df shard=unsharded label=sampled-minimum mount=root', receipt)
+            self.assertIn('df shard=unsharded label=finish mount=root', receipt)
             self.assertEqual(driver.summary['diskTelemetry']['minimumFreeBytes'],
                              {'root': 40, 'mnt': 40})
+
+    def test_live_disk_sampling_retains_failure_final_and_unavailable_observations(self):
+        for profile in sorted(ci_verify.LIVE_ONLY_PROFILES):
+            for unavailable in ('none', 'interval-mnt', 'all'):
+                for status, code in (('passed', 0), ('failed', 1)):
+                    with self.subTest(profile=profile, unavailable=unavailable, status=status), \
+                            tempfile.TemporaryDirectory(prefix='ci-live-disk-') as temporary:
+                        build = Path(temporary)
+                        cfg = ci_verify.build_config(
+                            [profile, '--build-dir', str(build)],
+                            which=lambda name: '/fixture/bin/' + name, stream_output=False)
+                        driver = ci_verify.Driver(cfg)
+                        driver.disk_stop = mock.Mock()
+                        driver.disk_stop.wait.side_effect = [False, True]
+                        readings = [
+                            mock.Mock(total=1000, used=1000 - free, free=free)
+                            for free in (80, 75, 40, 35, 70, 65)
+                        ]
+                        if unavailable == 'interval-mnt':
+                            readings[3] = OSError('mnt observation unavailable')
+                        elif unavailable == 'all':
+                            readings = [OSError('observation unavailable') for _ in readings]
+                        with mock.patch.object(ci_verify.shutil, 'disk_usage',
+                                               side_effect=readings):
+                            driver.start_disk_sampling()
+                            self.assertEqual(driver.finish(status, code), code)
+                        evidence = load_summary(build)['diskTelemetry']
+                        self.assertEqual(evidence['sampleIntervalSeconds'], 5)
+                        self.assertEqual(evidence['samples'], 3)
+                        self.assertEqual(evidence['start']['label'], 'leg-start')
+                        self.assertEqual(evidence['final']['label'], 'finish')
+                        self.assertEqual(evidence['observationsComplete'], unavailable == 'none')
+                        self.assertEqual(len(evidence['unavailableObservations']),
+                                         {'none': 0, 'interval-mnt': 1, 'all': 6}[unavailable])
+                        self.assertEqual(evidence['minimumFreeBytes'], {
+                            'none': {'root': 40, 'mnt': 35},
+                            'interval-mnt': {'root': 40, 'mnt': 65},
+                            'all': {'root': None, 'mnt': None},
+                        }[unavailable])
+                        self.assertEqual(load_summary(build)['status'], status)
+                        self.assertNotIn('ctestShard', load_summary(build))
+                        receipt = (build / 'ci-logs/disk-telemetry.log').read_text()
+                        self.assertIn('label=finish mount=root', receipt)
+                        self.assertIn('not a continuous peak', receipt)
+                        self.assertIn('whole-tree sampler cost has not been measured', receipt)
+                        if unavailable == 'all':
+                            self.assertIn('sampled-minimum null', receipt)
+                            self.assertNotIn('freeBytes=', receipt)
 
 
 class DriverOrderingAndAggregation(unittest.TestCase):
@@ -3363,6 +3631,143 @@ class DriverOrderingAndAggregation(unittest.TestCase):
             name: ['tests/pytest-no-skips/' + name] for name in inventory})
         names = [stage['name'] for stage in summary['stages']]
         self.assertEqual(len(names), len(set(names)))
+
+    def test_live_build_uses_all_runner_producers_and_install_inputs(self):
+        for profile in sorted(ci_verify.LIVE_ONLY_PROFILES):
+            for shard in (None, '2/2'):
+                with self.subTest(profile=profile, shard=shard), \
+                        tempfile.TemporaryDirectory(prefix='ci-live-build-') as temporary:
+                    build = Path(temporary) / 'build'
+                    scripted = Scripted(build, ROOT, profile)
+                    registry = scripted._live_registry()
+                    product = build / 'runner/arbitrary-module.so'
+                    scripted.exits.update({
+                        'ctest_shard_inventory': registry,
+                        'ctest_shard_no_targets': registry,
+                        'ctest_shard_commands': {name: [sys.executable] for name in registry},
+                        'ctest_shard_properties': {
+                            registry[0]: [{'name': 'REQUIRED_FILES', 'value': str(product)}],
+                        },
+                        'ctest_shard_link_outputs': {
+                            'module_producer': str(product),
+                            'unrelated_engine_test': str(build / 'bin/unrelated-engine-test'),
+                        },
+                        'junit_help': 'absent',
+                    })
+                    extra = ['--ctest-shard', shard] if shard else []
+                    code = run_driver(profile, build, scripted, extra=extra)
+                    summary = load_summary(build)
+                    self.assertEqual(code, 0, summary['failures'])
+                    command = next(argv for argv in scripted.calls
+                                   if argv[0] == 'cmake' and '--build' in argv)
+                    targets = command[command.index('--target') + 1:]
+                    expected = {'pineforge', 'pineforge_kernel', 'pineforge_window_plan',
+                                'pineforge-live', 'module_producer'}
+                    if summary['requireWebsocket']:
+                        expected.add('test_native_live_websocket')
+                    self.assertEqual(targets, sorted(expected))
+                    evidence = summary['liveCTestInventory']
+                    self.assertEqual(evidence['buildTargets'], targets)
+                    self.assertEqual(evidence['registeredNames'], sorted(registry))
+                    self.assertEqual(evidence['targetMap'], {
+                        name: ['module_producer'] if name == registry[0] else []
+                        for name in sorted(registry)
+                    })
+                    self.assertNotIn('unrelated_engine_test', targets)
+                    names = stage_names(summary)
+                    self.assertLess(names.index('live-ctest-target-mapping'), names.index('build'))
+                    self.assertLess(names.index('live-ctest-build-coverage'), names.index('ctest'))
+                    self.assertIn('install', scripted.names() if not shard else names)
+                    if not shard:
+                        self.assertIn('smoke-version', scripted.names())
+                        self.assertNotIn('ctestShard', summary)
+                        self.assertNotIn('ctestRegistrySha256', summary)
+                    else:
+                        self.assertLess(summary['ctestSelected'], len(registry))
+                    self.assertEqual(len(names), len(set(names)))
+
+    def test_live_build_refuses_missing_or_changed_registry_and_mapping_inputs(self):
+        for defect in ('missing-row', 'unowned-command', 'changed-command',
+                       'changed-property', 'changed-data', 'changed-command-argument',
+                       'changed-property-value', 'missing-after-build'):
+            with self.subTest(defect=defect), \
+                    tempfile.TemporaryDirectory(prefix='ci-live-build-drift-') as temporary:
+                build = Path(temporary) / 'build'
+                product = build / 'runner/drift-module.so'
+                control_row = 'additional_runner_input'
+                scripted = Scripted(build, ROOT, 'live-sanitizers',
+                                    ctest_registered_names=(control_row,),
+                                    ctest_shard_link_outputs={'drift_producer': str(product)})
+                built = False
+
+                def runner(argv, **kwargs):
+                    nonlocal built
+                    result = scripted(argv, **kwargs)
+                    if argv[0] == 'cmake' and '--build' in argv:
+                        built = True
+                    if argv[0] == 'ctest' and '--show-only=json-v1' in argv:
+                        before = defect in {'missing-row', 'unowned-command'}
+                        if built != before:
+                            document = json.loads(result.stdout)
+                            row = next(test for test in document['tests']
+                                       if test['name'] == control_row)
+                            if defect in {'missing-row', 'missing-after-build'}:
+                                document['tests'].remove(row)
+                            elif defect == 'unowned-command':
+                                row['command'] = [str(build / 'bin/unowned')]
+                            elif defect == 'changed-command':
+                                row['command'] += ['--module', str(product)]
+                            elif defect == 'changed-property':
+                                row['properties'] = [{'name': 'REQUIRED_FILES',
+                                                      'value': str(product)}]
+                            elif defect == 'changed-command-argument':
+                                # Same producer/data-path map, changed command.
+                                row['command'] += ['--changed-runner-mode']
+                            elif defect == 'changed-property-value':
+                                # No path changes: full properties still bind.
+                                row['properties'] = [{'name': 'PROCESSORS', 'value': 2}]
+                            else:
+                                row['properties'] = [{'name': 'WORKING_DIRECTORY',
+                                                      'value': str(build / 'changed-data')}]
+                            return Completed(result.returncode, json.dumps(document).encode(),
+                                             result.stderr)
+                    return result
+
+                code = main(['live-sanitizers', '--build-dir', str(build), '--jobs', '2'],
+                            runner=runner, stream_output=False)
+                summary = load_summary(build)
+                self.assertEqual(code, 1)
+                self.assertNotIn('ctest', scripted.names())
+                before = defect in {'missing-row', 'unowned-command'}
+                self.assertEqual('build' in scripted.names(), not before)
+                self.assertIn('live-ctest-target-mapping' if before
+                              else 'live-ctest-build-coverage', failure_stages(summary))
+
+    def test_unsharded_live_accounting_refuses_changed_result_names_at_the_same_count(self):
+        for defect in ('missing', 'duplicate', 'extra'):
+            with self.subTest(defect=defect), \
+                    tempfile.TemporaryDirectory(prefix='ci-live-results-') as temporary:
+                build = Path(temporary) / 'build'
+                scripted = Scripted(build, ROOT, 'live-sanitizers')
+                names = scripted._live_registry()
+                output = named_ctest_output(names)
+                old = f'{len(names)}/{len(names)} Test #{len(names)}: {names[-1]}'
+                line = old + ' ........Passed 0.01 sec\n'
+                self.assertIn(line.encode(), output)
+                if defect == 'missing':
+                    output = output.replace(line.encode(), b'', 1)
+                else:
+                    replacement = names[0] if defect == 'duplicate' else 'unregistered_result'
+                    output = output.replace(old.encode(), old.replace(
+                        names[-1], replacement).encode(), 1)
+                scripted.exits['ctest_raw'] = output
+                code = run_driver('live-sanitizers', build, scripted)
+                summary = load_summary(build)
+                self.assertEqual(code, 1)
+                self.assertIn('live-ctest-accounting', failure_stages(summary))
+                self.assertNotIn('liveCTestResults', summary)
+                self.assertIn('install', scripted.names())
+                self.assertNotIn('ctestShard', summary)
 
     def test_profile_summaries_match_lab_exclusion_declarations(self):
         commands = {name: 0 for name in LAB_SHARD_GUARDS | {'source-guard-twin-parity'}}
@@ -4074,9 +4479,10 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                 self.assertIn('abi-providers-skipped', stage_names(summary))
                 self.assertEqual(summary['requireWebsocket'], present)
                 self.assertEqual(summary['minTests'], LIVE_SANITIZERS_MIN_TESTS - int(not present))
-                self.assertEqual(summary['ctestRows'], summary['minTests'])
-                self.assertEqual(summary['ctestRegistered'], summary['minTests'])
-                self.assertEqual(summary['ctestSelected'], summary['minTests'])
+                population = len(scripted._live_registry())
+                self.assertEqual(summary['ctestRows'], population)
+                self.assertEqual(summary['ctestRegistered'], population)
+                self.assertEqual(summary['ctestSelected'], population)
                 inventory = next(stage for stage in summary['stages']
                                  if stage['name'] == 'live-test-inventory-required')
                 inventory_log = (build_dir / inventory['log']).read_text()
@@ -4108,8 +4514,8 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertEqual(code, 0, summary['failures'])
         self.assertIn('runner-thread-sanitizer-coverage', stage_names(summary))
         self.assertIn('live-test-inventory-required', stage_names(summary))
-        self.assertEqual(summary['ctestRegistered'], LIVE_SANITIZERS_MIN_TESTS)
-        self.assertEqual(summary['ctestSelected'], LIVE_SANITIZERS_MIN_TESTS)
+        self.assertEqual(summary['ctestRegistered'], len(scripted._live_registry()))
+        self.assertEqual(summary['ctestSelected'], len(scripted._live_registry()))
         self.assertEqual(summary['ctestSkipped'], [])
         self.assertNotIn('sanitizer-public-flag', stage_names(summary))
         self.assertNotIn('live-sanitizer-coverage', stage_names(summary))
@@ -4137,10 +4543,12 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertIn('live-test-inventory-required', failure_stages(summary))
                 self.assertNotIn('ctest', scripted.names())
+                self.assertNotIn('build', scripted.names())
 
     def test_live_sanitizers_refuse_skips_and_unsupported_websockets(self):
-        cases = [({'ctest_rows': LIVE_SANITIZERS_MIN_TESTS + 1,
-                   'ctest_skipped': ['native_live_e2e']}, 'live-test-skips')]
+        # A required e2e row that skips is refused over the full registry the
+        # runner prints by name; no count is scripted beside it.
+        cases = [({'ctest_skipped': ['native_live_e2e']}, 'live-test-skips')]
         if (ROOT / 'runner' / 'transport.cpp').is_file():
             cases.append(({'require-websocket': 77}, 'require-websocket-skip'))
         for defects, stage in cases:
@@ -5437,33 +5845,87 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         self.assertGreaterEqual(len(pinned), count)
         return pinned[:count]
 
+    def live_registry(self, profile='live-sanitizers', **exits) -> tuple:
+        # The runner/ registry a control's inputs produce, read from the
+        # tree's own fields: the required rows, every e2e driver and
+        # equivalence probe it holds, and each row the control scripts as
+        # skipped, not-run or disabled. LIVE_SANITIZERS_MIN_TESTS is a floor
+        # on genuine executions, never the size of this collection, so a
+        # coherent control scripts no count of its own: the runner derives
+        # its registered, selected and total counts from these names.
+        return Scripted(Path('scripted-live-registry'), ROOT, profile,
+                        **exits)._live_registry()
+
     def test_green_the_absent_runner_placeholders_skip_and_the_profile_passes(self):
         # Control (a): the public native-live shape. The runner/ tree
         # registers its 65 old pinned placeholders beside the required rows;
-        # they skip, ran stays at the floor, and the profile passes with the
-        # acceptance printed.
+        # they skip, every other registered row genuinely runs, and the
+        # profile passes with the acceptance printed. No count is scripted:
+        # the selected names, the closing total and the printed results all
+        # come from the registry, and the genuine executions must clear the
+        # floor rather than equal it.
         pinned = self.pinned_probe(65)
+        registry = self.live_registry('live-sanitizers', ctest_skipped=pinned)
+        genuine = sorted(set(registry) - set(pinned))
         code, summary, _, build_dir = self.run_profile(
-            'live-sanitizers', ctest_registered=65 + LIVE_SANITIZERS_MIN_TESTS,
-            ctest_rows=65 + LIVE_SANITIZERS_MIN_TESTS,
-            ctest_skipped=pinned)
+            'live-sanitizers', ctest_skipped=pinned)
         self.assertEqual(code, 0, summary['failures'])
-        self.assertEqual(summary['ctestRows'], LIVE_SANITIZERS_MIN_TESTS)
+        self.assertGreaterEqual(len(genuine), LIVE_SANITIZERS_MIN_TESTS)
+        self.assertEqual(summary['ctestRegistered'], len(registry))
+        self.assertEqual(summary['ctestRows'], len(genuine))
+        results = summary['liveCTestResults']
+        self.assertEqual(results['selectedNames'], sorted(registry))
+        self.assertEqual(results['ran'], genuine)
+        self.assertEqual(results['executedCount'], len(genuine))
+        self.assertEqual(results['privatePlaceholderSkips'], sorted(pinned))
+        self.assertEqual(results['skipped'], sorted(pinned))
+        self.assertEqual(results['notRun'], [])
+        self.assertEqual(results['disabled'], [])
+        self.assertEqual(sorted(results['ran'] + results['skipped']), results['selectedNames'])
+        self.assertNotIn('ctestShard', summary)
         self.assertNotIn('live-test-skips', failure_stages(summary))
         self.assertIn('live-test-skips', stage_names(summary))
         log = (build_dir / 'ci-logs' / 'live-test-skips.log').read_text()
-        self.assertIn('65 pinned private-fixture rows skipping', log)
+        self.assertIn(f'{len(pinned)} pinned private-fixture rows skipping', log)
+
+    def test_red_a_floor_sized_total_cannot_stand_in_for_the_registered_names(self):
+        # The retired fixture, kept as a refusal. It was the green control:
+        # it declared 65 + LIVE_SANITIZERS_MIN_TESTS rows, registered and run,
+        # as if the policy floor were the size of the collection. The floor is
+        # a minimum. The registry is the required rows, every e2e driver and
+        # equivalence probe, and the pinned placeholders, which is more rows
+        # than that total, so on the preceding fixture the transcript named
+        # only the 65 skipped rows and live-ctest-accounting refused it as a
+        # lost or extra row, as asserted here. This total agrees with its own
+        # registered count, clears the floor and skips only pinned rows, so
+        # nothing but an exact name match can refuse it: a count match must
+        # never be accepted in place of one.
+        pinned = self.pinned_probe(65)
+        registry = self.live_registry('live-sanitizers', ctest_skipped=pinned)
+        stale = len(pinned) + LIVE_SANITIZERS_MIN_TESTS
+        self.assertGreater(len(registry), stale)
+        code, summary, _, _ = self.run_profile(
+            'live-sanitizers', ctest_registered=stale, ctest_rows=stale,
+            ctest_skipped=pinned)
+        self.assertEqual(code, 1)
+        self.assertEqual(failure_stages(summary), ['live-ctest-accounting'])
+        self.assertIn('result names differ from the selected shard (lost or extra row)',
+                      summary['failures'][0]['error'])
+        self.assertEqual(summary['ctestRows'], LIVE_SANITIZERS_MIN_TESTS)
+        self.assertNotIn('liveCTestResults', summary)
+        names = summary['liveCTestInventory']['registeredNames']
+        self.assertEqual(names, sorted(registry))
+        missing = (set(ci_verify.runner_e2e_test_names(ROOT)) | set(pinned)) - set(names)
+        self.assertEqual(missing, set())
 
     def test_red_an_unpinned_runner_skip_fails(self):
         # Control (b): one skipped row outside the pin is a failure, even
-        # though the arithmetic alone would tolerate it.
+        # though the floor and every count agree with the printed names.
         pinned = self.pinned_probe(65)
         code, summary, _, _ = self.run_profile(
-            'live-sanitizers', ctest_registered=66 + LIVE_SANITIZERS_MIN_TESTS,
-            ctest_rows=66 + LIVE_SANITIZERS_MIN_TESTS,
-            ctest_skipped=pinned + ['test_unpinned_runner_row'])
+            'live-sanitizers', ctest_skipped=pinned + ['test_unpinned_runner_row'])
         self.assertEqual(code, 1)
-        self.assertIn('live-test-skips', failure_stages(summary))
+        self.assertEqual(failure_stages(summary), ['live-test-skips'])
         error = next(item['error'] for item in summary['failures']
                      if item['stage'] == 'live-test-skips')
         self.assertIn('test_unpinned_runner_row', error)
@@ -5474,11 +5936,10 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # pinned skips -- the acceptance covers skips, nothing else.
         pinned = self.pinned_probe(65)
         code, summary, _, _ = self.run_profile(
-            'live-sanitizers', ctest_registered=66 + LIVE_SANITIZERS_MIN_TESTS,
-            ctest_rows=66 + LIVE_SANITIZERS_MIN_TESTS,
-            ctest_skipped=pinned, ctest_not_run=['test_live_not_run_row'])
+            'live-sanitizers', ctest_skipped=pinned,
+            ctest_not_run=['test_live_not_run_row'])
         self.assertEqual(code, 1)
-        self.assertIn('live-test-skips', failure_stages(summary))
+        self.assertEqual(failure_stages(summary), ['live-test-skips'])
         error = next(item['error'] for item in summary['failures']
                      if item['stage'] == 'live-test-skips')
         self.assertIn('cannot accept skipped, disabled or unreadable rows', error)
@@ -5488,11 +5949,10 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # own count, so only this rule can refuse it.
         pinned = self.pinned_probe(65)
         code, summary, _, _ = self.run_profile(
-            'live-sanitizers', ctest_registered=65 + LIVE_SANITIZERS_MIN_TESTS,
-            ctest_rows=65 + LIVE_SANITIZERS_MIN_TESTS,
-            ctest_skipped=pinned, ctest_disabled=['test_live_disabled_row'])
+            'live-sanitizers', ctest_skipped=pinned,
+            ctest_disabled=['test_live_disabled_row'])
         self.assertEqual(code, 1)
-        self.assertIn('live-test-skips', failure_stages(summary))
+        self.assertEqual(failure_stages(summary), ['live-test-skips'])
 
     def test_red_overlay_present_a_pinned_skip_still_fails(self):
         # Control (d): with the overlay present the old rule stands -- every
@@ -5500,9 +5960,7 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # private-fixtures rule and on this one.
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
             code, summary, _, _ = self.run_profile(
-                'live-sanitizers', ctest_registered=LIVE_SANITIZERS_MIN_TESTS + 1,
-                ctest_rows=LIVE_SANITIZERS_MIN_TESTS + 1,
-                ctest_skipped=self.pinned_probe(1))
+                'live-sanitizers', ctest_skipped=self.pinned_probe(1))
         self.assertEqual(code, 1)
         self.assertIn('live-test-skips', failure_stages(summary))
         self.assertIn('ctest-private-fixtures', failure_stages(summary))
@@ -5512,14 +5970,16 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
 
     def test_green_live_tsan_carries_the_same_rule(self):
         # The rule keys on the profile SET: live-tsan accepts the pinned
-        # placeholders the same way.
+        # placeholders the same way, over the same derived registry.
         pinned = self.pinned_probe(65)
-        code, summary, _, _ = self.run_profile(
-            'live-tsan', ctest_registered=65 + LIVE_SANITIZERS_MIN_TESTS,
-            ctest_rows=65 + LIVE_SANITIZERS_MIN_TESTS,
-            ctest_skipped=pinned)
+        registry = self.live_registry('live-tsan', ctest_skipped=pinned)
+        code, summary, _, _ = self.run_profile('live-tsan', ctest_skipped=pinned)
         self.assertEqual(code, 0, summary['failures'])
         self.assertIn('live-test-skips', stage_names(summary))
+        results = summary['liveCTestResults']
+        self.assertEqual(results['selectedNames'], sorted(registry))
+        self.assertEqual(results['privatePlaceholderSkips'], sorted(pinned))
+        self.assertEqual(results['executedCount'], len(registry) - len(pinned))
 
     def test_required_equivalence_skip_fails_even_when_other_rows_cover_the_floor(self):
         # Inventory membership and a healthy total cannot substitute for this
@@ -5529,13 +5989,14 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
             for probe in probes:
                 name = 'native_live_equivalence_e2e_' + probe
                 with self.subTest(profile=profile, probe=probe):
+                    registry = self.live_registry(profile, ctest_skipped=[name])
                     code, summary, _, _ = self.run_profile(
-                        profile, ctest_registered=LIVE_SANITIZERS_MIN_TESTS + 1,
-                        ctest_rows=LIVE_SANITIZERS_MIN_TESTS + 1,
-                        ctest_skipped=[name])
+                        profile, ctest_skipped=[name])
                     self.assertEqual(code, 1)
-                    self.assertEqual(summary['ctestRows'], LIVE_SANITIZERS_MIN_TESTS)
-                    self.assertIn('live-test-skips', failure_stages(summary))
+                    # Every other registered row ran and covers the floor.
+                    self.assertEqual(summary['ctestRows'], len(registry) - 1)
+                    self.assertGreaterEqual(summary['ctestRows'], LIVE_SANITIZERS_MIN_TESTS)
+                    self.assertEqual(failure_stages(summary), ['live-test-skips'])
                     error = next(item['error'] for item in summary['failures']
                                  if item['stage'] == 'live-test-skips')
                     self.assertIn('required runner e2e rows skipped', error)
@@ -6255,6 +6716,8 @@ class NativeLiveEquivalenceCTest(unittest.TestCase):
         self.assertIsNotNone(properties)
         self.assertRegex(properties.group(1), r'\bSKIP_RETURN_CODE\s+77\b')
         self.assertRegex(properties.group(1), r'\bLABELS\s+private_fixtures\b')
+        self.assertIn('REQUIRED_FILES "$<TARGET_FILE:pineforge-live>;$<TARGET_FILE:pineforge>"',
+                      properties.group(1))
         self.assertNotRegex(properties.group(1),
                             r'\b(SKIP_REGULAR_EXPRESSION|PASS_REGULAR_EXPRESSION|WILL_FAIL|DISABLED)\b')
         probes = driver_probes((ROOT / 'tests' / 'native_live_equivalence_e2e.py').read_text())

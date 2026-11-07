@@ -3891,6 +3891,7 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
         findings.append('native-live must retain read-only permissions and required release tags')
     for name, sharded in (('native-live', False), ('native-live-shards', True)):
         findings += _native_profile_job_findings(jobs.get(name, ''), name, sharded=sharded)
+    findings += native_live_disk_workflow_findings(job)
     if curl_action is not None:
         action_steps = _steps(curl_action, 4)
         metadata = _step_named(action_steps, '      id: dependencies')
@@ -3906,6 +3907,62 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
                 or 'echo "curl-dir=${GITHUB_WORKSPACE}/build-native-deps/curl-install/lib/cmake/CURL" >> "$GITHUB_OUTPUT"' not in metadata
                 or 'steps.curl-cache' in curl_action or '  cache-hit:' in curl_action):
             findings.append('pinned curl must always build the checksum-pinned dependency and publish curl-dir')
+    return findings
+
+
+def native_live_disk_workflow_findings(job: str) -> list[str]:
+    """Bind live image preparation, workspace storage and exact-byte df evidence."""
+    findings = []
+    steps = _steps(job)
+    image_names = [
+        'Inventory disposable .NET installation', 'Remove disposable .NET installation',
+        'Inventory disposable Android SDK', 'Remove disposable Android SDK',
+        'Inventory disposable GHC installation', 'Remove disposable GHC installation',
+        'Inventory disposable Boost installation', 'Remove disposable Boost installation',
+        'Prune unused Docker images',
+    ]
+    image = [_step_named(steps, '      - name: ' + name) for name in image_names]
+    before = _step_named(steps, '      - name: Measure sanitizer disk space before preparation')
+    after = _step_named(steps, '      - name: Measure sanitizer disk space after preparation')
+    start = _step_named(steps, '      - name: Measure sanitizer disk space at live start')
+    final = _step_named(steps, '      - name: Measure sanitizer disk space after verification')
+    prepare = _step_named(steps, '      - name: Prepare sanitizer build storage')
+    dependencies = _step_named(steps, '      - name: Install native build dependencies')
+    verify = _step_named(steps, '        id: verify')
+    checkouts = [step for step in steps
+                 if any(value.startswith('actions/checkout@')
+                        for value in _step_values(step, 'uses'))]
+    checkout = checkouts[0] if len(checkouts) == 1 else ''
+
+    def observation(step: str, condition: str) -> bool:
+        return (bool(step) and _step_values(step, 'run') == ['df -B1 -P / /mnt']
+                and _step_values(step, 'if') == [condition]
+                and not _step_values(step, 'continue-on-error'))
+
+    if (not all(image) or not before or not after or not checkout
+            or not observation(before, AUTHZ_SUCCESS)
+            or not observation(after, AUTHZ_ALWAYS)
+            or not steps.index(before) < steps.index(image[0])
+            or [steps.index(step) for step in image]
+            != sorted(steps.index(step) for step in image)
+            or not steps.index(image[-1]) < steps.index(after) < steps.index(checkout)):
+        findings.append('native-live must measure and prepare image disk before checkout')
+    if any(not step or 'set -euo pipefail' not in '\n'.join(_code(step))
+           or re.search(r'\|\|\s*(?:true|:)|\bset\s+\+e\b', '\n'.join(_code(step)))
+           or _step_values(step, 'continue-on-error')
+           or _step_values(step, 'if') != [AUTHZ_SUCCESS]
+           for step in image):
+        findings.append('native-live image preparation must fail closed')
+    if (not checkout or not prepare or not dependencies or not start or not verify
+            or _step_values(prepare, 'if') != [AUTHZ_SUCCESS]
+            or _step_values(prepare, 'continue-on-error')
+            or not observation(start, AUTHZ_SUCCESS)
+            or not steps.index(checkout) < steps.index(prepare) < steps.index(dependencies)
+            < steps.index(start) < steps.index(verify)):
+        findings.append('native-live must prepare workspace storage after checkout and record df at live start')
+    if (not verify or not observation(final, AUTHZ_ALWAYS)
+            or steps.index(final) <= steps.index(verify)):
+        findings.append('native-live must record an always-run exact-byte final df sample')
     return findings
 
 

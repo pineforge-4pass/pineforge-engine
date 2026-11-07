@@ -1211,6 +1211,19 @@ def ctest_target_output_manifest(build_dir: Path) -> dict[Path, str]:
     """
     manifest: dict[Path, str] = {}
     root = build_dir.resolve()
+
+    def register(raw: str, target: str, directory: Path, source: Path) -> None:
+        output = Path(raw)
+        if not output.is_absolute():
+            output = directory / output
+        output = output.resolve()
+        previous = manifest.get(output)
+        if previous is not None and previous != target:
+            raise ValueError(
+                f'generated output {output} belongs to both {previous} and {target} '
+                f'(source {source})')
+        manifest[output] = target
+
     for link in root.rglob('link.txt'):
         match = OBJECT_DIR.search(link.as_posix())
         if match is None:
@@ -1236,15 +1249,40 @@ def ctest_target_output_manifest(build_dir: Path) -> dict[Path, str]:
         for raw in outputs:
             if not raw or '$' in raw:
                 continue
-            output = Path(raw)
-            if not output.is_absolute():
-                output = target_root / output
-            output = output.resolve()
-            previous = manifest.get(output)
-            if previous is not None and previous != target:
-                raise ValueError(
-                    f'generated output {output} belongs to both {previous} and {target}')
-            manifest[output] = target
+            register(raw, target, target_root, link)
+    # Ninja does not emit link.txt. Its generated link edges bind the real
+    # TARGET_FILE and OBJECT_DIR; neither a phony alias nor a row name proves
+    # that an output has a producer.
+    ninja = root / 'build.ninja'
+    if ninja.is_file():
+        with open(ninja, encoding='utf-8') as stream:
+            text = stream.read()
+        text = re.sub(r'\$\r?\n[ \t]*', '', text)
+        for edge in re.finditer(
+                r'(?m)^build .+: [^\s:]*_LINKER__[^\s:]+[^\n]*\n'
+                r'(?P<bindings>(?:[ \t]+[^\n]*\n|\n)*)', text):
+            bindings = edge['bindings']
+            directory = re.search(r'(?m)^  OBJECT_DIR = (.+)$', bindings)
+            product = re.search(r'(?m)^  TARGET_FILE = (.+)$', bindings)
+            if directory is None or product is None:
+                raise ValueError(f'generated Ninja link edge lacks OBJECT_DIR/TARGET_FILE: '
+                                 f'{ninja}: {edge.group(0).splitlines()[0]}')
+
+            def literal(value: str) -> str:
+                # Decode only Ninja's literal escapes. An unresolved variable
+                # is missing producer evidence, not a path to guess.
+                def escaped(match: re.Match) -> str:
+                    if match[1] not in {'$', ' ', ':'}:
+                        raise ValueError(
+                            f'unresolved generated Ninja link path in {ninja}: {value}')
+                    return match[1]
+                return re.sub(r'\$(.|$)', escaped, value)
+
+            match = OBJECT_DIR.search(literal(directory[1]) + '/')
+            if match is None:
+                raise ValueError(f'generated Ninja link edge has no CMake target: '
+                                 f'{ninja}: {directory[1]}')
+            register(literal(product[1]), match[1], root, ninja)
     return manifest
 
 
@@ -1574,6 +1612,65 @@ def ctest_shard_build_targets(target_map: dict[str, tuple[str, ...]],
     return tuple(sorted(targets))
 
 
+def ctest_live_build_inventory(output: bytes, registry: tuple[str, ...],
+                               build_dir: Path, *, require_websocket: bool) -> dict:
+    """Bind the full runner registry to its configure-time build closure.
+
+    This is an unpartitioned inventory, including when execution is sharded.
+    Keep data paths as evidence; only real CMake producers become targets.
+    """
+    registry_hash = ctest_registry_sha256(registry)
+    mapping, data_paths = ctest_target_mapping(output, build_dir)
+    if set(mapping) != set(registry):
+        raise ValueError(
+            'runner target mapping differs from the full registry: missing '
+            + repr(sorted(set(registry) - set(mapping))) + '; extra '
+            + repr(sorted(set(mapping) - set(registry))))
+    outputs = ctest_target_output_manifest(build_dir)
+    root = build_dir.resolve()
+    commands = None
+    row_inputs = {}
+    for test in json.loads(output)['tests']:
+        command = test.get('command')
+        if command is None:
+            if commands is None:
+                commands = ctest_configure_commands(build_dir)
+            command = commands[test['name']]
+        row_inputs[test['name']] = {
+            'command': list(command),
+            'properties': test.get('properties', []),
+        }
+        executable = Path(command[0])
+        if executable.is_absolute():
+            executable = executable.resolve()
+            if root in executable.parents and executable not in outputs:
+                raise ValueError(
+                    f'runner row {test["name"]}: command executable {executable} '
+                    'has no producer in generated link recipes')
+    targets = set(ctest_shard_build_targets(mapping, registry, include_install=True))
+    # Install owns this executable in runner/CMakeLists.txt. The WebSocket
+    # gate invokes its binary directly even when its CTest row is filtered.
+    targets.add('pineforge-live')
+    if require_websocket:
+        targets.add('test_native_live_websocket')
+    missing = sorted(targets - set(outputs.values()))
+    if missing:
+        raise ValueError('runner build/install prerequisites have no generated output: '
+                         + ', '.join(missing))
+    return {
+        'registeredNames': sorted(registry),
+        'registrySha256': registry_hash,
+        'targetMap': {name: list(mapping[name]) for name in sorted(mapping)},
+        'rowInputs': {name: row_inputs[name] for name in sorted(row_inputs)},
+        'unmappedBuildPaths': {name: list(data_paths[name]) for name in sorted(data_paths)},
+        'targetOutputs': {
+            os.path.relpath(path, root): target
+            for path, target in sorted(outputs.items()) if target in targets
+        },
+        'buildTargets': sorted(targets),
+    }
+
+
 def disk_tree_totals(build_dir: Path,
                      test_binary_paths: tuple[Path, ...] = ()) -> dict:
     """Return byte totals and largest files for the sanitizer disk receipt."""
@@ -1681,7 +1778,9 @@ def ctest_every_stages(profile: str) -> frozenset[str]:
     if PROFILE[profile].sanitizers:
         names.add('sanitizer-public-flag')
     if profile in LIVE_ONLY_PROFILES:
-        names.update(('live-test-inventory', 'live-test-inventory-required'))
+        names.update(('live-test-inventory', 'live-test-inventory-required',
+                      'live-ctest-list-build', 'live-ctest-target-mapping',
+                      'live-test-inventory-after-build', 'live-ctest-build-coverage'))
     if profile == 'live-sanitizers':
         names.add('live-sanitizer-coverage')
     if profile == 'live-tsan':
@@ -2122,7 +2221,13 @@ def kernel_residuals_command(cfg: VerifyConfig) -> list[str]:
 # source/test population, and shard selection unchanged while using compact
 # line tables for sanitizer Debug objects; this reduces object/debug footprint
 # without changing generated machine code or runtime instrumentation.
+# Scope: only the two ASan/UBSan profiles, sanitizers and live-sanitizers, take
+# these flags. live-tsan is a Debug build too but deliberately retains the
+# default Debug flags, as do debug, release, native and kernel: no other
+# profile sets CMAKE_C_FLAGS_DEBUG or CMAKE_CXX_FLAGS_DEBUG.
 SANITIZER_DEBUG_INFO_FLAGS = '-g1'
+
+
 def cmake_cache_definitions(cfg: VerifyConfig) -> dict[str, str]:
     profile = cfg.profile
     values = {
@@ -2148,6 +2253,7 @@ def cmake_cache_definitions(cfg: VerifyConfig) -> dict[str, str]:
     if profile.live_runner:
         values['PINEFORGE_LIVE_TSAN'] = 'ON' if profile.thread_sanitizers else 'OFF'
     if profile.name in {'sanitizers', 'live-sanitizers'}:
+        # live-tsan is left out on purpose: it keeps the default Debug flags.
         values['CMAKE_C_FLAGS_DEBUG'] = SANITIZER_DEBUG_INFO_FLAGS
         values['CMAKE_CXX_FLAGS_DEBUG'] = SANITIZER_DEBUG_INFO_FLAGS
     if cfg.curl_dir is not None:
@@ -2672,6 +2778,56 @@ class Driver:
         self.write_summary()
         return False
 
+    def discover_live_build(self, test_dir: Path) -> bool:
+        inventory = self.invoke(
+            'live-test-inventory',
+            ['ctest', '--test-dir', str(test_dir), '--show-only=json-v1'],
+            stream_output=False)
+        try:
+            names = {test['name'] for test in json.loads(inventory.stdout)['tests']}
+            if any(not isinstance(name, str) or not name for name in names):
+                raise ValueError('runner CTest inventory contains malformed row names')
+            required = {'native_live_help', 'test_live_json',
+                        'test_native_live_startup', 'test_native_live_store',
+                        'test_native_live_routing',
+                        'test_native_example_batch', 'test_native_example_selected',
+                        'test_native_live_equivalence_split'}
+            if (self.cfg.source / 'runner' / 'transport.cpp').is_file():
+                required.add('test_native_live_websocket')
+            required.update(runner_e2e_test_names(self.cfg.source))
+            if inventory.returncode != 0 or required - names:
+                raise ValueError('missing runner CTest rows: ' +
+                                 ', '.join(sorted(required - names)))
+        except (OSError, KeyError, TypeError, ValueError) as error:
+            self.fail_stage('live-test-inventory-required', str(error))
+            return False
+        self.pass_stage('live-test-inventory-required',
+                        'all required runner rows registered: ' + ', '.join(sorted(names)))
+        listing = self.invoke(
+            'live-ctest-list-build', ['ctest', '--test-dir', str(test_dir), '-N'],
+            stream_output=False)
+        try:
+            if listing.returncode:
+                raise ValueError('runner CTest registry discovery command failed')
+            registry = ctest_registry(listing.stdout + listing.stderr)
+            evidence = ctest_live_build_inventory(
+                inventory.stdout, registry, self.cfg.build_dir,
+                require_websocket=self.cfg.require_websocket)
+            self.summary['liveCTestInventory'] = evidence
+            row_targets = set().union(*(evidence['targetMap'][name] for name in registry))
+            self.disk_binary_paths = tuple(
+                self.cfg.build_dir / path
+                for path, target in evidence['targetOutputs'].items() if target in row_targets)
+            self.pass_stage(
+                'live-ctest-target-mapping',
+                f'{len(registry)} runner rows covered; '
+                f'{len(evidence["buildTargets"])} build/install targets; '
+                'row targets, data paths and generated outputs in liveCTestInventory')
+            return True
+        except (OSError, ValueError) as error:
+            self.fail_stage('live-ctest-target-mapping', str(error))
+            return False
+
     def discover_ctest_shard(self, test_dir: Path, all_rows: Completed,
                              selected_rows: Completed, *,
                              target_mapping: bool = False) -> CTestShardDiscovery | None:
@@ -2827,7 +2983,7 @@ class Driver:
         return ran
 
     def record_disk_sample(self, label: str) -> None:
-        if self.cfg.profile.name != 'sanitizers':
+        if self.cfg.profile.name not in {'sanitizers', *LIVE_ONLY_PROFILES}:
             return
         sample = {'label': label, 'time': round(time.time(), 3)}
         for mount, key in (('/', 'root'), ('/mnt', 'mnt')):
@@ -2844,9 +3000,9 @@ class Driver:
         self.disk_samples.append(sample)
 
     def start_disk_sampling(self) -> None:
-        if self.cfg.profile.name != 'sanitizers':
+        if self.cfg.profile.name not in {'sanitizers', *LIVE_ONLY_PROFILES}:
             return
-        self.record_disk_sample('shard-start')
+        self.record_disk_sample('shard-start' if self.cfg.ctest_shard else 'leg-start')
 
         def sample_until_stopped() -> None:
             while not self.disk_stop.wait(5):
@@ -2862,46 +3018,67 @@ class Driver:
             self.disk_thread = None
         if self.disk_telemetry_written or not self.disk_samples:
             return
+        # Stop the interval writer before the final observation, including on
+        # configure/build/CTest failure. The last sample must really be final.
+        self.record_disk_sample('finish')
         self.disk_telemetry_written = True
 
-        def free_bytes(sample: dict) -> int:
+        def free_bytes(sample: dict) -> int | None:
             values = [
                 sample[mount]['freeBytes']
                 for mount in ('root', 'mnt')
                 if isinstance(sample.get(mount), dict)
                 and isinstance(sample[mount].get('freeBytes'), int)
             ]
-            return min(values) if values else 1 << 62
+            return min(values) if values else None
 
-        peak = min(self.disk_samples, key=free_bytes)
+        observed = [sample for sample in self.disk_samples if free_bytes(sample) is not None]
+        sampled_minimum = min(observed, key=free_bytes) if observed else None
         minimum_free = {
-            mount: min(sample[mount]['freeBytes'] for sample in self.disk_samples
-                       if 'freeBytes' in sample.get(mount, {}))
+            mount: min((sample[mount]['freeBytes'] for sample in self.disk_samples
+                        if 'freeBytes' in sample.get(mount, {})), default=None)
             for mount in ('root', 'mnt')
-            if any('freeBytes' in sample.get(mount, {}) for sample in self.disk_samples)
         }
+        unavailable = [
+            {'label': sample['label'], 'time': sample['time'], 'mount': mount,
+             'error': sample[mount]['error']}
+            for sample in self.disk_samples for mount in ('root', 'mnt')
+            if 'error' in sample[mount]
+        ]
         self.summary['diskTelemetry'] = {
             'sampleIntervalSeconds': 5,
             'samples': len(self.disk_samples),
             'minimumFreeBytes': minimum_free,
+            'start': self.disk_samples[0],
+            'final': self.disk_samples[-1],
+            'observationsComplete': not unavailable,
+            'unavailableObservations': unavailable,
+            'minimumScope': 'sampled observations, not a continuous peak',
+            'samplerCostMeasured': False,
             'log': 'ci-logs/disk-telemetry.log',
         }
         shard = self.cfg.ctest_shard
         shard_name = f'{shard.index}/{shard.count}' if shard else 'unsharded'
         lines = [
             'disk telemetry v1',
-            'df samples: root and mnt free bytes; peak is the lowest observed free value',
+            'df samples: root and mnt free bytes; sampled minimum is not a continuous peak',
+            'whole-tree sampler cost has not been measured',
         ]
         lines.extend('sample ' + json.dumps(sample, sort_keys=True)
                      for sample in self.disk_samples)
-        lines.append('peak ' + json.dumps(peak, sort_keys=True))
-        lines.append(f'objects.bytes={peak["objectsBytes"]}')
-        lines.append(f'archives.bytes={peak["archivesBytes"]}')
-        lines.append(f'test-binaries.bytes={peak["testBinariesBytes"]}')
-        lines.append('top files:')
-        lines.extend(f'  {entry["bytes"]} {entry["path"]}'
-                     for entry in peak['topFiles'])
-        for label, sample in (('shard-start', self.disk_samples[0]), ('peak', peak)):
+        lines.append('sampled-minimum ' + json.dumps(sampled_minimum, sort_keys=True))
+        if sampled_minimum is not None:
+            lines.append(f'objects.bytes={sampled_minimum["objectsBytes"]}')
+            lines.append(f'archives.bytes={sampled_minimum["archivesBytes"]}')
+            lines.append(f'test-binaries.bytes={sampled_minimum["testBinariesBytes"]}')
+            lines.append('top files at sampled minimum:')
+            lines.extend(f'  {entry["bytes"]} {entry["path"]}'
+                         for entry in sampled_minimum['topFiles'])
+        samples_to_display = [(self.disk_samples[0]['label'], self.disk_samples[0])]
+        if sampled_minimum is not None:
+            samples_to_display.append(('sampled-minimum', sampled_minimum))
+        samples_to_display.append(('finish', self.disk_samples[-1]))
+        for label, sample in samples_to_display:
             for mount in ('root', 'mnt'):
                 usage = sample[mount]
                 line = f'df shard={shard_name} label={label} mount={mount} '
@@ -3452,6 +3629,11 @@ class Driver:
         all_rows = selected_rows = None
         registered = selected = None
         test_dir = self.cfg.build_dir
+        live_only = self.cfg.profile.name in LIVE_ONLY_PROFILES
+        if live_only:
+            test_dir /= 'runner'
+            if not self.discover_live_build(test_dir):
+                return self.finish('failed', 1)
         if optimized_shard:
             listing = ['ctest', '--test-dir', str(test_dir), '-N']
             all_rows = self.invoke('ctest-list-all', listing, stream_output=False)
@@ -3484,6 +3666,8 @@ class Driver:
         ]
         if optimized_shard:
             build_argv += ['--target', *shard_discovery.build_targets]
+        elif live_only:
+            build_argv += ['--target', *self.summary['liveCTestInventory']['buildTargets']]
         build = self.invoke('build', build_argv)
         self.record_disk_sample('after-build')
         if build.returncode != 0:
@@ -3549,29 +3733,6 @@ class Driver:
         apple_asan = (self.cfg.profile.sanitizers and sys.platform == 'darwin'
                       and not cxx_name.startswith('g++'))
         ctest_jobs = 1 if apple_asan else self.cfg.jobs
-        if self.cfg.profile.name in LIVE_ONLY_PROFILES:
-            test_dir /= 'runner'
-            inventory = self.invoke('live-test-inventory',
-                                    ['ctest', '--test-dir', str(test_dir), '--show-only=json-v1'],
-                                    stream_output=False)
-            try:
-                names = {test['name'] for test in json.loads(inventory.stdout)['tests']}
-                required = {'native_live_help', 'test_live_json',
-                            'test_native_live_startup', 'test_native_live_store',
-                            'test_native_live_routing',
-                            'test_native_example_batch', 'test_native_example_selected',
-                            'test_native_live_equivalence_split'}
-                if (self.cfg.source / 'runner' / 'transport.cpp').is_file():
-                    required.add('test_native_live_websocket')
-                required.update(runner_e2e_test_names(self.cfg.source))
-                if inventory.returncode != 0 or required - names:
-                    raise RuntimeError('missing runner CTest rows: ' +
-                                       ', '.join(sorted(required - names)))
-            except Exception as error:
-                self.fail_stage('live-test-inventory-required', str(error))
-                return self.finish('failed', 1)
-            self.pass_stage('live-test-inventory-required',
-                            'all required runner rows registered: ' + ', '.join(sorted(names)))
         if not optimized_shard:
             listing = ['ctest', '--test-dir', str(test_dir), '-N']
             all_rows = self.invoke('ctest-list-all', listing,
@@ -3594,6 +3755,40 @@ class Driver:
                     'ctest-discovery',
                     'could not read registered/selected CTest counts')
             self.write_summary()
+        if live_only:
+            inventory = self.invoke(
+                'live-test-inventory-after-build',
+                ['ctest', '--test-dir', str(test_dir), '--show-only=json-v1'],
+                stream_output=False)
+            try:
+                if inventory.returncode or all_rows.returncode:
+                    raise ValueError('runner CTest discovery after build failed')
+                evidence = ctest_live_build_inventory(
+                    inventory.stdout, ctest_registry(all_rows.stdout + all_rows.stderr),
+                    self.cfg.build_dir, require_websocket=self.cfg.require_websocket)
+                if evidence != self.summary['liveCTestInventory']:
+                    changed = [key for key in evidence
+                               if evidence[key] != self.summary['liveCTestInventory'].get(key)]
+                    before = self.summary['liveCTestInventory']
+                    changed_rows = sorted({
+                        name for key in ('targetMap', 'unmappedBuildPaths', 'rowInputs')
+                        for name in set(evidence[key]) | set(before[key])
+                        if evidence[key].get(name) != before[key].get(name)
+                    })
+                    reasons = [
+                        f'{name}: command/properties from CTest JSON or generated add_test; '
+                        f'before={before["rowInputs"].get(name)!r}; '
+                        f'after={evidence["rowInputs"].get(name)!r}'
+                        for name in changed_rows
+                    ]
+                    raise ValueError('runner build inventory changed after build: '
+                                     + ', '.join(changed) + '; rows ' + repr(changed_rows)
+                                     + '\n' + '\n'.join(reasons))
+            except (OSError, ValueError) as error:
+                self.fail_stage('live-ctest-build-coverage', str(error))
+                return self.finish('failed', 1)
+            self.pass_stage('live-ctest-build-coverage',
+                            'runner registry and target/data-path mapping match the build inputs')
         if self.cfg.ctest_shard is not None:
             ran = self.run_sharded_ctest(
                 test_dir, ctest_jobs, all_rows, selected_rows, discovery=shard_discovery)
@@ -3619,6 +3814,24 @@ class Driver:
             self.enforce_test_floor(ran, registered=registered, selected=selected,
                                     registered_names=registered_names, excluded_names=excluded_names)
         self.record_disk_sample('after-ctest')
+        if live_only and self.cfg.ctest_shard is None:
+            try:
+                selected_names = tuple(self.summary['liveCTestInventory']['registeredNames'])
+                results = ctest_shard_evidence(ran.stdout + ran.stderr, selected_names)
+                self.summary['liveCTestResults'] = {
+                    'selectedNames': list(selected_names),
+                    'executedCount': len(results['ran']),
+                    'privatePlaceholderSkips': [] if not results['skipped'] else None,
+                    **results,
+                }
+                self.pass_stage(
+                    'live-ctest-accounting',
+                    f'{len(selected_names)} selected runner names exactly match result names; '
+                    f'{len(results["ran"])} genuine executions; '
+                    f'{len(results["skipped"])} explicit skips; '
+                    f'{len(results["notRun"])} not-run; {len(results["disabled"])} disabled')
+            except ValueError as error:
+                self.fail_stage('live-ctest-accounting', str(error))
         if self.cfg.profile.name in LIVE_ONLY_PROFILES:
             try:
                 rows = ctest_rows(ran.stdout + ran.stderr)
@@ -3644,6 +3857,9 @@ class Driver:
                                 f'{self.cfg.profile.name} cannot accept skipped rows that '
                                 f'are not pinned private-fixture placeholders (the overlay '
                                 f'is absent): ' + ', '.join(unpinned))
+                        if 'liveCTestResults' in self.summary:
+                            self.summary['liveCTestResults']['privatePlaceholderSkips'] = sorted(
+                                rows.skipped)
                         self.pass_stage(
                             'live-test-skips',
                             f'{len(rows.skipped)} pinned private-fixture rows skipping in '
@@ -3949,7 +4165,6 @@ class Driver:
                 f'{PRIVATE_FIXTURE_LABEL} rows skipped')
 
     def finish(self, status: str, code: int) -> int:
-        self.record_disk_sample('finish')
         self.write_disk_telemetry()
         self.summary['status'] = status
         self.summary['exitCode'] = code

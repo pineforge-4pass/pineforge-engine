@@ -76,7 +76,8 @@ if(PINEFORGE_BUILD_TESTS)
         add_test(NAME test_tutorial_stream
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run_stream.py)
         set_tests_properties(test_tutorial_stream PROPERTIES
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            REQUIRED_FILES "$<TARGET_FILE:strategy_tutorial_macd>")
         if(PINEFORGE_ENABLE_SANITIZERS AND UNIX)
             # The strategy DSO is ASan-instrumented, but the host Python
             # interpreter is not. Preload the compiler's ASan runtime so its

@@ -35,6 +35,7 @@ SLOW_CLASSES = frozenset({
     'StaleBinaries',
     'ReceiptRecipe',
     'NativeLiveEquivalenceCTest',
+    'CTestTargetMapping',  # No passing serial runtime is retained.
 })
 
 

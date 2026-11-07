@@ -10256,6 +10256,73 @@ class HostedNativeProfiles(unittest.TestCase):
     def workflow(self):
         return (ROOT / '.github/workflows/native-live.yml').read_text()
 
+    def test_live_image_preparation_and_df_contract_uses_the_real_job(self):
+        native = self.workflow()
+        job = _jobs(native)['native-live']
+        self.assertEqual(ci_preflight.native_live_disk_workflow_findings(job), [])
+        self.assertEqual(native_workflow_findings(native), [])
+        steps = ci_preflight._steps(job)
+
+        def named(name):
+            step = ci_preflight._step_named(steps, '      - name: ' + name)
+            self.assertTrue(step, name)
+            self.assertEqual(job.count(step), 1)
+            return step
+
+        before = named('Measure sanitizer disk space before preparation')
+        after = named('Measure sanitizer disk space after preparation')
+        start = named('Measure sanitizer disk space at live start')
+        final = named('Measure sanitizer disk space after verification')
+        storage = named('Prepare sanitizer build storage')
+        prune = named('Prune unused Docker images')
+        checkouts = [step for step in steps if any(
+            value.startswith('actions/checkout@')
+            for value in ci_preflight._step_values(step, 'uses'))]
+        self.assertEqual(len(checkouts), 1)
+        checkout = checkouts[0]
+        image_finding = 'native-live must measure and prepare image disk before checkout'
+        failure_finding = 'native-live image preparation must fail closed'
+        start_finding = ('native-live must prepare workspace storage after checkout '
+                         'and record df at live start')
+        final_finding = 'native-live must record an always-run exact-byte final df sample'
+        mutations = [
+            (job.replace(checkout, '', 1).replace(before, checkout + '\n' + before, 1),
+             [image_finding]),
+            (job.replace(storage, '', 1).replace(checkout, storage + '\n' + checkout, 1),
+             [start_finding]),
+            (job.replace(after, '', 1), [image_finding]),
+            (job.replace(start, '', 1), [start_finding]),
+            (job.replace(final, '', 1), [final_finding]),
+            (job.replace(prune, '', 1), [image_finding, failure_finding]),
+            (job.replace(prune, prune.replace('docker image prune -af',
+                                              'docker image prune -af || true'), 1),
+             [failure_finding]),
+            (job.replace(prune, prune.replace('set -euo pipefail', 'set +e'), 1),
+             [failure_finding]),
+            (job.replace(prune, prune.replace('        shell: bash',
+                                              '        continue-on-error: true\n        shell: bash'), 1),
+             [failure_finding]),
+            (job.replace(final, final.replace(ci_preflight.AUTHZ_ALWAYS,
+                                              ci_preflight.AUTHZ_SUCCESS), 1),
+             [final_finding]),
+            (job.replace(after, after.replace(ci_preflight.AUTHZ_ALWAYS,
+                                              ci_preflight.AUTHZ_SUCCESS), 1),
+             [image_finding]),
+        ]
+        for sample, finding in ((before, image_finding), (after, image_finding),
+                                (start, start_finding), (final, final_finding)):
+            mutations.append((job.replace(sample, sample.replace(
+                'df -B1 -P / /mnt', 'df -h / /mnt'), 1), [finding]))
+            mutations.append((job.replace(sample, sample.replace(
+                '        run:', '        continue-on-error: true\n        run:'), 1), [finding]))
+        for changed, expected in mutations:
+            with self.subTest(expected=expected, changed=changed):
+                self.assertNotEqual(changed, job)
+                self.assertEqual(ci_preflight.native_live_disk_workflow_findings(changed), expected)
+                changed_workflow = native.replace(job, changed, 1)
+                self.assertNotEqual(changed_workflow, native)
+                self.assertEqual(native_workflow_findings(changed_workflow), expected)
+
     def test_native_matrix_needs_both_rows(self):
         native = self.workflow()
         job = _jobs(native)['native-live']
