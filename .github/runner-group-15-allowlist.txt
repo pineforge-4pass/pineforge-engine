@@ -1,2 +1,1 @@
-# The unchanged release workflow retains its protected group 15 route.
-pineforge-4pass/pineforge-engine/.github/workflows/release.yml@refs/heads/main
+# Group 15 mirror intentionally empty: release builds use hosted runners.

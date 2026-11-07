@@ -359,6 +359,7 @@ HOSTED_JOB_RUNNERS = {
     'corpus-parity.yml': GKE_JOB_RUNNERS['corpus-parity.yml'],
     'docs.yml': {'authz': 'ubuntu-24.04', 'build': 'ubuntu-24.04'},
     'rerun-preempted.yml': {'rerun': 'ubuntu-24.04'},
+    'prebuilt-hosted-diagnostic.yml': {'observe': 'ubuntu-24.04'},
     'promote-baseline.yml': GKE_JOB_RUNNERS['promote-baseline.yml'],
     'release-ruleset-probe.yml': GKE_JOB_RUNNERS['release-ruleset-probe.yml'],
 }
@@ -2401,6 +2402,8 @@ def release_credential_findings(workflow: str, name: str = 'release.yml') -> lis
     for job, body in _jobs(workflow).items():
         if job in ('release', 'notify-hub'):
             continue
+        if job == 'prebuilt-x86' and not release_option_c_workflow_findings(workflow):
+            continue
         # strict=True admits the existing GITHUB_TOKEN-only prebuilt surface,
         # while refusing any other secret, inherited environment, OIDC write,
         # App mint or private-key handoff.
@@ -2895,6 +2898,12 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         if _LARGER_RUNNER_LABEL.search(code):
             findings.append(f'{name} must not use larger-runner labels; use the GCP fleet or hosted exceptions')
         fixed_release = RELEASE_JOB_RUNNERS.get(name, {})
+        if name == 'release.yml' and set(jobs) & set(RELEASE_OPTION_C_JOBS):
+            split_runners = {'prebuilt-x86': HOSTED_X86_RUNNER,
+                             'prebuilt-arm': PREBUILT_ARM_RUNNER, 'upload': HOSTED_X86_RUNNER}
+            fixed_release = {job: pin for job, pin in fixed_release.items() if job != 'prebuilt'}
+            fixed_release = {**fixed_release, **split_runners}
+            hosted_release_pins = {**hosted_release_pins, **split_runners}
         event_runner = POST_RUNNER if routes[name] & POST_EVENTS else PR_RUNNER
         pinned = {job: event_runner for job in timed}
         pinned.update(fixed_hosted)
@@ -3168,7 +3177,10 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 display = job + '-shard (${{ matrix.shard }}/' + str(count) + ')'
                 if _job_values(body, 'name') != [display]:
                     findings.append(f'ci-post.yml {job} legs must keep their names: {display}')
-    if 'release.yml' in workflows:
+    if 'prebuilt-hosted-diagnostic.yml' in workflows:
+        findings += prebuilt_hosted_diagnostic_findings(workflows['prebuilt-hosted-diagnostic.yml'])
+    if 'release.yml' in workflows and not (set(_jobs(workflows['release.yml']))
+                                          & set(RELEASE_OPTION_C_JOBS)):
         prebuilt = _jobs(workflows['release.yml']).get('prebuilt', '')
         if (len(_job_values(prebuilt, 'strategy')) != 1
                 or _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY)):
@@ -3208,6 +3220,15 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 break
             block.append(follow)
         if not any(line.strip() == 'type: boolean' for line in block):
+            findings.append('release.yml must declare dry_run as a boolean dispatch input')
+    if 'release.yml' in workflows and set(_jobs(workflows['release.yml'])) & set(RELEASE_OPTION_C_JOBS):
+        workflow = workflows['release.yml']
+        findings += release_option_c_workflow_findings(workflow)
+        if _job_values(_jobs(workflow).get('notify-hub', ''), 'if') != ['${{ !inputs.dry_run }}']:
+            findings.append('release.yml job notify-hub must carry '
+                            'if: ${{ !inputs.dry_run }} so a dry run dispatches nothing')
+        dispatch = '\n'.join(_job_block(workflow, 'on'))
+        if not re.search(r'(?s)      dry_run:\n.*?        type: boolean', dispatch):
             findings.append('release.yml must declare dry_run as a boolean dispatch input')
     return findings
 
@@ -3546,13 +3567,529 @@ RELEASE_PREBUILT_STEPS = RELEASE_PREBUILT_LEGACY_STEPS.replace(
     RELEASE_PREBUILT_LEGACY_GLIBC_STEP, RELEASE_PREBUILT_ARCHIVE_GLIBC_STEPS)
 
 
+# Exact Option C jobs bind token custody, both real archive gates and the hash handoff.
+RELEASE_OPTION_C_JOBS = {
+    'prebuilt-x86': r'''    needs: release
+    if: ${{ github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && github.workflow_ref == format('pineforge-4pass/pineforge-engine/.github/workflows/release.yml@{0}', github.ref) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.digest }}
+
+    steps:
+      - name: Refuse an untrusted toolchain caller
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          [[ "${EVENT}" == workflow_dispatch ]]
+          case "${REF}" in refs/heads/main|refs/tags/v*) ;; *) exit 1 ;; esac
+          [[ "${WORKFLOW_REF}" == "pineforge-4pass/pineforge-engine/.github/workflows/release.yml@${REF}" ]]
+
+      - name: Checkout release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
+          fetch-depth: 0   # the version helper still observes the git sha
+          persist-credentials: false
+
+      - name: Assert tag still names the emitted release commit
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          SHA: ${{ needs.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::invalid emitted release sha: ${SHA}" >&2
+            exit 1
+          fi
+          test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${SHA}"
+
+      - name: Write the dry run's VERSION
+        if: ${{ inputs.dry_run }}
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: printf '%s\n' "${NEXT}" > VERSION
+
+      - name: Authenticate the dedicated toolchain reader
+        id: toolchain-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: projects/76767776102/locations/global/workloadIdentityPools/pineforge-github/providers/github-oidc
+          service_account: engine-release-toolchainreader@gen-lang-client-0864094636.iam.gserviceaccount.com
+          create_credentials_file: false
+          export_environment_variables: false
+          token_format: access_token
+
+      - name: Log in to the private toolchain registry
+        env:
+          REGISTRY_ACCESS_TOKEN: ${{ steps.toolchain-auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${REGISTRY_ACCESS_TOKEN}" | docker login us-central1-docker.pkg.dev --username oauth2accesstoken --password-stdin
+
+      - name: Pull the private pinned toolchain and record observations
+        run: |
+          set -euo pipefail
+          test -f .github/engine-toolchain-image.txt
+          test ! -L .github/engine-toolchain-image.txt
+          test "$(wc -l < .github/engine-toolchain-image.txt)" -eq 1
+          IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt
+          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/gke-runner-images/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
+          export ENGINE_TOOLCHAIN_IMAGE
+          started=$(date +%s)
+          if docker pull "${ENGINE_TOOLCHAIN_IMAGE}"; then pull_rc=0; else pull_rc=$?; fi
+          printf 'pull_exit=%s\nelapsed_seconds=%s\n' "${pull_rc}" "$(( $(date +%s) - started ))"
+          if [[ "${pull_rc}" != 0 ]]; then exit "${pull_rc}"; fi
+          docker image inspect --format 'size_bytes={{.Size}}' "${ENGINE_TOOLCHAIN_IMAGE}"
+
+      - name: Build x86_64 in pinned Bookworm
+        env:
+          SOURCE_SHA: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
+          NEXT: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          test -f .github/engine-toolchain-image.txt
+          test ! -L .github/engine-toolchain-image.txt
+          test "$(wc -l < .github/engine-toolchain-image.txt)" -eq 1
+          IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt
+          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/gke-runner-images/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
+          export ENGINE_TOOLCHAIN_IMAGE
+          bash scripts/build_prebuilt_bookworm.sh \
+            "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" "${SOURCE_SHA}" "${NEXT}" "${TAG}" "${DRY_RUN}"
+
+      - name: Verify the staged version
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: |
+          python3 scripts/release_version.py check-install \
+            --prefix "${STAGE_DIR}" --expect "${NEXT}"
+
+      - name: Fetch the v1.10.0 baseline archive for the glibc comparison
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIPLE: linux-x86_64
+        run: |
+          set -euo pipefail
+          case "${TRIPLE}" in
+            linux-x86_64) digest=cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543 ;;
+            linux-aarch64) digest=982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bb ;;
+            *) echo "::error::no v1.10.0 baseline archive for ${TRIPLE}" >&2; exit 1 ;;
+          esac
+          archive="pineforge-v1.10.0-${TRIPLE}.tar.gz"
+          root="${RUNNER_TEMP}/glibc-baseline-${TRIPLE}"
+          mkdir "${root}" "${root}/download" "${root}/tree"
+          gh release download v1.10.0 --repo "${GITHUB_REPOSITORY}" \
+            --pattern "${archive}" --dir "${root}/download"
+          echo "${digest}  ${root}/download/${archive}" | sha256sum -c -
+          tar -xzf "${root}/download/${archive}" -C "${root}/tree" \
+            --no-same-owner --no-same-permissions
+          echo "BASELINE_DIR=${root}/tree" >> "${GITHUB_ENV}"
+
+      - name: Check every staged library's glibc floor
+        env:
+          TRIPLE: linux-x86_64
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
+          mkdir -p "${log}"
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" --baseline-root "${BASELINE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+            checker_rc=0
+          else checker_rc=$?; fi
+          printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
+          cat "${log}/stdout.jsonl"
+          cat "${log}/stderr.txt" >&2
+          exit "${checker_rc}"
+
+      - name: Bundle docs into tarball root
+        run: |
+          set -euo pipefail
+          cp LICENSE NOTICE VERSION "${STAGE_DIR}/"
+
+      - name: Pack tarball + sha256
+        id: pack
+        env:
+          TAG:    ${{ needs.release.outputs.tag }}
+          TRIPLE: linux-x86_64
+        run: |
+          set -euo pipefail
+          base="pineforge-${TAG}-${TRIPLE}"
+          tarball="${base}.tar.gz"
+          tar -czf "${tarball}" -C "$(dirname "${STAGE_DIR}")" "${base}"
+          sha256sum "${tarball}" > "${tarball}.sha256"
+          digest=$(sha256sum "${tarball}")
+          digest=${digest%% *}
+          [[ "${digest}" =~ ^[0-9a-f]{64}$ ]]
+          {
+            echo "digest=${digest}"
+            echo "tarball=${tarball}"
+            echo "sha256=${tarball}.sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Consume packed x86_64 archive
+        env:
+          TARBALL:  ${{ steps.pack.outputs.tarball }}
+          SHASUM:   ${{ steps.pack.outputs.sha256 }}
+          TAG:      ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          test -f .github/engine-toolchain-image.txt
+          test ! -L .github/engine-toolchain-image.txt
+          test "$(wc -l < .github/engine-toolchain-image.txt)" -eq 1
+          IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt
+          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/gke-runner-images/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
+          export ENGINE_TOOLCHAIN_IMAGE
+          bash scripts/build_prebuilt_bookworm.sh \
+            --consume "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" \
+            "${TARBALL}" "${SHASUM}" "${TAG}"
+
+      - name: Keep the verified tarball as a workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: prebuilt-linux-x86_64
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.sha256 }}
+          if-no-files-found: error
+          retention-days: 7
+''',
+    'prebuilt-arm': r'''    needs: release
+    runs-on: ubuntu-22.04-arm
+    permissions:
+      contents: read
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.digest }}
+
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
+          fetch-depth: 0   # the version helper still observes the git sha
+          persist-credentials: false
+
+      - name: Assert tag still names the emitted release commit
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          SHA: ${{ needs.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::invalid emitted release sha: ${SHA}" >&2
+            exit 1
+          fi
+          test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${SHA}"
+
+      - name: Write the dry run's VERSION
+        if: ${{ inputs.dry_run }}
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: printf '%s\n' "${NEXT}" > VERSION
+
+      - name: Install Eigen3 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev
+
+      - name: Assert Eigen3 3.4.0 on ARM
+        run: |
+          set -euo pipefail
+          macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "${macros}"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "${macros}"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "${macros}"
+
+      - name: Configure
+        env:
+          TAG:         ${{ needs.release.outputs.tag }}
+          TRIPLE:      linux-aarch64
+        run: |
+          set -euo pipefail
+          stage="stage/pineforge-${TAG}-${TRIPLE}"
+          echo "STAGE_DIR=${stage}" >> "$GITHUB_ENV"
+          # FILE: the version identity is the VERSION file exactly, -rc.N
+          # included, however the checkout's tags describe it; a dry run's
+          # VERSION has no tag at all.
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DEigen3_DIR=/usr/share/eigen3/cmake \
+            -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+            -DPINEFORGE_BUILD_TESTS=OFF \
+            -DPINEFORGE_BUILD_TUTORIAL=OFF \
+            -DPINEFORGE_VERSION_SOURCE=FILE \
+            -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}"
+          grep -Fx 'Eigen3_DIR:PATH=/usr/share/eigen3/cmake' build/CMakeCache.txt
+
+      - name: Build
+        run: cmake --build build -j 4
+
+      - name: Install to staging
+        run: cmake --install build
+
+      - name: Verify the staged version
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: |
+          python3 scripts/release_version.py check-install \
+            --prefix "${STAGE_DIR}" --expect "${NEXT}"
+
+      - name: Fetch the v1.10.0 baseline archive for the glibc comparison
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIPLE: linux-aarch64
+        run: |
+          set -euo pipefail
+          case "${TRIPLE}" in
+            linux-x86_64) digest=cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543 ;;
+            linux-aarch64) digest=982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bb ;;
+            *) echo "::error::no v1.10.0 baseline archive for ${TRIPLE}" >&2; exit 1 ;;
+          esac
+          archive="pineforge-v1.10.0-${TRIPLE}.tar.gz"
+          root="${RUNNER_TEMP}/glibc-baseline-${TRIPLE}"
+          mkdir "${root}" "${root}/download" "${root}/tree"
+          gh release download v1.10.0 --repo "${GITHUB_REPOSITORY}" \
+            --pattern "${archive}" --dir "${root}/download"
+          echo "${digest}  ${root}/download/${archive}" | sha256sum -c -
+          tar -xzf "${root}/download/${archive}" -C "${root}/tree" \
+            --no-same-owner --no-same-permissions
+          echo "BASELINE_DIR=${root}/tree" >> "${GITHUB_ENV}"
+
+      - name: Check every staged library's glibc floor
+        env:
+          TRIPLE: linux-aarch64
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
+          mkdir -p "${log}"
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" --baseline-root "${BASELINE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+            checker_rc=0
+          else checker_rc=$?; fi
+          printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
+          cat "${log}/stdout.jsonl"
+          cat "${log}/stderr.txt" >&2
+          exit "${checker_rc}"
+
+      - name: Bundle docs into tarball root
+        run: |
+          set -euo pipefail
+          cp LICENSE NOTICE VERSION "${STAGE_DIR}/"
+
+      - name: Pack tarball + sha256
+        id: pack
+        env:
+          TAG:    ${{ needs.release.outputs.tag }}
+          TRIPLE: linux-aarch64
+        run: |
+          set -euo pipefail
+          base="pineforge-${TAG}-${TRIPLE}"
+          tarball="${base}.tar.gz"
+          tar -czf "${tarball}" -C "$(dirname "${STAGE_DIR}")" "${base}"
+          sha256sum "${tarball}" > "${tarball}.sha256"
+          digest=$(sha256sum "${tarball}")
+          digest=${digest%% *}
+          [[ "${digest}" =~ ^[0-9a-f]{64}$ ]]
+          {
+            echo "digest=${digest}"
+            echo "tarball=${tarball}"
+            echo "sha256=${tarball}.sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Keep the verified tarball as a workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: prebuilt-linux-aarch64
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.sha256 }}
+          if-no-files-found: error
+          retention-days: 7
+''',
+    'upload': r'''    needs: [release, prebuilt-x86, prebuilt-arm]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download x86_64 tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: prebuilt-linux-x86_64
+          path: artifacts/x86
+
+      - name: Download ARM tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: prebuilt-linux-aarch64
+          path: artifacts/arm
+
+      - name: Verify both tarballs against build outputs
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          X86_TARBALL: ${{ needs.prebuilt-x86.outputs.tarball }}
+          X86_SHA256: ${{ needs.prebuilt-x86.outputs.sha256 }}
+          ARM_TARBALL: ${{ needs.prebuilt-arm.outputs.tarball }}
+          ARM_SHA256: ${{ needs.prebuilt-arm.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]
+          [[ "${X86_TARBALL}" == "pineforge-${TAG}-linux-x86_64.tar.gz" ]]
+          [[ "${ARM_TARBALL}" == "pineforge-${TAG}-linux-aarch64.tar.gz" ]]
+          [[ "${X86_SHA256}" =~ ^[0-9a-f]{64}$ && "${ARM_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+          test -f "artifacts/x86/${X86_TARBALL}"
+          test ! -L "artifacts/x86/${X86_TARBALL}"
+          test -f "artifacts/arm/${ARM_TARBALL}"
+          test ! -L "artifacts/arm/${ARM_TARBALL}"
+          printf '%s  %s\n' "${X86_SHA256}" "artifacts/x86/${X86_TARBALL}" \
+            "${ARM_SHA256}" "artifacts/arm/${ARM_TARBALL}" | sha256sum --check --strict -
+          # Recreate sidecars from the independently verified build outputs.
+          printf '%s  %s\n' "${X86_SHA256}" "${X86_TARBALL}" > "artifacts/x86/${X86_TARBALL}.sha256"
+          printf '%s  %s\n' "${ARM_SHA256}" "${ARM_TARBALL}" > "artifacts/arm/${ARM_TARBALL}.sha256"
+
+      - name: Upload to release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
+          X86_TARBALL: ${{ needs.prebuilt-x86.outputs.tarball }}
+          ARM_TARBALL: ${{ needs.prebuilt-arm.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          gh release upload "${TAG}" \
+            "artifacts/x86/${X86_TARBALL}" "artifacts/x86/${X86_TARBALL}.sha256" \
+            "artifacts/arm/${ARM_TARBALL}" "artifacts/arm/${ARM_TARBALL}.sha256" --clobber
+''',
+}
+
+PREBUILT_HOSTED_DIAGNOSTIC = r'''name: Prebuilt hosted diagnostic
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/release.yml'
+      - '.github/workflows/prebuilt-hosted-diagnostic.yml'
+      - '.github/engine-toolchain-image.txt'
+      - 'scripts/build_prebuilt_bookworm.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the exact same-repository PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Record host identity and Docker observations
+        run: |
+          set -euo pipefail
+          id
+          docker version --format '{{.Client.Version}} {{.Server.Version}}'
+          docker info --format '{{.Driver}}'
+'''
+
+def release_option_c_workflow_findings(workflow: str) -> list[str]:
+    """Admit only the split hosted builds and verified two-artifact upload."""
+    jobs = _jobs(workflow)
+    findings = []
+    if (set(jobs) != {'release', 'prebuilt-x86', 'prebuilt-arm', 'upload', 'notify-hub'}
+            or _events(workflow) != {'workflow_dispatch'}):
+        findings.append('release.yml Option C must keep dispatch-only split build/upload jobs')
+    if any(_job_values(jobs.get(job, ''), 'runs-on', unquote=False) != [HOSTED_X86_RUNNER]
+           for job in ('release', 'notify-hub')):
+        findings.append('release.yml Option C release and notify-hub must stay hosted on ubuntu-24.04')
+    if (_job_values(workflow, 'permissions') != ['contents: read']
+            or _job_values(jobs.get('release', ''), 'permissions') != ['contents: write']
+            or _job_values(jobs.get('notify-hub', ''), 'permissions') != ['contents: read']
+            or _job_values(jobs.get('notify-hub', ''), 'needs') != ['[release, upload]']):
+        findings.append('release.yml Option C must isolate release writes and notify only after upload')
+    if (_job_block(workflow, 'env') != [
+            'env:', '  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"']
+            or _job_values(workflow, 'defaults')):
+        findings.append('release.yml Option C must not override workflow shell or toolchain inputs')
+    for job, expected in RELEASE_OPTION_C_JOBS.items():
+        actual = jobs.get(job, '')
+        # Raw steps preserve physical shell continuation boundaries; code-only
+        # comparison alone could hide a blank/comment that disables a command.
+        if (_code(actual) != _code(expected)
+                or [step.rstrip('\n') for step in _steps(actual)]
+                != [step.rstrip('\n') for step in _steps(expected)]):
+            findings.append(f'release.yml Option C job {job} differs from its exact '
+                            'permissions, caller, toolchain, artifact and hash contract')
+        if job != 'upload':
+            marker = "      - name: Check every staged library's glibc floor"
+            if (_step_named(_steps(actual), marker).rstrip('\n')
+                    != _step_named(_steps(expected), marker).rstrip('\n')):
+                findings.append('release.yml prebuilt must retain the raw single-line all-library '
+                                'glibc checker invocation and its run context')
+    auth_jobs = [job for job, body in jobs.items() for step in _steps(body)
+                 for action in _step_values(step, 'uses')
+                 if action.startswith('google-github-actions/auth@')]
+    if auth_jobs != ['prebuilt-x86']:
+        findings.append('release.yml Option C requires exactly one dedicated literal OIDC auth '
+                        'step on x86 before private registry access')
+    # Inspect raw bytes outside the two credential steps as expressions also
+    # expand in comments. Release/App jobs cannot receive the registry token.
+    outside_auth = workflow
+    for name in ('Authenticate the dedicated toolchain reader',
+                 'Log in to the private toolchain registry'):
+        step = _step_named(_steps(jobs.get('prebuilt-x86', '')), '      - name: ' + name)
+        if step:
+            outside_auth = outside_auth.replace(step, '', 1)
+    if re.search(r'toolchain-auth|REGISTRY_ACCESS_TOKEN|access_token|google-github-actions/auth@',
+                 outside_auth):
+        findings.append('release.yml Option C registry token must remain in the exact x86 '
+                        'auth output and login step environment only')
+    return findings
+
+
+def prebuilt_hosted_diagnostic_findings(workflow: str) -> list[str]:
+    if (_code(workflow) != _code(PREBUILT_HOSTED_DIAGNOSTIC)
+            or [step.rstrip('\n') for step in _steps(_jobs(workflow).get('observe', ''))]
+            != [step.rstrip('\n') for step in _steps(
+                _jobs(PREBUILT_HOSTED_DIAGNOSTIC)['observe'])]):
+        return ['prebuilt-hosted-diagnostic.yml must keep its read-only same-repository '
+                'exact-head checkout and unauthenticated host observations']
+    return []
+
+
 # Git blob identity of the transport, including build and archive-consumer launch.
 # A changed helper requires reviewing its source and controls before repinning.
 # This is a source contract, never an engine/build/glibc verdict.
-RELEASE_BOOKWORM_HELPER_BLOB = 'daaf2fe0541b5d0f8aab0746b35dcf069862afa3'
+# expectation corrected: daaf2fe0541b5d0f8aab0746b35dcf069862afa3 -> f02008afa4d3503e3b71531b26853f7e712c9ffe, because hosted transport records real Docker versions and host UID/GID under /home/runner/work.
+# Host UID 1001 and the container's 1001:123 identity remain required.
+RELEASE_BOOKWORM_HELPER_BLOB = 'f02008afa4d3503e3b71531b26853f7e712c9ffe'
 # The helper delegates the shipped-archive execution to this exact consumer.
 # This is a source contract, never a native-runtime verdict.
 RELEASE_BOOKWORM_CONSUMER_BLOB = 'd066968913c0d4ff7358e6fd4dde2a794e1be600'
+
+
+def release_prebuilt_image_findings(source: str) -> list[str]:
+    """Bind the tracked one-line image input to the approved immutable source."""
+    payload = source.encode('utf-8')
+    actual = hashlib.sha1(b'blob ' + str(len(payload)).encode('ascii') + b'\0' + payload).hexdigest()
+    if actual != '2199f116b530dc61c4eada61bfbb62dc44b21c71':
+        return ['release prebuilt toolchain pin must contain exactly the approved private '
+                'Bookworm repository@sha256 line']
+    return []
 
 
 def release_prebuilt_helper_findings(source: str) -> list[str]:
@@ -3575,6 +4112,8 @@ def release_prebuilt_consumer_findings(source: str) -> list[str]:
 
 def release_prebuilt_workflow_findings(workflow: str) -> list[str]:
     """Pin artifact structure and its token-only admission surface."""
+    if set(_jobs(workflow)) & set(RELEASE_OPTION_C_JOBS):
+        return release_option_c_workflow_findings(workflow)
     prebuilt = _jobs(workflow).get('prebuilt', '')
     release = _jobs(workflow).get('release', '')
     notify = _jobs(workflow).get('notify-hub', '')
@@ -4443,6 +4982,9 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         _universal_newlines, (ci, native, promote, cmake, parity, docs, post, docs_post))
     curl_action = None if curl_action is None else _universal_newlines(curl_action)
     findings = runner_findings(workflows)
+    if (set(_jobs(workflows.get('release.yml', ''))) & set(RELEASE_OPTION_C_JOBS)
+            and 'prebuilt-hosted-diagnostic.yml' not in workflows):
+        findings.append('release.yml Option C requires its read-only hosted PR diagnostic')
     findings += action_pin_findings(action_sources)
     findings += app_token_environment_findings(workflows)
     if 'gke-pr.yml' in workflows:
@@ -4721,8 +5263,9 @@ def actionlint_runner_label_findings(source: Path) -> list[str]:
     lines = [re.sub(r'\s+#.*$', '', line).rstrip() for line in _code(config)]
     entries = [re.fullmatch(r'    - (' + _LITERAL_RUNNER_LABEL + r')', line)
                for line in lines[2:]]
-    if (lines[:2] != ['self-hosted-runner:', '  labels:']
-            or not entries or not all(entries)):
+    empty_hosted = lines == ['self-hosted-runner:', '  labels: []']
+    if not empty_hosted and (lines[:2] != ['self-hosted-runner:', '  labels:']
+                             or not entries or not all(entries)):
         return [*findings,
                 f'{config_name}: cannot parse config: expected self-hosted-runner.labels '
                 'as a block list of literal labels']
@@ -5182,6 +5725,11 @@ def main() -> int:
              if path.suffix in ('.yml', '.yaml') and path.name not in named},
             curl_action=read_ci_text(ROOT / '.github/actions/setup-live-curl/action.yml', findings),
             actions=actions)
+        image_path = ROOT / '.github/engine-toolchain-image.txt'
+        if (image_path.parent.is_symlink() or image_path.is_symlink() or not image_path.is_file()):
+            findings.append('release prebuilt toolchain pin must be a regular source file')
+        else:
+            checked += release_prebuilt_image_findings(read_ci_text(image_path, findings, ROOT))
         helper_path = ROOT / 'scripts/build_prebuilt_bookworm.sh'
         if helper_path.parent.is_symlink() or helper_path.is_symlink() or not helper_path.is_file():
             findings.append('release prebuilt Bookworm helper must be a regular source file')

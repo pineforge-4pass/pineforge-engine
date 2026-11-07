@@ -82,7 +82,7 @@ no Actions cache restore or save.
 
 Verification jobs keep exact runner pins at the workflow boundary: Every migrated
 job runs on a standard hosted image, `ubuntu-24.04` for x86 and `ubuntu-24.04-arm` for arm64.
-Only the unchanged `release.yml` keeps its protected `gkp-od-*` scale sets in runner group 15.
+Release also uses hosted runners; neither runner-group mirror needs a release entry.
 The two native-live sanitizer profiles use an exact runner matrix with both rows on `ubuntu-24.04`. No job routes by event.
 Hosted `ubuntu-24.04` runs the PR `authz`, admission, `legs` and `result` jobs, `docs.yml`'s `build`, and every light, aggregate and proof job of the migrated workflows. These jobs need no VM-only tools, mounts or caches.
 Preflight refuses any `gke-*` or `gkp-*` label in a pull_request-reachable workflow and any migrated job off its pinned hosted label; the old per-label GKE cap check stays only as a refusal.
@@ -93,7 +93,7 @@ the hosted `ubuntu-24.04` image; `probe` keeps its `release` environment.
 `docs.yml` retains the PR build name and `.github/**` exclusion.
 `docs-post.yml` builds and deploys on main pushes and manual dispatch.
 Tag pushes no longer trigger docs: the post fleet admits only engine `main`.
-Release keeps its exact protected GKE pins in runner group 15; baseline promotion runs on hosted `ubuntu-24.04`.
+Release and baseline promotion run on hosted `ubuntu-24.04`; the release ARM build retains `ubuntu-22.04-arm`.
 
 Human-dispatched App-token jobs (`release.yml`'s `release` and `notify-hub`, and `release-ruleset-probe.yml`'s `probe`) are bound to `release` (main only). Automatic `promote-baseline.yml`'s `promote` uses `release-bot` (main only, no reviewer), including manual re-fires. Preflight requires a literal, non-empty environment for visible App minting or private-key secret handoffs. Same-named environment secrets shadow repository secrets. Rollback reverts this preflight guard and its probe pin and removes the `environment:` lines; repository secret copies remain until the owner deletes them after dry runs.
 
@@ -113,7 +113,7 @@ Python refuse a system-wide install (PEP 668), and `.venv/` is ignored. The
 and fails, never skips, without it.
 
 Actionlint only accepts declared custom self-hosted runner labels; preflight
-checks the declarations in `.github/actionlint.yaml`, which now declare only the protected `gkp-od-*` label of `release.yml`'s x86_64 release matrix cell. Hosted workflows declare nothing. Before a workflow moves onto a `gke-*` label, add its ref to `.github/runner-group-allowlist.txt` (group 14, currently empty because no workflow uses one); protected `gkp-*` refs belong in `.github/runner-group-15-allowlist.txt` (group 15, currently only `release.yml`). Both mirrors are binding; a maintainer must confirm the corresponding live org workflow/ref entries before enabling the routes.
+checks the declarations in `.github/actionlint.yaml`, which declare an empty self-hosted label list for the hosted workflows. Before a workflow moves onto a `gke-*` label, add its ref to `.github/runner-group-allowlist.txt` (group 14, currently empty because no workflow uses one); protected `gkp-*` refs belong in `.github/runner-group-15-allowlist.txt` (group 15, currently empty). Both mirrors are binding; a maintainer must confirm the corresponding live org workflow/ref entries before enabling the routes.
 
 ORG-ACTIONPINS is enforced by preflight's `ci-workflow-contract`: every
 third-party `uses:` in `.github/workflows/*.yml` (also `.yaml`) and nested
@@ -1630,7 +1630,7 @@ runs, and this page does not claim either target as met.
 
 ## Runners and time limits
 
-Credentialed release work keeps protected GKE runner group 15; every other job runs directly on a standard hosted image, `ubuntu-24.04` for x86 and `ubuntu-24.04-arm` for arm64.
+Release jobs run on hosted `ubuntu-24.04`, with the ARM artifact build on `ubuntu-22.04-arm`; verification uses `ubuntu-24.04` for x86 and `ubuntu-24.04-arm` for arm64.
 The four amd64 post legs, arm64 cells, preflight, parity and native verification use the pinned hosted images; their aggregates use the hosted x86 image. Promotion's `promote-guard` and docs-post/probe `authz` each use one `ubuntu-24.04` instance in separate roots; their image must include `gh` for permission lookups.
 The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job or pinned native profile row:
 
@@ -1644,7 +1644,8 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`, full parity and subset: `ubuntu-24.04` |
 | `native-live.yml` | Dispatch and post CI callers on `main` | `authz`, both aggregates and the native shards: `ubuntu-24.04`; `matrix.runner`: live-sanitizers and live-tsan both `ubuntu-24.04` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz` and credentialed `build`: `ubuntu-24.04` |
-| `release.yml` | Dispatch from `main` | `release` and `notify-hub`: hosted `ubuntu-24.04`; x86_64 `prebuilt`: `gkp-od-16cpu-32gb-amd64-128gb`; arm64 `prebuilt`: hosted `ubuntu-22.04-arm` |
+| `release.yml` | Dispatch from `main` or a `v*` tag for toolchain auth | `release`, `prebuilt-x86`, `upload` and `notify-hub`: hosted `ubuntu-24.04`; `prebuilt-arm`: hosted `ubuntu-22.04-arm` |
+| `prebuilt-hosted-diagnostic.yml` | Same-repository PRs to `main` | `observe`: hosted `ubuntu-24.04`, read-only host observations |
 | `promote-baseline.yml` | Push to `main`, dispatch from `main` | `promote-guard` and `promote`: `ubuntu-24.04` |
 | `release-ruleset-probe.yml` | Dispatch from `main` | `authz` and `probe`: `ubuntu-24.04` |
 
@@ -1654,7 +1655,7 @@ refuses all PR events. Reusable workflows inherit their caller's event.
 follow local calls to a fixed point, refuse mixed event classes and require
 the exact hosted image of each pinned job or the exact native profile runner matrix; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
-Pinned verification jobs carry no deployment secrets, effective id-token permissions or environment and declare no job container or services; pull_request workflows cannot name `gke-*` or `gkp-*` routing. Only `release.yml` still names protected `gkp-od-*` scale sets: the runner-group allowlist must list its ref at refs/heads/main before it can acquire a pod, and every other workflow runs on a hosted image and needs no allowlist entry.
+Pinned verification jobs carry no deployment secrets, effective id-token permissions or environment and declare no job container or services; pull_request workflows cannot name `gke-*` or `gkp-*` routing. All current workflow jobs use hosted images and need no runner-group entry. The exact legacy isolated and hosted-matrix release forms remain admitted for rollback; restoring a protected route also requires its live group membership and committed mirror entry.
 Retired GCP main/post labels and paid larger-runner labels remain refused.
 
 The four full build checks are `build (ubuntu-24.04, Release)`,
@@ -1668,21 +1669,22 @@ Trusted post workflows and PR proof legs build cold; no trusted job restores an 
 `HOSTED_JOB_RUNNERS` pins the hosted x86 and arm64 jobs and the native profile runner matrix; `GKP_JOB_RUNNERS` separately pins the protected release jobs and sizes. Every pinned job runs directly on its hosted image. PR checks are
 `build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`. With the arm leg, the full set is `build`, `build-debug`, `build-arm`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.
 
-Release uses protected GKE runner group 15 for its x64 artifact only:
+Release uses hosted runners for both artifacts:
 `release` and `notify-hub` run on hosted `ubuntu-24.04` and keep their `release` environment;
-Linux x64 `prebuilt` uses `gkp-od-16cpu-32gb-amd64-128gb`; baseline `promote` uses hosted `ubuntu-24.04`.
+`prebuilt-x86` uses `ubuntu-24.04`, `prebuilt-arm` uses `ubuntu-22.04-arm`, and `upload` uses `ubuntu-24.04`.
 The release ruleset probe runs `authz` and `probe` on hosted `ubuntu-24.04`.
-Release's ARM artifact cell retains hosted `ubuntu-22.04-arm`;
+Release's ARM artifact build retains hosted `ubuntu-22.04-arm`;
 1.8.0 has no macOS test or artifact cells, and
 promotion runs on a push to `main` plus manual dispatch from `main`.
 
 Release and notify-hub run on hosted `ubuntu-24.04`, which no scale-set preemption can interrupt after tag push.
 Release computes versions, stamps JSON catalogs and publishes with git/gh; notify-hub
-mints an App token and dispatches an API request. The protected 2 CPU/4 GB set
-runs promotion's API/tree checks, Node campaign tooling and Cloud SQL proxy; the
-probe reads rulesets with Python/gh. Docs uses 4 CPU/8 GB for Doxygen and Graphviz
-over the full public header set before Pages upload. The x86_64 prebuilt requires
-16 CPU/32 GB and 128 GB storage, plus the preloaded immutable Bookworm Docker image.
+mints an App token and dispatches an API request. The x86_64 build uses the private
+immutable Bookworm Docker image named by the single line in
+`.github/engine-toolchain-image.txt`. Both transport calls read that tracked pin;
+a repository variable cannot select another image. The helper never logs in or
+pulls: it requires the workflow's digest pull, exact RepoDigests and image identity,
+linux/amd64, and `--pull=never` for the isolated build and packed-archive consumer.
 ARM installs `libeigen3-dev` from Ubuntu; x86_64 requires Bookworm's `3.4.0-4`.
 Before CMake, both builds must read the consumed `Eigen/src/Core/util/Macros.h`,
 pin `Eigen3_DIR=/usr/share/eigen3/cmake`, disable FetchContent, and match exactly
@@ -1690,12 +1692,35 @@ pin `Eigen3_DIR=/usr/share/eigen3/cmake`, disable FetchContent, and match exactl
 Missing headers or any other version fail the job. Preflight pins these steps and
 their order, the exact protected job/label inventory, and the App environments.
 Protected routing cannot be used by another job, PR caller, container or service.
-The group 15 mirror lists only docs-post, promote-baseline, release-ruleset-probe
-and release at `refs/heads/main`; label catalog/live membership, Docker versions,
-preload, shared `/home/runner/_work` and UID:GID `1001:123` still require operational confirmation; checks fail closed. The secret-free `gke-*` credential ban stays binding.
+Both runner-group mirrors are empty for the hosted workflows. The helper requires
+host UID 1001, records the actual host UID/GID and Docker version bytes, and keeps
+the container user at `1001:123`. Docker command failures remain failures.
 
-Every split workflow retains the canon authz step and its digest. All other
-jobs need authz; CI/native aggregates always run and refuse failed authz
+The x86 auth contract permits only `release.yml` on `workflow_dispatch` from main
+or a `v*` tag, with provider `projects/76767776102/locations/global/workloadIdentityPools/pineforge-github/providers/github-oidc`,
+dedicated reader `engine-release-toolchainreader@gen-lang-client-0864094636.iam.gserviceaccount.com`,
+and `google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093`.
+It sets `create_credentials_file: false`, `export_environment_variables: false`
+and `token_format: access_token`. Only the registry login step receives the token
+in its environment and pipes it to `docker login us-central1-docker.pkg.dev`
+with `--username oauth2accesstoken --password-stdin`. Only x86 receives `id-token: write`; both
+builds have read-only contents permission. Each build emits the SHA-256 of its
+actual tarball and uploads a named workflow artifact. The later `upload` job needs
+both builds, has `contents: write` without OIDC, and re-hashes both downloads
+against those job outputs before any release upload. Missing or mismatched hashes
+refuse the job. Notify follows upload; dry runs retain the artifacts and publish
+nothing. Both builds retain the v1.10.0 archive comparison, fixed GLIBC 2.36 ceiling,
+`__isoc23_*` refusal, and every-library inventory; x86 also consumes its packed archive.
+
+The PR diagnostic checks out only the exact same-repository head without persisted
+credentials and prints actual id, Docker client/server versions and storage driver.
+It has no registry auth, image pull, build, test, release or API command. Actual
+private pull status, image size and elapsed time belong to a later authenticated
+release dry run after the dedicated registry entitlement is applied; reader and
+recording-Docker tests provide no hosted access evidence.
+
+The PR/post verification and documentation workflows retain the canon authz step and its digest.
+Their other jobs need authz; CI/native aggregates always run and refuse failed authz
 before anything else. The PR aggregate retains its independent API diff
 reader, so a preceding job cannot authorize a GitHub-only skip. Full CI keeps
 every proof dependency and both preflight tiers. Docs deployment and parity's
@@ -1910,7 +1935,7 @@ If the release App token cannot see them, the bump is refused.
 Visibility with the installation token, including inherited organization
 rulesets, is unverified until the probe runs. A missing field refuses;
 the guard never assumes an unreadable list is empty or App-only.
-The workflow-level `contents: write` setting scopes GITHUB_TOKEN.
+The release job's `contents: write` setting scopes GITHUB_TOKEN; the workflow default is read-only.
 Preflight pins the unconditional gate invocation and its App token, and its
 binding release-gate tests pin this visibility requirement in code and docs.
 
@@ -1920,8 +1945,7 @@ Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from
 must use `main`'s copy.
 The credentialed probe job runs on hosted `ubuntu-24.04`, with
 secret-free `authz` on hosted `ubuntu-24.04`.
-Protected runner group 15 admits only allowlisted workflow refs at `refs/heads/main`;
-the probe keeps its `release` environment and main-ref refusal before App minting.
+The hosted probe keeps its `release` environment and main-ref refusal before App minting.
 The dispatch must run from `main`; the workflow itself refuses any other ref
 before minting the App token or checking out repository code.
 It runs `python3 scripts/ci_release_gate.py rulesets-probe --repo OWNER/REPO`,

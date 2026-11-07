@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release gate decisions and text pins; no subprocesses or network in tests."""
+"""Release gate decisions, source pins and local artifact-custody shell controls."""
 from __future__ import annotations
 
 import ast
@@ -17,6 +17,8 @@ import unicodedata
 import unittest
 from unittest import mock
 
+import hashlib
+import ci_preflight
 from ci_preflight import _jobs, _steps, release_prebuilt_workflow_findings
 import ci_release_gate
 
@@ -1994,14 +1996,14 @@ class RulesetsProbeTests(unittest.TestCase):
         docs = (ROOT / "docs/ci.md").read_text()
         requirements = (
             'job runs on a standard hosted image, `ubuntu-24.04` for x86 and `ubuntu-24.04-arm` for arm64.\n'
-            'Only the unchanged `release.yml` keeps its protected `gkp-od-*` scale sets in runner group 15.\n'
+            'Release also uses hosted runners; neither runner-group mirror needs a release entry.\n'
             'The two native-live sanitizer profiles use an exact runner matrix with both rows on `ubuntu-24.04`. '
             'No job routes by event.',
             "The manual `release-ruleset-probe.yml` workflow runs `authz` and `probe` on\n"
             'the hosted `ubuntu-24.04` image; `probe` keeps its `release` environment.',
-            "Release uses protected GKE runner group 15 for its x64 artifact only:\n"
+            "Release uses hosted runners for both artifacts:\n"
             "`release` and `notify-hub` run on hosted `ubuntu-24.04` and keep their `release` environment;\n"
-            'Linux x64 `prebuilt` uses `gkp-od-16cpu-32gb-amd64-128gb`; baseline `promote` uses hosted `ubuntu-24.04`.\n'
+            '`prebuilt-x86` uses `ubuntu-24.04`, `prebuilt-arm` uses `ubuntu-22.04-arm`, and `upload` uses `ubuntu-24.04`.\n'
             'The release ruleset probe runs `authz` and `probe` on hosted `ubuntu-24.04`.',
             "Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from\n"
             "`main` to check actual ruleset visibility with the same App token mint as\n"
@@ -2009,8 +2011,7 @@ class RulesetsProbeTests(unittest.TestCase):
             "must use `main`'s copy.\n"
             'The credentialed probe job runs on hosted `ubuntu-24.04`, with\n'
             'secret-free `authz` on hosted `ubuntu-24.04`.',
-            "Protected runner group 15 admits only allowlisted workflow refs at `refs/heads/main`;\n"
-            "the probe keeps its `release` environment and main-ref refusal before App minting.",
+            "The hosted probe keeps its `release` environment and main-ref refusal before App minting.",
             "The dispatch must run from `main`; the workflow itself refuses any other ref\n"
             "before minting the App token or checking out repository code.",
         )
@@ -2297,9 +2298,206 @@ class MainProofSeamTests(unittest.TestCase):
         run.assert_called_once()
 
 
-class WorkflowPinTests(unittest.TestCase):
+def hosted_matrix_release_workflow(workflow):
+    """Retain #768's exact matrix form as a rollback input, distinct from Option C."""
+    if 'prebuilt' in _jobs(workflow):
+        return workflow
+    start = workflow.index('  prebuilt-x86:\n')
+    end = workflow.index('  # Notify the pineforge-release', start)
+    header = ('    needs: release\n    permissions:\n'
+              '      contents: write   # gh release upload\n'
+              + ci_preflight.RELEASE_STRATEGY
+              + '    runs-on: ${{ matrix.runner }}\n\n    steps:\n')
+    workflow = (workflow[:start] + '  prebuilt:\n' + header
+                + ci_preflight.RELEASE_PREBUILT_STEPS + '\n' + workflow[end:])
+    workflow = workflow.replace('permissions:\n  contents: read\n',
+                                'permissions:\n  contents: write\n', 1)
+    for job in ('release', 'notify-hub'):
+        body = _jobs(workflow)[job]
+        changed = re.sub(r'^    permissions:\n      contents: (read|write)\n',
+                         '', body, count=1, flags=re.MULTILINE)
+        workflow = workflow.replace(body, changed, 1)
+    return workflow.replace('    needs: [release, upload]\n',
+                            '    needs: [release, prebuilt]\n', 1)
+
+
+class OptionCWorkflowTests(unittest.TestCase):
+    """Read the actual split workflow and exercise its local custody shell."""
+
     def workflow(self):
         return (ROOT / ".github/workflows/release.yml").read_text()
+
+    def step(self, job, name):
+        step = ci_preflight._step_named(_steps(_jobs(self.workflow())[job]),
+                                       "      - name: " + name)
+        self.assertTrue(step, name)
+        return step
+
+    def shell(self, job, name):
+        step = self.step(job, name)
+        self.assertIn("        run: |\n", step)
+        return "\n".join(line[10:] if line.startswith("          ") else line
+                         for line in step.split("        run: |\n", 1)[1].splitlines())
+
+    def test_actual_split_builds_keep_baseline_glibc_and_consumer_before_artifacts(self):
+        workflow = self.workflow()
+        self.assertEqual(release_prebuilt_workflow_findings(workflow), [])
+        jobs = _jobs(workflow)
+        for job in ("prebuilt-x86", "prebuilt-arm"):
+            names = [step.splitlines()[0].removeprefix("      - name: ")
+                     for step in _steps(jobs[job])]
+            previous = "Verify the staged version"
+            for name in ("Fetch the v1.10.0 baseline archive for the glibc comparison",
+                         "Check every staged library's glibc floor", "Pack tarball + sha256",
+                         * (("Consume packed x86_64 archive",) if job == "prebuilt-x86" else ()),
+                         "Keep the verified tarball as a workflow artifact"):
+                self.assertLess(names.index(previous), names.index(name))
+                previous = name
+            gate = self.step(job, "Check every staged library's glibc floor")
+            self.assertNotIn("        if:", gate)
+            self.assertIn('--baseline-root "${BASELINE_DIR}"', gate)
+            self.assertIn('exit "${checker_rc}"', gate)
+            fetch = self.step(job, "Fetch the v1.10.0 baseline archive for the glibc comparison")
+            self.assertNotIn("        if:", fetch)
+            self.assertIn("gh release download v1.10.0", fetch)
+            self.assertIn("| sha256sum -c -", fetch)
+        self.assertNotIn("timeout-minutes:", workflow)
+        self.assertIn("    runs-on: ubuntu-22.04-arm", jobs["prebuilt-arm"])
+
+    def test_single_tracked_image_pin_and_both_transport_readers_consume_mutations(self):
+        pin = (ROOT / ".github/engine-toolchain-image.txt").read_text()
+        self.assertEqual(ci_preflight.release_prebuilt_image_findings(pin), [])
+        for changed in ("", pin.rstrip("\n"), pin + "\n", pin + "# extra\n",
+                        pin.replace("@sha256:", ":latest#"), pin.replace("72fb3", "82fb3"),
+                        pin.replace("gke-runner-images", "other-images")):
+            with self.subTest(pin=changed):
+                self.assertNotEqual(changed, pin)
+                self.assertTrue(ci_preflight.release_prebuilt_image_findings(changed))
+        workflow = self.workflow()
+        self.assertNotIn("vars.ENGINE_TOOLCHAIN_IMAGE", workflow)
+        for name in ("Build x86_64 in pinned Bookworm", "Consume packed x86_64 archive"):
+            step = self.step("prebuilt-x86", name)
+            binding = "IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt"
+            self.assertIn(binding, step)
+            for after in ("ENGINE_TOOLCHAIN_IMAGE=example.invalid/other:latest",
+                          "IFS= read -r ENGINE_TOOLCHAIN_IMAGE < /tmp/untracked-image"):
+                changed = workflow.replace(step, step.replace(binding, after, 1), 1)
+                self.assertNotEqual(changed, workflow)
+                self.assertTrue(release_prebuilt_workflow_findings(changed))
+
+    def test_pack_outputs_follow_actual_tarball_bytes_for_each_build(self):
+        for job, triple in (("prebuilt-x86", "linux-x86_64"),
+                            ("prebuilt-arm", "linux-aarch64")):
+            observed = []
+            for payload in (b"first actual archive input\n", b"different actual archive input\n"):
+                with self.subTest(job=job, payload=payload):
+                    root = Path(tempfile.mkdtemp(prefix="prebuilt-pack-control-"))
+                    base = "pineforge-v1.11.0-rc.2-" + triple
+                    stage = root / "stage" / base
+                    stage.mkdir(parents=True)
+                    (stage / "payload.txt").write_bytes(payload)
+                    output = root / "github-output"
+                    output.touch()
+                    ran = subprocess.run(
+                        ["bash", "-euo", "pipefail", "-c", self.shell(job, "Pack tarball + sha256")],
+                        cwd=root, env={**os.environ, "TAG": "v1.11.0-rc.2", "TRIPLE": triple,
+                                       "STAGE_DIR": str(stage), "GITHUB_OUTPUT": str(output)},
+                        text=True, capture_output=True)
+                    self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+                    archive = root / fields["tarball"]
+                    actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+                    self.assertEqual(fields["digest"], actual)
+                    self.assertEqual((root / fields["sha256"]).read_text(),
+                                     actual + "  " + archive.name + "\n")
+                    observed.append(actual)
+            self.assertNotEqual(*observed, "different packed inputs must not emit a constant hash")
+
+    def test_upload_rehash_refuses_missing_wrong_and_changed_artifact_bytes(self):
+        # Execute only the real verify step. It cannot upload or call an API.
+        tag = "v1.11.0-rc.2"
+        files = {"X86": "pineforge-" + tag + "-linux-x86_64.tar.gz",
+                 "ARM": "pineforge-" + tag + "-linux-aarch64.tar.gz"}
+        for mutation in ("valid", "changed-x86", "changed-arm", "wrong-x86-hash",
+                         "wrong-arm-hash", "missing-hash", "missing-file", "wrong-name"):
+            with self.subTest(mutation=mutation):
+                root = Path(tempfile.mkdtemp(prefix="prebuilt-rehash-control-"))
+                values = {"TAG": tag}
+                for arch, relative in (("X86", "x86"), ("ARM", "arm")):
+                    folder = root / "artifacts" / relative
+                    folder.mkdir(parents=True)
+                    payload = ("actual " + arch + " archive bytes\n").encode()
+                    if mutation != "missing-file" or arch != "ARM":
+                        (folder / files[arch]).write_bytes(payload)
+                    (folder / (files[arch] + ".sha256")).write_text("untrusted sidecar\n")
+                    values[arch + "_TARBALL"] = files[arch]
+                    values[arch + "_SHA256"] = hashlib.sha256(payload).hexdigest()
+                if mutation.startswith("changed-"):
+                    arch = mutation.removeprefix("changed-")
+                    (root / "artifacts" / arch / files[arch.upper()]).write_bytes(b"tampered\n")
+                elif mutation in ("wrong-x86-hash", "wrong-arm-hash"):
+                    values[mutation.split("-")[1].upper() + "_SHA256"] = "0" * 64
+                elif mutation == "missing-hash":
+                    values["ARM_SHA256"] = ""
+                elif mutation == "wrong-name":
+                    values["X86_TARBALL"] = "../untrusted.tar.gz"
+                ran = subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c",
+                     self.shell("upload", "Verify both tarballs against build outputs")],
+                    cwd=root, env={**os.environ, **values}, text=True, capture_output=True)
+                self.assertEqual(ran.returncode == 0, mutation == "valid", ran.stdout + ran.stderr)
+                if mutation == "wrong-arm-hash":
+                    script = self.shell("upload", "Verify both tarballs against build outputs")
+                    bypass = script.replace("sha256sum --check --strict -", "cat", 1)
+                    self.assertNotEqual(bypass, script)
+                    weakened = subprocess.run(["bash", "-euo", "pipefail", "-c", bypass],
+                        cwd=root, env={**os.environ, **values}, text=True, capture_output=True)
+                    self.assertEqual(weakened.returncode, 0, weakened.stdout + weakened.stderr)
+                    with self.assertRaises(AssertionError):
+                        self.assertNotEqual(weakened.returncode, 0,
+                                            "a mismatched archive must refuse")
+                if mutation == "valid":
+                    for arch, relative in (("X86", "x86"), ("ARM", "arm")):
+                        self.assertEqual((root / "artifacts" / relative
+                                          / (files[arch] + ".sha256")).read_text(),
+                                         values[arch + "_SHA256"] + "  " + files[arch] + "\n")
+
+    def test_toolchain_caller_shell_rejects_pr_wrong_ref_and_workflow_identity(self):
+        script = self.shell("prebuilt-x86", "Refuse an untrusted toolchain caller")
+        for event, ref, identity, allowed in (
+                ("workflow_dispatch", "refs/heads/main", "release.yml", True),
+                ("workflow_dispatch", "refs/tags/v1.11.0", "release.yml", True),
+                ("workflow_dispatch", "refs/tags/v1.11.0-rc.2", "release.yml", True),
+                ("pull_request", "refs/heads/main", "release.yml", False),
+                ("pull_request_target", "refs/heads/main", "release.yml", False),
+                ("push", "refs/heads/main", "release.yml", False),
+                ("schedule", "refs/heads/main", "release.yml", False),
+                ("workflow_dispatch", "refs/heads/topic", "release.yml", False),
+                ("workflow_dispatch", "refs/tags/topic", "release.yml", False),
+                ("workflow_dispatch", "refs/heads/main", "other.yml", False)):
+            with self.subTest(event=event, ref=ref, identity=identity):
+                ran = subprocess.run(["bash", "-euo", "pipefail", "-c", script],
+                    env={**os.environ, "EVENT": event, "REF": ref, "WORKFLOW_REF":
+                         "pineforge-4pass/pineforge-engine/.github/workflows/" + identity + "@" + ref},
+                    text=True, capture_output=True)
+                self.assertEqual(ran.returncode == 0, allowed, ran.stdout + ran.stderr)
+        for workflow_ref in (
+                "pineforge-4pass/other-engine/.github/workflows/release.yml@refs/heads/main",
+                "pineforge-4pass/pineforge-engine/.github/workflows/release.yml@refs/heads/topic",
+                "pineforge-4pass/pineforge-engine/.github/workflows/release.yml@refs/tags/v1.11.0"):
+            with self.subTest(workflow_ref=workflow_ref):
+                ran = subprocess.run(["bash", "-euo", "pipefail", "-c", script],
+                    env={**os.environ, "EVENT": "workflow_dispatch", "REF": "refs/heads/main",
+                         "WORKFLOW_REF": workflow_ref}, text=True, capture_output=True)
+                self.assertNotEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+
+
+class WorkflowPinTests(unittest.TestCase):
+    def workflow(self):
+        # Keep the supported #768 matrix contracts; OptionCWorkflowTests reads
+        # the actual split workflow for its additional custody/auth surface.
+        return hosted_matrix_release_workflow(
+            (ROOT / ".github/workflows/release.yml").read_text())
 
     def test_bookworm_image_is_bound_only_to_the_repository_variable(self):
         workflow = self.workflow()

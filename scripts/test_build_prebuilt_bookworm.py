@@ -36,16 +36,18 @@ def recording_command() -> int:
     command, *args = sys.argv[2:]
     with (root / "commands.jsonl").open("a", encoding="utf-8") as stream:
         stream.write(json.dumps([command, *args]) + "\n")
-    if command == "id":
-        print({"-u": "1001", "-g": "123"}[args[0]])
-        return 0
     controls = json.loads((root / "controls.json").read_text())
+    if command == "id":
+        print({"-u": controls.get("host_uid", "1001"),
+               "-g": controls.get("host_gid", "123")}[args[0]])
+        return 0
     if args == ["images", "--digests", "--no-trunc"]:
         print("RECORDING FIXTURE: no images inspected")
     elif args == ["info", "--format", "{{.Driver}}"]:
         print("overlayfs")
     elif args == ["version", "--format", "{{.Client.Version}} {{.Server.Version}}"]:
         print(controls.get("versions", "29.9.2 29.8.1"))
+        return controls.get("version_rc", 0)
     # Record the reference the real helper supplies, including an old helper's
     # hardcoded reference. Old-source RED must be a failed refusal assertion,
     # never an unknown recording protocol or fixture setup failure.
@@ -145,7 +147,11 @@ class BookwormTransport(unittest.TestCase):
                             + " --recording-command " + name + ' "$@"\n')
             path.chmod(0o755)
         text = HELPER.read_text()
-        needle = "readonly shared_root=/home/runner/_work"
+        roots = [line for line in text.splitlines() if line.startswith("readonly shared_root=")]
+        self.assertEqual(len(roots), 1)
+        needle = roots[0]
+        self.assertIn(needle, ("readonly shared_root=/home/runner/work",
+                               "readonly shared_root=/home/runner/_work"))
         self.assertEqual(text.count(needle), 1)
         self.helper = self.root / "transport-helper.sh"
         self.helper.write_text(text.replace(needle, "readonly shared_root=" + shlex.quote(str(self.shared))))
@@ -295,11 +301,59 @@ class BookwormTransport(unittest.TestCase):
         self.assertEqual((evidence / "docker-image-id.txt").read_text(), IMAGE_DIGEST + "\n")
 
     def test_empty_or_wrong_repository_digest_and_architecture_are_refused(self):
-        for controls in ({"digest": ""}, {"digest": "example:latest"}, {"arch": "linux/arm64"},
-                         {"versions": "29.9.2 28.0.0"}):
+        for controls in ({"digest": ""}, {"digest": "example:latest"}, {"arch": "linux/arm64"}):
             with self.subTest(controls=controls):
                 ran = self.invoke(controls=controls)
                 self.assert_refused(ran, "prebuilt-bookworm:")
+
+    def test_observed_docker_versions_are_recorded_for_both_transports(self):
+        for consume in (False, True):
+            if consume:
+                archive, checksum = self.consumer_inputs()
+            for versions in ("28.0.4 27.5.1", "29.9.2 28.0.0"):
+                with self.subTest(versions=versions, consume=consume):
+                    before = set(self.temp.iterdir())
+                    controls = {"versions": versions}
+                    ran = (self.consume(archive, checksum, controls=controls) if consume
+                           else self.invoke(controls=controls))
+                    self.assertEqual(ran.returncode, 0, ran.stderr)
+                    evidence = (set(self.temp.iterdir()) - before).pop() / "evidence"
+                    self.assertEqual((evidence / "docker-versions.txt").read_bytes(),
+                                     (versions + "\n").encode())
+
+    def test_host_gid_is_recorded_without_restricting_it_in_both_transports(self):
+        for consume in (False, True):
+            if consume:
+                archive, checksum = self.consumer_inputs()
+            for gid in ("999", "456"):
+                with self.subTest(gid=gid, consume=consume):
+                    before = set(self.temp.iterdir())
+                    controls = {"host_gid": gid}
+                    ran = (self.consume(archive, checksum, controls=controls) if consume
+                           else self.invoke(controls=controls))
+                    self.assertEqual(ran.returncode, 0, ran.stderr)
+                    evidence = (set(self.temp.iterdir()) - before).pop() / "evidence"
+                    self.assertEqual((evidence / "host-identity.txt").read_text(),
+                                     "uid=1001\ngid=" + gid + "\n")
+
+    def test_wrong_host_uid_refuses_both_transports_before_docker(self):
+        archive, checksum = self.consumer_inputs()
+        for uid in ("0", "1000"):
+            for consume in (False, True):
+                with self.subTest(uid=uid, consume=consume):
+                    controls = {"host_uid": uid}
+                    ran = (self.consume(archive, checksum, controls=controls) if consume
+                           else self.invoke(controls=controls))
+                    self.assert_refused(ran, "UID must be 1001")
+                    self.assertFalse(any(row[0] == "docker" for row in self.commands()))
+
+    def test_docker_version_failure_preserves_status_and_observed_bytes(self):
+        ran = self.invoke(controls={"versions": "client-only diagnostic", "version_rc": 31})
+        self.assertEqual(ran.returncode, 31, ran.stderr)
+        self.assertFalse(any(row[1:2] == ["run"] for row in self.commands()))
+        evidence = next(self.temp.glob("prebuilt-bookworm.*")) / "evidence"
+        self.assertEqual((evidence / "docker-versions.txt").read_bytes(),
+                         b"client-only diagnostic\n")
 
     def test_builder_failure_preserves_status_and_raw_output_without_host_fallback(self):
         ran = self.invoke(controls={"run_rc": 23})
