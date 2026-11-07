@@ -1999,8 +1999,8 @@ class RulesetsProbeTests(unittest.TestCase):
             'No job routes by event.',
             "The manual `release-ruleset-probe.yml` workflow runs `authz` and `probe` on\n"
             'the hosted `ubuntu-24.04` image; `probe` keeps its `release` environment.',
-            "Release uses protected GKE runner group 15:\n"
-            "`release` and `notify-hub` use `gkp-od-4cpu-8gb-amd64`;\n"
+            "Release uses protected GKE runner group 15 for its x64 artifact only:\n"
+            "`release` and `notify-hub` run on hosted `ubuntu-24.04` and keep their `release` environment;\n"
             'Linux x64 `prebuilt` uses `gkp-od-16cpu-32gb-amd64-128gb`; baseline `promote` uses hosted `ubuntu-24.04`.\n'
             'The release ruleset probe runs `authz` and `probe` on hosted `ubuntu-24.04`.',
             "Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from\n"
@@ -2327,9 +2327,12 @@ class WorkflowPinTests(unittest.TestCase):
         self.assertEqual(release_prebuilt_workflow_findings(workflow), [])
         steps = _steps(_jobs(workflow)["prebuilt"])
         names = [step.splitlines()[0] for step in steps]
+        baseline_fetch = "Fetch the v1.10.0 baseline archive for the glibc comparison"
         for earlier, later in (
                 ("Build x86_64 in preloaded Bookworm", "Verify the staged version"),
                 ("Install to staging", "Check every staged library's glibc floor"),
+                ("Verify the staged version", baseline_fetch),
+                (baseline_fetch, "Check every staged library's glibc floor"),
                 ("Check every staged library's glibc floor", "Pack tarball + sha256"),
                 ("Pack tarball + sha256", "Consume packed x86_64 archive"),
                 ("Consume packed x86_64 archive", "Upload to release")):
@@ -2338,11 +2341,16 @@ class WorkflowPinTests(unittest.TestCase):
         gate = next(step for step in steps if "      - name: Check every staged library's glibc floor" in step)
         self.assertNotIn("        if:", gate)
         self.assertIn('python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}"', gate)
+        self.assertIn('--baseline-root "${BASELINE_DIR}"', gate)
         self.assertIn('exit "${checker_rc}"', gate)
+        # Both release modes and both triples fetch the baseline: no condition on the step.
+        fetch = next(step for step in steps if "      - name: " + baseline_fetch in step)
+        self.assertNotIn("        if:", fetch)
 
     def test_glibc_invocation_rejects_raw_blank_and_comment_continuations(self):
         workflow = self.workflow()
         command = ('          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" '
+                   '--baseline-root "${BASELINE_DIR}" '
                    '> "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then')
         finding = ('release.yml prebuilt must retain the raw single-line all-library '
                    'glibc checker invocation and its run context')
@@ -2377,6 +2385,19 @@ class WorkflowPinTests(unittest.TestCase):
                  'python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" || true'),
                 ('exit "${checker_rc}"', "exit 0"),
                 ('else checker_rc=$?; fi', 'else checker_rc=0; fi'),
+                # The released baseline is part of the gate: drop it, aim it at the
+                # staged tree, retarget the release, break its digest check or digest.
+                ('--baseline-root "${BASELINE_DIR}" ', ''),
+                ('--baseline-root "${BASELINE_DIR}"', '--baseline-root "${STAGE_DIR}"'),
+                ('gh release download v1.10.0', 'gh release download v1.9.1'),
+                ('archive="pineforge-v1.10.0-${TRIPLE}.tar.gz"',
+                 'archive="pineforge-v1.9.1-${TRIPLE}.tar.gz"'),
+                ('| sha256sum -c -', '| cat'),
+                ('cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543',
+                 'cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3544'),
+                ('982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bb',
+                 '982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bc'),
+                ('echo "BASELINE_DIR=${root}/tree"', 'echo "BASELINE_DIR=${root}/download"'),
                 ("          fetch-depth: 0", "          fetch-depth: 1"),
                 ("          persist-credentials: false", "          persist-credentials: true"),
         ):
