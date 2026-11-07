@@ -1,0 +1,170 @@
+name: Live TSan timing A/B
+
+on:
+  push:
+    branches: [diag-tsan-timing-ab]
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: Exact candidate commit
+        required: true
+        default: 36dd032c18ff75da0ab422cf0f2eb2bae9654e67
+      base:
+        description: Exact parent commit
+        required: true
+        default: c9a6414292992341e6cad958e33104b0fb7643bb
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: ${{ matrix.row }} / replicate ${{ matrix.replicate }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - row: delivery_pending_tail_work
+            replicate: 1
+          - row: delivery_pending_tail_work
+            replicate: 2
+          - row: delivery_pending_tail_work
+            replicate: 3
+          - row: report_default_delta_work
+            replicate: 1
+          - row: report_default_delta_work
+            replicate: 2
+          - row: report_default_delta_work
+            replicate: 3
+    env:
+      BASE: ${{ inputs.base || 'c9a6414292992341e6cad958e33104b0fb7643bb' }}
+      CANDIDATE: ${{ inputs.candidate || '36dd032c18ff75da0ab422cf0f2eb2bae9654e67' }}
+      JOB_ROW: ${{ matrix.row }}
+      JOB_REPLICATE: ${{ matrix.replicate }}
+      BUILD_ROOT: ${{ github.workspace }}/tsan-builds
+      CURL_BUILD: ${{ github.workspace }}/build-native-deps
+      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+    steps:
+      - name: Checkout workflow source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate || '36dd032c18ff75da0ab422cf0f2eb2bae9654e67' }}
+          fetch-depth: 0
+          submodules: recursive
+          lfs: true
+
+      - name: Install native prerequisites
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            cmake ninja-build libeigen3-dev tzdata-legacy ccache strace \
+            libssl-dev zlib1g-dev libsqlite3-dev python3-venv
+          python3 -m pip install --user --requirement scripts/requirements-preflight.txt
+
+      - name: Fetch and prepare both exact trees
+        run: |
+          git fetch --no-tags origin "$BASE"
+          git cat-file -e "$BASE^{commit}"
+          git cat-file -e "$CANDIDATE^{commit}"
+          git rev-parse HEAD
+          git worktree add --detach "$GITHUB_WORKSPACE/../tsan-base" "$BASE"
+          git -C "$GITHUB_WORKSPACE/../tsan-base" submodule update --init --recursive
+          git submodule update --init --recursive
+
+      - name: Build pinned WebSocket curl
+        run: bash scripts/build_live_curl.sh "$CURL_BUILD" 4
+
+      - name: Configure and build state A (parent)
+        run: |
+          mkdir -p "$BUILD_ROOT"
+          cmake -S "$GITHUB_WORKSPACE/../tsan-base" -B "$BUILD_ROOT/A" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DPython3_EXECUTABLE="$(command -v python3)" \
+            -DPINEFORGE_BUILD_TESTS=ON \
+            -DPINEFORGE_BUILD_TUTORIAL=OFF \
+            -DPINEFORGE_BUILD_LIVE_RUNNER=ON \
+            -DPINEFORGE_BUILD_SOURCE_LAYER=ON \
+            -DPINEFORGE_ENABLE_SANITIZERS=OFF \
+            -DPINEFORGE_BUILD_CORPUS_STRATEGIES=OFF \
+            -DPINEFORGE_BUILD_BENCH_STRATEGIES=OFF \
+            -DPINEFORGE_BUILD_SPEED_BENCH=OFF \
+            -DPINEFORGE_BUILD_EXAMPLES=OFF \
+            -DPINEFORGE_ENABLE_COVERAGE=OFF \
+            -DPINEFORGE_STRICT_WARNINGS=OFF \
+            -DPINEFORGE_REQUIRE_ABI_RECEIPTS=ON \
+            -DPINEFORGE_VERSION_SOURCE=FILE \
+            -DPINEFORGE_LIVE_TSAN=ON \
+            -DCURL_DIR="$CURL_BUILD/curl-install/lib/cmake/CURL"
+          cmake --build "$BUILD_ROOT/A" --target pineforge-live-observed \
+            native_live_ledger_fixture_writer native_live_ledger_work_strategy \
+            --parallel "$(getconf _NPROCESSORS_ONLN)"
+          grep -E 'CMAKE_BUILD_TYPE:|PINEFORGE_BUILD_LIVE_RUNNER:|PINEFORGE_LIVE_TSAN:' \
+            "$BUILD_ROOT/A/CMakeCache.txt"
+
+      - name: Configure and build state B (candidate)
+        run: |
+          cmake -S "$GITHUB_WORKSPACE" -B "$BUILD_ROOT/B" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DPython3_EXECUTABLE="$(command -v python3)" \
+            -DPINEFORGE_BUILD_TESTS=ON \
+            -DPINEFORGE_BUILD_TUTORIAL=OFF \
+            -DPINEFORGE_BUILD_LIVE_RUNNER=ON \
+            -DPINEFORGE_BUILD_SOURCE_LAYER=ON \
+            -DPINEFORGE_ENABLE_SANITIZERS=OFF \
+            -DPINEFORGE_BUILD_CORPUS_STRATEGIES=OFF \
+            -DPINEFORGE_BUILD_BENCH_STRATEGIES=OFF \
+            -DPINEFORGE_BUILD_SPEED_BENCH=OFF \
+            -DPINEFORGE_BUILD_EXAMPLES=OFF \
+            -DPINEFORGE_ENABLE_COVERAGE=OFF \
+            -DPINEFORGE_STRICT_WARNINGS=OFF \
+            -DPINEFORGE_REQUIRE_ABI_RECEIPTS=ON \
+            -DPINEFORGE_VERSION_SOURCE=FILE \
+            -DPINEFORGE_LIVE_TSAN=ON \
+            -DCURL_DIR="$CURL_BUILD/curl-install/lib/cmake/CURL"
+          cmake --build "$BUILD_ROOT/B" --target pineforge-live-observed \
+            native_live_ledger_fixture_writer native_live_ledger_work_strategy \
+            --parallel "$(getconf _NPROCESSORS_ONLN)"
+          grep -E 'CMAKE_BUILD_TYPE:|PINEFORGE_BUILD_LIVE_RUNNER:|PINEFORGE_LIVE_TSAN:' \
+            "$BUILD_ROOT/B/CMakeCache.txt"
+
+      - name: Measure A then B back to back
+        run: |
+          measure() {
+            state="$1"
+            build="$2"
+            log="$BUILD_ROOT/${state}-${JOB_ROW}.log"
+            timing="$BUILD_ROOT/${state}-${JOB_ROW}.time"
+            set +e
+            /usr/bin/time -f "state=${state} row=${JOB_ROW} replicate=${JOB_REPLICATE} elapsed_seconds=%e" \
+              -o "$timing" \
+              env TSAN_OPTIONS="$TSAN_OPTIONS" setarch x86_64 -R \
+              ctest --test-dir "$build/runner" -R "^${JOB_ROW}$" \
+                --no-tests=error --output-on-failure -V --timeout 7200 --parallel 1 \
+              > "$log" 2>&1
+            rc=$?
+            set -e
+            cat "$timing"
+            grep -E "Test #[0-9]+: ${JOB_ROW} .*Passed|100% tests passed, 0 tests failed" "$log"
+            elapsed="$(awk -F= '/elapsed_seconds=/{print $2}' "$timing")"
+            awk -v value="$elapsed" 'BEGIN { if (value + 0 < 60) exit 1 }'
+            test "$rc" -eq 0
+          }
+          measure A "$BUILD_ROOT/A"
+          measure B "$BUILD_ROOT/B"
+
+      - name: Upload raw A/B evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsan-${{ matrix.row }}-replicate-${{ matrix.replicate }}
+          path: |
+            ${{ env.BUILD_ROOT }}/*.log
+            ${{ env.BUILD_ROOT }}/*.time
+            ${{ env.BUILD_ROOT }}/A/Testing/**
+            ${{ env.BUILD_ROOT }}/B/Testing/**
+          if-no-files-found: error
+          retention-days: 14
