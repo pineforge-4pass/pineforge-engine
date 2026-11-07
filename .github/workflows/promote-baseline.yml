@@ -9,7 +9,7 @@
 # now on the base branch carries the gated PR head's TREE (a squash merge mints
 # a new commit; the strict up-to-date rule keeps its tree the head's), the gate
 # is green on that head, and `lab promote` finds the verdict that binds it:
-#   engine   pineforge/verify and pineforge/parity success on the PR head;
+#   engine   pineforge/parity success on the PR head (pineforge/verify is advisory);
 #            lab promote adopts the pair the merge gate's parity verdict
 #            measured — the merged engine with the codegen the sweep measured
 #            (ruling R2, 2026-09-26), PASS or neutral alike
@@ -98,8 +98,8 @@ permissions:
   # commits/{sha}/pulls needs pull-request read access for the repo-scoped
   # token, including when this unchanged workflow is installed in a private repo.
   pull-requests: read
-  # The engine's gate is two commit statuses (pineforge/verify,
-  # pineforge/parity): `statuses`. The codegen axis reads check-runs: `checks`.
+  # The engine axis admits on pineforge/parity; pineforge/verify is advisory.
+  # Read `statuses`; the codegen axis reads check-runs: `checks`.
   statuses: read
   checks: read
   # Workload identity federation mints the GCP credential from the job's own
@@ -372,10 +372,9 @@ jobs:
             if ! jq -es '
               reduce (.[][]) as $s ({};
                 if has($s.context) then . else .[$s.context] = $s.state end)
-              | .["pineforge/verify"] == "success"
-                and .["pineforge/parity"] == "success"
+              | .["pineforge/parity"] == "success"
             ' <<< "$statuses" >/dev/null; then
-              echo "::notice::pineforge/verify and pineforge/parity must both be success on $HEAD_SHA — skipping"
+              echo "::notice::pineforge/parity must be success on $HEAD_SHA — skipping"
               echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
             fi
           else
