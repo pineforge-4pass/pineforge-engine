@@ -334,6 +334,8 @@ public:
     }
     std::string exit_comment(int i) const { return closed_trade_exit_comment(i); }
     double exit_price(int i) const { return closed_trade_exit_price(i); }
+    // expectation corrected: +slice/+remainder -> -slice/-remainder,
+    // because this probe closes shorts; the rounding formulas are unchanged.
     double trade_size(int i) const { return closed_trade_size(i); }
     using BacktestEngine::position_side_;
     using BacktestEngine::position_qty_;
@@ -374,7 +376,7 @@ void test_short_cascade_slices_at_rounded_high() {
     if (eng.trade_count() >= 1) {
         CHECK(eng.exit_comment(0) == std::string("Margin call"));
         CHECK_NEAR(eng.exit_price(0), 105.01, 1e-9);
-        CHECK_NEAR(eng.trade_size(0), 4.0 * (20.0 - 2000.0 / 105.01), 1e-6);
+        CHECK_NEAR(eng.trade_size(0), -4.0 * (20.0 - 2000.0 / 105.01), 1e-6);
         // pre-fix: 4.0 * (20.0 - 2000.0 / 105.005) = 3.8131518
     }
 }
@@ -412,7 +414,7 @@ void test_short_chronological_slice_marks_at_rounded_high() {
         if (eng.trade_count() >= 1) {
             CHECK(eng.exit_comment(0) != std::string("Margin call"));
             CHECK_NEAR(eng.exit_price(0), 99.60, 1e-9);
-            CHECK_NEAR(eng.trade_size(0), 10.0, 1e-9);
+            CHECK_NEAR(eng.trade_size(0), -10.0, 1e-9);
         }
         CHECK(eng.position_side_ == PositionSide::FLAT);
     }
@@ -430,10 +432,10 @@ void test_short_chronological_slice_marks_at_rounded_high() {
         if (eng.trade_count() == 2) {
             CHECK(eng.exit_comment(0) == std::string("Margin call"));
             CHECK_NEAR(eng.exit_price(0), 100.01, 1e-9);
-            CHECK_NEAR(eng.trade_size(0), 4.0 * q_min, 1e-9);
+            CHECK_NEAR(eng.trade_size(0), -4.0 * q_min, 1e-9);
             CHECK(eng.exit_comment(1) != std::string("Margin call"));
             CHECK_NEAR(eng.exit_price(1), 99.60, 1e-9);
-            CHECK_NEAR(eng.trade_size(1), 10.0 - 4.0 * q_min, 1e-9);
+            CHECK_NEAR(eng.trade_size(1), -(10.0 - 4.0 * q_min), 1e-9);
         }
         CHECK(eng.position_side_ == PositionSide::FLAT);
     }

@@ -1220,11 +1220,12 @@ class RealTree(unittest.TestCase):
         # emitted, 4 stale entries removed), one group of the local list of
         # materialize_relative_exits and three groups of
         # SeriesPercentileNearestRank (its ring, the growth of the ring and its
-        # window), and five groups of the finished trade text companion (the
-        # source's text accessor and the writer's transfer buffer, transfer
-        # bytes, carried bytes and integer text temporaries); all 184
-        # pending-flat-memory groups remain.
-        self.assertEqual(c['OPEN'], 1356 + 55 + 184)
+        # window), less the two whole-state copies of the bounded drawing arena
+        # removed when it began writing in place, and five groups of the finished
+        # trade text companion (the source's text accessor and the writer's
+        # transfer buffer, transfer bytes, carried bytes and integer text
+        # temporaries); all 184 pending-flat-memory groups remain.
+        self.assertEqual(c['OPEN'], 1356 + 53 + 184)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')
