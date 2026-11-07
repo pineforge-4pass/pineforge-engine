@@ -39,17 +39,6 @@ target_include_directories(pineforge-live PRIVATE
 target_link_libraries(pineforge-live PRIVATE pineforge_live_startup ${CMAKE_DL_LIBS})
 target_compile_options(pineforge-live PRIVATE -Wall -Wextra -Wpedantic -ffp-contract=off)
 install(TARGETS pineforge-live RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
-    add_library(trade_text_strategy MODULE
-        ${PROJECT_SOURCE_DIR}/tests/test_trade_text_strategy.cpp)
-    target_link_libraries(trade_text_strategy PRIVATE PineForge::pineforge)
-    target_compile_definitions(trade_text_strategy PRIVATE PINEFORGE_TRADE_TEXT_MODULE=1)
-    target_compile_options(trade_text_strategy PRIVATE -fvisibility=hidden -ffp-contract=off -UNDEBUG)
-    add_test(NAME native_live_trade_text_e2e COMMAND ${Python3_EXECUTABLE} -B
-        ${PROJECT_SOURCE_DIR}/tests/native_live_trade_text_e2e.py
-        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:trade_text_strategy>
-        ${CMAKE_CURRENT_BINARY_DIR}/trade-text)
-endif()
 # examples/strategy.cpp derives from pineforge::source::PineStrategyHost, so
 # it is the one example that a kernel-only build cannot compile.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
@@ -772,4 +761,17 @@ if(PINEFORGE_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
         --artifacts ${PROJECT_BINARY_DIR}/ledger-behavior-artifacts)
     set_tests_properties(native_live_ledger_behavior_e2e PROPERTIES
         LABELS "slow;live_ledger" TIMEOUT 7200)
+endif()
+# The finished trade text companion (--trade-text) is the last block of this
+# file, so the line numbers that the design docs cite above stay where they are.
+if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
+    add_library(trade_text_strategy MODULE
+        ${PROJECT_SOURCE_DIR}/tests/test_trade_text_strategy.cpp)
+    target_link_libraries(trade_text_strategy PRIVATE PineForge::pineforge)
+    target_compile_definitions(trade_text_strategy PRIVATE PINEFORGE_TRADE_TEXT_MODULE=1)
+    target_compile_options(trade_text_strategy PRIVATE -fvisibility=hidden -ffp-contract=off -UNDEBUG)
+    add_test(NAME native_live_trade_text_e2e COMMAND ${Python3_EXECUTABLE} -B
+        ${PROJECT_SOURCE_DIR}/tests/native_live_trade_text_e2e.py
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:trade_text_strategy>
+        ${CMAKE_CURRENT_BINARY_DIR}/trade-text)
 endif()
