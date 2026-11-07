@@ -1,0 +1,5 @@
+# Authentication uses the Ubuntu archive keyring from the pinned base.
+# Expiry relaxation applies only to these immutable historical sources.
+deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261101T000000Z jammy main universe
+deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261101T000000Z jammy-updates main universe
+deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261101T000000Z jammy-security main universe
