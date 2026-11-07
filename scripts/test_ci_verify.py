@@ -1366,7 +1366,10 @@ class RowFloorConfig(unittest.TestCase):
         # Hash assignment can leave an empty shard even when len(names) >= N.
         with self.assertRaisesRegex(ValueError, 'zero rows'):
             ci_verify.ctest_partitions(('a', 'b'), 2)
-        for index, count in ((0, 4), (5, 4), (1, 0), (1, 9), (True, 2), (1, 2.0)):
+        # expectation corrected: 9 -> MAX_CTEST_SHARDS + 1, because the shard
+        # limit is now 16.
+        for index, count in ((0, 4), (5, 4), (1, 0), (1, MAX_CTEST_SHARDS + 1),
+                             (True, 2), (1, 2.0)):
             with self.subTest(index=index, count=count):
                 with self.assertRaises(ConfigError):
                     ci_verify.CTestShard(index, count)

@@ -3930,7 +3930,8 @@ def sanitizer_disk_workflow_findings(job: str) -> list[str]:
     dependencies = _step_named(steps, '      - name: Install dependencies')
     verify = _step_named(steps, '      - name: Verify (sanitizers)')
     checkout_index = next(
-        (index for index, step in enumerate(steps) if 'actions/checkout@' in _code(step)),
+        (index for index, step in enumerate(steps)
+         if 'actions/checkout@' in '\n'.join(_code(step))),
         None)
     if not all(cleanup):
         findings.append('sanitizers must reclaim hosted-image bulk before checkout')
@@ -3940,12 +3941,12 @@ def sanitizer_disk_workflow_findings(job: str) -> list[str]:
             or not before or not after
             or _step_values(before, 'run') != ['df -B1 -P / /mnt']
             or _step_values(after, 'run') != ['df -B1 -P / /mnt']
-            or 'always()' not in _code(after)
+            or 'always()' not in '\n'.join(_code(after))
             or not steps.index(before) < min(cleanup_positions)
             or not max(cleanup_positions) < steps.index(after) < checkout_index):
         findings.append('sanitizers must measure and clean image disk before checkout')
-    if any('set -euo pipefail' not in _code(step)
-           or '||' in _code(step) or 'set +e' in _code(step)
+    if any('set -euo pipefail' not in '\n'.join(_code(step))
+           or '||' in '\n'.join(_code(step)) or 'set +e' in '\n'.join(_code(step))
            or _step_values(step, 'continue-on-error')
            or _step_values(step, 'if') != [AUTHZ_SUCCESS]
            for step in cleanup):
@@ -3958,7 +3959,7 @@ def sanitizer_disk_workflow_findings(job: str) -> list[str]:
         findings.append('sanitizers must record df at shard start after preparation')
     if (not final or not verify
             or _step_values(final, 'run') != ['df -B1 -P / /mnt']
-            or 'always()' not in _code(final)
+            or 'always()' not in '\n'.join(_code(final))
             or steps.index(final) <= steps.index(verify)):
         findings.append('sanitizers must record an always-run final df sample')
     return findings
