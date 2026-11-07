@@ -424,6 +424,7 @@ set(TEST_SOURCES
     test_pointvalue
     test_metrics
     test_drawing
+    test_drawing_bound_checkpoint_cost
     test_drawing_bound_status
     test_drawing_bounded_builtins
     test_drawing_bounded_creation_failure
