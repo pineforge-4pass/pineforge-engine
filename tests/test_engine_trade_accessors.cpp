@@ -238,6 +238,8 @@ class ShortProbe : public pineforge::source::PineStrategyHost {
 public:
     double profit_at_close = 0;
     double pct_at_close = 0;
+    double open_size_at_close = 0;
+    double closed_size_after = 0;
     ShortProbe() {
         source::PineStrategyConfig config;
         config.initial_capital = 100000;
@@ -255,6 +257,11 @@ public:
             // Read the snapshots BEFORE we close
             profit_at_close = open_trade_profit(0);
             pct_at_close = open_trade_profit_percent(0);
+            open_size_at_close = open_trade_size(0);
+            strategy_close("S1");
+        }
+        if (bar_index_ == 4) {
+            closed_size_after = closed_trade_size(0);
         }
     }
 };
@@ -267,8 +274,8 @@ static void test_open_trade_short_path() {
         {100, 102,  98, 100, 1000,  60'000},
         {100, 102,  98, 100, 1000, 120'000},  // entry "S1" placed → fills next bar at open
         { 99, 100,  94,  95,  500, 180'000},  // S1 short fills at open=99
-        { 95,  96,  90,  92,  500, 240'000},  // snapshot bar (bar_index_ == 3); current_bar_.close=92
-        { 92,  95,  90,  93,  500, 300'000},
+        { 95,  96,  90,  92,  500, 240'000},  // snapshot at close=92, then request close
+        { 92,  95,  90,  93,  500, 300'000},  // close fills at open=92; read closed size
     };
     strat.run(bars, 5);
 
@@ -280,6 +287,8 @@ static void test_open_trade_short_path() {
     // profit / entry_cost * 100 = 14 / (99*2) * 100 ≈ 7.0707%
     // (was the gross short price-ratio (99/92-1)*100 ≈ 7.6087%).
     CHECK(near(strat.pct_at_close, 14.0 / (99.0 * 2.0) * 100.0, 1e-6));
+    CHECK(near(strat.open_size_at_close, -2.0));
+    CHECK(near(strat.closed_size_after, -2.0));
 }
 
 // Zero-price guard branches in open_trade_profit_percent /

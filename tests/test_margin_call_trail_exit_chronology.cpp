@@ -80,6 +80,8 @@ public:
     std::string exit_comment(int i) const { return closed_trade_exit_comment(i); }
     double exit_price(int i) const { return closed_trade_exit_price(i); }
     double entry_price(int i) const { return closed_trade_entry_price(i); }
+    // expectation corrected: short +quantity -> -quantity, because Pine size
+    // encodes the side; the fill-derived magnitudes below are unchanged.
     double trade_size(int i) const { return closed_trade_size(i); }
     int exit_bar(int i) const { return closed_trade_exit_bar_index(i); }
     double position_size() const { return signed_position_size(); }
@@ -166,12 +168,12 @@ static void test_trail_exit_slices_at_adverse_extreme_first() {
     CHECK(eng.trade_count() == 2);
     CHECK(margin_call_rows(eng) == 1);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(eng.trade_size(0), 0.234, 1e-9));
+    CHECK(near(eng.trade_size(0), -0.234, 1e-9));
     CHECK(near(eng.exit_price(0), 3960.0));
     CHECK(near(eng.entry_price(0), 3879.36));
     CHECK(eng.exit_bar(0) == 2);
     CHECK(eng.exit_comment(1) != std::string("Margin call"));
-    CHECK(near(eng.trade_size(1), 1.885, 1e-9));
+    CHECK(near(eng.trade_size(1), -1.885, 1e-9));
     CHECK(near(eng.exit_price(1), 3821.06));
     CHECK(near(eng.position_size(), 0.0));
 }
@@ -193,7 +195,7 @@ static void test_trail_exit_before_extreme_stays_quiet() {
 
     CHECK(eng.trade_count() == 1);
     CHECK(margin_call_rows(eng) == 0);
-    CHECK(near(eng.trade_size(0), 2.119, 1e-9));
+    CHECK(near(eng.trade_size(0), -2.119, 1e-9));
     CHECK(near(eng.exit_price(0), 3821.06));
     CHECK(near(eng.position_size(), 0.0));
 }
@@ -209,7 +211,7 @@ static void test_trail_chronology_disabled_emulator_stays_quiet() {
 
     CHECK(eng.trade_count() == 1);
     CHECK(margin_call_rows(eng) == 0);
-    CHECK(near(eng.trade_size(0), 2.119, 1e-9));
+    CHECK(near(eng.trade_size(0), -2.119, 1e-9));
     CHECK(near(eng.exit_price(0), 3821.06));
 }
 
