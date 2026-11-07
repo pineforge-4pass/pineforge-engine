@@ -83,14 +83,16 @@ ceilings:
   # CR-559: one map Store resize group and one group of three error-string temporaries.
   # Both stay OPEN; an optional pair limit with default zero establishes no fixed bound.
   # Ten time-format string groups use per-call pattern and written-width storage.
-  # Forty-seven more unreviewed groups on the integrated tree (51 emitted by
+  # Forty-six more unreviewed groups on the integrated tree (50 emitted by
   # --emit-seed, 4 stale entries removed): the bounded drawings, the owned
   # storage and runtime context service, the ledger cache
   # and the selected-capacity driver, reader and core. None is bounded.
+  # One materialize_relative_exits local-list group and three
+  # SeriesPercentileNearestRank groups remain OPEN as well.
   # Five more groups for the finished trade text companion: the source's text
   # accessor and the writer's transfer buffer, transfer bytes, carried bytes and
   # integer text temporaries. None is bounded.
-  unreviewed: 1412
+  unreviewed: 1411
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -926,7 +928,6 @@ entries:
   - {id: "U0828", file: "src/source/pine_adapter.cpp", symbol: "close_logical_units_", ops: ["subscript"], container: "unresolved by the index: close_logical_units_[...]", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 9488}
   - {id: "U0830", file: "src/source/pine_adapter.cpp", symbol: "closes", ops: ["assign", "decl", "grow"], container: "std::vector<std::pair<native_order::RequestHandle, PlacementSnapshot>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1885}
   - {id: "U0833", file: "src/source/pine_adapter.cpp", symbol: "cohort_sides", ops: ["decl", "subscript"], container: "std::unordered_map<const void*, CohortSides>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1551}
-  - {id: "U0834", file: "src/source/pine_adapter.cpp", symbol: "cohorts_by_id_", ops: ["grow", "subscript"], container: "unresolved by the index: cohorts_by_id_.emplace(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 3020}
   - {id: "U0835", file: "src/source/pine_adapter.cpp", symbol: "consumed_partial_exit_cycles_", ops: ["grow", "subscript"], container: "unresolved by the index: consumed_partial_exit_cycles_[...]", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 24790}
   - {id: "U0836", file: "src/source/pine_adapter.cpp", symbol: "cross_side_by_entry", ops: ["decl", "grow"], container: "std::unordered_map<SourceId, bool>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1974}
   - {id: "U0837", file: "src/source/pine_adapter.cpp", symbol: "current_debited_applied_ordinals_", ops: ["grow"], container: "unresolved by the index: current_debited_applied_ordinals_.insert(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 10535}
