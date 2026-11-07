@@ -49,6 +49,17 @@ std::string bar_prefix() {
             "' function. It must not be na");
 }
 
+[[noreturn]] void max_bars_back_exceeded(long long length) {
+    throw coded<std::runtime_error>(
+        RunFailureCode::pine_runtime_limit,
+        {{"limit", "max_bars_back"}, {"max", SeriesWindowExtreme::kMaxBarsBack}},
+        bar_prefix() +
+        "The script attempts to reference historical data that is too far from "
+        "the current bar (" + std::to_string(length - 1) +
+        " bars back). The historical buffer's limit is " +
+        std::to_string(SeriesWindowExtreme::kMaxBarsBack) + " bars.");
+}
+
 // A Pine int length carried as a double: na stays na, anything else
 // truncates toward zero (Pine's int()), saturating far outside any window.
 bool length_value(double value, long long& out) {
@@ -194,16 +205,7 @@ SeriesWindowExtreme::Result SeriesWindowExtreme::update(double src, long long le
     }
 
     if (length <= 0) length_not_positive(length, function, "length");
-    if (length - 1 > kMaxBarsBack) {
-        throw coded<std::runtime_error>(
-            RunFailureCode::pine_runtime_limit,
-            {{"limit", "max_bars_back"}, {"max", kMaxBarsBack}},
-            bar_prefix() +
-            "The script attempts to reference historical data that is too far from "
-            "the current bar (" + std::to_string(length - 1) +
-            " bars back). The historical buffer's limit is " +
-            std::to_string(kMaxBarsBack) + " bars.");
-    }
+    if (length - 1 > kMaxBarsBack) max_bars_back_exceeded(length);
 
     // Every call of one bar re-applies from the state the bar found.
     if (!has_bar_ || bar != current_bar_) {
@@ -330,6 +332,78 @@ double SeriesLowestBars::compute(double src, double length) {
 double SeriesLowestBars::recompute(double src, double length) {
     return core_.update(src, series_length(length, "lowestbars"), false, false, "lowestbars")
         .offset;
+}
+
+// --- SeriesPercentileNearestRank ---
+
+void SeriesPercentileNearestRank::append(double src) {
+    constexpr std::size_t capacity =
+        static_cast<std::size_t>(SeriesWindowExtreme::kMaxBarsBack) + 1;
+    if (history_.empty()) history_.assign(capacity, na<double>());
+    history_[next_] = src;
+    next_ = (next_ + 1) % capacity;
+    if (count_ != capacity) ++count_;
+}
+
+void SeriesPercentileNearestRank::replace_last(double src) {
+    if (count_ == 0) {
+        append(src);
+        return;
+    }
+    constexpr std::size_t capacity =
+        static_cast<std::size_t>(SeriesWindowExtreme::kMaxBarsBack) + 1;
+    history_[(next_ + capacity - 1) % capacity] = src;
+}
+
+double SeriesPercentileNearestRank::history_at(std::size_t offset) const {
+    constexpr std::size_t capacity =
+        static_cast<std::size_t>(SeriesWindowExtreme::kMaxBarsBack) + 1;
+    const std::size_t oldest = count_ == capacity ? next_ : 0;
+    return history_[(oldest + offset) % capacity];
+}
+
+const std::vector<double>* SeriesPercentileNearestRank::rebuild_window(std::size_t length) {
+    window_.emplace(static_cast<int>(length));
+    window_length_ = length;
+    const std::size_t before = count_ - 1;
+    const std::size_t seed = std::min(before, length - 1);
+    for (std::size_t offset = before - seed; offset != before; ++offset)
+        window_->push(history_at(offset));
+    return window_->push(history_at(before));
+}
+
+double SeriesPercentileNearestRank::compute(double src, double length, double percentage) {
+    const long long value = series_length(length, "percentile_nearest_rank");
+    if (value <= 0) length_not_positive(value, "percentile_nearest_rank", "length");
+    if (value - 1 > SeriesWindowExtreme::kMaxBarsBack)
+        max_bars_back_exceeded(value);
+    append(src);
+    const auto requested = static_cast<std::size_t>(value);
+    const std::vector<double>* ranked = nullptr;
+    if (!window_ || window_length_ != requested)
+        ranked = rebuild_window(requested);
+    else
+        ranked = window_->push(src);
+    return ta::nearest_rank_of(ranked, percentage);
+}
+
+double SeriesPercentileNearestRank::recompute(double src, double length, double percentage) {
+    const long long value = series_length(length, "percentile_nearest_rank");
+    if (value <= 0) length_not_positive(value, "percentile_nearest_rank", "length");
+    if (value - 1 > SeriesWindowExtreme::kMaxBarsBack)
+        max_bars_back_exceeded(value);
+    replace_last(src);
+    const auto requested = static_cast<std::size_t>(value);
+    const std::vector<double>* ranked = nullptr;
+    if (!window_ || window_length_ != requested)
+        ranked = rebuild_window(requested);
+    else
+        ranked = window_->repush(src);
+    return ta::nearest_rank_of(ranked, percentage);
+}
+
+void SeriesPercentileNearestRank::observe_owned_storage(OwnedStorage& out) const noexcept {
+    observe_owned_members(out, history_, window_);
 }
 
 // --- PineSupertrend ---

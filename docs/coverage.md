@@ -367,10 +367,15 @@ A length that is neither a constant nor an input is the source layer's
 the run, builds the class from the call site's first execution
 (`FirstCallBound`); a series length re-windows `ta.highest`, `ta.lowest`,
 `ta.highestbars` and `ta.lowestbars` at every call (`SeriesHighest`,
-`SeriesLowest`, `SeriesHighestBars`, `SeriesLowestBars`); `ta.supertrend`
-keeps its first execution's factor (`PineSupertrend`); a length of 0, a
+`SeriesLowest`, `SeriesHighestBars`, `SeriesLowestBars`);
+`ta.supertrend` keeps its first execution's factor (`PineSupertrend`); a length of 0, a
 negative length or `na` stops the run. pineforge-codegen 1.0.0 lowers such
-calls (0.10.4 refuses them).
+calls (0.10.4 refuses them). A series length for `ta.percentile_nearest_rank`
+appends the source at every call of its site and ranks the last `length`
+appended values (`SeriesPercentileNearestRank`); only the codegen release that
+adds it lowers that call, and earlier releases refuse it. A call inside an `if`
+appends only when it runs, and no TradingView tape pins that shape or the
+replay of the retained values when the length changes.
 
 ### Tuple-returning TA classes
 
