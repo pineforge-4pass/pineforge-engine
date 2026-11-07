@@ -6,6 +6,18 @@ inspect every .a, .so and .so.*; require a nonempty inventory. Policy is fixed.
 GNU ar/readelf must already be installed in the OS default executable search
 path. Never extract archives, load libraries, execute payloads, or write files.
 
+--baseline-root DIR adds the released-baseline comparison. DIR is an already
+unpacked released archive (the workflow checks its digest and unpacks it; this
+tool still extracts nothing). The same strict inspection reads every library
+under DIR, and the highest numeric GLIBC_ tag over all staged libraries may not
+exceed the highest over all baseline libraries: equal or lower passes, higher
+fails. A tree with no numeric tag ranks below any tag. The baseline is read, not
+judged: the fixed ceiling and the __isoc23_* rule apply to the staging tree
+only, since a released archive may predate them. A missing, empty or partly
+uninspectable baseline, or one overlapping the staging root, fails closed. No
+expected value is configured anywhere: the verdict is a function of the two
+inspected trees.
+
 All symlinks (including directory links), protected/key/config/.env* paths,
 unreadable entries, thin archives, non-ELF members, and wrong ELF types fail.
 Archives must contain REL objects with inspectable symbol tables; shared objects
@@ -65,8 +77,13 @@ class InspectionError(Exception):
     pass
 
 
+# Fields added to every record while the released baseline is being read.
+EVENT_CONTEXT: dict[str, str] = {}
+
+
 def emit(event: str, **fields) -> None:
-    print(json.dumps({"event": event, **fields}, ensure_ascii=True), flush=True)
+    print(json.dumps({"event": event, **EVENT_CONTEXT, **fields}, ensure_ascii=True),
+          flush=True)
 
 
 def issue(issues: list[dict], path: Path, cause: str, **fields) -> None:
@@ -282,6 +299,42 @@ def maximum_version(names: list[str]) -> str | None:
     return name[len("GLIBC_"):]
 
 
+def tree_maximum(rows: list[dict]) -> tuple[int, ...] | None:
+    """Highest numeric GLIBC_ tag over every inspected library of one tree."""
+    highest = maximum_version(sorted({name for row in rows for name in row["versions"]}))
+    return None if highest is None else tuple(int(part) for part in highest.split("."))
+
+
+def version_text(version: tuple[int, ...] | None) -> str | None:
+    return None if version is None else ".".join(str(part) for part in version)
+
+
+def glibc_label(version: tuple[int, ...] | None) -> str:
+    return "none" if version is None else "GLIBC_" + version_text(version)
+
+
+def exceeds_baseline(candidate: tuple[int, ...] | None,
+                     baseline: tuple[int, ...] | None) -> bool:
+    """True when the staged tree's highest numeric tag is above the baseline's.
+
+    Components compare with zero padding, so 2.36 equals 2.36.0. No numeric tag
+    at all ranks below every tag: a staged tag above a tagless baseline exceeds
+    it, and a tagless staged tree never does.
+    """
+    if candidate is None:
+        return False
+    if baseline is None:
+        return True
+    width = max(len(candidate), len(baseline))
+    return (candidate + (0,) * (width - len(candidate))
+            > baseline + (0,) * (width - len(baseline)))
+
+
+def roots_overlap(left: Path, right: Path) -> bool:
+    first, second = (Path(os.path.abspath(path)) for path in (left, right))
+    return first == second or first in second.parents or second in first.parents
+
+
 def version_sections(lines: list[str], dynamic_count: int | None) -> set[str]:
     headers = [(index, VERSION_HEADER.fullmatch(line))
                for index, line in enumerate(lines) if line.startswith("Version ")]
@@ -493,7 +546,7 @@ def policy_issues(path: Path, member: dict, issues: list[dict]) -> None:
 
 
 def inspect_target(root_fd: int, target: dict, directories: dict,
-                   tools: dict[str, str], issues: list[dict]) -> dict:
+                   tools: dict[str, str], issues: list[dict], policy: bool = True) -> dict:
     path = target["path"]
     row = {
         "path": str(path), "kind": target["kind"], "identity": target["identity"],
@@ -580,7 +633,8 @@ def inspect_target(root_fd: int, target: dict, directories: dict,
             try:
                 member.update(parse_elf(lines, "REL" if expected_members is not None else "DYN"))
                 member["inspected"] = True
-                policy_issues(path, member, issues)
+                if policy:
+                    policy_issues(path, member, issues)
             except (InspectionError, ValueError) as error:
                 issue(issues, path, str(error), member=name, ordinal=ordinal)
                 complete = False
@@ -613,16 +667,12 @@ def inspect_target(root_fd: int, target: dict, directories: dict,
     return row
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("staging_root", type=Path, help="explicit installed prebuilt staging root")
-    args = parser.parse_args(argv)
-    issues = []
+def inspect_tree(root: Path, issues: list[dict], policy: bool) -> tuple[list[dict], list[dict]]:
+    """Inventory and inspect one explicit root; the fixed policy is for staging only."""
     targets = []
     results = []
     root_fd = None
-    root = args.staging_root
-    emit("root", path=str(root), fixed_glibc_ceiling="2.36")
+    emit("root", path=str(root), **({"fixed_glibc_ceiling": "2.36"} if policy else {}))
     try:
         if sys.platform != "linux":
             raise InspectionError("Linux descriptor-based ELF inspection is required")
@@ -638,7 +688,7 @@ def main(argv: list[str] | None = None) -> int:
             issue(issues, root, "no shipped .so/.so.*/.a libraries in staging inventory")
         tools = installed_tools(root, issues) if targets else {}
         for target in targets:
-            results.append(inspect_target(root_fd, target, directories, tools, issues))
+            results.append(inspect_target(root_fd, target, directories, tools, issues, policy))
         # Re-open the path and re-inventory metadata to catch late additions,
         # removals, renames, or a replacement root; payloads are never re-read.
         final_fd = open_root(root)
@@ -657,12 +707,59 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if root_fd is not None:
             os.close(root_fd)
+    return targets, results
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("staging_root", type=Path, help="explicit installed prebuilt staging root")
+    parser.add_argument("--baseline-root", default=None, metavar="DIR",
+                        help="explicit unpacked released archive; the staging tree's highest "
+                             "numeric GLIBC_ tag may not exceed the highest found there")
+    args = parser.parse_args(argv)
+    if args.baseline_root is not None and not args.baseline_root:
+        parser.error("--baseline-root must name a directory")
+    issues = []
+    targets, results = inspect_tree(args.staging_root, issues, True)
     inspected = sum(row["inspected"] for row in results)
-    success = bool(targets) and inspected == len(targets) and not issues
+    complete = bool(targets) and inspected == len(targets)
+    baseline_fields = {}
+    if args.baseline_root is not None:
+        baseline_root = Path(args.baseline_root)
+        baseline_targets = []
+        baseline_results = []
+        if roots_overlap(args.staging_root, baseline_root):
+            issue(issues, baseline_root.absolute(),
+                  "baseline root must be separate from the staging root")
+        else:
+            EVENT_CONTEXT["role"] = "baseline"
+            try:
+                baseline_targets, baseline_results = inspect_tree(baseline_root, issues, False)
+            finally:
+                EVENT_CONTEXT.clear()
+        baseline_inspected = sum(row["inspected"] for row in baseline_results)
+        baseline_fields = {"baseline_discovered": len(baseline_targets),
+                           "baseline_inspected": baseline_inspected}
+        complete = (complete and bool(baseline_targets)
+                    and baseline_inspected == len(baseline_targets))
+        if complete:
+            staged_highest = tree_maximum(results)
+            released_highest = tree_maximum(baseline_results)
+            above = exceeds_baseline(staged_highest, released_highest)
+            emit("baseline_comparison", staged_max_glibc=version_text(staged_highest),
+                 baseline_max_glibc=version_text(released_highest), exceeds=above)
+            if above:
+                issue(issues, args.staging_root.absolute(),
+                      f"staged highest {glibc_label(staged_highest)} exceeds released baseline "
+                      f"highest {glibc_label(released_highest)}",
+                      staged_max_glibc=version_text(staged_highest),
+                      baseline_max_glibc=version_text(released_highest),
+                      baseline_root=str(baseline_root.absolute()))
+    success = complete and not issues
     emit("summary", verdict="PASS" if success else "FAIL", discovered=len(targets),
          inspected=inspected, archive_members=sum(
              sum(member["inspected"] for member in row["members"]) for row in results),
-         issues=len(issues))
+         issues=len(issues), **baseline_fields)
     return 0 if success else 1
 
 
