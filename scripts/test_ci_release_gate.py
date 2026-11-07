@@ -2566,15 +2566,20 @@ class MainProofSeamTests(unittest.TestCase):
                  for node in ast.walk(main)
                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                  and node.func.attr == "add_parser"]
-        self.assertEqual(modes, ["gate", "rulesets-probe"])
+        self.assertEqual(modes, ["gate", "plan", "rulesets-probe"])
         flags = {}
         for node in ast.walk(main):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "add_argument"):
                 flags.setdefault(node.func.value.id, []).extend(
                     ast.literal_eval(argument) for argument in node.args)
-        self.assertEqual(flags, {"check": ["--repo", "--sha", "--ref"], "probe": ["--repo"]},
-                         "neither subcommand may offer a cut-over override flag")
+        # plan's --override selects the release version, never the main-proof cut-over.
+        self.assertEqual(flags, {
+            "check": ["--repo", "--sha", "--ref", "--phase", "--dispatch-sha"],
+            "plan": ["--sha", "--phase", "--bump", "--override", "--dispatch-sha",
+                     "--github-output"],
+            "probe": ["--repo"],
+        }, "no subcommand may offer a main-proof cut-over override flag")
 
     def test_reader_is_not_live_and_defines_no_storage_format(self):
         with self.assertRaisesRegex(NotImplementedError,
