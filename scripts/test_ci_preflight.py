@@ -11894,6 +11894,8 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
             'gke-pr.yml build-debug must follow admission and keep its path policy',
             'gke-pr.yml build-debug must run its complete fast Debug smoke',
             'gke-pr.yml build-debug must install only its smoke dependencies',
+            'gke-pr.yml build-debug must retain exactly its four smoke steps '
+            'and optional pinned final output collector',
             'gke-pr.yml legs must require every selected proof',
             'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results',
             'gke-pr.yml build-debug must have one head checkout',
@@ -12363,6 +12365,404 @@ class GkeAdmissionRuleTests(unittest.TestCase):
             self.assertFalse((directory / '.github/workflows/gke-pr.yml').exists())
             self.assertEqual(admit_rule_findings(directory, run_actionlint=False), [
                 'gke-pr.yml: admission workflow is missing'])
+
+
+def main_admission_data_findings(workflows):
+    """Exercise the ordinary data-only entry without executing a supplied checker."""
+    copies = ('.github/actionlint.yaml', '.github/actions/setup-live-curl/action.yml')
+    scratch = ROOT / '.lane-notes'
+    announce_compare_fixture_paths(scratch, *(ROOT / relative for relative in copies))
+    scratch.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='admit-main-', dir=scratch) as fetched:
+        directory = Path(fetched)
+        targets = [directory / relative for relative in copies]
+        targets += [directory / '.github/workflows' / name for name in workflows]
+        announce_compare_fixture_paths(directory, *targets)
+        for target in targets:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        for relative in copies:
+            shutil.copyfile(ROOT / relative, directory / relative)
+        for name, text in workflows.items():
+            (directory / '.github/workflows' / name).write_text(text, encoding='utf-8')
+        return admit_rule_findings(directory, run_actionlint=False)
+
+
+class SplitHostedReleaseAdmission(unittest.TestCase):
+    """The exported split layout must bind each architecture and its handoff."""
+
+    JOBS = ('prebuilt-x86', 'prebuilt-arm', 'upload')
+    INVENTORY = ('release.yml split prebuilt must contain exactly release, prebuilt-x86, '
+                 'prebuilt-arm, upload and notify-hub jobs')
+    HEADER = 'release.yml {} must retain its reviewed header, permissions, dependencies and outputs'
+    STEP = 'release.yml {} must retain step {} with its reviewed command and context'
+    RAW = ('release.yml {} must retain the raw single-line all-library glibc checker '
+           'invocation and its run context')
+
+    def setUp(self):
+        fixture = ROOT / 'scripts/fixtures/ci_preflight/release_split_hosted_2167.yml'
+        release = ROOT / '.github/workflows/release.yml'
+        gke = ROOT / '.github/workflows/gke-pr.yml'
+        announce_compare_fixture_paths(fixture, release, gke)
+        self.split = fixture.read_text(encoding='utf-8')
+        self.shipped = release.read_text(encoding='utf-8')
+        self.gke = gke.read_text(encoding='utf-8')
+
+    def step(self, job, name):
+        step = ci_preflight._step_named(ci_preflight._steps(_jobs(self.split)[job]),
+                                        '      - name: ' + name)
+        self.assertTrue(step, (job, name))
+        return step
+
+    def mutate_step(self, job, name, before, after):
+        step = self.step(job, name)
+        self.assertIn(before, step)
+        changed = in_job(self.split, job, step, step.replace(before, after, 1))
+        self.assertNotEqual(changed, self.split)
+        return changed
+
+    def assert_refused(self, changed, finding):
+        self.assertNotEqual(changed, self.split)
+        self.assertIn(finding, ci_preflight.release_prebuilt_workflow_findings(changed))
+        self.assertIn(finding, ci_preflight.runner_findings({'release.yml': changed}))
+        self.assertIn(finding, main_admission_data_findings(
+            {'gke-pr.yml': self.gke, 'release.yml': changed}))
+
+    def test_legacy_and_unchanged_export_dispatch_through_real_parsers(self):
+        # On the old production source the legacy controls pass, then the exact
+        # split export fails for the absent matrix job/raw gate, not setup.
+        for workflow in (self.shipped, legacy_release_workflow(self.shipped), self.split):
+            with self.subTest(jobs=tuple(_jobs(workflow))):
+                self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(workflow), [])
+                self.assertEqual(ci_preflight.runner_findings({'release.yml': workflow}), [])
+                self.assertEqual(main_admission_data_findings(
+                    {'gke-pr.yml': self.gke, 'release.yml': workflow}), [])
+        paths = [ROOT / path for path in CI_SOURCES]
+        probe = ROOT / '.github/workflows/release-ruleset-probe.yml'
+        announce_compare_fixture_paths(*paths, probe)
+        self.assertEqual(ci_workflow_findings(
+            *(path.read_text(encoding='utf-8') for path in paths),
+            others={'release.yml': self.split, 'gke-pr.yml': self.gke,
+                    'release-ruleset-probe.yml': probe.read_text(encoding='utf-8')}), [])
+
+    def test_each_split_step_is_required_and_cannot_be_weakened(self):
+        for job in self.JOBS:
+            for step in ci_preflight._steps(_jobs(self.split)[job]):
+                name, = ci_preflight._step_values(step, 'name')
+                for replacement in ('', step.replace('\n', '\n        continue-on-error: true\n', 1)):
+                    with self.subTest(job=job, step=name, removed=not replacement):
+                        changed = in_job(self.split, job, step, replacement)
+                        self.assert_refused(changed, self.STEP.format(job, name))
+
+    def test_split_inventory_refuses_partial_hybrid_unknown_and_duplicate_jobs(self):
+        for job in self.JOBS:
+            body = _jobs(self.split)[job]
+            with self.subTest(missing=job):
+                self.assert_refused(self.split.replace(f'  {job}:' + body, '', 1),
+                                    self.INVENTORY)
+        legacy = _jobs(self.shipped)['prebuilt']
+        for addition in ('\n  prebuilt:' + legacy,
+                         '\n  surprise:\n    runs-on: ubuntu-24.04\n'
+                         '    steps:\n      - run: true\n',
+                         '\n  upload:' + _jobs(self.split)['upload']):
+            with self.subTest(addition=addition.splitlines()[1]):
+                self.assert_refused(self.split + addition, self.INVENTORY)
+
+    def test_both_raw_glibc_invocations_bind_arguments_context_streams_and_exit(self):
+        name = "Check every staged library's glibc floor"
+        command = ('          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" '
+                   '--baseline-root "${BASELINE_DIR}" '
+                   '> "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then')
+        mutations = [
+            (command, ''),
+            (command, '          # ' + command.lstrip()),
+            ('"${STAGE_DIR}" --baseline-root', '"${STAGE_DIR}/lib/libpineforge.a" --baseline-root'),
+            ('--baseline-root "${BASELINE_DIR}"', ''),
+            ('--baseline-root "${BASELINE_DIR}"', '--baseline-root "${STAGE_DIR}"'),
+            (' > "${log}/stdout.jsonl"', ' > /dev/null'),
+            (' 2> "${log}/stderr.txt"', ' 2> /dev/null'),
+            ('set -euo pipefail', 'set +e'),
+            ('run: |', 'run: >'),
+            ('        run: |', '        shell: sh\n        run: |'),
+            ('        run: |', '        if: false\n        run: |'),
+            ('          TRIPLE:', '          BASH_ENV: /outside\n          TRIPLE:'),
+            ('checker_rc=0', 'checker_rc=1'),
+            ('else checker_rc=$?; fi', 'else checker_rc=0; fi'),
+            ('"${checker_rc}" > "${log}/exitcode.txt"', '0 > "${log}/exitcode.txt"'),
+            ('cat "${log}/stdout.jsonl"', 'true'),
+            ('cat "${log}/stderr.txt" >&2', 'true'),
+            ('exit "${checker_rc}"', 'exit 0'),
+        ]
+        for separator in ('', '\n', '            # disabled continuation\n'):
+            mutations.append((command, command.replace(
+                ' > "${log}/stdout.jsonl"',
+                ' \\\n' + separator + '            > "${log}/stdout.jsonl"', 1)))
+        for job in ('prebuilt-x86', 'prebuilt-arm'):
+            for before, after in mutations:
+                with self.subTest(job=job, before=before, after=after):
+                    self.assert_refused(self.mutate_step(job, name, before, after),
+                                        self.RAW.format(job))
+
+    def test_each_architecture_fetch_digest_and_pack_output_is_binding(self):
+        fetch = 'Fetch the v1.10.0 baseline archive for the glibc comparison'
+        for job, digest in (
+                ('prebuilt-x86', 'cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543'),
+                ('prebuilt-arm', '982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bb')):
+            mutations = (
+                (fetch, 'gh release download v1.10.0', 'gh release download latest'),
+                (fetch, digest, '0' * 64),
+                (fetch, '| sha256sum -c -', '| cat'),
+                (fetch, 'echo "BASELINE_DIR=${root}/tree"', 'echo "BASELINE_DIR=${root}/download"'),
+                ('Pack tarball + sha256', 'digest=$(sha256sum "${tarball}")', 'digest=' + '0' * 64),
+                ('Pack tarball + sha256', 'echo "digest=${digest}"', 'echo "digest=unverified"'),
+            )
+            for name, before, after in mutations:
+                with self.subTest(job=job, step=name, before=before):
+                    self.assert_refused(self.mutate_step(job, name, before, after),
+                                        self.STEP.format(job, name))
+
+    def test_x86_toolchain_reader_build_and_consumer_are_exact_and_ordered(self):
+        mutations = (
+            ('Authenticate the dedicated toolchain reader',
+             'auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093', 'auth@' + '0' * 40),
+            ('Authenticate the dedicated toolchain reader',
+             'create_credentials_file: false', 'create_credentials_file: true'),
+            ('Authenticate the dedicated toolchain reader',
+             'export_environment_variables: false', 'export_environment_variables: true'),
+            ('Authenticate the dedicated toolchain reader',
+             'engine-release-toolchainreader@', 'release-writer@'),
+            ('Build x86_64 in pinned Bookworm', 'test ! -L .github/engine-toolchain-image.txt', 'true'),
+            ('Build x86_64 in pinned Bookworm', '@sha256:[0-9a-f]{64}', ':latest'),
+            ('Build x86_64 in pinned Bookworm', 'bash scripts/build_prebuilt_bookworm.sh', 'cmake -B build'),
+            ('Build x86_64 in pinned Bookworm',
+             'SOURCE_SHA: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}',
+             'SOURCE_SHA: ${{ github.sha }}'),
+            ('Consume packed x86_64 archive', '--consume ', ''),
+            ('Consume packed x86_64 archive', '"${TARBALL}" "${SHASUM}"', '"other.tar.gz" "${SHASUM}"'),
+        )
+        for name, before, after in mutations:
+            with self.subTest(step=name, before=before):
+                self.assert_refused(self.mutate_step('prebuilt-x86', name, before, after),
+                                    self.STEP.format('prebuilt-x86', name))
+        consumer = self.step('prebuilt-x86', 'Consume packed x86_64 archive').rstrip('\n')
+        retention = self.step('prebuilt-x86', 'Keep the verified tarball as a workflow artifact').rstrip('\n')
+        before = consumer + '\n\n' + retention
+        changed = in_job(self.split, 'prebuilt-x86', before, retention + '\n\n' + consumer)
+        self.assert_refused(changed, 'release.yml prebuilt-x86 must retain exactly its reviewed ordered steps')
+
+    def test_arm_eigen_configure_build_install_and_archive_steps_stay_applicable(self):
+        mutations = (
+            ('Install Eigen3 (Linux)', 'sudo apt-get install -y libeigen3-dev', 'true'),
+            ('Assert Eigen3 3.4.0 on ARM', 'EIGEN_MAJOR_VERSION[[:space:]]+4',
+             'EIGEN_MAJOR_VERSION[[:space:]]+3'),
+            ('Configure', '-DEigen3_DIR=/usr/share/eigen3/cmake', '-DEigen3_DIR=/outside'),
+            ('Configure', '-DFETCHCONTENT_FULLY_DISCONNECTED=ON', '-DFETCHCONTENT_FULLY_DISCONNECTED=OFF'),
+            ('Build', 'cmake --build build -j 4', 'true'),
+            ('Install to staging', 'cmake --install build', 'true'),
+        )
+        for name, before, after in mutations:
+            with self.subTest(step=name):
+                self.assert_refused(self.mutate_step('prebuilt-arm', name, before, after),
+                                    self.STEP.format('prebuilt-arm', name))
+
+    def test_upload_verifies_actual_archives_before_public_write(self):
+        name = 'Verify both tarballs against build outputs'
+        for before, after in (
+                ('needs.prebuilt-x86.outputs.sha256', 'needs.prebuilt-arm.outputs.sha256'),
+                ('needs.prebuilt-arm.outputs.sha256', 'steps.download.outputs.sha256'),
+                ('| sha256sum --check --strict -', '| cat'),
+                ('test ! -L "artifacts/x86/${X86_TARBALL}"', 'true'),
+                ('test ! -L "artifacts/arm/${ARM_TARBALL}"', 'true'),
+                ('set -euo pipefail', 'set +e'),
+                ('"${X86_SHA256}" "artifacts/x86/${X86_TARBALL}"',
+                 '"${X86_SHA256}" "artifacts/arm/${ARM_TARBALL}"'),
+                ('"${ARM_SHA256}" "artifacts/arm/${ARM_TARBALL}"',
+                 '"${ARM_SHA256}" "artifacts/x86/${X86_TARBALL}"')):
+            with self.subTest(before=before):
+                self.assert_refused(self.mutate_step('upload', name, before, after),
+                                    self.STEP.format('upload', name))
+        verify = self.step('upload', name).rstrip('\n')
+        publish = self.step('upload', 'Upload to release').rstrip('\n')
+        changed = in_job(self.split, 'upload', verify + '\n\n' + publish,
+                         publish + '\n\n' + verify)
+        self.assert_refused(changed, 'release.yml upload must retain exactly its reviewed ordered steps')
+        for job, before, after in (
+                ('upload', 'needs: [release, prebuilt-x86, prebuilt-arm]', 'needs: [release, prebuilt-x86]'),
+                ('notify-hub', 'needs: [release, upload]', 'needs: [release, prebuilt-arm]')):
+            self.assert_refused(in_job(self.split, job, before, after), self.HEADER.format(job))
+
+    def test_split_permissions_tokens_shell_env_and_runner_boundaries_fail_closed(self):
+        for job in self.JOBS:
+            for declaration in (
+                    '    environment: release\n',
+                    '    env:\n      TOKEN: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\n',
+                    '    env:\n      TOKEN: ${{ secrets[inputs.secret_name] }}\n',
+                    '    secrets: inherit\n',
+                    '    container: ubuntu:24.04\n',
+                    '    defaults:\n      run:\n        shell: sh\n',
+                    '    env:\n      BASH_ENV: /outside\n',
+                    '    env:\n      DOCKER_HOST: tcp://outside:2375\n',
+                    '    env:\n      RUNNER_TEMP: /outside\n',
+                    '    continue-on-error: true\n',
+                    '    if: always()\n'):
+                with self.subTest(job=job, declaration=declaration):
+                    self.assert_refused(in_job(self.split, job, '    steps:\n',
+                                               declaration + '    steps:\n'),
+                                        self.HEADER.format(job))
+                    body = _jobs(self.split)[job]
+                    trailing = body.rstrip('\n') + '\n' + declaration + '\n'
+                    self.assert_refused(in_job(self.split, job, body, trailing),
+                                        self.HEADER.format(job))
+            body = _jobs(self.split)[job]
+            label, = ci_preflight._job_values(body, 'runs-on')
+            for replacement in ('self-hosted', "'ubuntu-24.04'", '[ubuntu-24.04]'):
+                with self.subTest(job=job, runner=replacement):
+                    self.assert_refused(in_job(self.split, job, 'runs-on: ' + label,
+                                               'runs-on: ' + replacement), self.HEADER.format(job))
+            changed = in_job(self.split, job, '      contents: ', '      actions: ')
+            self.assert_refused(changed, self.HEADER.format(job))
+        for before, after in (
+                ('permissions:\n  contents: read\n', 'permissions:\n  contents: write\n'),
+                ('env:\n', 'defaults:\n  run:\n    shell: sh\nenv:\n'),
+                ('env:\n', 'env:\n  PATH: /outside\n'),
+                ('env:\n', 'env:\n  TOKEN: ${{ secrets.DEPLOY_TOKEN }}\n')):
+            with self.subTest(workflow=after):
+                self.assert_refused(self.split.replace(before, after, 1),
+                                    'release.yml split prebuilt must retain its read-only workflow permissions, '
+                                    'release-tag environment and default shell')
+        for job in ('prebuilt-arm', 'upload'):
+            changed = in_job(self.split, job, '      contents: ',
+                             '      id-token: write\n      contents: ')
+            self.assert_refused(changed, self.HEADER.format(job))
+
+
+class GkeSmokeOutputAdmission(unittest.TestCase):
+    """Exact old4/new5 forms leave the original smoke and identity binding intact."""
+
+    COLLECTOR = '''      - name: Retain PR smoke test output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-smoke-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/ctest-junit.xml
+            build/Testing/Temporary/LastTest.log
+          retention-days: 3
+          if-no-files-found: warn
+'''
+    LAYOUT = 'gke-pr.yml {} must retain exactly its four smoke steps and optional pinned final output collector'
+    COLLECTOR_FINDING = 'gke-pr.yml {} must retain the pinned always-upload PR smoke output collector'
+
+    def setUp(self):
+        path = ROOT / '.github/workflows/gke-pr.yml'
+        announce_compare_fixture_paths(path)
+        self.original = path.read_text(encoding='utf-8')
+
+    def with_collectors(self, jobs=('build', 'build-debug')):
+        workflow = self.original
+        for job in jobs:
+            body = _jobs(workflow)[job]
+            workflow = in_job(workflow, job, body, body.rstrip('\n') + '\n' + self.COLLECTOR + '\n')
+        return workflow
+
+    def assert_refused(self, changed, finding):
+        self.assertIn(finding, gke_admit_workflow_findings(changed))
+        self.assertIn(finding, main_admission_data_findings({'gke-pr.yml': changed}))
+
+    def test_exact_four_or_five_steps_are_admitted_independently_in_both_jobs(self):
+        for jobs in ((), ('build',), ('build-debug',), ('build', 'build-debug')):
+            with self.subTest(collectors=jobs):
+                workflow = self.with_collectors(jobs)
+                self.assertEqual(gke_admit_workflow_findings(workflow), [])
+                self.assertEqual(main_admission_data_findings({'gke-pr.yml': workflow}), [])
+
+    def test_each_collector_field_and_extra_execution_key_is_binding(self):
+        workflow = self.with_collectors()
+        for job in ('build', 'build-debug'):
+            for before, after in (
+                    ('Retain PR smoke test output', 'Upload logs'),
+                    ('ea165f8d65b6e75b540449e92b4886f43607fa02', '0' * 40),
+                    ('if: always()', 'if: success()'),
+                    ('        if: always()\n', ''),
+                    ('            build/ctest-junit.xml\n', ''),
+                    ('            build/Testing/Temporary/LastTest.log\n', ''),
+                    ('build/ctest-junit.xml', 'build/*.xml'),
+                    ('build/Testing/Temporary/LastTest.log', 'build/Testing/Temporary/'),
+                    ('${{ github.job }}', '${{ github.sha }}'),
+                    ('-${{ github.run_id }}', ''),
+                    ('-${{ github.run_attempt }}', ''),
+                    ('retention-days: 3', 'retention-days: 7'),
+                    ('if-no-files-found: warn', 'if-no-files-found: error'),
+                    ('        with:\n', '        continue-on-error: true\n        with:\n'),
+                    ('        with:\n', '        run: true\n        with:\n'),
+                    ('        with:\n', '        env:\n          BASH_ENV: /outside\n        with:\n'),
+                    ('          path: |\n', '          path: >\n')):
+                with self.subTest(job=job, before=before, after=after):
+                    collector = self.COLLECTOR.rstrip('\n')
+                    changed = in_job(workflow, job, collector, collector.replace(before, after, 1))
+                    self.assertNotEqual(changed, workflow)
+                    self.assert_refused(changed, self.COLLECTOR_FINDING.format(job))
+
+    def test_collector_position_extra_steps_and_missing_producers_are_refused(self):
+        workflow = self.with_collectors()
+        for job in ('build', 'build-debug'):
+            old_steps = ci_preflight._steps(_jobs(self.original)[job])
+            for step in old_steps:
+                with self.subTest(job=job, missing_old_step=step.splitlines()[0]):
+                    self.assert_refused(in_job(self.original, job, step, ''),
+                                        self.LAYOUT.format(job))
+            added = in_job(self.original, job, '    steps:\n',
+                           '    steps:\n      - run: true\n')
+            self.assert_refused(added, self.LAYOUT.format(job))
+            body = _jobs(workflow)[job]
+            steps = ci_preflight._steps(body)
+            collector = steps[-1].rstrip('\n')
+            verify = steps[-2].rstrip('\n')
+            for position in range(4):
+                with self.subTest(job=job, collector_position=position):
+                    moved = body.replace(collector, '', 1)
+                    moved = moved.replace(steps[position], collector + '\n' + steps[position], 1)
+                    self.assert_refused(in_job(workflow, job, body, moved), self.LAYOUT.format(job))
+            for before, after in (
+                    (collector, collector + '\n' + collector),
+                    (collector, collector + '\n      - run: true'),
+                    (steps[1], ''),
+                    (verify, ''),
+                    (collector, '      - run: true')):
+                with self.subTest(job=job, replacement=after[:100]):
+                    changed = in_job(workflow, job, before, after)
+                    self.assert_refused(changed, self.LAYOUT.format(job))
+
+    def test_old_and_new_forms_keep_producer_head_and_failure_semantics(self):
+        for workflow in (self.original, self.with_collectors()):
+            for job, build_type in (('build', 'Release'), ('build-debug', 'Debug')):
+                for before, after, finding in (
+                        ('--target pineforge_pr_smoke', '--target pineforge',
+                         f'gke-pr.yml {job} must run its complete fast {build_type} smoke'),
+                        ('--no-tests=error', '--no-tests=ignore',
+                         f'gke-pr.yml {job} must run its complete fast {build_type} smoke'),
+                        ('--output-junit build/ctest-junit.xml', '--output-junit elsewhere.xml',
+                         f'gke-pr.yml {job} must run its complete fast {build_type} smoke'),
+                        ('--output-junit build/ctest-junit.xml', '--output-junit build/ctest-junit.xml || true',
+                         f'gke-pr.yml {job} must run its complete fast {build_type} smoke'),
+                        ('ref: ${{ needs.admit.outputs.head_sha }}', 'ref: ${{ github.sha }}',
+                         f'gke-pr.yml {job} checkout must use the admitted immutable head'),
+                        ('persist-credentials: false', 'persist-credentials: true',
+                         f'gke-pr.yml {job} checkout must use the admitted immutable head'),
+                        ('      - name: Verify ' + build_type,
+                         '      - name: Verify ' + build_type + '\n        continue-on-error: true',
+                         self.LAYOUT.format(job)),
+                        ('      - name: Verify ' + build_type,
+                         '      - name: Verify ' + build_type + '\n        shell: sh',
+                         self.LAYOUT.format(job)),
+                        ('    steps:\n', '    env:\n      BASH_ENV: /outside\n    steps:\n',
+                         self.LAYOUT.format(job)),
+                        ('    steps:\n', '    defaults:\n      run:\n        shell: sh\n    steps:\n',
+                         self.LAYOUT.format(job)),
+                        ('    steps:\n', '    continue-on-error: true\n    steps:\n',
+                         self.LAYOUT.format(job))):
+                    with self.subTest(steps=len(ci_preflight._steps(_jobs(workflow)[job])),
+                                      job=job, before=before):
+                        self.assert_refused(in_job(workflow, job, before, after), finding)
 
 
 if __name__ == '__main__':
