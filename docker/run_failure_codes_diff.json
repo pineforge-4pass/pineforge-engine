@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "d4a555dcea58c5d7a4c3a0f2223832acb04361f6eebda5f4a642226df4a5067f"
+    "catalogSha256": "00b60fe00cb9371b5e5be06f671217e3d14ed0f612434dae640bed2aabddd699"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -238,7 +238,8 @@
             "max_bars_back",
             "matrix_elements",
             "udt_objects",
-            "drawing_ids"
+            "drawing_ids",
+            "live_drawings"
           ]
         },
         {
@@ -262,7 +263,8 @@
             "box drawing ID domain exhausted",
             "label drawing ID domain exhausted",
             "linefill drawing ID domain exhausted",
-            "generic drawing ID domain exhausted"
+            "generic drawing ID domain exhausted",
+            "The script keeps more than {max} live drawings of one type; the configured drawing capacity is exceeded."
           ]
         }
       ]
