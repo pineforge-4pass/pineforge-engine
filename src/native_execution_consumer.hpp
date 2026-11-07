@@ -733,8 +733,8 @@ public:
 private:
     struct CurrentExecutionFrame {
         NativeCurrentPointView point;
-        uint64_t acceptance_cutoff = 0;
-        CurrentExecutionFrame() = default;
+        uint64_t acceptance_cutoff;
+        CurrentExecutionFrame() noexcept : point{}, acceptance_cutoff(0) {}
         CurrentExecutionFrame(const NativeCurrentPointView& at, uint64_t cutoff)
             : point(at), acceptance_cutoff(cutoff) {}
         // A callback's frame from its parts, so the optional that holds it
@@ -760,9 +760,14 @@ private:
     // At most one rests at a time: a moved level or moved units withdraw the
     // previous one under CancelReason::Superseded before the new one is born.
     struct MarginLiquidation {
-        native_order::RequestHandle handle{};
-        double level = 0.0;
-        double units = 0.0;
+        MarginLiquidation() noexcept : handle{}, level(0.0), units(0.0) {}
+        MarginLiquidation(const native_order::RequestHandle& request, double at_level,
+                          double at_units) noexcept
+            : handle(request), level(at_level), units(at_units) {}
+
+        native_order::RequestHandle handle;
+        double level;
+        double units;
     };
     // L9 generic risk ledger. Durable decision state, but only for a run that
     // declares NativeRunSpec::risk: it is folded into the continuation digest
