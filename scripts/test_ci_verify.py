@@ -4492,7 +4492,9 @@ class PrivateFixtureFloors(unittest.TestCase):
             {f'test_native_command_after_slice_{index}' for index in range(1, 9)})
         # expectation corrected: 89 -> 92, because three newly registered slow
         # population names are explicitly pinned.
-        self.assertEqual(len(ci_verify.PINNED_SLOW_TEST_ROWS), 92)
+        # expectation corrected: 92 -> 93, because the raised-boundary name
+        # adds one slow pin; the small UINT64_MAX positive control adds none.
+        self.assertEqual(len(ci_verify.PINNED_SLOW_TEST_ROWS), 93)
         self.assertEqual(LIVE_SANITIZERS_MIN_TESTS, 21)
         for name, (full, pinned) in ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS.items():
             with self.subTest(profile=name):

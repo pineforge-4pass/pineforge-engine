@@ -5576,9 +5576,13 @@ class PreflightFailures(unittest.TestCase):
         # expectation corrected: 71 -> 92 and 28 -> 49, because the actual
         # source census exposes a pre-existing 18-name direct inventory gap
         # plus three new population rows; the loop still contains 43 names.
-        self.assertEqual(inventory, [('92', '43', '49')])
-        self.assertIn('The timing list contains 43 names, and 49 additional names', text)
-        self.assertIn('making 92 distinct pinned slow names.', text)
+        # expectation corrected: 92 -> 93 and 49 -> 50, because the boundary
+        # adds one direct name to the existing group (still 39 sites).
+        # The historical 18-name gap and all four new population names are
+        # already included in 93; neither is added a second time.
+        self.assertEqual(inventory, [('93', '43', '50')])
+        self.assertIn('The timing list contains 43 names, and 50 additional names', text)
+        self.assertIn('making 93 distinct pinned slow names.', text)
 
     def test_documented_slow_rows_refuse_same_size_wrong_slice(self):
         text = (ROOT / 'docs/ci.md').read_text()

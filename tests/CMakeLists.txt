@@ -8450,10 +8450,15 @@ add_test(NAME test_o1_live_limit_lower
     COMMAND test_o1_live_limit_policy lower --limit 8)
 add_test(NAME test_o1_live_limit_invalid
     COMMAND test_o1_live_limit_policy invalid)
+add_test(NAME test_o1_live_limit_raised_boundary
+    COMMAND test_o1_live_limit_policy raised --objects 1048577 --limit 1048577)
+add_test(NAME test_o1_live_limit_uint64_max
+    COMMAND test_o1_live_limit_policy raised --objects 4096 --limit 18446744073709551615)
 set_tests_properties(
     test_o1_live_limit_raised
     test_o1_live_limit_default_unset
     test_o1_live_limit_default_zero
+    test_o1_live_limit_raised_boundary
     PROPERTIES LABELS "slow;mem")
 # --- CR-150 o1-live-limit-policy end ---
 

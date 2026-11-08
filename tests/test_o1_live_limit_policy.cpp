@@ -314,6 +314,7 @@ void expect_refusal(Observation& observation, std::vector<Id>& ids) {
     observation.invalidate_readback();
     const Stats before = store.stats();
     const auto pages_before = observation.backing->page_count();
+    const auto ids_before = ids.size();
     bool refused = false;
     try {
         const Id unexpected = store.create(sizeof(std::uint64_t), 1);
@@ -327,18 +328,19 @@ void expect_refusal(Observation& observation, std::vector<Id>& ids) {
     require(refused, "finite policy admitted N+1");
     require_unchanged(before, store.stats());
     require(observation.backing->page_count() == pages_before, "refusal extended backing");
+    require(ids.size() == ids_before, "refusal changed retained IDs");
 }
 
-void check_lower(Observation& observation, std::vector<Id>& ids) {
+Id check_finite_boundary(Observation& observation, std::vector<Id>& ids) {
     Store& store = *observation.store;
     const auto count = observation.input.objects;
     const Id next = ids.back() + 1;
-    observation.phase = "lower-N-plus-one";
+    observation.phase = "finite-N-plus-one";
     expect_refusal(observation, ids);
     require(!store.alive(next), "refusal published a partial header");
     verify_retained(observation);
 
-    observation.phase = "lower-release";
+    observation.phase = "finite-release";
     observation.invalidate_readback();
     const Id original_first = ids.front();
     const auto bytes_before = store.stats().bytes_live;
@@ -352,10 +354,16 @@ void check_lower(Observation& observation, std::vector<Id>& ids) {
     require(replacement == next, "refusal consumed an ID");
     ids.front() = replacement;
     write_marker(store, replacement, 0, count);
-    observation.phase = "lower-replacement";
+    observation.phase = "finite-replacement";
     verify_retained(observation);
     observation.report("replacement_verified");
+    return replacement;
+}
 
+void check_lower(Observation& observation, std::vector<Id>& ids) {
+    Store& store = *observation.store;
+    const auto count = observation.input.objects;
+    const Id replacement = check_finite_boundary(observation, ids);
     const Id last = ids.back();
     const auto last_index = count - 1;
     observation.phase = "lower-release-rollback";
@@ -416,6 +424,10 @@ int run_store_row(const Options& input) {
     // Keep the real fixture alive through failure reporting.
     std::unique_ptr<a5u_test::StoreFixture> fixture;
     try {
+        // expectation corrected: helper default trusted -> compared with Shape,
+        // because a fixture override must not hide the native default policy.
+        require(shape.max_live_objects == Shape{}.max_live_objects,
+                "fixture changed the native Shape default policy");
         if (input.row != "default") shape.max_live_objects = input.limit;
         else if (input.zero_policy) shape.max_live_objects = 0;
         observation.phase = "open";
@@ -432,6 +444,10 @@ int run_store_row(const Options& input) {
         require(observation.store->stats().max_live_objects == input.limit,
                 "Store did not preserve the finite limit or report unbounded policy as zero");
         if (input.row == "lower") check_lower(observation, ids);
+        // expectation corrected: raised admission only -> finite N+1 refusal,
+        // because a raised limit must enforce its boundary as well as admit N.
+        else if (input.row == "raised" && input.objects == input.limit)
+            check_finite_boundary(observation, ids);
         observation.phase = "complete";
         observation.report("passed");
         return 0;
@@ -470,12 +486,16 @@ int run_invalid(const Options& input) {
             // This is a native typed catch. No CLI rejection, invented wire
             // code, or reference to a proposed checked-field type is involved.
             observation.report("native_invalid_argument", &error);
+            // expectation corrected: assignment or open rejection -> assignment
+            // only, because rejecting an unsigned wrap at open is too late.
+            require(assigning, "negative input was rejected only after assignment");
+            require(std::string(error.what()).find("max_live_objects") != std::string::npos,
+                    "negative assignment error did not name max_live_objects");
             require(!store, "negative input published a Store");
             require(backing->page_count() == pages_before,
                     "negative input mutated the backing before rejection");
-            if (assigning)
-                require(shape.max_live_objects == original_limit,
-                        "rejected assignment changed the previous native value");
+            require(shape.max_live_objects == original_limit,
+                    "rejected assignment changed the previous native value");
             rejected = true;
         }
         require(rejected, "signed -1 assignment and Store::open both accepted negative input");
