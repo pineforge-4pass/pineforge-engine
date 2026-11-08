@@ -1086,18 +1086,19 @@ class ReleasePhaseTests(unittest.TestCase):
                 self.assertEqual(err, "::error::release transition must modify exactly VERSION "
                                  "and docker/run_failure_codes_diff.json as regular files\n")
 
-    def test_tag_refuses_untrusted_parent_parity_creators(self):
-        for login, creator_type in (("untrusted-operator", "User"), ("luisleo526", "Bot")):
-            with self.subTest(login=login, creator_type=creator_type):
-                parity = status("pineforge/parity")
-                parity["creator"] = {"login": login, "type": creator_type}
-                self.api.statuses([parity])
-                code, out, err = self.run_phase()
-                self.assertEqual(code, 1, (out, err))
-                self.assertEqual(out, "")
-                self.assertEqual(err, f"::error::API {STATUSES_API}: pineforge/parity: "
-                                 f"refused status creator (login={login!r}, "
-                                 f"type={creator_type!r})\n")
+    def test_tag_refuses_untrusted_parent_status_creators(self):
+        for context in ("pineforge/parity", "pineforge/verify"):
+            for login, creator_type in (("untrusted-operator", "User"), ("luisleo526", "Bot")):
+                with self.subTest(context=context, login=login, creator_type=creator_type):
+                    newest = status(context)
+                    newest["creator"] = {"login": login, "type": creator_type}
+                    self.api.statuses([newest, *successes()])
+                    code, out, err = self.run_phase()
+                    self.assertEqual(code, 1, (out, err))
+                    self.assertEqual(out, "")
+                    self.assertEqual(err, f"::error::API {STATUSES_API}: {context}: "
+                                     f"refused status creator (login={login!r}, "
+                                     f"type={creator_type!r})\n")
 
     def test_tag_uses_authenticated_parent_parity_and_own_ci(self):
         code, out, err = self.run_phase()
@@ -1459,7 +1460,7 @@ class GateTests(unittest.TestCase):
         self.assertIn((STATUSES_API, True, None), self.api.calls)
 
     def test_success_from_an_unknown_creator_or_wrong_type_refuses(self):
-        for index, context in enumerate(("pineforge/parity",), start=1):
+        for index, context in enumerate(("pineforge/verify", "pineforge/parity")):
             for login, creator_type in (("untrusted-operator", "User"), ("luisleo526", "Bot")):
                 with self.subTest(context=context, login=login, creator_type=creator_type):
                     self.api = FakeAPI()
@@ -1470,7 +1471,7 @@ class GateTests(unittest.TestCase):
                         f"{context}: refused status creator (login={login!r}, type={creator_type!r})")
 
     def test_newest_untrusted_creator_cannot_be_rescued_by_an_older_allowed_success(self):
-        for context in ("pineforge/parity",):
+        for context in ("pineforge/verify", "pineforge/parity"):
             with self.subTest(context=context):
                 self.api = FakeAPI()
                 newest = status(context)
@@ -1481,7 +1482,7 @@ class GateTests(unittest.TestCase):
                     f"{context}: refused status creator (login='untrusted-operator', type='User')")
 
     def test_status_without_creator_refuses(self):
-        for index, context in enumerate(("pineforge/parity",), start=1):
+        for index, context in enumerate(("pineforge/verify", "pineforge/parity")):
             with self.subTest(context=context):
                 self.api = FakeAPI()
                 rows = successes()
@@ -1490,27 +1491,30 @@ class GateTests(unittest.TestCase):
                 self.assert_refused(f"{context}: missing or malformed status creator: None")
 
     def test_malformed_creator_object_refuses(self):
-        for creator in (None, "luisleo526", ["luisleo526", "User"]):
-            with self.subTest(creator=creator):
-                self.api = FakeAPI()
-                rows = successes()
-                rows[1]["creator"] = creator
-                self.api.statuses(rows)
-                self.assert_refused(
-                    f"pineforge/parity: missing or malformed status creator: {creator!r}")
+        for index, context in enumerate(("pineforge/verify", "pineforge/parity")):
+            for creator in (None, "luisleo526", ["luisleo526", "User"]):
+                with self.subTest(context=context, creator=creator):
+                    self.api = FakeAPI()
+                    rows = successes()
+                    rows[index]["creator"] = creator
+                    self.api.statuses(rows)
+                    self.assert_refused(
+                        f"{context}: missing or malformed status creator: {creator!r}")
 
     def test_missing_or_malformed_creator_fields_refuse_without_inventing_an_identity(self):
-        for creator in ({}, {"login": "luisleo526"}, {"type": "User"},
-                        {"login": None, "type": "User"}, {"login": "luisleo526", "type": None},
-                        {"login": 17, "type": "User"}, {"login": "luisleo526", "type": ["User"]}):
-            with self.subTest(creator=creator):
-                self.api = FakeAPI()
-                rows = successes()
-                rows[1]["creator"] = creator
-                self.api.statuses(rows)
-                self.assert_refused(
-                    "pineforge/parity: refused status creator "
-                    f"(login={creator.get('login')!r}, type={creator.get('type')!r})")
+        for index, context in enumerate(("pineforge/verify", "pineforge/parity")):
+            for creator in ({}, {"login": "luisleo526"}, {"type": "User"},
+                            {"login": None, "type": "User"}, {"login": "luisleo526", "type": None},
+                            {"login": 17, "type": "User"},
+                            {"login": "luisleo526", "type": ["User"]}):
+                with self.subTest(context=context, creator=creator):
+                    self.api = FakeAPI()
+                    rows = successes()
+                    rows[index]["creator"] = creator
+                    self.api.statuses(rows)
+                    self.assert_refused(
+                        f"{context}: refused status creator "
+                        f"(login={creator.get('login')!r}, type={creator.get('type')!r})")
 
     def test_pr_parity_and_exact_ci_accept_missing_or_non_success_advisory_verify(self):
         """Parity and exact CI evidence admit every advisory verify state."""
@@ -2089,15 +2093,27 @@ class ReleaseBumpTests(unittest.TestCase):
             author={"name": "github-actions[bot]"},
             committer={"name": "github-actions[bot]"},
             verification={"verified": True})
-        for actor, trigger in (("luisleo526", "luisleo526"),
-                               ("luisleo526", "pineforge-app[bot]")):
+        for actor, trigger, diagnostic in (
+                ("luisleo526", "luisleo526",
+                 "release bump push actor must be pineforge-app[bot]"),
+                ("luisleo526", "pineforge-app[bot]",
+                 "release bump push actor must be pineforge-app[bot]"),
+                ("pineforge-app[bot]", "luisleo526",
+                 "first workflow attempt triggering_actor differs from actor")):
             with self.subTest(actor=actor, triggering_actor=trigger):
                 self.reset_bump()
                 self.api.responses[BUMP_API] = json.dumps(candidate)
                 row = push_run(actor=actor, triggering_actor=trigger)
                 self.api.responses[RUNS_API] = runs_page([row])
                 self.api.attempts(row, {1: []})
-                self.assert_refused("release bump push actor must be pineforge-app[bot]")
+                code, out, err = self.run_gate()
+                self.assertEqual(code, 1, (out, err))
+                self.assertIn("::error::", err)
+                self.assertIn(diagnostic, err)
+                self.assertEqual(out, "", "a refusal must never print a green line")
+                self.assertEqual(
+                    err, f"::error::no merged pull request associated with {SHA}; "
+                    f"release bump refused: {diagnostic}\n")
 
     def test_zero_runs_refuses(self):
         self.api.responses[RUNS_API] = runs_page([])
@@ -2288,7 +2304,8 @@ class ReleaseBumpTests(unittest.TestCase):
                 (runs_page([None]), "invalid workflow run"),
                 (runs_page([{"event": "push"}]), "invalid workflow run"),
                 (runs_page([{**push_run(), "actor": None}]), "invalid workflow actor"),
-                (runs_page([{**push_run(), "triggering_actor": {}}]), "latest metadata changed")):
+                (runs_page([{**push_run(), "triggering_actor": {}}]),
+                 "latest triggering_actor is missing or malformed")):
             with self.subTest(payload=payload):
                 self.reset_bump()
                 self.api.responses[RUNS_API] = payload
@@ -2309,15 +2326,18 @@ class ReleaseBumpTests(unittest.TestCase):
         for variant, fragment in (
                 ("red", "pineforge/parity=failure (expected success)"),
                 ("creator", "refused status creator"),
+                ("verify-creator", "pineforge/verify: refused status creator "
+                 "(login='outsider', type='User')"),
                 ("tree", f"no merged pull request head matches release tree {TREE}"),
                 ("ambiguous", "multiple merged PR heads match (#17, #18)")):
             with self.subTest(variant=variant):
                 self.reset_bump()
                 if variant == "red":
                     self.api.statuses([status("pineforge/parity", "failure"), *successes()])
-                elif variant == "creator":
+                elif variant in ("creator", "verify-creator"):
                     rows = successes()
-                    rows[1]["creator"] = {"login": "outsider", "type": "User"}
+                    rows[0 if variant == "verify-creator" else 1]["creator"] = {
+                        "login": "outsider", "type": "User"}
                     self.api.statuses(rows)
                 elif variant == "tree":
                     self.api.responses[f"repos/{REPO}/commits/{HEAD}"] = json.dumps(
@@ -6638,37 +6658,223 @@ class ReceiptEvidenceTests(unittest.TestCase):
         self.assertTrue(data["run_validations"][0]["complete"])
         self.assert_decision_binding(data)
 
-    def test_failed_and_missing_verify_are_recorded_on_pr_and_main_proof_paths(self):
-        for watcher in (False, True):
-            for state in (None, "failure"):
-                with self.subTest(watcher=watcher, state=state):
-                    self.api = FakeAPI()
-                    self.api.ci_post(self.row, self.jobs)
-                    contexts = {"pineforge/parity": "success"}
-                    rows = [status("pineforge/parity")]
-                    if state is not None:
-                        contexts["pineforge/verify"] = state
-                        rows.insert(0, {**status("pineforge/verify", state), "id": 401,
-                                        "target_url": "https://example.invalid/verify/401",
-                                        "created_at": "2026-10-25T11:00:00Z"})
-                    self.api.statuses(rows)
-                    with mock.patch.object(ci_release_gate, "MAIN_PROOF_WATCHER_FIRST_SHA",
-                                           SHA if watcher else None), \
-                            mock.patch.object(ci_release_gate, "read_main_proof",
-                                              return_value=contexts):
-                        self.git.side_effect = None
-                        self.git.return_value = True
-                        code, out, err = self.run_receipt()
-                    self.assertEqual((code, err), (0, ""), out)
-                    advisory = self.receipt()["advisory_verify"]
-                    self.assertEqual(advisory["presence"], state is not None)
-                    self.assertEqual(advisory["state"], state or "missing")
-                    self.assertEqual(advisory["sha"], SHA if watcher else HEAD)
-                    self.assertEqual(advisory["tree"], TREE)
-                    self.assertIn(f"pineforge/verify={state or 'missing'} (advisory)", out)
-                    if not watcher and state:
-                        self.assertEqual(advisory["status"]["id"], 401)
-                        self.assertEqual(advisory["status"]["creator"]["login"], "luisleo526")
+    def test_advisory_states_and_absence_are_recorded_on_each_parity_path(self):
+        for phase in ("bump", "tag"):
+            for watcher in (False, True):
+                for state in (None, "success", "pending", "failure", "error", "missing"):
+                    with self.subTest(phase=phase, watcher=watcher, state=state):
+                        self.api = FakeAPI()
+                        if phase == "tag":
+                            self.api.release_bump()
+                        self.api.ci_post(self.row, self.jobs)
+                        proof_sha = BUMP_PARENT if phase == "tag" else SHA
+                        contexts = {"pineforge/parity": "success"}
+                        rows = [status("pineforge/parity")]
+                        if state is not None:
+                            contexts["pineforge/verify"] = state
+                            rows.insert(0, {**status("pineforge/verify", state), "id": 401,
+                                            "target_url": "https://example.invalid/verify/401",
+                                            "created_at": "2026-10-25T11:00:00Z"})
+                        self.api.statuses(rows)
+                        with mock.patch.object(ci_release_gate, "MAIN_PROOF_WATCHER_FIRST_SHA",
+                                               proof_sha if watcher else None), \
+                                mock.patch.object(ci_release_gate, "read_main_proof",
+                                                  return_value=contexts) as reader:
+                            self.git.side_effect = None
+                            self.git.return_value = True
+                            code, out, err = self.run_receipt(
+                                phase=phase, dispatch=BUMP_PARENT if phase == "tag" else "")
+                        self.assertEqual((code, err), (0, ""), out)
+                        data = self.receipt()
+                        self.assertEqual(data["gate"]["outcome"], "admitted")
+                        self.assertEqual(data["required_contexts"], ["pineforge/parity"])
+                        advisory = data["advisory_verify"]
+                        self.assertEqual(advisory["presence"], state is not None)
+                        self.assertEqual(advisory["state"], state or "missing")
+                        self.assertEqual(advisory["sha"], proof_sha if watcher else HEAD)
+                        self.assertEqual(advisory["tree"], TREE)
+                        self.assertIn(f"pineforge/verify={state or 'missing'} (advisory)", out)
+                        if watcher:
+                            reader.assert_called_once_with(REPO, proof_sha)
+                            self.assertNotIn((STATUSES_API, True, None), self.api.calls)
+                        else:
+                            reader.assert_not_called()
+                            if state:
+                                self.assertEqual(advisory["status"]["id"], 401)
+                                self.assertEqual(advisory["status"]["creator"]["login"],
+                                                 "luisleo526")
+
+    def test_invalid_advisory_states_refuse_before_output_or_receipt_recording_on_each_path(self):
+        for phase in ("bump", "tag"):
+            for watcher in (False, True):
+                for state in (None, "", True, 1, [], {}, "unknown", "neutral", "SUCCESS",
+                              " success", "success ", "success\n::notice::untrusted-status",
+                              "pending\r::error::untrusted-status",
+                              "failure\r\n::warning::untrusted-status"):
+                    with self.subTest(phase=phase, watcher=watcher, state=state):
+                        self.api = FakeAPI()
+                        if phase == "tag":
+                            self.api.release_bump()
+                        self.api.ci_post(self.row, self.jobs)
+                        self.api.statuses([status("pineforge/verify", state),
+                                           status("pineforge/parity")])
+                        proof_sha = BUMP_PARENT if phase == "tag" else SHA
+                        with mock.patch.object(ci_release_gate, "MAIN_PROOF_WATCHER_FIRST_SHA",
+                                               proof_sha if watcher else None), \
+                                mock.patch.object(ci_release_gate, "read_main_proof",
+                                                  return_value={"pineforge/parity": "success",
+                                                                "pineforge/verify": state}):
+                            self.git.side_effect = None
+                            self.git.return_value = True
+                            code, out, err = self.run_receipt(
+                                phase=phase, dispatch=BUMP_PARENT if phase == "tag" else "")
+                        self.assertEqual((code, out), (1, ""), err)
+                        if not isinstance(state, str) or not state:
+                            diagnostic = (
+                                f"main-proof receipt for {proof_sha}: invalid or empty context map"
+                                if watcher else
+                                f"API {STATUSES_API} returned invalid status state for pineforge/verify")
+                        else:
+                            diagnostic = "invalid advisory status state for pineforge/verify"
+                        self.assertEqual(err, f"::error::{diagnostic}\n")
+                        data = self.receipt()
+                        self.assertEqual(data["gate"]["outcome"], "refused")
+                        self.assertEqual(data["gate"]["reasons"], [{
+                            "kind": "ReleaseGateError",
+                            "check": ("authenticated release bump and parent parity"
+                                      if phase == "tag" else
+                                      "main-proof parity" if watcher else "PR head parity")}])
+                        self.assertIsNone(data["advisory_verify"]["presence"])
+                        self.assertEqual(data["advisory_verify"]["state"], "unread")
+                        self.assertFalse(data["advisory_verify"]["complete"])
+                        self.assertNotIn("untrusted-status", self.path.read_text())
+                        self.assert_decision_binding(data)
+
+    def test_removing_verify_creator_authentication_admits_forged_advisory_records(self):
+        source = Path(ci_release_gate.__file__).read_text()
+        before = ('        if context in (*CONTEXTS, "pineforge/verify"):\n'
+                  '            creator = row.get("creator")\n')
+        after = ('        if context in CONTEXTS:\n'
+                 '            creator = row.get("creator")\n')
+        self.assertEqual(source.count(before), 1, "mutation must have one source target")
+        mutated = source.replace(before, after, 1)
+        self.assertNotEqual(mutated, source)
+        namespace = {"__name__": "ci_release_gate_verify_creator_mutant",
+                     "__file__": ci_release_gate.__file__}
+        exec(compile(mutated, ci_release_gate.__file__, "exec"), namespace)
+        cases = (
+            ("outsider", {"login": "untrusted-operator", "type": "User"},
+             "refused status creator (login='untrusted-operator', type='User')"),
+            ("wrong-type", {"login": "luisleo526", "type": "Bot"},
+             "refused status creator (login='luisleo526', type='Bot')"),
+            ("missing", None, "missing or malformed status creator: None"),
+            ("malformed-object", ["luisleo526", "User"],
+             "missing or malformed status creator: ['luisleo526', 'User']"),
+            ("malformed-field", {"login": "luisleo526", "type": ["User"]},
+             "refused status creator (login='luisleo526', type=['User'])"))
+        for phase in ("bump", "tag"):
+            for state in ("success", "pending", "failure", "error"):
+                for name, creator, diagnostic in cases:
+                    with self.subTest(phase=phase, state=state, creator=name):
+                        self.api = FakeAPI()
+                        if phase == "tag":
+                            self.api.release_bump()
+                        self.api.ci_post(self.row, self.jobs)
+                        newest = status("pineforge/verify", state)
+                        newest["id"] = 401
+                        if name == "missing":
+                            del newest["creator"]
+                        else:
+                            newest["creator"] = creator
+                        # An older authenticated success cannot rescue the newest status.
+                        self.api.statuses([newest, *successes()])
+                        dispatch = BUMP_PARENT if phase == "tag" else ""
+                        code, out, err = self.run_receipt(phase=phase, dispatch=dispatch)
+                        self.assertEqual((code, out), (1, ""), err)
+                        self.assertEqual(err, f"::error::API {STATUSES_API}: pineforge/verify: "
+                                         f"{diagnostic}\n")
+                        self.assertEqual(self.receipt()["gate"]["outcome"], "refused")
+                        out, err = io.StringIO(), io.StringIO()
+                        self.api.calls.clear()
+                        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                            code = namespace["main"](
+                                ["gate", "--repo", REPO, "--sha", SHA, "--ref", "refs/heads/main",
+                                 "--phase", phase, "--dispatch-sha", dispatch,
+                                 "--receipt", str(self.path)],
+                                api=self.api, git=self.git, history=self.history,
+                                release_git=ReleaseSnapshot())
+                        self.assertEqual((code, err.getvalue()), (0, ""), out.getvalue())
+                        prefix = (f"release bump {SHA}; parent {BUMP_PARENT}; "
+                                  if phase == "tag" else "")
+                        self.assertEqual(out.getvalue(), (
+                            f"release gate green: {prefix}PR #17 head {HEAD}; "
+                            f"pineforge/parity=success; tree {TREE}; "
+                            f"pineforge/verify={state} (advisory); "
+                            f"ci-post run {self.row['id']} for {SHA}\n"))
+                        data = self.receipt()
+                        self.assertEqual(data["gate"]["outcome"], "admitted")
+                        self.assertTrue(data["advisory_verify"]["presence"])
+                        self.assertEqual(data["advisory_verify"]["state"], state)
+                        self.assertEqual(data["advisory_verify"]["status"]["id"], 401)
+                        self.assert_decision_binding(data)
+
+    def test_latest_triggering_actor_shape_is_distinct_from_changed_attempt_metadata(self):
+        missing = {key: value for key, value in self.row.items() if key != "triggering_actor"}
+        malformed = [missing, *[
+            {**self.row, "triggering_actor": actor}
+            for actor in (None, {}, [], "release-maintainer", {"login": None},
+                          {"login": 17}, {"login": ""}, {"login": "human\nactor"})]]
+        for row in malformed:
+            with self.subTest(triggering_actor=row.get("triggering_actor")):
+                api = FakeAPI()
+                api.attempts(row, {1: self.jobs})
+                record = {}
+                with self.assertRaises(ci_release_gate.ReleaseGateError) as refused:
+                    ci_release_gate._collect_attempts(api, REPO, row, record)
+                self.assertEqual(str(refused.exception), "ci-post: incomplete attempt history: "
+                                 "latest triggering_actor is missing or malformed")
+                self.assertFalse(record["history_complete"])
+                self.assertEqual(record["attempt_history"], [])
+                self.assertEqual(api.calls, [])
+        api = FakeAPI()
+        api.attempts(self.row, {1: self.jobs})
+        record = {}
+        ci_release_gate._collect_attempts(api, REPO, self.row, record)
+        self.assertTrue(record["history_complete"])
+        api = FakeAPI()
+        api.attempts(self.row, {1: self.jobs},
+                     metadata={1: {"conclusion": "failure"}})
+        record = {}
+        with self.assertRaises(ci_release_gate.ReleaseGateError) as refused:
+            ci_release_gate._collect_attempts(api, REPO, self.row, record)
+        self.assertEqual(str(refused.exception),
+                         "ci-post: incomplete attempt history: latest metadata changed")
+        self.assertFalse(record["history_complete"])
+        self.assertEqual(api.calls[-1], (attempt_api(self.row["id"], 1), False, None))
+
+    def test_unexpected_exceptions_write_sanitized_class_and_checkpoint_refusals(self):
+        secret = "private-unexpected-exception-credential"
+        for error in (KeyError, TypeError, RuntimeError):
+            with self.subTest(error=error.__name__):
+                self.history.responses[SHA] = error(secret)
+                code, out, err = self.run_receipt()
+                self.assertEqual((code, out), (1, ""), err)
+                self.assertEqual(err, f"::error::unexpected {error.__name__} "
+                                 "at ci-post and attempt history\n")
+                data = self.receipt()
+                self.assertEqual(data["gate"]["outcome"], "refused")
+                self.assertEqual(data["gate"]["reasons"], [{
+                    "kind": error.__name__, "check": "ci-post and attempt history"}])
+                self.assertNotIn(secret, self.path.read_text())
+                self.assertNotIn(secret, out + err)
+                self.assert_decision_binding(data)
+                self.history.responses[SHA] = (OTHER_HEAD, ["src/release.cpp"])
+                code, out, err = self.run_receipt()
+                self.assertEqual((code, err), (0, ""), out)
+                data = self.receipt()
+                self.assertEqual(data["gate"]["outcome"], "admitted")
+                self.assertEqual(data["gate"]["reasons"], [])
+                self.assertEqual(data["run_validations"][-1]["outcome"], "stable")
 
     def test_watcher_enabled_bump_cannot_rebump_an_app_push_without_a_pr(self):
         self.api.release_bump()

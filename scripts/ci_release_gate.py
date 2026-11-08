@@ -322,7 +322,7 @@ def _collect_attempts(api: API, repo: str, run: dict, record: dict, *,
         _actor_login(run.get("triggering_actor"))
     except ReleaseGateError as exc:
         raise ReleaseGateError(
-            "ci-post: incomplete attempt history: latest metadata changed") from exc
+            "ci-post: incomplete attempt history: latest triggering_actor is missing or malformed") from exc
     _observe_run(api, repo, run, record)
     for attempt in record["expected_attempts"]:
         audit = {"requested_attempt": attempt, "run": None, "jobs": None,
@@ -1260,6 +1260,11 @@ def _require_full_contexts(latest: dict, subject: str) -> str:
 def _context_evidence(latest: dict, *, sha: str, tree: str | None,
                        source: str, records: dict | None = None,
                        receipt: dict | None = None) -> str:
+    verify = latest.get("pineforge/verify", "missing")
+    # GitHub commit-status states plus the normalized absence sentinel.
+    # Reject before either the receipt or the Actions log can contain the value.
+    if not isinstance(verify, str) or verify not in ("success", "pending", "failure", "error", "missing"):
+        raise ReleaseGateError("invalid advisory status state for pineforge/verify")
     if receipt is not None:
         receipt["contexts"] = {
             context: {"presence": context in latest, "state": latest.get(context, "missing"),
@@ -1269,7 +1274,7 @@ def _context_evidence(latest: dict, *, sha: str, tree: str | None,
         receipt["advisory_verify"] = {
             "context": "pineforge/verify", "complete": True,
             **receipt["contexts"]["pineforge/verify"]}
-    return f"pineforge/verify={latest.get('pineforge/verify', 'missing')} (advisory)"
+    return f"pineforge/verify={verify} (advisory)"
 
 
 def _main_proof_evidence(repo: str, sha: str, *, receipt: dict | None = None) -> str:
@@ -1510,6 +1515,16 @@ def main(argv=None, *, api: API | None = None, git: Git | None = None,
             receipt["gate"] = {
                 "outcome": "refused",
                 "reasons": [{"kind": type(exc).__name__, "check": receipt["checkpoint"]}]}
+    except Exception as exc:
+        # Unexpected implementation/shape failures are refusals too. Never
+        # expose their text, which can include credentials or arbitrary input.
+        checkpoint = receipt["checkpoint"] if receipt is not None else args.mode
+        print(f"::error::unexpected {type(exc).__name__} at {checkpoint}", file=sys.stderr)
+        code = 1
+        if receipt is not None:
+            receipt["gate"] = {
+                "outcome": "refused",
+                "reasons": [{"kind": type(exc).__name__, "check": checkpoint}]}
     if receipt is not None:
         _bind_response_inventory(receipt)
     if args.mode == "gate" and args.receipt is not None:
