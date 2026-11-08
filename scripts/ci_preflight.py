@@ -3017,7 +3017,7 @@ def clang_build_workflow_findings(workflow: str) -> list[str]:
 set -euo pipefail
 mkdir clang-build-logs
 date -u --iso-8601=seconds | tee clang-build-logs/started-at.log
-git rev-parse HEAD HEAD^{tree} | tee clang-build-logs/identity-before.log
+git rev-parse HEAD 'HEAD^{tree}' | tee clang-build-logs/identity-before.log
 test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 uname -a | tee clang-build-logs/machine.log
 test "$(uname -m)" = x86_64
@@ -3090,7 +3090,7 @@ cmake --build build-clang18 --parallel 4 2>&1 | tee clang-build-logs/build.log
 set -euo pipefail
 mkdir -p clang-build-logs
 date -u --iso-8601=seconds | tee clang-build-logs/finished-at.log
-git rev-parse HEAD HEAD^{tree} 2>&1 | tee clang-build-logs/identity-after.log
+git rev-parse HEAD 'HEAD^{tree}' 2>&1 | tee clang-build-logs/identity-after.log
 test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 cmp clang-build-logs/identity-before.log clang-build-logs/identity-after.log
 test -s clang-build-logs/clang-version.log
