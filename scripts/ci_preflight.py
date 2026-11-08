@@ -351,6 +351,7 @@ GKE_PR_ARM_JOB_COMMANDS = {**JOB_COMMANDS['gke-pr.yml'], 'build-arm': VERIFY}
 # matrix pin, checked per job.
 HOSTED_JOB_RUNNERS = {
     'ci.yml': {'authz': 'ubuntu-24.04'},
+    'clang-build.yml': {'clang-build': 'ubuntu-24.04'},
     'gke-pr.yml': {**dict.fromkeys(('admit', 'legs', 'result'), 'ubuntu-24.04'),
                    **GKE_JOB_RUNNERS['gke-pr.yml']},
     'ci-post.yml': GKE_JOB_RUNNERS['ci-post.yml'],

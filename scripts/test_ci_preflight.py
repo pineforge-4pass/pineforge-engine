@@ -7106,6 +7106,7 @@ exit "$lookup_exit"
         self.assertEqual(ci_preflight.PREBUILT_ARM_RUNNER, 'ubuntu-22.04-arm')
         self.assertEqual(ci_preflight.HOSTED_JOB_RUNNERS,
                          {'ci.yml': {'authz': 'ubuntu-24.04'},
+                          'clang-build.yml': {'clang-build': 'ubuntu-24.04'},
                           'gke-pr.yml': {'admit': 'ubuntu-24.04', 'legs': 'ubuntu-24.04',
                                          'result': 'ubuntu-24.04',
                                          **{job: label for job, label in EXPECTED_GKE_JOBS['gke-pr.yml'].items()
@@ -12989,6 +12990,11 @@ class ClangBuildWorkflowControls(unittest.TestCase):
         self.assertIn(f'{self.NAME} {finding}', self.findings(changed))
 
     def test_workflow_is_accepted_through_runner_entry_point(self):
+        self.assertEqual(ci_preflight.HOSTED_JOB_RUNNERS.get(self.NAME),
+                         {'clang-build': HOSTED_X86})
+        self.assertEqual(ci_preflight._job_values(_jobs(self.workflow)['clang-build'],
+                                                 'runs-on', unquote=False),
+                         [HOSTED_X86])
         self.assertEqual(self.workflow.count('-DPINEFORGE_BUILD_TESTS=ON'), 1)
         self.assertNotIn('-DPINEFORGE_BUILD_TESTS=OFF', self.workflow)
         self.assertEqual(self.findings(self.workflow), [])
@@ -13115,6 +13121,18 @@ class ClangBuildWorkflowControls(unittest.TestCase):
     def test_native_single_job_has_no_timeout_or_target_overrides(self):
         for before, after in (
                 ('runs-on: ubuntu-24.04', 'runs-on: ubuntu-24.04-arm'),
+                ('runs-on: ubuntu-24.04', "runs-on: 'ubuntu-24.04'"),
+                ('runs-on: ubuntu-24.04', 'runs-on: "ubuntu-24.04"'),
+                ('runs-on: ubuntu-24.04', 'runs-on: ubuntu-latest'),
+                ('runs-on: ubuntu-24.04', 'runs-on: ubuntu-22.04'),
+                ('runs-on: ubuntu-24.04', f'runs-on: {LEGACY_PR_RUNNER}'),
+                ('runs-on: ubuntu-24.04', f'runs-on: {GKE_2}'),
+                ('runs-on: ubuntu-24.04', f'runs-on: {GKP_2}'),
+                ('runs-on: ubuntu-24.04', f'runs-on: {RELEASE_RUNNER}'),
+                ('runs-on: ubuntu-24.04',
+                 "runs-on: ${{ fromJSON('ubuntu-24.04') || 'ubuntu-24.04' }}"),
+                ('runs-on: ubuntu-24.04',
+                 "runs-on: ${{ inputs.runner || 'ubuntu-24.04' }}"),
                 ('    steps:\n', '    timeout-minutes: 15\n    steps:\n'),
                 ('    steps:\n',
                  '    strategy:\n      matrix:\n        compiler: [clang, gcc]\n    steps:\n'),
