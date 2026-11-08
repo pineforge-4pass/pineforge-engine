@@ -5573,9 +5573,12 @@ class PreflightFailures(unittest.TestCase):
         inventory = re.findall(
             r'pins all (\d+) source-labelled names: (\d+) from the\n'
             r'`PINEFORGE_PR_SLOW_TESTS` loop and (\d+) direct CMake', text)
-        self.assertEqual(inventory, [('71', '43', '28')])
-        self.assertIn('The timing list contains 43 names, and 28 additional names', text)
-        self.assertIn('making 71 distinct pinned slow names.', text)
+        # expectation corrected: 71 -> 92 and 28 -> 49, because the actual
+        # source census exposes a pre-existing 18-name direct inventory gap
+        # plus three new population rows; the loop still contains 43 names.
+        self.assertEqual(inventory, [('92', '43', '49')])
+        self.assertIn('The timing list contains 43 names, and 49 additional names', text)
+        self.assertIn('making 92 distinct pinned slow names.', text)
 
     def test_documented_slow_rows_refuse_same_size_wrong_slice(self):
         text = (ROOT / 'docs/ci.md').read_text()
