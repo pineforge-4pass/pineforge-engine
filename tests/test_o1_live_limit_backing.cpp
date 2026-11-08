@@ -139,7 +139,7 @@ void check_backing_failure() {
   require(store->read(replacement, 0, &actual, sizeof actual) == sizeof actual && actual == 0,
           "replacement payload is not a fresh zero-filled object");
   require(backing.page_count() <= QuotaBacking::kPageQuota, "recovery bypassed physical quota");
-  require(typed, "physical refusal has no carried typed run-failure code; report to supervisor");
+  require(typed, "physical refusal has no carried typed run-failure code");
 }
 } // namespace
 

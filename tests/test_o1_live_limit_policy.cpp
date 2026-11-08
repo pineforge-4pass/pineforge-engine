@@ -1,6 +1,6 @@
-// Proposed native live-object contract, using only the baseline Shape/Store API.
-// Source preparation only: admission above the former cap needs disk capacity
-// measured on spark2. Unexpected admission refusals and infrastructure failures
+// Native live-object policy, using the Shape/Store API.
+// Admission above the former cap needs sufficient disk-backed capacity.
+// Unexpected admission refusals and infrastructure failures
 // never count as PASS.
 //
 // Rows:
