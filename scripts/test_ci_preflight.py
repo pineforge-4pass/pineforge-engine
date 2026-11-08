@@ -415,32 +415,8 @@ def in_step(workflow, job, name, before, after):
     return workflow.replace(step, step.replace(before, after, 1), 1)
 
 
-def hosted_matrix_release_workflow(workflow):
-    """Retain #768's exact matrix form as a rollback input, distinct from Option C."""
-    if 'prebuilt' in _jobs(workflow):
-        return workflow
-    start = workflow.index('  prebuilt-x86:\n')
-    end = workflow.index('  # Notify the pineforge-release', start)
-    header = ('    needs: release\n    permissions:\n'
-              '      contents: write   # gh release upload\n'
-              + ci_preflight.RELEASE_STRATEGY
-              + '    runs-on: ${{ matrix.runner }}\n\n    steps:\n')
-    workflow = (workflow[:start] + '  prebuilt:\n' + header
-                + ci_preflight.RELEASE_PREBUILT_STEPS + '\n' + workflow[end:])
-    workflow = workflow.replace('permissions:\n  contents: read\n',
-                                'permissions:\n  contents: write\n', 1)
-    for job in ('release', 'notify-hub'):
-        body = _jobs(workflow)[job]
-        changed = re.sub(r'^    permissions:\n      contents: (read|write)\n',
-                         '', body, count=1, flags=re.MULTILINE)
-        workflow = workflow.replace(body, changed, 1)
-    return workflow.replace('    needs: [release, upload]\n',
-                            '    needs: [release, prebuilt]\n', 1)
-
-
 def legacy_release_workflow(workflow):
-    """Keep the isolated-form fixtures after the shipped workflow moves hosted."""
-    workflow = hosted_matrix_release_workflow(workflow)
+    """Transform the supplied hosted matrix into the prior isolated form."""
     for job in ('release', 'notify-hub'):
         workflow = in_job(workflow, job, runner_declaration(HOSTED_X86),
                           runner_declaration(RELEASE_RUNNER))
@@ -797,7 +773,8 @@ class ProtectedGkeRunners(unittest.TestCase):
     def workflows(self, *, legacy_release=False):
         workflows = {path.name: path.read_text()
                      for path in (ROOT / '.github/workflows').glob('*.yml')}
-        workflows['release.yml'] = hosted_matrix_release_workflow(workflows['release.yml'])
+        workflows['release.yml'] = (
+            ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
         if legacy_release:
             workflows['release.yml'] = legacy_release_workflow(workflows['release.yml'])
         return workflows
@@ -1321,9 +1298,11 @@ class PrebuiltCredentialAdmission(unittest.TestCase):
     def setUp(self):
         self.workflows = {path.name: path.read_text()
                           for path in (ROOT / '.github/workflows').glob('*.yml')}
-        # These methods retain the prior matrix admission target; OptionCAdmission
-        # below reads the actual split workflow separately.
-        self.shipped = hosted_matrix_release_workflow(self.workflows['release.yml'])
+        # The original method IDs retain the previously shipped matrix target.
+        # Keep the actual split workflow bound separately.
+        self.actual = self.workflows['release.yml']
+        self.shipped = (
+            ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
         self.release = legacy_release_workflow(self.shipped)
 
     def findings(self, workflow, *, name='release.yml'):
@@ -1334,12 +1313,19 @@ class PrebuiltCredentialAdmission(unittest.TestCase):
             return ci_preflight.runner_findings(workflows)
 
     def test_shipped_prebuilt_is_token_only_without_deployment_environment(self):
+        for job in ('prebuilt-x86', 'prebuilt-arm'):
+            self.assertEqual(ci_preflight._job_values(_jobs(self.actual)[job], 'environment'), [])
+        self.assertEqual(self.findings(self.actual), [])
         body = _jobs(self.shipped)['prebuilt']
         self.assertEqual(ci_preflight._job_values(body, 'environment'), [])
         self.assertIsNone(ci_preflight.GKP_JOB_ENVIRONMENTS['release.yml'].get('prebuilt'))
         self.assertEqual(self.findings(self.shipped), [])
 
     def test_shipped_inherited_release_tag_binding_is_not_a_shell_env_override(self):
+        self.assertEqual(ci_preflight._job_block(self.actual, 'env'),
+                         ['env:', '  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"'])
+        self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(self.actual), [])
+        self.assertEqual(self.findings(self.actual), [])
         self.assertEqual(ci_preflight._job_block(self.shipped, 'env'),
                          ['env:', '  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"'])
         self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(self.shipped), [])
@@ -1820,7 +1806,9 @@ class OptionCAdmission(unittest.TestCase):
                 self.assertEqual(
                     [step.rstrip('\n') for step in ci_preflight._steps(actual)],
                     [step.rstrip('\n') for step in ci_preflight._steps(expected)])
-        matrix = hosted_matrix_release_workflow(self.workflow)
+        current = (ROOT / 'scripts/fixtures/ci_preflight/release_split_hosted_2167.yml').read_text()
+        self.assertEqual(self.findings(current), [])
+        matrix = (ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
         self.assertEqual(self.findings(matrix), [])
         self.assertEqual(self.findings(legacy_release_workflow(matrix)), [])
         hybrid = self.workflow
@@ -2122,7 +2110,8 @@ class HostedReleaseAdmission(unittest.TestCase):
                          'promote-baseline.yml')
             if name not in named
         }
-        self.legacy = legacy_release_workflow(self.others['release.yml'])
+        matrix = (ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
+        self.legacy = legacy_release_workflow(matrix)
 
     def findings(self, workflow):
         return ci_workflow_findings(
@@ -3801,8 +3790,8 @@ class PostLinuxBuildPolicy(unittest.TestCase):
 
     def test_release_prebuilt_refuses_retired_macos_steps(self):
         # Retain the matrix rollback refusal target after splitting the source.
-        release = hosted_matrix_release_workflow(
-            (ROOT / '.github/workflows/release.yml').read_text())
+        release = (ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
+        self.assertEqual(ci_preflight.runner_findings({'release.yml': release}), [])
         for step in ("      - name: Install Eigen3 (macOS)\n"
                      "        if: runner.os == 'macOS'\n"
                      "        run: brew install eigen\n",
@@ -5060,7 +5049,9 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.assertEqual(ci_preflight.RUNNER_ALLOWLIST_REPOSITORY, self.REPOSITORY)
         self.assertEqual([line for line in lines if line.startswith('advisory:')], [])
         release = self.workflows / 'release.yml'
-        release.write_text(hosted_matrix_release_workflow(release.read_text()))
+        # Restore the historical matrix explicitly after checking the real tree.
+        release.write_text(
+            (ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text())
         code, lines = self.run_stage()
         self.assertEqual(code, 1, lines)
         self.assertCountEqual(self.failures(lines), [
@@ -5393,20 +5384,21 @@ class PreflightFailures(unittest.TestCase):
     def ci_sources(self):
         return [(ROOT / path).read_text() for path in CI_SOURCES]
 
-    def other_sources(self):
-        """Every other workflow file, by name: ci_workflow_findings' ``others``."""
+    def other_sources(self, *, release_path='.github/workflows/release.yml'):
+        """Read real workflows, with an explicit release input for historical tests."""
         named = {Path(path).name for path in CI_SOURCES}
         workflows = {path.name: path.read_text()
                      for path in sorted((ROOT / '.github/workflows').iterdir())
                      if path.suffix in ('.yml', '.yaml') and path.name not in named}
-        # Preserve every existing matrix mutation target after the source split.
-        workflows['release.yml'] = hosted_matrix_release_workflow(workflows['release.yml'])
+        workflows['release.yml'] = (ROOT / release_path).read_text()
         return workflows
 
     def workflow_sources(self, *, legacy_release=False):
+        """Use the canonical matrix for historical routing inventory mutations."""
         workflows = {Path(path).name: contents
                      for path, contents in zip(CI_SOURCES, self.ci_sources())
-                     if path.endswith(('.yml', '.yaml'))} | self.other_sources()
+                     if path.endswith(('.yml', '.yaml'))} | self.other_sources(
+                         release_path='scripts/fixtures/ci_preflight/release_legacy.yml')
         if legacy_release:
             workflows['release.yml'] = legacy_release_workflow(workflows['release.yml'])
         return workflows
@@ -8800,7 +8792,10 @@ finally:
                     self.assertIn(f'{name} {finding}; use the GCP fleet or hosted exceptions', findings)
 
     def test_release_jobs_require_isolation_and_reject_pr_triggers(self):
-        original, others = self.ci_sources(), self.other_sources()
+        # Preserve the historical matrix's exact isolation and trigger targets.
+        original = self.ci_sources()
+        others = self.other_sources(
+            release_path='scripts/fixtures/ci_preflight/release_legacy.yml')
         release = others['release.yml']
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
         for event in ('pull_request', 'pull_request_target', 'push'):
@@ -9108,7 +9103,9 @@ finally:
 
     def test_github_token_alone_and_credential_comments_keep_the_pool(self):
         self.maxDiff = None
-        original, others = self.ci_sources(), self.other_sources()
+        original = self.ci_sources()
+        others = self.other_sources(
+            release_path='scripts/fixtures/ci_preflight/release_legacy.yml')
         for reference in ('secrets.GITHUB_TOKEN', "secrets['GITHUB_TOKEN']"):
             workflow = self.github_token_pool_workflow(reference)
             with self.subTest(reference=reference):
@@ -9149,7 +9146,8 @@ finally:
         target_case = type(self)('test_github_token_alone_and_credential_comments_keep_the_pool')
         with mock.patch.object(ci_preflight, '_holds_credentials', namespace['_holds_credentials']):
             findings = ci_workflow_findings(
-                *self.ci_sources(), others={**self.other_sources(),
+                *self.ci_sources(), others={**self.other_sources(
+                    release_path='scripts/fixtures/ci_preflight/release_legacy.yml'),
                                            'token.yml': self.github_token_pool_workflow('secrets.GITHUB_TOKEN')})
             # The former assertIn still passes on this actual wrong classifier.
             self.assertIn('token.yml job token may use GKE routing only at its exact pinned job and label',
@@ -9185,8 +9183,13 @@ finally:
                 self.assertIn(gke_finding, diagnostic)
 
     def test_today_release_and_deployment_jobs_pass_only_on_their_pinned_routes(self):
+        # Keep actual HEAD admission before the historical matrix routing rows.
+        self.assertEqual(ci_workflow_findings(
+            *self.ci_sources(), others=self.other_sources()), [])
         self.assertEqual(ci_preflight.runner_findings(self.light_workflows()), [])
-        original, others = self.ci_sources(), self.other_sources()
+        original = self.ci_sources()
+        others = self.other_sources(
+            release_path='scripts/fixtures/ci_preflight/release_legacy.yml')
         workflows = {'docs.yml': original[5], 'promote-baseline.yml': original[2],
                      'release.yml': others['release.yml']}
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
@@ -9194,8 +9197,8 @@ finally:
         for name, jobs in (('docs.yml', ('build',)), ('promote-baseline.yml', ('promote-guard', 'promote')),
                            ('release.yml', ('release', 'prebuilt', 'notify-hub'))):
             for job in jobs:
-                # The shipped release and notify-hub jobs are hosted; the prebuilt
-                # matrix still contains the protected x86_64 artifact cell.
+                # The historical hosted release/notify form keeps the protected
+                # x86_64 artifact cell in its prebuilt matrix.
                 before = HOSTED_MATRIX_RUNNER if job == 'prebuilt' else HOSTED_X86
                 after = (PR_RUNNER if job == 'prebuilt' else
                          'ubuntu-latest' if name in ('docs.yml', 'promote-baseline.yml')
@@ -9231,38 +9234,76 @@ finally:
                 self.assertIn(f'{name} job {job} must not set PF_CI_LABELS on {route}', findings)
 
     def test_release_dry_run_never_reaches_the_hub_dispatch(self):
-        # Owner, the 1.6.2 dry cut: the hub's receivers are disabled, so a
-        # rehearsal that reached notify-hub would dispatch into nothing. The
-        # job-level guard is the only thing between a dry run and that call.
+        # Both release forms must refuse a notify job without its dry-run guard.
         original, others = self.ci_sources(), self.other_sources()
-        release = others['release.yml']
-        self.assertEqual(ci_workflow_findings(*original, others=others), [])
-        finding = ('release.yml job notify-hub must carry '
-                   "if: ${{ inputs.phase == 'tag' && !inputs.dry_run }} "
-                   'so phase 1 and dry runs dispatch nothing')
-        self.assertEqual(ci_preflight._jobs(release)['notify-hub'].count(
-            "    if: ${{ inputs.phase == 'tag' && !inputs.dry_run }}\n"), 1)
-        for after in ('', '    if: ${{ always() }}\n',
-                      '    if: ${{ inputs.dry_run }}\n',
-                      '    if: ${{ !inputs.dry_run || inputs.dry_run }}\n',
-                      "    if: '!inputs.dry_run'\n"):
-            with self.subTest(after=after):
-                changed = in_job(release, 'notify-hub',
-                                 "    if: ${{ inputs.phase == 'tag' && !inputs.dry_run }}\n",
-                                 after)
-                findings = ci_workflow_findings(
-                    *original, others=dict(others, **{'release.yml': changed}))
-                self.assertIn(finding, findings)
-        # The guard reads a declared input: dropping or retyping it must fail.
-        declaration = 'release.yml must declare dry_run as a boolean dispatch input'
-        for before, after in (('      dry_run:\n', '      dry_run_disabled:\n'),
-                              ('        type: boolean\n', '        type: string\n'),
-                              ('        type: boolean\n', '        type: choice\n')):
-            with self.subTest(declaration=after):
-                changed = in_job(release, None, before, after)
-                findings = ci_workflow_findings(
-                    *original, others=dict(others, **{'release.yml': changed}))
-                self.assertIn(declaration, findings)
+        legacy = (ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
+        legacy_guard = '    if: ${{ !inputs.dry_run }}\n'
+        notify_finding = ('release.yml job notify-hub must carry '
+                          'if: ${{ !inputs.dry_run }} so a dry run dispatches nothing')
+        header_finding = ('release.yml notify-hub must retain its reviewed header, '
+                          'permissions, dependencies and outputs')
+        for form, release, guard in (
+                ('phase', others['release.yml'],
+                 "    if: ${{ inputs.phase == 'tag' && !inputs.dry_run }}\n"),
+                ('legacy', legacy, legacy_guard)):
+            with self.subTest(form=form, baseline=True):
+                self.assertEqual(ci_workflow_findings(
+                    *original, others={**others, 'release.yml': release}), [])
+                self.assertEqual(_jobs(release)['notify-hub'].count(guard), 1)
+                self.assertEqual(ci_preflight._job_values(
+                    _jobs(release)['notify-hub'], 'if'), [guard.strip()[4:]])
+                if form == 'phase':
+                    self.assertEqual(ci_preflight._release_split_mode(release), 'phase')
+            mutations = ('', '    if: ${{ always() }}\n',
+                         '    if: ${{ inputs.dry_run }}\n',
+                         '    if: ${{ !inputs.dry_run || inputs.dry_run }}\n',
+                         "    if: '!inputs.dry_run'\n")
+            if form == 'phase':
+                # Drop each conjunct independently, including the dry-run refusal.
+                mutations += ("    if: ${{ inputs.phase == 'tag' }}\n", legacy_guard)
+            for after in mutations:
+                with self.subTest(form=form, after=after):
+                    changed = in_job(release, 'notify-hub', guard, after)
+                    self.assertNotEqual(changed, release)
+                    self.assertEqual(_jobs(changed)['notify-hub'].count(guard), 0)
+                    for job in _jobs(release):
+                        if job != 'notify-hub':
+                            self.assertEqual(_jobs(changed)[job], _jobs(release)[job])
+                    if form == 'phase':
+                        self.assertIsNone(ci_preflight._release_split_mode(changed))
+                        self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(changed),
+                                         [header_finding])
+                        # Complete-mode loss also revokes the dedicated x86 exception.
+                        expected = [
+                            'release.yml job prebuilt-x86 must not receive the protected release '
+                            'environment or release credentials',
+                            header_finding]
+                        if after != legacy_guard:
+                            expected += [notify_finding]
+                        expected += [
+                            'release.yml must keep the exact two-phase release writer, '
+                            'untagged bump push and same-SHA tag retry',
+                            'release.yml must keep the unconditional release gate with its release '
+                            'App token for the App-only main pull_request barrier',
+                            'release.yml must always retain the exact release gate receipt artifact '
+                            'before planning or publishing',
+                            'release.yml must gate the dispatch before planning or publishing']
+                    else:
+                        expected = [notify_finding]
+                    self.assertEqual(ci_workflow_findings(
+                        *original, others={**others, 'release.yml': changed}), expected)
+            # The guard reads a declared input: dropping or retyping it must fail.
+            declaration = 'release.yml must declare dry_run as a boolean dispatch input'
+            for before, after in (('      dry_run:\n', '      dry_run_disabled:\n'),
+                                  ('        type: boolean\n', '        type: string\n'),
+                                  ('        type: boolean\n', '        type: choice\n')):
+                with self.subTest(form=form, declaration=after):
+                    self.assertEqual(release.count(before), 1)
+                    changed = in_job(release, None, before, after)
+                    self.assertNotEqual(changed, release)
+                    findings = ci_workflow_findings(
+                        *original, others={**others, 'release.yml': changed})
+                    self.assertIn(declaration, findings)
 
     def test_no_stage_runs_under_a_timeout_and_jobs_keep_the_platform_maximum(self):
         # Owner rule, 2026-10-12: no stage of this preflight is run under a
@@ -9693,6 +9734,7 @@ finally:
     def test_release_phase_input_and_downstream_boundaries_are_pinned(self):
         original, others = self.ci_sources(), self.other_sources()
         release = others['release.yml']
+        self.assertEqual(ci_preflight._release_split_mode(release), 'phase')
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
         phase_finding = ('release.yml must declare bump-default/tag phases and the explicit '
                          'phase1 dispatch SHA input')
@@ -9722,29 +9764,55 @@ finally:
                 with self.subTest(step=name, replacement=replacement):
                     changed = in_step(release, 'release', name, guard, replacement)
                     self.assertNotEqual(changed, release)
+                    # expectation corrected: singleton -> complete-mode loss plus
+                    # the same named guard refusal, because PHASE admission is whole.
                     self.assertEqual(ci_preflight.release_bump_workflow_findings(changed),
-                                     [finding])
+                                     [
+                                         'release.yml must keep the exact two-phase release writer, '
+                                         'untagged bump push and same-SHA tag retry',
+                                         'release.yml must keep the unconditional release gate '
+                                         'with its release App token for the App-only main pull_request barrier',
+                                         'release.yml must always retain the exact release gate receipt artifact '
+                                         'before planning or publishing',
+                                         finding,
+                                         'release.yml must gate the dispatch before planning or publishing'])
                     self.assertIn(finding, ci_workflow_findings(
                         *original, others={**others, 'release.yml': changed}))
 
     def test_release_prebuilt_job_refuses_missing_or_bypassed_tag_phase(self):
         original, others = self.ci_sources(), self.other_sources()
         release = others['release.yml']
-        guard = "    if: ${{ inputs.phase == 'tag' }}\n"
-        finding = ("release.yml prebuilt must carry if: ${{ inputs.phase == 'tag' }} "
-                   "so phase 1 stops before builds")
+        self.assertEqual(ci_preflight._release_split_mode(release), 'phase')
+        guards = {
+            'prebuilt-x86': "${{ github.event_name == 'workflow_dispatch' && "
+                            "github.ref == 'refs/heads/main' && github.workflow_ref == "
+                            "format('pineforge-4pass/pineforge-engine/.github/workflows/"
+                            "release.yml@{0}', github.ref) && inputs.phase == 'tag' }}",
+            'prebuilt-arm': "${{ inputs.phase == 'tag' }}",
+            'upload': "${{ inputs.phase == 'tag' }}",
+            'notify-hub': "${{ inputs.phase == 'tag' && !inputs.dry_run }}",
+        }
+        self.assertEqual(ci_workflow_findings(*original, others=others), [])
         self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(release), [])
-        for replacement in (
-                '', '    if: ${{ always() }}\n',
-                "    if: ${{ always() || inputs.phase == 'tag' }}\n"):
-            with self.subTest(replacement=replacement):
-                changed = in_job(release, 'prebuilt', guard, replacement)
-                self.assertNotEqual(changed, release)
-                self.assertEqual(_jobs(changed)['release'], _jobs(release)['release'])
-                self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(changed),
-                                 [finding])
-                self.assertIn(finding, ci_workflow_findings(
-                    *original, others={**others, 'release.yml': changed}))
+        for job, condition in guards.items():
+            guard = f'    if: {condition}\n'
+            # The split contract pins this job's full phase/identity boundary.
+            finding = (f'release.yml {job} must retain its reviewed header, permissions, '
+                       'dependencies and outputs')
+            self.assertEqual(_jobs(release)[job].count(guard), 1)
+            for replacement in (
+                    '', '    if: ${{ always() }}\n',
+                    '    if: ${{ always() || ' + condition[4:-3] + ' }}\n'):
+                with self.subTest(job=job, replacement=replacement):
+                    changed = in_job(release, job, guard, replacement)
+                    self.assertNotEqual(changed, release)
+                    for other_job in _jobs(release):
+                        if other_job != job:
+                            self.assertEqual(_jobs(changed)[other_job], _jobs(release)[other_job])
+                    self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(changed),
+                                     [finding])
+                    self.assertIn(finding, ci_workflow_findings(
+                        *original, others={**others, 'release.yml': changed}))
 
     def test_release_bump_app_token_mutations_refuse(self):
         original, others = self.ci_sources(), self.other_sources()
@@ -12785,11 +12853,10 @@ class GkeAdmissionRuleTests(unittest.TestCase):
             self.assertEqual(contradictory, normal)
 
     def test_admission_accepts_the_release_matrix_runner_under_its_fetched_path(self) -> None:
-        # Admission names a fetched file by its repository path, so the one
-        # `runs-on: ${{ matrix.runner }}` that release.yml carries must be
+        # Admission names a fetched file by its repository path, so the
+        # historical matrix's `runs-on: ${{ matrix.runner }}` must be
         # excused under `.github/workflows/release.yml`, not only as a bare name.
-        release = hosted_matrix_release_workflow(
-            (ROOT / '.github/workflows/release.yml').read_text())
+        release = (ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
         self.assertIn('runs-on: ${{ matrix.runner }}', release)
         refusal = 'every runs-on must be a literal value'
         with tempfile.TemporaryDirectory() as fetched:
@@ -12832,10 +12899,13 @@ class GkeAdmissionRuleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as fetched:
             directory = Path(fetched)
             self.copy_repository_admission_inputs(directory)
+            # Check the actual HEAD before selecting the historical matrix
+            # needed to discriminate the fetched-path runner exemption.
+            self.assertEqual(admit_rule_findings(directory, run_actionlint=False), [])
             release_path = '.github/workflows/release.yml'
-            release = hosted_matrix_release_workflow(
-                (directory / release_path).read_text(encoding='utf-8'))
+            release = (ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
             (directory / release_path).write_text(release)
+            self.assertEqual(admit_rule_findings(directory, run_actionlint=False), [])
             runner = '    runs-on: ${{ matrix.runner }}'
             self.assertIn(runner, _jobs(release)['prebuilt'])
             lines = release.splitlines()
