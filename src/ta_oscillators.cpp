@@ -399,24 +399,25 @@ double CCI::compute(double src) {
 
 RCI::RCI(int length)
     : length_(length),
-      prices_(ta_window_capacity(length)),
       order_(ta_window_capacity(length)),
       price_rank_(ta_window_capacity(length)) {}
 
 double RCI::calculate() {
     const int n = static_cast<int>(buffer_.size());
-    std::copy(buffer_.begin(), buffer_.end(), prices_.begin());
+    // Rank the live random-access window directly. Keep the legacy prices_
+    // member empty so the public C++ class layout stays unchanged without a
+    // second length-sized price allocation or a full-window copy per call.
     for (int i = 0; i < n; i++) {
         order_[i] = i;
     }
     std::sort(order_.begin(), order_.begin() + n, [&](int a, int b) {
-        return prices_[a] < prices_[b];
+        return buffer_[a] < buffer_[b];
     });
 
     int i = 0;
     while (i < n) {
         int j = i;
-        while (j + 1 < n && prices_[order_[j + 1]] == prices_[order_[i]]) {
+        while (j + 1 < n && buffer_[order_[j + 1]] == buffer_[order_[i]]) {
             j++;
         }
         double avg_rank = (i + j) / 2.0;
