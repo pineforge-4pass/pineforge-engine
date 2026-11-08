@@ -82,7 +82,7 @@ on:
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 # The run-failure guards this workflow runs (--stamp, --check) read the tags
 # its full-history checkout fetches: here a missing tag fails them, never their
@@ -92,6 +92,8 @@ env:
 
 jobs:
   release:
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     environment: release
 
@@ -431,23 +433,29 @@ jobs:
   #
   # Consumers still need Eigen3 (>= 3.3) installed system-wide; see
   # release notes / README.
-  prebuilt:
+  prebuilt-x86:
     needs: release
-    if: ${{ inputs.phase == 'tag' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.workflow_ref == format('pineforge-4pass/pineforge-engine/.github/workflows/release.yml@{0}', github.ref) && inputs.phase == 'tag' }}
+    runs-on: ubuntu-24.04
     permissions:
-      contents: write   # gh release upload
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - triple: linux-x86_64
-            runner: gkp-od-16cpu-32gb-amd64-128gb
-          - triple: linux-aarch64
-            runner: ubuntu-22.04-arm
-    runs-on: ${{ matrix.runner }}
+      contents: read
+      id-token: write
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.digest }}
 
     steps:
-      # A dry run has no tag yet: it builds the dispatched commit.
+      - name: Refuse an untrusted toolchain caller
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          [[ "${EVENT}" == workflow_dispatch ]]
+          case "${REF}" in refs/heads/main) ;; *) exit 1 ;; esac
+          [[ "${WORKFLOW_REF}" == "pineforge-4pass/pineforge-engine/.github/workflows/release.yml@${REF}" ]]
+
       - name: Checkout release commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -474,85 +482,55 @@ jobs:
           NEXT: ${{ needs.release.outputs.version }}
         run: printf '%s\n' "${NEXT}" > VERSION
 
-      # The x86_64 build uses only the preloaded immutable Bookworm toolchain.
-      - name: Build x86_64 in preloaded Bookworm
-        if: matrix.triple == 'linux-x86_64'
+      - name: Authenticate the dedicated toolchain reader
+        id: toolchain-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: projects/76767776102/locations/global/workloadIdentityPools/pineforge-github/providers/github-oidc
+          service_account: engine-release-toolchainreader@gen-lang-client-0864094636.iam.gserviceaccount.com
+          create_credentials_file: false
+          export_environment_variables: false
+          token_format: access_token
+
+      - name: Log in to the private toolchain registry
         env:
-          ENGINE_TOOLCHAIN_IMAGE: ${{ vars.ENGINE_TOOLCHAIN_IMAGE }}
+          REGISTRY_ACCESS_TOKEN: ${{ steps.toolchain-auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${REGISTRY_ACCESS_TOKEN}" | docker login us-central1-docker.pkg.dev --username oauth2accesstoken --password-stdin
+
+      - name: Pull the private pinned toolchain and record observations
+        run: |
+          set -euo pipefail
+          test -f .github/engine-toolchain-image.txt
+          test ! -L .github/engine-toolchain-image.txt
+          test "$(wc -l < .github/engine-toolchain-image.txt)" -eq 1
+          IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt
+          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/engine-release-toolchains/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
+          export ENGINE_TOOLCHAIN_IMAGE
+          started=$(date +%s)
+          if docker pull "${ENGINE_TOOLCHAIN_IMAGE}"; then pull_rc=0; else pull_rc=$?; fi
+          printf 'pull_exit=%s\nelapsed_seconds=%s\n' "${pull_rc}" "$(( $(date +%s) - started ))"
+          if [[ "${pull_rc}" != 0 ]]; then exit "${pull_rc}"; fi
+          docker image inspect --format 'size_bytes={{.Size}}' "${ENGINE_TOOLCHAIN_IMAGE}"
+
+      - name: Build x86_64 in pinned Bookworm
+        env:
           SOURCE_SHA: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
           NEXT: ${{ needs.release.outputs.version }}
           TAG: ${{ needs.release.outputs.tag }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
+          set -euo pipefail
+          test -f .github/engine-toolchain-image.txt
+          test ! -L .github/engine-toolchain-image.txt
+          test "$(wc -l < .github/engine-toolchain-image.txt)" -eq 1
+          IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt
+          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/engine-release-toolchains/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
+          export ENGINE_TOOLCHAIN_IMAGE
           bash scripts/build_prebuilt_bookworm.sh \
             "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" "${SOURCE_SHA}" "${NEXT}" "${TAG}" "${DRY_RUN}"
 
-      - name: Install Eigen3 (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libeigen3-dev
-
-      - name: Assert Eigen3 3.4.0 on the protected Linux x86_64 slice
-        if: runner.os == 'Linux' && matrix.triple == 'linux-x86_64'
-        run: |
-          set -euo pipefail
-          hdr=""
-          for p in /usr/include/eigen3/Eigen/Core /usr/local/include/eigen3/Eigen/Core; do
-            if [ -f "$p" ]; then hdr="$p"; break; fi
-          done
-          if [ -z "$hdr" ]; then
-            echo "::error::Eigen3 headers not found on the protected GKE runner"
-            exit 1
-          fi
-          macros="$(dirname "$hdr")/src/Core/util/Macros.h"
-          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "$macros"
-          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "$macros"
-          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "$macros"
-          echo "Eigen3 3.4.0 present at $(dirname "$(dirname "$hdr")")"
-
-      # The ARM build checks the exact Eigen headers that CMake will consume.
-      - name: Assert Eigen3 3.4.0 on ARM
-        if: runner.os == 'Linux' && matrix.triple == 'linux-aarch64'
-        run: |
-          set -euo pipefail
-          macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h
-          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "${macros}"
-          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "${macros}"
-          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "${macros}"
-
-      - name: Configure
-        if: matrix.triple == 'linux-aarch64'
-        env:
-          TAG:         ${{ needs.release.outputs.tag }}
-          TRIPLE:      ${{ matrix.triple }}
-        run: |
-          set -euo pipefail
-          stage="stage/pineforge-${TAG}-${TRIPLE}"
-          echo "STAGE_DIR=${stage}" >> "$GITHUB_ENV"
-          # FILE: the version identity is the VERSION file exactly, -rc.N
-          # included, however the checkout's tags describe it; a dry run's
-          # VERSION has no tag at all.
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DEigen3_DIR=/usr/share/eigen3/cmake \
-            -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
-            -DPINEFORGE_BUILD_TESTS=OFF \
-            -DPINEFORGE_BUILD_TUTORIAL=OFF \
-            -DPINEFORGE_VERSION_SOURCE=FILE \
-            -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}"
-          grep -Fx 'Eigen3_DIR:PATH=/usr/share/eigen3/cmake' build/CMakeCache.txt
-
-      - name: Build
-        if: matrix.triple == 'linux-aarch64'
-        run: cmake --build build -j 4
-
-      - name: Install to staging
-        if: matrix.triple == 'linux-aarch64'
-        run: cmake --install build
-
-      # The generated version.h and the CMake package files must carry the
-      # full version, -rc.N included, and its numeric X.Y.Z.
       - name: Verify the staged version
         env:
           NEXT: ${{ needs.release.outputs.version }}
@@ -560,13 +538,10 @@ jobs:
           python3 scripts/release_version.py check-install \
             --prefix "${STAGE_DIR}" --expect "${NEXT}"
 
-      # The glibc comparison baseline is this triple's archive from the v1.10.0
-      # release: the real released bytes, pinned by sha256 and unpacked here.
-      # The checker below only reads the unpacked libraries.
       - name: Fetch the v1.10.0 baseline archive for the glibc comparison
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TRIPLE: ${{ matrix.triple }}
+          TRIPLE: linux-x86_64
         run: |
           set -euo pipefail
           case "${TRIPLE}" in
@@ -584,12 +559,9 @@ jobs:
             --no-same-owner --no-same-permissions
           echo "BASELINE_DIR=${root}/tree" >> "${GITHUB_ENV}"
 
-      # Both dry-run and publication inspect every installed .a/.so/.so.* and
-      # compare their highest glibc tag with the baseline fetched above.
-      # Keep raw checker output and its actual exit status, including setup errors.
       - name: Check every staged library's glibc floor
         env:
-          TRIPLE: ${{ matrix.triple }}
+          TRIPLE: linux-x86_64
         run: |
           set -euo pipefail
           log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
@@ -611,51 +583,261 @@ jobs:
         id: pack
         env:
           TAG:    ${{ needs.release.outputs.tag }}
-          TRIPLE: ${{ matrix.triple }}
+          TRIPLE: linux-x86_64
         run: |
           set -euo pipefail
           base="pineforge-${TAG}-${TRIPLE}"
           tarball="${base}.tar.gz"
           tar -czf "${tarball}" -C "$(dirname "${STAGE_DIR}")" "${base}"
           sha256sum "${tarball}" > "${tarball}.sha256"
-          echo "tarball=${tarball}"           >> "$GITHUB_OUTPUT"
-          echo "sha256=${tarball}.sha256"     >> "$GITHUB_OUTPUT"
+          digest=$(sha256sum "${tarball}")
+          digest=${digest%% *}
+          [[ "${digest}" =~ ^[0-9a-f]{64}$ ]]
+          {
+            echo "digest=${digest}"
+            echo "tarball=${tarball}"
+            echo "sha256=${tarball}.sha256"
+          } >> "$GITHUB_OUTPUT"
 
-      # The x86_64 release path must consume the bytes it is about to upload.
-      # The helper checks the sidecar, unpacks the archive, and runs the
-      # existing native host against the shipped full archive in Bookworm.
       - name: Consume packed x86_64 archive
-        if: matrix.triple == 'linux-x86_64'
         env:
-          ENGINE_TOOLCHAIN_IMAGE: ${{ vars.ENGINE_TOOLCHAIN_IMAGE }}
           TARBALL:  ${{ steps.pack.outputs.tarball }}
           SHASUM:   ${{ steps.pack.outputs.sha256 }}
           TAG:      ${{ needs.release.outputs.tag }}
         run: |
           set -euo pipefail
+          test -f .github/engine-toolchain-image.txt
+          test ! -L .github/engine-toolchain-image.txt
+          test "$(wc -l < .github/engine-toolchain-image.txt)" -eq 1
+          IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt
+          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/engine-release-toolchains/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
+          export ENGINE_TOOLCHAIN_IMAGE
           bash scripts/build_prebuilt_bookworm.sh \
             --consume "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" \
             "${TARBALL}" "${SHASUM}" "${TAG}"
+
+      - name: Keep the verified tarball as a workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: prebuilt-linux-x86_64
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.sha256 }}
+          if-no-files-found: error
+          retention-days: 7
+
+  prebuilt-arm:
+    needs: release
+    if: ${{ inputs.phase == 'tag' }}
+    runs-on: ubuntu-22.04-arm
+    permissions:
+      contents: read
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.digest }}
+
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
+          fetch-depth: 0   # the version helper still observes the git sha
+          persist-credentials: false
+
+      - name: Assert tag still names the emitted release commit
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          SHA: ${{ needs.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::invalid emitted release sha: ${SHA}" >&2
+            exit 1
+          fi
+          test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${SHA}"
+
+      - name: Write the dry run's VERSION
+        if: ${{ inputs.dry_run }}
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: printf '%s\n' "${NEXT}" > VERSION
+
+      - name: Install Eigen3 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev
+
+      - name: Assert Eigen3 3.4.0 on ARM
+        run: |
+          set -euo pipefail
+          macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "${macros}"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "${macros}"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "${macros}"
+
+      - name: Configure
+        env:
+          TAG:         ${{ needs.release.outputs.tag }}
+          TRIPLE:      linux-aarch64
+        run: |
+          set -euo pipefail
+          stage="stage/pineforge-${TAG}-${TRIPLE}"
+          echo "STAGE_DIR=${stage}" >> "$GITHUB_ENV"
+          # FILE: the version identity is the VERSION file exactly, -rc.N
+          # included, however the checkout's tags describe it; a dry run's
+          # VERSION has no tag at all.
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DEigen3_DIR=/usr/share/eigen3/cmake \
+            -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+            -DPINEFORGE_BUILD_TESTS=OFF \
+            -DPINEFORGE_BUILD_TUTORIAL=OFF \
+            -DPINEFORGE_VERSION_SOURCE=FILE \
+            -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}"
+          grep -Fx 'Eigen3_DIR:PATH=/usr/share/eigen3/cmake' build/CMakeCache.txt
+
+      - name: Build
+        run: cmake --build build -j 4
+
+      - name: Install to staging
+        run: cmake --install build
+
+      - name: Verify the staged version
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: |
+          python3 scripts/release_version.py check-install \
+            --prefix "${STAGE_DIR}" --expect "${NEXT}"
+
+      - name: Fetch the v1.10.0 baseline archive for the glibc comparison
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIPLE: linux-aarch64
+        run: |
+          set -euo pipefail
+          case "${TRIPLE}" in
+            linux-x86_64) digest=cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543 ;;
+            linux-aarch64) digest=982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bb ;;
+            *) echo "::error::no v1.10.0 baseline archive for ${TRIPLE}" >&2; exit 1 ;;
+          esac
+          archive="pineforge-v1.10.0-${TRIPLE}.tar.gz"
+          root="${RUNNER_TEMP}/glibc-baseline-${TRIPLE}"
+          mkdir "${root}" "${root}/download" "${root}/tree"
+          gh release download v1.10.0 --repo "${GITHUB_REPOSITORY}" \
+            --pattern "${archive}" --dir "${root}/download"
+          echo "${digest}  ${root}/download/${archive}" | sha256sum -c -
+          tar -xzf "${root}/download/${archive}" -C "${root}/tree" \
+            --no-same-owner --no-same-permissions
+          echo "BASELINE_DIR=${root}/tree" >> "${GITHUB_ENV}"
+
+      - name: Check every staged library's glibc floor
+        env:
+          TRIPLE: linux-aarch64
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
+          mkdir -p "${log}"
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" --baseline-root "${BASELINE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+            checker_rc=0
+          else checker_rc=$?; fi
+          printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
+          cat "${log}/stdout.jsonl"
+          cat "${log}/stderr.txt" >&2
+          exit "${checker_rc}"
+
+      - name: Bundle docs into tarball root
+        run: |
+          set -euo pipefail
+          cp LICENSE NOTICE VERSION "${STAGE_DIR}/"
+
+      - name: Pack tarball + sha256
+        id: pack
+        env:
+          TAG:    ${{ needs.release.outputs.tag }}
+          TRIPLE: linux-aarch64
+        run: |
+          set -euo pipefail
+          base="pineforge-${TAG}-${TRIPLE}"
+          tarball="${base}.tar.gz"
+          tar -czf "${tarball}" -C "$(dirname "${STAGE_DIR}")" "${base}"
+          sha256sum "${tarball}" > "${tarball}.sha256"
+          digest=$(sha256sum "${tarball}")
+          digest=${digest%% *}
+          [[ "${digest}" =~ ^[0-9a-f]{64}$ ]]
+          {
+            echo "digest=${digest}"
+            echo "tarball=${tarball}"
+            echo "sha256=${tarball}.sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Keep the verified tarball as a workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: prebuilt-linux-aarch64
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.sha256 }}
+          if-no-files-found: error
+          retention-days: 7
+
+  upload:
+    needs: [release, prebuilt-x86, prebuilt-arm]
+    if: ${{ inputs.phase == 'tag' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download x86_64 tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: prebuilt-linux-x86_64
+          path: artifacts/x86
+
+      - name: Download ARM tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: prebuilt-linux-aarch64
+          path: artifacts/arm
+
+      - name: Verify both tarballs against build outputs
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          X86_TARBALL: ${{ needs.prebuilt-x86.outputs.tarball }}
+          X86_SHA256: ${{ needs.prebuilt-x86.outputs.sha256 }}
+          ARM_TARBALL: ${{ needs.prebuilt-arm.outputs.tarball }}
+          ARM_SHA256: ${{ needs.prebuilt-arm.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]
+          [[ "${X86_TARBALL}" == "pineforge-${TAG}-linux-x86_64.tar.gz" ]]
+          [[ "${ARM_TARBALL}" == "pineforge-${TAG}-linux-aarch64.tar.gz" ]]
+          [[ "${X86_SHA256}" =~ ^[0-9a-f]{64}$ && "${ARM_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+          test -f "artifacts/x86/${X86_TARBALL}"
+          test ! -L "artifacts/x86/${X86_TARBALL}"
+          test -f "artifacts/arm/${ARM_TARBALL}"
+          test ! -L "artifacts/arm/${ARM_TARBALL}"
+          printf '%s  %s\n' "${X86_SHA256}" "artifacts/x86/${X86_TARBALL}" \
+            "${ARM_SHA256}" "artifacts/arm/${ARM_TARBALL}" | sha256sum --check --strict -
+          # Recreate sidecars from the independently verified build outputs.
+          printf '%s  %s\n' "${X86_SHA256}" "${X86_TARBALL}" > "artifacts/x86/${X86_TARBALL}.sha256"
+          printf '%s  %s\n' "${ARM_SHA256}" "${ARM_TARBALL}" > "artifacts/arm/${ARM_TARBALL}.sha256"
 
       - name: Upload to release
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG:     ${{ needs.release.outputs.tag }}
-          TARBALL: ${{ steps.pack.outputs.tarball }}
-          SHASUM:  ${{ steps.pack.outputs.sha256 }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release.outputs.tag }}
+          X86_TARBALL: ${{ needs.prebuilt-x86.outputs.tarball }}
+          ARM_TARBALL: ${{ needs.prebuilt-arm.outputs.tarball }}
         run: |
-          gh release upload "${TAG}" "${TARBALL}" "${SHASUM}" --clobber
+          set -euo pipefail
+          gh release upload "${TAG}" \
+            "artifacts/x86/${X86_TARBALL}" "artifacts/x86/${X86_TARBALL}.sha256" \
+            "artifacts/arm/${ARM_TARBALL}" "artifacts/arm/${ARM_TARBALL}.sha256" --clobber
 
-      - name: Keep the dry run's tarball as a workflow artifact
-        if: ${{ inputs.dry_run }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ steps.pack.outputs.tarball }}
-          path: |
-            ${{ steps.pack.outputs.tarball }}
-            ${{ steps.pack.outputs.sha256 }}
-          retention-days: 7
 
   # Notify the pineforge-release hub AFTER the tarballs are uploaded — the hub
   # builds FROM the engine static-lib tarball, so it must exist first. The hub
@@ -663,7 +845,9 @@ jobs:
   # the MCPs. FAIL LOUD (no continue-on-error): a dropped notify means downstream
   # never rebuilds. Credential is the org GitHub App (no PAT).
   notify-hub:
-    needs: [release, prebuilt]
+    permissions:
+      contents: read
+    needs: [release, upload]
     if: ${{ inputs.phase == 'tag' && !inputs.dry_run }}
     runs-on: ubuntu-24.04
     environment: release
@@ -681,7 +865,7 @@ jobs:
       # run_id}. -F sends prerelease as a JSON boolean and run_id as a
       # number. The hub never publishes a prerelease to its stable or
       # `latest` channels and pairs the engine with codegen of the same
-      # version (lane REL10-HUB).
+      # version.
       - name: Dispatch engine-release -> pineforge-release
         env:
           GH_TOKEN:   ${{ steps.app.outputs.token }}

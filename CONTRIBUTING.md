@@ -98,7 +98,11 @@ Linux hosts running `test_run_json_jailed_nofile_e2e` require `strace` with perm
 > rebuilds only the static library. Test executables are separate targets that
 > statically link it, and `ctest` rebuilds nothing — so after a library-only
 > build, `ctest` runs stale binaries and can pass falsely. Always build **all**
-> targets before `ctest` when runtime values changed.
+> targets before `ctest` when runtime values changed. The sanitizer shards and
+> `live-sanitizers` profile of `scripts/ci_verify.py` instead rebuild the selected
+> tests' configured producers, their dependencies, both checked archives and the
+> install inputs owned by that shard. The driver refuses missing producers,
+> changed build inputs or missing outputs before executing the same CTest set.
 
 ## The loop: write the witness first
 
@@ -160,7 +164,7 @@ What each gate refuses:
 
 `ci_verify.py` counts the CTest rows that actually **ran** and fails below a
 floor. The floors' numbers live in one place, the
-`PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:808 table: per profile, `full`
+`PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:809 table: per profile, `full`
 is its overlay-present registered population and `pinned` is how many rows of
 `tests/private_fixture_rows.txt` that registry registers, so with the private
 fixtures absent the floor is `full` minus `pinned`; every other profile
