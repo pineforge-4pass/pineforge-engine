@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -642,6 +643,180 @@ class ProbeWorkerTests(unittest.TestCase):
         self.assertTrue(any("broken" in finding
                             and "RuntimeError: probe work interrupted" in finding
                             for finding in findings), findings)
+
+
+class BuildAndProbePathTests(unittest.TestCase):
+    """The build-and-probe stage, with a fake cmake and stub engine scripts.
+
+    The engine is a real tiny Git repository whose tracked scripts are the stubs, and
+    the corpus is a plain directory. The fake tools only decide which step fails, so
+    these tests pin how each failure is reported and which failures are errors; they
+    do not claim anything about what a real compiler does.
+    """
+
+    PROBE = "validation/sample"
+    TAPE_HEADER = "Trade #,Type,Signal"
+
+    FAKE_CMAKE = '''#!{python}
+import os
+import sys
+from pathlib import Path
+
+arguments = sys.argv[1:]
+if "--build" in arguments:
+    print("fake cmake build")
+    if os.environ.get("FAKE_CMAKE_BUILD") == "fail":
+        print("fake build failure")
+        sys.exit(7)
+    libraries = os.environ.get("FAKE_CMAKE_LIBRARIES", "one")
+    if libraries != "none":
+        for generated in (Path.cwd() / "corpus").rglob("generated.cpp"):
+            (generated.parent / "strategy.so").write_bytes(b"")
+            if libraries == "two":
+                (generated.parent / "strategy.dylib").write_bytes(b"")
+    sys.exit(0)
+print("fake cmake configure")
+if os.environ.get("FAKE_CMAKE_CONFIGURE") == "fail":
+    print("fake configure failure")
+    sys.exit(5)
+'''
+
+    DERIVE = '''import os
+import sys
+from pathlib import Path
+
+if os.environ.get("FAKE_DERIVE") == "fail":
+    print("fake derive failure")
+    sys.exit(6)
+arguments = sys.argv[1:]
+Path(arguments[arguments.index("--derived-workspace") + 1]).mkdir(parents=True, exist_ok=True)
+'''
+
+    RUN = '''import os
+import sys
+from pathlib import Path
+
+if os.environ.get("FAKE_PROBE") == "fail":
+    print("fake probe failure")
+    sys.exit(9)
+arguments = sys.argv[1:]
+output = Path(arguments[arguments.index("--output") + 1])
+output.parent.mkdir(parents=True, exist_ok=True)
+output.write_text(os.environ["FAKE_HEADER"] + "\\n1,Long,Entry\\n", encoding="utf-8")
+'''
+
+    def setUp(self):
+        resources = ExitStack()
+        self.addCleanup(resources.close)
+        self.directory = Path(resources.enter_context(
+            tempfile.TemporaryDirectory(prefix="corpus-build-"))).resolve()
+        self.engine = self.directory / "engine"
+        (self.engine / "scripts").mkdir(parents=True)
+        (self.engine / "CMakeLists.txt").write_text("# fake engine\n")
+        (self.engine / "scripts" / "derive_corpus_feeds.py").write_text(self.DERIVE)
+        (self.engine / "scripts" / "run_strategy.py").write_text(self.RUN)
+        git(self.engine, "init", "-q")
+        git(self.engine, "add", "--all")
+        self.corpus = self.directory / "corpus"
+        probe = self.corpus / self.PROBE
+        probe.mkdir(parents=True)
+        (probe / "generated.cpp").write_text("// fake strategy\n")
+        (probe / "engine_trades.csv").write_text(self.TAPE_HEADER + "\n1,Long,Entry\n")
+        self.work = self.directory / "work"
+        self.work.mkdir()
+        bin_directory = self.directory / "bin"
+        bin_directory.mkdir()
+        cmake = bin_directory / "cmake"
+        cmake.write_text(self.FAKE_CMAKE.replace("{python}", sys.executable))
+        cmake.chmod(0o755)
+        self.environment = {"PATH": f"{bin_directory}{os.pathsep}{os.environ['PATH']}",
+                            "FAKE_HEADER": self.TAPE_HEADER}
+
+    def build(self, **fake):
+        output = io.StringIO()
+        with mock.patch.dict(os.environ, {**self.environment, **fake}):
+            with redirect_stdout(output):
+                result = validator._build_and_run(
+                    self.corpus, self.engine, self.work, {self.PROBE}, [self.PROBE], jobs=1)
+        return result, output.getvalue()
+
+    def test_a_clean_run_has_no_findings_and_no_error(self):
+        (findings, error), printed = self.build()
+        self.assertEqual((findings, error), ([], False))
+        self.assertIn("WORK ", printed)
+
+    def test_configure_failure_is_an_error_and_shows_its_log(self):
+        (findings, error), printed = self.build(FAKE_CMAKE_CONFIGURE="fail")
+        self.assertTrue(error)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertTrue(findings[0].startswith(
+            f"build {self.engine / 'CMakeLists.txt'}: configure failed; see "), findings)
+        self.assertIn("fake configure failure", printed)
+
+    def test_build_failure_is_a_finding_and_not_an_error(self):
+        (findings, error), printed = self.build(FAKE_CMAKE_BUILD="fail")
+        self.assertFalse(error)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("corpus_strategies failed; see ", findings[0])
+        self.assertIn("fake build failure", printed)
+
+    def test_a_probe_without_exactly_one_library_is_a_finding(self):
+        for libraries in ("none", "two"):
+            with self.subTest(libraries=libraries):
+                (findings, error), _ = self.build(FAKE_CMAKE_LIBRARIES=libraries)
+                self.assertFalse(error)
+                self.assertEqual(len(findings), 1, findings)
+                self.assertIn("expected one freshly built strategy library", findings[0])
+
+    def test_derivation_failure_is_an_error_and_shows_its_log(self):
+        (findings, error), printed = self.build(FAKE_DERIVE="fail")
+        self.assertTrue(error)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("derivation failed; see ", findings[0])
+        self.assertIn("fake derive failure", printed)
+
+    def test_probe_failure_is_a_finding_and_shows_its_log(self):
+        (findings, error), printed = self.build(FAKE_PROBE="fail")
+        self.assertFalse(error)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("probe failed; see ", findings[0])
+        self.assertIn("fake probe failure", printed)
+
+    def test_changed_or_undeclared_headers_are_findings(self):
+        declared = "Engine range-end"
+        cases = (
+            ("renamed column", "Trade #,Kind,Signal", "header changed"),
+            ("missing column", "Trade #,Type", "header changed"),
+            ("undeclared trailing column", f"{self.TAPE_HEADER},Surprise",
+             "undeclared or repeated trailing columns"),
+            ("repeated declared column", f"{self.TAPE_HEADER},{declared},{declared}",
+             "undeclared or repeated trailing columns"),
+        )
+        for label, header, reason in cases:
+            with self.subTest(case=label):
+                (findings, error), _ = self.build(FAKE_HEADER=header)
+                self.assertFalse(error)
+                self.assertEqual(len(findings), 1, findings)
+                self.assertTrue(findings[0].startswith("header "), findings)
+                self.assertIn(reason, findings[0])
+
+    def test_the_declared_trailing_column_is_accepted(self):
+        self.assertEqual(validator.ALLOWED_EXTRA_COLUMNS, ("Engine range-end",))
+        (findings, error), _ = self.build(FAKE_HEADER=f"{self.TAPE_HEADER},Engine range-end")
+        self.assertEqual((findings, error), ([], False))
+
+    def test_command_returns_the_exit_code_and_shows_the_log_of_a_failure(self):
+        log = self.directory / "command.log"
+        for code in (0, 3):
+            with self.subTest(code=code):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    result = validator._command(
+                        [sys.executable, "-c", f"print('line'); raise SystemExit({code})"],
+                        self.directory, log, os.environ.copy())
+                self.assertEqual(result, code)
+                self.assertEqual(log.read_text(), "line\n")
+                self.assertEqual(output.getvalue(), "line\n" if code else "")
 
 
 if __name__ == "__main__":
