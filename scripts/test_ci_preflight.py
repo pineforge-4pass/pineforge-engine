@@ -1800,6 +1800,9 @@ class OptionCAdmission(unittest.TestCase):
         self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(self.workflow), [])
         self.assertEqual(ci_preflight.release_option_c_workflow_findings(self.workflow), [])
         for job, expected in ci_preflight.RELEASE_OPTION_C_JOBS.items():
+            expected = expected.replace(
+                ci_preflight.RELEASE_SPLIT_HEADERS[job],
+                ci_preflight.RELEASE_SPLIT_PHASE_HEADERS[job], 1)
             with self.subTest(template=job):
                 actual = _jobs(self.workflow)[job]
                 self.assertEqual(ci_preflight._code(actual), ci_preflight._code(expected))
