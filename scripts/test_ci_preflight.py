@@ -3040,9 +3040,8 @@ class PostFleetRunnerPolicy(unittest.TestCase):
 
     def test_post_fleet_docs_match_runner_policy(self):
         docs = (ROOT / 'docs/ci.md').read_text()
-        # expectation corrected: 2060 -> 2062, because the truthful smoke
-        # documentation gained two lines.
-        self.assertEqual(len(docs.splitlines()), 2062)
+        # expectation corrected: 2062 -> 2109, because corpus admission and gate documentation was added.
+        self.assertEqual(len(docs.splitlines()), 2109)
         # The test-owned job catalog defines the protected label inventory.
         tables = re.findall(
             r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
@@ -4858,7 +4857,9 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'preflight-tests', 'unittest-shards-tests', 'verifier-paths-tests',
             'native-c-surface-tests', 'native-x86-release-tests', 'kernel-residuals-tests',
             'corpus-parity-identity-tests',
-            'corpus-parity-subset-cover-tests', 'report-schema-key-tests',
+            'corpus-parity-subset-cover-tests', 'corpus-sha-validation-tests',
+            'corpus-gitlink-result-tests', 'corpus-file-digest-tests',
+            'corpus-admission-variant-tests', 'report-schema-key-tests',
             'selected-window-ownership-tests', 'report-outputs-key-tests', 'release-version-tests',
             'release-gate-tests', 'rerun-preempted-tests', 'prebuilt-bookworm-tests', 'prebuilt-glibc-tests',
             'run-failure-diff-tests', 'run-json-harness-tests',
@@ -4877,8 +4878,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
         with mock.patch.object(ci_preflight.sys, 'platform', 'linux'):
             self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
             # main() prepends actionlint-version to all/fast/github-only.
-            self.assertEqual(len(expected) + 1, 67)
-            self.assertEqual(len(check_commands(ROOT, tier='fast')), 62)
+            self.assertEqual(len(expected) + 1, 71)
+            self.assertEqual(len(check_commands(ROOT, tier='fast')), 66)
             self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
             self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
         for platform in ('darwin', 'win32'):
@@ -4887,7 +4888,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
                                      if name not in ('prebuilt-bookworm-tests', 'prebuilt-glibc-tests')]
                 self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})],
                                  expected_platform)
-                self.assertEqual(len(check_commands(ROOT, tier='fast')), 60)
+                self.assertEqual(len(check_commands(ROOT, tier='fast')), 64)
 
 
 class PrebuiltGlibcRegistration(unittest.TestCase):
@@ -5554,9 +5555,8 @@ class PreflightFailures(unittest.TestCase):
 
     def test_documented_slow_row_counts_match_literal_population(self):
         text = (ROOT / 'docs/ci.md').read_text()
-        # expectation corrected: 2060 -> 2062, because the truthful smoke
-        # documentation gained two lines.
-        self.assertEqual(len(text.splitlines()), 2062)
+        # expectation corrected: 2062 -> 2109, because corpus admission and gate documentation was added.
+        self.assertEqual(len(text.splitlines()), 2109)
         slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
                        if name.startswith('test_ci_verify_slice_'))
         self.assertTrue(slices, 'verifier slice inventory must not be empty')

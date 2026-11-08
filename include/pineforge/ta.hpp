@@ -253,7 +253,7 @@ public:
 // --- SMA ---
 
 class SMA {
-    ExactWindowSum window_;
+    KahanWindowSum window_;
     int length;
     int bar_count;
 

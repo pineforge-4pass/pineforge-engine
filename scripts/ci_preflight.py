@@ -143,6 +143,8 @@ GKE_JOB_LABELS = {
 }
 # The arm admission variant has its own exact inventory; main keeps the old one.
 GKE_PR_ARM_JOB_LABELS = {**GKE_JOB_LABELS['gke-pr.yml'], 'build-arm': HOSTED_ARM_RUNNER}
+# Add these rows only when the corpus admission variant is selected.
+GKE_PR_CORPUS_JOB_LABELS = {'corpus-gitlink-result': HOSTED_X86_RUNNER}
 GKE_LIGHT_JOB_RUNNERS = {
     'ci-post.yml': dict.fromkeys(
         ('authz', 'changes', 'build-release-gate', 'build-debug-gate',
@@ -347,6 +349,7 @@ JOB_COMMANDS = {
     'docs-post.yml': {'authz': None, 'build': None},
 }
 GKE_PR_ARM_JOB_COMMANDS = {**JOB_COMMANDS['gke-pr.yml'], 'build-arm': VERIFY}
+GKE_PR_CORPUS_JOB_COMMANDS = {'corpus-gitlink-result': None}
 # Exact hosted pins (x86 ubuntu-24.04, arm64 ubuntu-24.04-arm) and the native
 # matrix pin, checked per job.
 HOSTED_JOB_RUNNERS = {
@@ -597,6 +600,20 @@ GKE_ARM_RESULT_STEP = '''      - name: Require an independently consistent succe
             test "$LEGS_RESULT" = success || fail "proof legs did not pass"
           fi
 '''
+_GKE_CORPUS_RESULT_INSERTIONS = (
+    ('          X86_RESULT: ${{ needs.build-x86-gcc133.result }}\n',
+     '          CORPUS_RESULT: ${{ needs.corpus-gitlink-result.result }}\n'),
+    ('          test "$X86_RESULT" = success || fail "native x86 GNU 13.3.0 build did not pass"\n',
+     '          test "$CORPUS_RESULT" = success || fail "corpus validation did not pass"\n'),
+)
+for _result_template in (GKE_RESULT_STEP, GKE_ARM_RESULT_STEP):
+    for _anchor, _addition in _GKE_CORPUS_RESULT_INSERTIONS:
+        assert _result_template.count(_anchor) == 1, 'corpus result insertion anchor drifted'
+GKE_CORPUS_RESULT_STEP = GKE_RESULT_STEP
+GKE_ARM_CORPUS_RESULT_STEP = GKE_ARM_RESULT_STEP
+for _anchor, _addition in _GKE_CORPUS_RESULT_INSERTIONS:
+    GKE_CORPUS_RESULT_STEP = GKE_CORPUS_RESULT_STEP.replace(_anchor, _anchor + _addition, 1)
+    GKE_ARM_CORPUS_RESULT_STEP = GKE_ARM_CORPUS_RESULT_STEP.replace(_anchor, _anchor + _addition, 1)
 POST_BUILD_VERIFY_RUN = ('| python3 scripts/ci_verify.py '
                          "${{ matrix.build_type == 'Release' && 'release' || 'debug' }} "
                          f'--build-dir build --jobs {CORES} --ccache')
@@ -1776,6 +1793,11 @@ def _gke_pr_arm_variant(name: str, jobs: dict[str, str]) -> bool:
     return name == 'gke-pr.yml' and 'build-arm' in jobs
 
 
+def _gke_pr_corpus_variant(name: str, jobs: dict[str, str]) -> bool:
+    """Select all corpus rules together, only for the defined corpus job."""
+    return name == 'gke-pr.yml' and 'corpus-gitlink-result' in jobs
+
+
 GKE_PR_SMOKE_STEPS = r'''      - name: Checkout the admitted head
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -1839,10 +1861,18 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
     # Admission also runs runner_findings, whose _unparsed check refuses quoted job keys.
     jobs = _jobs(workflow)
     arm_variant = _gke_pr_arm_variant(name, jobs)
+    corpus_variant = _gke_pr_corpus_variant(name, jobs)
     proofs = PR_ARM_PROOF_JOBS if arm_variant else PR_PROOF_JOBS
     legs_step = GKE_ARM_LEGS_STEP if arm_variant else GKE_LEGS_STEP
     result_template = GKE_ARM_RESULT_STEP if arm_variant else GKE_RESULT_STEP
     required = {'admit', 'preflight', *proofs, NATIVE_X86_JOB, 'legs', 'result'}
+    result_needs = ['admit', 'preflight', NATIVE_X86_JOB, 'legs']
+    result_dependency = NATIVE_X86_JOB
+    if corpus_variant:
+        required.add('corpus-gitlink-result')
+        result_needs.insert(-1, 'corpus-gitlink-result')
+        result_dependency += ', corpus-gitlink-result'
+        result_template = GKE_ARM_CORPUS_RESULT_STEP if arm_variant else GKE_CORPUS_RESULT_STEP
     if not required <= set(jobs):
         findings.append(f'{name}: required jobs are missing')
     if set(jobs) != required:
@@ -1855,8 +1885,8 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
         findings.append(f'{name} result must run always')
     if 'needs.legs.result' not in jobs.get('result', ''):
         findings.append(f'{name} result must test needs.legs.result')
-    if _needs(jobs.get('result', '')) != ['admit', 'preflight', NATIVE_X86_JOB, 'legs']:
-        findings.append(f'{name} result must need admit, preflight, {NATIVE_X86_JOB} and legs')
+    if _needs(jobs.get('result', '')) != result_needs:
+        findings.append(f'{name} result must need admit, preflight, {result_dependency} and legs')
     if 'workflow_call' in workflow or 'uses: ./.github/workflows/' in workflow:
         findings.append(f'{name}: reusable workflow calls are refused')
     if re.search(r'\b(?:secrets\.(?!GITHUB_TOKEN)|id-token\b|environment\s*:)', workflow):
@@ -1887,6 +1917,8 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
                     for value in _step_values(step, 'script') + _step_block(step, 'script')):
                 findings.append(f'{name} job {job} github-script must pass PR values through env')
     expected = GKE_PR_ARM_JOB_LABELS if arm_variant else GKE_JOB_RUNNERS.get(name, {})
+    if corpus_variant:
+        expected = {**expected, **GKE_PR_CORPUS_JOB_LABELS}
     for job, label in expected.items():
         actual = _job_values(jobs.get(job, ''), 'runs-on', unquote=False)
         if actual != [label]:
@@ -1964,15 +1996,20 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
             or _job_values(identity_env, 'HEAD_IS_FORK') != [
                 '${{ toJSON(github.event.pull_request.head.repo.fork) }}']):
         findings.append(f'{name} admit must refuse drafts and stale or unauthorized identities')
-    for job in ('preflight', *proofs, NATIVE_X86_JOB):
+    admitted_jobs = ('preflight', *proofs, NATIVE_X86_JOB)
+    if corpus_variant:
+        admitted_jobs += ('corpus-gitlink-result',)
+    for job in admitted_jobs:
         body = jobs.get(job, '')
         condition = ("${{ needs.admit.outputs.allowed == 'true' }}"
-                     if job == 'preflight' else
+                     if job in ('preflight', 'corpus-gitlink-result') else
                      NATIVE_X86_PR_IF if job == NATIVE_X86_JOB else
                      GKE_ARM_PROOF_IF if job == 'build-arm' else GKE_PROOF_IF)
         expected_needs = ['admit']
         if (_needs(body) != expected_needs or _job_values(body, 'if') != [condition]):
-            findings.append(f'{name} {job} must follow admission and keep its path policy')
+            policy = ('for every path class' if job == 'corpus-gitlink-result'
+                      else 'and keep its path policy')
+            findings.append(f'{name} {job} must follow admission {policy}')
         if _job_block(body, 'strategy') or _job_values(body, 'strategy'):
             findings.append(f'{name} {job} must remain one fixed proof job')
     findings += native_x86_job_findings(jobs.get(NATIVE_X86_JOB, ''), name, pr=True)
@@ -2057,6 +2094,58 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
     if (_step_values(subset, 'run') != [f'{PARITY_COMMAND} --subset']
             or _step_values(subset, 'if') or _step_values(subset, 'continue-on-error')):
         findings.append(f'{name} corpus-parity-subset must run its unconditional inline subset command')
+    if corpus_variant:
+        corpus = jobs['corpus-gitlink-result']
+        corpus_steps = steps['corpus-gitlink-result']
+        job_keys = [line.strip().split(':', 1)[0] for line in _code(corpus)
+                    if _indent(line) == 4]
+        if job_keys != ['needs', 'if', 'runs-on', 'permissions', 'steps']:
+            findings.append(f'{name} corpus-gitlink-result must keep only its admitted job keys')
+        corpus_names = ('Checkout the base tree', 'Checkout the admitted head', 'Set up Python',
+                        'Require validation of the proposed corpus commit')
+        if [_step_values(step, 'name') for step in corpus_steps] != [[label] for label in corpus_names]:
+            findings.append(f'{name} corpus-gitlink-result must keep its four ordered steps')
+        # Two distinct immutable checkouts: only the base supplies executable
+        # checker text, while the proposed head is repository data.
+        for label, path, output in (
+                ('Checkout the base tree', 'base', 'base_sha'),
+                ('Checkout the admitted head', 'head', 'head_sha')):
+            checkout = _step_named(corpus_steps, '      - name: ' + label)
+            expected_checkout = [
+                '      - name: ' + label,
+                '        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0',
+                '        with:',
+                '          repository: ${{ github.repository }}',
+                '          ref: ${{ needs.admit.outputs.' + output + ' }}',
+                '          path: ' + path,
+            ]
+            if path == 'head':
+                expected_checkout.append('          fetch-depth: 0')
+            expected_checkout.append('          persist-credentials: false')
+            if _code(checkout) != expected_checkout:
+                findings.append(f'{name} corpus-gitlink-result must keep its exact {path} checkout')
+        corpus_python = _step_named(corpus_steps, '      - name: Set up Python')
+        debug_python = _step_named(steps.get('build-debug', []), '      - name: Set up Python')
+        expected_python = [
+            '      - name: Set up Python',
+            '        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0',
+            '        with:',
+            "          python-version: '3.12'",
+        ]
+        if (_code(corpus_python) != expected_python
+                or _code(corpus_python) != _code(debug_python)):
+            findings.append(f'{name} corpus-gitlink-result must use the same pinned Python setup as build-debug')
+        corpus_check = _step_named(
+            corpus_steps, '      - name: Require validation of the proposed corpus commit')
+        if _code(corpus_check) != [
+                '      - name: Require validation of the proposed corpus commit',
+                '        env:',
+                '          GH_TOKEN: ${{ github.token }}',
+                '          BASE_SHA: ${{ needs.admit.outputs.base_sha }}',
+                '          HEAD_SHA: ${{ needs.admit.outputs.head_sha }}',
+                '        run: python3 base/scripts/check_corpus_gitlink_result.py --repo head '
+                '--base "$BASE_SHA" --head "$HEAD_SHA"']:
+            findings.append(f'{name} corpus-gitlink-result must run only the base checker over head data')
     legs = jobs.get('legs', '')
     legs_if = GKE_PROOF_IF.replace('${{ ', '${{ always() && ', 1)
     legs_needs = ['admit', *proofs]
@@ -2067,11 +2156,12 @@ def gke_admit_workflow_findings(workflow: str, name: str = 'gke-pr.yml') -> list
         findings.append(f'{name} legs must require every selected proof')
     result_step = _step_named(steps.get('result', []),
                               '      - name: Require an independently consistent successful result')
-    result_needs = ['admit', 'preflight', NATIVE_X86_JOB, 'legs']
     if (_needs(jobs.get('result', '')) != result_needs
             or _job_values(jobs.get('result', ''), 'if') != ['always()']
             or _code(result_step) != _code(result_template)):
-        findings.append(f'{name} result must require admission, preflight, native x86 and consistent proof results')
+        corpus_requirement = ', corpus validation' if corpus_variant else ''
+        findings.append(f'{name} result must require admission, preflight, native x86'
+                        f'{corpus_requirement} and consistent proof results')
     if not admit_steps or 'id: allowed' not in admit_steps[-1] \
             or 'allowed=true' not in admit_steps[-1] \
             or any('allowed=true' in step for step in admit_steps[:-1]):
@@ -2960,12 +3050,16 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         jobs = _jobs(workflow)
         split_release_form = name == 'release.yml' and _release_split_requested(jobs)
         arm_variant = _gke_pr_arm_variant(name, jobs)
+        corpus_variant = _gke_pr_corpus_variant(name, jobs)
         timed = GKE_PR_ARM_JOB_COMMANDS if arm_variant else JOB_COMMANDS.get(name, {})
         gke_pins = GKE_PR_ARM_JOB_LABELS if arm_variant else GKE_JOB_RUNNERS.get(name, {})
+        if corpus_variant:
+            timed = {**timed, **GKE_PR_CORPUS_JOB_COMMANDS}
+            gke_pins = {**gke_pins, **GKE_PR_CORPUS_JOB_LABELS}
         gkp_pins = GKP_JOB_RUNNERS.get(name, {})
         hosted_pins = HOSTED_JOB_RUNNERS.get(name, {})
         hosted_release_pins = HOSTED_RELEASE_JOB_RUNNERS.get(name, {})
-        if arm_variant:
+        if arm_variant or corpus_variant:
             hosted_pins = {**hosted_pins, **gke_pins}
         fixed_hosted = {job: label for job, label in hosted_pins.items()
                         if label == HOSTED_X86_RUNNER or name == 'gke-pr.yml'
@@ -5586,6 +5680,14 @@ def check_commands(source: Path, output: Path | None = None,
         # every mutation of the recorded battery the full sweep caught.
         ('corpus-parity-subset-cover-tests',
          [sys.executable, str(source / 'scripts/test_corpus_parity_subset_cover.py')]),
+        ('corpus-sha-validation-tests',
+         [sys.executable, str(source / 'scripts/test_validate_corpus_sha.py')]),
+        ('corpus-gitlink-result-tests',
+         [sys.executable, str(source / 'scripts/test_check_corpus_gitlink_result.py')]),
+        ('corpus-file-digest-tests',
+         [sys.executable, str(source / 'scripts/test_write_corpus_file_digests.py')]),
+        ('corpus-admission-variant-tests',
+         [sys.executable, str(source / 'scripts/test_ci_corpus_variant.py')]),
         # Lane REL10: the JSON report keys outlive the removed C spellings, and
         # release.yml's version arithmetic is a tested script.
         ('report-schema-key-tests',
