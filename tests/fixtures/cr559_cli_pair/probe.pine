@@ -1,0 +1,12 @@
+//@version=6
+strategy("Map capacity CLI", initial_capital=1000000000, pyramiding=2)
+pairs = input.int(50003, "Pairs", minval=1)
+salt = input.int(11, "Salt", minval=1)
+var map<string, int> values = map.new<string, int>()
+if bar_index == 1
+    for i = 0 to pairs - 1
+        values.put(str.tostring(i * 37 + 11), i * 3 + salt + int(close))
+    strategy.entry("size", strategy.long, qty=float(values.size()))
+    strategy.entry("lookup", strategy.long, qty=float(values.get(str.tostring((pairs - 1) * 37 + 11))))
+if bar_index == 2
+    strategy.close_all()
