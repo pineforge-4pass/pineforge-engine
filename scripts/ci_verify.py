@@ -1017,8 +1017,11 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_p2_a5_string_1m',
     'test_p2_a5_map_1m',
     'test_p2_a5_map_prepared_1m',
-    # tests/cr150.d/cr559-map-capacity.cmake:23.
+    # tests/cr150.d/cr559-map-capacity.cmake:30.
     'test_cr559_map_capacity_resident',
+    # tests/cr150.d/cr559-map-capacity.cmake:25 (its library target is in the
+    # tests/CMakeLists.txt fence); measured 5615.44 s in the ended pair proof.
+    'test_cr559_map_capacity_cli',
     # tests/cr150.d/p2cx-a5arr.cmake:5.
     'test_array_growth_1m',
     # tests/cr150.d/report-trade-retirement.cmake and report-trade-reference.cmake:
