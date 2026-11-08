@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import io
 import inspect
 import json
@@ -3039,9 +3040,8 @@ class PostFleetRunnerPolicy(unittest.TestCase):
 
     def test_post_fleet_docs_match_runner_policy(self):
         docs = (ROOT / 'docs/ci.md').read_text()
-        # expectation corrected: 2060 -> 2062, because the truthful smoke
-        # documentation gained two lines.
-        self.assertEqual(len(docs.splitlines()), 2062)
+        # expectation corrected: 2062 -> 2109, because corpus admission and gate documentation was added.
+        self.assertEqual(len(docs.splitlines()), 2109)
         # The test-owned job catalog defines the protected label inventory.
         tables = re.findall(
             r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
@@ -4857,9 +4857,11 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'preflight-tests', 'unittest-shards-tests', 'verifier-paths-tests',
             'native-c-surface-tests', 'native-x86-release-tests', 'kernel-residuals-tests',
             'corpus-parity-identity-tests',
-            'corpus-parity-subset-cover-tests', 'report-schema-key-tests',
+            'corpus-parity-subset-cover-tests', 'corpus-sha-validation-tests',
+            'corpus-gitlink-result-tests', 'corpus-file-digest-tests',
+            'corpus-admission-variant-tests', 'report-schema-key-tests',
             'selected-window-ownership-tests', 'report-outputs-key-tests', 'release-version-tests',
-            'release-gate-tests', 'prebuilt-bookworm-tests', 'prebuilt-glibc-tests',
+            'release-gate-tests', 'rerun-preempted-tests', 'prebuilt-bookworm-tests', 'prebuilt-glibc-tests',
             'run-failure-diff-tests', 'run-json-harness-tests',
             'docs-only-tests', 'design-inventory-tests', 'design-inventory',
             'detached-comments-tests', 'detached-comments', 'native-tempdir-tests',
@@ -4876,8 +4878,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
         with mock.patch.object(ci_preflight.sys, 'platform', 'linux'):
             self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
             # main() prepends actionlint-version to all/fast/github-only.
-            self.assertEqual(len(expected) + 1, 66)
-            self.assertEqual(len(check_commands(ROOT, tier='fast')), 61)
+            self.assertEqual(len(expected) + 1, 71)
+            self.assertEqual(len(check_commands(ROOT, tier='fast')), 66)
             self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
             self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
         for platform in ('darwin', 'win32'):
@@ -4886,7 +4888,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
                                      if name not in ('prebuilt-bookworm-tests', 'prebuilt-glibc-tests')]
                 self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})],
                                  expected_platform)
-                self.assertEqual(len(check_commands(ROOT, tier='fast')), 59)
+                self.assertEqual(len(check_commands(ROOT, tier='fast')), 64)
 
 
 class PrebuiltGlibcRegistration(unittest.TestCase):
@@ -5553,9 +5555,8 @@ class PreflightFailures(unittest.TestCase):
 
     def test_documented_slow_row_counts_match_literal_population(self):
         text = (ROOT / 'docs/ci.md').read_text()
-        # expectation corrected: 2060 -> 2062, because the truthful smoke
-        # documentation gained two lines.
-        self.assertEqual(len(text.splitlines()), 2062)
+        # expectation corrected: 2062 -> 2109, because corpus admission and gate documentation was added.
+        self.assertEqual(len(text.splitlines()), 2109)
         slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
                        if name.startswith('test_ci_verify_slice_'))
         self.assertTrue(slices, 'verifier slice inventory must not be empty')
@@ -5570,12 +5571,18 @@ class PreflightFailures(unittest.TestCase):
             r'in `tests/CMakeLists.txt`: (\d+)$', text, re.MULTILINE)
         self.assertEqual([int(first or second) for first, second in counts],
                          [len(EXPECTED_PR_SLOW_ROWS)] * 2)
+        # expectation corrected: 71 -> 90, because docs/ci.md now states the
+        # size of the pinned set (89 names, 90 with test_cr559_map_capacity_cli)
+        # instead of the retired 43 + 28 = 71 breakdown, which had fallen
+        # behind the pin.
         inventory = re.findall(
-            r'pins all (\d+) source-labelled names: (\d+) from the\n'
-            r'`PINEFORGE_PR_SLOW_TESTS` loop and (\d+) direct CMake', text)
-        self.assertEqual(inventory, [('71', '43', '28')])
-        self.assertIn('The timing list contains 43 names, and 28 additional names', text)
-        self.assertIn('making 71 distinct pinned slow names.', text)
+            r'`scripts/ci_verify\.py` pins (\d+) slow-test names, including\n'
+            r'`test_cr559_map_capacity_cli`\.', text)
+        self.assertEqual(inventory, ['90'])
+        self.assertIn(
+            '`PINNED_SLOW_TEST_ROWS` explicitly pins 90 distinct slow names across\n'
+            '`tests/CMakeLists.txt` and `tests/cr150.d/*.cmake`, including the directly\n'
+            'labelled `test_cr559_map_capacity_cli` row.', text)
 
     def test_documented_slow_rows_refuse_same_size_wrong_slice(self):
         text = (ROOT / 'docs/ci.md').read_text()
@@ -9050,7 +9057,7 @@ finally:
             'selected-window-ownership-tests', 'release-gate-tests', 'prebuilt-bookworm-tests',
             'run-failure-diff-tests', 'design-inventory', 'design-inventory-tests',
             'doc-anchors', 'doc-anchors-tests', 'doc-lint', 'doc-lint-tests',
-            'kernel-seam-rows', 'kernel-seam-rows-tests',
+            'kernel-seam-rows', 'kernel-seam-rows-tests', 'rerun-preempted-tests',
         }
         for platform in ('linux', 'darwin', 'win32'):
             with mock.patch.object(ci_preflight.sys, 'platform', platform):
@@ -9255,12 +9262,15 @@ finally:
                     'run-json-harness-tests']
         self.assertEqual(argv[9:], ['/nonexistent-pineforge-src/docker/run_json_*_test.py'])
 
-    def test_release_bump_contract_and_gate_tests_remain_binding(self):
+    def test_release_gate_and_rerun_tests_remain_binding(self):
         self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
         for tier in ('all', 'fast'):
             plan = {entry[0]: entry for entry in check_commands(ROOT, tier=tier)}
             self.assertEqual(plan['release-gate-tests'], (
                 'release-gate-tests', [sys.executable, str(ROOT / 'scripts/test_ci_release_gate.py')]))
+            self.assertEqual(plan['rerun-preempted-tests'], (
+                'rerun-preempted-tests',
+                [sys.executable, str(ROOT / 'scripts/test_ci_rerun_preempted.py')]))
 
     def test_release_bump_publication_mutations_refuse(self):
         original, others = self.ci_sources(), self.other_sources()
@@ -11894,6 +11904,8 @@ class GkeArmAdmissionVariantTests(unittest.TestCase):
             'gke-pr.yml build-debug must follow admission and keep its path policy',
             'gke-pr.yml build-debug must run its complete fast Debug smoke',
             'gke-pr.yml build-debug must install only its smoke dependencies',
+            'gke-pr.yml build-debug must retain exactly its four smoke steps '
+            'and optional pinned final output collector',
             'gke-pr.yml legs must require every selected proof',
             'gke-pr.yml result must require admission, preflight, native x86 and consistent proof results',
             'gke-pr.yml build-debug must have one head checkout',
@@ -12363,6 +12375,606 @@ class GkeAdmissionRuleTests(unittest.TestCase):
             self.assertFalse((directory / '.github/workflows/gke-pr.yml').exists())
             self.assertEqual(admit_rule_findings(directory, run_actionlint=False), [
                 'gke-pr.yml: admission workflow is missing'])
+
+
+def main_admission_data_findings(workflows):
+    """Exercise the ordinary data-only entry without executing a supplied checker."""
+    copies = ('.github/actionlint.yaml', '.github/actions/setup-live-curl/action.yml')
+    announce_compare_fixture_paths(*(ROOT / relative for relative in copies))
+    with tempfile.TemporaryDirectory(prefix='admit-main-') as fetched:
+        directory = Path(fetched)
+        targets = [directory / relative for relative in copies]
+        targets += [directory / '.github/workflows' / name for name in workflows]
+        announce_compare_fixture_paths(directory, *targets)
+        for target in targets:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        for relative in copies:
+            shutil.copyfile(ROOT / relative, directory / relative)
+        for name, text in workflows.items():
+            (directory / '.github/workflows' / name).write_text(text, encoding='utf-8')
+        return admit_rule_findings(directory, run_actionlint=False)
+
+
+class SplitHostedReleaseAdmission(unittest.TestCase):
+    """The split layout must bind each architecture and its artifact handoff."""
+
+    JOBS = ('release', 'prebuilt-x86', 'prebuilt-arm', 'upload', 'notify-hub')
+    INVENTORY = ('release.yml split prebuilt must contain exactly release, prebuilt-x86, '
+                 'prebuilt-arm, upload and notify-hub jobs')
+    HEADER = 'release.yml {} must retain its reviewed header, permissions, dependencies and outputs'
+    STEP = 'release.yml {} must retain step {} with its reviewed command and context'
+    RAW = ('release.yml {} must retain the raw single-line all-library glibc checker '
+           'invocation and its run context')
+    CREDENTIAL = ('release.yml job {} must not receive the protected release '
+                  'environment or release credentials')
+    TRIGGER = ('release.yml split prebuilt must retain exactly its workflow_dispatch '
+               'trigger and reviewed inputs')
+
+    def setUp(self):
+        fixture = ROOT / 'scripts/fixtures/ci_preflight/release_split_hosted_2167.yml'
+        legacy = ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml'
+        gke_fixture = ROOT / 'scripts/fixtures/ci_preflight/gke_pr_legacy.yml'
+        release = ROOT / '.github/workflows/release.yml'
+        announce_compare_fixture_paths(fixture, legacy, gke_fixture, release)
+        split_bytes = fixture.read_bytes()
+        self.assertEqual(hashlib.sha256(split_bytes).hexdigest(),
+                         '00e84f8d45028105c580ac84818ccdd96ff08aeab352286273a29a02eaeed062')
+        legacy_bytes = legacy.read_bytes()
+        self.assertEqual(hashlib.sha256(legacy_bytes).hexdigest(),
+                         '3f6443192ad993e59e543b85ef00ebca226dba4a2e4c2647a02ac371daa2b267')
+        gke_bytes = gke_fixture.read_bytes()
+        self.assertEqual(hashlib.sha256(gke_bytes).hexdigest(),
+                         '21025075090a0a40bfd7360e54a36a0c9bbac9bb8109fbbaa86edce347c27b87')
+        self.split = split_bytes.decode('utf-8')
+        self.legacy = legacy_bytes.decode('utf-8')
+        self.shipped = release.read_text(encoding='utf-8')
+        self.gke = gke_bytes.decode('utf-8')
+
+    def step(self, job, name):
+        step = ci_preflight._step_named(ci_preflight._steps(_jobs(self.split)[job]),
+                                        '      - name: ' + name)
+        self.assertTrue(step, (job, name))
+        return step
+
+    def mutate_step(self, job, name, before, after):
+        step = self.step(job, name)
+        self.assertIn(before, step)
+        changed = in_job(self.split, job, step, step.replace(before, after, 1))
+        self.assertNotEqual(changed, self.split)
+        return changed
+
+    def assert_refused(self, changed, finding):
+        self.assertNotEqual(changed, self.split)
+        self.assertIn(finding, ci_preflight.release_prebuilt_workflow_findings(changed))
+        self.assertIn(finding, ci_preflight.runner_findings({'release.yml': changed}))
+        self.assertIn(finding, main_admission_data_findings(
+            {'gke-pr.yml': self.gke, 'release.yml': changed}))
+
+    def test_legacy_and_split_layouts_dispatch_through_real_parsers(self):
+        # Exercise the matrix forms and the intended split through the same
+        # checker entry points, independently of later workflow cutovers.
+        for workflow in (self.shipped, self.legacy,
+                         legacy_release_workflow(self.legacy), self.split):
+            with self.subTest(jobs=tuple(_jobs(workflow))):
+                self.assertEqual(ci_preflight.release_credential_findings(workflow), [])
+                self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(workflow), [])
+                self.assertEqual(ci_preflight.runner_findings({'release.yml': workflow}), [])
+                self.assertEqual(main_admission_data_findings(
+                    {'gke-pr.yml': self.gke, 'release.yml': workflow}), [])
+        paths = [ROOT / path for path in CI_SOURCES]
+        probe = ROOT / '.github/workflows/release-ruleset-probe.yml'
+        announce_compare_fixture_paths(*paths, probe)
+        self.assertEqual(ci_workflow_findings(
+            *(path.read_text(encoding='utf-8') for path in paths),
+            others={'release.yml': self.split, 'gke-pr.yml': self.gke,
+                    'release-ruleset-probe.yml': probe.read_text(encoding='utf-8')}), [])
+
+    def test_each_split_step_is_required_and_cannot_be_weakened(self):
+        self.assertEqual(
+            {job: len(ci_preflight._steps(_jobs(self.split)[job])) for job in self.JOBS},
+            {'release': 12, 'prebuilt-x86': 15, 'prebuilt-arm': 14, 'upload': 4, 'notify-hub': 2})
+        for job in self.JOBS:
+            for step in ci_preflight._steps(_jobs(self.split)[job]):
+                name, = ci_preflight._step_values(step, 'name')
+                for replacement in ('', step.replace('\n', '\n        continue-on-error: true\n', 1)):
+                    with self.subTest(job=job, step=name, removed=not replacement):
+                        changed = in_job(self.split, job, step, replacement)
+                        self.assert_refused(changed, self.STEP.format(job, name))
+
+    def test_split_inventory_refuses_partial_hybrid_unknown_and_duplicate_jobs(self):
+        for job in self.JOBS:
+            body = _jobs(self.split)[job]
+            with self.subTest(missing=job):
+                self.assert_refused(self.split.replace(f'  {job}:' + body, '', 1),
+                                    self.INVENTORY)
+        legacy = _jobs(self.legacy)['prebuilt']
+        for addition in ('\n  prebuilt:' + legacy,
+                         '\n  surprise:\n    runs-on: ubuntu-24.04\n'
+                         '    steps:\n      - run: true\n',
+                         '\n  upload:' + _jobs(self.split)['upload']):
+            with self.subTest(addition=addition.splitlines()[1]):
+                self.assert_refused(self.split + addition, self.INVENTORY)
+
+    def test_legacy_inventory_rejects_missing_extra_and_duplicate_jobs(self):
+        finding = 'release.yml prebuilt must retain exactly release, prebuilt and notify-hub jobs'
+        self.assertEqual(set(_jobs(self.legacy)), {'release', 'prebuilt', 'notify-hub'})
+        mutations = [(f'  {job}:' + body, '')
+                     for job, body in _jobs(self.legacy).items()]
+        mutations += [
+            ('\n  prebuilt:', '\n  unexpected:\n    runs-on: ubuntu-24.04\n'
+             '    steps:\n      - run: true\n\n  prebuilt:'),
+            ('\n  prebuilt:', '\n  prebuilt:\n    runs-on: ubuntu-24.04\n'
+             '    steps:\n      - run: true\n\n  prebuilt:'),
+        ]
+        for before, after in mutations:
+            with self.subTest(before=before.splitlines()[0], after=after):
+                self.assertIn(before, self.legacy)
+                changed = self.legacy.replace(before, after, 1)
+                self.assertNotEqual(changed, self.legacy)
+                self.assert_refused(changed, finding)
+
+    def test_split_dispatch_trigger_and_all_input_shapes_are_pinned(self):
+        for before, after in (
+                ('on:\n  workflow_dispatch:\n', 'on:\n  push:\n'),
+                ('on:\n  workflow_dispatch:\n', 'on:\n  pull_request:\n'),
+                ('on:\n  workflow_dispatch:\n', 'on:\n  workflow_call:\n'),
+                ('on:\n  workflow_dispatch:\n',
+                 'on:\n  push:\n  workflow_dispatch:\n'),
+                ('on:\n  workflow_dispatch:\n',
+                 'on:\n  workflow_dispatch:\n  workflow_dispatch:\n'),
+                ('on:\n  workflow_dispatch:\n',
+                 'on:\n  workflow_dispatch:\non:\n  workflow_dispatch:\n'),
+                ('    inputs:\n', ''),
+                ('    inputs:\n', '    inputs: {}\n'),
+                ('      bump:\n', '      increment:\n'),
+                ('        type: choice\n', '        type: string\n'),
+                ('        required: true\n', '        required: false\n'),
+                ('        default: patch\n', '        default: major\n'),
+                ('          - major\n', '          - major\n          - arbitrary\n'),
+                ('      override:\n', '      override_disabled:\n'),
+                ("        default: ''\n", "        default: '1.0.0'\n"),
+                ('        type: string\n', '        type: boolean\n'),
+                ('      dry_run:\n', '      dry_run_disabled:\n'),
+                ('        type: boolean\n', '        type: string\n'),
+                ('        default: false\n', '        default: true\n'),
+                ('    inputs:\n', '    inputs:\n      token:\n        type: string\n')):
+            with self.subTest(before=before, after=after):
+                self.assertIn(before, self.split)
+                changed = self.split.replace(before, after, 1)
+                self.assert_refused(changed, self.TRIGGER)
+                self.assertIn(self.CREDENTIAL.format('prebuilt-x86'),
+                              ci_preflight.release_credential_findings(changed))
+
+    def test_release_and_notify_action_and_dispatch_pins_are_binding(self):
+        for job, name, before, after in (
+                ('release', 'Mint org App token',
+                 'd72941d797fd3113feb6b93fd0dec494b13a2547', '0' * 40),
+                ('release', 'Refuse unless pineforge/verify and pineforge/parity are green',
+                 'python3 scripts/ci_release_gate.py gate', 'true # gate disabled'),
+                ('notify-hub', 'Mint org App token (hub dispatch)',
+                 'd72941d797fd3113feb6b93fd0dec494b13a2547', '0' * 40),
+                ('notify-hub', 'Mint org App token (hub dispatch)',
+                 'repositories: pineforge-release', 'repositories: pineforge-engine'),
+                ('notify-hub', 'Dispatch engine-release -> pineforge-release',
+                 'gh api repos/pineforge-4pass/pineforge-release/dispatches',
+                 'gh api repos/pineforge-4pass/other/dispatches'),
+                ('notify-hub', 'Dispatch engine-release -> pineforge-release',
+                 '-f event_type=engine-release', '-f event_type=other'),
+                ('notify-hub', 'Dispatch engine-release -> pineforge-release',
+                 '-F "client_payload[prerelease]=${PRERELEASE}"',
+                 '-f "client_payload[prerelease]=${PRERELEASE}"')):
+            with self.subTest(job=job, step=name, before=before):
+                self.assert_refused(self.mutate_step(job, name, before, after),
+                                    self.STEP.format(job, name))
+
+    def test_x86_credential_exception_requires_the_exact_reader(self):
+        announce_compare_fixture_paths(ROOT / 'scripts/ci_preflight.py')
+        source = inspect.getsource(ci_preflight.release_credential_findings)
+        guard = 'and _release_split_toolchain_reader_is_pinned(workflow, body)'
+        self.assertIn(guard, source)
+        self.assertEqual(source.count(guard), 1)
+        mutant = source.replace(guard, 'and True', 1)
+        self.assertNotEqual(mutant, source)
+        namespace = dict(ci_preflight.release_credential_findings.__globals__)
+        exec(compile(mutant, '<release-reader-exemption-without-pin>', 'exec'), namespace)
+        unchecked = namespace['release_credential_findings']
+        self.assertEqual(ci_preflight.release_credential_findings(self.split), [])
+        self.assertEqual(unchecked(self.split), [])
+        for before, after in (
+                ('create_credentials_file: false', 'create_credentials_file: true'),
+                ('export_environment_variables: false', 'export_environment_variables: true'),
+                ('    steps:\n', '    environment: release\n    steps:\n')):
+            with self.subTest(before=before):
+                if before == '    steps:\n':
+                    self.assertIn(before, _jobs(self.split)['prebuilt-x86'])
+                    changed = in_job(self.split, 'prebuilt-x86', before, after)
+                else:
+                    changed = self.mutate_step(
+                        'prebuilt-x86', 'Authenticate the dedicated toolchain reader', before, after)
+                self.assertNotEqual(changed, self.split)
+                finding = self.CREDENTIAL.format('prebuilt-x86')
+                self.assertIn(finding, ci_preflight.release_credential_findings(changed))
+                self.assertIn(finding, ci_preflight.runner_findings({'release.yml': changed}))
+                self.assertIn(finding, main_admission_data_findings(
+                    {'gke-pr.yml': self.gke, 'release.yml': changed}))
+                self.assertNotIn(finding, unchecked(changed))
+
+    def test_runner_strict_scan_covers_arm_and_upload_raw_secret_expressions(self):
+        announce_compare_fixture_paths(ROOT / 'scripts/ci_preflight.py')
+        source = inspect.getsource(ci_preflight.runner_findings)
+        guard = "'prebuilt', 'prebuilt-x86', 'prebuilt-arm', 'upload'"
+        self.assertIn(guard, source)
+        self.assertEqual(source.count(guard), 1)
+        mutant = source.replace(guard, "'prebuilt', 'prebuilt-x86'", 1)
+        self.assertNotEqual(mutant, source)
+        namespace = dict(ci_preflight.runner_findings.__globals__)
+        exec(compile(mutant, '<release-runner-without-arm-upload-strict-scan>', 'exec'), namespace)
+        unchecked = namespace['runner_findings']
+        for job, step in (('prebuilt-arm', 'Configure'),
+                          ('upload', 'Verify both tarballs against build outputs')):
+            with self.subTest(job=job):
+                # GitHub evaluates expressions even in shell comments. Move
+                # the job off hosted so the independent routing guard must act.
+                changed = self.mutate_step(
+                    job, step, '          set -euo pipefail\n',
+                    '          set -euo pipefail\n          # ${{ secrets.DEPLOY_TOKEN }}\n')
+                runner, = ci_preflight._job_values(_jobs(changed)[job], 'runs-on')
+                self.assertIn('runs-on: ' + runner, _jobs(changed)[job])
+                changed = in_job(changed, job, 'runs-on: ' + runner, 'runs-on: self-hosted')
+                self.assertNotEqual(changed, self.split)
+                finding = (f'release.yml job {job} must keep production credentials '
+                           'on a hosted standard runner')
+                self.assertIn(finding, ci_preflight.runner_findings({'release.yml': changed}))
+                mutant_findings = unchecked({'release.yml': changed})
+                self.assertNotIn(finding, mutant_findings)
+                self.assertIn(self.CREDENTIAL.format(job), mutant_findings)
+
+    def test_x86_oidc_caller_guards_admit_only_main_dispatch_from_this_workflow(self):
+        job = 'prebuilt-x86'
+        for before, after in (
+                ("github.ref == 'refs/heads/main'",
+                 "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))"),
+                ("github.event_name == 'workflow_dispatch'",
+                 "github.event_name == 'push'"),
+                ("github.ref == 'refs/heads/main'", "github.ref == 'refs/heads/other'"),
+                ('pineforge-engine/.github/workflows/release.yml@{0}',
+                 'pineforge-engine/.github/workflows/other.yml@{0}')):
+            with self.subTest(header=before, after=after):
+                self.assertIn(before, _jobs(self.split)[job])
+                changed = in_job(self.split, job, before, after)
+                self.assert_refused(changed, self.HEADER.format(job))
+                self.assertIn(self.CREDENTIAL.format(job),
+                              ci_preflight.release_credential_findings(changed))
+        name = 'Refuse an untrusted toolchain caller'
+        for before, after in (
+                ('case "${REF}" in refs/heads/main)',
+                 'case "${REF}" in refs/heads/main|refs/tags/v*)'),
+                ('[[ "${EVENT}" == workflow_dispatch ]]', '[[ "${EVENT}" == push ]]'),
+                ('case "${REF}" in refs/heads/main)', 'case "${REF}" in refs/heads/other)'),
+                ('pineforge-engine/.github/workflows/release.yml@${REF}',
+                 'pineforge-engine/.github/workflows/other.yml@${REF}')):
+            with self.subTest(caller=before, after=after):
+                changed = self.mutate_step(job, name, before, after)
+                self.assert_refused(changed, self.STEP.format(job, name))
+                self.assertIn(self.CREDENTIAL.format(job),
+                              ci_preflight.release_credential_findings(changed))
+
+    def test_both_raw_glibc_invocations_bind_arguments_context_streams_and_exit(self):
+        name = "Check every staged library's glibc floor"
+        command = ('          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" '
+                   '--baseline-root "${BASELINE_DIR}" '
+                   '> "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then')
+        mutations = [
+            (command, ''),
+            (command, '          # ' + command.lstrip()),
+            ('"${STAGE_DIR}" --baseline-root', '"${STAGE_DIR}/lib/libpineforge.a" --baseline-root'),
+            ('--baseline-root "${BASELINE_DIR}"', ''),
+            ('--baseline-root "${BASELINE_DIR}"', '--baseline-root "${STAGE_DIR}"'),
+            (' > "${log}/stdout.jsonl"', ' > /dev/null'),
+            (' 2> "${log}/stderr.txt"', ' 2> /dev/null'),
+            ('set -euo pipefail', 'set +e'),
+            ('run: |', 'run: >'),
+            ('        run: |', '        shell: sh\n        run: |'),
+            ('        run: |', '        if: false\n        run: |'),
+            ('          TRIPLE:', '          BASH_ENV: /outside\n          TRIPLE:'),
+            ('checker_rc=0', 'checker_rc=1'),
+            ('else checker_rc=$?; fi', 'else checker_rc=0; fi'),
+            ('"${checker_rc}" > "${log}/exitcode.txt"', '0 > "${log}/exitcode.txt"'),
+            ('cat "${log}/stdout.jsonl"', 'true'),
+            ('cat "${log}/stderr.txt" >&2', 'true'),
+            ('exit "${checker_rc}"', 'exit 0'),
+        ]
+        for separator in ('', '\n', '            # disabled continuation\n'):
+            mutations.append((command, command.replace(
+                ' > "${log}/stdout.jsonl"',
+                ' \\\n' + separator + '            > "${log}/stdout.jsonl"', 1)))
+        for job in ('prebuilt-x86', 'prebuilt-arm'):
+            for before, after in mutations:
+                with self.subTest(job=job, before=before, after=after):
+                    self.assert_refused(self.mutate_step(job, name, before, after),
+                                        self.RAW.format(job))
+
+    def test_each_architecture_fetch_digest_and_pack_output_is_binding(self):
+        fetch = 'Fetch the v1.10.0 baseline archive for the glibc comparison'
+        for job, digest in (
+                ('prebuilt-x86', 'cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543'),
+                ('prebuilt-arm', '982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bb')):
+            mutations = (
+                (fetch, 'gh release download v1.10.0', 'gh release download latest'),
+                (fetch, digest, '0' * 64),
+                (fetch, '| sha256sum -c -', '| cat'),
+                (fetch, 'echo "BASELINE_DIR=${root}/tree"', 'echo "BASELINE_DIR=${root}/download"'),
+                ('Pack tarball + sha256', 'digest=$(sha256sum "${tarball}")', 'digest=' + '0' * 64),
+                ('Pack tarball + sha256', 'echo "digest=${digest}"', 'echo "digest=unverified"'),
+            )
+            for name, before, after in mutations:
+                with self.subTest(job=job, step=name, before=before):
+                    self.assert_refused(self.mutate_step(job, name, before, after),
+                                        self.STEP.format(job, name))
+
+    def test_x86_toolchain_reader_build_and_consumer_are_exact_and_ordered(self):
+        mutations = (
+            ('Authenticate the dedicated toolchain reader',
+             'auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093', 'auth@' + '0' * 40),
+            ('Authenticate the dedicated toolchain reader',
+             'create_credentials_file: false', 'create_credentials_file: true'),
+            ('Authenticate the dedicated toolchain reader',
+             'export_environment_variables: false', 'export_environment_variables: true'),
+            ('Authenticate the dedicated toolchain reader',
+             'engine-release-toolchainreader@', 'release-writer@'),
+            ('Build x86_64 in pinned Bookworm', 'test ! -L .github/engine-toolchain-image.txt', 'true'),
+            ('Build x86_64 in pinned Bookworm', '@sha256:[0-9a-f]{64}', ':latest'),
+            ('Build x86_64 in pinned Bookworm', 'bash scripts/build_prebuilt_bookworm.sh', 'cmake -B build'),
+            ('Build x86_64 in pinned Bookworm',
+             'SOURCE_SHA: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}',
+             'SOURCE_SHA: ${{ github.sha }}'),
+            ('Consume packed x86_64 archive', '--consume ', ''),
+            ('Consume packed x86_64 archive', '"${TARBALL}" "${SHASUM}"', '"other.tar.gz" "${SHASUM}"'),
+        )
+        for name, before, after in mutations:
+            with self.subTest(step=name, before=before):
+                self.assert_refused(self.mutate_step('prebuilt-x86', name, before, after),
+                                    self.STEP.format('prebuilt-x86', name))
+        consumer = self.step('prebuilt-x86', 'Consume packed x86_64 archive').rstrip('\n')
+        retention = self.step('prebuilt-x86', 'Keep the verified tarball as a workflow artifact').rstrip('\n')
+        before = consumer + '\n\n' + retention
+        changed = in_job(self.split, 'prebuilt-x86', before, retention + '\n\n' + consumer)
+        self.assert_refused(changed, 'release.yml prebuilt-x86 must retain exactly its reviewed ordered steps')
+
+    def test_arm_eigen_configure_build_install_and_archive_steps_stay_applicable(self):
+        mutations = (
+            ('Install Eigen3 (Linux)', 'sudo apt-get install -y libeigen3-dev', 'true'),
+            ('Assert Eigen3 3.4.0 on ARM', 'EIGEN_MAJOR_VERSION[[:space:]]+4',
+             'EIGEN_MAJOR_VERSION[[:space:]]+3'),
+            ('Configure', '-DEigen3_DIR=/usr/share/eigen3/cmake', '-DEigen3_DIR=/outside'),
+            ('Configure', '-DFETCHCONTENT_FULLY_DISCONNECTED=ON', '-DFETCHCONTENT_FULLY_DISCONNECTED=OFF'),
+            ('Build', 'cmake --build build -j 4', 'true'),
+            ('Install to staging', 'cmake --install build', 'true'),
+        )
+        for name, before, after in mutations:
+            with self.subTest(step=name):
+                self.assert_refused(self.mutate_step('prebuilt-arm', name, before, after),
+                                    self.STEP.format('prebuilt-arm', name))
+
+    def test_upload_verifies_actual_archives_before_public_write(self):
+        for before, after in (
+                ('          GH_REPO: ${{ github.repository }}\n', ''),
+                ('GH_REPO: ${{ github.repository }}', 'GH_REPO: pineforge-4pass/other')):
+            with self.subTest(repository=after):
+                self.assert_refused(self.mutate_step('upload', 'Upload to release', before, after),
+                                    self.STEP.format('upload', 'Upload to release'))
+        name = 'Verify both tarballs against build outputs'
+        for before, after in (
+                ('needs.prebuilt-x86.outputs.sha256', 'needs.prebuilt-arm.outputs.sha256'),
+                ('needs.prebuilt-arm.outputs.sha256', 'steps.download.outputs.sha256'),
+                ('| sha256sum --check --strict -', '| cat'),
+                ('test ! -L "artifacts/x86/${X86_TARBALL}"', 'true'),
+                ('test ! -L "artifacts/arm/${ARM_TARBALL}"', 'true'),
+                ('set -euo pipefail', 'set +e'),
+                ('"${X86_SHA256}" "artifacts/x86/${X86_TARBALL}"',
+                 '"${X86_SHA256}" "artifacts/arm/${ARM_TARBALL}"'),
+                ('"${ARM_SHA256}" "artifacts/arm/${ARM_TARBALL}"',
+                 '"${ARM_SHA256}" "artifacts/x86/${X86_TARBALL}"')):
+            with self.subTest(before=before):
+                self.assert_refused(self.mutate_step('upload', name, before, after),
+                                    self.STEP.format('upload', name))
+        verify = self.step('upload', name).rstrip('\n')
+        publish = self.step('upload', 'Upload to release').rstrip('\n')
+        changed = in_job(self.split, 'upload', verify + '\n\n' + publish,
+                         publish + '\n\n' + verify)
+        self.assert_refused(changed, 'release.yml upload must retain exactly its reviewed ordered steps')
+        for job, before, after in (
+                ('upload', 'needs: [release, prebuilt-x86, prebuilt-arm]', 'needs: [release, prebuilt-x86]'),
+                ('notify-hub', 'needs: [release, upload]', 'needs: [release, prebuilt-arm]')):
+            self.assert_refused(in_job(self.split, job, before, after), self.HEADER.format(job))
+
+    def test_split_permissions_tokens_shell_env_and_runner_boundaries_fail_closed(self):
+        for job in ('prebuilt-x86', 'prebuilt-arm', 'upload'):
+            for declaration in (
+                    '    environment: release\n',
+                    '    env:\n      TOKEN: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\n',
+                    '    env:\n      TOKEN: ${{ secrets[inputs.secret_name] }}\n',
+                    '    secrets: inherit\n',
+                    '    container: ubuntu:24.04\n',
+                    '    defaults:\n      run:\n        shell: sh\n',
+                    '    env:\n      BASH_ENV: /outside\n',
+                    '    env:\n      DOCKER_HOST: tcp://outside:2375\n',
+                    '    env:\n      RUNNER_TEMP: /outside\n',
+                    '    continue-on-error: true\n',
+                    '    if: always()\n'):
+                with self.subTest(job=job, declaration=declaration):
+                    self.assert_refused(in_job(self.split, job, '    steps:\n',
+                                               declaration + '    steps:\n'),
+                                        self.HEADER.format(job))
+                    body = _jobs(self.split)[job]
+                    trailing = body.rstrip('\n') + '\n' + declaration + '\n'
+                    self.assert_refused(in_job(self.split, job, body, trailing),
+                                        self.HEADER.format(job))
+            body = _jobs(self.split)[job]
+            label, = ci_preflight._job_values(body, 'runs-on')
+            for replacement in ('self-hosted', "'ubuntu-24.04'", '[ubuntu-24.04]'):
+                with self.subTest(job=job, runner=replacement):
+                    self.assert_refused(in_job(self.split, job, 'runs-on: ' + label,
+                                               'runs-on: ' + replacement), self.HEADER.format(job))
+            changed = in_job(self.split, job, '      contents: ', '      actions: ')
+            self.assert_refused(changed, self.HEADER.format(job))
+        for before, after in (
+                ('permissions:\n  contents: read\n', 'permissions:\n  contents: write\n'),
+                ('env:\n', 'defaults:\n  run:\n    shell: sh\nenv:\n'),
+                ('env:\n', 'env:\n  PATH: /outside\n'),
+                ('env:\n', 'env:\n  TOKEN: ${{ secrets.DEPLOY_TOKEN }}\n')):
+            with self.subTest(workflow=after):
+                self.assert_refused(self.split.replace(before, after, 1),
+                                    'release.yml split prebuilt must retain its read-only workflow permissions, '
+                                    'release-tag environment and default shell')
+        for job in ('prebuilt-arm', 'upload'):
+            changed = in_job(self.split, job, '      contents: ',
+                             '      id-token: write\n      contents: ')
+            self.assert_refused(changed, self.HEADER.format(job))
+            finding = self.CREDENTIAL.format(job)
+            self.assertIn(finding, ci_preflight.release_credential_findings(changed))
+            self.assertIn(finding, ci_preflight.runner_findings({'release.yml': changed}))
+            self.assertIn(finding, main_admission_data_findings(
+                {'gke-pr.yml': self.gke, 'release.yml': changed}))
+
+
+class GkeSmokeOutputAdmission(unittest.TestCase):
+    """Four smoke steps and an optional collector retain the admitted identity."""
+
+    COLLECTOR = '''      - name: Retain PR smoke test output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-smoke-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/ctest-junit.xml
+            build/Testing/Temporary/LastTest.log
+          retention-days: 3
+          if-no-files-found: warn
+'''
+    LAYOUT = 'gke-pr.yml {} must retain exactly its four smoke steps and optional pinned final output collector'
+    COLLECTOR_FINDING = 'gke-pr.yml {} must retain the pinned always-upload PR smoke output collector'
+
+    def setUp(self):
+        path = ROOT / '.github/workflows/gke-pr.yml'
+        fixture = ROOT / 'scripts/fixtures/ci_preflight/gke_pr_legacy.yml'
+        announce_compare_fixture_paths(path, fixture)
+        data = fixture.read_bytes()
+        self.assertEqual(hashlib.sha256(data).hexdigest(),
+                         '21025075090a0a40bfd7360e54a36a0c9bbac9bb8109fbbaa86edce347c27b87')
+        self.original = data.decode('utf-8')
+        self.shipped = path.read_text(encoding='utf-8')
+        for job in ('build', 'build-debug'):
+            self.assertEqual(len(ci_preflight._steps(_jobs(self.original)[job])), 4)
+
+    def with_collectors(self, jobs=('build', 'build-debug')):
+        workflow = self.original
+        for job in jobs:
+            body = _jobs(workflow)[job]
+            workflow = in_job(workflow, job, body, body.rstrip('\n') + '\n' + self.COLLECTOR + '\n')
+        return workflow
+
+    def assert_refused(self, changed, finding):
+        self.assertIn(finding, gke_admit_workflow_findings(changed))
+        self.assertIn(finding, main_admission_data_findings({'gke-pr.yml': changed}))
+
+    def test_exact_four_or_five_steps_are_admitted_independently_in_both_jobs(self):
+        self.assertEqual(gke_admit_workflow_findings(self.shipped), [])
+        self.assertEqual(main_admission_data_findings({'gke-pr.yml': self.shipped}), [])
+        for jobs in ((), ('build',), ('build-debug',), ('build', 'build-debug')):
+            with self.subTest(collectors=jobs):
+                workflow = self.with_collectors(jobs)
+                self.assertEqual(gke_admit_workflow_findings(workflow), [])
+                self.assertEqual(main_admission_data_findings({'gke-pr.yml': workflow}), [])
+
+    def test_each_collector_field_and_extra_execution_key_is_binding(self):
+        workflow = self.with_collectors()
+        for job in ('build', 'build-debug'):
+            for before, after in (
+                    ('Retain PR smoke test output', 'Upload logs'),
+                    ('ea165f8d65b6e75b540449e92b4886f43607fa02', '0' * 40),
+                    ('if: always()', 'if: success()'),
+                    ('        if: always()\n', ''),
+                    ('            build/ctest-junit.xml\n', ''),
+                    ('            build/Testing/Temporary/LastTest.log\n', ''),
+                    ('build/ctest-junit.xml', 'build/*.xml'),
+                    ('build/Testing/Temporary/LastTest.log', 'build/Testing/Temporary/'),
+                    ('${{ github.job }}', '${{ github.sha }}'),
+                    ('-${{ github.run_id }}', ''),
+                    ('-${{ github.run_attempt }}', ''),
+                    ('retention-days: 3', 'retention-days: 7'),
+                    ('if-no-files-found: warn', 'if-no-files-found: error'),
+                    ('        with:\n', '        continue-on-error: true\n        with:\n'),
+                    ('        with:\n', '        run: true\n        with:\n'),
+                    ('        with:\n', '        env:\n          BASH_ENV: /outside\n        with:\n'),
+                    ('          path: |\n', '          path: >\n')):
+                with self.subTest(job=job, before=before, after=after):
+                    collector = self.COLLECTOR.rstrip('\n')
+                    changed = in_job(workflow, job, collector, collector.replace(before, after, 1))
+                    self.assertNotEqual(changed, workflow)
+                    self.assert_refused(changed, self.COLLECTOR_FINDING.format(job))
+
+    def test_collector_position_extra_steps_and_missing_producers_are_refused(self):
+        workflow = self.with_collectors()
+        for job in ('build', 'build-debug'):
+            old_steps = ci_preflight._steps(_jobs(self.original)[job])
+            for step in old_steps:
+                with self.subTest(job=job, missing_old_step=step.splitlines()[0]):
+                    self.assert_refused(in_job(self.original, job, step, ''),
+                                        self.LAYOUT.format(job))
+            added = in_job(self.original, job, '    steps:\n',
+                           '    steps:\n      - run: true\n')
+            self.assert_refused(added, self.LAYOUT.format(job))
+            body = _jobs(workflow)[job]
+            steps = ci_preflight._steps(body)
+            collector = steps[-1].rstrip('\n')
+            verify = steps[-2].rstrip('\n')
+            for position in range(4):
+                with self.subTest(job=job, collector_position=position):
+                    moved = body.replace(collector, '', 1)
+                    moved = moved.replace(steps[position], collector + '\n' + steps[position], 1)
+                    self.assert_refused(in_job(workflow, job, body, moved), self.LAYOUT.format(job))
+            for before, after in (
+                    (collector, collector + '\n' + collector),
+                    (collector, collector + '\n      - run: true'),
+                    (steps[1], ''),
+                    (verify, ''),
+                    (collector, '      - run: true')):
+                with self.subTest(job=job, replacement=after[:100]):
+                    changed = in_job(workflow, job, before, after)
+                    self.assert_refused(changed, self.LAYOUT.format(job))
+
+    def test_old_and_new_forms_keep_producer_head_and_failure_semantics(self):
+        for workflow in (self.original, self.with_collectors()):
+            for job, build_type in (('build', 'Release'), ('build-debug', 'Debug')):
+                for before, after, finding in (
+                        ('--target pineforge_pr_smoke', '--target pineforge',
+                         f'gke-pr.yml {job} must run its complete fast {build_type} smoke'),
+                        ('--no-tests=error', '--no-tests=ignore',
+                         f'gke-pr.yml {job} must run its complete fast {build_type} smoke'),
+                        ('--output-junit build/ctest-junit.xml', '--output-junit elsewhere.xml',
+                         f'gke-pr.yml {job} must run its complete fast {build_type} smoke'),
+                        ('--output-junit build/ctest-junit.xml', '--output-junit build/ctest-junit.xml || true',
+                         f'gke-pr.yml {job} must run its complete fast {build_type} smoke'),
+                        ('ref: ${{ needs.admit.outputs.head_sha }}', 'ref: ${{ github.sha }}',
+                         f'gke-pr.yml {job} checkout must use the admitted immutable head'),
+                        ('persist-credentials: false', 'persist-credentials: true',
+                         f'gke-pr.yml {job} checkout must use the admitted immutable head'),
+                        ('      - name: Verify ' + build_type,
+                         '      - name: Verify ' + build_type + '\n        continue-on-error: true',
+                         self.LAYOUT.format(job)),
+                        ('      - name: Verify ' + build_type,
+                         '      - name: Verify ' + build_type + '\n        shell: sh',
+                         self.LAYOUT.format(job)),
+                        ('    steps:\n', '    env:\n      BASH_ENV: /outside\n    steps:\n',
+                         self.LAYOUT.format(job)),
+                        ('    steps:\n', '    defaults:\n      run:\n        shell: sh\n    steps:\n',
+                         self.LAYOUT.format(job)),
+                        ('    steps:\n', '    continue-on-error: true\n    steps:\n',
+                         self.LAYOUT.format(job))):
+                    with self.subTest(steps=len(ci_preflight._steps(_jobs(workflow)[job])),
+                                      job=job, before=before):
+                        self.assert_refused(in_job(workflow, job, before, after), finding)
 
 
 if __name__ == '__main__':
