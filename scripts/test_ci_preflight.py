@@ -3040,9 +3040,8 @@ class PostFleetRunnerPolicy(unittest.TestCase):
 
     def test_post_fleet_docs_match_runner_policy(self):
         docs = (ROOT / 'docs/ci.md').read_text()
-        # expectation corrected: 2060 -> 2062, because the truthful smoke
-        # documentation gained two lines.
-        self.assertEqual(len(docs.splitlines()), 2062)
+        # expectation corrected: 2062 -> 2109, because corpus admission and gate documentation was added.
+        self.assertEqual(len(docs.splitlines()), 2109)
         # The test-owned job catalog defines the protected label inventory.
         tables = re.findall(
             r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
@@ -4858,9 +4857,11 @@ class RunnerGroupAllowlist(unittest.TestCase):
             'preflight-tests', 'unittest-shards-tests', 'verifier-paths-tests',
             'native-c-surface-tests', 'native-x86-release-tests', 'kernel-residuals-tests',
             'corpus-parity-identity-tests',
-            'corpus-parity-subset-cover-tests', 'report-schema-key-tests',
+            'corpus-parity-subset-cover-tests', 'corpus-sha-validation-tests',
+            'corpus-gitlink-result-tests', 'corpus-file-digest-tests',
+            'corpus-admission-variant-tests', 'report-schema-key-tests',
             'selected-window-ownership-tests', 'report-outputs-key-tests', 'release-version-tests',
-            'release-gate-tests', 'prebuilt-bookworm-tests', 'prebuilt-glibc-tests',
+            'release-gate-tests', 'rerun-preempted-tests', 'prebuilt-bookworm-tests', 'prebuilt-glibc-tests',
             'run-failure-diff-tests', 'run-json-harness-tests',
             'docs-only-tests', 'design-inventory-tests', 'design-inventory',
             'detached-comments-tests', 'detached-comments', 'native-tempdir-tests',
@@ -4877,8 +4878,8 @@ class RunnerGroupAllowlist(unittest.TestCase):
         with mock.patch.object(ci_preflight.sys, 'platform', 'linux'):
             self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})], expected)
             # main() prepends actionlint-version to all/fast/github-only.
-            self.assertEqual(len(expected) + 1, 66)
-            self.assertEqual(len(check_commands(ROOT, tier='fast')), 61)
+            self.assertEqual(len(expected) + 1, 71)
+            self.assertEqual(len(check_commands(ROOT, tier='fast')), 66)
             self.assertEqual(len(check_commands(ROOT, tier='slow')), 4)
             self.assertEqual(len(check_commands(ROOT, tier='github-only')), 7)
         for platform in ('darwin', 'win32'):
@@ -4887,7 +4888,7 @@ class RunnerGroupAllowlist(unittest.TestCase):
                                      if name not in ('prebuilt-bookworm-tests', 'prebuilt-glibc-tests')]
                 self.assertEqual([entry[0] for entry in check_commands(ROOT, env={})],
                                  expected_platform)
-                self.assertEqual(len(check_commands(ROOT, tier='fast')), 59)
+                self.assertEqual(len(check_commands(ROOT, tier='fast')), 64)
 
 
 class PrebuiltGlibcRegistration(unittest.TestCase):
@@ -5554,9 +5555,8 @@ class PreflightFailures(unittest.TestCase):
 
     def test_documented_slow_row_counts_match_literal_population(self):
         text = (ROOT / 'docs/ci.md').read_text()
-        # expectation corrected: 2060 -> 2062, because the truthful smoke
-        # documentation gained two lines.
-        self.assertEqual(len(text.splitlines()), 2062)
+        # expectation corrected: 2062 -> 2109, because corpus admission and gate documentation was added.
+        self.assertEqual(len(text.splitlines()), 2109)
         slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
                        if name.startswith('test_ci_verify_slice_'))
         self.assertTrue(slices, 'verifier slice inventory must not be empty')
@@ -9051,7 +9051,7 @@ finally:
             'selected-window-ownership-tests', 'release-gate-tests', 'prebuilt-bookworm-tests',
             'run-failure-diff-tests', 'design-inventory', 'design-inventory-tests',
             'doc-anchors', 'doc-anchors-tests', 'doc-lint', 'doc-lint-tests',
-            'kernel-seam-rows', 'kernel-seam-rows-tests',
+            'kernel-seam-rows', 'kernel-seam-rows-tests', 'rerun-preempted-tests',
         }
         for platform in ('linux', 'darwin', 'win32'):
             with mock.patch.object(ci_preflight.sys, 'platform', platform):
@@ -9256,12 +9256,15 @@ finally:
                     'run-json-harness-tests']
         self.assertEqual(argv[9:], ['/nonexistent-pineforge-src/docker/run_json_*_test.py'])
 
-    def test_release_bump_contract_and_gate_tests_remain_binding(self):
+    def test_release_gate_and_rerun_tests_remain_binding(self):
         self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
         for tier in ('all', 'fast'):
             plan = {entry[0]: entry for entry in check_commands(ROOT, tier=tier)}
             self.assertEqual(plan['release-gate-tests'], (
                 'release-gate-tests', [sys.executable, str(ROOT / 'scripts/test_ci_release_gate.py')]))
+            self.assertEqual(plan['rerun-preempted-tests'], (
+                'rerun-preempted-tests',
+                [sys.executable, str(ROOT / 'scripts/test_ci_rerun_preempted.py')]))
 
     def test_release_bump_publication_mutations_refuse(self):
         original, others = self.ci_sources(), self.other_sources()
