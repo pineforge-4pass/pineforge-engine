@@ -8460,6 +8460,20 @@ set_tests_properties(
     test_o1_live_limit_default_zero
     test_o1_live_limit_raised_boundary
     PROPERTIES LABELS "slow;mem")
+add_executable(test_o1_live_limit_type test_o1_live_limit_type.cpp)
+target_link_libraries(test_o1_live_limit_type PRIVATE pineforge)
+target_compile_options(test_o1_live_limit_type PRIVATE -ffp-contract=off -UNDEBUG)
+if(PINEFORGE_ENABLE_COVERAGE)
+    target_compile_options(test_o1_live_limit_type PRIVATE ${_pf_cov_test_flags})
+endif()
+add_test(NAME test_o1_live_limit_type COMMAND test_o1_live_limit_type)
+add_executable(test_o1_live_limit_backing test_o1_live_limit_backing.cpp)
+target_link_libraries(test_o1_live_limit_backing PRIVATE pineforge)
+target_compile_options(test_o1_live_limit_backing PRIVATE -ffp-contract=off -UNDEBUG)
+if(PINEFORGE_ENABLE_COVERAGE)
+    target_compile_options(test_o1_live_limit_backing PRIVATE ${_pf_cov_test_flags})
+endif()
+add_test(NAME test_o1_live_limit_backing COMMAND test_o1_live_limit_backing)
 # --- CR-150 o1-live-limit-policy end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)

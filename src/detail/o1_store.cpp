@@ -396,9 +396,7 @@ StoreImpl::~StoreImpl() {
 
 StoreImpl::StoreImpl(const Shape& shape, ScratchBacking& backing)
     : chunk_bytes_(shape.chunk_bytes),
-      max_live_objects_(shape.max_live_objects == 0
-                            ? kMaxLiveObjectsCap
-                            : std::min(shape.max_live_objects, kMaxLiveObjectsCap)) {
+      max_live_objects_(shape.max_live_objects) {
   if (!is_power_of_two(shape.page_bytes) ||
       shape.page_bytes < scratch_min_page_size)
     throw std::invalid_argument(
@@ -582,10 +580,9 @@ Id StoreImpl::create(std::uint64_t bytes, std::uint64_t align) {
   const std::uint64_t alignment = align == 0 ? 1 : align;
   if (!is_power_of_two(alignment))
     throw std::invalid_argument("o1 store: align must be a power of two");
-  if (objects_live_ >= max_live_objects_)
+  if (max_live_objects_ != 0 && objects_live_ >= max_live_objects_)
     throw ScratchCapacityError(ScratchResource::cohort,
-        scratch_object_limit_message(max_live_objects_, objects_live_ + 1,
-                                     kMaxLiveObjectsCap));
+        scratch_object_limit_message(max_live_objects_, objects_live_ + 1));
   if (next_id_ == std::numeric_limits<Id>::max())
     throw std::overflow_error("o1 store: id space exhausted");
   const Id id = next_id_;

@@ -147,9 +147,9 @@ bounded cohort table's historical distinct-ID count or aggregate ID-byte
 budget (`U/B_U`, default 65,536 IDs / 4,194,304 bytes).
 `resource=cohort_orders_live` identifies the separate 4,096 live-order-ID cap.
 `resource=cohort` remains valid for the refusal of an ID longer than 64 bytes,
-generic cohort-region capacity and the generic store's live-object cap.
-The labels preserve the existing message text, limits and refusal order;
-the independent `report_sink_failed` argument `store=cohort` is unchanged.
+generic cohort-region capacity and an explicitly finite generic Store live-object policy.
+expectation corrected: default 1,048,576 and approved-maximum text -> default 0 unbounded and finite-limit text, because Store policy now honors exact native limits.
+Only native embedders/tests set this policy; scripts need recompilation with new headers for the default. `report_sink_failed`'s `store=cohort` is unchanged.
 
 `report_mode_unsupported` (code 65) also covers a native begin when
 `SUMMARY_ONLY` (the v1 mode or the pending legacy equity mode) is combined with
