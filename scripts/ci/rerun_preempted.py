@@ -5,7 +5,8 @@ Requires gh and GH_TOKEN (actions:write for execution, actions:read for --dry-ru
 checks:read is required for gates and supplemental for shards;
 contents:read reads workflow data).
 The controller must load this file from its own trusted default-branch commit.
-Adapted from the peer backend controller supplied for LB-1012.
+Classifies failed jobs from runner-loss evidence and workflow dependencies
+before requesting a retry.
 """
 from __future__ import annotations
 
