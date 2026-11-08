@@ -61,7 +61,6 @@ COMMAND_CENSUS_EXEMPTIONS = (
     ('scripts/test_check_kernel_profile_rows.py', 'unnamed before this change'),
     ('scripts/test_check_replay_off_golden.py', 'unnamed before this change'),
     ('scripts/test_ci_preflight_split.py', 'unnamed before this change'),
-    ('scripts/test_ci_rerun_preempted.py', 'unnamed before this change'),
     ('scripts/test_ci_verify_fetch_lock.py', 'unnamed before this change'),
     ('scripts/test_ci_verify_split.py', 'unnamed before this change'),
     ('scripts/test_cmake_version_source.py', 'unnamed before this change'),
