@@ -71,7 +71,6 @@ exact engine and codegen HEADs for baseline promotion.
 
 | Command | Run it when the change touches | Why CI skips it |
 | --- | --- | --- |
-| `python3 scripts/test_ci_rerun_preempted.py` | `scripts/ci/rerun_preempted.py`, `scripts/fixtures/ci_rerun_preempted/`, `.github/workflows/rerun-preempted.yml` | no workflow, ctest row or preflight stage names it |
 | `python3 scripts/test_run_strategy_native_feed.py` | the native higher-timeframe feed path (`native_security_feeds`) of `scripts/run_strategy.py` | same |
 | `python3 scripts/verify_self_test.py` | the grading in `scripts/verify_corpus.py` (without the `corpus/` submodule it prints SKIP and exits 0) | same |
 | `python3 -I -m pytest -q tests/ownership/test_driver_selftest.py` | `tests/ownership/driver.py` (the self-tests need no codegen or engine, a real probe run does: `tests/ownership/README.md`) | CI runs only `tests/ownership/test_manifest_checker.py` (stage `selected-window-ownership-tests`) |
