@@ -9238,14 +9238,18 @@ finally:
         original, others = self.ci_sources(), self.other_sources()
         legacy = (ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
         legacy_guard = '    if: ${{ !inputs.dry_run }}\n'
-        notify_finding = ('release.yml job notify-hub must carry '
-                          'if: ${{ !inputs.dry_run }} so a dry run dispatches nothing')
+        phase_notify_finding = ('release.yml job notify-hub must carry '
+                                "if: ${{ inputs.phase == 'tag' && !inputs.dry_run }} "
+                                'so phase 1 and dry runs dispatch nothing')
+        legacy_notify_finding = ('release.yml job notify-hub must carry '
+                                 'if: ${{ !inputs.dry_run }} so a dry run dispatches nothing')
         header_finding = ('release.yml notify-hub must retain its reviewed header, '
                           'permissions, dependencies and outputs')
-        for form, release, guard in (
+        for form, release, guard, notify_finding in (
                 ('phase', others['release.yml'],
-                 "    if: ${{ inputs.phase == 'tag' && !inputs.dry_run }}\n"),
-                ('legacy', legacy, legacy_guard)):
+                 "    if: ${{ inputs.phase == 'tag' && !inputs.dry_run }}\n",
+                 phase_notify_finding),
+                ('legacy', legacy, legacy_guard, legacy_notify_finding)):
             with self.subTest(form=form, baseline=True):
                 self.assertEqual(ci_workflow_findings(
                     *original, others={**others, 'release.yml': release}), [])
@@ -9277,10 +9281,8 @@ finally:
                         expected = [
                             'release.yml job prebuilt-x86 must not receive the protected release '
                             'environment or release credentials',
-                            header_finding]
-                        if after != legacy_guard:
-                            expected += [notify_finding]
-                        expected += [
+                            header_finding,
+                            notify_finding,
                             'release.yml must keep the exact two-phase release writer, '
                             'untagged bump push and same-SHA tag retry',
                             'release.yml must keep the unconditional release gate with its release '
@@ -9292,6 +9294,38 @@ finally:
                         expected = [notify_finding]
                     self.assertEqual(ci_workflow_findings(
                         *original, others={**others, 'release.yml': changed}), expected)
+            if form == 'phase':
+                with self.subTest(form=form, other_job='prebuilt-arm'):
+                    before = '      tarball: ${{ steps.pack.outputs.tarball }}\n'
+                    after = '      tarball: ${{ steps.pack.outputs.wrong }}\n'
+                    self.assertEqual(_jobs(release)['prebuilt-arm'].count(before), 1)
+                    changed = in_job(release, 'prebuilt-arm', before, after)
+                    self.assertNotEqual(changed, release)
+                    self.assertEqual(_jobs(changed)['prebuilt-arm'].count(before), 0)
+                    self.assertEqual(_jobs(changed)['prebuilt-arm'].count(after), 1)
+                    for job in _jobs(release):
+                        if job != 'prebuilt-arm':
+                            self.assertEqual(_jobs(changed)[job], _jobs(release)[job])
+                    self.assertEqual(ci_preflight._job_values(
+                        _jobs(changed)['notify-hub'], 'if'), [guard.strip()[4:]])
+                    self.assertIsNone(ci_preflight._release_split_mode(changed))
+                    other_header_finding = (
+                        'release.yml prebuilt-arm must retain its reviewed header, '
+                        'permissions, dependencies and outputs')
+                    self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(changed),
+                                     [other_header_finding])
+                    self.assertEqual(ci_workflow_findings(
+                        *original, others={**others, 'release.yml': changed}), [
+                            'release.yml job prebuilt-x86 must not receive the protected release '
+                            'environment or release credentials',
+                            other_header_finding,
+                            'release.yml must keep the exact two-phase release writer, '
+                            'untagged bump push and same-SHA tag retry',
+                            'release.yml must keep the unconditional release gate with its release '
+                            'App token for the App-only main pull_request barrier',
+                            'release.yml must always retain the exact release gate receipt artifact '
+                            'before planning or publishing',
+                            'release.yml must gate the dispatch before planning or publishing'])
             # The guard reads a declared input: dropping or retyping it must fail.
             declaration = 'release.yml must declare dry_run as a boolean dispatch input'
             for before, after in (('      dry_run:\n', '      dry_run_disabled:\n'),
