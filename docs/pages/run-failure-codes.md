@@ -148,7 +148,7 @@ budget (`U/B_U`, default 65,536 IDs / 4,194,304 bytes).
 `resource=cohort_orders_live` identifies the separate 4,096 live-order-ID cap.
 `resource=cohort` remains valid for the refusal of an ID longer than 64 bytes,
 generic cohort-region capacity and an explicitly finite generic Store live-object policy.
-expectation corrected: default 1,048,576 and approved-maximum text -> default 0 unbounded and finite-limit text, because Store policy now honors exact native limits.
+The former default of 1,048,576 is now 0 (unbounded); Store policy honors exact native limits, and finite-limit text omits the approved-maximum clause.
 Only native embedders/tests set this policy; scripts need recompilation with new headers for the default. `report_sink_failed`'s `store=cohort` is unchanged.
 
 `report_mode_unsupported` (code 65) also covers a native begin when

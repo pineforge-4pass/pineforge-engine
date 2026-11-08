@@ -1,6 +1,8 @@
-// T6: unbounded real Store, real disk backing, and a persistent page quota.
-// Provisional until the first remote run supplies the literal exception-class,
-// code and args pin. The observations below are diagnostics, not acceptance.
+// T6: unbounded real Store over a STATUS-ONLY page-quota adapter on real FileBacking.
+// This uses neither production ScriptScratchBacking nor a real OS EFBIG.
+// expectation corrected: provisional typed check -> literal class/code/args,
+// because the actual 188c focused run observed coded<std::runtime_error>,
+// scratch_io_failed and {}.
 #include "a5u_test_store.hpp"
 
 #include <pineforge/detail/scratch_errors.hpp>
@@ -9,6 +11,7 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <stdexcept>
 #include <typeinfo>
 #include <vector>
 
@@ -93,6 +96,12 @@ void check_backing_failure() {
               << " code=" << pineforge::run_failure_code_name(failure.code)
               << " args=" << (failure.args ? *failure.args : "{}")
               << " what=" << error.what() << '\n';
+    require(dynamic_cast<const pineforge::coded<std::runtime_error>*>(&error) != nullptr,
+            "physical refusal changed the observed exception class");
+    require(failure.code == pineforge::RunFailureCode::scratch_io_failed,
+            "physical refusal changed the observed run-failure code");
+    require((failure.args ? *failure.args : "{}") == "{}",
+            "physical refusal changed the observed canonical arguments");
     require(dynamic_cast<const ScratchCapacityError*>(&error) == nullptr,
             "backing quota was mislabeled as a policy capacity refusal");
     require(failure.code != pineforge::RunFailureCode::scratch_capacity_exceeded,
