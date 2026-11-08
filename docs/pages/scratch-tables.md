@@ -1,9 +1,8 @@
 # Scratch tables {#scratch_tables}
 
 Scratch-table storage is selected independently of the report sink. The
-versioned descriptor and fixed-slab foundation are present; the host wiring
-and default header described here are authored, with remote verification
-pending. Bounded-memory enforcement, all-zero v1 expansion and independent
+versioned descriptors, fixed-slab foundation, host wiring and default header
+are present. Bounded-memory enforcement, all-zero v1 expansion and independent
 optional v2 admission are implemented in native begin. Disk/RAM identity and the complete jailed
 zero-file-operation proof remain **planned**. Host tests using a
 fake library establish orchestration only.
@@ -50,8 +49,12 @@ before allocation; actual allocation failure remains `out_of_memory`.
 
 With no `--scratch-*` flags, `docker/run_json.py` makes no scratch-policy setter
 call. Fresh supported libraries retain disk/arena backing and acquire no
-missing-export requirement. Arena size, actual allocation, I/O, physical
-quotas and representable offsets still constrain execution.
+logical-setter export requirement. Jailed handles still require the separate
+arena-admission export and a finite inherited arena. Arena size, actual
+allocation, I/O, physical quotas and representable offsets still constrain
+execution. Crossing the former P0 U=65,536 threshold with U omitted no longer
+causes a logical-cap refusal; actual arena exhaustion is
+`report_sink_failed` with reason `arena_exhausted`.
 
 The flags are `--scratch-k-q`, `--scratch-b-q`, `--scratch-k-e`, `--scratch-b-e`,
 `--scratch-k-c`, `--scratch-b-c`, `--scratch-u`, `--scratch-b-u`, `--scratch-v`,
@@ -75,10 +78,13 @@ no R capacity; abandoned tickets publish no root. Native
 `ScratchRootCapacityError` at `include/pineforge/detail/scratch_tables.hpp:86`
 exposes typed resource/limit/need; the current C error arguments carry
 `resource`, with exact limit and need in the diagnostic text. Structured C/JSON
-limit/need arguments still need the failure-registry owner's additive schema.
+limit/need arguments require an additive extension to the error schema.
 
-These are authored source paths, not runtime acceptance. The native tests and
-real-module CLI cases remain unrun in this source lane.
+Seven focused native CTests ran in ARM Debug at engine head
+`3a6461702eb003ea0b07b6218e94be1832383695`. The real-module Python CTest row
+`test_run_json_jailed_native` remains **UNRUN**. Runtime parity, hosted x86
+layout measurements and the complete jailed zero-file-operation proof remain
+pending.
 
 ## Explicit v1 P0 admission policy
 
@@ -214,7 +220,7 @@ so exec'd children do not get it. With stdout and stderr kept separate, this is
 transport isolation rather than a security boundary.
 
 Every jailed handle also calls `strategy_require_report_scratch_arena_v1`
-after table admission and before sink installation/execution. It attaches and
+after any requested logical policy and before sink installation/execution. It attaches and
 validates the inherited arena (`PF_SCRATCH_ARENA_FD=5`, positive
 `PF_SCRATCH_ARENA_BYTES`, optional `PF_SCRATCH_WINDOW_BYTES`), or refuses with
 typed `report_sink_failed` / `arena_backing`. No attached arena means no
@@ -266,7 +272,7 @@ execution. The export name is in the message; the optional `missing`
 argument is omitted because its closed vocabulary does not include this name.
 Setter refusals preserve their native typed error; a refusal without a native
 code is an `engine_invariant`. Explicit limits are never silently dropped.
-The arena admission export is also required; an older library missing it is
+Jailed execution also requires the arena admission export; a library missing it is
 `strategy_library_incompatible` with `{"reason":"symbol_missing"}`.
 An invalid environment profile is `run_request_invalid` with the existing
 `{"option":"arguments"}` classification.
@@ -344,13 +350,16 @@ terminate the child before a typed failure/refund can be transported.
 
 APP-visible integration items (external production paths are not asserted):
 
-1. Select the jailed host profile explicitly and supply a runtime with the
-   setter plus all bounded backends. Load read-only feeds/modules as required
-   by the launcher; do not provision an unused second scratch arena without
-   charging both copies.
-2. Reserve per-run/trial memory from the checked manifest and concurrency
-   entitlement. Cover effective HPO parameters and internal replacements;
-   incomplete codegen receipts do not prove a smaller budget.
+1. Select the jailed host profile explicitly and supply a runtime with arena
+   admission and disk/arena storage. Require the v2 setter when requesting
+   logical bounds, or the v1 setter and bounded backend when explicitly
+   selecting a slab. Load read-only feeds/modules as required by the launcher;
+   charge every supplied arena.
+2. Reserve per-run/trial memory for the finite physical arena and concurrency
+   entitlement, plus any explicitly selected v1 slab and other owned memory.
+   Cover effective HPO parameters and internal replacements; omitted logical
+   bounds do not make physical storage unlimited, and incomplete codegen
+   receipts do not prove a smaller budget.
 3. Install the signal disposition above, then enforce the filesystem/file-size
    restrictions. Supply the separately charged inherited arena; keep the sink
    off for array reports or pass an fd stream for trusted v1 finalization.

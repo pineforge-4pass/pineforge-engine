@@ -1007,9 +1007,9 @@ void exercise_limits(bool direct) {
             ordinals[index] = std::visit([](const auto& row) { return row.ordinal; }, event);
             addresses[index] = reinterpret_cast<std::uintptr_t>(&event);
         }
-        // expectation corrected: oversized EFBIG -> complete spill/reload, because
-        // the old assertion encoded the removed artificial cap at the packing target.
-        // This first successful append plus the two below now advance by three.
+        // The append spills the complete oversized event without changing live state.
+        // History and ordinal lookup must reload every field of the stored event.
+        // This append plus the two below advance history and ordinal by three.
         CHECK(submit_limit_case(core, filler, incarnation, ordinal, direct).status
               == no::SubmitStatus::Rejected);
         CHECK(core.history_end() == before_end + 1 && core.history_base() == 0);

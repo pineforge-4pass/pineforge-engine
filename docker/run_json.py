@@ -157,14 +157,16 @@ sends the phase records (selected and ordinary runs). Without any of these optio
 run is the ordinary run described above, byte for byte.
 
 --profile jailed (or PINEFORGE_RUN_JSON_PROFILE=jailed, read once at host
-startup) installs bounded-memory scratch tables on every fresh handle and
-keeps the report sink OFF unless --report-sink-fd explicitly selects a stream.
-Path sinks (--report-sink) are refused in this profile. Scratch-table admission
-is required for fd sinks too. Every jailed handle also requires an attached
-scratch arena (PF_SCRATCH_ARENA_FD=5); absent/invalid backing is a typed refusal
-before execution, never a temporary-file fallback. --spill-dir is refused,
-and --report-sink-fd 5 is reserved for the arena in every profile.
-An older library missing either admission API is a typed incompatibility.
+startup) keeps the report sink OFF unless --report-sink-fd selects a stream.
+Logical scratch bounds are optional in both profiles: omitted fields stay
+unbounded, and no scratch-policy setter is called without a requested bound.
+Supported --scratch-* bounds use v2; explicit zero is a finite logical bound.
+Every jailed handle requires an attached scratch arena (PF_SCRATCH_ARENA_FD=5),
+including fd-sink runs; physical arena quotas, allocation and I/O failures apply.
+Absent/invalid backing is a typed refusal before execution, with no temporary-file fallback.
+Jailed runs refuse --report-sink paths and --spill-dir; fd 5 is always reserved.
+Missing strategy_require_report_scratch_arena_v1 for jailed execution, or
+strategy_set_scratch_tables_v2 for an active bound, is a typed incompatibility.
 The default profile is unjailed.
 See docs/pages/scratch-tables.md for the policy tier and remaining jail work.
 

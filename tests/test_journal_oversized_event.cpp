@@ -1,6 +1,6 @@
 // An oversized native event must survive real spill/reload. The same event
 // still obeys an explicitly supplied scratch arena's finite capacity.
-// Existing API only: the supervisor can run this TU against the base for RED.
+// Exercises the existing public API with exact encoded-event comparisons.
 #include <pineforge/native_order.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
 

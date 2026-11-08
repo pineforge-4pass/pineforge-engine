@@ -143,11 +143,16 @@ The 1.7.0 additions are `report_mode_unsupported`, `report_sink_failed`,
 listed below.
 
 For `scratch_capacity_exceeded`, `resource=cohort_ids_total` identifies the
-bounded cohort table's historical distinct-ID count or aggregate ID-byte
-budget (`U/B_U`, default 65,536 IDs / 4,194,304 bytes).
-`resource=cohort_orders_live` identifies the separate 4,096 live-order-ID cap.
-`resource=cohort` remains valid for the refusal of an ID longer than 64 bytes,
-generic cohort-region capacity and the generic store's live-object cap.
+cohort table's explicitly bounded historical distinct-ID count or aggregate
+ID-byte budget (`U/B_U`). The explicit v1 P0 policy sets 65,536 IDs /
+4,194,304 bytes; v2 enforces only active fields. Omitted logical bounds
+remain unset in both JSON-host profiles. Without an explicit U bound,
+65,536 IDs is no refusal threshold; actual arena exhaustion remains
+`report_sink_failed` with reason `arena_exhausted`.
+`resource=cohort_orders_live` identifies the separate 4,096 live-order-ID cap
+of an explicitly selected v1 bounded-memory table.
+`resource=cohort` remains valid for that table's refusal of an ID longer than
+64 bytes, generic cohort-region capacity and the generic store's live-object cap.
 The labels preserve the existing message text, limits and refusal order;
 the independent `report_sink_failed` argument `store=cohort` is unchanged.
 

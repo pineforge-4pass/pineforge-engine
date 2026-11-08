@@ -1,5 +1,5 @@
-// Compile this against the previous header closure first. The first
-// missing v2 declaration is the expected fail-before; execution is off-master.
+// Tests independent v2 count/byte bounds with real disk records and native
+// admission counters, distinguishing omitted fields from explicit zero.
 // The module build exposes the same real source host to run_json's CLI.
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>

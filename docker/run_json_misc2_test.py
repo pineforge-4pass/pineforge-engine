@@ -32,7 +32,9 @@ def test_jailed_route_opens_no_report_artifact(tmp_path, monkeypatch):
         tmp_path, monkeypatch, library, "--profile", "jailed")
     assert (status, stderr) == (0, ""), stdout
     assert json.loads(stdout)["summary"]["total_trades"] == 3
-    jailed.assert_admission(library, 1, 10, require_arena=True)
+    # expectation corrected: roots=10 -> no logical setter, because this
+    # invocation requests no --scratch-* bound; arena admission still applies.
+    jailed.assert_admission(library, 1, require_arena=True)
     assert opened == [] and files == [] and library.installed == []
 
 

@@ -2752,10 +2752,13 @@ class CAbiRuntimeInventory(unittest.TestCase):
         header = [name for relative in RUNTIME_HEADERS
                   for name in _pf_api_names(ROOT / 'include/pineforge' / relative)]
         runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
-        # Source rows: pineforge.h 113 + observer 3 + window 3 + sink 5;
-        # 104 c_abi.cpp definitions and twenty generated declarations.
-        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 124)
-        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 104)
+        # Source rows: pineforge.h 114 + observer 3 + window 3 + sink 5.
+        # expectation corrected: 124 -> 125, because the v2 scratch setter
+        # adds one public declaration.
+        # expectation corrected: 104 -> 105, because c_abi.cpp implements
+        # that setter; twenty declarations remain generated.
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 125)
+        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 105)
         self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
         self.assertEqual(len(header), len(set(header)))
@@ -2772,6 +2775,7 @@ class CAbiRuntimeInventory(unittest.TestCase):
                      'strategy_report_sink_diagnostics_v1',
                      'strategy_require_report_scratch_arena_v1',
                      'strategy_set_scratch_tables_v1',
+                     'strategy_set_scratch_tables_v2',
                      'strategy_set_cache_policy_v1',
                      'strategy_stream_engine_layout_version',
                      'pf_output_series_limit_set_checked',

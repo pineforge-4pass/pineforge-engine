@@ -33,8 +33,8 @@ def clear_native_profile(monkeypatch):
 
 @pytest.fixture
 def native_manifest_module():
-    # The supervisor builds the module variant of the ordinary native test
-    # against this candidate's real libpineforge. A missing module fails.
+    # CMake builds this module from test_scratch_manifest_options.cpp and
+    # links it against the current libpineforge. A missing module fails.
     name = os.environ.get("PF_SCRATCH_MANIFEST_MODULE")
     assert name, "build test_scratch_manifest_options.cpp with PINEFORGE_SCRATCH_MANIFEST_MODULE"
     path = Path(name).resolve()

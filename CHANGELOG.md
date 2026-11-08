@@ -7,6 +7,23 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- Native request-journal events larger than the 32,768-byte packing target
+  now spill and reload in extents of their exact encoded size, without a
+  default event-byte ceiling. Each oversized spill or reload uses a temporary
+  buffer of that size; source and decoded payloads use additional memory.
+  Representable sizes/offsets, actual allocation, finite scratch-provider
+  capacity and I/O still constrain the operation and retain typed failures,
+  including `report_sink_failed` with reason `arena_exhausted`.
+- `strategy_set_scratch_tables_v2` adds independent optional logical scratch
+  limits using the existing disk/arena stores. Inactive fields have no logical
+  bound; active fields accept finite maxima, including zero. Exceeding a
+  supported bound fails with `scratch_capacity_exceeded` for its resource.
+- The JSON host leaves omitted logical scratch limits unbounded in both
+  profiles, including `--profile jailed`. With no `--scratch-*` flags, it
+  calls no scratch-policy setter; requesting a field uses v2 and leaves the
+  other omitted fields unbounded. Jailed execution still requires its
+  inherited arena and remains subject to actual allocation, arena capacity
+  and I/O failures.
 - `ta.percentile_nearest_rank` now accepts a series length at runtime. Each
   call site retains its own appended source history and computes the
   nearest-rank percentile over the requested recent values, within the
@@ -2952,7 +2969,7 @@ release either.
   offline `redeliver` now exits 0, not 130 (`actions --follow` keeps 130).
   Fatal errors exit 1 and an offline redelivery that leaves selected actions
   failed or pending exits 2. [Service operation](runner/README.md#service-operation)
-  gives the schemas, bounds, restart semantics and supervisor grace periods.
+  gives the schemas, bounds, restart semantics and shutdown grace periods.
   The runner still opens no inbound listener and ingests no venue fills.
 
 - **Native cumulative reports ([#331]).** `pineforge-live report --ledger L
@@ -3140,7 +3157,7 @@ rows, the status file (`pineforge-live-status/v1`) and the redelivery request
   deployment, because the identity binds the library's bytes (and a
   regenerated library's capability receipt): it starts a new ledger and
   cannot resume one an earlier build wrote. A graceful signal stop of `run` or
-  of offline `redeliver` exits 0 instead of 130, so a supervisor that read 130
+  of offline `redeliver` exits 0 instead of 130, so a caller that read 130
   as a clean stop now reads 0. A regenerated library whose receipt names a
   requirement the close-only stream cannot honour is refused before the
   ledger opens.

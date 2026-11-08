@@ -112,8 +112,8 @@ the count is positive.
 
 The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
 
-The stable inventory contains 124 compiled-strategy `PF_API` declarations
-(104 implementations in `src/c_abi.cpp` plus twenty generated declarations)
+The stable inventory contains 125 compiled-strategy `PF_API` declarations
+(105 implementations in `src/c_abi.cpp` plus twenty generated declarations)
 and 43 native-host declarations. A module supplies the generated symbols it
 supports; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
@@ -195,7 +195,7 @@ A missing symbol, unknown declaration or throwing declaration reader keeps
 the actual curve. The probe takes no strategy handle or caller-supplied proof,
 allocates no handle, and does not change preferences or run state.
 `scripts/check_c_abi_runtime.py` pins the macro's nine definitions and its one
-optional declaration separately from the 94 `c_abi.cpp` implementations.
+optional declaration separately from the 105 `c_abi.cpp` implementations.
 
 Certification is an explicit specialization of
 `pineforge::native_module::MetricsPlainHostV1<Host>`. Its static
@@ -227,7 +227,7 @@ are unchanged. Uncertified hosts and Off requests do not call admission or
 preparation.
 
 Sixteen per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 104 runtime implementations, including the
+functions. The remaining 105 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.

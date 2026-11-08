@@ -1721,6 +1721,12 @@ _CODE_PASSTHROUGHS = [
      'RunFailure("cache policy rejected: " + json.dumps(args, sort_keys=True), '
      'code or "engine_unclassified_error", args)', 1,
      "engine_failure_code ABI tuple or the literal engine_unclassified_error fallback"),
+    ("apply_scratch_tables",
+     'RunFailure("the fresh strategy refused its scratch-table manifest", '
+     'code or "engine_invariant", args)', 1,
+     "engine_failure_code ABI tuple after v1 setter refusal, or literal engine_invariant"),
+    ("apply_scratch_options", 'RunFailure(text, code or "engine_invariant", detail)', 1,
+     "engine_failure_code ABI tuple after v2 setter refusal, or literal engine_invariant"),
 ]
 
 _HELPER_CODE_SOURCES = {

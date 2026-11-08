@@ -82,7 +82,7 @@ struct ScratchBounds {
 
 // v2 root admission exposes exact uint64 values to native callers. The
 // existing closed C error schema carries resource; its diagnostic also names
-// limit/need. Adding structured C arguments requires the registry owner.
+// limit/need. Structured limit/need arguments are not part of that C schema.
 class ScratchRootCapacityError final : public std::runtime_error, public RunFailureInfo {
 public:
     ScratchRootCapacityError(std::uint64_t maximum, std::uint64_t requested)

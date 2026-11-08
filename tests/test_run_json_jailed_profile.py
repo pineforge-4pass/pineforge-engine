@@ -611,8 +611,8 @@ def test_jailed_fd_arena_refusal_preserves_caller_ownership(tmp_path, mode, requ
         assert maxima["U"] == limit
         assert all(value == 0 for field, value in maxima.items() if field != "U")
     else:
-        # expectation corrected: implicit P0 setter -> no setter, because
-        # no-flags arena failure must not acquire a removed implicit policy.
+        # With no requested logical bound, arena refusal follows handle creation
+        # without installing a scratch policy or transferring the sink descriptor.
         assert [row[0] for row in library.history] == ["create", "free"]
         assert not any(row[0] == "scratch" for row in before_arena)
     assert library.released == library.created and not library.installed

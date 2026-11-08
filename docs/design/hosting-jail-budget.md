@@ -62,7 +62,27 @@ nonnegative integers. Arithmetic is checked before rounding; admission
 values fit signed 64-bit integers and the relevant kernel type. Unknown is
 distinct from zero. Kernel `max`/`RLIM_INFINITY` is not a finite value.
 
-## Current behaviour at EM
+## Current scratch policy: Option A
+
+The JSON host uses disk/arena tables with independent optional logical bounds
+in both profiles. Omission makes no logical setter call and applies no default
+cap, including in jailed mode; a requested v2 field is finite even when zero,
+and leaves other fields unbounded. The explicit v1 bounded-memory slab and
+its P0 helper remain supported, but the CLI does not select them implicitly.
+
+Every jailed execution still requires the finite inherited arena and
+`strategy_require_report_scratch_arena_v1`. An active CLI bound additionally
+requires `strategy_set_scratch_tables_v2`; no logical-setter export is required
+without an active bound. Actual allocation, physical capacity, representable
+offsets and I/O remain constraints. The former implicit U=65,536 refusal is
+gone; a run that exhausts its arena fails with `report_sink_failed`, reason
+`arena_exhausted`. Current fresh-handle wiring and guards are
+`apply_scratch_options` and `_require_jailed_arena` in `docker/run_json.py`.
+
+## Historical behaviour at EM
+
+This table records the pinned EM baseline, including its former implicit
+jailed manifest. The Option A policy above governs current scratch admission.
 
 | Stage | Engine-local behaviour and limits | Host assumption; consequence when absent |
 | --- | --- | --- |
@@ -86,7 +106,7 @@ checks: `src/scratch_arena.cpp`.
 Neither capacity nor the mapping window equals charged physical memory.
 Attachment initializes bitmap/window metadata; growth zeroes entire newly
 claimed chunks. Unmapping does not release the backing's charged pages.
-`src/scratch_arena.cpp`. The public scratch-table descriptor also
+`src/scratch_arena.cpp`. Explicit v1 bounded-memory selection also
 reserves a separate slab; its P0 root allowance is 2N, not arena space.
 `docker/run_json.py`, `include/pineforge/pineforge.h`.
 
@@ -152,11 +172,13 @@ report worker requires a real host-created process boundary. This prevents
 the existing preparation-before-free lifetime from escaping the reservation.
 
 **R2 — finite plan (T1–T4, T25, T26, T30).** The host and engine MUST
-resolve every applicable table row to a finite installed value before
-admission. A request cannot select a larger tier after a failure without a
-new attempt identity and reservation. Missing workload bounds select a
-finite policy tier, with the unknown terms recorded; they never select
-unlimited. No bar/trade/object count is invented to manufacture a proof.
+resolve every applicable physical-resource row to a finite installed value
+before admission. Optional logical scratch bounds remain inactive when
+omitted; the host MUST NOT manufacture a P0 cap or call a logical setter
+for that omission. A request cannot select a larger physical tier after a
+failure without a new attempt identity and reservation. Missing physical
+requirements select a finite policy reservation, with unknown terms recorded.
+No bar/trade/object count is invented to manufacture a proof.
 
 ### Proposed reference policy
 
@@ -174,7 +196,7 @@ or a policy allowance.
 | --- | --- | --- |
 | A | Certified arena requirement if available; otherwise 4 GiB, rounded up to whole engine chunks | A finite starting policy, not a promise arbitrary strategies fit. The existing calculator requires certified facts and leaves unknowns explicit: `docs/design/arena-bound.md`, `scripts/arena_bound.py`. |
 | W | Existing 32 MiB default, or an explicitly admitted positive page multiple | Existing engine default: `include/pineforge/detail/scratch_arena.hpp`, `src/scratch_arena.cpp`. It is not substituted for A in physical-memory admission. |
-| S(N), the slab | Exact admitted manifest layout; for the documented P0 batch: `61,128,704 + 4096*ceil(32*N/4096)` bytes | Existing P0 hand arithmetic and extra-memory exclusions: `docs/pages/scratch-tables.md`. Explicit manifests use their actual layout, not this shortcut. |
+| S(N), the optional v1 slab | Zero for the default disk/arena route and v2 logical bounds; exact layout only when a v1 slab is explicitly selected. Explicit P0 batch example: `61,128,704 + 4096*ceil(32*N/4096)` bytes | Existing explicit P0 hand arithmetic and extra-memory exclusions: `docs/pages/scratch-tables.md`. Other v1 manifests use their actual layout, not this shortcut. Arena and other memory charges remain separate. |
 | Input resident/AS allowances, O_r/O_a | Corresponding independently certified OHLCV terms; otherwise 1 GiB each | A resident observation cannot certify AS. Unknown CSV/parser/copy overhead remains subject to the whole-stage caps. Existing calculator separates these terms: `scripts/arena_bound.py`. |
 | U | Certified `finalizerStream.bytes` if available; otherwise 64 MiB | A finite policy cap, not a prediction. Existing stream arithmetic is conditional: `scripts/arena_bound.py`. |
 | J | Explicit report-channel reservation; otherwise 8 MiB | New policy recommendation only. There is no EM 8 MiB report cap in `_prepare_report_json`: `docker/run_json.py`. U and J are independent, including escaping/expanded JSON. |
@@ -257,7 +279,7 @@ defined below; failure abbreviations are defined in the following section.
 | Swap | `memory.swap.max`; bytes | Every leaf and job parent; host | 0 in reference policy; memory and swap ceilings are recorded separately | B for omitted/nonzero installation under this policy; memory outcome M if actually exhausted | P2 | T3, T7, T8 |
 | Arena backing capacity | Existing fd 5 size/seals and allocator chunk checks; bytes | `run`; host creates/charges, engine validates/enforces region capacity | A, exact supplied bytes with whole-chunk capacity | Existing `report_sink_failed{reason:arena_backing}` or `{reason:arena_exhausted,...snapshot}` | P1, P5 plus engine attachment | T6, T8, T9 |
 | Arena mapping window | Existing `PF_SCRATCH_WINDOW_BYTES` / allocator LRU; bytes | `run`; engine, admitted by host | W, default 32 MiB; positive page multiple | Existing backing/I/O refusal; never treated as a physical-memory ceiling | P1, P5 | T8, T9 |
-| Scratch-table slab/counts | Existing bounded manifest and exact layout; rows/key bytes/layout bytes | `run`; engine | Exact manifest, default P0 S(N), including 2N roots | Existing `scratch_capacity_exceeded{resource}`; existing allocator classification otherwise | P1 binds manifest; engine setter/admission | T1, T9, T29 |
+| Optional scratch logical bounds / v1 slab | Active v2 maxima or explicitly selected v1 manifest/layout; rows/key bytes/layout bytes | `run`; engine | Omitted logical fields have no cap or setter; active zero is finite. S(N)=0 without an explicit v1 slab. Physical A/M/D remain finite | `scratch_capacity_exceeded{resource}` for an explicit logical bound; actual arena exhaustion remains `report_sink_failed{reason:arena_exhausted}`; existing allocation/I/O classifications otherwise | P1 records effective optional policy; engine checks requested bounds and required arena separately | T1, T9, T29 |
 | Ledger resident window | Published descriptor/payload/cache geometry; rows/bytes | `run`; engine-local sublimit | Preserve published 64-row window and distinct cache policy; no total-ledger cap inferred | Preserve existing failures; backing/heap also subject to D/A/M | P1 binds runtime image; not OS proof | T1, T9, T29 |
 | Optional command extent cap | Published `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES`; bytes | `run`; engine-local subset | Record unset or an explicit positive decimal. Unset disables only this optional subset cap; A/M/D still impose finite hardware ceilings | Existing `scratch_configuration_invalid` / `scratch_io_failed`; arena share keeps its existing sink code | P1 records effective environment | T1, T10, T29 |
 | Aggregate work/storage bytes | Enforced XFS project hard block quota with project inheritance, on a disk-backed per-run directory; bytes after quota-unit normalization | All stage directories, compiler temps, spool/provisional/retained outputs; host | Shared D, remaining capacity is D minus current charge. No grace-period-only/soft quota | L(work_bytes) for proven quota denial; existing I/O code when no quota cause is established | P3, P5 | T3, T10, T18, T21, T26, T28 |
@@ -445,8 +467,8 @@ canonical identity, and cpus are sorted numerically.
 Identity = {mount_namespace_inode:i, mount_id:i, device:i, inode:i,
             generation:id, path:str}
 Rlimit = {soft:i, hard:i}
-Manifest = {K_q:i, B_q:i, K_e:i, B_e:i, K_c:i, B_c:i,
-            U:i, B_U:i, V:i, B_V:i, R:i}
+Manifest = {K_q:?i, B_q:?i, K_e:?i, B_e:?i, K_c:?i, B_c:?i,
+            U:?i, B_U:?i, V:?i, B_V:?i, R:?i}
 LimitSet = {
   as_bytes:?i, memory_max_bytes:i, memory_high_bytes:i, swap_max_bytes:i,
   memory_oom_group:i, fsize_bytes:?i, nofile:?i, nproc:?i, pids_max:i,
@@ -483,7 +505,7 @@ storage = {
 }
 arena = ?{
   identity:Identity, supplied_bytes:i, window_bytes:i, seals:[str],
-  manifest:Manifest, slab_bytes:i, creator_launch_id:id,
+  manifest:?Manifest, slab_bytes:i, creator_launch_id:id,
   creator_cgroup:Identity, charge_cgroup:Identity,
   external_reserved_bytes:i, external_reservation_id:?id,
   aliases:[{owner_launch_id:id, fd:i}]
@@ -519,9 +541,12 @@ opt_out = ?{authorization_id:id, reason:"local_debug"|"local_compatibility",
 ```
 
 `Stage`/`Resource` are the code vocabularies above, plus `workload` only
-for internal plan/tree keys. All null LimitSet values mean inapplicable:
+for internal plan/tree keys. `Manifest` is the proposed receipt's normalized
+logical policy, not a binary v1/v2 descriptor: a null maximum is inactive,
+and zero is an active finite bound. A null manifest records no logical policy;
+`slab_bytes=0` records no v1 slab. Other null LimitSet values mean inapplicable:
 the workload/job cgroups have no process rlimits; non-arena stages have
-null arena/manifest fields. An applicable hosted value cannot be null.
+null arena fields. Applicable physical hosted limits cannot be null.
 An unused output channel has capacity zero. Parent limits do not use
 zero as an unlimited sentinel.
 
@@ -532,8 +557,8 @@ The process fields additionally include `no_new_privs:bool`,
 and `run_id` use id; PID/sequence/credential/clock fields use i.
 `attempt_id` and `launch_id` are 32 lowercase hex digits.
 `parent_launch_id` and `parent_stage_seq` are explicitly nullable.
-Only `facts_sha256`, pre-build `artifact_sha256`, and inapplicable
-codegen/toolchain/source identities can be null. The immutable image
+Among identity/digest fields, only `facts_sha256`, pre-build `artifact_sha256`,
+and inapplicable codegen/toolchain/source identities can be null. The immutable image
 policy fixes engine/harness identities even for an early stage.
 
 `derivations` is an array of
@@ -1233,10 +1258,10 @@ The following is dependency order, not a claim these changes exist at EM.
    the shared pre-load path before ordinary, selected and capabilities
    calls to `load_strategy`. Current anchors:
    `docker/run_json.py`.
-   Keep the existing per-handle manifest and arena checks; add host proof
-   before library constructors, rather than replacing those checks.
-   Current functions: `default_scratch_manifest`, `apply_scratch_tables`,
-   `_require_jailed_arena` at
+   Keep optional per-handle logical admission and mandatory jailed arena checks;
+   add host proof before library constructors. Omission must keep making no
+   logical setter call. Current functions: `apply_scratch_options` and
+   `_require_jailed_arena`; explicit v1 callers retain `apply_scratch_tables` at
    `docker/run_json.py`.
 
 5. **Bound report preparation and publication.** Add J checks at the

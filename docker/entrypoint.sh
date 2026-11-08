@@ -123,7 +123,7 @@
 # PF_SCRATCH_ARENA_FD=5 with PF_SCRATCH_ARENA_BYTES supplies an inherited arena,
 # PF_SCRATCH_ARENA_JAILED=1 requires a sealed memfd, and PF_SCRATCH_WINDOW_BYTES
 # (default 32 MiB) caps what is mapped at once; PINEFORGE_RUN_JSON_PROFILE=jailed
-# selects the bounded-memory profile. Defaults, units and limits:
+# requires the finite inherited arena; omitted logical limits stay unset. Controls:
 # docs/pages/memory-management.md in the engine repository.
 set -euo pipefail
 
