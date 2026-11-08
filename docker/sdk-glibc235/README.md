@@ -1,8 +1,9 @@
 # Ubuntu 22.04 SDK toolchain and hosted diagnostic
 
 This recipe builds GCC 13.3.0 C/C++ on glibc 2.35 for native x86_64, with Eigen
-3.4.0 and tools for a disconnected SDK build. The diagnostic source has not
-been executed or accepted as runtime evidence.
+3.4.0 and tools for a disconnected SDK build. This caller repair is source
+only. Its new component tests and all native SDK/loader work are UNRUN;
+neither source inspection nor component results establish runtime acceptance.
 
 ## Authenticated CA bootstrap
 
@@ -78,14 +79,17 @@ This assumes the bootstrap-only work root ends in `-prepare`. These are usage
 instructions, not executed results. The full diagnostic builds its context and
 image itself. Contexts, containers and build trees are retained without cleanup.
 
-Both stages retain the Ubuntu 22.04 linux/amd64 manifest pin
+Both stages retain the configured Ubuntu 22.04 linux/amd64 manifest pin
 `sha256:8a2321a92b438238f93b4346fff61bc4259c99fdd4d9b52ee86f153fee0c344f`.
-Its distinct index digest is
+The supplied distinct index digest is
 `sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11`.
+Their association and platform identity have no new verification evidence
+from this source edit.
 GCC is downloaded from
 `https://gcc.gnu.org/pub/gcc/releases/gcc-13.3.0/gcc-13.3.0.tar.xz`, checked
-against the unchanged official SHA512 record before extraction, bootstrapped
+against the unchanged pinned SHA512 record before extraction, bootstrapped
 with at most eight workers, and installed to `/opt/gcc-13.3.0`.
+The checksum record's provenance still needs independent evidence.
 The image checks actual compiler versions/targets, glibc, Eigen macros, ELF
 identities and compiler-runtime resolution.
 
@@ -93,7 +97,11 @@ The resulting local image ID in `diagnostic-image.json` identifies this
 diagnostic's build. It is **not a release repository manifest pin**.
 `scripts/build_prebuilt_bookworm.sh` retains its different immutable pin,
 distribution/compiler admission and release contract. This diagnostic never
-calls or changes that helper and grants no release admission.
+calls or changes that helper. The cumulative shared-inspector change tightens
+the fixed ceiling from GLIBC 2.36 to 2.35; `release.yml` also invokes that
+inspector, so this is a release-admission change. This caller repair preserves
+the inspector bytes and its 2.35 ceiling, relative-baseline rule and ELF-kind
+guard. No diagnostic result by itself grants release admission.
 
 ## SDK and actual strategy loads
 
@@ -114,7 +122,7 @@ package files.
 The installed package includes the old-glibc build's regular `libstdc++.so.6`
 and `libgcc_s.so.1` bytes, selected by actual SONAME and recorded by hash.
 `share/gcc-runtime/` preserves the verified corresponding GCC source archive,
-official source checksum, `COPYING*` licenses and runtime exception.
+pinned source checksum, `COPYING*` licenses and runtime exception.
 Other dynamic dependencies must belong to the explicit OS-provided libc
 family or the two supplied GCC libraries. No libc or ELF interpreter is copied.
 
@@ -122,8 +130,8 @@ The unchanged `scripts/check_prebuilt_glibc.py` inspects every installed
 archive/shared object, including all ordered archive members, with the actual
 released archive as comparison baseline. Every installed file's magic is
 checked so an ELF hidden under an unrecognized filename fails. The fixed
-GLIBC <= 2.35 and no-`__isoc23_*` rules remain unchanged. Complete nonempty
-inventory and the checker's own PASS summary are required. The packed SDK is
+GLIBC <= 2.35 and no-`__isoc23_*` rules are fixed in the pinned inspector.
+Complete nonempty inventory and the checker's own PASS summary are required. The packed SDK is
 safely unpacked and its complete file/hash manifest must equal the inspected
 installed inventory before it is consumed.
 
@@ -147,10 +155,40 @@ installed SDK/Eigen include paths, and whole-archive linking. The example's
 standalone `main` is never called.
 
 `load_strategy.c` is compiled twice in the old-glibc image against each SDK's
-matching C header. The executable is PIE and named `*-loader.so` so the
-unchanged inspector discovers its DYN ELF alongside the new module. The old
-module is inspected as baseline; its known incompatible symbols are never
-allowed in the candidate. The loader uses `dlopen(RTLD_NOW)`, checks the real
+matching C header, retaining `-fPIE -pie -Werror`. The two tools are
+`generated/old-loader` and `generated/new-loader`, genuine PIE executables.
+Only these exact paths, bound to their actual compiler-output digests, are
+exempt from the shared-library inventory. The complete consumer-tree inventory
+requires exactly those two tools and the two strategy DSOs; an extra
+ELF/archive, missing or changed tool, or symlink refuses execution. Ordinary
+non-library filenames are still checked for ELF/archive magic.
+
+Both positive library inspections (installed SDK and new consumer DSO) use
+the actual unpacked published SDK root as `--baseline-root`. The old module
+is inspected separately, without serving as a positive baseline. Its command
+permits a nonzero result only for classification: it must actually return 1,
+report FAIL with complete inspection and real `__isoc23_*` symbol violations.
+A setup/parse error, unrelated violation or compatible old DSO refuses this
+independent negative control. Actual target/member digests, complete tagsets,
+baseline comparison and issues are retained even on an admission failure.
+
+The tools have separate genuine `readelf` header/symbol/version and
+program-header/dynamic inspections. They must be PIE executables with complete
+dynamic-symbol/version coverage, no `__isoc23_*` references and no numeric
+GLIBC requirement above 2.35; private/unknown GLIBC tags also fail. Their actual
+machine, interpreter, ELF kind, tagsets and digests are recorded. The native
+consumer route additionally requires x86_64 and its expected interpreter.
+No tool is relabelled as a shared object and no `readelf` output is rewritten.
+Both tool digests and both DSO digests are bound to the exact runtime paths;
+the supplied GCC-runtime bytes are bound to the inspected installed SDK.
+
+Published and installed baseline tagsets remain unmeasured. In particular,
+the synthetic 2.38 baseline in inspector component tests is not evidence of
+the published SDK's tags. If the real published maximum is below the staged
+maximum, the unchanged relative rule must still refuse, even below 2.35.
+No manufactured baseline or policy relaxation is used to obtain a PASS.
+
+The loader uses `dlopen(RTLD_NOW)`, checks the real
 `pf_abi_version` against that header's `PF_ABI_VERSION`, resolves the required
 exports from `docker/run_json.py`, and calls real `strategy_create("{}")`
 and `strategy_free`, requiring a non-null instance. It runs no backtest.
@@ -170,6 +208,16 @@ the ABI/create/free path with exit 0. Raw output and stopped-container state
 are retained before classification. Compile errors, missing dependencies,
 wrong ABI, setup failures and unexpected old success fail the proof.
 
+After shared trust, compile and inspection prerequisites pass, all four
+eligible cases are attempted once even if an earlier case is unexpected.
+Each case retains its actual launch status/exception, streams and container
+state. An unavailable runtime has an explicit failed case record; absent
+loader output, container state or exit status is never invented. A failed
+runtime pull or identity check prevents launching its two cases and records
+the actual preparation error while the other runtime is still considered.
+`cases.result.json` aggregates every case and refuses completion if any is
+missing, errored or unexpected. Failed shared prerequisites stop collection.
+
 ## Evidence and unexecuted failure controls
 
 Reports retain complete child argv, stdout, stderr, native return codes,
@@ -183,13 +231,38 @@ codes; no verdict is inferred from one.
 `INCOMPLETE.json` is an immutable initial record. Exceptions and refusals
 write `FAILURE.json` and a nonzero driver exit when the report destination
 remains writable. Abrupt loss leaves the initial incomplete record.
-Only all required classified case files and both complete inspector verdicts
-permit `RUN.COMPLETE`. Upload uses `always()` with missing files treated as
-an error. Only the reports subtree is uploaded; no checkout, Git metadata,
+Only all four required successful classifications, both complete positive
+inspector verdicts, both executable inspections and the independent old
+negative result permit `RUN.COMPLETE`. Upload uses `always()` with missing
+files treated as an error. Only the reports subtree is uploaded; no checkout, Git metadata,
 source archive, `.deb`, SDK archive or build tree is uploaded.
 
-Further independent failure controls remain unexecuted. In separate retained
-contexts, corrupt the downloaded CA package and require hash rejection before
+The ordinary component controls are in `test_diagnostic.py`. On a later
+admitted test worker, use an existing explicit scratch root:
+
+```sh
+python3 -B docker/sdk-glibc235/test_diagnostic.py --scratch-root /explicit/scratch
+```
+
+They compile small real PIE/shared ELF fixtures and inspect actual symbol and
+version data, including success/refusal controls, changed/unknown tool
+inventories, a genuine old-reference symbol refusal, and a lower baseline
+that must still refuse. Fixture payloads are never executed. Unit orchestration
+doubles only check that later cases remain reachable after an injected
+unexpected result; they emit no successful native qualification. Component
+tests are UNRUN for this repair, including any RED-before/GREEN-after evidence.
+Their eventual results must be reported separately from a real native run.
+
+All native work remains UNRUN: hosted signature/CA bootstrap and snapshot
+installs; GCC/image build and compiler admission; SDK build, install, archive
+and unpack equality; inspections of actual published/installed/consumer ELF
+bytes; both matching-header strategy/loader compiles; four Ubuntu/Debian
+loads; artifact upload and `RUN.COMPLETE`. The supplied Ubuntu image identities
+and GCC checksum record have not gained provenance evidence from this edit.
+
+Further independent failure controls remain unexecuted, including bootstrap,
+signature, CA, compiler, tar-traversal and thin-archive controls. In separate
+retained contexts, corrupt the downloaded CA package and require hash rejection before
 extraction; corrupt signed metadata and require `gpgv` rejection; alter the
 compiler-version expectation and require rejection of the actual version.
 In separate retained consumer inputs, a missing dependency, ABI mismatch,

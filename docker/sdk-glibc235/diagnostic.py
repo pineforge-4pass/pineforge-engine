@@ -22,6 +22,7 @@ import sys
 import tarfile
 import time
 import traceback
+import types
 
 
 RECIPE = Path("docker/sdk-glibc235")
@@ -285,8 +286,11 @@ class Session:
         return rows
 
     def run(self, label: str, argv, *, inputs=(), allow_nonzero: bool = False,
-            cwd: Path | None = None, environment: dict | None = None) -> dict:
+            cwd: Path | None = None, environment: dict | None = None,
+            allow_unavailable: bool = False) -> dict:
         require(re.fullmatch(r"[a-z0-9-]+", label) is not None, "unsafe command label")
+        require(not allow_unavailable or allow_nonzero,
+                "unavailable commands must remain explicit failed observations")
         self.follows(inputs, f"command {label}")
         if cwd is not None:
             self.follows([cwd], f"command working directory {label}")
@@ -299,6 +303,7 @@ class Session:
                "returncode": None}
         self.emit("command_start", **row)
         started = time.monotonic()
+        child = None
         try:
             with out.open("xb") as stdout, err.open("xb") as stderr:
                 child = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=stdout,
@@ -307,6 +312,10 @@ class Session:
                                        check=False)
             row["returncode"] = child.returncode
             put(Path(str(base) + ".exit"), f"{child.returncode}\n")
+        except OSError as error:
+            row["spawn_or_wait_error"] = repr(error)
+            if not allow_unavailable:
+                raise
         except BaseException as error:
             row["spawn_or_wait_error"] = repr(error)
             raise
@@ -314,11 +323,11 @@ class Session:
             row.update(finished=now(), elapsed_seconds=time.monotonic() - started)
             put_json(Path(str(base) + ".json"), row)
             self.emit("command_end", **row)
-        row["stdout_hash"] = self.digest(out)
-        row["stderr_hash"] = self.digest(err)
+        row["stdout_hash"] = self.digest(out) if os.path.lexists(out) else None
+        row["stderr_hash"] = self.digest(err) if os.path.lexists(err) else None
         self.emit("command_output_hashes", label=label, stdout=row["stdout_hash"],
                   stderr=row["stderr_hash"])
-        if child.returncode != 0 and not allow_nonzero:
+        if child is not None and child.returncode != 0 and not allow_nonzero:
             raise ChildFailure(label, child.returncode)
         return row
 
@@ -639,48 +648,382 @@ def dependency_records(s: Session, paths: list[Path], name: str) -> list[dict]:
     return records
 
 
-def inspect_symbols(s: Session, checker: Path, root: Path, baseline: Path,
-                    label: str) -> dict:
-    require(s.digest(checker)["sha256"] == FLOOR_CHECKER_SHA,
+def same_bytes(observed: dict, expected: dict) -> bool:
+    return (observed["sha256"] == expected["sha256"]
+            and observed["size"] == expected["size"]
+            and observed["size"] > 0)
+
+
+def load_floor_checker(s: Session, checker: Path):
+    # Import the exact hash-verified bytes, without a second source read or a
+    # bytecode-cache write. Only its existing low-level grammars are reused;
+    # parse_elf's shared-library guard is never altered or bypassed.
+    data = s.read(checker)
+    require(hashlib.sha256(data).hexdigest() == FLOOR_CHECKER_SHA,
             "floor checker differs from the unchanged reviewed implementation")
+    module = types.ModuleType("_sdk_diagnostic_floor")
+    module.__file__ = str(checker)
+    exec(compile(data, str(checker), "exec"), module.__dict__)
+    return module
+
+
+def elf_inventory(s: Session, root: Path, *, tool_receipts: dict | None = None):
     files = s.files(root)
     libraries = [p for p in files if p.name.endswith(".a")
                  or re.search(r"\.so(?:\..*)?$", p.name)]
     require(bool(libraries), "refuse empty symbol inspection inventory")
+    tools = {}
+    if tool_receipts is not None:
+        require(set(tool_receipts) == {"old", "new"},
+                "only the two exact compiled loader tools may be declared")
+        for kind in ("old", "new"):
+            path = root / (kind + "-loader")
+            receipt = tool_receipts[kind]
+            require(receipt["path"] == str(path) and path in files,
+                    f"missing/substituted exact loader tool: {path}")
+            require(same_bytes(s.digest(path), receipt),
+                    f"compiled loader tool bytes changed: {path}")
+            require(path.lstat().st_mode & 0o111, f"loader tool is not executable: {path}")
+            tools[path] = receipt
     for path in files:
         magic = s.magic(path)
+        if path in tools:
+            require(magic.startswith(b"\x7fELF"), f"loader tool is not ELF: {path}")
+            continue
         if magic.startswith(b"\x7fELF") or magic in (b"!<arch>\n", b"!<thin>\n"):
             require(path in libraries, f"ELF/archive outside checker's named inventory: {path}")
-    row = s.run(label, ["python3", "-I", checker, root, "--baseline-root", baseline],
-                inputs=[checker, *files, *s.files(baseline)])
-    summaries, targets = [], []
-    s.follows([Path(row["stdout"])], "read actual symbol-inspector result stream")
-    with os.fdopen(open_regular(Path(row["stdout"])), "r", encoding="utf-8") as stream:
-        for line in stream:
-            event = json.loads(line)
-            if event["event"] == "summary":
-                summaries.append(event)
-            if event["event"] == "target" and event.get("role") != "baseline":
-                targets.append(event)
-    require(len(summaries) == 1, "checker supplied no unique summary")
-    summary = summaries[0]
-    require(summary["verdict"] == "PASS" and summary["issues"] == 0
-            and summary["discovered"] == summary["inspected"] == len(libraries)
-            and summary["archive_members"] >= 0, "incomplete/failing actual symbol inspection")
-    require({t["path"] for t in targets} == {str(p) for p in libraries}
-            and all(t["inspected"] and not t["isoc23_references"] for t in targets),
+    s.emit("elf_inventory", root=str(root), libraries=[str(p) for p in libraries],
+           tools=[str(p) for p in tools])
+    return files, libraries
+
+
+def check_target_coverage(s: Session, targets: list[dict], receipts: dict) -> int:
+    require(len(targets) == len(receipts)
+            and {t["path"] for t in targets} == set(receipts),
             "checker target coverage differs from complete input inventory")
+    members = 0
     for target in targets:
-        if target["kind"] == "archive":
+        path = Path(target["path"])
+        kind = "archive" if path.name.endswith(".a") else "shared"
+        require(target["kind"] == kind and target["inspected"] is True
+                and target["symbols"] > 0
+                and same_bytes(target, receipts[str(path)])
+                and same_bytes(s.digest(path), target),
+                f"incomplete/changed actual inspected library: {path}")
+        if kind == "archive":
             require(bool(target["expected_members"])
                     and [m["name"] for m in target["members"]] == target["expected_members"]
-                    and all(m["inspected"] for m in target["members"]),
+                    and [m["ordinal"] for m in target["members"]]
+                    == list(range(1, len(target["expected_members"]) + 1))
+                    and all(m["inspected"] is True for m in target["members"]),
                     "incomplete actual archive-member inspection")
-    put_json(s.report / f"{label}-result.json",
-             {"summary": summary, "command": row, "targets": [
-                 {"path": t["path"], "sha256": t["sha256"], "size": t["size"],
-                  "max_glibc": t["max_glibc"]} for t in targets]})
-    return summary
+            members += len(target["members"])
+        else:
+            require(not target["members"] and target["expected_members"] is None,
+                    "shared ELF acquired an archive-member inventory")
+    return members
+
+
+def check_old_negative(floor, row: dict, summary: dict, targets: list[dict],
+                       issues: list[dict]) -> None:
+    require(row["returncode"] == 1 and summary["verdict"] == "FAIL"
+            and summary["issues"] == len(issues) > 0 and len(targets) == 1,
+            "old reference supplied no actual nonzero/FAIL policy result")
+    target = targets[0]
+    require(target["inspected"] is True and target["kind"] == "shared"
+            and bool(target["isoc23_references"]),
+            "old reference lacks inspected __isoc23_* symbol evidence")
+    reported = [{key: value for key, value in issue.items()
+                 if key not in ("event", "role")} for issue in issues]
+    require(target["violations"] == reported,
+            "old reference failed outside its inspected policy violations")
+    isoc23_issues = 0
+    for issue in reported:
+        require(issue["path"] == target["path"] and issue.get("member") is None
+                and issue.get("ordinal") == 1,
+                "old reference has an unrelated setup/member error")
+        reference = issue.get("reference")
+        if reference is not None:
+            require(floor.is_isoc23_reference(reference["symbol"])
+                    and issue["cause"] == "forbidden __isoc23_* symbol reference: "
+                    + reference["symbol"]
+                    and any(all(observed[key] == value for key, value in reference.items())
+                            for observed in target["isoc23_references"]),
+                    "old reference refusal does not match its actual symbol data")
+            isoc23_issues += 1
+        else:
+            match = re.fullmatch(
+                r"(GLIBC_[0-9]+(?:\.[0-9]+)+) exceeds fixed GLIBC_2.35 ceiling",
+                issue["cause"])
+            require(match is not None and match[1] in target["versions"]
+                    and floor.version_exceeds_ceiling(floor.numeric_version(match[1])),
+                    "old reference failed for an unrelated cause")
+    require(isoc23_issues > 0, "old reference supplied no actual __isoc23_* refusal")
+
+
+def inspect_symbols(s: Session, checker: Path, root: Path, baseline: Path | None,
+                    label: str, *, tool_receipts: dict | None = None,
+                    expected_negative: bool = False) -> dict:
+    require(s.digest(checker)["sha256"] == FLOOR_CHECKER_SHA,
+            "floor checker differs from the unchanged reviewed implementation")
+    require((baseline is None) == expected_negative,
+            "positive inspections require the published baseline; old control is independent")
+    files, libraries = elf_inventory(s, root, tool_receipts=tool_receipts)
+    if expected_negative:
+        require(libraries == [root / "strategy.so"] and tool_receipts is None,
+                "old negative must inspect exactly the separately compiled strategy.so")
+    receipts = {str(p): s.digest(p) for p in libraries}
+    baseline_files, baseline_libraries = (elf_inventory(s, baseline)
+                                          if baseline is not None else ([], []))
+    baseline_receipts = {str(p): s.digest(p) for p in baseline_libraries}
+    argv = ["python3", "-I", checker, root]
+    if baseline is not None:
+        argv += ["--baseline-root", baseline]
+    # Even a failing positive inspection must retain the real candidate and
+    # published tagsets. Only the separate old control can accept a FAIL.
+    row = s.run(label, argv, inputs=[checker, *files, *baseline_files], allow_nonzero=True)
+    result = {"classification": "REFUSED", "command": row, "summary": None,
+              "targets": [], "baseline_targets": [], "baseline_comparisons": [], "issues": []}
+    try:
+        require(not s.text(row, "stderr"), "symbol checker emitted stderr")
+        summaries = []
+        for line in s.text(row).splitlines():
+            event = json.loads(line)
+            require(isinstance(event, dict) and isinstance(event.get("event"), str),
+                    "malformed symbol-inspector event")
+            role = event.get("role")
+            require(role in (None, "baseline"), "unknown symbol-inspector role")
+            if event["event"] == "summary":
+                require(role is None, "baseline supplied a separate/ambiguous summary")
+                summaries.append(event)
+            elif event["event"] == "target":
+                result["baseline_targets" if role == "baseline" else "targets"].append(event)
+            elif event["event"] == "baseline_comparison":
+                result["baseline_comparisons"].append(event)
+            elif event["event"] == "issue":
+                result["issues"].append(event)
+        require(len(summaries) == 1, "checker supplied no unique summary")
+        summary = result["summary"] = summaries[0]
+        require(summary["discovered"] == summary["inspected"] == len(libraries)
+                and summary["issues"] == len(result["issues"]),
+                "incomplete actual symbol inspection or issue coverage")
+        members = check_target_coverage(s, result["targets"], receipts)
+        require(summary["archive_members"] == members,
+                "checker archive-member count differs from complete input inventory")
+        if baseline is not None:
+            require(summary["baseline_discovered"] == summary["baseline_inspected"]
+                    == len(baseline_libraries) and bool(baseline_libraries),
+                    "published baseline was not completely inspected")
+            check_target_coverage(s, result["baseline_targets"], baseline_receipts)
+            require(len(result["baseline_comparisons"]) == 1,
+                    "missing actual published-baseline comparison")
+        else:
+            require(not result["baseline_targets"] and not result["baseline_comparisons"],
+                    "independent old negative unexpectedly used a baseline")
+        require(s.files(root) == files
+                and (baseline is None or s.files(baseline) == baseline_files),
+                "inspection input inventory changed")
+        if tool_receipts is not None:
+            for kind, receipt in tool_receipts.items():
+                require(same_bytes(s.digest(root / (kind + "-loader")), receipt),
+                        "loader tool changed during shared-library inspection")
+        if expected_negative:
+            check_old_negative(load_floor_checker(s, checker), row, summary,
+                               result["targets"], result["issues"])
+            result["classification"] = "EXPECTED_ISOC23_REFUSAL"
+        else:
+            require(row["returncode"] == 0 and summary["verdict"] == "PASS"
+                    and summary["issues"] == 0
+                    and result["baseline_comparisons"][0]["exceeds"] is False
+                    and all(not t["isoc23_references"] for t in result["targets"]),
+                    "failing actual symbol/baseline admission; see real tagsets and issues")
+            result["classification"] = "PASS"
+        return summary
+    except (Refusal, KeyError, TypeError, ValueError) as error:
+        result["error"] = repr(error)
+        raise
+    finally:
+        put_json(s.report / f"{label}-result.json", result)
+
+
+def parse_executable_elf(floor, output: str, layout: str) -> dict:
+    """Parse genuine PIE output, independently of the DSO-only parse_elf API."""
+    lines = output.splitlines()
+    require(lines.count("ELF Header:") == 1
+            and sum(bool(re.match(r"\s*Magic:\s+7f 45 4c 46(?:\s|$)", line))
+                    for line in lines) == 1, "missing/malformed executable ELF header")
+
+    def field(name):
+        values = [match[1] for line in lines
+                  if (match := re.fullmatch(r"\s*" + name + r":\s+(.+)", line))]
+        require(len(values) == 1, f"missing/duplicate executable ELF {name}")
+        return values[0]
+
+    elf_type, machine, elf_class, data = (
+        field("Type"), field("Machine"), field("Class"), field("Data"))
+    require(elf_type == "DYN (Position-Independent Executable file)",
+            f"loader tool is not an actual PIE executable: {elf_type}")
+    require(elf_class == "ELF64" and data == "2's complement, little endian",
+            "loader tool has unsupported ELF class/encoding")
+    interpreters = re.findall(
+        r"^\s*\[Requesting program interpreter: ([^\]\r\n]+)\]\s*$", layout, re.M)
+    flags = re.findall(r"^\s*0x[0-9a-fA-F]+\s+\(FLAGS_1\)\s+Flags:\s+(.+)$", layout, re.M)
+    require(layout.splitlines().count("Program Headers:") == 1
+            and len(re.findall(r"^\s*INTERP\s+", layout, re.M)) == 1
+            and len(interpreters) == 1 and interpreters[0].startswith("/")
+            and len(flags) == 1 and "PIE" in flags[0].split(),
+            "missing/malformed executable interpreter or PIE dynamic flags")
+    tables, table_symbols, versions = {}, {}, set()
+    references, isoc23 = [], []
+    meaningful, index = 0, 0
+    while index < len(lines):
+        line = lines[index]
+        header = floor.SYMBOL_HEADER.fullmatch(line)
+        if header is None:
+            require(not line.startswith("Symbol table ")
+                    and floor.SYMBOL_ROW.fullmatch(line) is None,
+                    "unparsable/uncovered executable symbol table row")
+            index += 1
+            continue
+        table, count_text = header.groups()
+        count = int(count_text)
+        require(table not in tables and count > 0, "duplicate/empty executable symbol table")
+        tables[table], table_symbols[table] = count, 0
+        index += 1
+        require(index < len(lines) and lines[index].split() == [
+            "Num:", "Value", "Size", "Type", "Bind", "Vis", "Ndx", "Name"],
+            "unparsable executable symbol columns")
+        index += 1
+        for ordinal in range(count):
+            require(index < len(lines), "incomplete executable symbol table")
+            symbol_row = floor.SYMBOL_ROW.fullmatch(lines[index])
+            require(symbol_row is not None and int(symbol_row[1]) == ordinal,
+                    "incomplete/noncontiguous executable symbol row")
+            symbol = re.sub(r"\s+\([0-9]+\)$", "", (symbol_row[8] or "").strip())
+            index += 1
+            if not symbol or symbol_row[4] in ("FILE", "SECTION"):
+                continue
+            meaningful += 1
+            table_symbols[table] += 1
+            version = None
+            if "@" in symbol:
+                suffix = re.fullmatch(r"([^@]+)@{1,2}([^@]+)", symbol)
+                require(suffix is not None, "unparsable executable versioned symbol")
+                version = suffix[2]
+                versions.add(version)
+            reference = {"symbol": symbol, "table": table, "index": ordinal,
+                         "section": symbol_row[7]}
+            if version and version.startswith("GLIBC_"):
+                references.append(reference)
+            if floor.is_isoc23_reference(symbol):
+                isoc23.append(reference)
+    require(table_symbols.get(".dynsym", 0) > 0,
+            "no complete nonempty executable dynamic symbol table")
+    try:
+        versions.update(floor.version_sections(lines, tables.get(".dynsym")))
+    except (floor.InspectionError, ValueError) as error:
+        raise Refusal(f"uninspectable executable version metadata: {error}") from error
+    glibc = sorted(name for name in versions if name.startswith("GLIBC_"))
+    return {
+        "kind": "pie-executable", "elf_type": "DYN", "type_description": elf_type,
+        "machine": machine, "class": elf_class, "data": data,
+        "interpreter": interpreters[0], "dynamic_flags": flags[0].split(),
+        "symbol_tables": tables, "table_symbols": table_symbols, "symbols": meaningful,
+        "versions": glibc, "other_versions": sorted(versions.difference(glibc)),
+        "max_glibc": floor.maximum_version(glibc), "glibc_references": references,
+        "isoc23_references": isoc23,
+    }
+
+
+def executable_violations(floor, facts: dict) -> list[str]:
+    issues = []
+    for name in facts["versions"]:
+        version = floor.numeric_version(name)
+        if version is None:
+            issues.append(f"private/unknown GLIBC version refused: {name}")
+        elif floor.version_exceeds_ceiling(version):
+            issues.append(f"{name} exceeds fixed GLIBC_2.35 ceiling")
+    issues.extend("forbidden __isoc23_* symbol reference: " + reference["symbol"]
+                  for reference in facts["isoc23_references"])
+    return issues
+
+
+def inspect_tools(s: Session, checker: Path, root: Path, receipts: dict) -> dict:
+    elf_inventory(s, root, tool_receipts=receipts)
+    floor = load_floor_checker(s, checker)
+    result = {"status": "INCOMPLETE", "tools": []}
+    try:
+        for kind in ("old", "new"):
+            path = root / (kind + "-loader")
+            record = {"file": s.digest(path), "elf": None, "inspected": False,
+                      "violations": [], "command": None, "layout_command": None}
+            result["tools"].append(record)
+            require(same_bytes(record["file"], receipts[kind]), "compiled tool changed")
+            row = record["command"] = s.run("tool-" + kind + "-symbols", [
+                "readelf", "--wide", "--file-header", "--symbols", "--version-info",
+                "--", path], inputs=[path])
+            layout = record["layout_command"] = s.run("tool-" + kind + "-layout", [
+                "readelf", "--wide", "--program-headers", "--dynamic", "--", path],
+                inputs=[path])
+            require(not s.text(row, "stderr") and not s.text(layout, "stderr"),
+                    "executable readelf emitted a diagnostic")
+            record["elf"] = parse_executable_elf(floor, s.text(row), s.text(layout))
+            require(same_bytes(s.digest(path), record["file"]),
+                    "loader tool changed during real readelf inspection")
+            record["inspected"] = True
+            record["violations"] = executable_violations(floor, record["elf"])
+            require(not record["violations"],
+                    f"loader tool violates fixed symbol policy: {path}")
+        result["status"] = "INSPECTED"
+        return result
+    except (Refusal, OSError, KeyError, TypeError, ValueError) as error:
+        result["error"] = repr(error)
+        raise
+    finally:
+        put_json(s.report / "consumer-tools-result.json", result)
+
+
+def consumer_inventory(s: Session, root: Path, records: dict) -> dict:
+    """Bind the entire consumer tree to exactly two tools and two real DSOs."""
+    require(set(records) == {"old", "new"}, "missing/unknown compiled consumer kind")
+    expected = {}
+    for kind in ("old", "new"):
+        paths = {"loader": Path("generated") / (kind + "-loader"),
+                 "strategy": (Path("old/strategy.so") if kind == "old"
+                              else Path("generated/new-strategy.so"))}
+        for role, relative_path in paths.items():
+            receipt = records[kind][role]
+            require(receipt["path"] == str(Path("/output") / relative_path),
+                    "compiler receipt names a substituted consumer path")
+            expected[root / relative_path] = receipt
+    files = s.files(root)
+    observed = {}
+    for path in files:
+        magic = s.magic(path)
+        binary = (magic.startswith(b"\x7fELF")
+                  or magic in (b"!<arch>\n", b"!<thin>\n")
+                  or path.name.endswith(".a") or re.search(r"\.so(?:\..*)?$", path.name))
+        if binary:
+            require(path in expected and magic.startswith(b"\x7fELF"),
+                    f"unexpected/malformed consumer ELF/archive: {path}")
+            observed[path] = s.digest(path)
+            require(same_bytes(observed[path], expected[path]),
+                    f"consumer bytes differ from actual compile: {path}")
+    require(set(observed) == set(expected), "missing exact compiled consumer ELF/tool")
+    return {path.relative_to(root).as_posix(): receipt for path, receipt in observed.items()}
+
+
+def require_positive_inspection(result: dict) -> None:
+    summary = result["summary"]
+    require(result["classification"] == "PASS" and result["command"]["returncode"] == 0
+            and summary["verdict"] == "PASS" and summary["issues"] == 0
+            and not result["issues"]
+            and summary["discovered"] == summary["inspected"] == len(result["targets"]) > 0
+            and summary["baseline_discovered"] == summary["baseline_inspected"]
+            == len(result["baseline_targets"]) > 0
+            and len(result["baseline_comparisons"]) == 1
+            and result["baseline_comparisons"][0]["exceeds"] is False,
+            "missing complete actual positive/published-baseline verdict")
 
 
 def inside_build(s: Session, args) -> None:
@@ -818,7 +1161,7 @@ def inside_consume(s: Session, args) -> None:
         example = matching_source / EXAMPLE
         loader = source / RECIPE / "load_strategy.c"
         so = old_module / "strategy.so" if kind == "old" else generated / "new-strategy.so"
-        executable = generated / (kind + "-loader.so")
+        executable = generated / (kind + "-loader")
         s.follows([example, loader, prefix / "lib/libpineforge.a",
                    *s.files(prefix / "include")], f"{kind} complete consumer inputs")
         s.run("compile-" + kind + "-strategy", [
@@ -828,8 +1171,8 @@ def inside_consume(s: Session, args) -> None:
             "-o", so,
         ], inputs=[example, prefix / "include", prefix / "lib/libpineforge.a",
                    Path("/usr/include/eigen3")])
-        # PIE is an actual executable. The .so suffix makes this DYN ELF visible
-        # to the unchanged all-member checker, which discovers .a/.so/.so.*.
+        # PIE is an executable tool. It never enters the DSO-only checker;
+        # its genuine executable metadata and symbols are inspected separately.
         s.run("compile-" + kind + "-loader", [
             CC, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-fPIE", "-pie",
             "-I" + str(prefix / "include"), loader, "-ldl", "-o", executable,
@@ -840,13 +1183,24 @@ def inside_consume(s: Session, args) -> None:
             "archive": s.digest(prefix / "lib/libpineforge.a"),
             "strategy": s.digest(so), "loader": s.digest(executable),
         }
-    generated_files = s.files(generated)
-    dependency_records(s, generated_files + s.files(old_module), "consumers")
-    summary = inspect_symbols(s, source / "scripts/check_prebuilt_glibc.py",
-                              generated, old_module, "consumer-symbols")
+    consumer_inventory(s, output, records)
+    dependency_records(s, s.files(generated) + s.files(old_module), "consumers")
+    checker = source / "scripts/check_prebuilt_glibc.py"
+    tool_receipts = {kind: record["loader"] for kind, record in records.items()}
+    tools = inspect_tools(s, checker, generated, tool_receipts)
+    require(all(record["elf"]["machine"] == "Advanced Micro Devices X86-64"
+                and record["elf"]["interpreter"] == "/lib64/ld-linux-x86-64.so.2"
+                for record in tools["tools"]),
+            "actual compiled loader machine/interpreter differs from native x86_64")
+    summary = inspect_symbols(s, checker, generated, old, "consumer-symbols",
+                              tool_receipts=tool_receipts)
+    old_summary = inspect_symbols(s, checker, old_module, None, "old-reference-symbols",
+                                  expected_negative=True)
+    consumer_inventory(s, output, records)
     put_json(s.report / "consumers.result.json",
              {"status": "COMPILED_AND_INSPECTED", "inputs": records,
-              "symbol_summary": summary})
+              "symbol_summary": summary, "old_reference_summary": old_summary,
+              "tool_status": tools["status"]})
 
 
 def package_sdk(s: Session, stage: Path, work: Path, inspected: list[dict]) -> Path:
@@ -876,59 +1230,181 @@ def package_sdk(s: Session, stage: Path, work: Path, inspected: list[dict]) -> P
     return unpacked
 
 
-def actual_case(s: Session, os_name: str, image: str, image_id: str, kind: str,
-                consumers: Path, dependencies: Path, abi: int, token: str) -> dict:
-    name = f"sdkdiag-{token}-{os_name}-{kind}"
-    loader = f"/inputs/generated/{kind}-loader.so"
-    module = "/inputs/old/strategy.so" if kind == "old" else "/inputs/generated/new-strategy.so"
-    input_receipt = {
-        "loader": s.digest(consumers / Path(loader).relative_to("/inputs")),
-        "strategy": s.digest(consumers / Path(module).relative_to("/inputs")),
-        "gcc_dependencies": [s.digest(dependencies / "lib" / name)
-                             for name in sorted(GCC_NEEDED)],
-    }
-    put_json(s.report / f"inputs-{os_name}-{kind}.json", input_receipt)
-    argv = container_argv(image, [(consumers, "/inputs", True),
-                                 (dependencies, "/dependencies", True)], name=name,
-                          environment={"LD_LIBRARY_PATH": "/dependencies/lib"})
-    raw = s.run("load-" + os_name + "-" + kind, argv + [loader, module],
-                inputs=s.files(consumers) + s.files(dependencies), allow_nonzero=True)
-    # Preserve the actual stopped-container state before interpreting a nonzero
-    # loader result. Docker setup/exec/OOM/ABI errors never count as old RED.
-    state_row = s.run("state-" + os_name + "-" + kind,
-                      ["docker", "container", "inspect", name])
-    state = json.loads(s.text(state_row))
-    require(len(state) == 1, "missing actual container state")
-    container = state[0]
+def classify_case(raw: dict, container: dict, stdout: str, stderr: str,
+                  image_id: str, kind: str, abi: int) -> str:
     observed = container["State"]
-    stderr, stdout = s.text(raw, "stderr"), s.text(raw)
-    result = {"os": os_name, "sdk": kind, "raw": raw, "container": container,
-              "inputs": input_receipt,
-              "verdict": "UNCLASSIFIED"}
-    # This file survives any later classification refusal.
-    put_json(s.report / f"raw-{os_name}-{kind}.json", result)
     require(container["Image"] == image_id and observed["Status"] == "exited"
             and not observed["OOMKilled"] and not observed["Error"]
             and observed["ExitCode"] == raw["returncode"],
             "runtime setup/state mismatch; cannot classify as a strategy outcome")
     events = [json.loads(line) for line in stdout.splitlines()]
     start = {"event": "loader_start", "expected_abi": abi}
+    require(kind in ("old", "new"), "unknown runtime consumer kind")
     if kind == "old":
         require(raw["returncode"] == 10 and events == [start]
                 and stderr.startswith("dlopen failed: ")
                 and re.search(r"undefined symbol: __isoc23_strtol(?:\W|$)", stderr) is not None,
                 "old SDK did not produce the required actual __isoc23_strtol dlopen failure")
-        result["verdict"] = "EXPECTED_LOADER_RED"
+        return "EXPECTED_LOADER_RED"
+    if raw["returncode"] != 0:
+        raise ChildFailure("new SDK actual loader", raw["returncode"])
+    require(not stderr and events == [
+        start, {"event": "abi", "expected": abi, "actual": abi},
+        {"event": "create_free", "non_null": True}, {"event": "loader_complete"},
+    ], "new SDK supplied no complete ABI/create/free loader evidence")
+    return "LOADER_ABI_CREATE_FREE_OK"
+
+
+def runtime_text(s: Session, row: dict, stream: str, errors: list[dict]) -> str | None:
+    if row.get(stream + "_hash") is None:
+        errors.append({"phase": row["label"], "stream": stream,
+                       "error": "command supplied no retained stream file"})
+        return None
+    try:
+        return s.text(row, stream)
+    except (OSError, UnicodeError) as error:
+        errors.append({"phase": row["label"], "stream": stream, "error": repr(error)})
+        return None
+
+
+def actual_case(s: Session, os_name: str, image: str, image_id: str, kind: str,
+                consumers: Path, dependencies: Path, abi: int, token: str,
+                expected: dict) -> dict:
+    name = f"sdkdiag-{token}-{os_name}-{kind}"
+    loader = f"/inputs/generated/{kind}-loader"
+    module = "/inputs/old/strategy.so" if kind == "old" else "/inputs/generated/new-strategy.so"
+    input_receipt = {
+        "loader": s.digest(consumers / Path(loader).relative_to("/inputs")),
+        "strategy": s.digest(consumers / Path(module).relative_to("/inputs")),
+        "gcc_dependencies": [s.digest(dependencies / "lib" / soname)
+                             for soname in sorted(GCC_NEEDED)],
+    }
+    # These are shared trust prerequisites, outside outcome collection. A
+    # substituted input stops execution rather than becoming a runtime case.
+    require(all(same_bytes(input_receipt[role], expected[role])
+                for role in ("loader", "strategy"))
+            and len(input_receipt["gcc_dependencies"]) == len(expected["gcc_dependencies"])
+            and all(actual["path"] == prior["path"] and same_bytes(actual, prior)
+                    for actual, prior in zip(input_receipt["gcc_dependencies"],
+                                             expected["gcc_dependencies"])),
+            "exact runtime files differ from compiled/inspected inputs")
+    put_json(s.report / f"inputs-{os_name}-{kind}.json", input_receipt)
+    argv = container_argv(image, [(consumers, "/inputs", True),
+                                 (dependencies, "/dependencies", True)], name=name,
+                          environment={"LD_LIBRARY_PATH": "/dependencies/lib"})
+    raw = s.run("load-" + os_name + "-" + kind, argv + [loader, module],
+                inputs=s.files(consumers) + s.files(dependencies),
+                allow_nonzero=True, allow_unavailable=True)
+    # The single launch attempt and the single state query retain their actual
+    # return codes/exceptions, including when Docker never created a container.
+    state_row = s.run("state-" + os_name + "-" + kind,
+                      ["docker", "container", "inspect", name],
+                      allow_nonzero=True, allow_unavailable=True)
+    result = {"os": os_name, "sdk": kind, "image": image, "image_id": image_id,
+              "docker_run_attempted": True, "raw": raw, "state_command": state_row,
+              "container": None, "inputs": input_receipt, "errors": [],
+              "verdict": "UNCLASSIFIED"}
+    errors = result["errors"]
+    stdout, stderr = (runtime_text(s, raw, stream, errors) for stream in ("stdout", "stderr"))
+    state_stdout = runtime_text(s, state_row, "stdout", errors)
+    state_stderr = runtime_text(s, state_row, "stderr", errors)
+    result.update(stdout=stdout, stderr=stderr,
+                  state_stdout=state_stdout, state_stderr=state_stderr)
+    if raw["returncode"] is None or raw.get("spawn_or_wait_error"):
+        errors.append({"phase": "launch", "error": raw.get("spawn_or_wait_error"),
+                       "returncode": raw["returncode"]})
+    elif raw["returncode"] in (125, 126, 127):
+        errors.append({"phase": "launch", "returncode": raw["returncode"],
+                       "error": "Docker run reported a setup/exec failure; see actual streams/state"})
+    if state_row["returncode"] != 0 or state_row.get("spawn_or_wait_error"):
+        errors.append({"phase": "state", "error": state_row.get("spawn_or_wait_error"),
+                       "returncode": state_row["returncode"]})
+    elif state_stdout is not None:
+        try:
+            state = json.loads(state_stdout)
+            require(isinstance(state, list) and len(state) == 1
+                    and isinstance(state[0], dict), "missing actual container state")
+            result["container"] = state[0]
+        except (Refusal, ValueError, TypeError) as error:
+            errors.append({"phase": "state", "error": repr(error)})
+    # Preserve actual streams/state before classifying any loader outcome.
+    put_json(s.report / f"raw-{os_name}-{kind}.json", result)
+    if errors:
+        result["verdict"] = "RUNTIME_UNAVAILABLE"
     else:
-        if raw["returncode"] != 0:
-            raise ChildFailure("new SDK actual loader", raw["returncode"])
-        require(not stderr and events == [
-            start, {"event": "abi", "expected": abi, "actual": abi},
-            {"event": "create_free", "non_null": True}, {"event": "loader_complete"},
-        ], "new SDK supplied no complete ABI/create/free loader evidence")
-        result["verdict"] = "LOADER_ABI_CREATE_FREE_OK"
+        try:
+            result["verdict"] = classify_case(raw, result["container"], stdout, stderr,
+                                              image_id, kind, abi)
+        except (Refusal, KeyError, TypeError, ValueError) as error:
+            result["verdict"] = "UNEXPECTED_OUTCOME"
+            errors.append({"phase": "classification", "error": repr(error),
+                           "traceback": traceback.format_exc()})
     put_json(s.report / f"case-{os_name}-{kind}.json", result)
     return result
+
+
+def collect_cases(s: Session, consumers: Path, dependencies: Path, packed: Path,
+                  compiled: dict, token: str, expected_inputs: dict) -> list[dict]:
+    cases = []
+    for os_name, runtime in RUNTIMES.items():
+        preparation = {"image": runtime, "pull": None, "inspection_label": "image-" + os_name}
+        runtime_id = None
+        try:
+            pull = preparation["pull"] = s.run(
+                "pull-" + os_name, ["docker", "pull", "--platform", "linux/amd64", runtime],
+                allow_nonzero=True, allow_unavailable=True)
+            require(pull["returncode"] == 0 and not pull.get("spawn_or_wait_error"),
+                    "runtime pull failed; see actual status/exception and command streams")
+            runtime_id = image_identity(s, runtime, preparation["inspection_label"])["Id"]
+        except (Refusal, OSError, KeyError, TypeError, ValueError) as error:
+            preparation["error"] = repr(error)
+            preparation["traceback"] = traceback.format_exc()
+        for kind in ("old", "new"):
+            if runtime_id is None:
+                # A failed pull/identity check is evidence of unavailability,
+                # never invented loader bytes or an expected old/new verdict.
+                result = {
+                    "os": os_name, "sdk": kind, "verdict": "RUNTIME_UNAVAILABLE",
+                    "docker_run_attempted": False, "runtime_preparation": preparation,
+                    "raw": None, "container": None,
+                    "errors": [{"phase": "runtime_preparation",
+                                "error": preparation["error"]}],
+                }
+                put_json(s.report / f"raw-{os_name}-{kind}.json", result)
+                put_json(s.report / f"case-{os_name}-{kind}.json", result)
+            else:
+                dependency_root = dependencies if kind == "old" else packed
+                result = actual_case(
+                    s, os_name, runtime, runtime_id, kind, consumers, dependency_root,
+                    compiled["inputs"][kind]["abi"], token, expected_inputs[kind])
+            cases.append(result)
+    return cases
+
+
+def require_complete_cases(s: Session, cases: list[dict]) -> list[dict]:
+    required = {(os_name, kind) for os_name in RUNTIMES for kind in ("old", "new")}
+    errors, outcomes = [], []
+    if len(cases) != 4 or {(case["os"], case["sdk"]) for case in cases} != required:
+        errors.append("four required actual runtime outcomes are incomplete/duplicated")
+    for os_name, kind in sorted(required):
+        try:
+            row = json.loads(s.read(s.report / f"case-{os_name}-{kind}.json"))
+            matches = [case for case in cases if (case["os"], case["sdk"]) == (os_name, kind)]
+            require(len(matches) == 1 and row == matches[0],
+                    "retained case differs from its actual collected result")
+            outcomes.append(row)
+            require(row["verdict"] == ("EXPECTED_LOADER_RED" if kind == "old"
+                                       else "LOADER_ABI_CREATE_FREE_OK")
+                    and not row["errors"] and row["docker_run_attempted"] is True,
+                    f"missing/errored/unexpected actual outcome: {os_name}/{kind}")
+        except (Refusal, OSError, KeyError, TypeError, ValueError) as error:
+            errors.append({"os": os_name, "sdk": kind, "error": repr(error)})
+    put_json(s.report / "cases.result.json", {
+        "status": "INCOMPLETE" if errors else "ALL_CASES_CLASSIFIED",
+        "cases": cases, "retained_cases": outcomes, "errors": errors,
+    })
+    require(not errors, "four-case aggregate refused; see cases.result.json and each case")
+    return outcomes
 
 
 def host(s: Session, args, work: Path) -> None:
@@ -1005,7 +1481,14 @@ def host(s: Session, args, work: Path) -> None:
     stage = output / "stage" / f"pineforge-v{new_identity['version']}-linux-x86_64"
     installed_manifest = json.loads(s.read(build_report / "installed-sdk.json"))
     symbols = json.loads(s.read(build_report / "installed-symbols-result.json"))
+    require_positive_inspection(symbols)
     installed_by_path = {row["path"]: row for row in installed_manifest}
+    require({str(Path(target["path"]).relative_to(Path(built["stage"])))
+             for target in symbols["targets"]}
+            == {row["path"] for row in installed_manifest
+                if row["path"].endswith(".a")
+                or re.search(r"\.so(?:\..*)?$", row["path"])},
+            "installed symbol verdict does not cover every installed library")
     for target in symbols["targets"]:
         path = str(Path(target["path"]).relative_to(Path(built["stage"])))
         require(target["sha256"] == installed_by_path[path]["sha256"]
@@ -1027,6 +1510,7 @@ def host(s: Session, args, work: Path) -> None:
     ], inputs=[exported, old_exported, baseline, packed, consumers])
     compiled = json.loads(s.read(consume_report / "consumers.result.json"))
     require(compiled["status"] == "COMPILED_AND_INSPECTED", "consumer compile evidence missing")
+    consumer_inventory(s, consumers, compiled["inputs"])
     compiled_manifest = s.manifest(consumers, "compiled-inputs.json")
     compiled_by_path = {row["path"]: row for row in compiled_manifest}
     for record in compiled["inputs"].values():
@@ -1036,43 +1520,73 @@ def host(s: Session, args, work: Path) -> None:
                     and record[name]["size"] == compiled_by_path[path]["size"],
                     "runtime input differs from actual compiler output")
     consumer_symbols = json.loads(s.read(consume_report / "consumer-symbols-result.json"))
-    for target in consumer_symbols["targets"]:
+    require_positive_inspection(consumer_symbols)
+    old_reference = json.loads(s.read(consume_report / "old-reference-symbols-result.json"))
+    tools = json.loads(s.read(consume_report / "consumer-tools-result.json"))
+    require(consumer_symbols["classification"] == "PASS"
+            and len(consumer_symbols["targets"]) == 1
+            and consumer_symbols["targets"][0]["path"] == "/output/generated/new-strategy.so"
+            and old_reference["classification"] == "EXPECTED_ISOC23_REFUSAL"
+            and old_reference["command"]["returncode"] == 1
+            and old_reference["summary"]["verdict"] == "FAIL"
+            and old_reference["summary"]["discovered"]
+            == old_reference["summary"]["inspected"] == 1
+            and len(old_reference["targets"]) == 1
+            and old_reference["targets"][0]["path"] == "/output/old/strategy.so"
+            and bool(old_reference["targets"][0]["isoc23_references"]),
+            "positive consumer or independent expected-negative evidence is incomplete")
+    inspected_consumers = {}
+    for target in consumer_symbols["targets"] + old_reference["targets"]:
         path = str(Path(target["path"]).relative_to("/output"))
-        require(target["sha256"] == compiled_by_path[path]["sha256"]
-                and target["size"] == compiled_by_path[path]["size"],
+        require(target["inspected"] is True and same_bytes(target, compiled_by_path[path]),
                 "runtime input differs from actual inspected consumer ELF")
+        inspected_consumers[path] = target
+    require(tools["status"] == compiled["tool_status"] == "INSPECTED"
+            and len(tools["tools"]) == 2
+            and {row["file"]["path"] for row in tools["tools"]}
+            == {f"/output/generated/{kind}-loader" for kind in ("old", "new")},
+            "the two exact executable inspections are incomplete")
+    inspected_tools = {}
+    for record in tools["tools"]:
+        path = str(Path(record["file"]["path"]).relative_to("/output"))
+        require(record["inspected"] is True and not record["violations"]
+                and record["elf"]["kind"] == "pie-executable"
+                and record["elf"]["elf_type"] == "DYN"
+                and record["elf"]["machine"] == "Advanced Micro Devices X86-64"
+                and record["elf"]["interpreter"] == "/lib64/ld-linux-x86-64.so.2"
+                and same_bytes(record["file"], compiled_by_path[path]),
+                "runtime tool differs from actual executable inspection")
+        inspected_tools[path] = record["file"]
     # Exactly the old-glibc GCC libraries shipped with the new SDK are also
     # supplied separately to the old consumer. Published old SDK stays read-only.
     deps = output / "consumer-dependencies"
-    for soname in GCC_NEEDED:
-        require(s.digest(deps / "lib" / soname)["sha256"]
-                == s.digest(packed / "lib" / soname)["sha256"],
-                "old/new consumer GCC runtime bytes differ")
-    cases = []
-    for os_name, runtime in RUNTIMES.items():
-        s.run("pull-" + os_name, ["docker", "pull", "--platform", "linux/amd64", runtime])
-        runtime_id = image_identity(s, runtime, "image-" + os_name)["Id"]
-        for kind in ("old", "new"):
-            # New case uses the packed SDK's actual runtime libraries.
-            dependency_root = deps if kind == "old" else packed
-            cases.append(actual_case(s, os_name, runtime, runtime_id, kind, consumers,
-                                     dependency_root, compiled["inputs"][kind]["abi"], token))
-    required = {(os_name, kind) for os_name in RUNTIMES for kind in ("old", "new")}
-    require({(case["os"], case["sdk"]) for case in cases} == required and len(cases) == 4,
-            "four required actual runtime outcomes are incomplete")
+    expected_inputs = {}
+    for kind in ("old", "new"):
+        dependency_root = deps if kind == "old" else packed
+        gcc_receipts = []
+        for soname in sorted(GCC_NEEDED):
+            receipt = s.digest(dependency_root / "lib" / soname)
+            require(same_bytes(receipt, installed_by_path["lib/" + soname]),
+                    "consumer GCC runtime differs from the inspected/packed SDK bytes")
+            gcc_receipts.append(receipt)
+        expected_inputs[kind] = {
+            "loader": inspected_tools[f"generated/{kind}-loader"],
+            "strategy": inspected_consumers["old/strategy.so" if kind == "old"
+                                           else "generated/new-strategy.so"],
+            "gcc_dependencies": gcc_receipts,
+        }
+    cases = collect_cases(s, consumers, deps, packed, compiled, token, expected_inputs)
     # Read the work's own classified files and checker summaries; an exit marker
     # or a Docker build/tag alone can never produce this verdict.
-    outcomes = [json.loads(s.read(s.report / f"case-{os_name}-{kind}.json"))
-                for os_name, kind in sorted(required)]
-    require(all(row["verdict"] == ("EXPECTED_LOADER_RED" if row["sdk"] == "old"
-                                  else "LOADER_ABI_CREATE_FREE_OK") for row in outcomes),
-            "case result files do not establish all required outcomes")
+    outcomes = require_complete_cases(s, cases)
     for directory, label in ((build_report, "installed-symbols"),
                              (consume_report, "consumer-symbols")):
         result = json.loads(s.read(directory / f"{label}-result.json"))
-        require(result["summary"]["verdict"] == "PASS" and result["summary"]["issues"] == 0
-                and result["summary"]["discovered"] == result["summary"]["inspected"] > 0,
-                "missing complete actual symbol verdict")
+        require_positive_inspection(result)
+    require(json.loads(s.read(consume_report / "old-reference-symbols-result.json"))
+            == old_reference
+            and json.loads(s.read(consume_report / "consumer-tools-result.json")) == tools,
+            "independent old-negative or executable inspection evidence changed")
     put_json(s.report / "RUN.COMPLETE", {
         "verdict": "PASS", "finished": now(), "cases": [
             {"os": c["os"], "sdk": c["sdk"], "verdict": c["verdict"]} for c in outcomes],
@@ -1080,6 +1594,9 @@ def host(s: Session, args, work: Path) -> None:
         "local_diagnostic_image_id": image, "release_admitted": False,
         "symbol_results": ["sdk-build/installed-symbols-result.json",
                            "consumers/consumer-symbols-result.json"],
+        "old_reference_result": "consumers/old-reference-symbols-result.json",
+        "executable_result": "consumers/consumer-tools-result.json",
+        "case_aggregate": "cases.result.json",
     })
 
 
