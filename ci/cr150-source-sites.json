@@ -13200,6 +13200,43 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/trade_text_source.hpp",
+   "symbol": "text_value",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "namespace trade_source_detail #1",
+    "class TradeValueSourceV1 : public TradeSourceV1 #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/trade_text_source.hpp",
+   "symbol": "text_value",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "class LedgerTradeSourceV1 final : public trade_source_detail :: TradeValueSourceV1 #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/trade_text_source.hpp",
+   "symbol": "text_value",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "class EngineReportTradeSourceV1 final : public trade_source_detail :: TradeValueSourceV1 #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/window_sum.hpp",
    "symbol": "values_",
    "scope": [
@@ -46707,6 +46744,111 @@
    ],
    "cls": "decl",
    "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/trade_text_writer.hpp",
+   "symbol": "buffer",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "template < class Write > void write_trade_text_companion_to ( Write && write , std :: string_view run_id , const TradeSourceV1 & source , std :: size_t read_capacity ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: vector < char >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/trade_text_writer.hpp",
+   "symbol": "pending",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "template < class Write > void write_trade_text_companion_to ( Write && write , std :: string_view run_id , const TradeSourceV1 & source , std :: size_t read_capacity ) #1",
+    "const auto text = [ & ] ( LogicalIndexV1 index , TradeTextV1 field ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/trade_text_writer.hpp",
+   "symbol": "bytes",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "template < class Write > void write_trade_text_companion_to ( Write && write , std :: string_view run_id , const TradeSourceV1 & source , std :: size_t read_capacity ) #1",
+    "const auto text = [ & ] ( LogicalIndexV1 index , TradeTextV1 field ) #1",
+    "while ( offset < length ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/trade_text_writer.hpp",
+   "symbol": "bytes",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "template < class Write > void write_trade_text_companion_to ( Write && write , std :: string_view run_id , const TradeSourceV1 & source , std :: size_t read_capacity ) #1",
+    "const auto text = [ & ] ( LogicalIndexV1 index , TradeTextV1 field ) #1",
+    "while ( offset < length ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "bytes . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/trade_text_writer.hpp",
+   "symbol": "pending",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "template < class Write > void write_trade_text_companion_to ( Write && write , std :: string_view run_id , const TradeSourceV1 & source , std :: size_t read_capacity ) #1",
+    "const auto text = [ & ] ( LogicalIndexV1 index , TradeTextV1 field ) #1",
+    "while ( offset < length ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "pending = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/trade_text_writer.hpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "template < class Write > void write_trade_text_companion_to ( Write && write , std :: string_view run_id , const TradeSourceV1 & source , std :: size_t read_capacity ) #1",
+    "+ + index ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/trade_text_writer.hpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "template < class Write > void write_trade_text_companion_to ( Write && write , std :: string_view run_id , const TradeSourceV1 & source , std :: size_t read_capacity ) #1",
+    "+ + index ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/trade_text_writer.hpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace report #1",
+    "template < class Write > void write_trade_text_companion_to ( Write && write , std :: string_view run_id , const TradeSourceV1 & source , std :: size_t read_capacity ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
    "ordinal": 1
   },
   {

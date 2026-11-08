@@ -8429,6 +8429,20 @@ if(UNIX)
         else()
             target_link_options(test_cr559_map_capacity_run PRIVATE "-Wl,--export-dynamic")
         endif()
+        if(NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+            # The genuine generated.cpp fixture is committed; a missing file
+            # is a configure error.
+            add_library(cr559_cli_pair SHARED
+                fixtures/cr559_cli_pair/generated.cpp)
+            target_link_libraries(cr559_cli_pair PRIVATE pineforge)
+            if(APPLE)
+                target_link_options(cr559_cli_pair PRIVATE
+                    "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+            else()
+                target_link_options(cr559_cli_pair PRIVATE
+                    "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+            endif()
+        endif()
     endif()
 endif()
 # --- CR-150 cr559-map-capacity end ---

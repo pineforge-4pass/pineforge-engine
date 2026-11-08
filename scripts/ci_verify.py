@@ -924,15 +924,16 @@ PINNED_CI_SCRIPT_TEST_ROWS = frozenset((
     'test_ci_preflight_slices_cover',
 ))
 
-# Static slow-label policy: 43 loop + 50 distinct direct LABELS names = 93.
-# The direct names span 39 assignment sites. Never derive pins from the run's registry.
+# Static slow-label policy: 43 loop + 51 distinct direct LABELS names = 94.
+# The direct names span 40 assignment sites. Never derive pins from the run's registry.
 # Conditional registration may omit pins; every discovered slow name must
 # belong to this set. A new slow row requires an explicit policy change.
 # Both eight-slice verifier and command-after families are already in the 43.
-# Four report slices replace one direct name (historical +3), already in the 50;
+# Four report slices replace one direct name (historical +3), already in the 51;
 # report and command-after covers remain unlabelled.
 # expectation corrected: 43 + 18 = 61 was a stale comment; current source has
 # 46 existing direct names + 4 new population names, plus the 43 loop names.
+# expectation corrected: 93 -> 94, because main adds the CLI slow name at one new site.
 PINNED_SLOW_TEST_ROWS = frozenset((
     # tests/CMakeLists.txt: the timing list, labelled by its slow loop.
     'test_adapter_live_state_equivalence',
@@ -1020,7 +1021,7 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_p2_a5_string_1m',
     'test_p2_a5_map_1m',
     'test_p2_a5_map_prepared_1m',
-    # tests/cr150.d/cr559-map-capacity.cmake:23.
+    # tests/cr150.d/cr559-map-capacity.cmake:30.
     'test_cr559_map_capacity_resident',
     # tests/cr150.d/o1-live-limit-policy.cmake and the matching
     # o1-live-limit-policy fence in tests/CMakeLists.txt.
@@ -1030,6 +1031,9 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     # expectation corrected: 92 -> 93 pins, because the finite raised-boundary
     # row joins the existing slow property group (43 loop + 50 direct names).
     'test_o1_live_limit_raised_boundary',
+    # tests/cr150.d/cr559-map-capacity.cmake:25 (its library target is in the
+    # tests/CMakeLists.txt fence); measured 5615.44 s in the ended pair proof.
+    'test_cr559_map_capacity_cli',
     # tests/cr150.d/p2cx-a5arr.cmake:5.
     'test_array_growth_1m',
     # tests/cr150.d/report-trade-retirement.cmake and report-trade-reference.cmake:

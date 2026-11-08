@@ -1221,11 +1221,17 @@ class RealTree(unittest.TestCase):
         # materialize_relative_exits and three groups of
         # SeriesPercentileNearestRank (its ring, the growth of the ring and its
         # window), less the two whole-state copies of the bounded drawing arena
-        # removed when it began writing in place; all 184 pending-flat-memory
-        # groups remain. expectation corrected: 1588 -> 1589, because the scalar
+        # removed when it began writing in place. expectation corrected:
+        # 1588 -> 1589, because the scalar
         # field of the checked live-object limit class adds one key with two
         # assignment sites; that key stays OPEN.
-        self.assertEqual(c['OPEN'], 1356 + 49 + 184)
+        # Main adds five groups of the finished
+        # trade text companion (the source's text accessor and the writer's
+        # transfer buffer, transfer bytes, carried bytes and integer text
+        # temporaries); all 184 pending-flat-memory groups remain.
+        # expectation corrected: 1593 -> 1594, because main's 53 groups and the
+        # retained scalar group form 54 distinct groups after the merge.
+        self.assertEqual(c['OPEN'], 1356 + 54 + 184)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')

@@ -93,7 +93,11 @@ ceilings:
   # One materialize_relative_exits local-list group and three
   # SeriesPercentileNearestRank groups remain OPEN as well.
   # expectation corrected: unreviewed 1404 -> 1405, because one LiveObjectLimit scalar key was added; OPEN.
-  unreviewed: 1405
+  # Five more groups for the finished trade text companion: the source's text
+  # accessor and the writer's transfer buffer, transfer bytes, carried bytes and
+  # integer text temporaries. None is bounded.
+  # expectation corrected: unreviewed 1409 -> 1410, because the merged main's five groups retain the live-object scalar key; OPEN.
+  unreviewed: 1410
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1737,4 +1741,10 @@ entries:
   - {id: "U1724", file: "include/pineforge/source/pine_ta_length.hpp", symbol: "history_", ops: ["decl"], container: "std::vector<double>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "SeriesPercentileNearestRank's append ring retains kMaxBarsBack + 1 doubles. Its optional ta::PercentileWindow retains the requested length, at most kMaxBarsBack + 1 values, and is rebuilt on a length change. OPEN.", line: 289}
   - {id: "U1725", file: "src/source/pine_ta_length.cpp", symbol: "history_", ops: ["grow"], container: "unresolved by the index: history_.assign(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "SeriesPercentileNearestRank's append ring is assigned once at kMaxBarsBack + 1 doubles and then overwrites slots. The optional ta::PercentileWindow retains the requested length, at most kMaxBarsBack + 1 values, and is rebuilt on a length change. OPEN.", line: 342}
   - {id: "U1728", file: "src/source/pine_ta_length.cpp", symbol: "window_", ops: ["grow"], container: "unresolved by the index: window_.emplace(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "SeriesPercentileNearestRank builds its ta::PercentileWindow for the requested length and builds it again when the requested length changes; the window retains that length, at most kMaxBarsBack + 1 values. OPEN.", line: 366}
-  - {id: "U1729", file: "include/pineforge/detail/o1_store.hpp", symbol: "value_", ops: ["assign"], container: "unresolved by the index: value_ = ...", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 114}
+  - {id: "U1729", file: "include/pineforge/trade_text_source.hpp", symbol: "text_value", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "The trade text source returns one text field (an entry or exit id or comment) as a std::string by value: the virtual accessor and its ledger-backed and report-backed overrides. Each read_text call asks for the whole field again and copies a window of it, so a field longer than the transfer quantum is materialised once per transfer. A field length has no fixed bound. OPEN.", line: 86}
+  - {id: "U1730", file: "src/trade_text_writer.hpp", symbol: "buffer", ops: ["decl"], container: "std::vector<char>", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "The companion writer's one transfer buffer, allocated once per companion write at the read_capacity the caller supplies. read_capacity is a transfer quantum, not a limit on a field, a record or the stream. OPEN.", line: 26}
+  - {id: "U1731", file: "src/trade_text_writer.hpp", symbol: "bytes", ops: ["decl", "grow"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "One transfer of a text field: the held trailing bytes of the previous transfer plus the copied transfer, at most read_capacity + 3 bytes. OPEN.", line: 54}
+  - {id: "U1732", file: "src/trade_text_writer.hpp", symbol: "pending", ops: ["assign", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "Per text field: the at most three trailing bytes of a UTF-8 scalar that may cross a transfer boundary, carried into the next transfer. OPEN.", line: 45}
+  - {id: "U1733", file: "src/trade_text_writer.hpp", symbol: "std::to_string", ops: ["temp"], container: "unresolved by the index: std::to_string(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "Decimal text of an unsigned 64-bit integer, at most 20 characters: the row index and the entry incarnation of each row, and the row count of the trailer. OPEN.", line: 83}
+  # The live-object scalar was U1729 before main added its trade-text key; retain both under distinct ids.
+  - {id: "U1734", file: "include/pineforge/detail/o1_store.hpp", symbol: "value_", ops: ["assign"], container: "unresolved by the index: value_ = ...", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 114}
