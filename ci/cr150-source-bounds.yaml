@@ -92,6 +92,7 @@ ceilings:
   # blocks written in place, so the ceiling drops by two.
   # One materialize_relative_exits local-list group and three
   # SeriesPercentileNearestRank groups remain OPEN as well.
+  # expectation corrected: unreviewed 1404 -> 1405, because one LiveObjectLimit scalar key was added; OPEN.
   unreviewed: 1405
   pending-flat-memory: 184
 owners:
@@ -1736,6 +1737,4 @@ entries:
   - {id: "U1724", file: "include/pineforge/source/pine_ta_length.hpp", symbol: "history_", ops: ["decl"], container: "std::vector<double>", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "SeriesPercentileNearestRank's append ring retains kMaxBarsBack + 1 doubles. Its optional ta::PercentileWindow retains the requested length, at most kMaxBarsBack + 1 values, and is rebuilt on a length change. OPEN.", line: 289}
   - {id: "U1725", file: "src/source/pine_ta_length.cpp", symbol: "history_", ops: ["grow"], container: "unresolved by the index: history_.assign(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "SeriesPercentileNearestRank's append ring is assigned once at kMaxBarsBack + 1 doubles and then overwrites slots. The optional ta::PercentileWindow retains the requested length, at most kMaxBarsBack + 1 values, and is rebuilt on a length change. OPEN.", line: 342}
   - {id: "U1728", file: "src/source/pine_ta_length.cpp", symbol: "window_", ops: ["grow"], container: "unresolved by the index: window_.emplace(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", note: "SeriesPercentileNearestRank builds its ta::PercentileWindow for the requested length and builds it again when the requested length changes; the window retains that length, at most kMaxBarsBack + 1 values. OPEN.", line: 366}
-  # expectation corrected: unreviewed ceiling 1404 -> 1405, because the checked
-  # live-object field adds one scanned key with two assign sites; it stays OPEN.
   - {id: "U1729", file: "include/pineforge/detail/o1_store.hpp", symbol: "value_", ops: ["assign"], container: "unresolved by the index: value_ = ...", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 114}
