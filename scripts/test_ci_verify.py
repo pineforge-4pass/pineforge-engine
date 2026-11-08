@@ -573,8 +573,9 @@ class Scripted:
             (self.build_dir / 'CTestTestfile.cmake').write_text('# deliberately empty inventory\n')
         if (self.profile == 'live-sanitizers'
                 or self.profile == 'sanitizers' and 'ctest_shard_inventory' in self.exits):
+            # Discovery and generated producers must describe the same rows.
             registry = self.exits.get('ctest_shard_inventory', ())
-            if self.profile == 'live-sanitizers':
+            if self.profile == 'live-sanitizers' and 'ctest_shard_inventory' not in self.exits:
                 registry = self._live_registry()
             target_names = self.exits.get('ctest_build_target_names', {})
             self.link_outputs = {
@@ -4461,6 +4462,31 @@ class RowFloorDriver(unittest.TestCase):
         class RealCTest(Scripted):
             def _configure(self):
                 result = super()._configure()
+                # CTest's commands below use the real external cmake. The
+                # scripted build still needs independent archive and install
+                # producers for the Driver's selected-build inventory.
+                self.link_outputs = {
+                    'pineforge': self.build_dir / 'lib/libpineforge.a',
+                    'pineforge_kernel': self.build_dir / 'lib/libpineforge_kernel.a',
+                    'pineforge_window_plan': self.build_dir / 'lib/libpineforge_window_plan.so',
+                }
+                directories = []
+                for target, output in self.link_outputs.items():
+                    directory = self.build_dir / 'CMakeFiles' / (target + '.dir')
+                    directory.mkdir(parents=True, exist_ok=True)
+                    directories.append(str(directory))
+                    recipe = (f'ar qc "{output}"\nranlib "{output}"\n'
+                              if output.suffix == '.a' else f'c++ -shared -o "{output}"\n')
+                    (directory / 'link.txt').write_text(recipe)
+                (self.build_dir / 'CMakeFiles/TargetDirectories.txt').write_text(
+                    '\n'.join(directories) + '\n')
+                (self.build_dir / 'cmake_install.cmake').write_text('\n'.join(
+                    'file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/lib" '
+                    f'TYPE {kind} FILES "{self.link_outputs[target]}")'
+                    for target, kind in (
+                        ('pineforge', 'STATIC_LIBRARY'),
+                        ('pineforge_kernel', 'STATIC_LIBRARY'),
+                        ('pineforge_window_plan', 'SHARED_LIBRARY'))) + '\n')
                 inventory = self.build_dir / 'CTestTestfile.cmake'
                 failed_row = 'row.a' if self.exits.get('real_failure') else None
                 inventory.write_text(''.join(
