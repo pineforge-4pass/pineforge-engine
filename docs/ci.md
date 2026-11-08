@@ -2089,16 +2089,18 @@ comes from the trusted base tree, and the head checkout is data. A pull request
 cannot replace the checker that judges its proposed corpus commit.
 The job uses only its read-only job token and the admitted base and head SHAs.
 
-The corpus workflow runs the engine's `scripts/validate_corpus_sha.py` against
-the proposed corpus checkout and prints the engine commit it ran.
-The validator checks recorded bytes and checkout cleanliness, builds the
-probes and measures the selected subset. The manifest `file_digests.json`,
-written by `scripts/write_corpus_file_digests.py`, binds every tracked corpus
-file except itself. The checked commit binds the manifest's own bytes.
+The corpus workflow, added by the corpus pull request, is to run the engine's
+`scripts/validate_corpus_sha.py` on the proposed corpus checkout and print the
+engine commit it ran. The validator checks recorded bytes and checkout
+cleanliness, builds the selected probes and compares each produced trade file's
+header with the recorded tape header; it never compares trades.
+The manifest `file_digests.json`, written by
+`scripts/write_corpus_file_digests.py`, binds every tracked corpus file except
+itself. The checked commit binds the manifest's own bytes.
 The manifest is not a signature: it detects unrecorded changes and exposes
 deliberate rewrites for review, without proving the correctness of those files.
-A coverage limit is a finding; subset measurement does not establish full
-population parity. The full parity sweep remains a separate gate.
+Subset probes do not establish population parity.
+The full parity sweep remains a separate gate.
 
 Known limit: while corpus OLD remains accepted, as arm OLD is today, a pull
 request that removes the corpus job and restores OLD result wiring is admitted.

@@ -3040,8 +3040,8 @@ class PostFleetRunnerPolicy(unittest.TestCase):
 
     def test_post_fleet_docs_match_runner_policy(self):
         docs = (ROOT / 'docs/ci.md').read_text()
-        # expectation corrected: 2062 -> 2107, because corpus admission and gate documentation was added.
-        self.assertEqual(len(docs.splitlines()), 2107)
+        # expectation corrected: 2062 -> 2109, because corpus admission and gate documentation was added.
+        self.assertEqual(len(docs.splitlines()), 2109)
         # The test-owned job catalog defines the protected label inventory.
         tables = re.findall(
             r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
@@ -5555,8 +5555,8 @@ class PreflightFailures(unittest.TestCase):
 
     def test_documented_slow_row_counts_match_literal_population(self):
         text = (ROOT / 'docs/ci.md').read_text()
-        # expectation corrected: 2062 -> 2107, because corpus admission and gate documentation was added.
-        self.assertEqual(len(text.splitlines()), 2107)
+        # expectation corrected: 2062 -> 2109, because corpus admission and gate documentation was added.
+        self.assertEqual(len(text.splitlines()), 2109)
         slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
                        if name.startswith('test_ci_verify_slice_'))
         self.assertTrue(slices, 'verifier slice inventory must not be empty')
