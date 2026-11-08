@@ -1699,7 +1699,7 @@ host UID 1001, records the actual host UID/GID and Docker version bytes, and kee
 the container user at `1001:123`. Docker command failures remain failures.
 
 The x86 auth contract permits only `release.yml` on `workflow_dispatch` from main
-(the caller's tag allowance does not admit a tag dispatch), with provider `projects/76767776102/locations/global/workloadIdentityPools/pineforge-github/providers/github-oidc`,
+(tag refs are refused), with provider `projects/76767776102/locations/global/workloadIdentityPools/pineforge-github/providers/github-oidc`,
 dedicated reader `engine-release-toolchainreader@gen-lang-client-0864094636.iam.gserviceaccount.com`,
 and `google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093`.
 It sets `create_credentials_file: false`, `export_environment_variables: false`

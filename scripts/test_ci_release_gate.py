@@ -2494,8 +2494,8 @@ class OptionCWorkflowTests(unittest.TestCase):
         script = self.shell("prebuilt-x86", "Refuse an untrusted toolchain caller")
         for event, ref, identity, allowed in (
                 ("workflow_dispatch", "refs/heads/main", "release.yml", True),
-                ("workflow_dispatch", "refs/tags/v1.11.0", "release.yml", True),
-                ("workflow_dispatch", "refs/tags/v1.11.0-rc.2", "release.yml", True),
+                ("workflow_dispatch", "refs/tags/v1.11.0", "release.yml", False),
+                ("workflow_dispatch", "refs/tags/v1.11.0-rc.2", "release.yml", False),
                 ("pull_request", "refs/heads/main", "release.yml", False),
                 ("pull_request_target", "refs/heads/main", "release.yml", False),
                 ("push", "refs/heads/main", "release.yml", False),
