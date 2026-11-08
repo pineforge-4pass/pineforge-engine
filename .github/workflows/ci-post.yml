@@ -2,7 +2,7 @@ name: CI post-merge
 
 on:
   push:
-    branches: [main]
+    branches: [diag/x86-debug-dwarf-1108]
   schedule:
     - cron: '30 1 * * *'
   workflow_dispatch:
@@ -417,6 +417,98 @@ jobs:
         if: ${{ needs.authz.result == 'success' }}
         run: |
           python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --ctest-shard ${{ matrix.shard }}/2
+
+      - name: Capture native x86 Debug objects and DWARF
+        if: ${{ always() && needs.authz.result == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          capture_status=0
+          artifact=x86-debug-dwarf
+          mkdir -p -- "$artifact"
+          git rev-parse HEAD 'HEAD^{tree}' > "$artifact/source-identity.txt" 2>&1 || capture_status=1
+          git diff --exit-code 3afaba4635ae29af10a4fe949b1ea8370937b94b -- \
+            src include tests/test_abi_layout_probe.cpp CMakeLists.txt \
+            > "$artifact/source-diff.txt" 2>&1 || capture_status=1
+          sha256sum -- src/source/pine_adapter.cpp src/source/pine_strategy_host.cpp \
+            include/pineforge/source/pine_adapter.hpp include/pineforge/source/pine_strategy_host.hpp \
+            tests/test_abi_layout_probe.cpp > "$artifact/source.sha256" 2>&1 || capture_status=1
+          cp -- build/CMakeCache.txt build/compile_commands.json "$artifact/" || capture_status=1
+          cp --parents -- build/CMakeFiles/*/CMakeCXXCompiler.cmake "$artifact/" || capture_status=1
+          compiler_path=$(sed -n -E 's/^CMAKE_CXX_COMPILER:(FILEPATH|STRING)=//p' build/CMakeCache.txt) || capture_status=1
+          [[ -n "$compiler_path" ]] || capture_status=1
+          readlink -f -- "$compiler_path" > "$artifact/compiler-path.txt" 2>&1 || capture_status=1
+          sha256sum -- "$compiler_path" > "$artifact/compiler.sha256" 2>&1 || capture_status=1
+          "$compiler_path" --version > "$artifact/compiler-version.txt" 2>&1 || capture_status=1
+          "$compiler_path" -dumpmachine > "$artifact/compiler-target.txt" 2>&1 || capture_status=1
+          cmake --version > "$artifact/cmake-version.txt" 2>&1 || capture_status=1
+          readelf --version > "$artifact/readelf-version.txt" 2>&1 || capture_status=1
+          gdb --nx --nh --batch --version > "$artifact/gdb-version.txt" 2>&1 || capture_status=1
+
+          if [[ -f build/CMakeFiles/pineforge.dir/src/source/pine_adapter.cpp.o && \
+                ! -L build/CMakeFiles/pineforge.dir/src/source/pine_adapter.cpp.o ]]; then
+            cp -p -- build/CMakeFiles/pineforge.dir/src/source/pine_adapter.cpp.o "$artifact/" || capture_status=1
+          else
+            capture_status=1
+          fi
+          if [[ -f build/CMakeFiles/pineforge.dir/src/source/pine_strategy_host.cpp.o && \
+                ! -L build/CMakeFiles/pineforge.dir/src/source/pine_strategy_host.cpp.o ]]; then
+            cp -p -- build/CMakeFiles/pineforge.dir/src/source/pine_strategy_host.cpp.o "$artifact/" || capture_status=1
+          else
+            capture_status=1
+          fi
+          stat -c '%n %s bytes %F' -- "$artifact/pine_adapter.cpp.o" "$artifact/pine_strategy_host.cpp.o" \
+            > "$artifact/objects-stat.txt" 2>&1 || capture_status=1
+          sha256sum -- "$artifact/pine_adapter.cpp.o" "$artifact/pine_strategy_host.cpp.o" \
+            > "$artifact/objects.sha256" 2>&1 || capture_status=1
+          readelf --file-header --section-headers --wide "$artifact/pine_adapter.cpp.o" \
+            > "$artifact/pine_adapter.elf.txt" 2>&1 || capture_status=1
+          readelf --file-header --section-headers --wide "$artifact/pine_strategy_host.cpp.o" \
+            > "$artifact/pine_strategy_host.elf.txt" 2>&1 || capture_status=1
+          grep -Eq 'Class:[[:space:]]+ELF64' "$artifact/pine_adapter.elf.txt" || capture_status=1
+          grep -Eq 'Type:[[:space:]]+REL[[:space:]]' "$artifact/pine_adapter.elf.txt" || capture_status=1
+          grep -Eq 'Machine:[[:space:]]+Advanced Micro Devices X86-64[[:space:]]*$' "$artifact/pine_adapter.elf.txt" || capture_status=1
+          grep -Eq 'Class:[[:space:]]+ELF64' "$artifact/pine_strategy_host.elf.txt" || capture_status=1
+          grep -Eq 'Type:[[:space:]]+REL[[:space:]]' "$artifact/pine_strategy_host.elf.txt" || capture_status=1
+          grep -Eq 'Machine:[[:space:]]+Advanced Micro Devices X86-64[[:space:]]*$' "$artifact/pine_strategy_host.elf.txt" || capture_status=1
+          readelf --debug-dump=info --wide "$artifact/pine_adapter.cpp.o" \
+            > "$artifact/pine_adapter.dwarf.txt" 2>&1 || capture_status=1
+          readelf --debug-dump=info --wide "$artifact/pine_strategy_host.cpp.o" \
+            > "$artifact/pine_strategy_host.dwarf.txt" 2>&1 || capture_status=1
+          grep -q 'DW_TAG_compile_unit' "$artifact/pine_adapter.dwarf.txt" || capture_status=1
+          grep -q 'DW_TAG_compile_unit' "$artifact/pine_strategy_host.dwarf.txt" || capture_status=1
+
+          gdb --nx --nh --batch --quiet --readnow \
+            -iex 'set auto-load off' -iex 'set debuginfod enabled off' \
+            -ex 'set print type methods off' \
+            -ex "ptype /o 'pineforge::source::PineExecutionAdapter'" \
+            "$artifact/pine_adapter.cpp.o" > "$artifact/adapter.ptype.txt" 2>&1 || capture_status=1
+          gdb --nx --nh --batch --quiet --readnow \
+            -iex 'set auto-load off' -iex 'set debuginfod enabled off' \
+            -ex 'set print type methods off' \
+            -ex "ptype /o 'pineforge::source::PineExecutionAdapter::RetiredRowScratch'" \
+            "$artifact/pine_adapter.cpp.o" > "$artifact/scratch.ptype.txt" 2>&1 || capture_status=1
+          gdb --nx --nh --batch --quiet --readnow \
+            -iex 'set auto-load off' -iex 'set debuginfod enabled off' \
+            -ex 'set print type methods off' \
+            -ex "ptype /o 'pineforge::source::PineStrategyHost'" \
+            "$artifact/pine_strategy_host.cpp.o" > "$artifact/host.ptype.txt" 2>&1 || capture_status=1
+          grep -Eq 'total size \(bytes\):[[:space:]]+[1-9][0-9]*' "$artifact/adapter.ptype.txt" || capture_status=1
+          grep -Eq 'total size \(bytes\):[[:space:]]+[1-9][0-9]*' "$artifact/scratch.ptype.txt" || capture_status=1
+          grep -Eq 'total size \(bytes\):[[:space:]]+[1-9][0-9]*' "$artifact/host.ptype.txt" || capture_status=1
+          grep -Eq '/\*[[:space:]]*[0-9]+[[:space:]]*\|.*[^[:alnum:]_]pine_view_;' "$artifact/adapter.ptype.txt" || capture_status=1
+          grep -Eq '/\*[[:space:]]*[0-9]+[[:space:]]*\|.*[^[:alnum:]_]retired_row_scratch_;' "$artifact/adapter.ptype.txt" || capture_status=1
+          grep -Eq '/\*[[:space:]]*[0-9]+[[:space:]]*\|.*[^[:alnum:]_]staged_scopes_;' "$artifact/adapter.ptype.txt" || capture_status=1
+          grep -Eq '/\*[[:space:]]*[0-9]+[[:space:]]*\|.*[^[:alnum:]_]adapter_;' "$artifact/host.ptype.txt" || capture_status=1
+          exit "$capture_status"
+
+      - name: Retain native x86 Debug DWARF diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: x86-debug-dwarf-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}-shard-${{ matrix.shard }}-of-2
+          path: x86-debug-dwarf/
+          if-no-files-found: error
 
       - name: Stage and summarize diagnostics
         if: ${{ always() && needs.authz.result == 'success' }}
