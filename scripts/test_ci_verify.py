@@ -1594,11 +1594,30 @@ class RowFloorConfig(unittest.TestCase):
                 self.assertEqual(len(flat), len(set(flat)))
                 self.assertIsNone(ci_verify.validate_ctest_shard_union(summaries))
                 lost = json.loads(json.dumps(summaries))
-                lost[0]['ctestRan'].pop()
+                omitted = lost[0]['ctestRan'].pop()
                 for key in ('ctestSelected', 'ctestRows', 'ctestTotal'):
                     lost[0][key] -= 1
-                with self.assertRaisesRegex(ValueError, 'CTest shard union lost or added a row'):
+                # Selected-build accounting refuses the unchanged plan first.
+                expected_error = (
+                    'selected build targets/inputs differ from shard execution'
+                    if profile == 'live-sanitizers' else 'CTest shard union lost or added a row')
+                with self.assertRaises(ValueError) as refusal:
                     ci_verify.validate_ctest_shard_union(lost)
+                self.assertEqual(str(refusal.exception), expected_error)
+                if profile == 'live-sanitizers':
+                    # Independently omit the same row from results and both
+                    # selections. Keep the producer map, archives, install/build
+                    # targets, argv and stage proofs: extra build targets are
+                    # allowed, so only the global union refusal applies.
+                    lost_from_plan = json.loads(json.dumps(summaries))
+                    lost_from_plan[0]['ctestRan'].remove(omitted)
+                    for key in ('ctestSelected', 'ctestRows', 'ctestTotal'):
+                        lost_from_plan[0][key] -= 1
+                    for key in ('ctestBuildInventory', 'ctestBuildInventoryAfter'):
+                        lost_from_plan[0][key]['selectedNames'].remove(omitted)
+                    with self.assertRaises(ValueError) as refusal:
+                        ci_verify.validate_ctest_shard_union(lost_from_plan)
+                    self.assertEqual(str(refusal.exception), 'CTest shard union lost or added a row')
 
     def test_native_live_shard_result_accounting_refuses_one_lost_row(self):
         inventory = self.native_live_inventory()
@@ -5714,33 +5733,138 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         self.assertGreaterEqual(len(pinned), count)
         return pinned[:count]
 
+    def assert_live_population(self, summary, scripted):
+        # Expected arithmetic and categories come from the command fixture's
+        # input registry, never the Driver's discovery/accounting results.
+        registry = set(scripted._live_registry())
+        skipped = list(scripted.exits.get('ctest_skipped', ()))
+        not_run = list(scripted.exits.get('ctest_not_run', ()))
+        disabled = list(scripted.exits.get('ctest_disabled', ()))
+        self.assertEqual(scripted.exits['ctest_registered'], len(registry))
+        self.assertEqual(scripted.exits['ctest_rows'], len(registry))
+        self.assertTrue(set(skipped + not_run + disabled) <= registry)
+        executed = registry - set(skipped + not_run + disabled)
+        self.assertEqual(summary['ctestRegistered'], len(registry))
+        self.assertEqual(summary['ctestSelected'], len(registry))
+        self.assertEqual(summary['ctestTotal'], len(registry) - len(disabled))
+        self.assertEqual(summary['ctestRows'], len(executed))
+        self.assertEqual(summary['ctestSkipped'], skipped)
+        self.assertEqual(summary['ctestNotRun'], not_run)
+        self.assertEqual(summary['ctestDisabled'], disabled)
+        results = summary['ctestBuildResults']
+        self.assertEqual(results['selectedNames'], sorted(registry))
+        self.assertEqual(results['ran'], sorted(executed))
+        self.assertEqual(results['skipped'], sorted(skipped))
+        self.assertEqual(results['notRun'], sorted(not_run))
+        self.assertEqual(results['disabled'], sorted(disabled))
+        return registry, executed
+
     def test_green_the_absent_runner_placeholders_skip_and_the_profile_passes(self):
         # Control (a): the public native-live shape. The runner/ tree
         # registers its 65 old pinned placeholders beside the required rows;
-        # they skip, ran stays at the floor, and the profile passes with the
-        # acceptance printed.
+        # they skip and every named executable row runs.
+        # expectation corrected: 86 -> 95 registered/total and 21 -> 30
+        # executable, because the named registry has 30 executable rows plus
+        # 65 pinned skips. The production floor stays 21.
+        # Literal names transcribed from Scripted's base row declarations and
+        # runner/CMakeLists.txt, including _pf_equivalence_probes and its cover
+        # row; independent of discovery, results and runner_e2e_test_names().
+        expected_executed = {
+            'native_live_chart_calendar_e2e',
+            'native_live_chart_input_e2e',
+            'native_live_checkpoint_e2e',
+            'native_live_e2e',
+            'native_live_equivalence_e2e_bracket-trailing-activation-offset-path-01',
+            'native_live_equivalence_e2e_order-entry-implicit-reversal-exit-01',
+            'native_live_equivalence_e2e_order-harbor-stop-limit-01',
+            'native_live_equivalence_e2e_order-keystone-limit-replace-01',
+            'native_live_equivalence_e2e_order-stop-entry-touch-boundary-01',
+            'native_live_equivalence_e2e_order-tranche-partial-market-close-01',
+            'native_live_equivalence_e2e_pyramid-terrace-staged-entry-01',
+            'native_live_equivalence_e2e_ta-rsi14-cross-50-01',
+            'native_live_genuine_retry_e2e',
+            'native_live_help',
+            'native_live_ledger_behavior_e2e',
+            'native_live_ratio_interval_e2e',
+            'native_live_report_e2e',
+            'native_live_routing_e2e',
+            'native_live_service_e2e',
+            'native_live_startup_e2e',
+            'native_live_stdin_idle_e2e',
+            'native_live_websocket_e2e',
+            'test_live_json',
+            'test_native_example_batch',
+            'test_native_example_selected',
+            'test_native_live_equivalence_split',
+            'test_native_live_routing',
+            'test_native_live_startup',
+            'test_native_live_store',
+            'test_native_live_websocket',
+        }
         pinned = self.pinned_probe(65)
-        code, summary, _, build_dir = self.run_profile(
-            'live-sanitizers', ctest_registered=65 + LIVE_SANITIZERS_MIN_TESTS,
-            ctest_rows=65 + LIVE_SANITIZERS_MIN_TESTS,
+        self.assertEqual(len(expected_executed), 30)
+        code, summary, scripted, build_dir = self.run_profile(
+            'live-sanitizers', ctest_registered=95, ctest_rows=95,
             ctest_skipped=pinned)
+        registry, _ = self.assert_live_population(summary, scripted)
+        self.assertEqual(registry - set(pinned), expected_executed)
+        expected_count = len(registry - set(pinned))
         self.assertEqual(code, 0, summary['failures'])
-        self.assertEqual(summary['ctestRows'], LIVE_SANITIZERS_MIN_TESTS)
+        self.assertEqual(failure_stages(summary), [])
+        self.assertEqual(summary['ctestRegistered'], 95)
+        self.assertEqual(summary['ctestTotal'], 95)
+        self.assertEqual(summary['ctestRows'], expected_count)
+        self.assertEqual(LIVE_SANITIZERS_MIN_TESTS, 21)
+        self.assertEqual(summary['minTests'], 21)
+        self.assertGreaterEqual(summary['ctestRows'], 21)
+        self.assertEqual(len(summary['ctestSkipped']), 65)
+        self.assertEqual(summary['ctestSkipped'], pinned)
+        results = summary['ctestBuildResults']
+        self.assertEqual(results['ran'], sorted(expected_executed))
+        self.assertEqual(results['skipped'], pinned)
         self.assertNotIn('live-test-skips', failure_stages(summary))
         self.assertIn('live-test-skips', stage_names(summary))
         log = (build_dir / 'ci-logs' / 'live-test-skips.log').read_text()
         self.assertIn('65 pinned private-fixture rows skipping', log)
 
+        # The native four-row override control is a different population.
+        # Pin both sides of the boundary on this same 95-name registry,
+        # retaining every executable name and all 65 pinned skips.
+        for minimum, expected_code, stages in (
+                (expected_count, 0, []),
+                (expected_count + 1, 1, ['ctest-floor'])):
+            with self.subTest(min_tests=minimum):
+                code, summary, scripted, _ = self.run_profile(
+                    'live-sanitizers', extra=['--min-tests', str(minimum)],
+                    ctest_registered=len(registry), ctest_rows=len(registry),
+                    ctest_skipped=pinned)
+                boundary_registry, boundary_executed = self.assert_live_population(
+                    summary, scripted)
+                self.assertEqual(boundary_registry, registry)
+                self.assertEqual(boundary_executed, expected_executed)
+                self.assertEqual(summary['ctestBuildResults']['ran'], sorted(expected_executed))
+                self.assertEqual(summary['ctestSkipped'], pinned)
+                self.assertEqual(summary['minTests'], minimum)
+                self.assertEqual(code, expected_code, summary['failures'])
+                self.assertEqual(failure_stages(summary), stages)
+                if expected_code:
+                    self.assertIn(
+                        f'ctest ran {expected_count} rows, below the floor of {minimum} '
+                        'for the live-sanitizers profile',
+                        summary['failures'][0]['error'])
+
     def test_red_an_unpinned_runner_skip_fails(self):
         # Control (b): one skipped row outside the pin is a failure, even
         # though the arithmetic alone would tolerate it.
         pinned = self.pinned_probe(65)
-        code, summary, _, _ = self.run_profile(
-            'live-sanitizers', ctest_registered=66 + LIVE_SANITIZERS_MIN_TESTS,
-            ctest_rows=66 + LIVE_SANITIZERS_MIN_TESTS,
+        # expectation corrected: 87 -> 96, because 30 executable names plus
+        # 65 pinned skips and one unpinned skip must all be represented.
+        code, summary, scripted, _ = self.run_profile(
+            'live-sanitizers', ctest_registered=96, ctest_rows=96,
             ctest_skipped=pinned + ['test_unpinned_runner_row'])
+        self.assert_live_population(summary, scripted)
         self.assertEqual(code, 1)
-        self.assertIn('live-test-skips', failure_stages(summary))
+        self.assertEqual(failure_stages(summary), ['live-test-skips'])
         error = next(item['error'] for item in summary['failures']
                      if item['stage'] == 'live-test-skips')
         self.assertIn('test_unpinned_runner_row', error)
@@ -5750,39 +5874,58 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # Control (c): a row CTest could not start is refused beside the
         # pinned skips -- the acceptance covers skips, nothing else.
         pinned = self.pinned_probe(65)
-        code, summary, _, _ = self.run_profile(
-            'live-sanitizers', ctest_registered=66 + LIVE_SANITIZERS_MIN_TESTS,
-            ctest_rows=66 + LIVE_SANITIZERS_MIN_TESTS,
+        # expectation corrected: 87 -> 96, because the named registry also
+        # carries the extra not-run row beside 30 executable names and 65 skips.
+        code, summary, scripted, _ = self.run_profile(
+            'live-sanitizers', ctest_registered=96, ctest_rows=96,
             ctest_skipped=pinned, ctest_not_run=['test_live_not_run_row'])
+        self.assert_live_population(summary, scripted)
         self.assertEqual(code, 1)
-        self.assertIn('live-test-skips', failure_stages(summary))
+        self.assertEqual(failure_stages(summary),
+                         ['ctest-build-accounting', 'live-test-skips'])
+        self.assertEqual(summary['failures'][0]['error'],
+                         'selected build contains not-run or disabled rows')
+        self.assertEqual(summary['failures'][1]['error'],
+                         'live-sanitizers cannot accept skipped, disabled or unreadable rows')
         error = next(item['error'] for item in summary['failures']
                      if item['stage'] == 'live-test-skips')
         self.assertIn('cannot accept skipped, disabled or unreadable rows', error)
 
     def test_red_a_disabled_row_fails_with_the_pinned_skips(self):
         # Control (c) again, for the disabled list: CTest leaves it out of its
-        # own count, so only this rule can refuse it.
+        # own count. Named build accounting and the live skip rule both
+        # deliberately refuse the disabled result, with no population mismatch.
         pinned = self.pinned_probe(65)
-        code, summary, _, _ = self.run_profile(
-            'live-sanitizers', ctest_registered=65 + LIVE_SANITIZERS_MIN_TESTS,
-            ctest_rows=65 + LIVE_SANITIZERS_MIN_TESTS,
+        # expectation corrected: 86 -> 96 registered/input rows, because the
+        # disabled name also belongs to the registry; CTest's total is 95.
+        code, summary, scripted, _ = self.run_profile(
+            'live-sanitizers', ctest_registered=96, ctest_rows=96,
             ctest_skipped=pinned, ctest_disabled=['test_live_disabled_row'])
+        self.assert_live_population(summary, scripted)
         self.assertEqual(code, 1)
-        self.assertIn('live-test-skips', failure_stages(summary))
+        self.assertEqual(failure_stages(summary),
+                         ['ctest-build-accounting', 'live-test-skips'])
+        self.assertEqual(summary['failures'][0]['error'],
+                         'selected build contains not-run or disabled rows')
+        self.assertEqual(summary['failures'][1]['error'],
+                         'live-sanitizers cannot accept skipped, disabled or unreadable rows')
 
     def test_red_overlay_present_a_pinned_skip_still_fails(self):
         # Control (d): with the overlay present the old rule stands -- every
         # runner row must run -- so a pinned row that skips fails on the
         # private-fixtures rule and on this one.
+        pinned = self.pinned_probe(1)
+        # expectation corrected: 22 -> 31, because the fixture declares
+        # 30 executable names plus the one pinned skip in this control.
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
-            code, summary, _, _ = self.run_profile(
-                'live-sanitizers', ctest_registered=LIVE_SANITIZERS_MIN_TESTS + 1,
-                ctest_rows=LIVE_SANITIZERS_MIN_TESTS + 1,
-                ctest_skipped=self.pinned_probe(1))
+            code, summary, scripted, _ = self.run_profile(
+                'live-sanitizers', ctest_registered=31, ctest_rows=31,
+                ctest_skipped=pinned)
+        self.assert_live_population(summary, scripted)
         self.assertEqual(code, 1)
-        self.assertIn('live-test-skips', failure_stages(summary))
-        self.assertIn('ctest-private-fixtures', failure_stages(summary))
+        self.assertEqual(failure_stages(summary),
+                         ['ctest-private-fixtures', 'live-test-skips'])
+        self.assertIn(pinned[0], summary['failures'][0]['error'])
         error = next(item['error'] for item in summary['failures']
                      if item['stage'] == 'live-test-skips')
         self.assertIn('cannot accept skipped', error)
@@ -5791,11 +5934,16 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # The rule keys on the profile SET: live-tsan accepts the pinned
         # placeholders the same way.
         pinned = self.pinned_probe(65)
-        code, summary, _, _ = self.run_profile(
+        code, summary, scripted, _ = self.run_profile(
             'live-tsan', ctest_registered=65 + LIVE_SANITIZERS_MIN_TESTS,
             ctest_rows=65 + LIVE_SANITIZERS_MIN_TESTS,
             ctest_skipped=pinned)
         self.assertEqual(code, 0, summary['failures'])
+        self.assertEqual(failure_stages(summary), [])
+        self.assertEqual(summary['ctestRegistered'], scripted.exits['ctest_registered'])
+        self.assertEqual(summary['ctestTotal'], scripted.exits['ctest_rows'])
+        self.assertEqual(summary['ctestRows'], scripted.exits['ctest_rows'] - len(pinned))
+        self.assertEqual(summary['ctestSkipped'], pinned)
         self.assertIn('live-test-skips', stage_names(summary))
 
     def test_required_equivalence_skip_fails_even_when_other_rows_cover_the_floor(self):
@@ -5806,13 +5954,20 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
             for probe in probes:
                 name = 'native_live_equivalence_e2e_' + probe
                 with self.subTest(profile=profile, probe=probe):
-                    code, summary, _, _ = self.run_profile(
-                        profile, ctest_registered=LIVE_SANITIZERS_MIN_TESTS + 1,
-                        ctest_rows=LIVE_SANITIZERS_MIN_TESTS + 1,
+                    # expectation corrected: 22 -> 30 for live-sanitizers,
+                    # because the skipped required name is already in its
+                    # 30-name registry. The live-tsan count fixture is unchanged.
+                    registered = (30 if profile == 'live-sanitizers'
+                                  else LIVE_SANITIZERS_MIN_TESTS + 1)
+                    code, summary, scripted, _ = self.run_profile(
+                        profile, ctest_registered=registered, ctest_rows=registered,
                         ctest_skipped=[name])
+                    if profile == 'live-sanitizers':
+                        self.assert_live_population(summary, scripted)
+                    else:
+                        self.assertEqual(summary['ctestRows'], LIVE_SANITIZERS_MIN_TESTS)
                     self.assertEqual(code, 1)
-                    self.assertEqual(summary['ctestRows'], LIVE_SANITIZERS_MIN_TESTS)
-                    self.assertIn('live-test-skips', failure_stages(summary))
+                    self.assertEqual(failure_stages(summary), ['live-test-skips'])
                     error = next(item['error'] for item in summary['failures']
                                  if item['stage'] == 'live-test-skips')
                     self.assertIn('required runner e2e rows skipped', error)
