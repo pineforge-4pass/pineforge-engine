@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Check corpus decisions, real git histories, and local HTTP responses."""
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager, ExitStack, redirect_stdout
 import copy
 from datetime import datetime, timedelta
 import hashlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import io
 import json
 import os
 from pathlib import Path
@@ -45,6 +46,27 @@ def success():
 def later(row):
     completed = datetime.fromisoformat(row["completed_at"].replace("Z", "+00:00"))
     return (completed + timedelta(seconds=1)).isoformat()
+
+
+def without_the_check():
+    response = success()
+    response["check_runs"] = [row for row in response["check_runs"]
+                              if row["name"] != "corpus-validate"]
+    response["total_count"] = len(response["check_runs"])
+    return response
+
+
+def with_check_field(field, value):
+    response = success()
+    corpus_row(response)[field] = value
+    return response
+
+
+def with_another_app(**changes):
+    response = success()
+    row = corpus_row(response)
+    row["app"] = dict(row["app"], **changes)
+    return response
 
 
 def git(repo, *arguments):
@@ -207,6 +229,16 @@ class CorpusCheckResultTests(unittest.TestCase):
                      f"160000 commit {OLD}\tother\n"):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 gate.parse_gitlink(text)
+
+
+class TrustAnchorTests(unittest.TestCase):
+    """What the gate trusts is written out here, not derived from the script."""
+
+    def test_the_four_anchors_are_the_literal_values(self):
+        self.assertEqual(gate.CORPUS_REPOSITORY, "pineforge-4pass/pineforge-corpus")
+        self.assertEqual(gate.CHECK_NAME, "corpus-validate")
+        self.assertEqual(gate.GITHUB_ACTIONS_APP_ID, 15368)
+        self.assertEqual(gate.API_URL, "https://api.github.com")
 
 
 class CorpusGitlinkIntegrationTests(unittest.TestCase):
@@ -377,6 +409,50 @@ class CorpusGitlinkIntegrationTests(unittest.TestCase):
         for _, headers in requests:
             self.assertTrue(headers.get("Authorization") == f"Bearer {token}",
                             "redirect authorization header differs")
+
+    def test_every_refusal_exits_one_through_the_process(self):
+        # check_result is tested directly above; this runs the script as the job
+        # does and pins the exit code and the single reason line the job log shows.
+        cases = (
+            ("missing", without_the_check(), f"corpus-validate missing on {NEW}"),
+            ("failed", with_check_field("conclusion", "failure"),
+             "conclusion is 'failure'"),
+            ("pending", with_check_field("status", "in_progress"),
+             "status is 'in_progress'"),
+            ("another app id", with_another_app(id=15369), "app is not GitHub Actions"),
+            ("another app slug", with_another_app(slug="another-app"),
+             "app is not GitHub Actions"),
+            ("another commit", with_check_field("head_sha", OLD), "differs from"),
+        )
+        for label, response, reason in cases:
+            with self.subTest(case=label):
+                with serve(lambda handler, body=response: send_response(
+                        handler, body)) as (url, requests):
+                    result = self.invoke(url)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertEqual(result.stderr, "")
+                self.assertEqual(len(result.stdout.splitlines()), 1, result.stdout)
+                self.assertIn(reason, result.stdout)
+                self.assertNotIn("Traceback", result.stdout)
+                self.assertEqual(len(requests), 1)
+
+    def test_the_request_names_the_pinned_repository_and_check_literally(self):
+        with serve(lambda handler: send_response(handler, success())) as (url, requests):
+            result = self.invoke(url)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([path for path, _ in requests], [
+            f"/repos/pineforge-4pass/pineforge-corpus/commits/{NEW}/check-runs"
+            "?filter=all&check_name=corpus-validate&per_page=100"])
+
+    def test_a_run_without_api_url_asks_the_pinned_repository_on_the_pinned_host(self):
+        output = io.StringIO()
+        with mock.patch.object(gate, "read_checks", return_value=success()) as read:
+            with redirect_stdout(output):
+                code = gate.main(["--base", self.base, "--head", self.head,
+                                  "--repo", str(self.repo)])
+        self.assertEqual(code, 0, output.getvalue())
+        read.assert_called_once_with("pineforge-4pass/pineforge-corpus", NEW,
+                                     api_url="https://api.github.com")
 
 
 if __name__ == "__main__":
