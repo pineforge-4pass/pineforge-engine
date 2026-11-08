@@ -35,6 +35,7 @@ SLOW_CLASSES = frozenset({
     'StaleBinaries',
     'ReceiptRecipe',
     'NativeLiveEquivalenceCTest',
+    'CTestTargetMapping',  # Real generator/build controls; runtime not measured yet.
 })
 
 
