@@ -1222,8 +1222,10 @@ class RealTree(unittest.TestCase):
         # SeriesPercentileNearestRank (its ring, the growth of the ring and its
         # window), less the two whole-state copies of the bounded drawing arena
         # removed when it began writing in place; all 184 pending-flat-memory
-        # groups remain.
-        self.assertEqual(c['OPEN'], 1356 + 48 + 184)
+        # groups remain. expectation corrected: 1588 -> 1589, because the scalar
+        # field of the checked live-object limit class adds one key with two
+        # assignment sites; that key stays OPEN.
+        self.assertEqual(c['OPEN'], 1356 + 49 + 184)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')
