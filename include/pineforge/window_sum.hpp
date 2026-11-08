@@ -1,11 +1,63 @@
 #pragma once
 #include "na.hpp"
 #include "series.hpp"
+#include <array>
+#include <cstddef>
+#include <cstdint>
 
 namespace pineforge {
 
-// TradingView's sliding-window sum -- the arithmetic behind ta.sma and
-// math.sum, fitted bit-for-bit on the round-7 synthetic pins (see the note
+// SMA's exact sum of the retained raw sources, rounded once to binary64.
+// Each finite source is an integer multiple of 2^-1074. Separate unsigned
+// positive/negative magnitudes make removal an exact inverse of insertion.
+// The highest finite source bit is 2097; 34 limbs leave room for the sum of
+// any positive 32-bit int window length. No arithmetic operation scans values_.
+class ExactWindowSum {
+    using Magnitude = std::array<std::uint64_t, 34>;
+
+    OwnedDeque<double> values_;    // raw window sources, front = newest
+    Magnitude positive_{};
+    Magnitude negative_{};
+    int length_;
+    int count_ = 0;                // retained valid sources, at most length_
+    int positive_infinities_ = 0;
+    int negative_infinities_ = 0;
+
+    // Only the evicted raw source and membership need saving. Replacement
+    // and rewind invert the current source's contribution, without saving
+    // copies of the magnitudes. Eviction is explicit: infinity is not NA.
+    int saved_count_ = 0;
+    double saved_evicted_value_ = 0.0;
+    bool saved_evicted_ = false;
+    bool saved_pushed_ = false;
+
+    static void update_word(Magnitude& magnitude, std::size_t index,
+                            std::uint64_t word, bool remove);
+    void update(double src, bool remove);
+
+public:
+    explicit ExactWindowSum(int length);
+
+    // Never pass NA. SMA holds its seeded window and calls note_no_push().
+    double push(double src);
+    // A later repush starts a fresh push; unpush has nothing to rewind.
+    void note_no_push();
+    // Replace the provisional front while preserving the pre-bar eviction.
+    double repush(double src);
+    // Remove the provisional front and restore that saved eviction, if any.
+    void unpush();
+
+    int count() const { return count_; }
+    int length() const { return length_; }
+    bool seeded() const { return count_ >= length_; }
+    double sum() const;
+    void observe_owned_storage(OwnedStorage& out) const noexcept {
+        observe_owned_members(out, values_);
+    }
+};
+
+// Legacy sliding-window sum used by math.sum and biased StdDev, fitted
+// bit-for-bit on the round-7 synthetic pins (see the historical note
 // above its implementation in src/ta_moving_averages.cpp):
 //
 //   * a Kahan-compensated running sum S with compensation c;
@@ -20,7 +72,8 @@ namespace pineforge {
 //     newest-first over the window's sources, c is reset and the bar's ring
 //     addend is its raw source.
 //
-// Both users divide S by `length` themselves (ta.sma) or emit S (math.sum).
+// Consumers emit S or use it in their legacy arithmetic; SMA uses
+// ExactWindowSum instead.
 class KahanWindowSum {
     OwnedDeque<double> values_;    // window sources, front = newest
     OwnedDeque<double> addends_;   // the compensated addends, front = newest
@@ -45,7 +98,7 @@ class KahanWindowSum {
 public:
     explicit KahanWindowSum(int length);
 
-    // A valid source enters the window; returns S. Never pass na: both users
+    // A valid source enters the window; returns S. Never pass na: callers
     // hold their seeded value on na input and call note_no_push() instead.
     double push(double src);
     // The current bar carried no source (na input): records that a later
