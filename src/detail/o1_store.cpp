@@ -521,6 +521,13 @@ StoreImpl::Header StoreImpl::header_for(Id id) const {
   if (status == ScratchStatus::io_error && store_ && store_->carried_failure()) {
     rethrow_carried_scratch_failure(store_->carried_failure());
   }
+  // expectation corrected: status-only I/O unclassified -> scratch_io_failed,
+  // because physical backing failures must carry their I/O code.
+  if (status == ScratchStatus::io_error) {
+    throw pineforge::coded<std::runtime_error>(
+        RunFailureCode::scratch_io_failed, {},
+        std::string("o1 store: ") + what + ": " + status_text(status));
+  }
   throw std::runtime_error(std::string("o1 store: ") + what + ": " + status_text(status));
 }
 
