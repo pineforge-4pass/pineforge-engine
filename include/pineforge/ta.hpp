@@ -1245,6 +1245,11 @@ public:
     }
 };
 
+// Shared nearest-rank selection for percentile windows. A null ranked window
+// answers na, and a non-null window is already sorted as PercentileWindow
+// maintains it.
+double nearest_rank_of(const std::vector<double>* ranked, double percentage);
+
 // --- PercentileNearestRank ---
 
 class PercentileNearestRank {

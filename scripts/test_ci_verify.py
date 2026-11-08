@@ -2380,6 +2380,10 @@ class ProfileOptions(unittest.TestCase):
         self.assertEqual(values['PINEFORGE_ENABLE_SANITIZERS'], 'ON')
         self.assertEqual(values['PINEFORGE_BUILD_LIVE_RUNNER'], 'OFF')
         self.assertEqual(values['PINEFORGE_BUILD_TUTORIAL'], 'ON')
+        self.assertEqual(values['CMAKE_C_FLAGS_DEBUG'], '-g1')
+        self.assertEqual(values['CMAKE_CXX_FLAGS_DEBUG'], '-g1')
+        self.assertIn('-DCMAKE_C_FLAGS_DEBUG=-g1', argv)
+        self.assertIn('-DCMAKE_CXX_FLAGS_DEBUG=-g1', argv)
         self.assertIn('-DPINEFORGE_ENABLE_SANITIZERS=ON', argv)
 
     def test_live_sanitizers_enable_runner_and_gate_websockets_without_opt_in(self):
@@ -2387,6 +2391,8 @@ class ProfileOptions(unittest.TestCase):
         self.assertEqual(values['CMAKE_BUILD_TYPE'], 'Debug')
         self.assertEqual(values['PINEFORGE_BUILD_LIVE_RUNNER'], 'ON')
         self.assertEqual(values['PINEFORGE_ENABLE_SANITIZERS'], 'ON')
+        self.assertEqual(values['CMAKE_C_FLAGS_DEBUG'], '-g1')
+        self.assertEqual(values['CMAKE_CXX_FLAGS_DEBUG'], '-g1')
         self.assertEqual(values['PINEFORGE_BUILD_SOURCE_LAYER'], 'ON')
         self.assertEqual(values['PINEFORGE_BUILD_TUTORIAL'], 'OFF')
         cfg = validate_config(parse_args(['live-sanitizers'], source=ROOT))

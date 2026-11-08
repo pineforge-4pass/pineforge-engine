@@ -74,9 +74,11 @@ all stages and its existing event-aware verifier-class selection. `runner-allowl
 
 The smoke configures Release, builds `pineforge_pr_smoke` and directly runs
 `ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error`.
-`PINEFORGE_PR_FAST_TESTS` in `tests/CMakeLists.txt` names its eleven real
-executables; configure refuses missing, disabled, skippable, private-fixture
-or `slow` rows. The target rebuilds those executables with their library.
+`PINEFORGE_PR_FAST_TESTS` in `tests/CMakeLists.txt` names its twelve real
+executables, including `test_abi_layout_probe`, whose size and offset pins
+apply on Linux x86_64 with GNU libstdc++. Configure refuses missing, disabled,
+skippable, private-fixture or `slow` rows. The target rebuilds those executables
+with their library.
 PR proof legs build cold; trusted post workflows also build cold and contain
 no Actions cache restore or save.
 
@@ -113,7 +115,7 @@ Python refuse a system-wide install (PEP 668), and `.venv/` is ignored. The
 and fails, never skips, without it.
 
 Actionlint only accepts declared custom self-hosted runner labels; preflight
-checks the declarations in `.github/actionlint.yaml`, which now declare only the two protected `gkp-od-*` labels of `release.yml`, including its x86_64 release matrix cell. Hosted workflows declare nothing. Before a workflow moves onto a `gke-*` label, add its ref to `.github/runner-group-allowlist.txt` (group 14, currently empty because no workflow uses one); protected `gkp-*` refs belong in `.github/runner-group-15-allowlist.txt` (group 15, currently only `release.yml`). Both mirrors are binding; a maintainer must confirm the corresponding live org workflow/ref entries before enabling the routes.
+checks the declarations in `.github/actionlint.yaml`, which now declare only the protected `gkp-od-*` label of `release.yml`'s x86_64 release matrix cell. Hosted workflows declare nothing. Before a workflow moves onto a `gke-*` label, add its ref to `.github/runner-group-allowlist.txt` (group 14, currently empty because no workflow uses one); protected `gkp-*` refs belong in `.github/runner-group-15-allowlist.txt` (group 15, currently only `release.yml`). Both mirrors are binding; a maintainer must confirm the corresponding live org workflow/ref entries before enabling the routes.
 
 ORG-ACTIONPINS is enforced by preflight's `ci-workflow-contract`: every
 third-party `uses:` in `.github/workflows/*.yml` (also `.yaml`) and nested
@@ -1347,8 +1349,8 @@ tooling) runs `main`'s own copy on a `push` to `main` and runs no PR code.
 It resolves the pushed SHA through the commit's associated PRs, requiring
 exactly one merged PR whose `merge_commit_sha` is that SHA and whose base is
 `main`; no match or ambiguity exits green with a notice. Manual dispatch
-retains its five merge inputs. It requires both statuses to be successful on
-the resolved PR head and a merge commit on `main` that carries
+retains its five merge inputs. It requires `pineforge/parity` success on
+the resolved PR head (`pineforge/verify` is advisory) and a merge commit on `main` that carries
 exactly that head's tree (PRs are squash-merged, so the head itself never lands
 on the base branch). It hands the campaign tool the merge commit, the PR head and that
 tree, and the tool promotes the pair the merge gate's parity verdict measured
@@ -1644,7 +1646,7 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`, full parity and subset: `ubuntu-24.04` |
 | `native-live.yml` | Dispatch and post CI callers on `main` | `authz`, both aggregates and the native shards: `ubuntu-24.04`; `matrix.runner`: live-sanitizers and live-tsan both `ubuntu-24.04` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz` and credentialed `build`: `ubuntu-24.04` |
-| `release.yml` | Dispatch from `main` | `release` and `notify-hub`: `gkp-od-4cpu-8gb-amd64`; x86_64 `prebuilt`: `gkp-od-16cpu-32gb-amd64-128gb`; arm64 `prebuilt`: hosted `ubuntu-22.04-arm` |
+| `release.yml` | Dispatch from `main` | `release` and `notify-hub`: hosted `ubuntu-24.04`; x86_64 `prebuilt`: `gkp-od-16cpu-32gb-amd64-128gb`; arm64 `prebuilt`: hosted `ubuntu-22.04-arm` |
 | `promote-baseline.yml` | Push to `main`, dispatch from `main` | `promote-guard` and `promote`: `ubuntu-24.04` |
 | `release-ruleset-probe.yml` | Dispatch from `main` | `authz` and `probe`: `ubuntu-24.04` |
 
@@ -1668,15 +1670,15 @@ Trusted post workflows and PR proof legs build cold; no trusted job restores an 
 `HOSTED_JOB_RUNNERS` pins the hosted x86 and arm64 jobs and the native profile runner matrix; `GKP_JOB_RUNNERS` separately pins the protected release jobs and sizes. Every pinned job runs directly on its hosted image. PR checks are
 `build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`. With the arm leg, the full set is `build`, `build-debug`, `build-arm`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.
 
-Release uses protected GKE runner group 15:
-`release` and `notify-hub` use `gkp-od-4cpu-8gb-amd64`;
+Release uses protected GKE runner group 15 for its x64 artifact only:
+`release` and `notify-hub` run on hosted `ubuntu-24.04` and keep their `release` environment;
 Linux x64 `prebuilt` uses `gkp-od-16cpu-32gb-amd64-128gb`; baseline `promote` uses hosted `ubuntu-24.04`.
 The release ruleset probe runs `authz` and `probe` on hosted `ubuntu-24.04`.
 Release's ARM artifact cell retains hosted `ubuntu-22.04-arm`;
 1.8.0 has no macOS test or artifact cells, and
 promotion runs on a push to `main` plus manual dispatch from `main`.
 
-Release and notify-hub use the on-demand 4 CPU/8 GB set to prevent preemption after tag push.
+Release and notify-hub run on hosted `ubuntu-24.04`, which no scale-set preemption can interrupt after tag push.
 Release computes versions, stamps JSON catalogs and publishes with git/gh; notify-hub
 mints an App token and dispatches an API request. The protected 2 CPU/4 GB set
 runs promotion's API/tree checks, Node campaign tooling and Cloud SQL proxy; the

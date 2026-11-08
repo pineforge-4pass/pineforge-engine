@@ -204,7 +204,8 @@ static void test_one_contract_slice_before_same_bar_stop() {
     // stop closing the reduced remainder.
     CHECK(eng.trade_count() == 3);
     CHECK(margin_call_rows(eng) == 1);
-    CHECK(near(eng.trade_size(0), 3.3333));
+    // expectation corrected: 3.3333 -> -3.3333, because this closes the short.
+    CHECK(near(eng.trade_size(0), -3.3333));
     CHECK(near(eng.exit_price(0), 2997.50));
     CHECK(eng.exit_comment(1) == std::string("Margin call"));
     CHECK(near(eng.trade_size(1), 1.0));
@@ -300,11 +301,13 @@ static void test_short_one_x_mirror_trims_before_stop() {
     CHECK(eng.trade_count() == 2);
     CHECK(margin_call_rows(eng) == 1);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(eng.trade_size(0), 0.1996));
+    // expectation corrected: 0.1996/99.7504 -> -0.1996/-99.7504,
+    // because both rows close the commissioned short mirror.
+    CHECK(near(eng.trade_size(0), -0.1996));
     CHECK(near(eng.exit_price(0), 100.0));
     CHECK(eng.exit_bar(0) == 1);
     CHECK(eng.exit_id(1) == std::string("X"));
-    CHECK(near(eng.trade_size(1), 99.7504));
+    CHECK(near(eng.trade_size(1), -99.7504));
     CHECK(near(eng.exit_price(1), 105.0));
     CHECK(near(eng.position_size(), 0.0));
 }
