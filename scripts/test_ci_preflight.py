@@ -2434,8 +2434,8 @@ class WorkflowEventFleets(unittest.TestCase):
                          f'    runs-on: {HOSTED_X86}\n',
                          '    runs-on: ["self-hosted","pf-ci","pf-ci-release"]\n')
         self.assertNotEqual(changed, release)
-        self.assertIn(f'release.yml job release must run on {GKP_OD_4} '
-                      '(isolated release)', ci_preflight.runner_findings({'release.yml': changed}))
+        self.assertIn(f'release.yml job release must run on {HOSTED_X86} '
+                      '(hosted)', ci_preflight.runner_findings({'release.yml': changed}))
 
     def test_flat_peak_release_pool_has_no_unproven_reusable_exception(self):
         workflows = self.workflows()
