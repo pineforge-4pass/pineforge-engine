@@ -14,183 +14,13 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
-#include <limits>
 #include <numeric>
 #include <string>
 #include <vector>
 
 namespace pineforge {
 
-// --- ExactWindowSum (window_sum.hpp): correctly rounded SMA window sum ---
-
-ExactWindowSum::ExactWindowSum(int length) : length_(length) {
-    static_assert(std::numeric_limits<double>::is_iec559 &&
-                  std::numeric_limits<double>::radix == 2 &&
-                  std::numeric_limits<double>::digits == 53 &&
-                  std::numeric_limits<double>::max_exponent == 1024 &&
-                  sizeof(double) == sizeof(std::uint64_t),
-                  "ExactWindowSum requires IEEE binary64");
-}
-
-void ExactWindowSum::update_word(Magnitude& magnitude, std::size_t index,
-                                std::uint64_t word, bool remove) {
-    // A source spans at most two words. Propagating each word's carry or
-    // borrow separately uses only standard unsigned 64-bit arithmetic.
-    while (word != 0 && index < magnitude.size()) {
-        const std::uint64_t before = magnitude[index];
-        if (remove) {
-            magnitude[index] = before - word;
-            word = before < word ? 1 : 0;
-        } else {
-            magnitude[index] = before + word;
-            word = magnitude[index] < before ? 1 : 0;
-        }
-        ++index;
-    }
-}
-
-void ExactWindowSum::update(double src, bool remove) {
-    std::uint64_t bits;
-    std::memcpy(&bits, &src, sizeof(bits));
-    const bool negative = (bits >> 63) != 0;
-    const unsigned exponent = static_cast<unsigned>((bits >> 52) & UINT64_C(0x7ff));
-    if (exponent == 0x7ff) {
-        // NA never enters this class; these are signed infinities.
-        int& count = negative ? negative_infinities_ : positive_infinities_;
-        count += remove ? -1 : 1;
-        return;
-    }
-
-    std::uint64_t significand = bits & UINT64_C(0x000fffffffffffff);
-    if (exponent != 0) significand |= UINT64_C(1) << 52;
-    const unsigned shift = exponent == 0 ? 0 : exponent - 1;
-    const std::size_t index = shift / 64;
-    const unsigned offset = shift % 64;
-    Magnitude& magnitude = negative ? negative_ : positive_;
-    update_word(magnitude, index, significand << offset, remove);
-    if (offset != 0) {
-        update_word(magnitude, index + 1, significand >> (64 - offset), remove);
-    }
-}
-
-double ExactWindowSum::push(double src) {
-    saved_count_ = count_;
-    saved_pushed_ = true;
-    saved_evicted_ = count_ >= length_;
-    if (saved_evicted_) {
-        saved_evicted_value_ = values_.back();
-        values_.pop_back();
-        update(saved_evicted_value_, true);
-    }
-    values_.push_front(src);
-    update(src, false);
-    if (count_ < length_) ++count_;
-    return sum();
-}
-
-void ExactWindowSum::note_no_push() {
-    saved_pushed_ = false;
-}
-
-void ExactWindowSum::unpush() {
-    if (!saved_pushed_) return;
-    update(values_.front(), true);
-    values_.pop_front();
-    if (saved_evicted_) {
-        values_.push_back(saved_evicted_value_);
-        update(saved_evicted_value_, false);
-    }
-    count_ = saved_count_;
-    saved_pushed_ = false;
-}
-
-double ExactWindowSum::repush(double src) {
-    if (!saved_pushed_) return push(src);
-    // The provisional source leaves, but its saved eviction stays absent:
-    // the replacement therefore sees exactly the same pre-bar window.
-    update(values_.front(), true);
-    values_.front() = src;
-    update(src, false);
-    return sum();
-}
-
-double ExactWindowSum::sum() const {
-    if (positive_infinities_ != 0 && negative_infinities_ != 0) return na<double>();
-    if (positive_infinities_ != 0) return std::numeric_limits<double>::infinity();
-    if (negative_infinities_ != 0) return -std::numeric_limits<double>::infinity();
-
-    int comparison = 0;
-    for (std::size_t i = positive_.size(); i-- > 0;) {
-        if (positive_[i] != negative_[i]) {
-            comparison = positive_[i] > negative_[i] ? 1 : -1;
-            break;
-        }
-    }
-    if (comparison == 0) return 0.0;    // exact cancellation is canonical +0
-
-    const Magnitude& larger = comparison > 0 ? positive_ : negative_;
-    const Magnitude& smaller = comparison > 0 ? negative_ : positive_;
-    // Fixed query scratch, not retained history or a saved per-bar snapshot.
-    Magnitude magnitude{};
-    std::uint64_t borrow = 0;
-    for (std::size_t i = 0; i < magnitude.size(); ++i) {
-        const std::uint64_t difference = larger[i] - smaller[i];
-        magnitude[i] = difference - borrow;
-        borrow = (larger[i] < smaller[i] || difference < borrow) ? 1 : 0;
-    }
-
-    std::size_t top = magnitude.size() - 1;
-    while (magnitude[top] == 0) --top;  // comparison established a nonzero sum
-    int highest_bit = static_cast<int>(top * 64);
-    for (std::uint64_t word = magnitude[top]; word > 1; word >>= 1) ++highest_bit;
-
-    std::uint64_t bits = comparison < 0 ? UINT64_C(1) << 63 : 0;
-    if (highest_bit < 52) {
-        // Subnormal sums are already exact integers in units of 2^-1074.
-        bits |= magnitude[0];
-    } else {
-        const unsigned discarded = static_cast<unsigned>(highest_bit - 52);
-        const std::size_t index = discarded / 64;
-        const unsigned offset = discarded % 64;
-        std::uint64_t significand = magnitude[index] >> offset;
-        if (offset != 0 && index + 1 < magnitude.size()) {
-            significand |= magnitude[index + 1] << (64 - offset);
-        }
-        if (discarded != 0) {
-            const std::size_t guard_index = (discarded - 1) / 64;
-            const unsigned guard_offset = (discarded - 1) % 64;
-            const bool guard = ((magnitude[guard_index] >> guard_offset) & 1) != 0;
-            bool sticky = (magnitude[guard_index] &
-                           ((UINT64_C(1) << guard_offset) - 1)) != 0;
-            for (std::size_t i = 0; i < guard_index; ++i) {
-                sticky = sticky || magnitude[i] != 0;
-            }
-            // Round the magnitude nearest/even: a set guard rounds up only
-            // beyond halfway, or at halfway when the retained low bit is odd.
-            if (guard && (sticky || (significand & 1) != 0)) ++significand;
-        }
-        if (significand == (UINT64_C(1) << 53)) {
-            significand >>= 1;
-            ++highest_bit;
-        }
-        // Bit k represents 2^(k-1074); its biased normal exponent is k-51.
-        const unsigned exponent = static_cast<unsigned>(highest_bit - 51);
-        if (exponent >= 0x7ff) {
-            bits |= UINT64_C(0x7ff0000000000000);
-        } else {
-            bits |= static_cast<std::uint64_t>(exponent) << 52;
-            bits |= significand & UINT64_C(0x000fffffffffffff);
-        }
-    }
-    double result;
-    std::memcpy(&result, &bits, sizeof(result));
-    return result;
-}
-
-// --- KahanWindowSum (window_sum.hpp): legacy math.sum / biased StdDev ---
-// The historical fit below is retained for those consumers. SMA now uses
-// ExactWindowSum above; these notes do not establish its current contract.
+// --- KahanWindowSum (window_sum.hpp): ta.sma / math.sum arithmetic ---
 // TradingView's sliding-window sum (ta.sma, math.sum), fitted 2026-09-05 on
 // the round-7 synthetic pins (scratchpad r7/pins/sma-pulse-*, sma-ident-*:
 // OANDA:EURUSD 15, pulse series of known doubles, lengths 3 and 20, three
@@ -442,7 +272,6 @@ double SMA::compute(double src) {
         return na<double>();
     }
 
-    // Round the exact current-window sum first, then divide in binary64.
     double sum = window_.push(src);
     bar_count++;
 
@@ -706,9 +535,9 @@ double SMA::recompute(double src) {
         return compute(src);
     }
 
-    // Replay the bar with the new raw source and the same saved eviction,
-    // so a recompute()d bar and a freshly computed one with an identical
-    // window agree bit-for-bit.
+    // Replay the bar with the new source: the same evicted addend, the same
+    // pre-bar (sum, compensation), so a recompute()d bar and a freshly
+    // computed one with an identical window agree bit-for-bit.
     double sum = window_.repush(src);
 
     if (bar_count < length) {
