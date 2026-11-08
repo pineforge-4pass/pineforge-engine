@@ -74,9 +74,11 @@ all stages and its existing event-aware verifier-class selection. `runner-allowl
 
 The smoke configures Release, builds `pineforge_pr_smoke` and directly runs
 `ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error`.
-`PINEFORGE_PR_FAST_TESTS` in `tests/CMakeLists.txt` names its eleven real
-executables; configure refuses missing, disabled, skippable, private-fixture
-or `slow` rows. The target rebuilds those executables with their library.
+`PINEFORGE_PR_FAST_TESTS` in `tests/CMakeLists.txt` names its twelve real
+executables, including `test_abi_layout_probe`, whose size and offset pins
+apply on Linux x86_64 with GNU libstdc++. Configure refuses missing, disabled,
+skippable, private-fixture or `slow` rows. The target rebuilds those executables
+with their library.
 PR proof legs build cold; trusted post workflows also build cold and contain
 no Actions cache restore or save.
 
@@ -1347,8 +1349,8 @@ tooling) runs `main`'s own copy on a `push` to `main` and runs no PR code.
 It resolves the pushed SHA through the commit's associated PRs, requiring
 exactly one merged PR whose `merge_commit_sha` is that SHA and whose base is
 `main`; no match or ambiguity exits green with a notice. Manual dispatch
-retains its five merge inputs. It requires both statuses to be successful on
-the resolved PR head and a merge commit on `main` that carries
+retains its five merge inputs. It requires `pineforge/parity` success on
+the resolved PR head (`pineforge/verify` is advisory) and a merge commit on `main` that carries
 exactly that head's tree (PRs are squash-merged, so the head itself never lands
 on the base branch). It hands the campaign tool the merge commit, the PR head and that
 tree, and the tool promotes the pair the merge gate's parity verdict measured

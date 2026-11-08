@@ -3039,8 +3039,9 @@ class PostFleetRunnerPolicy(unittest.TestCase):
 
     def test_post_fleet_docs_match_runner_policy(self):
         docs = (ROOT / 'docs/ci.md').read_text()
-        # expectation corrected: 2117 -> 2143, because raw response/race docs added 26 lines.
-        self.assertEqual(len(docs.splitlines()), 2143)
+        # expectation corrected: 2143 -> 2145, because main smoke docs and
+        # CR900 raw-response/race docs both remain.
+        self.assertEqual(len(docs.splitlines()), 2145)
         # The test-owned job catalog defines the protected label inventory.
         tables = re.findall(
             r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
@@ -5440,7 +5441,7 @@ class PreflightFailures(unittest.TestCase):
             (1, '        default: false', '        default: true'),
             (1, NATIVE_EXCLUSION, ''),
             # Baseline promotion starts from main's push and runs no PR code;
-            # it needs the newest two statuses on the resolved PR head.
+            # it needs the newest parity status on the resolved PR head.
             (2, '  push:\n    branches: [main]\n', '  pull_request:\n'),
             (2, '  statuses: read', '  checks: read'),
             (2, '  id-token: write', '  id-token: none'),
@@ -5552,8 +5553,9 @@ class PreflightFailures(unittest.TestCase):
 
     def test_documented_slow_row_counts_match_literal_population(self):
         text = (ROOT / 'docs/ci.md').read_text()
-        # expectation corrected: 2117 -> 2143, because raw response/race docs added 26 lines.
-        self.assertEqual(len(text.splitlines()), 2143)
+        # expectation corrected: 2143 -> 2145, because main smoke docs and
+        # CR900 raw-response/race docs both remain.
+        self.assertEqual(len(text.splitlines()), 2145)
         slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
                        if name.startswith('test_ci_verify_slice_'))
         self.assertTrue(slices, 'verifier slice inventory must not be empty')
@@ -5643,7 +5645,7 @@ class PreflightFailures(unittest.TestCase):
 
     def test_baseline_promotion_rejects_later_pr_head_checkout(self):
         finding = ("baseline promotion must run main's copy and require "
-                   "the latest two head statuses")
+                   "the latest head parity status only (verify is advisory)")
         self.assertNotIn(finding, ci_workflow_findings(*self.ci_sources(),
                                                       others=self.other_sources()))
         anchor = '      - name: Mint an org App token to read the campaign tooling\n'
@@ -5653,6 +5655,135 @@ class PreflightFailures(unittest.TestCase):
                     '          ref: ${{ needs.promote-guard.outputs.head_sha }}\n')
         findings = self.mutated_file_findings(2, 'promote', anchor, checkout + anchor)
         self.assertIn(finding, findings)
+
+    def promotion_head_gate_result(self, pages, *, workflow=None,
+                                   token='fixture-token', api_exit=0):
+        """Run the workflow's head gate with real jq and a fake API transport."""
+        bash = shutil.which('bash')
+        if bash is None or shutil.which('jq') is None:
+            self.fail('NOT RUN: bash and jq are required for promotion head-status cases')
+        workflow = self.ci_sources()[2] if workflow is None else workflow
+        script = job_script(workflow, 'promote', 'Confirm the gate on the PR head')
+        script = script.replace('${{ github.repository }}', 'owner/engine')
+        self.assertNotIn('${{', script)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gh = root / 'gh'
+            gh.write_text('#!' + sys.executable + ' -I\n'
+                'import json, os, pathlib, sys\n'
+                f'pages = {pages!r}\napi_exit = {api_exit!r}\n'
+                'args = sys.argv[1:]\n'
+                'with pathlib.Path(__file__).with_name("lookup").open("a") as log:\n'
+                '    log.write(" ".join(args) + "\\n")\n'
+                'if (os.environ.get("GH_TOKEN") != "fixture-token" or args != '
+                '["api", "--paginate", "repos/owner/engine/commits/" + "a" * 40 '
+                '+ "/statuses?per_page=100"]):\n'
+                '    raise SystemExit(2)\n'
+                'for page in pages: print(json.dumps(page))\n'
+                'raise SystemExit(api_exit)\n')
+            gh.chmod(0o755)
+            output = root / 'outputs'
+            lookup = root / 'lookup'
+            result = subprocess.run(
+                [bash, '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
+                env={'PATH': directory + os.pathsep + os.environ.get('PATH', '/usr/bin:/bin'),
+                     'GH_TOKEN': token, 'HEAD_SHA': 'a' * 40, 'AXIS': 'engine',
+                     'GITHUB_OUTPUT': str(output)},
+                capture_output=True, text=True)
+            return (result, output.read_text() if output.exists() else '',
+                    lookup.read_text() if lookup.exists() else '')
+
+    def test_baseline_promotion_accepts_only_latest_parity(self):
+        sources = self.ci_sources()
+        # The published parity-only workflow is the positive input, unchanged.
+        # On the old checker this must fail with the actual contract finding.
+        self.assertEqual(ci_workflow_findings(*sources), [])
+        parity = {'context': 'pineforge/parity', 'state': 'success'}
+        verify = {'context': 'pineforge/verify', 'state': 'success'}
+        cases = (
+            ('parity-only', [[parity]], True),
+            ('verify-failed', [[{**verify, 'state': 'failure'}, parity]], True),
+            ('verify-pending', [[{**verify, 'state': 'pending'}, parity]], True),
+            ('both-green', [[verify, parity]], True),
+            ('verify-only', [[verify]], False),
+            ('no-statuses', [[]], False),
+            ('parity-failed', [[verify, {**parity, 'state': 'failure'}]], False),
+            ('parity-pending', [[verify, {**parity, 'state': 'pending'}]], False),
+            ('parity-on-later-page', [[verify], [parity]], True),
+            ('newer-red', [[{**parity, 'state': 'failure'}], [parity, verify]], False),
+            ('newer-pending', [[{**parity, 'state': 'pending'}], [parity]], False),
+            ('newer-green', [[parity], [{**parity, 'state': 'failure'}, verify]], True),
+        )
+        for name, pages, green in cases:
+            with self.subTest(statuses=name):
+                result, output, lookup = self.promotion_head_gate_result(
+                    pages, workflow=sources[2])
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(output, f'green={str(green).lower()}\n')
+                self.assertEqual(lookup, 'api --paginate repos/owner/engine/commits/'
+                                 + 'a' * 40 + '/statuses?per_page=100\n')
+
+    def test_baseline_promotion_head_gate_refuses_status_transport_errors(self):
+        pages = [[{'context': 'pineforge/parity', 'state': 'success'}]]
+        for options, code in (({'api_exit': 1}, 1), ({'token': ''}, 2)):
+            with self.subTest(transport=options):
+                result, output, lookup = self.promotion_head_gate_result(pages, **options)
+                self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                self.assertEqual(output, '')
+                self.assertEqual(lookup, 'api --paginate repos/owner/engine/commits/'
+                                 + 'a' * 40 + '/statuses?per_page=100\n')
+
+    def test_baseline_promotion_rejects_head_status_policy_mutations(self):
+        original = self.ci_sources()
+        self.assertEqual(ci_workflow_findings(*original), [])
+        parity = '.["pineforge/parity"] == "success"'
+        verify = '.["pineforge/verify"] == "success"'
+        finding = ("baseline promotion must run main's copy and require "
+                   "the latest head parity status only (verify is advisory)")
+        for predicate in (verify + ' and ' + parity, parity + ' and ' + verify,
+                          parity + '\n              and ' + verify,
+                          '(' + parity, parity + ')', '((' + parity + ')',
+                          '(' + parity + '))', '(' + parity + ') or true',
+                          '(' + parity + ') and true', 'not (' + parity + ')',
+                          '(' + parity + ') | true',
+                          verify, 'true', '.["pineforge/parity"] == "failure"'):
+            with self.subTest(predicate=predicate):
+                changed = original.copy()
+                changed[2] = in_step(changed[2], 'promote', 'Confirm the gate on the PR head',
+                                     parity, predicate)
+                self.assertNotEqual(changed[2], original[2])
+                self.assertIn(finding, ci_workflow_findings(*changed))
+
+    def test_baseline_promotion_head_predicate_four_rows_and_wrapping(self):
+        original = self.ci_sources()
+        self.assertEqual(ci_workflow_findings(*original), [])
+        parity = '.["pineforge/parity"] == "success"'
+        finding = ("baseline promotion must run main's copy and require "
+                   "the latest head parity status only (verify is advisory)")
+        cases = (
+            ('parenthesized-parity-only',
+             '(.["pineforge/parity"] == "success")', []),
+            ('neither-required', 'true', [finding]),
+            ('parenthesized-verify-and-parity',
+             '(.["pineforge/verify"] == "success" and .["pineforge/parity"] == "success")',
+             [finding]),
+            ('verify-only', '.["pineforge/verify"] == "success"', [finding]),
+        )
+        for name, predicate, expected in cases:
+            with self.subTest(policy=name):
+                changed = original.copy()
+                changed[2] = in_step(changed[2], 'promote', 'Confirm the gate on the PR head',
+                                     parity, predicate)
+                self.assertNotEqual(changed[2], original[2])
+                self.assertEqual(ci_workflow_findings(*changed), expected)
+        for predicate in ('  ' + parity + '  ', '( ( ' + parity + ' ) )',
+                          '(\n              ( ' + parity + ' )\n              )'):
+            with self.subTest(wrapping=predicate):
+                changed = original.copy()
+                changed[2] = in_step(changed[2], 'promote', 'Confirm the gate on the PR head',
+                                     parity, predicate)
+                self.assertNotEqual(changed[2], original[2])
+                self.assertEqual(ci_workflow_findings(*changed), [])
 
     def test_promotion_guard_rejects_added_contents_read_permission(self):
         finding = 'baseline promotion must start with the pinned read-only promote-guard'
@@ -5835,7 +5966,8 @@ class PreflightFailures(unittest.TestCase):
                 changed = original.copy()
                 self.assertIn(before, changed[2])
                 changed[2] = changed[2].replace(before, after, 1)
-                self.assertIn("baseline promotion must run main's copy and require the latest two head statuses",
+                self.assertIn("baseline promotion must run main's copy and require "
+                              "the latest head parity status only (verify is advisory)",
                               ci_workflow_findings(*changed))
 
     @staticmethod
@@ -6596,11 +6728,13 @@ exit "$lookup_exit"
     def test_fast_label_rows_and_build_dependencies_are_pinned(self):
         cmake = self.ci_sources()[3]
         rows = ci_preflight.fast_rows(cmake)
+        # expectation corrected: 11 -> 12, because PR smoke now builds and
+        # selects the existing ABI layout probe alongside every prior row.
         self.assertEqual(rows, [
             'test_ringbuffer', 'test_timeframe', 'test_path_at', 'test_na_runtime',
             'test_math_sum', 'test_str_utils', 'test_ta', 'test_matrix',
             'test_native_run_spec', 'test_native_bare_host_contracts',
-            'test_native_kernel_edge'])
+            'test_native_kernel_edge', 'test_abi_layout_probe'])
         mutations = [
             ('    test_ringbuffer\n', ''),
             ('    test_ringbuffer\n', '    test_ringbuffer\n    test_ringbuffer\n'),
@@ -6620,6 +6754,20 @@ exit "$lookup_exit"
                 findings = self.mutated_file_findings(3, None, fast_block, changed_block)
                 self.assertIn('PR fast rows must keep one pinned CMake label list and executable build target',
                               findings)
+
+    def test_fast_rows_refuse_removing_abi_layout_probe(self):
+        sources = self.ci_sources()
+        cmake = sources[3]
+        finding = 'PR fast rows must keep one pinned CMake label list and executable build target'
+        self.assertIn('test_abi_layout_probe', ci_preflight.fast_rows(cmake))
+        self.assertNotIn(finding, ci_workflow_findings(*sources, others=self.other_sources()))
+        fast_block = cmake[cmake.index('set(PINEFORGE_PR_FAST_TESTS\n'):]
+        self.assertEqual(fast_block.count('    test_abi_layout_probe\n'), 1)
+        changed_block = fast_block.replace('    test_abi_layout_probe\n', '', 1)
+        self.assertNotEqual(changed_block, fast_block)
+        self.assertNotIn('test_abi_layout_probe', ci_preflight.fast_rows(changed_block))
+        findings = self.mutated_file_findings(3, None, fast_block, changed_block)
+        self.assertIn(finding, findings)
 
     def test_fast_rows_refuse_property_writes_after_the_registration_block(self):
         sources = self.ci_sources()
