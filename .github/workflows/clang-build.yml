@@ -2,7 +2,7 @@ name: Clang 18 build
 
 on:
   push:
-    branches: [main]
+    branches: [ci/clang18-diagnostic-1108]
 
 permissions: {contents: read}
 
