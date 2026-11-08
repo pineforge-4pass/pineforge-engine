@@ -1866,12 +1866,19 @@ def validate_ctest_shard_union(
             counted += 1
         reported = stage_tables[id(summary)]
         required = every | shared
-        if (profile == 'sanitizers' and count > 1) or profile == 'live-sanitizers':
+        selected_build = (profile == 'sanitizers' and count > 1) or profile == 'live-sanitizers'
+        if selected_build:
             required |= {'ctest-build-list', 'ctest-build-inventory', 'ctest-build-mapping',
                          'ctest-build-list-after', 'ctest-build-inventory-after',
                          'ctest-build-coverage', 'ctest-build-accounting'}
+        if profile in LIVE_ONLY_PROFILES and summary['ctestSkipped']:
+            required |= {'live-test-skips'}
+        for name in sorted(required):
+            if name not in reported:
+                raise ValueError('did not prove required stage ' + name)
+        if selected_build:
             plan = summary.get('ctestBuildInventory')
-            build = reported.get('build', {})
+            build = reported['build']
             argv = build.get('argv', [])
             if (not isinstance(plan, dict)
                     or plan != summary.get('ctestBuildInventoryAfter')
@@ -1879,17 +1886,21 @@ def validate_ctest_shard_union(
                     or plan.get('selectedNames') != sorted(names)
                     or not isinstance(plan.get('targetMap'), dict)
                     or set(plan['targetMap']) != set(registry)
+                    or not all(names_valid(targets) for targets in plan['targetMap'].values())
+                    or not names_valid(plan.get('installTargets'))
                     or not names_valid(plan.get('buildTargets'))
                     or not plan['buildTargets']
                     or plan['buildTargets'] != sorted(set(plan['buildTargets']))
+                    or not names_valid(argv)
                     or argv.count('--target') != 1
                     or argv[argv.index('--target') + 1:] != plan['buildTargets']):
                 raise ValueError('selected build targets/inputs differ from shard execution')
-        if profile in LIVE_ONLY_PROFILES and summary['ctestSkipped']:
-            required |= {'live-test-skips'}
-        for name in sorted(required):
-            if name not in reported:
-                raise ValueError('did not prove required stage ' + name)
+            required_targets = set(ARCHIVE_TARGETS) | set(plan['installTargets'])
+            for name in names:
+                required_targets.update(plan['targetMap'][name])
+            # Gate outputs may add targets beyond the selected-row closure.
+            if not required_targets <= set(plan['buildTargets']):
+                raise ValueError('selected build targets/inputs differ from shard execution')
         if shard['index'] != 1:
             for name in sorted(shared):
                 if reported[name]['status'] != 'deferred':
@@ -2617,6 +2628,7 @@ class Driver:
         self.disk_samples: list[dict] = []
         self.disk_stop = threading.Event()
         self.disk_thread: threading.Thread | None = None
+        self.disk_last_output: float | None = None
         self.summary: dict = {
             'schemaVersion': SCHEMA,
             'status': 'incomplete',
@@ -2687,6 +2699,17 @@ class Driver:
         self.write_summary()
         return False
 
+    def print_disk_telemetry(self, observation: dict) -> str | None:
+        if not self.cfg.stream_output:
+            return None
+        try:
+            print('ci_verify: disk telemetry: ' + json.dumps(observation, sort_keys=True),
+                  flush=True)
+        except Exception as error:
+            # Only observer output is optional; verification errors still propagate.
+            return f'{type(error).__name__}: {error}'
+        return None
+
     def sample_disk(self, label: str) -> None:
         started = time.monotonic()
         sample = {'label': label, 'unixSeconds': time.time(), 'monotonicSeconds': started,
@@ -2694,12 +2717,23 @@ class Driver:
         try:
             usage = shutil.disk_usage(self.cfg.build_dir)
             sample.update(totalBytes=usage.total, usedBytes=usage.used, freeBytes=usage.free)
-        except OSError as error:
+        except Exception as error:
             sample['error'] = str(error)
+        if label != 'finish' and (self.disk_last_output is None
+                                  or started - self.disk_last_output >= 10):
+            self.disk_last_output = started
+            output_error = self.print_disk_telemetry({
+                **sample, 'event': 'sample',
+                'totalBytes': sample.get('totalBytes', 'unavailable'),
+                'usedBytes': sample.get('usedBytes', 'unavailable'),
+                'freeBytes': sample.get('freeBytes', 'unavailable'),
+            })
+            if output_error is not None:
+                sample['stdoutError'] = output_error
         try:
             with open(self.logs / 'disk-telemetry.log', 'a', encoding='utf-8') as stream:
                 stream.write(json.dumps(sample, sort_keys=True) + '\n')
-        except OSError as error:
+        except Exception as error:
             sample['logError'] = str(error)
         sample['observerSeconds'] = time.monotonic() - started
         self.disk_samples.append(sample)
@@ -2709,7 +2743,8 @@ class Driver:
             return
         self.summary['diskTelemetry'] = {
             'observationsComplete': False, 'intervalSeconds': 5,
-            'scope': 'build filesystem free bytes; sampled minimum, not a continuous peak',
+            'stdoutIntervalSeconds': 10,
+            'scope': 'build filesystem used/free bytes; sampled extrema, not continuous peaks',
             'log': 'ci-logs/disk-telemetry.log'}
         self.sample_disk('start')
 
@@ -2717,28 +2752,56 @@ class Driver:
             while not self.disk_stop.wait(5):
                 self.sample_disk('interval')
 
-        self.disk_thread = threading.Thread(target=observe, name='ci-disk-observer', daemon=True)
-        self.disk_thread.start()
+        try:
+            self.disk_thread = threading.Thread(target=observe, name='ci-disk-observer', daemon=True)
+            self.disk_thread.start()
+        except Exception as error:
+            self.summary['diskTelemetry']['observerError'] = f'{type(error).__name__}: {error}'
+            self.disk_thread = None
 
     def finish_disk_telemetry(self) -> None:
-        if self.disk_thread is None:
+        telemetry = self.summary.get('diskTelemetry')
+        if telemetry is None or 'sampleCount' in telemetry:
             return
-        self.disk_stop.set()
-        self.disk_thread.join()
-        self.disk_thread = None
+        if self.disk_thread is not None:
+            self.disk_stop.set()
+            try:
+                self.disk_thread.join()
+            except Exception as error:
+                telemetry['observerError'] = f'{type(error).__name__}: {error}'
+            self.disk_thread = None
         self.sample_disk('finish')
         valid = [sample for sample in self.disk_samples if 'freeBytes' in sample]
         gaps = [right['monotonicSeconds'] - left['monotonicSeconds']
                 for left, right in zip(self.disk_samples, self.disk_samples[1:])]
-        self.summary['diskTelemetry'].update({
-            'observationsComplete': all('error' not in sample and 'logError' not in sample
-                                        for sample in self.disk_samples),
+        telemetry.update({
+            'observationsComplete': 'observerError' not in telemetry and all(
+                'error' not in sample and 'logError' not in sample and 'stdoutError' not in sample
+                for sample in self.disk_samples),
             'sampleCount': len(self.disk_samples),
+            'validSampleCount': len(valid),
+            'unavailableSampleCount': len(self.disk_samples) - len(valid),
             'start': self.disk_samples[0], 'finish': self.disk_samples[-1],
             'sampledMinimum': min(valid, key=lambda sample: sample['freeBytes']) if valid else None,
-            'largestIntervalSeconds': max(gaps, default=0),
+            'sampledMaximumUsed': max(valid, key=lambda sample: sample['usedBytes']) if valid else None,
+            'largestIntervalSeconds': max(gaps) if gaps else None,
             'observerSeconds': sum(sample['observerSeconds'] for sample in self.disk_samples),
         })
+        output_error = self.print_disk_telemetry({
+            'event': 'summary', 'path': str(self.cfg.build_dir),
+            'scope': telemetry['scope'],
+            'sampleCount': len(self.disk_samples), 'validSampleCount': len(valid),
+            'unavailableSampleCount': len(self.disk_samples) - len(valid),
+            'sampledMaximumUsedBytes': max(sample['usedBytes'] for sample in valid)
+                                      if valid else 'unavailable',
+            'sampledMinimumFreeBytes': min(sample['freeBytes'] for sample in valid)
+                                      if valid else 'unavailable',
+            'largestIntervalSeconds': max(gaps) if gaps else 'unavailable',
+            'observationsComplete': telemetry['observationsComplete'],
+            'observerError': telemetry.get('observerError'),
+        })
+        if output_error is not None:
+            telemetry.update(observationsComplete=False, stdoutError=output_error)
 
     def discover_ctest_shard(self, test_dir: Path, all_rows: Completed,
                              selected_rows: Completed) -> CTestShardDiscovery | None:
