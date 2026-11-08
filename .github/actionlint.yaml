@@ -1,4 +1,3 @@
-# Release keeps one protected runner label, on its x86_64 prebuilt cell.
+# Hosted workflows need no self-hosted runner labels.
 self-hosted-runner:
-  labels:
-    - gkp-od-16cpu-32gb-amd64-128gb
+  labels: []

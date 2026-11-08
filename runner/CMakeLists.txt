@@ -542,7 +542,9 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
             --out ${CMAKE_CURRENT_BINARY_DIR}/native_live_equivalence_e2e/${_pf_equivalence_probe}/output
             ${_pf_genuine_retry_sanitizer_args})
         set_tests_properties(native_live_equivalence_e2e_${_pf_equivalence_probe} PROPERTIES
-            SKIP_RETURN_CODE 77 LABELS private_fixtures)
+            SKIP_RETURN_CODE 77 LABELS private_fixtures
+            # The wrapper resolves these products through --build-dir.
+            REQUIRED_FILES "$<TARGET_FILE:pineforge-live>;$<TARGET_FILE:pineforge>")
         list(APPEND _pf_equivalence_rows native_live_equivalence_e2e_${_pf_equivalence_probe})
     endforeach()
     add_test(NAME test_native_live_equivalence_split COMMAND ${Python3_EXECUTABLE} -B
@@ -761,4 +763,17 @@ if(PINEFORGE_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
         --artifacts ${PROJECT_BINARY_DIR}/ledger-behavior-artifacts)
     set_tests_properties(native_live_ledger_behavior_e2e PROPERTIES
         LABELS "slow;live_ledger" TIMEOUT 7200)
+endif()
+# The finished trade text companion (--trade-text) is the last block of this
+# file, so the line numbers that the design docs cite above stay where they are.
+if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
+    add_library(trade_text_strategy MODULE
+        ${PROJECT_SOURCE_DIR}/tests/test_trade_text_strategy.cpp)
+    target_link_libraries(trade_text_strategy PRIVATE PineForge::pineforge)
+    target_compile_definitions(trade_text_strategy PRIVATE PINEFORGE_TRADE_TEXT_MODULE=1)
+    target_compile_options(trade_text_strategy PRIVATE -fvisibility=hidden -ffp-contract=off -UNDEBUG)
+    add_test(NAME native_live_trade_text_e2e COMMAND ${Python3_EXECUTABLE} -B
+        ${PROJECT_SOURCE_DIR}/tests/native_live_trade_text_e2e.py
+        $<TARGET_FILE:pineforge-live> $<TARGET_FILE:trade_text_strategy>
+        ${CMAKE_CURRENT_BINARY_DIR}/trade-text)
 endif()

@@ -1,0 +1,34 @@
+name: Prebuilt hosted diagnostic
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/release.yml'
+      - '.github/workflows/prebuilt-hosted-diagnostic.yml'
+      - '.github/engine-toolchain-image.txt'
+      - 'scripts/build_prebuilt_bookworm.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the exact same-repository PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Record host identity and Docker observations
+        run: |
+          set -euo pipefail
+          id
+          docker version --format '{{.Client.Version}} {{.Server.Version}}'
+          docker info --format '{{.Driver}}'

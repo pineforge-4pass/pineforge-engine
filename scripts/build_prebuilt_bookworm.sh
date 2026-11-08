@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Internal release transport. Requires the admitted same-daemon image preload.
+# Internal release transport. Requires the workflow's authenticated digest pull.
 # No registry login, pull, package installation, host compiler, or image-ID fallback.
 set -euo pipefail
 export LC_ALL=C LANG=C
 
 readonly image_digest=sha256:72fb3f2a4d3409e6050b17530585992784a21a4955b368cb8f8b392981abc780
+# Docker's .Id identifies the image config, separately from the registry manifest.
+readonly image_config_id=sha256:9b1e6c557f68a8b0f1577293d95aae135ade1f9c5499d817f6df100d1cf616bd
 readonly image=${ENGINE_TOOLCHAIN_IMAGE:-}
-readonly shared_root=/home/runner/_work
+readonly shared_root=/home/runner/work
 
 fail() {
     printf 'prebuilt-bookworm: %s\n' "$*" >&2
@@ -75,8 +77,6 @@ admit_image() {
     cat "$evidence/docker-storage-driver.txt"
     docker version --format '{{.Client.Version}} {{.Server.Version}}' > "$evidence/docker-versions.txt"
     cat "$evidence/docker-versions.txt"
-    [[ "$(cat "$evidence/docker-versions.txt")" == '29.9.2 29.8.1' ]] \
-        || fail "admitted Docker client/daemon versions changed"
     if docker image inspect "$image" > "$evidence/docker-image-inspect.json" 2> "$evidence/docker-image-inspect.stderr"; then
         inspect_rc=0
     else
@@ -98,8 +98,8 @@ admit_image() {
     cat "$evidence/docker-image-id.stderr" >&2
     printf '%s\n' "$image_id_rc" > "$evidence/docker-image-id.exitcode"
     if [[ "$image_id_rc" != 0 ]]; then exit "$image_id_rc"; fi
-    [[ "$(cat "$evidence/docker-image-id.txt")" == "$image_digest" ]] \
-        || fail "preloaded image Id differs from pinned digest"
+    [[ "$(cat "$evidence/docker-image-id.txt")" == "$image_config_id" ]] \
+        || fail "preloaded image Id differs from pinned config ID"
     [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" == linux/amd64 ]] \
         || fail "preloaded image must be linux/amd64"
     docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" \
@@ -209,7 +209,10 @@ consume_archive() {
     local base="pineforge-${tag}-linux-x86_64"
     [[ "$tarball" == "${base}.tar.gz" && "$shasum" == "${tarball}.sha256" ]] \
         || fail "archive consumer inputs do not name the packed x86_64 tarball"
-    [[ "$(id -u):$(id -g)" == 1001:123 ]] || fail "consumer host UID:GID must be 1001:123"
+    local host_uid host_gid
+    host_uid=$(id -u)
+    host_gid=$(id -g)
+    [[ "$host_uid" == 1001 ]] || fail "consumer host UID must be 1001"
     shared_directory "$workspace"
     shared_directory "$runner_temp"
     [[ -w "$runner_temp" ]] || fail "runner temp is not writable"
@@ -226,6 +229,7 @@ consume_archive() {
     local evidence="$run_root/evidence"
     local source_dir="$run_root/source"
     mkdir "$output_dir" "$evidence" "$source_dir"
+    printf 'uid=%s\ngid=%s\n' "$host_uid" "$host_gid" > "$evidence/host-identity.txt"
     # Export only the packed bytes and consumer inputs, without checkout
     # metadata, credentials or the source build/staging directories.
     local input
@@ -292,7 +296,9 @@ shared_directory "$runner_temp"
 safe_absolute "${GITHUB_ENV:?GITHUB_ENV is required}"
 [[ "$GITHUB_ENV" == "$shared_root/"* && -f "$GITHUB_ENV" && -w "$GITHUB_ENV" ]] \
     || fail "GITHUB_ENV must be a regular writable shared file"
-[[ "$(id -u):$(id -g)" == 1001:123 ]] || fail "runner UID:GID must be 1001:123"
+host_uid=$(id -u)
+host_gid=$(id -g)
+[[ "$host_uid" == 1001 ]] || fail "runner UID must be 1001"
 [[ "$(git -C "$workspace" rev-parse --show-toplevel)" == "$workspace" ]] \
     || fail "workspace is not the checkout root"
 [[ "$(git -C "$workspace" rev-parse HEAD)" == "$source_sha" ]] || fail "emitted HEAD mismatch"
@@ -355,9 +361,10 @@ description=$(cat "$evidence/git-describe.stdout")
 if [[ "$describe_rc" != 0 ]]; then description=; fi
 if [[ "$description" == *-dirty ]]; then dirty=ON; fi
 
-printf 'head=%s\ntree=%s\nversion=%s\ntag=%s\ndry_run=%s\nshort_sha=%s\ndirty=%s\nimage=%s\nuid_gid=1001:123\n' \
-    "$source_sha" "$source_tree" "$version" "$tag" "$dry_run" "$short_sha" "$dirty" "$image" \
+printf 'head=%s\ntree=%s\nversion=%s\ntag=%s\ndry_run=%s\nshort_sha=%s\ndirty=%s\nimage=%s\nuid_gid=%s:%s\n' \
+    "$source_sha" "$source_tree" "$version" "$tag" "$dry_run" "$short_sha" "$dirty" "$image" "$host_uid" "$host_gid" \
     > "$evidence/source-identity.txt"
+printf 'uid=%s\ngid=%s\n' "$host_uid" "$host_gid" > "$evidence/host-identity.txt"
 # Read only immutable tracked blobs, never checkout files, git config, LFS
 # filters, export-subst, untracked files or initialized submodule contents.
 while IFS= read -r -d '' entry; do

@@ -1,5 +1,9 @@
+#define PINEFORGE_TEST_ALLOCATION_BYTES
+#include "global_allocation_replacement.hpp"
+
 #include <cmath>
 #include <cstdio>
+#include <deque>
 #include <limits>
 #include <vector>
 
@@ -426,6 +430,79 @@ static int test_tr_subsequent_bars_match_regardless_of_handle_na() {
     return fails;
 }
 
+static std::size_t rci_constructor_bytes(int length) {
+    global_allocation::live_bytes = 0;
+    global_allocation::peak_bytes = 0;
+    global_allocation::recording = true;
+    std::size_t retained = 0;
+    {
+        ta::RCI indicator(length);
+        retained = global_allocation::live_bytes;
+    }
+    global_allocation::recording = false;
+    return retained;
+}
+
+static int test_rci_constructor_workspace() {
+    int fails = 0;
+    for (int length : {7, 37, 129}) {
+        const auto small = rci_constructor_bytes(length);
+        const auto large = rci_constructor_bytes(2 * length);
+        const auto expected = static_cast<std::size_t>(length)
+            * (sizeof(int) + sizeof(double));
+        const bool valid = small > 0 && large > small && large - small == expected;
+        std::printf("RCI workspace length=%d small=%zu large=%zu delta=%zu expected=%zu\n",
+                    length, small, large, large >= small ? large - small : 0, expected);
+        if (!valid) {
+            std::printf("FAIL RCI constructor workspace length=%d\n", length);
+            ++fails;
+        }
+    }
+    return fails;
+}
+
+static double rci_pairwise_reference(const std::deque<double>& window) {
+    const int n = static_cast<int>(window.size());
+    double squared = 0.0;
+    for (int i = 0; i < n; ++i) {
+        int less = 0, equal = 0;
+        for (double value : window) {
+            less += value < window[i];
+            equal += value == window[i];
+        }
+        const double rank = less + (equal - 1) / 2.0;
+        const double difference = static_cast<double>(i) - rank;
+        squared += difference * difference;
+    }
+    return (1.0 - 6.0 * squared / (n * (n * n - 1))) * 100.0;
+}
+
+static int test_rci_live_window_values() {
+    int fails = 0;
+    const double values[] = {3.0, 1.0, 1.0, 2.0, 7.0, -0.0, 0.0,
+                             5.0, -2.0, 5.0, 9.0, 4.0, 4.0, 2.0, 8.0};
+    for (int length : {2, 5, 9}) {
+        ta::RCI indicator(length);
+        std::deque<double> window;
+        for (double value : values) {
+            window.push_back(value);
+            if (static_cast<int>(window.size()) > length) window.pop_front();
+            const auto expected = [&] {
+                return static_cast<int>(window.size()) < length
+                    ? na<double>() : rci_pairwise_reference(window);
+            };
+            if (!near(indicator.compute(value), expected())) ++fails;
+            for (int tick = 0; tick < 4; ++tick) {
+                window.back() = value + (tick - 1) * 0.25;
+                if (!near(indicator.recompute(window.back()), expected())) ++fails;
+            }
+            if (!is_na(indicator.compute(na<double>()))) ++fails;
+        }
+    }
+    if (fails) std::printf("FAIL RCI live-window pairwise comparisons: %d\n", fails);
+    return fails;
+}
+
 int main() {
     int fails = test_linreg_na_in_window()
               + test_percentrank_pine_semantics()
@@ -433,7 +510,9 @@ int main() {
               + test_ema_ignores_na_inputs()
               + test_sar_matches_pine_reference_initialization()
               + test_tr_handle_na_default_returns_na_on_first_bar()
-              + test_tr_subsequent_bars_match_regardless_of_handle_na();
+              + test_tr_subsequent_bars_match_regardless_of_handle_na()
+              + test_rci_constructor_workspace()
+              + test_rci_live_window_values();
     if (fails > 0) {
         std::printf("test_ta: %d TA checks failed\n", fails);
         return 1;

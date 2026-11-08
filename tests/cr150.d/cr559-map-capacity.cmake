@@ -17,6 +17,13 @@ if(UNIX)
         pineforge_add_unit_test(test_cr559_map_capacity_run)
         list(APPEND TEST_SOURCES test_cr559_map_capacity_calc_on_fill)
         pineforge_add_unit_test(test_cr559_map_capacity_calc_on_fill)
+        if(NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+            add_test(NAME test_cr559_map_capacity_cli
+                COMMAND bash "${PROJECT_SOURCE_DIR}/tests/cr559_cli_pair.sh"
+                    "${PROJECT_SOURCE_DIR}" "$<TARGET_FILE:cr559_cli_pair>"
+                    "${CMAKE_CURRENT_BINARY_DIR}/cr559-cli-pair")
+            set_tests_properties(test_cr559_map_capacity_cli PROPERTIES LABELS slow)
+        endif()
     endif()
     # One million real pairs, including all reads, is deliberately in the full
     # verification population; there is no timeout or expected-failure marker.
