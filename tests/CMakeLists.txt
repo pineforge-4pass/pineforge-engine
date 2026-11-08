@@ -8433,6 +8433,30 @@ if(UNIX)
 endif()
 # --- CR-150 cr559-map-capacity end ---
 
+# --- CR-150 o1-live-limit-policy begin ---
+add_executable(test_o1_live_limit_policy test_o1_live_limit_policy.cpp)
+target_link_libraries(test_o1_live_limit_policy PRIVATE pineforge)
+target_compile_options(test_o1_live_limit_policy PRIVATE -ffp-contract=off -UNDEBUG)
+if(PINEFORGE_ENABLE_COVERAGE)
+    target_compile_options(test_o1_live_limit_policy PRIVATE ${_pf_cov_test_flags})
+endif()
+add_test(NAME test_o1_live_limit_raised
+    COMMAND test_o1_live_limit_policy raised --objects 1048577 --limit 2097152)
+add_test(NAME test_o1_live_limit_default_unset
+    COMMAND test_o1_live_limit_policy default --objects 1048577 --policy unset)
+add_test(NAME test_o1_live_limit_default_zero
+    COMMAND test_o1_live_limit_policy default --objects 1048577 --policy zero)
+add_test(NAME test_o1_live_limit_lower
+    COMMAND test_o1_live_limit_policy lower --limit 8)
+add_test(NAME test_o1_live_limit_invalid
+    COMMAND test_o1_live_limit_policy invalid)
+set_tests_properties(
+    test_o1_live_limit_raised
+    test_o1_live_limit_default_unset
+    test_o1_live_limit_default_zero
+    PROPERTIES LABELS "slow;mem")
+# --- CR-150 o1-live-limit-policy end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
