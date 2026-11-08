@@ -5765,9 +5765,7 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # Control (a): the public native-live shape. The runner/ tree
         # registers its 65 old pinned placeholders beside the required rows;
         # they skip and every named executable row runs.
-        # expectation corrected: 86 -> 95 registered/total and 21 -> 30
-        # executable, because the named registry has 30 executable rows plus
-        # 65 pinned skips. The production floor stays 21.
+        # The production floor stays 21.
         # Literal names transcribed from Scripted's base row declarations and
         # runner/CMakeLists.txt, including _pf_equivalence_probes and its cover
         # row; independent of discovery, results and runner_e2e_test_names().
@@ -5793,6 +5791,9 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
             'native_live_service_e2e',
             'native_live_startup_e2e',
             'native_live_stdin_idle_e2e',
+            # expectation corrected: 30 -> 31, because the newly declared
+            # native_live_trade_text_e2e row joins the literal executable set.
+            'native_live_trade_text_e2e',
             'native_live_websocket_e2e',
             'test_live_json',
             'test_native_example_batch',
@@ -5804,17 +5805,25 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
             'test_native_live_websocket',
         }
         pinned = self.pinned_probe(65)
-        self.assertEqual(len(expected_executed), 30)
+        # expectation corrected: 30 -> 31, because the newly declared
+        # native_live_trade_text_e2e row adds one executable.
+        self.assertEqual(len(expected_executed), 31)
+        # expectation corrected: 95 -> 96, because the newly declared
+        # native_live_trade_text_e2e row adds one registered/input row.
         code, summary, scripted, build_dir = self.run_profile(
-            'live-sanitizers', ctest_registered=95, ctest_rows=95,
+            'live-sanitizers', ctest_registered=96, ctest_rows=96,
             ctest_skipped=pinned)
         registry, _ = self.assert_live_population(summary, scripted)
         self.assertEqual(registry - set(pinned), expected_executed)
         expected_count = len(registry - set(pinned))
         self.assertEqual(code, 0, summary['failures'])
         self.assertEqual(failure_stages(summary), [])
-        self.assertEqual(summary['ctestRegistered'], 95)
-        self.assertEqual(summary['ctestTotal'], 95)
+        # expectation corrected: 95 -> 96, because the newly declared
+        # native_live_trade_text_e2e row is registered.
+        self.assertEqual(summary['ctestRegistered'], 96)
+        # expectation corrected: 95 -> 96, because the newly declared
+        # native_live_trade_text_e2e row contributes to CTest's total.
+        self.assertEqual(summary['ctestTotal'], 96)
         self.assertEqual(summary['ctestRows'], expected_count)
         self.assertEqual(LIVE_SANITIZERS_MIN_TESTS, 21)
         self.assertEqual(summary['minTests'], 21)
@@ -5830,7 +5839,7 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         self.assertIn('65 pinned private-fixture rows skipping', log)
 
         # The native four-row override control is a different population.
-        # Pin both sides of the boundary on this same 95-name registry,
+        # Pin both sides of the boundary on this same 96-name registry,
         # retaining every executable name and all 65 pinned skips.
         for minimum, expected_code, stages in (
                 (expected_count, 0, []),
@@ -5859,10 +5868,11 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # Control (b): one skipped row outside the pin is a failure, even
         # though the arithmetic alone would tolerate it.
         pinned = self.pinned_probe(65)
-        # expectation corrected: 87 -> 96, because 30 executable names plus
-        # 65 pinned skips and one unpinned skip must all be represented.
+        # expectation corrected: 96 -> 97, because the newly declared
+        # native_live_trade_text_e2e row adds one executable beside the
+        # 65 pinned skips and one unpinned skip.
         code, summary, scripted, _ = self.run_profile(
-            'live-sanitizers', ctest_registered=96, ctest_rows=96,
+            'live-sanitizers', ctest_registered=97, ctest_rows=97,
             ctest_skipped=pinned + ['test_unpinned_runner_row'])
         self.assert_live_population(summary, scripted)
         self.assertEqual(code, 1)
@@ -5876,10 +5886,11 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # Control (c): a row CTest could not start is refused beside the
         # pinned skips -- the acceptance covers skips, nothing else.
         pinned = self.pinned_probe(65)
-        # expectation corrected: 87 -> 96, because the named registry also
-        # carries the extra not-run row beside 30 executable names and 65 skips.
+        # expectation corrected: 96 -> 97, because the newly declared
+        # native_live_trade_text_e2e row adds one executable beside the
+        # extra not-run row and 65 pinned skips.
         code, summary, scripted, _ = self.run_profile(
-            'live-sanitizers', ctest_registered=96, ctest_rows=96,
+            'live-sanitizers', ctest_registered=97, ctest_rows=97,
             ctest_skipped=pinned, ctest_not_run=['test_live_not_run_row'])
         self.assert_live_population(summary, scripted)
         self.assertEqual(code, 1)
@@ -5898,10 +5909,11 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # own count. Named build accounting and the live skip rule both
         # deliberately refuse the disabled result, with no population mismatch.
         pinned = self.pinned_probe(65)
-        # expectation corrected: 86 -> 96 registered/input rows, because the
-        # disabled name also belongs to the registry; CTest's total is 95.
+        # expectation corrected: 96 -> 97, because the newly declared
+        # native_live_trade_text_e2e row joins the registry beside the disabled
+        # name; CTest's total remains registered minus disabled.
         code, summary, scripted, _ = self.run_profile(
-            'live-sanitizers', ctest_registered=96, ctest_rows=96,
+            'live-sanitizers', ctest_registered=97, ctest_rows=97,
             ctest_skipped=pinned, ctest_disabled=['test_live_disabled_row'])
         self.assert_live_population(summary, scripted)
         self.assertEqual(code, 1)
@@ -5917,11 +5929,12 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
         # runner row must run -- so a pinned row that skips fails on the
         # private-fixtures rule and on this one.
         pinned = self.pinned_probe(1)
-        # expectation corrected: 22 -> 31, because the fixture declares
-        # 30 executable names plus the one pinned skip in this control.
+        # expectation corrected: 31 -> 32, because the newly declared
+        # native_live_trade_text_e2e row adds one executable beside the
+        # one pinned skip in this control.
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
             code, summary, scripted, _ = self.run_profile(
-                'live-sanitizers', ctest_registered=31, ctest_rows=31,
+                'live-sanitizers', ctest_registered=32, ctest_rows=32,
                 ctest_skipped=pinned)
         self.assert_live_population(summary, scripted)
         self.assertEqual(code, 1)
@@ -5956,10 +5969,10 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
             for probe in probes:
                 name = 'native_live_equivalence_e2e_' + probe
                 with self.subTest(profile=profile, probe=probe):
-                    # expectation corrected: 22 -> 30 for live-sanitizers,
-                    # because the skipped required name is already in its
-                    # 30-name registry. The live-tsan count fixture is unchanged.
-                    registered = (30 if profile == 'live-sanitizers'
+                    # expectation corrected: 30 -> 31, because the newly declared
+                    # native_live_trade_text_e2e row joins live-sanitizers' registry.
+                    # The skipped required name is included; live-tsan is unchanged.
+                    registered = (31 if profile == 'live-sanitizers'
                                   else LIVE_SANITIZERS_MIN_TESTS + 1)
                     code, summary, scripted, _ = self.run_profile(
                         profile, ctest_registered=registered, ctest_rows=registered,
