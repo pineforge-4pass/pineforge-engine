@@ -21,6 +21,7 @@ import hashlib
 import ci_preflight
 from ci_preflight import _jobs, _steps, release_prebuilt_workflow_findings
 import ci_release_gate
+import release_upload_context_proof
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2461,6 +2462,33 @@ class OptionCWorkflowTests(unittest.TestCase):
                         self.assertEqual((root / "artifacts" / relative
                                           / (files[arch] + ".sha256")).read_text(),
                                          values[arch + "_SHA256"] + "  " + files[arch] + "\n")
+
+    def test_upload_context_with_real_gh_outside_a_checkout(self):
+        actions = os.environ.get("GITHUB_ACTIONS")
+        if actions in (None, "false"):
+            reason = (
+                f"UNPROVEN_HOSTED: GITHUB_ACTIONS={actions!r}; non-Actions venue. "
+                "SKIP earns no hosted proof; run on the final PR head is required")
+            print(reason, flush=True)
+            self.skipTest(reason)
+        self.assertEqual(actions, "true", "unrecognized Actions venue declaration")
+        runner_temp = os.environ.get("RUNNER_TEMP")
+        self.assertTrue(runner_temp, "Actions must provide RUNNER_TEMP")
+        scratch = Path(runner_temp).resolve(strict=True)
+        self.assertFalse(scratch == ROOT or ROOT in scratch.parents,
+                         "RUNNER_TEMP must be outside the checkout")
+        output = Path(tempfile.mkdtemp(prefix="release-upload-context-", dir=scratch))
+        print("REAL_GH_UPLOAD_CONTEXT_OUTPUT", output, flush=True)
+        result = release_upload_context_proof.run_proof(
+            root=ROOT,
+            baseline=ROOT / "scripts/fixtures/release_upload_context_2167.yml",
+            candidate=ROOT / ".github/workflows/release.yml",
+            output=output)
+        self.assertEqual(
+            [(case["source"], case["outcome"]) for case in result["cases"]],
+            [("baseline", "RED"), ("candidate", "GREEN")] * 2)
+        self.assertEqual([case["payload_joins"] for case in result["cases"]
+                          if case["source"] == "candidate"], [4, 4])
 
     def test_toolchain_caller_shell_rejects_pr_wrong_ref_and_workflow_identity(self):
         script = self.shell("prebuilt-x86", "Refuse an untrusted toolchain caller")

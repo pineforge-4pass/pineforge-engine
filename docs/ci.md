@@ -1646,7 +1646,7 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`, full parity and subset: `ubuntu-24.04` |
 | `native-live.yml` | Dispatch and post CI callers on `main` | `authz`, both aggregates and the native shards: `ubuntu-24.04`; `matrix.runner`: live-sanitizers and live-tsan both `ubuntu-24.04` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz` and credentialed `build`: `ubuntu-24.04` |
-| `release.yml` | Dispatch from `main` or a `v*` tag for toolchain auth | `release`, `prebuilt-x86`, `upload` and `notify-hub`: hosted `ubuntu-24.04`; `prebuilt-arm`: hosted `ubuntu-22.04-arm` |
+| `release.yml` | Dispatch from `main`; the toolchain caller additionally checks its ref | `release`, `prebuilt-x86`, `upload` and `notify-hub`: hosted `ubuntu-24.04`; `prebuilt-arm`: hosted `ubuntu-22.04-arm` |
 | `prebuilt-hosted-diagnostic.yml` | Same-repository PRs to `main` | `observe`: hosted `ubuntu-24.04`, read-only host observations |
 | `promote-baseline.yml` | Push to `main`, dispatch from `main` | `promote-guard` and `promote`: `ubuntu-24.04` |
 | `release-ruleset-probe.yml` | Dispatch from `main` | `authz` and `probe`: `ubuntu-24.04` |
@@ -1699,7 +1699,7 @@ host UID 1001, records the actual host UID/GID and Docker version bytes, and kee
 the container user at `1001:123`. Docker command failures remain failures.
 
 The x86 auth contract permits only `release.yml` on `workflow_dispatch` from main
-or a `v*` tag, with provider `projects/76767776102/locations/global/workloadIdentityPools/pineforge-github/providers/github-oidc`,
+(the caller's tag allowance does not admit a tag dispatch), with provider `projects/76767776102/locations/global/workloadIdentityPools/pineforge-github/providers/github-oidc`,
 dedicated reader `engine-release-toolchainreader@gen-lang-client-0864094636.iam.gserviceaccount.com`,
 and `google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093`.
 It sets `create_credentials_file: false`, `export_environment_variables: false`

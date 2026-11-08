@@ -1,0 +1,805 @@
+name: Release
+
+# Bump VERSION, tag, cut a GitHub Release with generated notes, attach the
+# prebuilt static-lib tarballs and the run-failure code catalog with its diff
+# against the previous release, and notify the pineforge-release hub — all
+# from a single workflow_dispatch click. This workflow publishes no container
+# image: the GHCR image is the hub's, built from these tarballs.
+#
+# Trigger: GitHub UI → Actions → Release → "Run workflow" → pick bump, or
+# name the exact version in `override` (a release candidate is
+# X.Y.Z-rc.N, then the final release is override X.Y.Z). Tick `dry_run` to
+# rehearse: it computes the version, stamps and resets the run-failure
+# catalog diff, builds, installs, verifies and packs every tarball (the
+# tarballs and the catalog assets are kept as workflow artifacts), and
+# commits, tags, releases, uploads and dispatches nothing.
+#
+# The run-failure catalog (docker/run_failure_codes.json) ships as release
+# assets: run_failure_codes-<tag>.json, the catalog itself, and
+# run_failure_codes_diff-<tag>.json, its changes since the release the notes
+# start at (for a final release, the previous final release), stamped with
+# this version by scripts/gen_run_failure_catalog_diff.py --stamp. A final
+# release that follows its candidates also attaches the chain step,
+# run_failure_codes_diff-<tag>-from-<candidate tag>.json: the checked-in diff
+# (docker/run_failure_codes_diff.json), which starts at the newest release
+# tag, stamped. The diff reset to the new tag (--reset) is committed with the
+# VERSION bump, so main's source guard (--check) holds from the release
+# commit on.
+#
+# A release candidate (X.Y.Z-rc.N) is created as a GitHub prerelease, and
+# the hub dispatch carries it: client_payload = {version: "vX.Y.Z-rc.N",
+# prerelease: true, run_id}; a final release sends prerelease: false. The
+# engine and codegen release one version number from 1.0.0; the hub pairs
+# them (docs/pages/public-contract.md).
+#
+# The version arithmetic is scripts/release_version.py (unit tests:
+# scripts/test_release_version.py, a ci_preflight stage), not YAML.
+#
+# Security notes:
+#   - `bump` is a `choice` enum. `override` is free text: it reaches only
+#     scripts/release_version.py, through an `env:` block, which refuses
+#     anything but X.Y.Z or X.Y.Z-rc.N before any later step reads it.
+#   - All other interpolations are GitHub-controlled context (repo, actor,
+#     sha, secrets) or values the scripts computed from VERSION, the tags and
+#     the checked-in catalog; every one reaches a `run:` through `env:`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump'
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      override:
+        description: 'Exact version, X.Y.Z or X.Y.Z-rc.N (for example 1.0.0-rc.1); wins over bump'
+        required: false
+        type: string
+        default: ''
+      dry_run:
+        description: 'Rehearse: build and verify the tarballs; commit, tag, release, upload and dispatch nothing'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# The run-failure guards this workflow runs (--stamp, --check) read the tags
+# its full-history checkout fetches: here a missing tag fails them, never their
+# tag-less offline path.
+env:
+  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    environment: release
+
+    outputs:
+      tag:        ${{ steps.bump.outputs.tag }}
+      sha:        ${{ steps.publish.outputs.sha }}
+      version:    ${{ steps.bump.outputs.next }}
+      prerelease: ${{ steps.bump.outputs.prerelease }}
+
+    steps:
+      # Org GitHub App token (no PAT — never expires). Authorizes the version
+      # bump commit/tag push to protected main (the App is a bypass actor on the
+      # org ruleset) AND the downstream hub dispatch. Scoped to this repo + the
+      # hub. Minted first so checkout can push with it. GitHub records this
+      # authenticated pusher as pineforge-app[bot] on exact-main push runs;
+      # ci_release_gate.py pins that login for the one-bump phase-1 exemption.
+      - name: Mint org App token
+        id: app
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        with:
+          app-id: ${{ secrets.PINEFORGE_APP_ID }}
+          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: pineforge-engine
+
+      - name: Checkout (full history)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          # App token bypasses the org ruleset (PR-required) for the bump push.
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # Phase 1 also accepts an App-pushed two-file bump on a gated PR merge.
+      # No matching post-merge push run yet: refuse; retry after it exists.
+      # The gate requires one active main pull_request ruleset whose own
+      # bypass_actors is exactly Integration 4105147 with bypass_mode always.
+      # Other rulesets' bypass lists do not supply or invalidate that barrier.
+      # The gate needs bypass_actors visible on every branch ruleset in the inventory.
+      # If the release App token cannot see them, the bump is refused.
+      # release-ruleset-probe.yml reports whether it can. contents: write scopes GITHUB_TOKEN.
+      - name: Refuse unless pineforge/verify and pineforge/parity are green
+        id: gate
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          python3 scripts/ci_release_gate.py gate \
+            --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF}"
+
+      # current / next / tag / prerelease / previous (the release-notes base),
+      # validated; see scripts/release_version.py.
+      - name: Compute next version
+        id: bump
+        env:
+          BUMP:     ${{ inputs.bump }}
+          OVERRIDE: ${{ inputs.override }}
+        run: |
+          set -euo pipefail
+          git tag --list 'v*' > "${RUNNER_TEMP}/tags.txt"
+          python3 scripts/release_version.py next \
+            --bump "${BUMP}" --override "${OVERRIDE}" \
+            --tags-file "${RUNNER_TEMP}/tags.txt" \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Refuse if tag already exists
+        env:
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "tag ${TAG} already exists -- pick a different bump" >&2
+            exit 1
+          fi
+
+      # The run-failure catalog's assets, before anything is committed. PREV
+      # is where the release notes start (scripts/release_version.py's
+      # previous: the previous final release for a final one); BASE, the
+      # newest release tag HEAD reaches, is where the checked-in diff starts
+      # (its --check). When BASE is PREV, run_failure_codes_diff-<tag>.json is
+      # the checked-in diff stamped. When BASE is a release candidate after
+      # PREV -- a final release that follows its candidates -- it is a fresh
+      # diff from the catalog PREV published, so the stable channel sees every
+      # code the candidates added, and the checked-in diff stamped is the chain
+      # step, run_failure_codes_diff-<tag>-from-<BASE>.json, which keeps the
+      # chain through every release, candidates included, unbroken. --stamp
+      # refuses any other BASE (a PREV that HEAD does not reach), a catalog
+      # changed after the checked-in diff was generated, a removed code, a
+      # release that adds or changes codes but is no minor or major release,
+      # and an added code whose `since` is not this release (a candidate's
+      # X.Y.Z). --reset computes the diff main starts from after this release:
+      # from this tag and this catalog, nothing added.
+      - name: Stamp the run-failure catalog diff
+        id: catalog
+        env:
+          NEXT: ${{ steps.bump.outputs.next }}
+          TAG:  ${{ steps.bump.outputs.tag }}
+          PREV: ${{ steps.bump.outputs.previous }}
+        run: |
+          set -euo pipefail
+          base="$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD)"
+          assets="${RUNNER_TEMP}/run-failure-catalog"
+          chain="run_failure_codes_diff-${TAG}-from-${base}.json"
+          mkdir -p "${assets}"
+          python3 scripts/gen_run_failure_catalog_diff.py --stamp \
+            --to-version "${NEXT}" --previous-tag "${PREV}" \
+            --output "${assets}/run_failure_codes_diff-${TAG}.json" \
+            --chain-output "${assets}/${chain}"
+          if [[ ! -f "${assets}/${chain}" ]]; then chain=""; fi
+          cp docker/run_failure_codes.json "${assets}/run_failure_codes-${TAG}.json"
+          python3 scripts/gen_run_failure_catalog_diff.py --reset --tag "${TAG}" \
+            --output "${RUNNER_TEMP}/run_failure_codes_diff.reset.json"
+          {
+            echo "base=${base}"
+            echo "assets=${assets}"
+            echo "chain=${chain}"
+            echo "reset=${RUNNER_TEMP}/run_failure_codes_diff.reset.json"
+          } >> "${GITHUB_OUTPUT}"
+
+      # The reset diff rides the VERSION bump's commit, and the guard main runs
+      # from now on (--check: the diff starts at the newest tag HEAD reaches)
+      # must pass on the tagged commit before anything is pushed. The commit
+      # and the tag go up in one atomic push: both land or neither does, so
+      # main never holds a diff reset to a tag the remote lacks. Keep these
+      # exact two modified regular files: the release gate exempts no others.
+      #
+      # When a step fails after this push (gh release create, say), the tag
+      # exists and re-running this run stops at "Compute next version" (tag
+      # vX already exists); the tagged tree holds the reset diff, which stamps
+      # nothing. Rebuild the
+      # assets from git alone, byte for byte what the stamp step wrote, in any
+      # checkout with the tags (PREV is the run's "Compute next version"
+      # previous; the stamp step's log names the start of each diff it wrote):
+      #   python3 scripts/gen_run_failure_catalog_diff.py --stamp --to-tag <tag> \
+      #     --previous-tag <PREV> --output run_failure_codes_diff-<tag>.json
+      #   git show <tag>:docker/run_failure_codes.json > run_failure_codes-<tag>.json
+      # and, when the run wrote a chain step from <BASE>, the same --stamp
+      # --to-tag with --previous-tag <BASE> --output
+      # run_failure_codes_diff-<tag>-from-<BASE>.json. (Equivalently, check
+      # out <tag>^, the dispatched commit, and run the stamp step's own
+      # --stamp --to-version there.) Then create the release by hand with
+      # those assets (gh release create <tag> --verify-tag), its notes as the
+      # notes step writes them; the prebuilt and notify-hub jobs need it and
+      # did not run.
+      - name: Write bumped VERSION, commit, tag, push
+        id: publish
+        if: ${{ !inputs.dry_run }}
+        env:
+          NEXT:  ${{ steps.bump.outputs.next }}
+          TAG:   ${{ steps.bump.outputs.tag }}
+          RESET: ${{ steps.catalog.outputs.reset }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${NEXT}" > VERSION
+          cp "${RESET}" docker/run_failure_codes_diff.json
+          git add VERSION docker/run_failure_codes_diff.json
+          git commit -m "chore(release): ${TAG}"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          python3 scripts/gen_run_failure_catalog_diff.py --check
+          git push --atomic origin HEAD "${TAG}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # The range starts at scripts/release_version.py's `previous`: the last
+      # tag below this release in semver order (git's v:refname sort puts
+      # X.Y.Z-rc.N above X.Y.Z), and the last final release for a final one.
+      # A dry run has no tag yet and ends the range at the dispatched commit.
+      - name: Generate release notes
+        id: notes
+        env:
+          TAG:       ${{ steps.bump.outputs.tag }}
+          PREV:      ${{ steps.bump.outputs.previous }}
+          RANGE_END: ${{ inputs.dry_run && github.sha || steps.bump.outputs.tag }}
+          BASE:      ${{ steps.catalog.outputs.base }}
+          CHAIN:     ${{ steps.catalog.outputs.chain }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## ${TAG}"
+            echo
+            if [[ -n "$PREV" ]]; then
+              echo "### Changes since ${PREV}"
+              echo
+              git log --pretty=format:'- %s (%h)' "${PREV}..${RANGE_END}"
+            else
+              echo "### Initial release"
+              echo
+              git log --pretty=format:'- %s (%h)' "${RANGE_END}"
+            fi
+            echo
+            echo
+            echo "### Prebuilt libraries"
+            echo
+            echo "Linux amd64 and arm64 static-lib + headers tarballs are attached below (C ABI)."
+            echo "For the full PineScript -> backtest image, use \`ghcr.io/pineforge-4pass/pineforge-release\`."
+            echo
+            echo "### Run-failure codes"
+            echo
+            echo "\`run_failure_codes-${TAG}.json\` is the run-failure code catalog this release publishes;"
+            echo "\`run_failure_codes_diff-${TAG}.json\` lists its changes since ${PREV}."
+            if [[ -n "${CHAIN}" ]]; then
+              echo "\`${CHAIN}\` lists them since ${BASE}, the release candidate before this release:"
+              echo "the step in the chain of diffs through every release, candidates included."
+            fi
+          } > RELEASE_NOTES.md
+          echo "path=RELEASE_NOTES.md" >> "$GITHUB_OUTPUT"
+
+      # A release candidate is a GitHub prerelease, which GitHub never marks
+      # "Latest".
+      - name: Create GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
+          TAG:        ${{ steps.bump.outputs.tag }}
+          NOTES:      ${{ steps.notes.outputs.path }}
+          PRERELEASE: ${{ steps.bump.outputs.prerelease }}
+          ASSETS:     ${{ steps.catalog.outputs.assets }}
+        run: |
+          set -euo pipefail
+          prerelease=()
+          if [[ "${PRERELEASE}" == "true" ]]; then prerelease=(--prerelease); fi
+          # The catalog, its diff, and the chain step when there is one.
+          gh release create "${TAG}" \
+            --title "${TAG}" \
+            --notes-file "${NOTES}" \
+            --verify-tag \
+            "${prerelease[@]}" \
+            "${ASSETS}"/*.json
+
+      - name: Dry run summary
+        if: ${{ inputs.dry_run }}
+        env:
+          CURRENT:    ${{ steps.bump.outputs.current }}
+          NEXT:       ${{ steps.bump.outputs.next }}
+          TAG:        ${{ steps.bump.outputs.tag }}
+          PRERELEASE: ${{ steps.bump.outputs.prerelease }}
+          PREV:       ${{ steps.bump.outputs.previous }}
+          NOTES:      ${{ steps.notes.outputs.path }}
+          RUN_ID:     ${{ github.run_id }}
+          BASE:       ${{ steps.catalog.outputs.base }}
+          CHAIN:      ${{ steps.catalog.outputs.chain }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Dry run: ${CURRENT} -> ${NEXT}"
+            echo
+            echo "- would commit VERSION=${NEXT} and the run-failure catalog diff reset to ${TAG}, and push it with the tag ${TAG} in one atomic push"
+            echo "- would create the GitHub release ${TAG} (prerelease: ${PRERELEASE}), notes since ${PREV:-the first commit}"
+            echo "- would attach run_failure_codes-${TAG}.json and run_failure_codes_diff-${TAG}.json (stamped ${PREV} -> ${NEXT}; kept as a workflow artifact)"
+            if [[ -n "${CHAIN}" ]]; then
+              echo "- and the chain step ${CHAIN} (stamped ${BASE} -> ${NEXT}; kept too)"
+            fi
+            echo "- would dispatch engine-release to pineforge-release with client_payload {\"version\": \"${TAG}\", \"prerelease\": ${PRERELEASE}, \"run_id\": ${RUN_ID}}"
+            echo
+            cat "${NOTES}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          cat "${GITHUB_STEP_SUMMARY}"
+
+      - name: Keep the dry run's run-failure catalog assets as a workflow artifact
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: run-failure-catalog-${{ steps.bump.outputs.tag }}
+          path: ${{ steps.catalog.outputs.assets }}
+          retention-days: 7
+
+  # Prebuilt static-lib + headers tarballs, one per (os, arch). Attached
+  # to the GitHub Release created above. Tarball layout:
+  #   pineforge-vX.Y.Z-{triple}/
+  #     include/pineforge/*.{h,hpp}    (curated + generated version.h)
+  #     lib/libpineforge.a
+  #     lib/cmake/PineForge/*.cmake
+  #     LICENSE NOTICE VERSION
+  #
+  # Consumers still need Eigen3 (>= 3.3) installed system-wide; see
+  # release notes / README.
+  prebuilt-x86:
+    needs: release
+    if: ${{ github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && github.workflow_ref == format('pineforge-4pass/pineforge-engine/.github/workflows/release.yml@{0}', github.ref) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.digest }}
+
+    steps:
+      - name: Refuse an untrusted toolchain caller
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          [[ "${EVENT}" == workflow_dispatch ]]
+          case "${REF}" in refs/heads/main|refs/tags/v*) ;; *) exit 1 ;; esac
+          [[ "${WORKFLOW_REF}" == "pineforge-4pass/pineforge-engine/.github/workflows/release.yml@${REF}" ]]
+
+      - name: Checkout release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
+          fetch-depth: 0   # the version helper still observes the git sha
+          persist-credentials: false
+
+      - name: Assert tag still names the emitted release commit
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          SHA: ${{ needs.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::invalid emitted release sha: ${SHA}" >&2
+            exit 1
+          fi
+          test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${SHA}"
+
+      - name: Write the dry run's VERSION
+        if: ${{ inputs.dry_run }}
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: printf '%s\n' "${NEXT}" > VERSION
+
+      - name: Authenticate the dedicated toolchain reader
+        id: toolchain-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: projects/76767776102/locations/global/workloadIdentityPools/pineforge-github/providers/github-oidc
+          service_account: engine-release-toolchainreader@gen-lang-client-0864094636.iam.gserviceaccount.com
+          create_credentials_file: false
+          export_environment_variables: false
+          token_format: access_token
+
+      - name: Log in to the private toolchain registry
+        env:
+          REGISTRY_ACCESS_TOKEN: ${{ steps.toolchain-auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${REGISTRY_ACCESS_TOKEN}" | docker login us-central1-docker.pkg.dev --username oauth2accesstoken --password-stdin
+
+      - name: Pull the private pinned toolchain and record observations
+        run: |
+          set -euo pipefail
+          test -f .github/engine-toolchain-image.txt
+          test ! -L .github/engine-toolchain-image.txt
+          test "$(wc -l < .github/engine-toolchain-image.txt)" -eq 1
+          IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt
+          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/engine-release-toolchains/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
+          export ENGINE_TOOLCHAIN_IMAGE
+          started=$(date +%s)
+          if docker pull "${ENGINE_TOOLCHAIN_IMAGE}"; then pull_rc=0; else pull_rc=$?; fi
+          printf 'pull_exit=%s\nelapsed_seconds=%s\n' "${pull_rc}" "$(( $(date +%s) - started ))"
+          if [[ "${pull_rc}" != 0 ]]; then exit "${pull_rc}"; fi
+          docker image inspect --format 'size_bytes={{.Size}}' "${ENGINE_TOOLCHAIN_IMAGE}"
+
+      - name: Build x86_64 in pinned Bookworm
+        env:
+          SOURCE_SHA: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
+          NEXT: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          test -f .github/engine-toolchain-image.txt
+          test ! -L .github/engine-toolchain-image.txt
+          test "$(wc -l < .github/engine-toolchain-image.txt)" -eq 1
+          IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt
+          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/engine-release-toolchains/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
+          export ENGINE_TOOLCHAIN_IMAGE
+          bash scripts/build_prebuilt_bookworm.sh \
+            "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" "${SOURCE_SHA}" "${NEXT}" "${TAG}" "${DRY_RUN}"
+
+      - name: Verify the staged version
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: |
+          python3 scripts/release_version.py check-install \
+            --prefix "${STAGE_DIR}" --expect "${NEXT}"
+
+      - name: Fetch the v1.10.0 baseline archive for the glibc comparison
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIPLE: linux-x86_64
+        run: |
+          set -euo pipefail
+          case "${TRIPLE}" in
+            linux-x86_64) digest=cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543 ;;
+            linux-aarch64) digest=982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bb ;;
+            *) echo "::error::no v1.10.0 baseline archive for ${TRIPLE}" >&2; exit 1 ;;
+          esac
+          archive="pineforge-v1.10.0-${TRIPLE}.tar.gz"
+          root="${RUNNER_TEMP}/glibc-baseline-${TRIPLE}"
+          mkdir "${root}" "${root}/download" "${root}/tree"
+          gh release download v1.10.0 --repo "${GITHUB_REPOSITORY}" \
+            --pattern "${archive}" --dir "${root}/download"
+          echo "${digest}  ${root}/download/${archive}" | sha256sum -c -
+          tar -xzf "${root}/download/${archive}" -C "${root}/tree" \
+            --no-same-owner --no-same-permissions
+          echo "BASELINE_DIR=${root}/tree" >> "${GITHUB_ENV}"
+
+      - name: Check every staged library's glibc floor
+        env:
+          TRIPLE: linux-x86_64
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
+          mkdir -p "${log}"
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" --baseline-root "${BASELINE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+            checker_rc=0
+          else checker_rc=$?; fi
+          printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
+          cat "${log}/stdout.jsonl"
+          cat "${log}/stderr.txt" >&2
+          exit "${checker_rc}"
+
+      - name: Bundle docs into tarball root
+        run: |
+          set -euo pipefail
+          cp LICENSE NOTICE VERSION "${STAGE_DIR}/"
+
+      - name: Pack tarball + sha256
+        id: pack
+        env:
+          TAG:    ${{ needs.release.outputs.tag }}
+          TRIPLE: linux-x86_64
+        run: |
+          set -euo pipefail
+          base="pineforge-${TAG}-${TRIPLE}"
+          tarball="${base}.tar.gz"
+          tar -czf "${tarball}" -C "$(dirname "${STAGE_DIR}")" "${base}"
+          sha256sum "${tarball}" > "${tarball}.sha256"
+          digest=$(sha256sum "${tarball}")
+          digest=${digest%% *}
+          [[ "${digest}" =~ ^[0-9a-f]{64}$ ]]
+          {
+            echo "digest=${digest}"
+            echo "tarball=${tarball}"
+            echo "sha256=${tarball}.sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Consume packed x86_64 archive
+        env:
+          TARBALL:  ${{ steps.pack.outputs.tarball }}
+          SHASUM:   ${{ steps.pack.outputs.sha256 }}
+          TAG:      ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          test -f .github/engine-toolchain-image.txt
+          test ! -L .github/engine-toolchain-image.txt
+          test "$(wc -l < .github/engine-toolchain-image.txt)" -eq 1
+          IFS= read -r ENGINE_TOOLCHAIN_IMAGE < .github/engine-toolchain-image.txt
+          [[ "${ENGINE_TOOLCHAIN_IMAGE}" =~ ^us-central1-docker\.pkg\.dev/gen-lang-client-0864094636/engine-release-toolchains/engine-toolchain-bookworm@sha256:[0-9a-f]{64}$ ]]
+          export ENGINE_TOOLCHAIN_IMAGE
+          bash scripts/build_prebuilt_bookworm.sh \
+            --consume "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" \
+            "${TARBALL}" "${SHASUM}" "${TAG}"
+
+      - name: Keep the verified tarball as a workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: prebuilt-linux-x86_64
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.sha256 }}
+          if-no-files-found: error
+          retention-days: 7
+
+  prebuilt-arm:
+    needs: release
+    runs-on: ubuntu-22.04-arm
+    permissions:
+      contents: read
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.digest }}
+
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
+          fetch-depth: 0   # the version helper still observes the git sha
+          persist-credentials: false
+
+      - name: Assert tag still names the emitted release commit
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          SHA: ${{ needs.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::invalid emitted release sha: ${SHA}" >&2
+            exit 1
+          fi
+          test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${SHA}"
+
+      - name: Write the dry run's VERSION
+        if: ${{ inputs.dry_run }}
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: printf '%s\n' "${NEXT}" > VERSION
+
+      - name: Install Eigen3 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev
+
+      - name: Assert Eigen3 3.4.0 on ARM
+        run: |
+          set -euo pipefail
+          macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "${macros}"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "${macros}"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "${macros}"
+
+      - name: Configure
+        env:
+          TAG:         ${{ needs.release.outputs.tag }}
+          TRIPLE:      linux-aarch64
+        run: |
+          set -euo pipefail
+          stage="stage/pineforge-${TAG}-${TRIPLE}"
+          echo "STAGE_DIR=${stage}" >> "$GITHUB_ENV"
+          # FILE: the version identity is the VERSION file exactly, -rc.N
+          # included, however the checkout's tags describe it; a dry run's
+          # VERSION has no tag at all.
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DEigen3_DIR=/usr/share/eigen3/cmake \
+            -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+            -DPINEFORGE_BUILD_TESTS=OFF \
+            -DPINEFORGE_BUILD_TUTORIAL=OFF \
+            -DPINEFORGE_VERSION_SOURCE=FILE \
+            -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}"
+          grep -Fx 'Eigen3_DIR:PATH=/usr/share/eigen3/cmake' build/CMakeCache.txt
+
+      - name: Build
+        run: cmake --build build -j 4
+
+      - name: Install to staging
+        run: cmake --install build
+
+      - name: Verify the staged version
+        env:
+          NEXT: ${{ needs.release.outputs.version }}
+        run: |
+          python3 scripts/release_version.py check-install \
+            --prefix "${STAGE_DIR}" --expect "${NEXT}"
+
+      - name: Fetch the v1.10.0 baseline archive for the glibc comparison
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIPLE: linux-aarch64
+        run: |
+          set -euo pipefail
+          case "${TRIPLE}" in
+            linux-x86_64) digest=cb412fbae9e8ba515de41dc31026c77d6c5e309693247bee26bb93c67d3c3543 ;;
+            linux-aarch64) digest=982b16da2d5f5ee7c274615895484fce36bd740052a14d59b66576dca496d7bb ;;
+            *) echo "::error::no v1.10.0 baseline archive for ${TRIPLE}" >&2; exit 1 ;;
+          esac
+          archive="pineforge-v1.10.0-${TRIPLE}.tar.gz"
+          root="${RUNNER_TEMP}/glibc-baseline-${TRIPLE}"
+          mkdir "${root}" "${root}/download" "${root}/tree"
+          gh release download v1.10.0 --repo "${GITHUB_REPOSITORY}" \
+            --pattern "${archive}" --dir "${root}/download"
+          echo "${digest}  ${root}/download/${archive}" | sha256sum -c -
+          tar -xzf "${root}/download/${archive}" -C "${root}/tree" \
+            --no-same-owner --no-same-permissions
+          echo "BASELINE_DIR=${root}/tree" >> "${GITHUB_ENV}"
+
+      - name: Check every staged library's glibc floor
+        env:
+          TRIPLE: linux-aarch64
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/prebuilt-glibc-${TRIPLE}"
+          mkdir -p "${log}"
+          if python3 scripts/check_prebuilt_glibc.py "${STAGE_DIR}" --baseline-root "${BASELINE_DIR}" > "${log}/stdout.jsonl" 2> "${log}/stderr.txt"; then
+            checker_rc=0
+          else checker_rc=$?; fi
+          printf '%s\n' "${checker_rc}" > "${log}/exitcode.txt"
+          cat "${log}/stdout.jsonl"
+          cat "${log}/stderr.txt" >&2
+          exit "${checker_rc}"
+
+      - name: Bundle docs into tarball root
+        run: |
+          set -euo pipefail
+          cp LICENSE NOTICE VERSION "${STAGE_DIR}/"
+
+      - name: Pack tarball + sha256
+        id: pack
+        env:
+          TAG:    ${{ needs.release.outputs.tag }}
+          TRIPLE: linux-aarch64
+        run: |
+          set -euo pipefail
+          base="pineforge-${TAG}-${TRIPLE}"
+          tarball="${base}.tar.gz"
+          tar -czf "${tarball}" -C "$(dirname "${STAGE_DIR}")" "${base}"
+          sha256sum "${tarball}" > "${tarball}.sha256"
+          digest=$(sha256sum "${tarball}")
+          digest=${digest%% *}
+          [[ "${digest}" =~ ^[0-9a-f]{64}$ ]]
+          {
+            echo "digest=${digest}"
+            echo "tarball=${tarball}"
+            echo "sha256=${tarball}.sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Keep the verified tarball as a workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: prebuilt-linux-aarch64
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.sha256 }}
+          if-no-files-found: error
+          retention-days: 7
+
+  upload:
+    needs: [release, prebuilt-x86, prebuilt-arm]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download x86_64 tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: prebuilt-linux-x86_64
+          path: artifacts/x86
+
+      - name: Download ARM tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: prebuilt-linux-aarch64
+          path: artifacts/arm
+
+      - name: Verify both tarballs against build outputs
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          X86_TARBALL: ${{ needs.prebuilt-x86.outputs.tarball }}
+          X86_SHA256: ${{ needs.prebuilt-x86.outputs.sha256 }}
+          ARM_TARBALL: ${{ needs.prebuilt-arm.outputs.tarball }}
+          ARM_SHA256: ${{ needs.prebuilt-arm.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]
+          [[ "${X86_TARBALL}" == "pineforge-${TAG}-linux-x86_64.tar.gz" ]]
+          [[ "${ARM_TARBALL}" == "pineforge-${TAG}-linux-aarch64.tar.gz" ]]
+          [[ "${X86_SHA256}" =~ ^[0-9a-f]{64}$ && "${ARM_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+          test -f "artifacts/x86/${X86_TARBALL}"
+          test ! -L "artifacts/x86/${X86_TARBALL}"
+          test -f "artifacts/arm/${ARM_TARBALL}"
+          test ! -L "artifacts/arm/${ARM_TARBALL}"
+          printf '%s  %s\n' "${X86_SHA256}" "artifacts/x86/${X86_TARBALL}" \
+            "${ARM_SHA256}" "artifacts/arm/${ARM_TARBALL}" | sha256sum --check --strict -
+          # Recreate sidecars from the independently verified build outputs.
+          printf '%s  %s\n' "${X86_SHA256}" "${X86_TARBALL}" > "artifacts/x86/${X86_TARBALL}.sha256"
+          printf '%s  %s\n' "${ARM_SHA256}" "${ARM_TARBALL}" > "artifacts/arm/${ARM_TARBALL}.sha256"
+
+      - name: Upload to release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
+          X86_TARBALL: ${{ needs.prebuilt-x86.outputs.tarball }}
+          ARM_TARBALL: ${{ needs.prebuilt-arm.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          gh release upload "${TAG}" \
+            "artifacts/x86/${X86_TARBALL}" "artifacts/x86/${X86_TARBALL}.sha256" \
+            "artifacts/arm/${ARM_TARBALL}" "artifacts/arm/${ARM_TARBALL}.sha256" --clobber
+
+
+  # Notify the pineforge-release hub AFTER the tarballs are uploaded — the hub
+  # builds FROM the engine static-lib tarball, so it must exist first. The hub
+  # bumps its ENGINE_VERSION pin, rebuilds the combined image, and fans out to
+  # the MCPs. FAIL LOUD (no continue-on-error): a dropped notify means downstream
+  # never rebuilds. Credential is the org GitHub App (no PAT).
+  notify-hub:
+    permissions:
+      contents: read
+    needs: [release, upload]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - name: Mint org App token (hub dispatch)
+        id: app
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        with:
+          app-id: ${{ secrets.PINEFORGE_APP_ID }}
+          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: pineforge-release
+
+      # client_payload = {version: vX.Y.Z[-rc.N], prerelease: true|false,
+      # run_id}. -F sends prerelease as a JSON boolean and run_id as a
+      # number. The hub never publishes a prerelease to its stable or
+      # `latest` channels and pairs the engine with codegen of the same
+      # version (lane REL10-HUB).
+      - name: Dispatch engine-release -> pineforge-release
+        env:
+          GH_TOKEN:   ${{ steps.app.outputs.token }}
+          ENGINE_TAG: ${{ needs.release.outputs.tag }}
+          PRERELEASE: ${{ needs.release.outputs.prerelease }}
+          RUN_ID:     ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh api repos/pineforge-4pass/pineforge-release/dispatches \
+            -f event_type=engine-release \
+            -F "client_payload[version]=${ENGINE_TAG}" \
+            -F "client_payload[prerelease]=${PRERELEASE}" \
+            -F "client_payload[run_id]=${RUN_ID}"
+          echo "dispatched engine-release -> pineforge-release (${ENGINE_TAG}, prerelease=${PRERELEASE})"
