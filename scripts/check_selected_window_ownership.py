@@ -31,6 +31,7 @@ PRODUCERS = {S, G, R, X}
 NATIVE_ORDER_DESCRIPTOR_PROVIDERS = {
     "ReadThroughCacheStats": "include/pineforge/detail/read_through_cache.hpp",
     "CacheCapacity": "include/pineforge/detail/cache_capacity.hpp",
+    "ScratchBounds": "include/pineforge/detail/scratch_tables.hpp",
 }
 # These three later D6 decisions are a closed part of the contract, so a
 # manifest cannot erase a KEEP or turn it back into a producer obligation.

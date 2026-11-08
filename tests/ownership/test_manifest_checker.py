@@ -597,6 +597,103 @@ class ManifestCheckerTests(unittest.TestCase):
         self.assertEqual(str(raised.exception),
                          "missing struct descriptor UnmappedDescriptor")
 
+    def scratch_bounds_descriptor(self):
+        rows = [row for row in self.doc["descriptors"]
+                if row["id"] == "native_order.ScratchBounds"]
+        self.assertEqual(len(rows), 1)
+        return rows[0]
+
+    def test_scratch_bounds_descriptor_matches_declared_input(self):
+        provider = "include/pineforge/detail/scratch_tables.hpp"
+        # Independent contract from the two data declarations, not discovery's
+        # output or the manifest. active/maximum/require_growth are methods.
+        fields = ["active_fields", "manifest"]
+        self.assertEqual(ownership.NATIVE_ORDER_DESCRIPTOR_PROVIDERS.get("ScratchBounds"),
+                         provider)
+        source = (ROOT / provider).read_text(encoding="utf-8")
+        self.assertEqual(ownership.Cpp(source, provider).fields("ScratchBounds"), fields)
+        row = self.scratch_bounds_descriptor()
+        self.assertEqual(row["file"], provider)
+        self.assertEqual(row["anchor"], "ScratchBounds")
+        self.assertEqual(row["fields"], fields)
+        self.assertEqual(row["owner"], "caller")
+        self.assertTrue(row["policy"])
+
+    def test_scratch_bounds_missing_manifest_descriptor_is_rejected(self):
+        self.doc["descriptors"].remove(self.scratch_bounds_descriptor())
+        self.reject("descriptor-set", "missing native_order.ScratchBounds")
+
+    def test_scratch_bounds_manifest_provider_and_anchor_must_match(self):
+        row = self.scratch_bounds_descriptor()
+        original = row.copy()
+        for key, value in (("file", "include/pineforge/native_order.hpp"),
+                           ("anchor", "ScratchManifest")):
+            with self.subTest(member=key):
+                row.update(original)
+                row[key] = value
+                self.reject("descriptor-anchor",
+                            f"native_order.ScratchBounds: {key} differs from code")
+
+    def test_scratch_bounds_manifest_fields_are_exact(self):
+        row = self.scratch_bounds_descriptor()
+        for fields in (["manifest"], ["active_fields"],
+                       ["active_fields", "manifest", "unexpected"],
+                       ["active_fields", "limits"], ["manifest", "active_fields"]):
+            with self.subTest(fields=fields):
+                row["fields"] = fields
+                self.reject("descriptor-fields",
+                            "native_order.ScratchBounds: declaration fields differ from manifest")
+
+    def test_scratch_bounds_missing_provider_file_is_rejected(self):
+        self.copy_tree()
+        path = self.root / "include/pineforge/detail/scratch_tables.hpp"
+        path.rename(path.with_suffix(".hpp.missing"))
+        self.reject("input", "'include/pineforge/detail/scratch_tables.hpp'", copied_tree=True)
+
+    def test_scratch_bounds_missing_provider_definition_is_rejected(self):
+        self.copy_tree()
+        path = self.root / "include/pineforge/detail/scratch_tables.hpp"
+        source = path.read_text(encoding="utf-8")
+        declaration = "struct ScratchBounds {"
+        self.assertEqual(source.count(declaration), 1)
+        path.write_text(source.replace(declaration, "struct RenamedScratchBounds {", 1),
+                        encoding="utf-8")
+        self.reject("input", "missing struct descriptor ScratchBounds", copied_tree=True)
+
+    def test_scratch_bounds_unrecognized_provider_member_is_rejected(self):
+        self.copy_tree()
+        path = self.root / "include/pineforge/detail/scratch_tables.hpp"
+        source = path.read_text(encoding="utf-8")
+        declaration = "struct ScratchBounds {\n"
+        self.assertEqual(source.count(declaration), 1)
+        path.write_text(source.replace(
+            declaration, declaration + "    std::uint64_t unexpected[2];\n", 1),
+            encoding="utf-8")
+        self.reject("input",
+                    "unrecognized member of ScratchBounds: std :: uint64_t unexpected [ 2 ]",
+                    copied_tree=True)
+
+    def test_scratch_bounds_source_field_changes_require_manifest_update(self):
+        self.copy_tree()
+        path = self.root / "include/pineforge/detail/scratch_tables.hpp"
+        source = path.read_text(encoding="utf-8")
+        declaration = ("struct ScratchBounds {\n"
+                       "    std::uint64_t active_fields = 0;\n"
+                       "    ScratchManifest manifest{};\n")
+        self.assertEqual(source.count(declaration), 1)
+        mutations = (
+            ("extra", declaration + "    std::uint64_t unexpected = 0;\n"),
+            ("missing-active-fields", declaration.replace(
+                "    std::uint64_t active_fields = 0;\n", "")),
+            ("missing-manifest", declaration.replace("    ScratchManifest manifest{};\n", "")),
+        )
+        for name, changed in mutations:
+            with self.subTest(mutation=name):
+                path.write_text(source.replace(declaration, changed, 1), encoding="utf-8")
+                self.reject("descriptor-fields",
+                            "native_order.ScratchBounds: declaration fields differ from manifest",
+                            copied_tree=True)
+
     def test_d4_independent_reconstruction_matches_manifest(self):
         self.assertEqual(manifest_schema(self.doc), emitted_schema(ROOT))
 
