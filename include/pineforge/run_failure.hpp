@@ -82,7 +82,8 @@
 //                  polyline | table | udt_object
 //   pine_limit_stop(const char* limit, std::int64_t max, const char* english)
 //       -> pine_runtime_limit {limit, max}
-//          limit: map_pairs | max_bars_back | matrix_elements | udt_objects;
+//          limit: map_pairs | max_bars_back | matrix_elements | udt_objects |
+//                 drawing_ids | live_drawings;
 //          max is the limit's engine or transpiler constant (pass -1 for none)
 //   pine_unsupported_stop(const char* reason, std::int32_t line,
 //                         const char* english)

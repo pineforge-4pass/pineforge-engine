@@ -2380,6 +2380,10 @@ class ProfileOptions(unittest.TestCase):
         self.assertEqual(values['PINEFORGE_ENABLE_SANITIZERS'], 'ON')
         self.assertEqual(values['PINEFORGE_BUILD_LIVE_RUNNER'], 'OFF')
         self.assertEqual(values['PINEFORGE_BUILD_TUTORIAL'], 'ON')
+        self.assertEqual(values['CMAKE_C_FLAGS_DEBUG'], '-g1')
+        self.assertEqual(values['CMAKE_CXX_FLAGS_DEBUG'], '-g1')
+        self.assertIn('-DCMAKE_C_FLAGS_DEBUG=-g1', argv)
+        self.assertIn('-DCMAKE_CXX_FLAGS_DEBUG=-g1', argv)
         self.assertIn('-DPINEFORGE_ENABLE_SANITIZERS=ON', argv)
 
     def test_live_sanitizers_enable_runner_and_gate_websockets_without_opt_in(self):
@@ -2387,6 +2391,8 @@ class ProfileOptions(unittest.TestCase):
         self.assertEqual(values['CMAKE_BUILD_TYPE'], 'Debug')
         self.assertEqual(values['PINEFORGE_BUILD_LIVE_RUNNER'], 'ON')
         self.assertEqual(values['PINEFORGE_ENABLE_SANITIZERS'], 'ON')
+        self.assertEqual(values['CMAKE_C_FLAGS_DEBUG'], '-g1')
+        self.assertEqual(values['CMAKE_CXX_FLAGS_DEBUG'], '-g1')
         self.assertEqual(values['PINEFORGE_BUILD_SOURCE_LAYER'], 'ON')
         self.assertEqual(values['PINEFORGE_BUILD_TUTORIAL'], 'OFF')
         cfg = validate_config(parse_args(['live-sanitizers'], source=ROOT))
@@ -4484,7 +4490,9 @@ class PrivateFixtureFloors(unittest.TestCase):
             {name for name in ci_verify.PINNED_SLOW_TEST_ROWS
              if name.startswith('test_native_command_after')},
             {f'test_native_command_after_slice_{index}' for index in range(1, 9)})
-        self.assertEqual(len(ci_verify.PINNED_SLOW_TEST_ROWS), 89)
+        # expectation corrected: 89 -> 90, because test_cr559_map_capacity_cli
+        # joins the explicit slow-label policy.
+        self.assertEqual(len(ci_verify.PINNED_SLOW_TEST_ROWS), 90)
         self.assertEqual(LIVE_SANITIZERS_MIN_TESTS, 21)
         for name, (full, pinned) in ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS.items():
             with self.subTest(profile=name):

@@ -509,6 +509,86 @@ The engine implementers and the hosting layer **MUST** retain the following froz
 - Preserve legacy successful stdout JSON and failed-publication no-second-document behaviour. The explicit supervised/v1 differences are protected stdio/process inheritance, finite admission, the terminal channel, delayed sink publication, refusal of excluded utility/external-progress protocols, and zero JSON on a failed attempt when R has no room for a replacement. Legacy callers that do not negotiate retain their old protocol; hosted conformance requires negotiation.
 - Publish paired process/fd E2E evidence and deployment identity. Source review, a Python writer unit test, or the presence of this design document alone does not establish the isolation or resource guarantees.
 
+## Optional trade text companion
+
+The finished-report text companion is an independent JSONL channel with
+schema `pf-trade-text`, version 1. It is off by default. The live runner
+enables it with `run --trade-text PATH`; PATH must be new and must not overlap
+an input or ledger artifact. The option does not change the primary report,
+stdout, sink-v1, legacy structs or continuation state. A successful run with
+the option absent performs no companion reads or writes.
+
+The header is one compact JSON object followed by LF, with keys in this order:
+
+```json
+{"schema":"pf-trade-text","version":1,"run_id":"run","fields":["run_id","row_index","entry_incarnation","entry_id","exit_id","entry_comment","exit_comment"]}
+```
+
+Each report trade row emits one compact JSON array followed by LF:
+
+```json
+["T","run",0,7,"L","close","opened","digits 3678.7059999999997"]
+```
+
+The tag precedes the fields listed in the header. `row_index` is the zero-based
+index in the frozen report's existing row order, including any range-end
+suffix. `entry_incarnation` is the stored unsigned entry identity; the two
+string IDs provide the strategy's trade labels, even when a label is reused.
+Both indices and incarnations are unsigned decimal integers. All four text
+fields are present, including empty strings. Numeric-looking text is always
+a string and is never parsed, rounded or reformatted.
+
+The caller supplies the run ID. The runner uses the report's deployment ID,
+a colon, and its final decimal `inputs_committed` cursor. Consumers join
+against that deployment/cursor's report and the row index, checking the
+incarnation and IDs as well. The channel describes that finished invocation's
+report generation; it does not combine generations or emit per-input deltas.
+Storage-budget stops and failed intake/delivery do not emit a successful
+companion.
+
+The closing line has keys in this order:
+
+```text
+{"trailer":"pf-trade-text","version":1,"counts":{"T":1},"sha256":"<64 lowercase hex digits>"}
+```
+
+The count is the number of trade records, including zero for an empty report.
+SHA-256 covers every byte before the trailer, including the header and each
+record's LF; the trailer excludes itself. Consumers require a complete
+trailer, matching count and digest, and successful producer completion.
+Read/write/close errors fail the opt-in operation; an incomplete file is not
+a successful report.
+
+Strings use the existing sink encoder: quote and backslash are escaped;
+U+0000 through U+001F become lowercase `\u00xx`; other valid UTF-8 bytes
+remain unchanged. Each byte that does not start a valid UTF-8 sequence emits
+U+FFFD and advances one byte, including stray continuation bytes, overlong
+encodings, surrogate encodings and incomplete trailing sequences. This is
+the same replacement rule as sink-v1. Therefore decoded valid UTF-8 text is
+byte-exact; invalid stored bytes are exposed exactly by the provider but
+undergo this documented replacement on the JSON wire. Transfer boundaries
+never create extra replacements.
+
+`LedgerTradeSourceV1` is a separate adapter over `TradeLedger`, leaving the
+installed ledger's layout unchanged. It implements `TradeSourceV1` paging,
+visits and all four text selectors. `text_size` counts stored bytes;
+`read_text` copies at most the requested capacity from the byte offset, with
+no normalization or appended NUL. Repeated reads recover the entire field.
+An invalid row or offset throws `std::out_of_range`; an unknown field or a
+null buffer with positive capacity throws `std::invalid_argument`.
+`EngineReportTradeSourceV1` uses the existing public report row accessors to
+include the range-end suffix. Both adapters borrow a generation: their owners
+must remain alive and unmodified. Existing retired-history refusals propagate.
+The adapters reuse owning getters and may temporarily allocate a whole field
+or row; bounded caller transfers do not establish a bounded allocation claim.
+
+There is no field, record, line or aggregate size cap on this channel.
+The writer takes an explicit positive read capacity without a default; it is
+a transfer quantum, never an admission limit or truncation threshold. The
+runner passes 4096 bytes. Text can span arbitrarily many reads, and the
+writer carries incomplete UTF-8 sequences between them. The primary sink's
+existing limits and bytes remain frozen.
+
 ## Refusals and authoring verification
 
 No hook/guard refusal occurred during authoring. The supplied audits and pinned engine sources were read; no build, test, strategy, compiler, deployment, network or repository mutation was run. The acceptance tests above remain implementation/release obligations, not claimed results.

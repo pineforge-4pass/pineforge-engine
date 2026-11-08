@@ -2167,6 +2167,10 @@ private:
         std::string oca_name;
         double profit_ticks = std::numeric_limits<double>::quiet_NaN();
         double loss_ticks = std::numeric_limits<double>::quiet_NaN();
+        // An exit without from_entry called while no position was held and no
+        // entry order was working, which TradingView voids
+        // (PlacementSnapshot::void_global_issue): no entry's fill arms it.
+        bool void_global = false;
     };
 
     // One relative leg of a queued strategy.exit, spelled as the

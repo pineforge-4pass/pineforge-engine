@@ -109,6 +109,7 @@ set(TEST_SOURCES
     test_adapter_range_end_relower
     test_native_margin_kernel_r5
     test_adapter_brackets_relower
+    test_exit_without_from_entry_same_execution
     test_adapter_grid_relower
     test_adapter_htf_relower
     test_native_queued_reverse_to
@@ -423,6 +424,7 @@ set(TEST_SOURCES
     test_pointvalue
     test_metrics
     test_drawing
+    test_drawing_bound_checkpoint_cost
     test_drawing_bound_status
     test_drawing_bounded_builtins
     test_drawing_bounded_creation_failure
@@ -7589,6 +7591,7 @@ set(PINEFORGE_PR_FAST_TESTS
     test_native_run_spec
     test_native_bare_host_contracts
     test_native_kernel_edge
+    test_abi_layout_probe
 )
 
 # CR-150 P00: append after the pre-existing line-pinned registrations.
@@ -8425,6 +8428,20 @@ if(UNIX)
             target_link_options(test_cr559_map_capacity_run PRIVATE "-Wl,-export_dynamic")
         else()
             target_link_options(test_cr559_map_capacity_run PRIVATE "-Wl,--export-dynamic")
+        endif()
+        if(NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+            # The genuine generated.cpp fixture is committed; a missing file
+            # is a configure error.
+            add_library(cr559_cli_pair SHARED
+                fixtures/cr559_cli_pair/generated.cpp)
+            target_link_libraries(cr559_cli_pair PRIVATE pineforge)
+            if(APPLE)
+                target_link_options(cr559_cli_pair PRIVATE
+                    "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+            else()
+                target_link_options(cr559_cli_pair PRIVATE
+                    "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+            endif()
         endif()
     endif()
 endif()

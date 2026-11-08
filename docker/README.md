@@ -331,6 +331,20 @@ memory-limit cause from diagnostics, allocation errors or child signals.
 The compiler flags, including `-ffp-contract=off` and whole-archive linking,
 are unchanged.
 
+A compile that stops because of a limit outside these three settings, such as
+a file-size, open-file or process-count limit that the host applies, is not
+typed either. The entrypoint decodes only the wait status of the compiler
+driver it started, and any nonzero status that is not one of the typed stops
+above is an ordinary compile failure, exit 3. Measured with the compiler of
+the 1.10.0 image (g++ 14.2.0, Debian 13, arm64), the driver ended with exit 4
+for a file-size limit (its own internal-error status: it reports the death of
+its helper itself) and with exit 1 for an open-file, process-count or
+address-space limit, the same status as a syntax error. None of them reached
+the entrypoint as a signal. The status therefore names no cause, and the
+entrypoint does not read the compiler's text for one. Telling such a stop
+apart needs evidence from whoever enforces the limit, not the compiler's
+status or output.
+
 These controls are engine guards. They do not establish namespaces, cgroups,
 RSS or aggregate memory quotas, cumulative tree CPU limits, temporary-storage
 quotas, task quotas, or signed installation evidence. The host supplies those
@@ -1094,7 +1108,7 @@ directly (for example `base64 -d | shasum -a 256`).
 | ---: | ------- |
 |  `0` | Success — JSON report, C++ in transpile-only mode, or empty stdout after a build-only run |
 |  `2` | Missing input mount (`/in/strategy.pine` or `/in/strategy.cpp`, and `/in/ohlcv.csv`), or a mounted `strategy.cpp` the host did not vouch for (one typed `run_request_invalid` line on stdout) |
-|  `3` | `g++` compile or selected inventory binding failed |
+|  `3` | `g++` compile or selected inventory binding failed, including a stop by a limit the host applied (no cause is inferred) |
 |  `4` | Backtest aborted at runtime, a compile guard refused its settings or stopped compilation, or a build-only request or manifest failed |
 |  `5` | Transpile failed (unsupported Pine construct or syntax error) |
 

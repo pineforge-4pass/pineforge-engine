@@ -1017,8 +1017,11 @@ PINNED_SLOW_TEST_ROWS = frozenset((
     'test_p2_a5_string_1m',
     'test_p2_a5_map_1m',
     'test_p2_a5_map_prepared_1m',
-    # tests/cr150.d/cr559-map-capacity.cmake:23.
+    # tests/cr150.d/cr559-map-capacity.cmake:30.
     'test_cr559_map_capacity_resident',
+    # tests/cr150.d/cr559-map-capacity.cmake:25 (its library target is in the
+    # tests/CMakeLists.txt fence); measured 5615.44 s in the ended pair proof.
+    'test_cr559_map_capacity_cli',
     # tests/cr150.d/p2cx-a5arr.cmake:5.
     'test_array_growth_1m',
     # tests/cr150.d/report-trade-retirement.cmake and report-trade-reference.cmake:
@@ -1654,6 +1657,13 @@ def kernel_residuals_command(cfg: VerifyConfig) -> list[str]:
             '--min-ruled-texts', str(ADR_RULED_TEXTS_MIN)]
 
 
+# Hosted sanitizer runners have 145G on / and /mnt is the same filesystem.
+# The terminal main run reached 5MB free while compiling the unchanged full
+# shard population with ordinary Debug DWARF. Keep every sanitizer flag,
+# source/test population, and shard selection unchanged while using compact
+# line tables for sanitizer Debug objects; this reduces object/debug footprint
+# without changing generated machine code or runtime instrumentation.
+SANITIZER_DEBUG_INFO_FLAGS = '-g1'
 def cmake_cache_definitions(cfg: VerifyConfig) -> dict[str, str]:
     profile = cfg.profile
     values = {
@@ -1678,6 +1688,9 @@ def cmake_cache_definitions(cfg: VerifyConfig) -> dict[str, str]:
     }
     if profile.live_runner:
         values['PINEFORGE_LIVE_TSAN'] = 'ON' if profile.thread_sanitizers else 'OFF'
+    if profile.name in {'sanitizers', 'live-sanitizers'}:
+        values['CMAKE_C_FLAGS_DEBUG'] = SANITIZER_DEBUG_INFO_FLAGS
+        values['CMAKE_CXX_FLAGS_DEBUG'] = SANITIZER_DEBUG_INFO_FLAGS
     if cfg.curl_dir is not None:
         values['CURL_DIR'] = str(cfg.curl_dir)
     if cfg.ccache_path:

@@ -83,6 +83,8 @@ public:
             && std::isnan(opening_obligations_.raw_fill_base());
     }
 
+    // expectation corrected: +slice -> -slice, because every checked margin
+    // slice here closes a short; the original quantity and price oracles stay.
     std::vector<double> margin_quantities() const {
         std::vector<double> out;
         for (int index = 0; index < trade_count(); ++index) {
@@ -172,9 +174,9 @@ void test_direct_reversal_runs_opening_check_and_one_adverse_retry() {
     CHECK(qty.size() == 2U);
     CHECK(price.size() == 2U);
     if (qty.size() == 2U && price.size() == 2U) {
-        CHECK_NEAR(qty[0], 0.0376, 1e-9);
+        CHECK_NEAR(qty[0], -0.0376, 1e-9);
         CHECK_NEAR(price[0], 3145.01, 1e-9);
-        CHECK_NEAR(qty[1], 0.6204, 1e-9);
+        CHECK_NEAR(qty[1], -0.6204, 1e-9);
         CHECK_NEAR(price[1], 3154.20, 1e-9);
     }
     CHECK_NEAR(probe.position_size(), -30.8219, 1e-9);
@@ -228,9 +230,9 @@ void test_direct_reversal_floor_zero_full_residual_yields_to_slice() {
     CHECK(one_contract_price.size() == 2U);
     if (one_contract_qty.size() == 2U
         && one_contract_price.size() == 2U) {
-        CHECK_NEAR(one_contract_qty[0], 0.0392, 1e-9);
+        CHECK_NEAR(one_contract_qty[0], -0.0392, 1e-9);
         CHECK_NEAR(one_contract_price[0], 4514.70, 1e-9);
-        CHECK_NEAR(one_contract_qty[1], 1.0, 1e-9);
+        CHECK_NEAR(one_contract_qty[1], -1.0, 1e-9);
         CHECK_NEAR(one_contract_price[1], 4539.00, 1e-9);
     }
     CHECK_NEAR(one_contract.position_size(), -1.7346, 1e-9);
@@ -251,9 +253,9 @@ void test_direct_reversal_floor_zero_full_residual_yields_to_slice() {
     CHECK(full_residual_price.size() == 2U);
     if (full_residual_qty.size() == 2U
         && full_residual_price.size() == 2U) {
-        CHECK_NEAR(full_residual_qty[0], 0.0392, 1e-9);
+        CHECK_NEAR(full_residual_qty[0], -0.0392, 1e-9);
         CHECK_NEAR(full_residual_price[0], 4514.70, 1e-9);
-        CHECK_NEAR(full_residual_qty[1], 1.0, 1e-9);
+        CHECK_NEAR(full_residual_qty[1], -1.0, 1e-9);
         CHECK_NEAR(full_residual_price[1], 4539.00, 1e-9);
     }
     CHECK_NEAR(full_residual.position_size(), -1.7346, 1e-9);
@@ -308,7 +310,7 @@ void test_true_flat_floor_zero_control_slices_one_contract() {
     const std::vector<double> qty = probe.margin_quantities();
     CHECK(qty.size() == 1U);
     if (qty.size() == 1U) {
-        CHECK_NEAR(qty[0], 1.0, 1e-9);
+        CHECK_NEAR(qty[0], -1.0, 1e-9);
     }
     CHECK_NEAR(probe.position_size(), -2.6930, 1e-9);
     CHECK(probe.has_live_short_position());
