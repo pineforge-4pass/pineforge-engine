@@ -36,6 +36,10 @@ version number follows semantic versioning over the surfaces the
   sooner (that total timeout covers connecting). A positive value sets the
   connect bound in seconds. Files and stdin ignore a well-formed value;
   malformed values are refused for every feed kind.
+- `pineforge-live run --trade-text PATH` optionally writes a separate finished
+  report companion with all four trade text fields, run and row identity,
+  and a count/SHA-256 trailer. It is off by default and has no text size cap;
+  primary report and sink bytes remain unchanged.
 - **Default change, user-visible:** `pineforge-live run --feed -` (the stdin
   feed) no longer ends a run by itself after 15 seconds without data or 15
   seconds to complete a line. With neither flag given, `--feed-idle-timeout`
