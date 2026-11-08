@@ -3371,13 +3371,16 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         # hub; a rehearsal must never reach it (owner, the 1.6.2 dry cut: the
         # hub's receivers are disabled, so a real dispatch would be lost).
         notify = _jobs(workflows['release.yml']).get('notify-hub', '')
-        split_mode = (_release_split_mode(workflows['release.yml'])
-                      if _release_split_requested(_jobs(workflows['release.yml'])) else None)
+        # The whole declaration selects diagnostics, never a mode or exception.
+        phase_dispatch = (_job_block(workflows['release.yml'], 'on')
+                          == _code(RELEASE_SPLIT_PHASE_DISPATCH))
         notify_if = ("${{ inputs.phase == 'tag' && !inputs.dry_run }}"
-                     if split_mode == 'phase' else '${{ !inputs.dry_run }}')
+                     if phase_dispatch else '${{ !inputs.dry_run }}')
+        notify_tail = ('so phase 1 and dry runs dispatch nothing' if phase_dispatch
+                       else 'so a dry run dispatches nothing')
         if _job_values(notify, 'if') != [notify_if]:
             findings.append('release.yml job notify-hub must carry '
-                            f'if: {notify_if} so a dry run dispatches nothing')
+                            f'if: {notify_if} {notify_tail}')
         # The guard reads a dispatch input: a workflow that dropped or
         # retyped that declaration would not be the one this contract pins.
         dispatch = workflows['release.yml'].split('\n  workflow_dispatch:\n', 1)
