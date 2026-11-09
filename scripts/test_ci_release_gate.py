@@ -3722,6 +3722,12 @@ class WorkflowPinTests(unittest.TestCase):
         return hosted_matrix_release_workflow(
             (ROOT / ".github/workflows/release.yml").read_text())
 
+    def split_workflow(self):
+        # The validator admits the two-phase release job only with the split
+        # hosted jobs, so the release-success and tag-phase pins read the
+        # shipped workflow, not the matrix rebuild above.
+        return (ROOT / ".github/workflows/release.yml").read_text()
+
     def test_bookworm_image_is_bound_only_to_the_repository_variable(self):
         workflow = self.workflow()
         body = _jobs(workflow)["prebuilt"]
@@ -4033,8 +4039,15 @@ class WorkflowPinTests(unittest.TestCase):
 
     def assert_release_success_pin(self, workflow):
         jobs = _jobs(workflow)
-        self.assertRegex(jobs["prebuilt"], r"(?m)^    needs: release$")
-        for job in ("release", "prebuilt"):
+        builds = ("prebuilt-x86", "prebuilt-arm")
+        for job in builds:
+            self.assertRegex(jobs[job], r"(?m)^    needs: release$", "job " + job)
+        self.assertRegex(jobs["upload"],
+                         r"(?m)^    needs: \[release, prebuilt-x86, prebuilt-arm\]$",
+                         "job upload")
+        # release_bump_workflow_findings also compares every split job header,
+        # so the build and upload jobs are scanned first and name their own bypass.
+        for job in builds + ("upload", "release"):
             stripped = _without_comments(jobs[job])
             if job == "release":
                 self.assertEqual(release_bump_workflow_findings(workflow), [])
@@ -4042,9 +4055,9 @@ class WorkflowPinTests(unittest.TestCase):
                             if step.splitlines()[0] == "      - name: Keep release gate receipt"]
                 self.assertEqual(len(receipts), 1)
                 stripped = stripped.replace(_without_comments(receipts[0]), "", 1)
-            self.assertNotRegex(stripped, r"\balways\s*\(")
-            self.assertNotRegex(stripped, r"!\s*cancelled\s*\(")
-            self.assertNotRegex(stripped, r"(?m)^\s*continue-on-error\s*:")
+            self.assertNotRegex(stripped, r"\balways\s*\(", "job " + job)
+            self.assertNotRegex(stripped, r"!\s*cancelled\s*\(", "job " + job)
+            self.assertNotRegex(stripped, r"(?m)^\s*continue-on-error\s*:", "job " + job)
 
     def test_ci_release_gate_is_unconditional_and_precedes_every_release_write(self):
         self.assert_gate_pin(self.workflow())
@@ -4316,13 +4329,23 @@ class WorkflowPinTests(unittest.TestCase):
                       script)
 
     def test_two_release_phases_stop_before_publication_until_tag_phase(self):
-        workflow = self.workflow()
+        workflow = self.split_workflow()
         self.assertIn("      phase:\n", workflow)
         self.assertIn("        default: bump\n", workflow)
         self.assertIn('            --phase "${PHASE}" --dispatch-sha "${DISPATCH_SHA}"',
                       self.gate_block(workflow))
         jobs = _jobs(workflow)
-        self.assertRegex(jobs["prebuilt"], r"(?m)^    if: \$\{\{ inputs.phase == 'tag' \}\}$")
+        self.assertEqual(sorted(jobs),
+                         ["notify-hub", "prebuilt-arm", "prebuilt-x86", "release", "upload"])
+        tag = "inputs.phase == 'tag'"
+        caller = ("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"
+                  " && github.workflow_ref == format('pineforge-4pass/pineforge-engine/.github/"
+                  "workflows/release.yml@{0}', github.ref) && ")
+        for job, condition in (("prebuilt-x86", caller + tag), ("prebuilt-arm", tag),
+                               ("upload", tag)):
+            self.assertRegex(jobs[job],
+                             r"(?m)^    if: " + re.escape("${{ " + condition + " }}") + "$",
+                             job + " must run only in the tag phase")
         self.assertRegex(jobs["notify-hub"],
                          r"(?m)^    if: \$\{\{ inputs.phase == 'tag' && !inputs.dry_run \}\}$")
         steps = _steps(jobs["release"])
@@ -4339,12 +4362,16 @@ class WorkflowPinTests(unittest.TestCase):
         self.assertNotIn("git commit --amend", writer)
 
     def test_prebuilt_requires_release_success_without_failure_bypasses(self):
-        self.assert_release_success_pin(self.workflow())
+        self.assert_release_success_pin(self.split_workflow())
 
     def test_prebuilt_failure_bypass_mutations_are_refused(self):
-        workflow = self.workflow()
-        self.assertIn("no continue-on-error", _jobs(workflow)["prebuilt"])
-        anchor = "  prebuilt:\n    needs: release\n"
+        workflow = self.split_workflow()
+        # The shipped "no continue-on-error" prose sits above notify-hub. Each
+        # build job and upload must still pass with it: the pin reads keys, not words.
+        prose = [line for line in workflow.splitlines(keepends=True)
+                 if "no continue-on-error" in line]
+        self.assertEqual(len(prose), 1, "the shipped prose must have one source line")
+        self.assertTrue(prose[0].lstrip().startswith("#"))
         for bypass, message in (
             ("    continue-on-error: true\n",
              r"^Regex matched: '    continue-on-error:'"),
@@ -4352,11 +4379,17 @@ class WorkflowPinTests(unittest.TestCase):
         ):
             with self.subTest(bypass=bypass):
                 self.assert_release_success_pin(workflow)
-                changed = workflow.replace(anchor, anchor + bypass, 1)
-                self.assertNotEqual(changed, workflow, "the mutation must change the input")
-                self.assertIn(bypass, _jobs(changed)["prebuilt"])
-                with self.assertRaisesRegex(AssertionError, message):
-                    self.assert_release_success_pin(changed)
+                for job, needs in (("prebuilt-x86", "release"), ("prebuilt-arm", "release"),
+                                   ("upload", "[release, prebuilt-x86, prebuilt-arm]")):
+                    anchor = "  " + job + ":\n    needs: " + needs + "\n"
+                    documented = workflow.replace(anchor, anchor + prose[0], 1)
+                    self.assertIn("no continue-on-error", _jobs(documented)[job])
+                    self.assert_release_success_pin(documented)
+                    changed = documented.replace(anchor, anchor + bypass, 1)
+                    self.assertNotEqual(changed, documented, "the mutation must change the input")
+                    self.assertIn(bypass, _jobs(changed)[job])
+                    with self.assertRaisesRegex(AssertionError, message):
+                        self.assert_release_success_pin(changed)
 
     def test_pin_fails_when_gate_is_deleted(self):
         workflow = self.workflow()
