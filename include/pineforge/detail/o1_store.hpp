@@ -8,7 +8,7 @@
 //
 // STORE GUARANTEES:
 //  - A write or resize never fails because the resident window is full; it spills.
-//    Creation is bounded by Shape::max_live_objects, independent of lifetime ids.
+//    Creation obeys a nonzero Shape::max_live_objects, independent of lifetime ids.
 //  - Resident workspace plus kStoreReadCacheBytes is fixed at open,
 //    independent of bars B and of objects created.
 //  - Ids are stable and never recycled while reachable; a released id is dead, and
@@ -39,6 +39,7 @@
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <type_traits>
 
 #include <pineforge/detail/scratch_backing.hpp>
 
@@ -56,10 +57,6 @@ inline constexpr Id kNullId = UINT64_C(0);
 // bound the supported chunk size and resident page count, respectively.
 inline constexpr std::uint32_t kMaxChunkBytes = 64u * 1024u;
 inline constexpr std::uint32_t kMaxResidentPages = 1024u;
-// Live-object default and cap: 1,048,576. Zero selects the default; larger
-// values clamp to the cap, and smaller explicit values are kept.
-inline constexpr std::uint64_t kMaxLiveObjectsCap = UINT64_C(1024) * 1024;
-
 // Caller budget: outer script scope + joined collection + graph operation +
 // one headroom slot. Child container operations join without another handle,
 // independent of container depth. Finished handles occupy slots until destroyed;
@@ -91,6 +88,53 @@ class RollbackOnly : public std::logic_error {
 
 enum class CleanupSkip { rollback_only, failed };
 
+// Internal native-embedder policy, with exact-type validation before conversion.
+// Integers wider than uint64_t are excluded, as are bool and nonintegral types.
+// expectation corrected: default/cap 1,048,576 -> 0 unbounded, because the
+// live-object policy now honors every positive uint64_t without normalization.
+class LiveObjectLimit {
+ public:
+  constexpr LiveObjectLimit() noexcept = default;
+  constexpr LiveObjectLimit(const LiveObjectLimit&) noexcept = default;
+  constexpr LiveObjectLimit(LiveObjectLimit&&) noexcept = default;
+  constexpr LiveObjectLimit& operator=(const LiveObjectLimit&) noexcept = default;
+  constexpr LiveObjectLimit& operator=(LiveObjectLimit&&) noexcept = default;
+
+  template <typename Integer,
+            std::enable_if_t<std::is_integral<Integer>::value &&
+                             !std::is_same<Integer, bool>::value &&
+                             sizeof(Integer) <= sizeof(std::uint64_t), int> = 0>
+  constexpr LiveObjectLimit(Integer value) : value_(checked(value)) {}
+
+  template <typename Integer,
+            std::enable_if_t<std::is_integral<Integer>::value &&
+                             !std::is_same<Integer, bool>::value &&
+                             sizeof(Integer) <= sizeof(std::uint64_t), int> = 0>
+  constexpr LiveObjectLimit& operator=(Integer value) {
+    value_ = checked(value); // A rejected input never changes the stored value.
+    return *this;
+  }
+
+  constexpr operator std::uint64_t() const noexcept { return value_; }
+
+ private:
+  template <typename Integer>
+  static constexpr std::uint64_t checked(Integer value) {
+    if constexpr (std::is_signed<Integer>::value) {
+      if (value < 0)
+        throw std::invalid_argument(
+            "o1 store: max_live_objects negative input refused");
+    }
+    return static_cast<std::uint64_t>(value);
+  }
+
+  std::uint64_t value_ = 0;
+};
+
+// Read conversion supports integer reads, comparison and arithmetic. Template
+// min/max with uint64_t needs a cast; uint64_t references cannot bind; auto
+// deduces LiveObjectLimit; C variadic arguments require an explicit uint64_t cast.
+// This internal contract makes no source-compatibility claim outside this tree.
 struct Shape {
   std::uint32_t page_bytes = 4096;   // ScratchStore page size; must equal the backing's
   std::uint32_t resident_pages = 64; // ScratchStore resident cache pages; fixed at open
@@ -102,12 +146,26 @@ struct Shape {
   // Otherwise passed through; ScratchStore's workspace sizing never reads them.
   std::uint32_t journal_slots = 8;
   std::uint32_t index_slots = 8;
-  // EXT: maximum live objects in the current transaction. Zero selects the
-  // default (kMaxLiveObjectsCap); larger values clamp to the cap at open,
-  // and smaller explicit values are kept.
-  std::uint64_t max_live_objects = kMaxLiveObjectsCap;
+  // EXT: maximum live objects in the current transaction; 0 is unbounded.
+  // Positive limits are exact, including UINT64_MAX. Native embedders/tests
+  // set this field; there is no CLI, environment or JSON ingress.
+  LiveObjectLimit max_live_objects{};
 };
 
+static_assert(sizeof(LiveObjectLimit) == sizeof(std::uint64_t));
+static_assert(alignof(LiveObjectLimit) == alignof(std::uint64_t));
+static_assert(std::is_standard_layout<LiveObjectLimit>::value);
+static_assert(std::is_trivially_copyable<LiveObjectLimit>::value);
+static_assert(sizeof(Shape) == 32);
+static_assert(alignof(Shape) == 8);
+static_assert(offsetof(Shape, max_live_objects) == 24);
+static_assert(std::is_standard_layout<Shape>::value);
+static_assert(std::is_trivially_copyable<Shape>::value);
+
+// Shape crosses the plugin/library boundary by const reference. Its layout is
+// unchanged: no native layout stamp change. An old plugin's explicit 1,048,576
+// remains finite on a new engine; a new plugin's 0 selects the old default on an
+// old engine. The unbounded script default requires recompiling with new headers.
 struct Stats {
   std::uint64_t bytes_live = 0;     // logical bytes held by live ids
   std::uint64_t bytes_resident = 0; // fixed ScratchStore workspace + Store read cache
@@ -119,7 +177,7 @@ struct Stats {
   std::uint64_t cleanup_skipped_rollback_only = 0;
   std::uint64_t cleanup_failed = 0;
   std::uint64_t objects_live = 0;     // live ids as seen by the current transaction
-  std::uint64_t max_live_objects = 0; // normalized Shape limit, fixed at open
+  std::uint64_t max_live_objects = 0; // exact Shape policy; 0 unbounded, fixed at open
 };
 
 // Transactional root for calc-on-fill rollback. All mutations between begin() and
@@ -157,8 +215,8 @@ class Store {
   static std::unique_ptr<Store> open(const Shape&, ScratchBacking&);
 
   // Object lifecycle. `bytes` is the initial logical size; `align` is a power of two.
-  // Creating beyond max_live_objects throws ScratchCapacityError (cohort) before
-  // any mutation. For a direct store create(), an open Tx stays usable. Through
+  // Exceeding a nonzero max_live_objects throws ScratchCapacityError (cohort)
+  // before any mutation. For direct create(), an open Tx stays usable. Through
   // a container operation, the joined scope that saw the throw poisons the outer
   // transaction; there is no savepoint.
   virtual Id create(std::uint64_t bytes, std::uint64_t align) = 0;

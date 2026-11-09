@@ -5127,9 +5127,15 @@ class PrivateFixtureFloors(unittest.TestCase):
             {name for name in ci_verify.PINNED_SLOW_TEST_ROWS
              if name.startswith('test_native_command_after')},
             {f'test_native_command_after_slice_{index}' for index in range(1, 9)})
+        # expectation corrected: 89 -> 92, because three newly registered slow
+        # population names are explicitly pinned.
+        # expectation corrected: 92 -> 93, because the raised-boundary name
+        # adds one slow pin; the small UINT64_MAX positive control adds none.
         # expectation corrected: 89 -> 90, because test_cr559_map_capacity_cli
         # joins the explicit slow-label policy.
-        self.assertEqual(len(ci_verify.PINNED_SLOW_TEST_ROWS), 90)
+        # expectation corrected: 93 -> 94, because the merged policy retains
+        # the four population names and main's additional CLI name.
+        self.assertEqual(len(ci_verify.PINNED_SLOW_TEST_ROWS), 94)
         self.assertEqual(LIVE_SANITIZERS_MIN_TESTS, 21)
         for name, (full, pinned) in ci_verify.PRIVATE_FIXTURE_PROFILE_FLOORS.items():
             with self.subTest(profile=name):

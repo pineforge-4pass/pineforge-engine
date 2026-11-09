@@ -8447,6 +8447,49 @@ if(UNIX)
 endif()
 # --- CR-150 cr559-map-capacity end ---
 
+# --- CR-150 o1-live-limit-policy begin ---
+add_executable(test_o1_live_limit_policy test_o1_live_limit_policy.cpp)
+target_link_libraries(test_o1_live_limit_policy PRIVATE pineforge)
+target_compile_options(test_o1_live_limit_policy PRIVATE -ffp-contract=off -UNDEBUG)
+if(PINEFORGE_ENABLE_COVERAGE)
+    target_compile_options(test_o1_live_limit_policy PRIVATE ${_pf_cov_test_flags})
+endif()
+add_test(NAME test_o1_live_limit_raised
+    COMMAND test_o1_live_limit_policy raised --objects 1048577 --limit 2097152)
+add_test(NAME test_o1_live_limit_default_unset
+    COMMAND test_o1_live_limit_policy default --objects 1048577 --policy unset)
+add_test(NAME test_o1_live_limit_default_zero
+    COMMAND test_o1_live_limit_policy default --objects 1048577 --policy zero)
+add_test(NAME test_o1_live_limit_lower
+    COMMAND test_o1_live_limit_policy lower --limit 8)
+add_test(NAME test_o1_live_limit_invalid
+    COMMAND test_o1_live_limit_policy invalid)
+add_test(NAME test_o1_live_limit_raised_boundary
+    COMMAND test_o1_live_limit_policy raised --objects 1048577 --limit 1048577)
+add_test(NAME test_o1_live_limit_uint64_max
+    COMMAND test_o1_live_limit_policy raised --objects 4096 --limit 18446744073709551615)
+set_tests_properties(
+    test_o1_live_limit_raised
+    test_o1_live_limit_default_unset
+    test_o1_live_limit_default_zero
+    test_o1_live_limit_raised_boundary
+    PROPERTIES LABELS "slow;mem")
+add_executable(test_o1_live_limit_type test_o1_live_limit_type.cpp)
+target_link_libraries(test_o1_live_limit_type PRIVATE pineforge)
+target_compile_options(test_o1_live_limit_type PRIVATE -ffp-contract=off -UNDEBUG)
+if(PINEFORGE_ENABLE_COVERAGE)
+    target_compile_options(test_o1_live_limit_type PRIVATE ${_pf_cov_test_flags})
+endif()
+add_test(NAME test_o1_live_limit_type COMMAND test_o1_live_limit_type)
+add_executable(test_o1_live_limit_backing test_o1_live_limit_backing.cpp)
+target_link_libraries(test_o1_live_limit_backing PRIVATE pineforge)
+target_compile_options(test_o1_live_limit_backing PRIVATE -ffp-contract=off -UNDEBUG)
+if(PINEFORGE_ENABLE_COVERAGE)
+    target_compile_options(test_o1_live_limit_backing PRIVATE ${_pf_cov_test_flags})
+endif()
+add_test(NAME test_o1_live_limit_backing COMMAND test_o1_live_limit_backing)
+# --- CR-150 o1-live-limit-policy end ---
+
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")

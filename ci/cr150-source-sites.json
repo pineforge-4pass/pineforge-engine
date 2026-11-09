@@ -1785,6 +1785,33 @@
    "ordinal": 1
   },
   {
+   "file": "include/pineforge/detail/o1_store.hpp",
+   "symbol": "value_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "class LiveObjectLimit #1",
+    "template < typename Integer , std :: enable_if_t < std :: is_integral < Integer > :: value && ! std :: is_same < Integer , bool > :: value && sizeof ( Integer ) < = sizeof ( std :: uint64_t ) , int > = 0 > constexpr LiveObjectLimit & operator = ( Integer value ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "value_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/detail/o1_store.hpp",
+   "symbol": "value_",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "class LiveObjectLimit #1"
+   ],
+   "cls": "assign",
+   "spelling": "value_ = . . .",
+   "ordinal": 1
+  },
+  {
    "file": "include/pineforge/detail/read_through_cache.hpp",
    "symbol": "operator new",
    "scope": [
@@ -2104,7 +2131,7 @@
    "symbol": "message",
    "scope": [
     "namespace pineforge :: detail #1",
-    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
+    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -2115,7 +2142,7 @@
    "symbol": "message",
    "scope": [
     "namespace pineforge :: detail #1",
-    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
+    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live ) #1"
    ],
    "cls": "append",
    "spelling": "message + = . . .",
@@ -2126,7 +2153,7 @@
    "symbol": "message",
    "scope": [
     "namespace pineforge :: detail #1",
-    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
+    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live ) #1"
    ],
    "cls": "append",
    "spelling": "message + = . . .",
@@ -2137,33 +2164,11 @@
    "symbol": "message",
    "scope": [
     "namespace pineforge :: detail #1",
-    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
+    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live ) #1"
    ],
    "cls": "append",
    "spelling": "message + = . . .",
    "ordinal": 3
-  },
-  {
-   "file": "include/pineforge/detail/scratch_errors.hpp",
-   "symbol": "message",
-   "scope": [
-    "namespace pineforge :: detail #1",
-    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
-   ],
-   "cls": "append",
-   "spelling": "message + = . . .",
-   "ordinal": 4
-  },
-  {
-   "file": "include/pineforge/detail/scratch_errors.hpp",
-   "symbol": "message",
-   "scope": [
-    "namespace pineforge :: detail #1",
-    "inline std :: string scratch_object_limit_message ( std :: uint64_t limit , std :: uint64_t live , std :: uint64_t cap ) #1"
-   ],
-   "cls": "append",
-   "spelling": "message + = . . .",
-   "ordinal": 5
   },
   {
    "file": "include/pineforge/detail/scratch_file.hpp",
@@ -14264,7 +14269,7 @@
     "namespace pineforge #1",
     "namespace detail #1",
     "namespace o1 #1",
-    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) , max_live_objects_ ( shape . max_live_objects = = 0 ? kMaxLiveObjectsCap : std :: min ( shape . max_live_objects , kMaxLiveObjectsCap ) ) #1"
+    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) , max_live_objects_ ( shape . max_live_objects ) #1"
    ],
    "cls": "alloc",
    "spelling": "new std :: byte",
@@ -14277,7 +14282,7 @@
     "namespace pineforge #1",
     "namespace detail #1",
     "namespace o1 #1",
-    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) , max_live_objects_ ( shape . max_live_objects = = 0 ? kMaxLiveObjectsCap : std :: min ( shape . max_live_objects , kMaxLiveObjectsCap ) ) #1"
+    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) , max_live_objects_ ( shape . max_live_objects ) #1"
    ],
    "cls": "alloc",
    "spelling": "new TxPool",
@@ -14290,10 +14295,24 @@
     "namespace pineforge #1",
     "namespace detail #1",
     "namespace o1 #1",
-    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) , max_live_objects_ ( shape . max_live_objects = = 0 ? kMaxLiveObjectsCap : std :: min ( shape . max_live_objects , kMaxLiveObjectsCap ) ) #1"
+    "StoreImpl :: StoreImpl ( const Shape & shape , ScratchBacking & backing ) : chunk_bytes_ ( shape . chunk_bytes ) , max_live_objects_ ( shape . max_live_objects ) #1"
    ],
    "cls": "alloc",
    "spelling": "new CommandScratchStore",
+   "ordinal": 1
+  },
+  {
+   "file": "src/detail/o1_store.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace detail #1",
+    "namespace o1 #1",
+    "[ [ noreturn ] ] void StoreImpl :: throw_status ( const char * what , ScratchStatus status ) const #1",
+    "if ( status = = ScratchStatus :: io_error ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
    "ordinal": 1
   },
   {

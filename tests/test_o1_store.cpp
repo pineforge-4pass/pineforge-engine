@@ -47,7 +47,6 @@ using pineforge::detail::ScratchStoreConfig;
 using pineforge::detail::o1::CleanupSkip;
 using pineforge::detail::o1::Id;
 using pineforge::detail::o1::kMaxChunkBytes;
-using pineforge::detail::o1::kMaxLiveObjectsCap;
 using pineforge::detail::o1::kMaxResidentPages;
 using pineforge::detail::o1::kMaxTxHandles;
 using pineforge::detail::o1::kStoreReadCacheBytes;
@@ -925,7 +924,8 @@ void check_lifecycle() {
   const std::uint64_t ceiling = ceiling_for(shape);
   REQUIRE(store->stats().bytes_resident <= ceiling);
   REQUIRE(store->stats().objects_live == 0);
-  REQUIRE(store->stats().max_live_objects == kMaxLiveObjectsCap);
+  // expectation corrected: 1,048,576 -> 0, because the default is unbounded.
+  REQUIRE(store->stats().max_live_objects == 0);
 
   const Id small = store->create(10, 1);
   REQUIRE(small != pineforge::detail::o1::kNullId);
