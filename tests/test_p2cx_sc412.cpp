@@ -655,8 +655,12 @@ void default_disabled() {
     resident.emplace("id", Row{13});
     erased.insert_or_assign("id", 17); cycles.insert_or_assign("id", 19);
     Measure measure;
+    // A resident row is answered by its directory without a disk read, so the
+    // resident table is also asked for an absent key, which must consult the
+    // authoritative disk tree on every pass.
     for (int n = 0; n < 64; ++n)
         require(tree.get(at) == 11 && resident.find("id")->second.value == 13
+                && resident.find("absent") == resident.end()
                 && erased.at("id") == 17 && cycles.at("id") == 19, "all default tables read real bytes");
     const auto io = measure.finish();
     require(cache_blocks == 0 && cache_bytes == 0 && io[ids].reads >= 128 && io[pairs].reads >= 128,
@@ -887,8 +891,11 @@ void fixed_budget() {
     tree.emplace("id", Row{3});
     const auto rank = ranks.insert("id", 4).first;
     erased.insert_or_assign("id", 5); cycles.insert_or_assign("id", 6);
-    require(tree.find("id")->second.value == 3 && ranks.get(rank) == 4
-            && erased.at("id") == 5 && cycles.at("id") == 6,
+    // A resident row is answered by its directory without a disk read, so the
+    // resident table is also asked for an absent key, which must consult the
+    // authoritative disk tree through its read cache.
+    require(tree.find("id")->second.value == 3 && tree.find("absent") == tree.end()
+            && ranks.get(rank) == 4 && erased.at("id") == 5 && cycles.at("id") == 6,
             "all four real table constructions are read");
     require(cache_blocks == 4 && cache_bytes == allocation_capacity(192 * 1024),
             "complete 192 KiB payload plus shared metadata per adapter, not per engine");

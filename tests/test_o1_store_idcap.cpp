@@ -3,6 +3,8 @@
 #include <pineforge/detail/o1_store.hpp>
 #include <pineforge/detail/scratch_errors.hpp>
 
+#include "a5u_test_store.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -23,7 +25,6 @@ using pineforge::detail::FixedMemoryScratchBacking;
 using pineforge::detail::ScratchBuffer;
 using pineforge::detail::ScratchCapacityError;
 using pineforge::detail::o1::Id;
-using pineforge::detail::o1::kMaxLiveObjectsCap;
 using pineforge::detail::o1::kMaxTxHandles;
 using pineforge::detail::o1::kNullId;
 using pineforge::detail::o1::Shape;
@@ -60,21 +61,6 @@ struct Fixture {
   std::unique_ptr<Store> store;
 };
 
-// Independent oracle: insert separators into a complete decimal string rather
-// than use the production formatter or message builder to predict their output.
-std::string grouped(std::uint64_t value) {
-  std::string text = std::to_string(value);
-  for (std::size_t end = text.size(); end > 3; end -= 3)
-    text.insert(end - 3, 1, ',');
-  return text;
-}
-
-std::string expected_message(std::uint64_t limit) {
-  return "more than " + grouped(limit) + " store objects live at once; " + grouped(limit) +
-      " is the most allowed in this store; attempted live count " + grouped(limit + 1) +
-      ", approved maximum " + grouped(kMaxLiveObjectsCap);
-}
-
 Id create_admitted(Store& store, std::uint64_t bytes) {
   Id admitted = kNullId;
   try {
@@ -98,7 +84,7 @@ void require_refusal(Store& store, std::uint64_t limit, std::uint64_t bytes) {
                         "scratch_capacity_exceeded") == 0);
     REQUIRE(failure.args != nullptr);
     REQUIRE(*failure.args == "{\"resource\":\"cohort\"}");
-    REQUIRE(std::string(error.what()) == expected_message(limit));
+    REQUIRE(std::string(error.what()) == a5u_test::object_limit_text(limit));
   }
   REQUIRE(refused);
 }
@@ -171,44 +157,46 @@ void check_cap_and_next_id() {
   std::printf("O1STORE idcap CAP/CAP+1 and next-id preservation ok\n");
 }
 
-void check_default_and_normalization() {
+void check_default_and_exact_policy() {
+  // expectation corrected: default/zero/large inputs normalize to 1,048,576 ->
+  // exact inputs (default 0), because the Store no longer clamps native policy.
   const Shape defaults;
-  REQUIRE(defaults.max_live_objects == kMaxLiveObjectsCap);
+  REQUIRE(defaults.max_live_objects == 0);
   {
     Fixture fixture(defaults);
-    REQUIRE(fixture.store->stats().max_live_objects == kMaxLiveObjectsCap);
+    REQUIRE(fixture.store->stats().max_live_objects == 0);
     REQUIRE(fixture.store->stats().objects_live == 0);
   }
   const std::array<std::uint64_t, 3> inputs{{
-      0, kMaxLiveObjectsCap + 1, std::numeric_limits<std::uint64_t>::max()}};
+      0, UINT64_C(1048577), std::numeric_limits<std::uint64_t>::max()}};
   for (const auto input : inputs) {
     Shape shape = small_shape();
     shape.max_live_objects = input;
     Fixture fixture(shape);
-    REQUIRE(fixture.store->stats().max_live_objects == kMaxLiveObjectsCap);
+    REQUIRE(fixture.store->stats().max_live_objects == input);
     REQUIRE(fixture.store->stats().objects_live == 0);
     (void)create_admitted(*fixture.store, 0);
     REQUIRE(fixture.store->stats().objects_live == 1);
   }
-  std::printf("O1STORE idcap default, zero and above-cap normalization ok\n");
+  std::printf("O1STORE idcap default, zero and exact positive policy ok\n");
 }
 
 void check_documented_text() {
+  // expectation corrected: approved maximum 1,048,576 -> absent, because only
+  // this store's explicit finite policy supplies the live-object refusal limit.
   REQUIRE(scratch_object_limit_message(UINT64_C(65536),
-                                      UINT64_C(65537),
-                                      kMaxLiveObjectsCap) ==
+                                      UINT64_C(65537)) ==
       "more than 65,536 store objects live at once; 65,536 is the most allowed in this store; "
-      "attempted live count 65,537, approved maximum 1,048,576");
-  // The default cap, as a user sees it.
-  REQUIRE(scratch_object_limit_message(kMaxLiveObjectsCap,
-                                      kMaxLiveObjectsCap + 1,
-                                      kMaxLiveObjectsCap) ==
+      "attempted live count 65,537");
+  // An embedder's explicit finite limit, independent of the unbounded default.
+  REQUIRE(scratch_object_limit_message(UINT64_C(1048576),
+                                      UINT64_C(1048577)) ==
       "more than 1,048,576 store objects live at once; 1,048,576 is the most allowed in this store; "
-      "attempted live count 1,048,577, approved maximum 1,048,576");
-  // An explicit smaller limit: the sentence must not claim the cap as its own limit.
-  REQUIRE(scratch_object_limit_message(UINT64_C(1000), UINT64_C(1001), kMaxLiveObjectsCap) ==
+      "attempted live count 1,048,577");
+  // An explicit smaller limit reports only that store's policy.
+  REQUIRE(scratch_object_limit_message(UINT64_C(1000), UINT64_C(1001)) ==
       "more than 1,000 store objects live at once; 1,000 is the most allowed in this store; "
-      "attempted live count 1,001, approved maximum 1,048,576");
+      "attempted live count 1,001");
   std::printf("O1STORE idcap exact documented text ok\n");
 }
 
@@ -396,7 +384,7 @@ void check_reuse() {
 int main() {
   try {
     check_cap_and_next_id();
-    check_default_and_normalization();
+    check_default_and_exact_policy();
     check_documented_text();
     check_rollback();
     check_flattened_and_abandoned_rollback();

@@ -16,8 +16,8 @@
 // bound covers the Store workspace and transaction handles, not process RSS
 // or a cgroup's memory charge. Backing usage also includes storage metadata,
 // transactional versions and its retained high water; bytes_live is not RSS.
-// The Store fixes the two admission limits a graph meets: its caller handle
-// pool and its live-object limit (both below).
+// The Store fixes its caller handle pool and honors an optional live-object
+// policy; its default has no live-object policy limit (both below).
 //
 // Transaction handles: every public operation runs in one Store::scope().
 // Inside a caller's open transaction it joins without a handle; with none open
@@ -37,8 +37,8 @@
 // cleanup slot (begin_cleanup()), which takes no caller handle.
 //
 // Every node is one Store object, so a graph is admitted up to the Store's
-// live-object limit (Shape::max_live_objects, counting the control record):
-// creating one more throws ScratchCapacityError {"resource":"cohort"} before
+// nonzero live-object limit (Shape::max_live_objects, including the control):
+// exceeding it throws ScratchCapacityError {"resource":"cohort"} before
 // any Store change. The operation that saw it ends as any failed operation
 // does: its own scope rolls back, a joined one leaves the caller rollback-only.
 //
