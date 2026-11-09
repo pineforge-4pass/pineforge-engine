@@ -3561,7 +3561,7 @@ RELEASE_PREBUILT_LEGACY_STEPS = r'''
           # VERSION has no tag at all.
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DEigen3_DIR=/usr/share/eigen3/cmake \
+            -DEigen3_DIR:PATH=/usr/share/eigen3/cmake \
             -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
             -DPINEFORGE_BUILD_TESTS=OFF \
             -DPINEFORGE_BUILD_TUTORIAL=OFF \
@@ -3981,7 +3981,7 @@ RELEASE_OPTION_C_JOBS = {
           # VERSION has no tag at all.
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DEigen3_DIR=/usr/share/eigen3/cmake \
+            -DEigen3_DIR:PATH=/usr/share/eigen3/cmake \
             -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
             -DPINEFORGE_BUILD_TESTS=OFF \
             -DPINEFORGE_BUILD_TUTORIAL=OFF \
@@ -4768,19 +4768,7 @@ EIGEN_DIR_UNTYPED = '-DEigen3_DIR=/usr/share/eigen3/cmake'
 EIGEN_DIR_TYPED = '-DEigen3_DIR:PATH=/usr/share/eigen3/cmake'
 
 
-def _eigen_dir_accept_typed(text: str) -> str:
-    """Read the typed Eigen3_DIR flag as the reviewed one.
-
-    Without a type CMake caches Eigen3_DIR as UNINITIALIZED, so the reviewed
-    `grep -Fx 'Eigen3_DIR:PATH=...'` never matches. The typed flag is the fix;
-    both forms are admitted until the workflow switches, then the contract
-    keeps the typed form only.
-    """
-    return text.replace(EIGEN_DIR_TYPED, EIGEN_DIR_UNTYPED)
-
-
 def _release_split_job_findings(job: str, body: str) -> list[str]:
-    body = _eigen_dir_accept_typed(body)
     findings = []
     metadata = []
     in_steps, step_mappings = False, 0
@@ -4873,7 +4861,6 @@ def _release_split_workflow_findings(workflow: str) -> list[str]:
 
 def release_prebuilt_workflow_findings(workflow: str) -> list[str]:
     """Pin artifact structure and its token-only admission surface."""
-    workflow = _eigen_dir_accept_typed(workflow)
     if _release_split_requested(_jobs(workflow)):
         return _release_split_workflow_findings(workflow)
     prebuilt = _jobs(workflow).get('prebuilt', '')
