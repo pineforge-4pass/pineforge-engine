@@ -28,13 +28,13 @@ V190_ADDITIONS = {
     "run_quota_configuration_invalid": 78,
     "run_resource_quota_exceeded": 79,
 }
-# Preserve the current storage-budget ABI group; append the selected new map
-# code after its occupied IDs. These are contract pins, not measured output.
-V1101_ADDITIONS = {
-    "runtime_history_budget_exhausted": 80,
-    "runtime_storage_observation_incomplete": 81,
+# The first group after 1.9.0 ships in 1.11.0 (no 1.10.1 was released), so the
+# generator orders it by name. These are contract pins, not measured output.
+V1110_ADDITIONS = {
+    "pine_map_capacity_exceeded": 80,
+    "runtime_history_budget_exhausted": 81,
+    "runtime_storage_observation_incomplete": 82,
 }
-V1110_ADDITIONS = {"pine_map_capacity_exceeded": 82}
 # The selected-capacity additions are an independently closed membership list.
 # The generator orders same-release additions by name, so this tuple also pins
 # the contiguous suffix after the released map code without reading the
@@ -86,7 +86,7 @@ def released_numbers():
 
 
 def assert_selected_capacity_suffix(values):
-    first = V1110_ADDITIONS["pine_map_capacity_exceeded"] + 1
+    first = max(V1110_ADDITIONS.values()) + 1
     assert [values.get(name) for name in SELECTED_CAPACITY_ADDITIONS] == list(
         range(first, first + len(SELECTED_CAPACITY_ADDITIONS)))
 
@@ -99,7 +99,6 @@ def test_run_failure_code_numbers_stable():
     assert all(value > 64 for name, value in current.items() if name not in released)
     assert {name: current.get(name) for name in V170_ADDITIONS} == V170_ADDITIONS
     assert {name: current.get(name) for name in V190_ADDITIONS} == V190_ADDITIONS
-    assert {name: current.get(name) for name in V1101_ADDITIONS} == V1101_ADDITIONS
     assert {name: current.get(name) for name in V1110_ADDITIONS} == V1110_ADDITIONS
     assert_selected_capacity_suffix(current)
     assert set(current.values()) == set(range(EXPECTED_ENUMERATOR_COUNT))
@@ -115,7 +114,6 @@ def test_run_failure_generator_appends_after_released_numbers():
     assert {name: generated.get(name) for name in released} == released
     assert {name: generated.get(name) for name in V170_ADDITIONS} == V170_ADDITIONS
     assert {name: generated.get(name) for name in V190_ADDITIONS} == V190_ADDITIONS
-    assert {name: generated.get(name) for name in V1101_ADDITIONS} == V1101_ADDITIONS
     assert {name: generated.get(name) for name in V1110_ADDITIONS} == V1110_ADDITIONS
     assert_selected_capacity_suffix(generated)
     for path, rendered in registry.generated(catalogue).items():
@@ -217,7 +215,6 @@ def test_report_channel_catalog_contract():
         (set(released) - {"none"})
         | set(V170_ADDITIONS)
         | set(V190_ADDITIONS)
-        | set(V1101_ADDITIONS)
         | set(V1110_ADDITIONS)
         | set(SELECTED_CAPACITY_ADDITIONS)
     )
