@@ -1664,7 +1664,7 @@
     "runtime_history_budget_exhausted: configured={configured} used={used} needed={needed}"
    ],
    "retryable": false,
-   "since": "1.10.1"
+   "since": "1.11.0"
   },
   "runtime_storage_observation_incomplete": {
    "args": {
@@ -1690,7 +1690,7 @@
     "runtime context owned storage observation is incomplete"
    ],
    "retryable": false,
-   "since": "1.10.1"
+   "since": "1.11.0"
   },
   "scratch_capacity_exceeded": {
    "args": {

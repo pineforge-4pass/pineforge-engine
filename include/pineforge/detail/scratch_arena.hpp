@@ -32,8 +32,8 @@ public:
 // Use allocation provenance (bad_alloc or nothrow null), never syscall errno.
 const ReportScratchIoError& scratch_out_of_memory_failure() noexcept;
 
-// Re-emit the original typed object, retaining errno, English and the validated
-// argument object. Status-only backings pass nullptr and keep their old raiser.
+// Re-emit the original typed failure (errno, English, validated args) if nonnull.
+// nullptr does nothing; callers supply fallbacks, including Store's typed io_error.
 inline void rethrow_carried_scratch_failure(const ReportScratchIoError* failure) {
     if (failure) throw *failure;
 }

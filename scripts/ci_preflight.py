@@ -3568,7 +3568,7 @@ RELEASE_PREBUILT_LEGACY_STEPS = r'''
           # VERSION has no tag at all.
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DEigen3_DIR=/usr/share/eigen3/cmake \
+            -DEigen3_DIR:PATH=/usr/share/eigen3/cmake \
             -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
             -DPINEFORGE_BUILD_TESTS=OFF \
             -DPINEFORGE_BUILD_TUTORIAL=OFF \
@@ -3988,7 +3988,7 @@ RELEASE_OPTION_C_JOBS = {
           # VERSION has no tag at all.
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DEigen3_DIR=/usr/share/eigen3/cmake \
+            -DEigen3_DIR:PATH=/usr/share/eigen3/cmake \
             -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
             -DPINEFORGE_BUILD_TESTS=OFF \
             -DPINEFORGE_BUILD_TUTORIAL=OFF \
@@ -4193,7 +4193,8 @@ def prebuilt_hosted_diagnostic_findings(workflow: str) -> list[str]:
 # expectation corrected: daaf2fe0541b5d0f8aab0746b35dcf069862afa3 -> f02008afa4d3503e3b71531b26853f7e712c9ffe, because hosted transport records real Docker versions and host UID/GID under /home/runner/work.
 # Host UID 1001 and the container's 1001:123 identity remain required.
 # expectation corrected: f02008afa4d3503e3b71531b26853f7e712c9ffe -> dc2f8a2768eed52109d49d1d1098f22201710477, because Docker's image Id is pinned to the recorded config digest, separately from the unchanged registry manifest digest.
-RELEASE_BOOKWORM_HELPER_BLOB = 'dc2f8a2768eed52109d49d1d1098f22201710477'
+# expectation corrected: dc2f8a2768eed52109d49d1d1098f22201710477 -> a7ecf38c891bc81424a89d8b97e35880cea9bd15, because the configure passes -DEigen3_DIR:PATH= so the cache line it checks is written with its type; the rest of the helper is unchanged.
+RELEASE_BOOKWORM_HELPER_BLOB = 'a7ecf38c891bc81424a89d8b97e35880cea9bd15'
 # The helper delegates the shipped-archive execution to this exact consumer.
 # This is a source contract, never a native-runtime verdict.
 RELEASE_BOOKWORM_CONSUMER_BLOB = 'd066968913c0d4ff7358e6fd4dde2a794e1be600'
@@ -5133,6 +5134,10 @@ def _release_split_steps(job: str, mode: str = 'current') -> list[str]:
                 'upload': RELEASE_SPLIT_UPLOAD_STEPS,
                 'notify-hub': RELEASE_SPLIT_NOTIFY_STEPS}[job]
     return [step.rstrip('\n') for step in _steps(template)]
+
+
+EIGEN_DIR_UNTYPED = '-DEigen3_DIR=/usr/share/eigen3/cmake'
+EIGEN_DIR_TYPED = '-DEigen3_DIR:PATH=/usr/share/eigen3/cmake'
 
 
 def _release_split_job_findings(job: str, body: str, mode: str = 'current') -> list[str]:

@@ -120,9 +120,20 @@ public:
     };
 
     struct Path {
-        std::uint64_t page[kMaxDepth];
-        std::uint32_t slot[kMaxDepth];
+        std::uint64_t page[kMaxDepth]{};
+        std::uint32_t slot[kMaxDepth]{};
+        // Routing fences for each subtree, including the final leaf. Zero
+        // means an open end. These name actual separators, including ghosts;
+        // live leaf endpoints alone do not describe a B+tree's routing gaps.
+        std::uint64_t lower[kMaxDepth + 1]{};
+        std::uint64_t upper[kMaxDepth + 1]{};
         unsigned depth = 0;
+    };
+
+    struct SearchRoute {
+        Path path{};
+        std::uint64_t leaf = 0;
+        std::uint32_t pos = 0;
     };
 
     // A stored key or value as a byte source. It resolves logical bytes through
@@ -342,6 +353,9 @@ public:
         return Status::ok;
     }
     void invalidate_all() noexcept {
+        search_leaf_ = 0;
+        left_search_.leaf = right_search_.leaf = recent_search_.leaf = 0;
+        invalidate_handle_routes();
         for (std::size_t i = 0; i < slots_; ++i) {
             slot_[i].valid = false;
             slot_[i].dirty = false;
@@ -630,10 +644,24 @@ public:
     // child slot taken in each. Offset 4 of an interior node counts its
     // nonzero child slots, as offset 4 of a leaf counts its present entries.
     struct HPath {
-        std::uint64_t node[kMaxHeight];
-        std::size_t slot[kMaxHeight];
-        std::size_t depth;
+        std::uint64_t node[kMaxHeight]{};
+        std::size_t slot[kMaxHeight]{};
+        std::size_t depth = 0;
     };
+
+    struct HandleRoute {
+        HPath path{};
+        std::uint64_t number = 0;
+        std::uint64_t leaf = 0;
+    };
+
+    void invalidate_handle_routes() noexcept {
+        for (auto& route : handle_routes_) route.leaf = 0;
+    }
+    void remember_handle_route(std::uint64_t number, std::uint64_t leaf, const HPath& path) noexcept {
+        if (handle_routes_[0].leaf != leaf) handle_routes_[1] = handle_routes_[0];
+        handle_routes_[0] = {path, number, leaf};
+    }
 
     Status hfind_leaf(std::uint64_t leaf_no, bool create, std::uint64_t& leaf, HPath& path) noexcept {
         leaf = 0;
@@ -653,6 +681,9 @@ public:
         }
         while (leaf_no >= span_of(cur_.hheight)) {
             if (!create) return Status::ok;
+            // Retained paths include the root. Growing it changes their
+            // depth even though existing leaves keep their physical pages.
+            invalidate_handle_routes();
             std::uint64_t page = 0;
             st = alloc_page(page);
             if (st != Status::ok) return st;
@@ -667,7 +698,31 @@ public:
         }
         std::uint64_t node = cur_.hroot;
         std::uint64_t rest = leaf_no;
-        for (std::uint64_t level = cur_.hheight; level > 1; --level) {
+        // A handle resolves arithmetically to a radix leaf. Keep two routes
+        // for independent readers (such as a near key and a range fence),
+        // never entry bytes or presence/value answers. Every hget below
+        // still reads the current entry through rd(), including its errors.
+        // Within a route's subtree, resume at the nearest shared ancestor;
+        // advancing across leaves then amortises the directory walk.
+        for (const auto& route : handle_routes_) {
+            if (route.leaf == 0) continue;
+            if (route.number == leaf_no) {
+                leaf = route.leaf;
+                path = route.path;
+                remember_handle_route(leaf_no, leaf, path);
+                return Status::ok;
+            }
+            for (std::size_t depth = route.path.depth; depth-- > path.depth;) {
+                const auto span = span_of(cur_.hheight - depth);
+                if (leaf_no / span != route.number / span) continue;
+                node = route.path.node[depth];
+                rest = leaf_no % span;
+                path = route.path;
+                path.depth = depth;
+                break;
+            }
+        }
+        for (std::uint64_t level = cur_.hheight - path.depth; level > 1; --level) {
             if (path.depth >= kMaxHeight) return Status::corrupt;
             const std::uint64_t span = span_of(level - 1);
             const std::size_t ci = static_cast<std::size_t>(rest / span);
@@ -698,6 +753,7 @@ public:
             node = child;
         }
         leaf = node;
+        remember_handle_route(leaf_no, leaf, path);
         return Status::ok;
     }
 
@@ -751,6 +807,7 @@ public:
         // The leaf is empty and is not the root: release it, and each interior
         // node that this leaves without children, up to but not including the
         // root. Handle numbers are never reissued, so nothing would reuse them.
+        invalidate_handle_routes(); // No route may retain a freed/reused page.
         st = free_page(leaf);
         if (st != Status::ok) return st;
         for (std::size_t k = path.depth; k-- > 0;) {
@@ -793,6 +850,91 @@ public:
         return Status::ok;
     }
 
+    void remember_search(const Path& path, std::uint64_t leaf, std::uint32_t pos) noexcept {
+        // A comparator/source/visitor may nest reads. Its searches must not
+        // replace the outer operation's route, and no borrowed source or key
+        // bytes survive any call.
+        if (busy_ != 0) return;
+        if (search_leaf_ != 0 && search_leaf_ != leaf)
+            recent_search_ = {search_path_, search_leaf_, search_pos_};
+        search_path_ = path;
+        search_leaf_ = leaf;
+        search_pos_ = pos;
+        // Keep the two open ends across intervening probes. These are routes,
+        // not saved first/last answers: their fences and leaf keys are read
+        // and compared again on every search.
+        if (path.lower[path.depth] == 0) left_search_ = {path, leaf, pos};
+        if (path.upper[path.depth] == 0) right_search_ = {path, leaf, pos};
+    }
+
+    Status in_subtree(const ScratchByteSource& probe, const Path& path, unsigned depth,
+                      bool& inside, int& direction) noexcept {
+        inside = false;
+        direction = 0;
+        int order = 0;
+        if (path.lower[depth] != 0) {
+            const Status st = compare_with(probe, path.lower[depth], order);
+            if (st != Status::ok) return st;
+            if (order < 0) {
+                direction = -1;
+                return Status::ok;
+            }
+        }
+        if (path.upper[depth] != 0) {
+            const Status st = compare_with(probe, path.upper[depth], order);
+            if (st != Status::ok) return st;
+            if (order >= 0) {
+                direction = 1;
+                return Status::ok;
+            }
+        }
+        inside = true;
+        return Status::ok;
+    }
+
+    // A position inside a leaf has two real neighbours. Comparing those
+    // neighbours can prove the answer without first comparing the more distant
+    // subtree fences. This also covers sequential work in the interior of a
+    // leaf, where neither leaf endpoint is the insertion point.
+    Status near_position(const ScratchByteSource& probe, std::uint64_t leaf, std::uint32_t hint,
+                         std::uint32_t count, bool& found, bool& equal, std::uint32_t& pos) noexcept {
+        found = false;
+        if (hint == 0 || hint >= count) return Status::ok;
+        std::uint64_t handle = 0;
+        Status st = leaf_entry(leaf, hint, handle);
+        if (st != Status::ok) return st;
+        int order = 0;
+        st = compare_with(probe, handle, order);
+        if (st != Status::ok) return st;
+        if (order == 0) {
+            found = equal = true;
+            pos = hint;
+            return Status::ok;
+        }
+        const auto neighbour = order < 0 ? hint - 1 : hint + 1;
+        if (neighbour >= count) return Status::ok;
+        const bool before = order < 0;
+        st = leaf_entry(leaf, neighbour, handle);
+        if (st != Status::ok) return st;
+        st = compare_with(probe, handle, order);
+        if (st != Status::ok) return st;
+        if (order == 0 || (before ? order > 0 : order < 0)) {
+            found = true;
+            equal = order == 0;
+            pos = equal ? neighbour : before ? hint : neighbour;
+        }
+        return Status::ok;
+    }
+
+    // A split tightens one side of a subtree. Descendants that inherited that
+    // fence tighten with it; their own, nearer separators remain unchanged.
+    static void tighten_path(Path& path, unsigned depth, std::uint64_t separator, bool right) noexcept {
+        auto* bounds = right ? path.lower : path.upper;
+        const auto previous = bounds[depth];
+        for (unsigned d = depth; d <= path.depth; ++d)
+            if (bounds[d] == previous) bounds[d] = separator;
+    }
+
     // Find the leaf position of the first key not below the probe, and whether
     // that entry equals the probe. An empty tree answers leaf 0.
     Status descend(const ScratchByteSource& probe, Path& path, bool& equal, std::uint32_t& pos,
@@ -803,7 +945,91 @@ public:
         leaf = 0;
         if (cur_.iroot == 0) return Status::ok;
         std::uint64_t page = cur_.iroot;
-        for (std::uint64_t level = cur_.iheight; level > 1; --level) {
+        path.lower[0] = path.upper[0] = 0;
+        if (busy_ == 0 && search_leaf_ != 0) {
+            path = search_path_;
+            std::uint32_t count = 0;
+            Status st = index_count(search_leaf_, count);
+            if (st != Status::ok) return st;
+            if (count == 0 || count > leaf_cap_) return Status::corrupt;
+            bool found = false;
+            st = near_position(probe, search_leaf_, search_pos_, count, found, equal, pos);
+            if (st != Status::ok) return st;
+            if (found) {
+                leaf = search_leaf_;
+                remember_search(path, leaf, pos);
+                return Status::ok;
+            }
+            // Reuse the nearest subtree that actually brackets this probe.
+            // Every fence comparison resolves its current full key through
+            // backing; neither a previous miss nor a key prefix is an answer.
+            unsigned depth = path.depth;
+            bool tried_recent = false, tried_end = false;
+            for (;;) {
+                bool inside = false;
+                int direction = 0;
+                st = in_subtree(probe, path, depth, inside, direction);
+                if (st != Status::ok) return st;
+                if (inside) {
+                    page = depth == path.depth ? search_leaf_ : path.page[depth];
+                    path.depth = depth;
+                    break;
+                }
+                // Interleaved writers can advance in separate interior
+                // ranges. Retain the previous distinct leaf as well as the
+                // open ends; otherwise each switch repeats a root descent.
+                // Validate its current neighbours/fences through the caller's
+                // comparator, just as for the latest route above.
+                if (!tried_recent) {
+                    tried_recent = true;
+                    const auto& recent = recent_search_;
+                    if (recent.leaf != 0 && recent.leaf != search_leaf_) {
+                        std::uint32_t recent_count = 0;
+                        st = index_count(recent.leaf, recent_count);
+                        if (st != Status::ok) return st;
+                        if (recent_count == 0 || recent_count > leaf_cap_) return Status::corrupt;
+                        st = near_position(probe, recent.leaf, recent.pos, recent_count,
+                                           found, equal, pos);
+                        if (st != Status::ok) return st;
+                        if (found) {
+                            path = recent.path;
+                            leaf = recent.leaf;
+                            remember_search(path, leaf, pos);
+                            return Status::ok;
+                        }
+                        int recent_direction = 0;
+                        st = in_subtree(probe, recent.path, recent.path.depth, inside, recent_direction);
+                        if (st != Status::ok) return st;
+                        if (inside) {
+                            path = recent.path;
+                            page = recent.leaf;
+                            break;
+                        }
+                    }
+                }
+                // Nonlocal prefix/range scans often alternate between the
+                // two open ends. Try the other end once before climbing to
+                // the root; population never sizes this pair of cursors.
+                if (!tried_end) {
+                    tried_end = true;
+                    const auto& edge = direction < 0 ? left_search_ : right_search_;
+                    if (edge.leaf != 0 && edge.leaf != search_leaf_
+                        && edge.leaf != recent_search_.leaf) {
+                        int edge_direction = 0;
+                        st = in_subtree(probe, edge.path, edge.path.depth, inside, edge_direction);
+                        if (st != Status::ok) return st;
+                        if (inside) {
+                            path = edge.path;
+                            page = edge.leaf;
+                            break;
+                        }
+                    }
+                }
+                if (depth == 0) return Status::corrupt; // The root has open bounds.
+                --depth;
+            }
+        }
+        for (std::uint64_t level = cur_.iheight - path.depth; level > 1; --level) {
             if (path.depth >= kMaxDepth) return Status::corrupt;
             std::uint32_t count = 0;
             Status st = index_count(page, count);
@@ -825,6 +1051,20 @@ public:
             if (st != Status::ok) return st;
             path.page[path.depth] = page;
             path.slot[path.depth] = lo;
+            path.lower[path.depth + 1] = path.lower[path.depth];
+            path.upper[path.depth + 1] = path.upper[path.depth];
+            if (lo != 0) {
+                Byte raw[8];
+                st = rd(page, 24 + 16 * static_cast<std::size_t>(lo - 1), 8, raw);
+                if (st != Status::ok) return st;
+                path.lower[path.depth + 1] = ld64(raw);
+            }
+            if (lo < count) {
+                Byte raw[8];
+                st = rd(page, 24 + 16 * static_cast<std::size_t>(lo), 8, raw);
+                if (st != Status::ok) return st;
+                path.upper[path.depth + 1] = ld64(raw);
+            }
             ++path.depth;
             page = ld64(child_raw);
             if (page == 0) return Status::corrupt;
@@ -832,6 +1072,35 @@ public:
         std::uint32_t count = 0;
         Status st = index_count(page, count);
         if (st != Status::ok) return st;
+        if (count == 0 || count > leaf_cap_) return Status::corrupt;
+        // Sequential insertions and seeks need only the endpoint comparisons,
+        // independent of both the leaf occupancy and the tree population.
+        // Interior probes retain the ordinary bounded binary search.
+        std::uint64_t endpoint = 0;
+        st = leaf_entry(page, 0, endpoint);
+        if (st != Status::ok) return st;
+        int endpoint_order = 0;
+        st = compare_with(probe, endpoint, endpoint_order);
+        if (st != Status::ok) return st;
+        if (endpoint_order <= 0) {
+            leaf = page;
+            equal = endpoint_order == 0;
+            remember_search(path, leaf, pos);
+            return Status::ok;
+        }
+        if (count > 1) {
+            st = leaf_entry(page, count - 1, endpoint);
+            if (st != Status::ok) return st;
+            st = compare_with(probe, endpoint, endpoint_order);
+            if (st != Status::ok) return st;
+        }
+        if (endpoint_order >= 0) {
+            leaf = page;
+            equal = endpoint_order == 0;
+            pos = equal ? count - 1 : count;
+            remember_search(path, leaf, pos);
+            return Status::ok;
+        }
         std::uint32_t lo = 0, hi = count;
         while (lo < hi) {
             const std::uint32_t mid = lo + (hi - lo) / 2;
@@ -855,6 +1124,7 @@ public:
             if (st != Status::ok) return st;
             equal = order == 0;
         }
+        remember_search(path, leaf, pos);
         return Status::ok;
     }
 
@@ -899,9 +1169,26 @@ public:
     }
 
     // Insert a separator and its right sibling above a node that split.
-    Status insert_up(const Path& path, std::uint64_t separator, std::uint64_t right) noexcept {
+    Status insert_up(Path& path, std::uint64_t separator, std::uint64_t right, bool target_right) noexcept {
         for (int level = static_cast<int>(path.depth) - 1;; --level) {
-            if (level < 0) return new_root(separator, right);
+            if (level < 0) {
+                const Status st = new_root(separator, right);
+                if (st != Status::ok) return st;
+                if (path.depth >= kMaxDepth) return Status::corrupt;
+                for (unsigned d = path.depth + 1; d > 0; --d) {
+                    path.lower[d] = path.lower[d - 1];
+                    path.upper[d] = path.upper[d - 1];
+                }
+                for (unsigned d = path.depth; d > 0; --d) {
+                    path.page[d] = path.page[d - 1];
+                    path.slot[d] = path.slot[d - 1];
+                }
+                path.page[0] = cur_.iroot;
+                path.slot[0] = target_right ? 1 : 0;
+                path.lower[0] = path.upper[0] = 0;
+                ++path.depth;
+                return Status::ok;
+            }
             const std::uint64_t parent = path.page[level];
             const std::uint32_t c = path.slot[level];
             Status st = rd_full(parent, w0_);
@@ -914,7 +1201,9 @@ public:
                 st64(pairs + 16 * static_cast<std::size_t>(c), separator);
                 st64(pairs + 16 * static_cast<std::size_t>(c) + 8, right);
                 st32(w0_ + 4, count + 1);
-                return wr_page(parent, w0_);
+                st = wr_page(parent, w0_);
+                if (st == Status::ok) path.slot[level] = c + (target_right ? 1 : 0);
+                return st;
             }
             const std::uint32_t total = count + 1;
             const std::uint32_t mid = total / 2;
@@ -951,6 +1240,11 @@ public:
             if (st != Status::ok) return st;
             st = wr_page(parent, w2_);
             if (st != Status::ok) return st;
+            const auto child = c + (target_right ? 1 : 0);
+            target_right = child > mid;
+            path.page[level] = target_right ? new_page : parent;
+            path.slot[level] = target_right ? child - mid - 1 : child;
+            tighten_path(path, static_cast<unsigned>(level), promoted, target_right);
             separator = promoted;
             right = new_page;
         }
@@ -958,7 +1252,7 @@ public:
 
     Status rd_full(std::uint64_t page, Byte* buffer) noexcept { return rd(page, 0, usable_, buffer); }
 
-    Status tree_insert(const Path& path, std::uint64_t leaf, std::uint32_t pos, std::uint64_t handle) noexcept {
+    Status tree_insert(Path& path, std::uint64_t& leaf, std::uint32_t& pos, std::uint64_t handle) noexcept {
         Status st;
         if (leaf == 0) {
             std::uint64_t page = 0;
@@ -972,6 +1266,7 @@ public:
             if (st != Status::ok) return st;
             cur_.iroot = page;
             cur_.iheight = 1;
+            leaf = page;
             return Status::ok;
         }
         st = rd_full(leaf, w0_);
@@ -985,6 +1280,9 @@ public:
             st32(w0_ + 4, count + 1);
             return wr_page(leaf, w0_);
         }
+        // A split can shift ancestor slots on either saved end route. Rebuild
+        // the unused end lazily; the insertion's own route is repaired below.
+        left_search_.leaf = right_search_.leaf = recent_search_.leaf = 0;
         const std::uint32_t total = count + 1;
         const std::uint32_t mid = (total + 1) / 2;
         auto at = [&](std::uint32_t i) -> std::uint64_t {
@@ -1017,7 +1315,13 @@ public:
             st = wr64(old_next, 16, right_page);
             if (st != Status::ok) return st;
         }
-        return insert_up(path, separator, right_page);
+        const bool target_right = pos >= mid;
+        if (target_right) {
+            leaf = right_page;
+            pos -= mid;
+        }
+        tighten_path(path, path.depth, separator, target_right);
+        return insert_up(path, separator, right_page, target_right);
     }
 
     // A ghost separator keeps its key bytes only while some index node names
@@ -1306,6 +1610,7 @@ public:
         std::uint64_t leaf = 0;
         Status st = descend(key, path, equal, pos, leaf);
         if (st != Status::ok) return st;
+        search_leaf_ = 0; // Only a completed edit can publish its new position.
         Entry entry;
         entry.key_len = key_len;
         entry.val_word = (val_len << 2) | kLive;
@@ -1328,6 +1633,7 @@ public:
             if (st != Status::ok) return st;
             st = blob_free(old.val_loc);
             if (st != Status::ok) return st;
+            remember_search(path, leaf, pos);
             result = handle;
             return Status::ok;
         }
@@ -1342,6 +1648,7 @@ public:
         st = tree_insert(path, leaf, pos, handle);
         if (st != Status::ok) return st;
         ++cur_.record_count;
+        remember_search(path, leaf, pos);
         result = handle;
         return Status::ok;
     }
@@ -1352,6 +1659,8 @@ public:
         std::uint64_t handle = 0;
         const Status st = put_impl(key, value, handle);
         if (st != Status::ok) {
+            search_leaf_ = left_search_.leaf = right_search_.leaf = recent_search_.leaf = 0;
+            invalidate_handle_routes();
             poisoned_ = true;
             return backing_io_failed_ ? Status::io_error : Status::programming_error;
         }
@@ -1372,6 +1681,8 @@ public:
         st = leaf_entry(leaf, pos, found);
         if (st != Status::ok) return st;
         if (found != handle) return Status::corrupt;
+        search_leaf_ = 0; // Erasure can prune pages and release ghost fences.
+        left_search_.leaf = right_search_.leaf = recent_search_.leaf = 0;
         bool named = false;
         for (unsigned level = 0; level < path.depth; ++level) {
             const std::uint32_t c = path.slot[level];
@@ -1744,6 +2055,16 @@ public:
     std::uint64_t reads_ = 0;
     std::uint64_t writes_ = 0;
     std::uint64_t syncs_ = 0;
+    // Disposable index metadata only, included in the fixed workspace charge.
+    // No logical bytes, answers or caller sources are cached here. Successful
+    // insertions repair this route during splits; rollback/erase discard it.
+    Path search_path_{};
+    std::uint64_t search_leaf_ = 0;
+    std::uint32_t search_pos_ = 0;
+    SearchRoute left_search_{}, right_search_{}, recent_search_{};
+    // Fixed physical radix routes, charged in required_bytes(sizeof(Core)).
+    // Roots growing, leaf pruning and rollback invalidate both.
+    HandleRoute handle_routes_[2]{};
     Super cur_{};
     Super snap_{};
     bool active_ = false;

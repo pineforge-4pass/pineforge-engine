@@ -512,7 +512,12 @@ void object_store_allocation_failure() {
     ScratchFile filler;
     fill_arena(filler);
     auto backing = make_script_scratch_backing();
-    auto store = pineforge::detail::o1::Store::open(object_shape(), *backing);
+    // expectation corrected: implicit default control -> explicit unbounded control,
+    // because C14 requires both status-only and production carried paths on the new default.
+    const auto shape = object_shape();
+    require(shape.max_live_objects == 0, "carried allocation control needs the unbounded default");
+    auto store = pineforge::detail::o1::Store::open(shape, *backing);
+    require(store->stats().max_live_objects == 0, "Store changed the carried control's default");
     auto transaction = store->begin();
     AllocationFault fault;
     fault.arm();

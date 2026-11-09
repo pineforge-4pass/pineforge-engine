@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "00b60fe00cb9371b5e5be06f671217e3d14ed0f612434dae640bed2aabddd699"
+    "catalogSha256": "7e903f977be655901c877a3550008aeee19b7f69a9ecfad986ca6f0d9129c3be"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -64,7 +64,7 @@
           "runtime_history_budget_exhausted: configured={configured} used={used} needed={needed}"
         ],
         "retryable": false,
-        "since": "1.10.1"
+        "since": "1.11.0"
       }
     },
     {
@@ -94,7 +94,7 @@
           "runtime context owned storage observation is incomplete"
         ],
         "retryable": false,
-        "since": "1.10.1"
+        "since": "1.11.0"
       }
     },
     {

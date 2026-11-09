@@ -2165,7 +2165,7 @@ void registry_rows() {
             const auto expected_class = name == "runtime_history_budget_exhausted"
                 ? RunFailureClass::resource : RunFailureClass::unsupported;
             const Json* since = entry.find("since");
-            CHECK_EQ("runtime catalog since", since ? since->string : "", "1.10.1");
+            CHECK_EQ("runtime catalog since", since ? since->string : "", "1.11.0");
             CHECK(pineforge::run_failure_code_class(code) == expected_class);
             CHECK(!pineforge::run_failure_code_retryable(code));
             const Json* args = entry.find("args");
