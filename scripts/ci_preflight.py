@@ -3561,7 +3561,7 @@ RELEASE_PREBUILT_LEGACY_STEPS = r'''
           # VERSION has no tag at all.
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DEigen3_DIR=/usr/share/eigen3/cmake \
+            -DEigen3_DIR:PATH=/usr/share/eigen3/cmake \
             -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
             -DPINEFORGE_BUILD_TESTS=OFF \
             -DPINEFORGE_BUILD_TUTORIAL=OFF \
@@ -3981,7 +3981,7 @@ RELEASE_OPTION_C_JOBS = {
           # VERSION has no tag at all.
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DEigen3_DIR=/usr/share/eigen3/cmake \
+            -DEigen3_DIR:PATH=/usr/share/eigen3/cmake \
             -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
             -DPINEFORGE_BUILD_TESTS=OFF \
             -DPINEFORGE_BUILD_TUTORIAL=OFF \

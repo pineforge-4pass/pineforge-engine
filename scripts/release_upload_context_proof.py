@@ -28,7 +28,7 @@ import threading
 from urllib.parse import parse_qs, urlsplit
 
 
-BASELINE_SHA256 = "6f4e75db530c9c0cc13194145801a714b9b3a787fc2837059a0607d41e4abefa"
+BASELINE_SHA256 = "3cae61d4909db55623e69a349775c6703a9a500141ba72fc345379b01c614abd"
 BASELINE_GIT_BLOB = "ae19f9e7b4573048b3b0b40bd2e567f6be4e5e98"
 SYNTHETIC_TOKEN = "UNIT_DUMMY_NOT_A_CREDENTIAL"
 REPOSITORIES = ("pineforge-4pass/pineforge-engine", "fixture-owner/other-repository")

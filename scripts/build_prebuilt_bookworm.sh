@@ -160,7 +160,7 @@ inside_build() {
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_COMPILER=/usr/bin/gcc \
         -DCMAKE_CXX_COMPILER=/usr/bin/g++ \
-        -DEigen3_DIR=/usr/share/eigen3/cmake \
+        -DEigen3_DIR:PATH=/usr/share/eigen3/cmake \
         -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
         -DPINEFORGE_BUILD_TESTS=OFF \
         -DPINEFORGE_BUILD_TUTORIAL=OFF \

@@ -1186,7 +1186,7 @@ class ProtectedGkeRunners(unittest.TestCase):
         self.assertNotIn('dpkg-query', install)
         # The ARM configure consumes exactly the system Eigen the ARM step asserted.
         for line in ("        if: matrix.triple == 'linux-aarch64'",
-                     '            -DEigen3_DIR=/usr/share/eigen3/cmake \\',
+                     '            -DEigen3_DIR:PATH=/usr/share/eigen3/cmake \\',
                      '            -DFETCHCONTENT_FULLY_DISCONNECTED=ON \\',
                      "          grep -Fx 'Eigen3_DIR:PATH=/usr/share/eigen3/cmake' build/CMakeCache.txt"):
             self.assertIn(line, ci_preflight._code(configure))
@@ -1253,7 +1253,7 @@ class ProtectedGkeRunners(unittest.TestCase):
                 (arm_name, arm_name, 'Assert Eigen3 3.4.0 on arm64', False),
                 (arm_name, arm, '', False),
                 # Configure: the Eigen directory, the cache proof and offline FetchContent.
-                (configure_name, '-DEigen3_DIR=/usr/share/eigen3/cmake',
+                (configure_name, '-DEigen3_DIR:PATH=/usr/share/eigen3/cmake',
                  '-DEigen3_DIR=/other/eigen', False),
                 (configure_name,
                  "grep -Fx 'Eigen3_DIR:PATH=/usr/share/eigen3/cmake' build/CMakeCache.txt",
@@ -12821,10 +12821,10 @@ class SplitHostedReleaseAdmission(unittest.TestCase):
         announce_compare_fixture_paths(fixture, legacy, gke_fixture, release)
         split_bytes = fixture.read_bytes()
         self.assertEqual(hashlib.sha256(split_bytes).hexdigest(),
-                         '00e84f8d45028105c580ac84818ccdd96ff08aeab352286273a29a02eaeed062')
+                         '0c782f0b663c83fcd0ea47646ba3f4f24a87d59b94cde51d95bb95407218b310')
         legacy_bytes = legacy.read_bytes()
         self.assertEqual(hashlib.sha256(legacy_bytes).hexdigest(),
-                         '3f6443192ad993e59e543b85ef00ebca226dba4a2e4c2647a02ac371daa2b267')
+                         '9572e9f99ef22b7d4aa21fcab2009deb812f00b682d65184c867b4d768e47eee')
         gke_bytes = gke_fixture.read_bytes()
         self.assertEqual(hashlib.sha256(gke_bytes).hexdigest(),
                          '21025075090a0a40bfd7360e54a36a0c9bbac9bb8109fbbaa86edce347c27b87')
@@ -13151,7 +13151,7 @@ class SplitHostedReleaseAdmission(unittest.TestCase):
             ('Install Eigen3 (Linux)', 'sudo apt-get install -y libeigen3-dev', 'true'),
             ('Assert Eigen3 3.4.0 on ARM', 'EIGEN_MAJOR_VERSION[[:space:]]+4',
              'EIGEN_MAJOR_VERSION[[:space:]]+3'),
-            ('Configure', '-DEigen3_DIR=/usr/share/eigen3/cmake', '-DEigen3_DIR=/outside'),
+            ('Configure', '-DEigen3_DIR:PATH=/usr/share/eigen3/cmake', '-DEigen3_DIR:PATH=/outside'),
             ('Configure', '-DFETCHCONTENT_FULLY_DISCONNECTED=ON', '-DFETCHCONTENT_FULLY_DISCONNECTED=OFF'),
             ('Build', 'cmake --build build -j 4', 'true'),
             ('Install to staging', 'cmake --install build', 'true'),
