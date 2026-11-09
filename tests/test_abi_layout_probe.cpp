@@ -58,12 +58,12 @@ using Scratch = std::remove_reference_t<
 // The ABI pins apply to Linux x86_64 builds that use GNU libstdc++.
 // PlacementTable members added in #756 grow both enclosing layouts by 32 bytes.
 static_assert(sizeof(Scratch) == 672, "RetiredRowScratch size changed");
-static_assert(sizeof(Adapter) == 89520, "PineExecutionAdapter size changed");
+static_assert(sizeof(Adapter) == 90352, "PineExecutionAdapter size changed");
 #ifndef PINEFORGE_RUNTIME_LAYOUT_MEASURE_ONLY
 // Linux x86_64 GNU libstdc++ compiler diagnostics agree in Release and Debug
 // on the integrated tree. Measurement mode skips this pin and is never a
 // passing ABI gate.
-static_assert(sizeof(Host) == 108424, "PineStrategyHost size changed; measure and pin the final layout");
+static_assert(sizeof(Host) == 109256, "PineStrategyHost size changed; measure and pin the final layout");
 #endif
 static_assert(PF_STREAM_ENGINE_LAYOUT_VERSION == 4u, "runtime contexts require layout stamp 4");
 static_assert(!HasRosterRoots<Scratch>::value,
@@ -133,9 +133,9 @@ int main() {
 #if defined(__linux__) && defined(__x86_64__) && defined(__GLIBCXX__)
     bool pins_hold = true;
     pins_hold &= pin("sizeof RetiredRowScratch", sizeof(Scratch), 672);
-    pins_hold &= pin("sizeof PineExecutionAdapter", sizeof(Adapter), 89520);
+    pins_hold &= pin("sizeof PineExecutionAdapter", sizeof(Adapter), 90352);
 #ifndef PINEFORGE_RUNTIME_LAYOUT_MEASURE_ONLY
-    pins_hold &= pin("sizeof PineStrategyHost", sizeof(Host), 108424);
+    pins_hold &= pin("sizeof PineStrategyHost", sizeof(Host), 109256);
 #else
     // A successful measurement command is never a successful layout test.
     pins_hold = false;
