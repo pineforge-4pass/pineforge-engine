@@ -197,11 +197,11 @@ int main() {
     pins_hold &= pin("RetiredRowScratch::origin_fronts_pinned",
                      member_offset(adapter.*access(RetiredScratch{}), &Scratch::origin_fronts_pinned), 664);
     pins_hold &= pin("PineExecutionAdapter::pine_view_",
-                     member_offset(adapter, access(BeforeScratch{})), 88240);
+                     member_offset(adapter, access(BeforeScratch{})), 89072);
     pins_hold &= pin("PineExecutionAdapter::retired_row_scratch_",
-                     member_offset(adapter, access(RetiredScratch{})), 88248);
+                     member_offset(adapter, access(RetiredScratch{})), 89080);
     pins_hold &= pin("PineExecutionAdapter::staged_scopes_",
-                     member_offset(adapter, access(AfterScratch{})), 88920);
+                     member_offset(adapter, access(AfterScratch{})), 89752);
     pins_hold &= pin("PineStrategyHost::adapter_",
                      member_offset(host, access(HostAdapter{})), 6440);
     return pins_hold ? 0 : 1;
