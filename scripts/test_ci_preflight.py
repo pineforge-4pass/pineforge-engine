@@ -12864,6 +12864,9 @@ class SplitHostedReleaseAdmission(unittest.TestCase):
             with self.subTest(jobs=tuple(_jobs(workflow))):
                 self.assertIn(typed, workflow)
                 self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(workflow), [])
+                self.assertEqual(ci_preflight.runner_findings({'release.yml': workflow}), [])
+                self.assertEqual(main_admission_data_findings(
+                    {'gke-pr.yml': self.gke, 'release.yml': workflow}), [])
                 reverted = workflow.replace(typed, untyped)
                 self.assertNotEqual(reverted, workflow)
                 self.assertTrue(ci_preflight.release_prebuilt_workflow_findings(reverted))

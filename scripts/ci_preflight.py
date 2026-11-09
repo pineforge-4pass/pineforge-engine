@@ -4186,7 +4186,8 @@ def prebuilt_hosted_diagnostic_findings(workflow: str) -> list[str]:
 # expectation corrected: daaf2fe0541b5d0f8aab0746b35dcf069862afa3 -> f02008afa4d3503e3b71531b26853f7e712c9ffe, because hosted transport records real Docker versions and host UID/GID under /home/runner/work.
 # Host UID 1001 and the container's 1001:123 identity remain required.
 # expectation corrected: f02008afa4d3503e3b71531b26853f7e712c9ffe -> dc2f8a2768eed52109d49d1d1098f22201710477, because Docker's image Id is pinned to the recorded config digest, separately from the unchanged registry manifest digest.
-RELEASE_BOOKWORM_HELPER_BLOB = 'dc2f8a2768eed52109d49d1d1098f22201710477'
+# expectation corrected: dc2f8a2768eed52109d49d1d1098f22201710477 -> a7ecf38c891bc81424a89d8b97e35880cea9bd15, because the configure passes -DEigen3_DIR:PATH= so the cache line it checks is written with its type; the rest of the helper is unchanged.
+RELEASE_BOOKWORM_HELPER_BLOB = 'a7ecf38c891bc81424a89d8b97e35880cea9bd15'
 # The helper delegates the shipped-archive execution to this exact consumer.
 # This is a source contract, never a native-runtime verdict.
 RELEASE_BOOKWORM_CONSUMER_BLOB = 'd066968913c0d4ff7358e6fd4dde2a794e1be600'
