@@ -12853,6 +12853,22 @@ class SplitHostedReleaseAdmission(unittest.TestCase):
         self.assertIn(finding, main_admission_data_findings(
             {'gke-pr.yml': self.gke, 'release.yml': changed}))
 
+    def test_typed_eigen_dir_flag_is_admitted_in_both_layouts(self):
+        # The untyped flag leaves Eigen3_DIR UNINITIALIZED in the cache, so the
+        # reviewed grep for Eigen3_DIR:PATH fails; the typed flag is admitted.
+        untyped = ci_preflight.EIGEN_DIR_UNTYPED
+        typed = ci_preflight.EIGEN_DIR_TYPED
+        for workflow in (self.split, self.legacy):
+            changed = workflow.replace(untyped, typed)
+            with self.subTest(jobs=tuple(_jobs(workflow))):
+                self.assertNotEqual(changed, workflow)
+                self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(changed), [])
+                self.assertEqual(ci_preflight.runner_findings({'release.yml': changed}), [])
+                self.assertEqual(main_admission_data_findings(
+                    {'gke-pr.yml': self.gke, 'release.yml': changed}), [])
+        moved = self.split.replace(untyped, '-DEigen3_DIR:PATH=/outside')
+        self.assertTrue(ci_preflight.release_prebuilt_workflow_findings(moved))
+
     def test_legacy_and_split_layouts_dispatch_through_real_parsers(self):
         # Exercise the matrix forms and the intended split through the same
         # checker entry points, independently of later workflow cutovers.
