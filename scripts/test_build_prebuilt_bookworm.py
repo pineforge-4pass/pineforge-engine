@@ -514,7 +514,7 @@ class BookwormTransport(unittest.TestCase):
                 ("target=/output", "target=/var/run/docker.sock"),
                 ("source=$source_dir", "source=$workspace/.git"),
                 ("CMAKE_PROJECT_INCLUDE", "CMAKE_PROJECT_INCLUDE_BEFORE"),
-                ("Eigen3_DIR=/usr/share/eigen3/cmake", "Eigen3_DIR=/host/eigen"),
+                ("Eigen3_DIR:PATH=/usr/share/eigen3/cmake", "Eigen3_DIR:PATH=/host/eigen"),
                 ("PINEFORGE_VERSION_SOURCE=FILE", "PINEFORGE_VERSION_SOURCE=AUTO"),
                 ("FETCHCONTENT_FULLY_DISCONNECTED=ON", "FETCHCONTENT_FULLY_DISCONNECTED=OFF"),
                 ("EIGEN_MINOR_VERSION[[:space:]]+0", "EIGEN_MINOR_VERSION[[:space:]]+1"),
