@@ -105,16 +105,16 @@ The tables below list the catalog at this tree.
 
 The catalog contains 87 named failure codes: 38 first released in 1.4.0,
 26 first released in 1.5.0, 5 added in 1.7.0, 10 added in 1.9.0
-(3 run-quota codes and 7 report-channel codes), 2 added in 1.10.1, and
-6 added in 1.11.0. One unnamed `none` sentinel gives 88 registry entries;
-existing numbers stay fixed.
+(3 run-quota codes and 7 report-channel codes), and 8 added in 1.11.0.
+One unnamed `none` sentinel gives 88 registry entries; existing numbers stay
+fixed.
 
-The 1.10.1 additions are `runtime_history_budget_exhausted` (class
+The 1.11.0 additions are `runtime_history_budget_exhausted` (class
 `resource`), the refusal of a dynamic runtime context that exceeds its
-explicitly configured history storage budget, and
+explicitly configured history storage budget;
 `runtime_storage_observation_incomplete` (class `unsupported`), the refusal of
-a hard runtime history budget whose owned-storage observation is incomplete.
-The 1.11.0 additions are `pine_map_capacity_exceeded` (class
+a hard runtime history budget whose owned-storage observation is incomplete;
+`pine_map_capacity_exceeded` (class
 `strategy_limit`), the refusal of a distinct map insertion beyond that map's
 configured pair limit, and five class `resource` refusals of an actual
 reservation beyond a selected capacity bound:
@@ -147,9 +147,9 @@ bounded cohort table's historical distinct-ID count or aggregate ID-byte
 budget (`U/B_U`, default 65,536 IDs / 4,194,304 bytes).
 `resource=cohort_orders_live` identifies the separate 4,096 live-order-ID cap.
 `resource=cohort` remains valid for the refusal of an ID longer than 64 bytes,
-generic cohort-region capacity and the generic store's live-object cap.
-The labels preserve the existing message text, limits and refusal order;
-the independent `report_sink_failed` argument `store=cohort` is unchanged.
+generic cohort-region capacity and an explicitly finite generic Store live-object policy.
+The former default of 1,048,576 is now 0 (unbounded); Store policy honors exact native limits, and finite-limit text omits the approved-maximum clause.
+Only native embedders/tests set this policy; scripts need recompilation with new headers for the default. `report_sink_failed`'s `store=cohort` is unchanged.
 
 `report_mode_unsupported` (code 65) also covers a native begin when
 `SUMMARY_ONLY` (the v1 mode or the pending legacy equity mode) is combined with

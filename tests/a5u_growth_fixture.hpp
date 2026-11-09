@@ -17,7 +17,7 @@
 // retaining this entire graph grows the backing's memory charge with bars.
 //
 // LIVE-OBJECT LIMIT. Every node is one Store object and a Store admits at most
-// Shape::max_live_objects live objects (default 1,048,576, the cap). The graph
+// Shape::max_live_objects live objects (explicitly 1,048,576 here). The graph
 // holds its control record, its root and three nodes per bar, so the 100,000-
 // bar row stays below the limit. The 1,000,000-bar row reaches it: the bar
 // that would create the (limit + 1)-th object stops the run with the typed
@@ -313,6 +313,9 @@ void drive(Family& family, std::size_t count, std::size_t admitted, const std::s
 // nodes per bar (object, vector, string; the aliased vector is one node).
 inline constexpr std::uint64_t kFixedObjects = 2;
 inline constexpr std::uint64_t kNodesPerBar = 3;
+// expectation corrected: implicit default 1,048,576 -> explicit finite 1,048,576,
+// because the unbounded default must not turn this refusal row into 3M objects.
+inline constexpr std::uint64_t kGrowthLiveObjectLimit = UINT64_C(1048576);
 // Bars a Store with this live-object limit admits. The bar that would create
 // the (limit + 1)-th live object is refused and rolled back; earlier bars stay.
 inline std::size_t admitted_bars(std::size_t count, std::uint64_t limit) {
@@ -327,9 +330,10 @@ inline int run(std::size_t count, int argc, char** argv) {
                 "usage: test_a5u_growth [--native]");
         const bool native = !PF_UDT_HAS_GRAPH || argc == 2;
 #if PF_UDT_HAS_GRAPH
-        // The test Shape keeps the default limit, which is the cap.
+        auto growth_shape = a5u_test::shape(kResidentPages);
+        growth_shape.max_live_objects = kGrowthLiveObjectLimit;
         const std::size_t admitted =
-            native ? count : admitted_bars(count, pineforge::detail::o1::kMaxLiveObjectsCap);
+            native ? count : admitted_bars(count, kGrowthLiveObjectLimit);
 #else
         const std::size_t admitted = count;
 #endif
@@ -348,14 +352,14 @@ inline int run(std::size_t count, int argc, char** argv) {
             family.finish();
         } else {
 #if PF_UDT_HAS_GRAPH
-            a5u_test::StoreFixture fixture(kResidentPages);
+            a5u_test::StoreFixture fixture(growth_shape);
             a5u_test::CountingStore operations(*fixture.store);
             pineforge::detail::o1::UdtGraph graph(operations);
             const auto empty_live = fixture.store->stats().bytes_live;
             const auto initial = fixture.store->stats();
-            require(initial.max_live_objects == pineforge::detail::o1::kMaxLiveObjectsCap &&
+            require(initial.max_live_objects == kGrowthLiveObjectLimit &&
                         initial.objects_live == 1,
-                    "growth Store does not hold only its control record under the default limit");
+                    "growth Store does not hold only its control record under its finite limit");
             GraphFamily family(graph, operations);
             drive(family, count, admitted, a5u_test::object_limit_text(initial.max_live_objects));
             const auto stats = fixture.store->stats();
