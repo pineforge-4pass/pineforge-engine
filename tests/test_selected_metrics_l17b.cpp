@@ -1948,10 +1948,18 @@ void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
     CHECK(defaults.ledger_rows.automatic());
     CHECK(defaults.ledger_cache_max_bytes == TradeLedger::kDefaultLedgerCacheMaxBytes);
     CHECK(CacheDefaults::ledger_cache_rows(defaults.ledger_rows) == TradeLedger::kSinkCacheRows);
-    // 1,000 consecutive ordinals fill 1,000 sets, sixty-four to a page: sixteen
-    // whole pages of 256 slots (4,096 slots) behind the page table.
-    const auto small_slots = ledger_oracle::touched_slots(rows, 0, 1000);
-    CHECK(small_slots == 16 * 256);
+    // Every population below holds fewer rows than the default cache (215,070),
+    // so each row owns the slot of its ordinal and the pages follow the
+    // population: 1,000 rows lie on four whole pages of 256 slots (1,024 slots),
+    // 70,000 on 274 pages (70,144 slots), 100,000 on 391 pages (100,096 slots),
+    // each behind the page table. The plateau past the cap, where the cache stops
+    // growing with the trade count, is witnessed by test_report_sink_trade_residency.
+    const auto small_slots = ledger_oracle::touched_slots(rows, 1000, 0, 1000);
+    const auto capped_slots = ledger_oracle::touched_slots(rows, 70000, 0, 70000);
+    const auto large_slots = ledger_oracle::touched_slots(rows, 100000, 0, 100000);
+    CHECK(small_slots == 4 * 256);
+    CHECK(capped_slots == 274 * 256);
+    CHECK(large_slots == 391 * 256);
     for (int mode = 0; mode < 3; ++mode) {
         const bool selected = mode == 1;
         const bool observed = mode == 2;
@@ -1963,8 +1971,9 @@ void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
             selected ? "trades-selected-100k.ndjson" : observed
                 ? "trades-observed-100k.ndjson" : "trades-ordinary-100k.ndjson",
             100000, selected, false, false, observed);
-        // Both populations exceed the declared cap, so lazy growth has
-        // finished. Compare their actual heap usage, not just a large ceiling.
+        // Both populations are below the declared cap, so each has committed
+        // exactly the pages its own ordinals reach. Compare their actual heap
+        // usage, not just a large ceiling.
         const auto capped = trade_capture_and_read_storage(directory,
             selected ? "trades-selected-70k.ndjson" : observed
                 ? "trades-observed-70k.ndjson" : "trades-ordinary-70k.ndjson",
@@ -1976,13 +1985,14 @@ void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
                     large.largest_request, large.peak_live);
         // Count EVERY replaceable allocation and temporary buffer. A cache
         // allocated before this interval is covered by the exact resident-byte
-        // assertions too. The 1k run must retain only the sixteen pages its
-        // 1,000 ordinals reach; 70k and 100k reach every set and must both stop
-        // at the declared constant, not trade count.
+        // assertions too. Each run must retain exactly the pages its own ordinals
+        // reach (4, 274 and 391 pages), never the whole declared constant.
         CHECK(small.ledger_cache_bytes
               == fixed_bytes + page_table_bytes + small_slots * TradeLedger::kLedgerEntryBytes);
-        CHECK(capped.ledger_cache_bytes == cache_bound);
-        CHECK(large.ledger_cache_bytes == cache_bound);
+        CHECK(capped.ledger_cache_bytes
+              == fixed_bytes + page_table_bytes + capped_slots * TradeLedger::kLedgerEntryBytes);
+        CHECK(large.ledger_cache_bytes
+              == fixed_bytes + page_table_bytes + large_slots * TradeLedger::kLedgerEntryBytes);
         const auto window = report_sink::kScratchWindowBytes;
         // The ordinary reader keeps kScratchWindowPoints complete shared
         // lines, each with its own metadata (docs/design/tail-page-windows.md).
@@ -2003,10 +2013,12 @@ void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
         CHECK(small.largest_request <= small_budget && small.peak_live <= small_budget);
         CHECK(capped.largest_request <= budget && large.largest_request <= budget);
         CHECK(capped.peak_live <= budget && large.peak_live <= budget);
-        // Formatting can differ by integer width; the plateau tolerance
-        // remains one fixed production scratch window, as in the old witness.
-        CHECK(large.peak_live <= capped.peak_live + window);
-        CHECK(capped.peak_live <= large.peak_live + window);
+        // Formatting can differ by integer width; the tolerance remains one fixed
+        // production scratch window, as in the old witness, around the pages the
+        // larger population commits beyond the smaller one.
+        const auto page_growth = (large_slots - capped_slots) * TradeLedger::kLedgerEntryBytes;
+        CHECK(large.peak_live <= capped.peak_live + page_growth + window);
+        CHECK(capped.peak_live + page_growth <= large.peak_live + window);
         CHECK(large.largest_request <= capped.largest_request + window);
         CHECK(capped.largest_request <= large.largest_request + window);
     }
