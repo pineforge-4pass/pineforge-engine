@@ -1184,6 +1184,545 @@ void forced_eviction_then_reread_by_handle() {
     verify(*s, model, 512, numeric_probes(), 1, true, "after forced eviction");
 }
 
+bool ordered_search_growth() {
+    // Use the same charged backing and independent model as the eviction
+    // tests. Warm past the small handle-table height transitions before
+    // comparing marginal work; there is no timing budget or fitted allowance.
+    constexpr std::size_t warm = 2048;
+    constexpr std::array<std::size_t, 3> counts{{4096, 8192, 16384}};
+    bool flat = true;
+    for (const std::size_t page_size : {std::size_t{512}, std::size_t{4096}}) {
+        for (unsigned shape = 0; shape < 4; ++shape) {
+            const bool textual = shape >= 2;
+            const bool descending = (shape & 1) != 0;
+            OrderProbe order;
+            const auto ordering = textual ? order_lex(&order)
+                : descending ? order_numeric_desc(&order) : order_numeric(&order);
+            Model model(textual ? cmp_lex_text
+                : descending ? cmp_numeric_desc_text : cmp_numeric_text);
+            Rig rig(page_size, (64 * 1024 * 1024) / page_size);
+            Session s(rig, config_for(page_size, 2, 1, 1, ordering, ScratchOpenMode::create_empty));
+            require_status(s->status(), ScratchStatus::ok, "ordered growth open");
+            const auto resident = s->stats().resident_bytes;
+            // A common prefix larger than the minimum cache, including NULs,
+            // forces the comparator to read beyond any inline-key shortcut.
+            const Text prefix = Text(1201, 'p') + Text("\0ordered/", 9);
+            const auto key_at = [&](std::size_t i) {
+                return textual ? prefix + std::to_string(descending ? counts.back() + warm - i : i)
+                               : key_u64(3 * i + 7);
+            };
+            const auto append = [&](std::size_t i, bool seek) {
+                const Text key = key_at(i);
+                if (seek) {
+                    const auto at = model.lower(key);
+                    for (int repeat = 0; repeat < 8; ++repeat) {
+                        ScratchSpanSource probe(bytes_of(key));
+                        ScratchHandle found = 0xBAD;
+                        require_status(s->lower_bound(probe, found),
+                            at == model.rows.size() ? ScratchStatus::end : ScratchStatus::ok,
+                            "ordered prospective-key seek");
+                        require(found == (at == model.rows.size() ? scratch_no_handle : model.rows[at].handle),
+                                "ordered prospective-key seek agrees with the complete model");
+                    }
+                }
+                begin_ok(*s);
+                put_ok(*s, model, key, key_u64(mix(i + 91)));
+                commit_ok(*s);
+            };
+            std::size_t inserted = 0;
+            while (inserted < warm) append(inserted++, false);
+            std::array<std::uint64_t, counts.size()> reads{}, comparisons{};
+            std::array<std::size_t, counts.size()> rows{};
+            for (std::size_t leg = 0; leg < counts.size(); ++leg) {
+                const auto before_reads = rig.counters.reads;
+                const auto before_writes = rig.counters.writes;
+                const auto before_calls = order.calls;
+                rows[leg] = counts[leg] - inserted;
+                while (inserted < counts[leg]) append(inserted++, true);
+                reads[leg] = rig.counters.reads - before_reads;
+                comparisons[leg] = order.calls - before_calls;
+                require(reads[leg] > rows[leg] && rig.counters.writes - before_writes > rows[leg]
+                        && comparisons[leg] >= 8 * rows[leg],
+                        "ordered growth reaches actual backing and comparator work");
+                require(s->record_count() == counts[leg] && s->stats().resident_bytes == resident,
+                        "ordered growth retains every row in a fixed workspace");
+                s.check_io("ordered growth");
+                std::printf("SCRATCH_ORDERED page=%zu shape=%u N=%zu rows=%zu reads=%llu "
+                            "read_bytes=%llu comparisons=%llu resident=%llu\n",
+                            page_size, shape, counts[leg], rows[leg],
+                            static_cast<unsigned long long>(reads[leg]),
+                            static_cast<unsigned long long>(reads[leg] * page_size),
+                            static_cast<unsigned long long>(comparisons[leg]),
+                            static_cast<unsigned long long>(resident));
+            }
+            verify(*s, model, page_size, {key_at(0), key_at(warm), key_at(counts.back())},
+                   ordering.id, true, "ordered growth complete witness");
+            std::vector<std::byte> page(page_size);
+            std::uint64_t ordered = 0, state = 0;
+            require_status(s->ordered_digest({page.data(), page.size()}, ordered), ScratchStatus::ok,
+                           "ordered growth content digest");
+            require_status(s->state_digest({page.data(), page.size()}, state), ScratchStatus::ok,
+                           "ordered growth state digest");
+            require(ordered == expected_ordered_digest(model)
+                    && state == expected_state_digest(model, ordering.id),
+                    "ordered growth preserves content, handles and allocation state");
+            if (textual) require(order.max_end > 1024, "ordered growth compares the complete long keys");
+            std::printf("SCRATCH_ORDERED_WITNESS page=%zu shape=%u ordered=%llu state=%llu\n",
+                        page_size, shape, static_cast<unsigned long long>(ordered),
+                        static_cast<unsigned long long>(state));
+            s.close();
+            s.open(config_for(page_size, 3, 1, 1, ordering, ScratchOpenMode::reopen));
+            require_status(s->status(), ScratchStatus::ok, "ordered growth reopen");
+            verify(*s, model, page_size, {key_at(warm)}, ordering.id, true, "ordered growth reopened witness");
+            s.check_io("ordered growth reopened");
+            for (std::size_t leg = 1; leg < counts.size(); ++leg) {
+                flat = flat
+                    && static_cast<long double>(reads[leg]) * rows[0] * 8
+                        <= static_cast<long double>(reads[0]) * rows[leg] * 9
+                    && static_cast<long double>(comparisons[leg]) * rows[0] * 8
+                        <= static_cast<long double>(comparisons[0]) * rows[leg] * 9;
+            }
+            std::fflush(stdout);
+        }
+    }
+    return flat;
+}
+
+bool interleaved_range_growth() {
+    // Appends and range scans share a store. A single recent path is not
+    // sufficient when probes alternate between the two ends on every row.
+    // Charge the real backing/comparator, with the same minimum workspace
+    // and marginal populations as the ordered-key growth test.
+    constexpr std::size_t warm = 2048;
+    constexpr std::array<std::size_t, 3> counts{{4096, 8192, 16384}};
+    bool flat = true;
+    for (const std::size_t page_size : {std::size_t{512}, std::size_t{4096}}) {
+        Rig rig(page_size, (16 * 1024 * 1024) / page_size);
+        OrderProbe order;
+        Model model(cmp_numeric_text);
+        Session s(rig, config_for(page_size, 2, 1, 1, order_numeric(&order), ScratchOpenMode::create_empty));
+        require_status(s->status(), ScratchStatus::ok, "interleaved growth open");
+        const auto resident = s->stats().resident_bytes;
+        const std::array<Text, 2> probes{{key_u64(0), key_u64(UINT64_MAX)}};
+        const auto seek = [&](const Text& key) {
+            const auto at = model.lower(key);
+            ScratchSpanSource probe(bytes_of(key));
+            ScratchHandle found = 0xBAD;
+            require_status(s->lower_bound(probe, found),
+                           at == model.rows.size() ? ScratchStatus::end : ScratchStatus::ok,
+                           "interleaved range seek");
+            require(found == (at == model.rows.size() ? scratch_no_handle : model.rows[at].handle),
+                    "interleaved range seek agrees with the complete model");
+        };
+        const auto append = [&](std::size_t i) {
+            begin_ok(*s);
+            put_ok(*s, model, key_u64(3 * i + 7), key_u64(mix(i + 137)));
+            commit_ok(*s);
+        };
+        std::size_t inserted = 0;
+        while (inserted < warm) append(inserted++);
+        std::array<std::uint64_t, counts.size()> reads{}, comparisons{};
+        std::array<std::size_t, counts.size()> rows{};
+        for (std::size_t leg = 0; leg < counts.size(); ++leg) {
+            const auto before_reads = rig.counters.reads;
+            const auto before_writes = rig.counters.writes;
+            const auto before_calls = order.calls;
+            rows[leg] = counts[leg] - inserted;
+            while (inserted < counts[leg]) {
+                for (int repeat = 0; repeat < 8; ++repeat)
+                    for (const auto& key : probes) seek(key);
+                append(inserted++);
+            }
+            reads[leg] = rig.counters.reads - before_reads;
+            comparisons[leg] = order.calls - before_calls;
+            require(reads[leg] > rows[leg] && rig.counters.writes - before_writes > rows[leg]
+                    && comparisons[leg] >= 16 * rows[leg],
+                    "interleaved growth reaches actual backing and comparator work");
+            require(s->record_count() == counts[leg] && s->stats().resident_bytes == resident,
+                    "interleaved growth retains every row in a fixed workspace");
+            s.check_io("interleaved growth");
+            std::printf("SCRATCH_INTERLEAVED page=%zu N=%zu rows=%zu reads=%llu read_bytes=%llu "
+                        "comparisons=%llu resident=%llu\n",
+                        page_size, counts[leg], rows[leg],
+                        static_cast<unsigned long long>(reads[leg]),
+                        static_cast<unsigned long long>(reads[leg] * page_size),
+                        static_cast<unsigned long long>(comparisons[leg]),
+                        static_cast<unsigned long long>(resident));
+        }
+        verify(*s, model, page_size, {probes[0], key_u64(10000), probes[1]}, 1, true,
+               "interleaved growth complete witness");
+        std::vector<std::byte> page(page_size);
+        std::uint64_t ordered = 0, state = 0;
+        require_status(s->ordered_digest({page.data(), page.size()}, ordered), ScratchStatus::ok,
+                       "interleaved growth content digest");
+        require_status(s->state_digest({page.data(), page.size()}, state), ScratchStatus::ok,
+                       "interleaved growth state digest");
+        require(ordered == expected_ordered_digest(model) && state == expected_state_digest(model, 1),
+                "interleaved growth preserves every key, value, handle and allocation state");
+        std::printf("SCRATCH_INTERLEAVED_WITNESS page=%zu ordered=%llu state=%llu\n", page_size,
+                    static_cast<unsigned long long>(ordered), static_cast<unsigned long long>(state));
+
+        // Fail the comparison on the saved OTHER end, after the current
+        // route's first fence has already rejected the probe. Saving a route
+        // must not save an answer or suppress that comparator error.
+        for (const auto& key : probes) seek(key);
+        for (const auto& key : probes) {
+            const auto calls = order.calls;
+            order.fail_from_call = calls + 2;
+            ScratchSpanSource probe(bytes_of(key));
+            ScratchHandle found = 0xBAD;
+            require_status(s->lower_bound(probe, found), ScratchStatus::io_error,
+                           "saved end route preserves comparator failure");
+            require(found == 0xBAD && order.calls == calls + 2,
+                    "saved end route reaches the failing comparison without changing output");
+            order.fail_from_call = 0;
+            seek(key);
+        }
+        const auto faults = rig.backing.read_faults();
+        rig.backing.fail_reads(true);
+        ScratchSpanSource probe(bytes_of(probes[0]));
+        ScratchHandle found = 0xBAD;
+        require_status(s->lower_bound(probe, found), ScratchStatus::io_error,
+                       "saved end route preserves backing failure");
+        rig.backing.fail_reads(false);
+        require(found == 0xBAD && rig.backing.read_faults() > faults,
+                "saved end route reaches failing backing without changing output");
+        std::printf("SCRATCH_INTERLEAVED_ERRORS page=%zu comparator_calls=%llu read_faults=%llu\n",
+                    page_size, static_cast<unsigned long long>(order.calls),
+                    static_cast<unsigned long long>(rig.backing.read_faults()));
+
+        // Both end routes are populated before a mutation that can prune
+        // pages, and again before rollback. Neither may retain a freed route
+        // or use a ghost fence that the rollback has removed.
+        for (const auto& key : probes) seek(key);
+        const auto saved = model;
+        begin_ok(*s);
+        for (std::size_t i = 0; i < 80; ++i) {
+            erase_ok(*s, model, saved.rows[i].handle);
+            erase_ok(*s, model, saved.rows[saved.rows.size() - 1 - i].handle);
+        }
+        put_ok(*s, model, probes[0], "new-first");
+        put_ok(*s, model, probes[1], "new-last");
+        for (const auto& key : probes) seek(key);
+        verify(*s, model, page_size, {probes[0], probes[1]}, 1, false, "interleaved pending witness");
+        rollback_ok(*s);
+        model = saved;
+        verify(*s, model, page_size, {probes[0], probes[1]}, 1, true, "interleaved rollback witness");
+        s.close();
+        s.open(config_for(page_size, 2, 1, 1, order_numeric(&order), ScratchOpenMode::reopen));
+        require_status(s->status(), ScratchStatus::ok, "interleaved growth reopen");
+        verify(*s, model, page_size, {probes[0], probes[1]}, 1, true, "interleaved reopened witness");
+        s.check_io("interleaved growth reopened");
+        for (std::size_t leg = 1; leg < counts.size(); ++leg) {
+            flat = flat
+                && static_cast<long double>(reads[leg]) * rows[0] * 8
+                    <= static_cast<long double>(reads[0]) * rows[leg] * 9
+                && static_cast<long double>(comparisons[leg]) * rows[0] * 8
+                    <= static_cast<long double>(comparisons[0]) * rows[leg] * 9;
+        }
+        std::fflush(stdout);
+    }
+    return flat;
+}
+
+bool interleaved_interior_growth() {
+    // Two advancing ranges share an index, with stored anchors on BOTH sides
+    // of each range. Neither frontier can use an open-end route. This covers
+    // callers inserting identities into separate domains of the same store.
+    constexpr std::size_t warm = 2048;
+    constexpr std::array<std::size_t, 3> counts{{4096, 8192, 16384}};
+    constexpr std::uint64_t gap = std::uint64_t{1} << 61;
+    bool flat = true;
+    for (const std::size_t page_size : {std::size_t{512}, std::size_t{4096}}) {
+        Rig rig(page_size, (32 * 1024 * 1024) / page_size);
+        OrderProbe order;
+        Model model(cmp_numeric_text);
+        Session s(rig, config_for(page_size, 2, 1, 1, order_numeric(&order), ScratchOpenMode::create_empty));
+        require_status(s->status(), ScratchStatus::ok, "interior growth open");
+        const auto resident = s->stats().resident_bytes;
+        for (const auto key : {std::uint64_t{0}, 2 * gap, 4 * gap, UINT64_MAX}) {
+            begin_ok(*s);
+            put_ok(*s, model, key_u64(key), key_u64(mix(key)));
+            commit_ok(*s);
+        }
+        const auto key_at = [&](unsigned range, std::size_t i) {
+            return key_u64((2 * range + 1) * gap + 3 * i + 7);
+        };
+        const auto append = [&](std::size_t i, bool seek) {
+            for (unsigned range = 0; range < 2; ++range) {
+                const auto key = key_at(range, i);
+                if (seek) {
+                    const auto at = model.lower(key);
+                    for (int repeat = 0; repeat < 8; ++repeat) {
+                        ScratchSpanSource probe(bytes_of(key));
+                        ScratchHandle found = 0xBAD;
+                        require_status(s->lower_bound(probe, found), ScratchStatus::ok,
+                                       "interior prospective-key seek");
+                        require(at < model.rows.size() && found == model.rows[at].handle,
+                                "interior seek agrees with the complete model");
+                    }
+                }
+                begin_ok(*s);
+                put_ok(*s, model, key, key_u64(mix(2 * i + range + 211)));
+                commit_ok(*s);
+            }
+        };
+        std::size_t inserted = 0;
+        while (inserted < warm) append(inserted++, false);
+        std::array<std::uint64_t, counts.size()> reads{}, comparisons{};
+        std::array<std::size_t, counts.size()> rows{};
+        for (std::size_t leg = 0; leg < counts.size(); ++leg) {
+            const auto before_reads = rig.counters.reads;
+            const auto before_writes = rig.counters.writes;
+            const auto before_calls = order.calls;
+            rows[leg] = 2 * (counts[leg] - inserted);
+            while (inserted < counts[leg]) append(inserted++, true);
+            reads[leg] = rig.counters.reads - before_reads;
+            comparisons[leg] = order.calls - before_calls;
+            require(reads[leg] > rows[leg] && rig.counters.writes - before_writes > rows[leg]
+                    && comparisons[leg] >= 8 * rows[leg],
+                    "interior growth reaches backing, writes and full comparisons");
+            require(s->record_count() == 2 * counts[leg] + 4
+                    && s->stats().resident_bytes == resident,
+                    "interior growth retains both complete ranges in a fixed workspace");
+            s.check_io("interior growth");
+            std::printf("SCRATCH_INTERIOR page=%zu N=%zu rows=%zu reads=%llu read_bytes=%llu "
+                        "comparisons=%llu resident=%llu\n", page_size, counts[leg], rows[leg],
+                        static_cast<unsigned long long>(reads[leg]),
+                        static_cast<unsigned long long>(reads[leg] * page_size),
+                        static_cast<unsigned long long>(comparisons[leg]),
+                        static_cast<unsigned long long>(resident));
+        }
+        verify(*s, model, page_size, {key_at(0, counts.back()), key_at(1, counts.back())},
+               1, true, "interior complete witness");
+        std::vector<std::byte> page(page_size);
+        std::uint64_t ordered = 0, state = 0;
+        require_status(s->ordered_digest({page.data(), page.size()}, ordered), ScratchStatus::ok,
+                       "interior content digest");
+        require_status(s->state_digest({page.data(), page.size()}, state), ScratchStatus::ok,
+                       "interior state digest");
+        require(ordered == expected_ordered_digest(model) && state == expected_state_digest(model, 1),
+                "interior routes preserve every key, value, handle and allocation state");
+        std::printf("SCRATCH_INTERIOR_WITNESS page=%zu ordered=%llu state=%llu\n", page_size,
+                    static_cast<unsigned long long>(ordered), static_cast<unsigned long long>(state));
+        const std::array<Text, 2> fronts{{key_at(0, counts.back()), key_at(1, counts.back())}};
+        const auto seek = [&](unsigned range) {
+            ScratchSpanSource probe(bytes_of(fronts[range]));
+            ScratchHandle found = 0xBAD;
+            require_status(s->lower_bound(probe, found), ScratchStatus::ok, "interior warm seek");
+            require(found == model.rows[model.lower(fronts[range])].handle,
+                    "interior warm seek still agrees with the model");
+        };
+        for (unsigned range = 0; range < 2; ++range) {
+            seek(range);
+            seek(1 - range);
+            const auto before = order.calls;
+            seek(range);
+            const auto comparisons_to_answer = order.calls - before;
+            require(comparisons_to_answer > 0, "interior route uses the real comparator");
+            seek(1 - range);
+            // Fail the last actual comparison needed for this warmed search.
+            // Retaining a route cannot substitute a previous answer for it.
+            const auto fail_at = order.calls + comparisons_to_answer;
+            order.fail_from_call = fail_at;
+            ScratchSpanSource probe(bytes_of(fronts[range]));
+            ScratchHandle found = 0xBAD;
+            const auto status = s->lower_bound(probe, found);
+            order.fail_from_call = 0;
+            require_status(status, ScratchStatus::io_error, "interior route exposes comparator failure");
+            require(found == 0xBAD && order.calls == fail_at,
+                    "interior failure reaches the last comparison and preserves output");
+            seek(range);
+        }
+        seek(1);
+        const auto faults = rig.backing.read_faults();
+        rig.backing.fail_reads(true);
+        ScratchSpanSource probe(bytes_of(fronts[0]));
+        ScratchHandle found = 0xBAD;
+        const auto failed_read = s->lower_bound(probe, found);
+        rig.backing.fail_reads(false);
+        require_status(failed_read, ScratchStatus::io_error, "interior route exposes backing failure");
+        require(found == 0xBAD && rig.backing.read_faults() > faults,
+                "interior backing failure is reached without publishing an answer");
+        std::printf("SCRATCH_INTERIOR_ERRORS page=%zu comparator_calls=%llu read_faults=%llu\n",
+                    page_size, static_cast<unsigned long long>(order.calls),
+                    static_cast<unsigned long long>(rig.backing.read_faults()));
+        s.close();
+        s.open(config_for(page_size, 2, 1, 1, order_numeric(&order), ScratchOpenMode::reopen));
+        require_status(s->status(), ScratchStatus::ok, "interior reopen");
+        verify(*s, model, page_size, numeric_probes(), 1, true, "interior reopened witness");
+        s.check_io("interior reopened");
+        for (std::size_t leg = 1; leg < counts.size(); ++leg)
+            flat = flat
+                && static_cast<long double>(reads[leg]) * rows[0] * 8
+                    <= static_cast<long double>(reads[0]) * rows[leg] * 9
+                && static_cast<long double>(comparisons[leg]) * rows[0] * 8
+                    <= static_cast<long double>(comparisons[0]) * rows[leg] * 9;
+        std::fflush(stdout);
+    }
+    return flat;
+}
+
+bool handle_route_read_growth() {
+    // Two independently moving readers revisit distant handles, as stored-key
+    // comparisons do. A compact value needs one handle-entry page and one
+    // payload page; repeatedly walking the radix root is additional work.
+    // Include a handle-height transition beyond the ordered-search grid.
+    constexpr std::array<std::size_t, 4> counts{{4096, 8192, 16384, 65536}};
+    constexpr std::size_t repeats = 256;
+    bool bounded = true;
+    for (const std::size_t page_size : {std::size_t{512}, std::size_t{4096}}) {
+        Rig rig(page_size, (64 * 1024 * 1024) / page_size);
+        Model model(cmp_numeric_text);
+        Session s(rig, config_for(page_size, 2, 1, 1, order_numeric(), ScratchOpenMode::create_empty));
+        require_status(s->status(), ScratchStatus::ok, "handle-route growth open");
+        const auto resident = s->stats().resident_bytes;
+        std::size_t inserted = 0;
+        std::uint64_t first_reads = 0;
+        for (const auto count : counts) {
+            while (inserted < count) {
+                begin_ok(*s);
+                put_ok(*s, model, key_u64(3 * inserted + 7), key_u64(mix(inserted + 173)));
+                commit_ok(*s);
+                ++inserted;
+            }
+            const std::array<std::size_t, 2> positions{{0, count - 1}};
+            const auto read_ends = [&] {
+                for (const auto i : positions) {
+                    Text value;
+                    require_status(read_text(*s, model.rows[i].handle, ScratchField::value, 0, 8, value),
+                                   ScratchStatus::ok, "handle-route endpoint read");
+                    require(value == model.rows[i].value, "handle-route reads the actual stored value");
+                }
+            };
+            read_ends();
+            read_ends();
+            const auto before = rig.counters.reads;
+            for (std::size_t i = 0; i < repeats; ++i) read_ends();
+            const auto reads = rig.counters.reads - before;
+            const auto requests = 2 * repeats;
+            require(reads >= requests && s->stats().resident_bytes == resident
+                    && s->record_count() == count,
+                    "handle-route control reaches real backing in a fixed workspace");
+            if (!first_reads) first_reads = reads;
+            bounded = bounded && reads <= 2 * requests && reads * 8 <= first_reads * 9;
+            s.check_io("handle-route growth");
+            std::printf("SCRATCH_HANDLE_ROUTE page=%zu N=%zu requests=%zu reads=%llu "
+                        "read_bytes=%llu resident=%llu\n", page_size, count, requests,
+                        static_cast<unsigned long long>(reads),
+                        static_cast<unsigned long long>(reads * page_size),
+                        static_cast<unsigned long long>(resident));
+        }
+        verify(*s, model, page_size, numeric_probes(), 1, true, "handle-route complete witness");
+        std::vector<std::byte> page(page_size);
+        std::uint64_t ordered = 0, state = 0;
+        require_status(s->ordered_digest({page.data(), page.size()}, ordered), ScratchStatus::ok,
+                       "handle-route ordered digest");
+        require_status(s->state_digest({page.data(), page.size()}, state), ScratchStatus::ok,
+                       "handle-route state digest");
+        require(ordered == expected_ordered_digest(model) && state == expected_state_digest(model, 1),
+                "handle-route preserves every key, value, handle and allocation state");
+
+        // Evict the first endpoint with the other endpoint's distinct entry
+        // and payload pages. A saved route must still read the entry and fail.
+        Text value;
+        require_status(read_text(*s, model.rows.back().handle, ScratchField::value, 0, 8, value),
+                       ScratchStatus::ok, "warm other handle before backing failure");
+        const auto faults = rig.backing.read_faults();
+        rig.backing.fail_reads(true);
+        std::array<std::byte, 8> output;
+        output.fill(std::byte{0x7a});
+        const auto sentinel = output;
+        const auto status = s->read(model.rows.front().handle, ScratchField::value, 0,
+                                    {output.data(), output.size()});
+        rig.backing.fail_reads(false);
+        require_status(status, ScratchStatus::io_error, "handle route exposes backing failure");
+        require(output == sentinel && rig.backing.read_faults() > faults,
+                "failed handle-route read reaches backing and preserves output");
+
+        const auto saved = model;
+        begin_ok(*s);
+        for (std::size_t i = 0; i < 256; ++i) erase_ok(*s, model, saved.rows[i].handle);
+        put_ok(*s, model, key_u64(1), "pending");
+        verify(*s, model, page_size, numeric_probes(), 1, false, "handle-route pruned witness");
+        rollback_ok(*s);
+        model = saved;
+        verify(*s, model, page_size, numeric_probes(), 1, true, "handle-route rollback witness");
+        s.close();
+        s.open(config_for(page_size, 2, 1, 1, order_numeric(), ScratchOpenMode::reopen));
+        require_status(s->status(), ScratchStatus::ok, "handle-route reopen");
+        verify(*s, model, page_size, numeric_probes(), 1, true, "handle-route reopened witness");
+        s.check_io("handle-route reopened");
+        std::printf("SCRATCH_HANDLE_ROUTE_WITNESS page=%zu ordered=%llu state=%llu read_faults=%llu\n",
+                    page_size, static_cast<unsigned long long>(ordered),
+                    static_cast<unsigned long long>(state),
+                    static_cast<unsigned long long>(rig.backing.read_faults()));
+        std::fflush(stdout);
+    }
+    return bounded;
+}
+
+void ordered_search_error_controls() {
+    Rig rig(512, 12000);
+    OrderProbe order;
+    Session s(rig, config_for(512, 2, 1, 1, order_numeric(&order), ScratchOpenMode::create_empty));
+    Model model(cmp_numeric_text);
+    begin_ok(*s);
+    for (std::uint64_t i = 0; i < 1200; ++i) put_ok(*s, model, key_u64(2 * i), key_u64(i + 100));
+    commit_ok(*s);
+    const Text key = key_u64(2399);
+    ScratchSpanSource probe(bytes_of(key));
+    ScratchHandle found = 0xBAD;
+    require_status(s->lower_bound(probe, found), ScratchStatus::end, "warm ordered miss");
+    order.fail_from_call = order.calls + 1;
+    found = 0xBAD;
+    require_status(s->lower_bound(probe, found), ScratchStatus::io_error, "warm seek preserves comparator failure");
+    require(found == 0xBAD, "failed warm seek leaves its output unchanged");
+    order.fail_from_call = 0;
+    begin_ok(*s);
+    order.fail_from_call = order.calls + 1;
+    found = 0xBAD;
+    require_status(put_text(*s, key, "failed", found), ScratchStatus::programming_error,
+                   "warm put preserves comparator failure");
+    require(found == 0xBAD, "failed warm put leaves its output unchanged");
+    order.fail_from_call = 0;
+    check_rollback_only(*s, 512);
+    rollback_ok(*s);
+    verify(*s, model, 512, {key}, 1, true, "warm failure rollback witness");
+
+    const auto saved = model;
+    begin_ok(*s);
+    for (std::uint64_t i = 1200; i < 1500; ++i) put_ok(*s, model, key_u64(2 * i), "aborted");
+    for (std::size_t i = 0; i < 80; ++i) erase_ok(*s, model, saved.rows[i].handle);
+    rollback_ok(*s);
+    model = saved;
+    verify(*s, model, 512, {key, key_u64(3000)}, 1, true, "split and erase rollback witness");
+    begin_ok(*s);
+    put_ok(*s, model, key, "after-rollback");
+    put_ok(*s, model, key, "replacement");
+    for (std::size_t i = 0; i < 80; ++i) erase_ok(*s, model, saved.rows[i].handle);
+    commit_ok(*s);
+    verify(*s, model, 512, numeric_probes(), 1, true, "split erase and upsert witness");
+
+    // Reopen with a cold, minimum cache. A cached route must never turn a
+    // failing backing read into an end result or an answer from saved keys.
+    s.close();
+    s.open(config_for(512, 2, 1, 1, order_numeric(&order), ScratchOpenMode::reopen));
+    require_status(s->status(), ScratchStatus::ok, "error control reopen");
+    require_status(s->lower_bound(probe, found), ScratchStatus::ok, "warm route before backing failure");
+    const auto faults = rig.backing.read_faults();
+    rig.backing.fail_reads(true);
+    found = 0xBAD;
+    require_status(s->lower_bound(probe, found), ScratchStatus::io_error, "warm route exposes backing failure");
+    rig.backing.fail_reads(false);
+    require(found == 0xBAD && rig.backing.read_faults() > faults, "warm backing failure is reached and leaves output");
+    verify(*s, model, 512, {key}, 1, true, "warm backing failure recovery witness");
+    s.check_io("ordered search error controls");
+    std::printf("SCRATCH_ORDERED_ERRORS comparator_calls=%llu read_faults=%llu rows=%zu\n",
+                static_cast<unsigned long long>(order.calls),
+                static_cast<unsigned long long>(rig.backing.read_faults()), model.rows.size());
+}
+
 struct Nested {
     CommandScratchStore* store = nullptr;
     const Model* model = nullptr;
@@ -2637,6 +3176,15 @@ int main() {
         source_failure_during_put();
         geometry_and_open_validation();
         differential_random_walk();
+        const bool flat_ordered_search = ordered_search_growth();
+        const bool flat_interleaved_search = interleaved_range_growth();
+        const bool flat_interior_search = interleaved_interior_growth();
+        const bool bounded_handle_reads = handle_route_read_growth();
+        ordered_search_error_controls();
+        require(flat_ordered_search, "ordered scratch-store marginal reads or comparisons grow beyond 9/8");
+        require(flat_interleaved_search, "interleaved scratch-store marginal reads or comparisons grow beyond 9/8");
+        require(flat_interior_search, "interior scratch-store marginal reads or comparisons grow beyond 9/8");
+        require(bounded_handle_reads, "handle-route reads exceed two pages per value or grow beyond 9/8");
         std::puts("test_scratch_store: order, handles, eviction, reentrancy, rollback, reopen, digests, no heap");
         return 0;
     } catch (const std::exception& error) {

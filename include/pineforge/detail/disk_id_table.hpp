@@ -4,6 +4,7 @@
 #include <pineforge/detail/id_table_read_cache.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -29,6 +30,26 @@ class DiskIdTable {
         std::uint64_t key_size = 0, height = 1, reserved = 0;
     };
     static_assert(sizeof(Links) == 56, "scratch id node layout");
+    // Bounded routing hints only. A conclusive prefix comparison can select
+    // a local interval without speculative backing reads. An inconclusive
+    // comparison selects root descent. Neither case answers a lookup: the
+    // selected path still reads and compares current complete stored keys.
+    struct KeyHint {
+        std::array<char, 64> bytes{};
+        std::size_t size = 0;
+        KeyHint() = default;
+        explicit KeyHint(const std::string& key) noexcept : size(key.size()) {
+            std::copy_n(key.data(), std::min(size, bytes.size()), bytes.data());
+        }
+        std::optional<int> compare(const std::string& key) const noexcept {
+            const auto length = std::min({key.size(), size, bytes.size()});
+            const int order = std::char_traits<char>::compare(key.data(), bytes.data(), length);
+            if (order != 0) return order;
+            if (key.size() < size && key.size() <= bytes.size()) return -1;
+            if (size <= bytes.size()) return key.size() == size ? 0 : 1;
+            return std::nullopt;
+        }
+    };
 
 public:
     using Offset = std::uint64_t;
@@ -50,8 +71,15 @@ public:
             root_ = std::exchange(other.root_, 0);
             first_ = std::exchange(other.first_, 0);
             last_ = std::exchange(other.last_, 0);
+            last_lower_ = std::exchange(other.last_lower_, 0);
+            last_upper_ = std::exchange(other.last_upper_, 0);
+            last_key_ = std::exchange(other.last_key_, {});
+            last_lower_key_ = std::exchange(other.last_lower_key_, {});
+            last_upper_key_ = std::exchange(other.last_upper_key_, {});
             end_ = std::exchange(other.end_, 1);
             size_ = std::exchange(other.size_, 0);
+            gap_ = {};
+            other.gap_ = {};
         }
         return *this;
     }
@@ -70,12 +98,16 @@ public:
             throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                          "scratch id table requires a tree region");
         read_cache_.release();
+        gap_ = {};
         file_.bind_scratch(slab, resource);
     }
     void clear() noexcept {
         read_cache_.release();
         file_.clear();
         root_ = first_ = last_ = size_ = 0;
+        last_lower_ = last_upper_ = 0;
+        last_key_ = last_lower_key_ = last_upper_key_ = {};
+        gap_ = {};
         end_ = 1; // offset zero is the null link
     }
     std::uint64_t size() const noexcept { return size_; }
@@ -99,18 +131,11 @@ public:
     }
 
     std::optional<Offset> find(const std::string& key) const {
-        Offset at = root_;
-        while (at != 0) {
-            const auto row = links(at);
-            const int order = key.compare(read_key(at, row));
-            if (order == 0) return at;
-            at = order < 0 ? row.left : row.right;
-        }
-        return std::nullopt;
+        const auto result = search(key);
+        return result.found != 0 ? std::optional<Offset>(result.found) : std::nullopt;
     }
     // Read-only whole-node ticket, also used before a caller spills resident
     // facts or accepts a kernel command. Duplicates need no count/byte growth.
-    // Disk mode deliberately retains its existing search and I/O behaviour.
     void require_insert(const std::string& key) const {
         if (!file_.scratch_owner() || find(key)) return;
         require_new_key(key.size());
@@ -157,17 +182,9 @@ public:
         write(at + sizeof(Links), &value, sizeof value);
     }
     std::pair<Offset, bool> insert(const std::string& key, const Value& value) {
-        Offset parent = 0;
-        Offset at = root_;
-        bool left = false;
-        while (at != 0) {
-            const auto row = links(at);
-            const int order = key.compare(read_key(at, row));
-            if (order == 0) return {at, false};
-            parent = at;
-            left = order < 0;
-            at = left ? row.left : row.right;
-        }
+        const auto position = search(key);
+        if (position.found != 0) return {position.found, false};
+        const auto parent = position.parent;
         require_new_key(key.size());
         constexpr std::size_t header = sizeof(Links) + sizeof(Value);
         const bool arena = file_.opened() ? file_.arena_backed() : ScratchArena::attached() != nullptr;
@@ -175,8 +192,11 @@ public:
         ScratchFile::check_extent(end_ + header, key.size(), arena, ScratchFile::IoRaiser::auxiliary);
         if (size_ == std::numeric_limits<std::uint64_t>::max())
             throw AuxiliaryScratchIoError(EFBIG, "scratch id count exhausted");
+        // The next structural write can split the searched interval. Drop
+        // its cursor before any write, including one that can fail partially.
+        gap_ = {};
         file_.open("pineforge-ids");
-        at = end_;
+        const auto at = end_;
         Links row;
         row.parent = parent;
         row.key_size = key.size();
@@ -189,7 +209,7 @@ public:
         end_ += header + key.size();
         if (parent != 0) {
             auto old = links(parent);
-            (left ? old.left : old.right) = at;
+            (position.left ? old.left : old.right) = at;
             put_links(parent, old);
         } else root_ = at;
         if (last_ != 0) {
@@ -198,6 +218,11 @@ public:
             put_links(last_, previous);
         } else first_ = at;
         last_ = at;
+        last_lower_ = position.lower;
+        last_upper_ = position.upper;
+        last_key_ = KeyHint(key);
+        last_lower_key_ = position.lower_key;
+        last_upper_key_ = position.upper_key;
         ++size_;
         rebalance(parent);
         return {at, true};
@@ -215,6 +240,105 @@ public:
     }
 
 private:
+    struct Search {
+        Offset found = 0, parent = 0, lower = 0, upper = 0;
+        bool left = false;
+        KeyHint lower_key{}, upper_key{};
+        bool covers(const std::string& key) const noexcept {
+            const auto lo = lower == 0 ? std::optional<int>(1) : lower_key.compare(key);
+            const auto hi = upper == 0 ? std::optional<int>(-1) : upper_key.compare(key);
+            return lo && hi && *lo >= 0 && *hi <= 0;
+        }
+    };
+    Search search(const std::string& key) const {
+        if (gap_.parent != 0 && gap_.covers(key)) {
+            // A completed miss found two adjacent sorted rows. Until an
+            // insertion changes the tree, their open interval still names
+            // the same empty child. Re-read both complete keys: this is a
+            // search cursor, not a saved probe or a cached absence result.
+            // In particular a repeated admission query must still expose
+            // backing EIO and distinguish a prefix from its binary extension.
+            const int lower = gap_.lower == 0 ? 1 : key.compare(this->key(gap_.lower));
+            if (lower == 0) return {gap_.lower, 0, 0, 0, false};
+            if (lower > 0) {
+                const int upper = gap_.upper == 0 ? -1 : key.compare(this->key(gap_.upper));
+                if (upper == 0) return {gap_.upper, 0, 0, 0, false};
+                if (upper < 0) return gap_;
+            }
+        }
+        const auto result = search_from_last(key);
+        if (result.found == 0) gap_ = result;
+        return result;
+    }
+    bool near_last(const std::string& key) const noexcept {
+        const auto order = last_key_.compare(key);
+        if (!order) return false;
+        if (*order == 0) return true;
+        const bool left = *order < 0;
+        const auto bound = left ? last_lower_ : last_upper_;
+        if (bound == 0) return true;
+        const auto edge = (left ? last_lower_key_ : last_upper_key_).compare(key);
+        return edge && (left ? *edge >= 0 : *edge <= 0);
+    }
+    Search search_from_last(const std::string& key) const {
+        if (last_ != 0 && near_last(key)) {
+            const auto row = links(last_);
+            int order = 0;
+            KeyHint last_hint;
+            {
+                const auto stored_key = read_key(last_, row);
+                order = key.compare(stored_key);
+                last_hint = KeyHint(stored_key);
+            }
+            if (order == 0) return {last_, 0, 0, 0, false};
+            const bool left = order < 0;
+            const auto bound = left ? last_lower_ : last_upper_;
+            int edge = 0;
+            KeyHint bound_hint;
+            if (bound != 0) {
+                const auto stored_key = this->key(bound);
+                edge = key.compare(stored_key);
+                bound_hint = KeyHint(stored_key);
+            }
+            if (bound != 0 && edge == 0) return {bound, 0, 0, 0, false};
+            if (bound == 0 || (left ? edge > 0 : edge < 0)) {
+                // The key is strictly between the last inserted row and its
+                // immediate sorted neighbour (or the open end of the tree).
+                // Rotations preserve that gap. Its empty link belongs to
+                // last_ unless a rotation gave it a subtree on this side;
+                // then it belongs to the neighbour, on the opposite side.
+                const bool empty = (left ? row.left : row.right) == 0;
+                if (empty || bound != 0) {
+                    return {0, empty ? last_ : bound,
+                            left ? bound : last_, left ? last_ : bound,
+                            empty ? left : !left,
+                            left ? bound_hint : last_hint,
+                            left ? last_hint : bound_hint};
+                }
+            }
+        }
+        // A key outside the known adjacent interval (including a prefix we
+        // cannot classify in bounded memory) takes ordinary root descent
+        // immediately. Do not climb a finger and then repeat that work from
+        // the root. No I/O/comparison exception is caught or retried here.
+        Search result;
+        for (Offset at = root_; at != 0;) {
+            const auto row = links(at);
+            const auto stored_key = read_key(at, row);
+            const int order = key.compare(stored_key);
+            if (order == 0) {
+                result.found = at;
+                return result;
+            }
+            result.parent = at;
+            result.left = order < 0;
+            (result.left ? result.upper : result.lower) = at;
+            (result.left ? result.upper_key : result.lower_key) = KeyHint(stored_key);
+            at = result.left ? row.left : row.right;
+        }
+        return result;
+    }
+
     static constexpr ScratchResource ids_total_label(ScratchResource resource) noexcept {
         return resource == ScratchResource::cohort ? ScratchResource::cohort_ids_total : resource;
     }
@@ -330,23 +454,37 @@ private:
     void rebalance(Offset at) {
         while (at != 0) {
             auto row = links(at);
-            refresh(row);
-            put_links(at, row);
-            const int lean = balance(row);
+            const auto previous_height = row.height;
+            const auto left_height = height(row.left), right_height = height(row.right);
+            row.height = 1 + std::max(left_height, right_height);
+            const int lean = static_cast<int>(left_height) - static_cast<int>(right_height);
             if (lean > 1) {
                 if (balance(links(row.left)) < 0) (void)rotate(row.left, true);
-                at = rotate(at, false);
+                (void)rotate(at, false);
+                return; // Insertion's rotation restores the old subtree height.
             } else if (lean < -1) {
                 if (balance(links(row.right)) > 0) (void)rotate(row.right, false);
-                at = rotate(at, true);
+                (void)rotate(at, true);
+                return;
             }
-            at = links(at).parent;
+            // An unchanged subtree height cannot affect any ancestor.
+            // Avoid rewriting it and invalidating otherwise reusable pages.
+            if (row.height == previous_height) return;
+            put_links(at, row);
+            at = row.parent;
         }
     }
 
     ScratchFile file_{ScratchFile::IoRaiser::auxiliary};
     IdTableReadCache read_cache_;
     Offset root_ = 0, first_ = 0, last_ = 0, end_ = 1;
+    // Immediate sorted neighbours of last_, independent of AVL rotations.
+    // Fixed prefixes select routes; complete keys always come from backing.
+    Offset last_lower_ = 0, last_upper_ = 0;
+    KeyHint last_key_{}, last_lower_key_{}, last_upper_key_{};
+    // Disposable interval from the latest absent search. Value writes preserve
+    // the interval; insertion, clear, backend binding and move discard it.
+    mutable Search gap_{};
     std::uint64_t size_ = 0;
 };
 } // namespace pineforge::detail

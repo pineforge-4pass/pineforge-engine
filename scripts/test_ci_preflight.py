@@ -5968,13 +5968,21 @@ class PreflightFailures(unittest.TestCase):
         # instead of the retired 43 + 28 = 71 breakdown, which had fallen
         # behind the pin.
         inventory = re.findall(
-            r'`scripts/ci_verify\.py` pins (\d+) slow-test names, including\n'
-            r'`test_cr559_map_capacity_cli`\.', text)
-        self.assertEqual(inventory, ['90'])
-        self.assertIn(
-            '`PINNED_SLOW_TEST_ROWS` explicitly pins 90 distinct slow names across\n'
-            '`tests/CMakeLists.txt` and `tests/cr150.d/*.cmake`, including the directly\n'
-            'labelled `test_cr559_map_capacity_cli` row.', text)
+            r'pins all (\d+) source-labelled names: (\d+) from the\n'
+            r'`PINEFORGE_PR_SLOW_TESTS` loop and (\d+) direct CMake', text)
+        # expectation corrected: 71 -> 92 and 28 -> 49, because the actual
+        # source census exposes a pre-existing 18-name direct inventory gap
+        # plus three new population rows; the loop still contains 43 names.
+        # expectation corrected: 92 -> 93 and 49 -> 50, because the boundary
+        # adds one direct name to the existing group (still 39 sites).
+        # The historical 18-name gap and all four new population names are
+        # already included in 93; neither is added a second time.
+        # expectation corrected: 93 -> 94 and 50 -> 51, because main's CLI
+        # row adds one direct name and one assignment site (39 -> 40).
+        self.assertEqual(inventory, [('94', '43', '51')])
+        self.assertIn('The timing list contains 43 names, and 51 additional names', text)
+        self.assertIn('making 94 distinct pinned slow names.', text)
+        self.assertIn('`PINNED_SLOW_TEST_ROWS` includes `test_cr559_map_capacity_cli`', text)
 
     def test_documented_slow_rows_refuse_same_size_wrong_slice(self):
         text = (ROOT / 'docs/ci.md').read_text()

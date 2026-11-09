@@ -7,6 +7,18 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- The internal native Store live-object policy defaults to 0 (unbounded).
+  The former capped default of 1,048,576 is now 0. Native limits are kept
+  exactly: every positive uint64, including UINT64_MAX, is finite;
+  signed negative input is refused before conversion. Finite cohort refusals
+  keep `scratch_capacity_exceeded` and `resource=cohort`, but omit the
+  "approved maximum" text. Physical backing failures remain separate.
+  Only native embedders and tests set this parameter; there is no CLI,
+  environment or JSON ingress. Strategies must be recompiled with the new
+  headers to receive the unbounded default. Shape layout is unchanged, with
+  no native layout stamp change: an old plugin's explicit 1,048,576 remains
+  finite on a new engine; a new plugin's 0 selects the former default on an
+  old engine.
 - `ta.percentile_nearest_rank` now accepts a series length at runtime. Each
   call site retains its own appended source history and computes the
   nearest-rank percentile over the requested recent values, within the

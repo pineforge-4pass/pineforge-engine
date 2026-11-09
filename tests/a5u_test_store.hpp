@@ -60,9 +60,10 @@ inline std::string grouped(std::uint64_t value) {
     return text;
 }
 inline std::string object_limit_text(std::uint64_t limit) {
+    // expectation corrected: approved maximum clause -> absent, because finite
+    // Store limits are exact and there is no global live-object policy cap.
     return "more than " + grouped(limit) + " store objects live at once; " + grouped(limit) +
-           " is the most allowed in this store; attempted live count " + grouped(limit + 1) +
-           ", approved maximum " + grouped(pineforge::detail::o1::kMaxLiveObjectsCap);
+           " is the most allowed in this store; attempted live count " + grouped(limit + 1);
 }
 
 inline pineforge::detail::o1::Shape shape(std::uint32_t resident_pages) {
