@@ -85,6 +85,9 @@ PROOF_READS = {
     'docs/seo_postprocess.py':
         'the docs.yml build job executes it on synthetic pages through '
         'docs/build.sh --self-test-seo before building the site',
+    'tools/selected_admit/DESCRIPTOR-V1.md':
+        "CMakeLists.txt takes the page's sha256 into the selected-admit helper's manifest at "
+        'configure time, and test_selected_admit_manifest compares the installed manifest with it',
 }
 SHA = re.compile(r'[0-9a-f]{40}')
 NO_COMMIT = '0' * 40

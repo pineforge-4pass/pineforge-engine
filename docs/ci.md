@@ -1548,7 +1548,7 @@ the base tree's [`scripts/ci_docs_only.py`](../scripts/ci_docs_only.py) classifi
 A changed path is documentation when it is a Markdown file (`*.md`) or lies
 under `docs/`, unless it lies under `.github/`, `benchmarks/`, `scripts/` or
 `tests/`, is a CMake file or a git control file such as `.gitattributes`, or is
-one of the five files explicitly excluded by `PROOF_READS`:
+one of the six files explicitly excluded by `PROOF_READS`:
 `docs/pages/pine-to-native.md` and `docs/pages/native-engine.md`, whose code
 blocks `test_pine_to_native_worked` and `test_native_engine_complete_host`
 compile and run; `docs/adr/0001-kernel-adapter-boundary.md`, which
@@ -1556,10 +1556,10 @@ compile and run; `docs/adr/0001-kernel-adapter-boundary.md`, which
 profile's `kernel-residuals` stage hold the kernel against;
 `docs/build.sh`, whose `--self-test-retry` runs in `test_docs_doxygen_retry`
 and whose `--self-test-seo` runs in the `docs.yml` build job before the real
-site build; and `docs/seo_postprocess.py`, which that job executes on synthetic
-pages through `bash docs/build.sh --self-test-seo`. The SEO postprocessor
-remains conservatively excluded as a documentation-build input. A change
-to one of those five runs every proof leg. A change is documentation only when
+site build; `docs/seo_postprocess.py`, which that job executes on synthetic pages through `bash docs/build.sh --self-test-seo`; and
+`tools/selected_admit/DESCRIPTOR-V1.md`, whose sha256 `CMakeLists.txt` takes into the selected-admit helper's manifest at configure time (`test_selected_admit_manifest` compares the installed manifest with it).
+The SEO postprocessor remains conservatively excluded as a documentation-build input. A change to one of those six runs every proof leg.
+A change is documentation only when
 every path it changes, both sides of a rename, is documentation. The compare
 list is written as NUL-separated data; an empty, malformed, truncated or
 unreadable list is neither class. The base tree's copy judges the list, so a

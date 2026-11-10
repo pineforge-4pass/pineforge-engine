@@ -1231,7 +1231,9 @@ class RealTree(unittest.TestCase):
         # temporaries); all 184 pending-flat-memory groups remain.
         # expectation corrected: 1593 -> 1594, because main's 53 groups and the
         # retained scalar group form 54 distinct groups after the merge.
-        self.assertEqual(c['OPEN'], 1356 + 54 + 184)
+        # The selected-capacity Source stage adds three groups (its chunk
+        # buffer, its record window and its stored message): 54 + 3 = 57.
+        self.assertEqual(c['OPEN'], 1356 + 57 + 184)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')
