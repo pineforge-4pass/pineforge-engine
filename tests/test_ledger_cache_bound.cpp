@@ -417,25 +417,25 @@ void owning_return_failure(std::uint64_t seed) {
     same_trade(ledger.read(0), expected);
 }
 
-void allocation_failures(std::uint64_t seed) {
+// The failure schedule of a cache of 1024 entries whose first failure happens
+// with `failed_population` rows. `later_page_key` is an ordinal on a page that
+// is still cold when the later-page stage fails, whichever placement the growth
+// that follows selects.
+void allocation_failures_at(std::uint64_t seed, Size failed_population, Size later_page_key) {
     const auto maximum = std::numeric_limits<Size>::max();
-    CHECK(!TradeLedger::cache_retry_population_reached(0, 0));
-    CHECK(TradeLedger::cache_retry_population_reached(0, 1));
-    CHECK(!TradeLedger::cache_retry_population_reached(1, 1));
-    CHECK(TradeLedger::cache_retry_population_reached(1, 2));
-    CHECK(TradeLedger::cache_retry_population_reached(maximum / 2, maximum - 1));
-    CHECK(!TradeLedger::cache_retry_population_reached(maximum / 2 + 1, maximum));
-    CHECK(!TradeLedger::cache_retry_population_reached(maximum, maximum));
+    // At most 1024 rows give every row the slot of its ordinal (direct); each
+    // row of the growth below past it drops the cached rows once, at the
+    // append that crosses 1024, and fills four-way sets from then on.
+    const bool direct_at_failure = ledger_oracle::direct(1024, failed_population);
     // Directory failure, first-page failure, and later-page failure with an
     // old valid entry. The allocator independently asserts every fault fired.
     for (const unsigned stage : {0u, 1u, 2u}) {
         TradeLedger ledger;
         ledger.set_scratch_directory(".");
         ledger.set_ledger_cache_max_bytes(charge(1024));
-        const Size failed_population = 1024;
         append(ledger, 0, failed_population, seed, true);
         if (stage == 2) (void)ledger.entry_price_at(0); // old page/hit
-        const Size key = stage == 2 ? 64 : 0;
+        const Size key = stage == 2 ? later_page_key : 0;
         const auto old_resident = ledger.cache_resident_bytes();
         auto before = ledger.read_cache_stats();
         auto refused = global_allocation::refused;
@@ -494,10 +494,14 @@ void allocation_failures(std::uint64_t seed) {
         CHECK(!recovered.allocation_retry_blocked);
         CHECK(same_bits(recovered_price, recovery_price));
         CHECK(ledger.cache_size() != 0);
+        // The old entry survives growth within one placement. The append that
+        // crossed 1024 rows from the direct placement dropped every cached row,
+        // so there the read goes back to the backing store.
         if (stage == 2) {
             bound_io::Measure preserved;
             (void)ledger.entry_price_at(0);
-            CHECK(preserved.finish().bytes == 0);
+            if (direct_at_failure) CHECK(preserved.finish().bytes != 0);
+            else CHECK(preserved.finish().bytes == 0);
         }
         // Establish another real failure before testing a rewind. Geometry
         // has four pages; key 128 belongs to the still-cold third page.
@@ -526,6 +530,24 @@ void allocation_failures(std::uint64_t seed) {
         (void)ledger.entry_price_at(0);
         CHECK(ledger.cache_size() == 1);
     }
+}
+
+void allocation_failures(std::uint64_t seed) {
+    const auto maximum = std::numeric_limits<Size>::max();
+    CHECK(!TradeLedger::cache_retry_population_reached(0, 0));
+    CHECK(TradeLedger::cache_retry_population_reached(0, 1));
+    CHECK(!TradeLedger::cache_retry_population_reached(1, 1));
+    CHECK(TradeLedger::cache_retry_population_reached(1, 2));
+    CHECK(TradeLedger::cache_retry_population_reached(maximum / 2, maximum - 1));
+    CHECK(!TradeLedger::cache_retry_population_reached(maximum / 2 + 1, maximum));
+    CHECK(!TradeLedger::cache_retry_population_reached(maximum, maximum));
+    // The first failure with as many rows as the cache holds (each row owns the
+    // slot of its ordinal; ordinal 320 is on the second page, still cold, and
+    // lies on that page again once the growth selects four-way sets) and with
+    // one row more (four-way sets from the start; ordinal 64 is on the second
+    // page).
+    allocation_failures_at(seed, 1024, 320);
+    allocation_failures_at(seed, 1025, 64);
 }
 
 void finite_failure_compatibility(std::uint64_t seed) {
