@@ -1061,7 +1061,7 @@ class Machine:
                           'add_custom_target', 'install', 'configure_file',
                           'add_dependencies',
                           'target_sources', 'set_property', 'get_property',
-                          'enable_testing', 'add_subdirectory',
+                          'enable_testing',
                           'target_compile_features', 'add_compile_definitions',
                           'add_compile_options', 'add_link_options',
                           'set_directory_properties', 'set_source_files_properties',
