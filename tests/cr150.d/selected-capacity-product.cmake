@@ -1,0 +1,3 @@
+list(APPEND TEST_SOURCES test_selected_capacity_product)
+pineforge_add_unit_test(test_selected_capacity_product)
+set_tests_properties(test_selected_capacity_product PROPERTIES LABELS "selected_capacity")

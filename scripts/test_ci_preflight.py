@@ -415,32 +415,8 @@ def in_step(workflow, job, name, before, after):
     return workflow.replace(step, step.replace(before, after, 1), 1)
 
 
-def hosted_matrix_release_workflow(workflow):
-    """Retain #768's exact matrix form as a rollback input, distinct from Option C."""
-    if 'prebuilt' in _jobs(workflow):
-        return workflow
-    start = workflow.index('  prebuilt-x86:\n')
-    end = workflow.index('  # Notify the pineforge-release', start)
-    header = ('    needs: release\n    permissions:\n'
-              '      contents: write   # gh release upload\n'
-              + ci_preflight.RELEASE_STRATEGY
-              + '    runs-on: ${{ matrix.runner }}\n\n    steps:\n')
-    workflow = (workflow[:start] + '  prebuilt:\n' + header
-                + ci_preflight.RELEASE_PREBUILT_STEPS + '\n' + workflow[end:])
-    workflow = workflow.replace('permissions:\n  contents: read\n',
-                                'permissions:\n  contents: write\n', 1)
-    for job in ('release', 'notify-hub'):
-        body = _jobs(workflow)[job]
-        changed = re.sub(r'^    permissions:\n      contents: (read|write)\n',
-                         '', body, count=1, flags=re.MULTILINE)
-        workflow = workflow.replace(body, changed, 1)
-    return workflow.replace('    needs: [release, upload]\n',
-                            '    needs: [release, prebuilt]\n', 1)
-
-
 def legacy_release_workflow(workflow):
-    """Keep the isolated-form fixtures after the shipped workflow moves hosted."""
-    workflow = hosted_matrix_release_workflow(workflow)
+    """Transform the supplied hosted matrix into the prior isolated form."""
     for job in ('release', 'notify-hub'):
         workflow = in_job(workflow, job, runner_declaration(HOSTED_X86),
                           runner_declaration(RELEASE_RUNNER))
@@ -797,7 +773,8 @@ class ProtectedGkeRunners(unittest.TestCase):
     def workflows(self, *, legacy_release=False):
         workflows = {path.name: path.read_text()
                      for path in (ROOT / '.github/workflows').glob('*.yml')}
-        workflows['release.yml'] = hosted_matrix_release_workflow(workflows['release.yml'])
+        workflows['release.yml'] = (
+            ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
         if legacy_release:
             workflows['release.yml'] = legacy_release_workflow(workflows['release.yml'])
         return workflows
@@ -1323,9 +1300,11 @@ class PrebuiltCredentialAdmission(unittest.TestCase):
     def setUp(self):
         self.workflows = {path.name: path.read_text()
                           for path in (ROOT / '.github/workflows').glob('*.yml')}
-        # These methods retain the prior matrix admission target; OptionCAdmission
-        # below reads the actual split workflow separately.
-        self.shipped = hosted_matrix_release_workflow(self.workflows['release.yml'])
+        # The original method IDs retain the previously shipped matrix target.
+        # Keep the actual split workflow bound separately.
+        self.actual = self.workflows['release.yml']
+        self.shipped = (
+            ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
         self.release = legacy_release_workflow(self.shipped)
 
     def findings(self, workflow, *, name='release.yml'):
@@ -1336,12 +1315,19 @@ class PrebuiltCredentialAdmission(unittest.TestCase):
             return ci_preflight.runner_findings(workflows)
 
     def test_shipped_prebuilt_is_token_only_without_deployment_environment(self):
+        for job in ('prebuilt-x86', 'prebuilt-arm'):
+            self.assertEqual(ci_preflight._job_values(_jobs(self.actual)[job], 'environment'), [])
+        self.assertEqual(self.findings(self.actual), [])
         body = _jobs(self.shipped)['prebuilt']
         self.assertEqual(ci_preflight._job_values(body, 'environment'), [])
         self.assertIsNone(ci_preflight.GKP_JOB_ENVIRONMENTS['release.yml'].get('prebuilt'))
         self.assertEqual(self.findings(self.shipped), [])
 
     def test_shipped_inherited_release_tag_binding_is_not_a_shell_env_override(self):
+        self.assertEqual(ci_preflight._job_block(self.actual, 'env'),
+                         ['env:', '  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"'])
+        self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(self.actual), [])
+        self.assertEqual(self.findings(self.actual), [])
         self.assertEqual(ci_preflight._job_block(self.shipped, 'env'),
                          ['env:', '  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"'])
         self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(self.shipped), [])
@@ -1816,13 +1802,18 @@ class OptionCAdmission(unittest.TestCase):
         self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(self.workflow), [])
         self.assertEqual(ci_preflight.release_option_c_workflow_findings(self.workflow), [])
         for job, expected in ci_preflight.RELEASE_OPTION_C_JOBS.items():
+            expected = expected.replace(
+                ci_preflight.RELEASE_SPLIT_HEADERS[job],
+                ci_preflight.RELEASE_SPLIT_PHASE_HEADERS[job], 1)
             with self.subTest(template=job):
                 actual = _jobs(self.workflow)[job]
                 self.assertEqual(ci_preflight._code(actual), ci_preflight._code(expected))
                 self.assertEqual(
                     [step.rstrip('\n') for step in ci_preflight._steps(actual)],
                     [step.rstrip('\n') for step in ci_preflight._steps(expected)])
-        matrix = hosted_matrix_release_workflow(self.workflow)
+        current = (ROOT / 'scripts/fixtures/ci_preflight/release_split_hosted_2167.yml').read_text()
+        self.assertEqual(self.findings(current), [])
+        matrix = (ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
         self.assertEqual(self.findings(matrix), [])
         self.assertEqual(self.findings(legacy_release_workflow(matrix)), [])
         hybrid = self.workflow
@@ -2124,7 +2115,8 @@ class HostedReleaseAdmission(unittest.TestCase):
                          'promote-baseline.yml')
             if name not in named
         }
-        self.legacy = legacy_release_workflow(self.others['release.yml'])
+        matrix = (ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
+        self.legacy = legacy_release_workflow(matrix)
 
     def findings(self, workflow):
         return ci_workflow_findings(
@@ -3414,11 +3406,9 @@ class PostFleetRunnerPolicy(unittest.TestCase):
 
     def test_post_fleet_docs_match_runner_policy(self):
         docs = (ROOT / 'docs/ci.md').read_text()
-        # expectation corrected: 2084 -> 2133, because the merged docs retain
-        # Option C custody/auth/diagnostics and add corpus admission/main changes.
-        # expectation corrected: 2109 -> 2133, because those incoming docs also
-        # retain Option C's split-custody, auth and host-only PR diagnostic text.
-        self.assertEqual(len(docs.splitlines()), 2133)
+        # expectation corrected: 2145 -> 2216, because the merged docs/ci.md
+        # retains both parents' content (actual main previously pinned 2133).
+        self.assertEqual(len(docs.splitlines()), 2216)
         # The test-owned job catalog defines the protected label inventory.
         tables = re.findall(
             r"^\| Workflow \| Events/callers \| Inline jobs' `runs-on` \|\n"
@@ -3805,8 +3795,8 @@ class PostLinuxBuildPolicy(unittest.TestCase):
 
     def test_release_prebuilt_refuses_retired_macos_steps(self):
         # Retain the matrix rollback refusal target after splitting the source.
-        release = hosted_matrix_release_workflow(
-            (ROOT / '.github/workflows/release.yml').read_text())
+        release = (ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
+        self.assertEqual(ci_preflight.runner_findings({'release.yml': release}), [])
         for step in ("      - name: Install Eigen3 (macOS)\n"
                      "        if: runner.os == 'macOS'\n"
                      "        run: brew install eigen\n",
@@ -5064,7 +5054,9 @@ class RunnerGroupAllowlist(unittest.TestCase):
         self.assertEqual(ci_preflight.RUNNER_ALLOWLIST_REPOSITORY, self.REPOSITORY)
         self.assertEqual([line for line in lines if line.startswith('advisory:')], [])
         release = self.workflows / 'release.yml'
-        release.write_text(hosted_matrix_release_workflow(release.read_text()))
+        # Restore the historical matrix explicitly after checking the real tree.
+        release.write_text(
+            (ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text())
         code, lines = self.run_stage()
         self.assertEqual(code, 1, lines)
         self.assertCountEqual(self.failures(lines), [
@@ -5397,20 +5389,21 @@ class PreflightFailures(unittest.TestCase):
     def ci_sources(self):
         return [(ROOT / path).read_text() for path in CI_SOURCES]
 
-    def other_sources(self):
-        """Every other workflow file, by name: ci_workflow_findings' ``others``."""
+    def other_sources(self, *, release_path='.github/workflows/release.yml'):
+        """Read real workflows, with an explicit release input for historical tests."""
         named = {Path(path).name for path in CI_SOURCES}
         workflows = {path.name: path.read_text()
                      for path in sorted((ROOT / '.github/workflows').iterdir())
                      if path.suffix in ('.yml', '.yaml') and path.name not in named}
-        # Preserve every existing matrix mutation target after the source split.
-        workflows['release.yml'] = hosted_matrix_release_workflow(workflows['release.yml'])
+        workflows['release.yml'] = (ROOT / release_path).read_text()
         return workflows
 
     def workflow_sources(self, *, legacy_release=False):
+        """Use the canonical matrix for historical routing inventory mutations."""
         workflows = {Path(path).name: contents
                      for path, contents in zip(CI_SOURCES, self.ci_sources())
-                     if path.endswith(('.yml', '.yaml'))} | self.other_sources()
+                     if path.endswith(('.yml', '.yaml'))} | self.other_sources(
+                         release_path='scripts/fixtures/ci_preflight/release_legacy.yml')
         if legacy_release:
             workflows['release.yml'] = legacy_release_workflow(workflows['release.yml'])
         return workflows
@@ -5946,11 +5939,9 @@ class PreflightFailures(unittest.TestCase):
 
     def test_documented_slow_row_counts_match_literal_population(self):
         text = (ROOT / 'docs/ci.md').read_text()
-        # expectation corrected: 2084 -> 2133, because retained Option C
-        # auth/custody/diagnostics join incoming corpus/main and slow-row docs.
-        # expectation corrected: 2109 -> 2133, because the merged docs retain
-        # Option C's auth, artifact custody and host-only PR diagnostic text.
-        self.assertEqual(len(text.splitlines()), 2133)
+        # expectation corrected: 2145 -> 2216, because the merged docs/ci.md
+        # retains both parents' content (actual main previously pinned 2133).
+        self.assertEqual(len(text.splitlines()), 2216)
         slices = tuple(name for name in EXPECTED_PR_SLOW_ROWS
                        if name.startswith('test_ci_verify_slice_'))
         self.assertTrue(slices, 'verifier slice inventory must not be empty')
@@ -8814,7 +8805,10 @@ finally:
                     self.assertIn(f'{name} {finding}; use the GCP fleet or hosted exceptions', findings)
 
     def test_release_jobs_require_isolation_and_reject_pr_triggers(self):
-        original, others = self.ci_sources(), self.other_sources()
+        # Preserve the historical matrix's exact isolation and trigger targets.
+        original = self.ci_sources()
+        others = self.other_sources(
+            release_path='scripts/fixtures/ci_preflight/release_legacy.yml')
         release = others['release.yml']
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
         for event in ('pull_request', 'pull_request_target', 'push'):
@@ -9122,7 +9116,9 @@ finally:
 
     def test_github_token_alone_and_credential_comments_keep_the_pool(self):
         self.maxDiff = None
-        original, others = self.ci_sources(), self.other_sources()
+        original = self.ci_sources()
+        others = self.other_sources(
+            release_path='scripts/fixtures/ci_preflight/release_legacy.yml')
         for reference in ('secrets.GITHUB_TOKEN', "secrets['GITHUB_TOKEN']"):
             workflow = self.github_token_pool_workflow(reference)
             with self.subTest(reference=reference):
@@ -9163,7 +9159,8 @@ finally:
         target_case = type(self)('test_github_token_alone_and_credential_comments_keep_the_pool')
         with mock.patch.object(ci_preflight, '_holds_credentials', namespace['_holds_credentials']):
             findings = ci_workflow_findings(
-                *self.ci_sources(), others={**self.other_sources(),
+                *self.ci_sources(), others={**self.other_sources(
+                    release_path='scripts/fixtures/ci_preflight/release_legacy.yml'),
                                            'token.yml': self.github_token_pool_workflow('secrets.GITHUB_TOKEN')})
             # The former assertIn still passes on this actual wrong classifier.
             self.assertIn('token.yml job token may use GKE routing only at its exact pinned job and label',
@@ -9199,8 +9196,13 @@ finally:
                 self.assertIn(gke_finding, diagnostic)
 
     def test_today_release_and_deployment_jobs_pass_only_on_their_pinned_routes(self):
+        # Keep actual HEAD admission before the historical matrix routing rows.
+        self.assertEqual(ci_workflow_findings(
+            *self.ci_sources(), others=self.other_sources()), [])
         self.assertEqual(ci_preflight.runner_findings(self.light_workflows()), [])
-        original, others = self.ci_sources(), self.other_sources()
+        original = self.ci_sources()
+        others = self.other_sources(
+            release_path='scripts/fixtures/ci_preflight/release_legacy.yml')
         workflows = {'docs.yml': original[5], 'promote-baseline.yml': original[2],
                      'release.yml': others['release.yml']}
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
@@ -9208,8 +9210,8 @@ finally:
         for name, jobs in (('docs.yml', ('build',)), ('promote-baseline.yml', ('promote-guard', 'promote')),
                            ('release.yml', ('release', 'prebuilt', 'notify-hub'))):
             for job in jobs:
-                # The shipped release and notify-hub jobs are hosted; the prebuilt
-                # matrix still contains the protected x86_64 artifact cell.
+                # The historical hosted release/notify form keeps the protected
+                # x86_64 artifact cell in its prebuilt matrix.
                 before = HOSTED_MATRIX_RUNNER if job == 'prebuilt' else HOSTED_X86
                 after = (PR_RUNNER if job == 'prebuilt' else
                          'ubuntu-latest' if name in ('docs.yml', 'promote-baseline.yml')
@@ -9245,36 +9247,110 @@ finally:
                 self.assertIn(f'{name} job {job} must not set PF_CI_LABELS on {route}', findings)
 
     def test_release_dry_run_never_reaches_the_hub_dispatch(self):
-        # Owner, the 1.6.2 dry cut: the hub's receivers are disabled, so a
-        # rehearsal that reached notify-hub would dispatch into nothing. The
-        # job-level guard is the only thing between a dry run and that call.
+        # Both release forms must refuse a notify job without its dry-run guard.
         original, others = self.ci_sources(), self.other_sources()
-        release = others['release.yml']
-        self.assertEqual(ci_workflow_findings(*original, others=others), [])
-        finding = ('release.yml job notify-hub must carry '
-                   'if: ${{ !inputs.dry_run }} so a dry run dispatches nothing')
-        self.assertEqual(ci_preflight._jobs(release)['notify-hub'].count(
-            '    if: ${{ !inputs.dry_run }}\n'), 1)
-        for after in ('', '    if: ${{ always() }}\n',
-                      '    if: ${{ inputs.dry_run }}\n',
-                      '    if: ${{ !inputs.dry_run || inputs.dry_run }}\n',
-                      "    if: '!inputs.dry_run'\n"):
-            with self.subTest(after=after):
-                changed = in_job(release, 'notify-hub',
-                                 '    if: ${{ !inputs.dry_run }}\n', after)
-                findings = ci_workflow_findings(
-                    *original, others=dict(others, **{'release.yml': changed}))
-                self.assertIn(finding, findings)
-        # The guard reads a declared input: dropping or retyping it must fail.
-        declaration = 'release.yml must declare dry_run as a boolean dispatch input'
-        for before, after in (('      dry_run:\n', '      dry_run_disabled:\n'),
-                              ('        type: boolean\n', '        type: string\n'),
-                              ('        type: boolean\n', '        type: choice\n')):
-            with self.subTest(declaration=after):
-                changed = in_job(release, None, before, after)
-                findings = ci_workflow_findings(
-                    *original, others=dict(others, **{'release.yml': changed}))
-                self.assertIn(declaration, findings)
+        legacy = (ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
+        legacy_guard = '    if: ${{ !inputs.dry_run }}\n'
+        phase_notify_finding = ('release.yml job notify-hub must carry '
+                                "if: ${{ inputs.phase == 'tag' && !inputs.dry_run }} "
+                                'so phase 1 and dry runs dispatch nothing')
+        legacy_notify_finding = ('release.yml job notify-hub must carry '
+                                 'if: ${{ !inputs.dry_run }} so a dry run dispatches nothing')
+        header_finding = ('release.yml notify-hub must retain its reviewed header, '
+                          'permissions, dependencies and outputs')
+        for form, release, guard, notify_finding in (
+                ('phase', others['release.yml'],
+                 "    if: ${{ inputs.phase == 'tag' && !inputs.dry_run }}\n",
+                 phase_notify_finding),
+                ('legacy', legacy, legacy_guard, legacy_notify_finding)):
+            with self.subTest(form=form, baseline=True):
+                self.assertEqual(ci_workflow_findings(
+                    *original, others={**others, 'release.yml': release}), [])
+                self.assertEqual(_jobs(release)['notify-hub'].count(guard), 1)
+                self.assertEqual(ci_preflight._job_values(
+                    _jobs(release)['notify-hub'], 'if'), [guard.strip()[4:]])
+                if form == 'phase':
+                    self.assertEqual(ci_preflight._release_split_mode(release), 'phase')
+            mutations = ('', '    if: ${{ always() }}\n',
+                         '    if: ${{ inputs.dry_run }}\n',
+                         '    if: ${{ !inputs.dry_run || inputs.dry_run }}\n',
+                         "    if: '!inputs.dry_run'\n")
+            if form == 'phase':
+                # Drop each conjunct independently, including the dry-run refusal.
+                mutations += ("    if: ${{ inputs.phase == 'tag' }}\n", legacy_guard)
+            for after in mutations:
+                with self.subTest(form=form, after=after):
+                    changed = in_job(release, 'notify-hub', guard, after)
+                    self.assertNotEqual(changed, release)
+                    self.assertEqual(_jobs(changed)['notify-hub'].count(guard), 0)
+                    for job in _jobs(release):
+                        if job != 'notify-hub':
+                            self.assertEqual(_jobs(changed)[job], _jobs(release)[job])
+                    if form == 'phase':
+                        self.assertIsNone(ci_preflight._release_split_mode(changed))
+                        self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(changed),
+                                         [header_finding])
+                        # Complete-mode loss also revokes the dedicated x86 exception.
+                        expected = [
+                            'release.yml job prebuilt-x86 must not receive the protected release '
+                            'environment or release credentials',
+                            header_finding,
+                            notify_finding,
+                            'release.yml must keep the exact two-phase release writer, '
+                            'untagged bump push and same-SHA tag retry',
+                            'release.yml must keep the unconditional release gate with its release '
+                            'App token for the App-only main pull_request barrier',
+                            'release.yml must always retain the exact release gate receipt artifact '
+                            'before planning or publishing',
+                            'release.yml must gate the dispatch before planning or publishing']
+                    else:
+                        expected = [notify_finding]
+                    self.assertEqual(ci_workflow_findings(
+                        *original, others={**others, 'release.yml': changed}), expected)
+            if form == 'phase':
+                with self.subTest(form=form, other_job='prebuilt-arm'):
+                    before = '      tarball: ${{ steps.pack.outputs.tarball }}\n'
+                    after = '      tarball: ${{ steps.pack.outputs.wrong }}\n'
+                    self.assertEqual(_jobs(release)['prebuilt-arm'].count(before), 1)
+                    changed = in_job(release, 'prebuilt-arm', before, after)
+                    self.assertNotEqual(changed, release)
+                    self.assertEqual(_jobs(changed)['prebuilt-arm'].count(before), 0)
+                    self.assertEqual(_jobs(changed)['prebuilt-arm'].count(after), 1)
+                    for job in _jobs(release):
+                        if job != 'prebuilt-arm':
+                            self.assertEqual(_jobs(changed)[job], _jobs(release)[job])
+                    self.assertEqual(ci_preflight._job_values(
+                        _jobs(changed)['notify-hub'], 'if'), [guard.strip()[4:]])
+                    self.assertIsNone(ci_preflight._release_split_mode(changed))
+                    other_header_finding = (
+                        'release.yml prebuilt-arm must retain its reviewed header, '
+                        'permissions, dependencies and outputs')
+                    self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(changed),
+                                     [other_header_finding])
+                    self.assertEqual(ci_workflow_findings(
+                        *original, others={**others, 'release.yml': changed}), [
+                            'release.yml job prebuilt-x86 must not receive the protected release '
+                            'environment or release credentials',
+                            other_header_finding,
+                            'release.yml must keep the exact two-phase release writer, '
+                            'untagged bump push and same-SHA tag retry',
+                            'release.yml must keep the unconditional release gate with its release '
+                            'App token for the App-only main pull_request barrier',
+                            'release.yml must always retain the exact release gate receipt artifact '
+                            'before planning or publishing',
+                            'release.yml must gate the dispatch before planning or publishing'])
+            # The guard reads a declared input: dropping or retyping it must fail.
+            declaration = 'release.yml must declare dry_run as a boolean dispatch input'
+            for before, after in (('      dry_run:\n', '      dry_run_disabled:\n'),
+                                  ('        type: boolean\n', '        type: string\n'),
+                                  ('        type: boolean\n', '        type: choice\n')):
+                with self.subTest(form=form, declaration=after):
+                    self.assertEqual(release.count(before), 1)
+                    changed = in_job(release, None, before, after)
+                    self.assertNotEqual(changed, release)
+                    findings = ci_workflow_findings(
+                        *original, others={**others, 'release.yml': changed})
+                    self.assertIn(declaration, findings)
 
     def test_no_stage_runs_under_a_timeout_and_jobs_keep_the_platform_maximum(self):
         # Owner rule, 2026-10-12: no stage of this preflight is run under a
@@ -9679,8 +9755,8 @@ finally:
     def test_release_bump_publication_mutations_refuse(self):
         original, others = self.ci_sources(), self.other_sources()
         release = others['release.yml']
-        finding = ('release.yml must keep the exact two-file release bump writer, '
-                   'commit and atomic push')
+        finding = ('release.yml must keep the exact two-phase release writer, '
+                   'untagged bump push and same-SHA tag retry')
         for before, after in (
                 ('git add VERSION docker/run_failure_codes_diff.json',
                  'git add VERSION docker/run_failure_codes_diff.json README.md'),
@@ -9691,13 +9767,99 @@ finally:
                  "printf '%s\\n' \"${NEXT}\" > VERSION\n          chmod +x VERSION"),
                 ('git commit -m "chore(release): ${TAG}"',
                  'git commit --amend -m "chore(release): ${TAG}"'),
-                ('git push --atomic origin HEAD "${TAG}"', 'git push origin HEAD "${TAG}"')):
+                ('git push origin "${sha}:refs/heads/main"',
+                 'git push origin "${sha}:refs/heads/main" "${TAG}"'),
+                ('git push origin "refs/tags/${TAG}"', 'git push --force origin "refs/tags/${TAG}"'),
+                ('if [[ "${PHASE}" == bump ]]; then', 'if true; then')):
             with self.subTest(after=after):
                 changed = in_step(release, 'release', 'Write bumped VERSION, commit, tag, push',
                                   before, after)
                 self.assertNotEqual(changed, release)
                 self.assertIn(finding, ci_workflow_findings(
                     *original, others={**others, 'release.yml': changed}))
+
+    def test_release_phase_input_and_downstream_boundaries_are_pinned(self):
+        original, others = self.ci_sources(), self.other_sources()
+        release = others['release.yml']
+        self.assertEqual(ci_preflight._release_split_mode(release), 'phase')
+        self.assertEqual(ci_workflow_findings(*original, others=others), [])
+        phase_finding = ('release.yml must declare bump-default/tag phases and the explicit '
+                         'phase1 dispatch SHA input')
+        for before, after, finding in (
+                ('      phase:\n', '      disabled_phase:\n', phase_finding),
+                ('        default: bump\n', '        default: tag\n', phase_finding),
+                ('            --phase "${PHASE}" --dispatch-sha "${DISPATCH_SHA}"',
+                 '            --phase bump',
+                 'release.yml must keep the unconditional release gate '
+                 'with its release App token for the App-only main pull_request barrier')):
+            with self.subTest(after=after):
+                changed = release.replace(before, after, 1)
+                self.assertNotEqual(changed, release)
+                self.assertIn(finding, ci_workflow_findings(
+                    *original, others={**others, 'release.yml': changed}))
+        for name, condition in (
+                ('Generate release notes', "${{ inputs.phase == 'tag' }}"),
+                ('Create GitHub Release', "${{ inputs.phase == 'tag' && !inputs.dry_run }}"),
+                ('Dry run summary', "${{ inputs.phase == 'tag' && inputs.dry_run }}"),
+                ('Refuse if tag already exists', "${{ inputs.phase == 'bump' }}")):
+            guard = f'        if: {condition}\n'
+            finding = f'release.yml {name} must carry if: {condition}'
+            for replacement in (
+                    '', '        if: ${{ always() }}\n',
+                    '        if: ${{ !inputs.dry_run }}\n',
+                    '        if: ${{ always() || ' + condition[4:-3] + ' }}\n'):
+                with self.subTest(step=name, replacement=replacement):
+                    changed = in_step(release, 'release', name, guard, replacement)
+                    self.assertNotEqual(changed, release)
+                    # expectation corrected: singleton -> complete-mode loss plus
+                    # the same named guard refusal, because PHASE admission is whole.
+                    self.assertEqual(ci_preflight.release_bump_workflow_findings(changed),
+                                     [
+                                         'release.yml must keep the exact two-phase release writer, '
+                                         'untagged bump push and same-SHA tag retry',
+                                         'release.yml must keep the unconditional release gate '
+                                         'with its release App token for the App-only main pull_request barrier',
+                                         'release.yml must always retain the exact release gate receipt artifact '
+                                         'before planning or publishing',
+                                         finding,
+                                         'release.yml must gate the dispatch before planning or publishing'])
+                    self.assertIn(finding, ci_workflow_findings(
+                        *original, others={**others, 'release.yml': changed}))
+
+    def test_release_prebuilt_job_refuses_missing_or_bypassed_tag_phase(self):
+        original, others = self.ci_sources(), self.other_sources()
+        release = others['release.yml']
+        self.assertEqual(ci_preflight._release_split_mode(release), 'phase')
+        guards = {
+            'prebuilt-x86': "${{ github.event_name == 'workflow_dispatch' && "
+                            "github.ref == 'refs/heads/main' && github.workflow_ref == "
+                            "format('pineforge-4pass/pineforge-engine/.github/workflows/"
+                            "release.yml@{0}', github.ref) && inputs.phase == 'tag' }}",
+            'prebuilt-arm': "${{ inputs.phase == 'tag' }}",
+            'upload': "${{ inputs.phase == 'tag' }}",
+            'notify-hub': "${{ inputs.phase == 'tag' && !inputs.dry_run }}",
+        }
+        self.assertEqual(ci_workflow_findings(*original, others=others), [])
+        self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(release), [])
+        for job, condition in guards.items():
+            guard = f'    if: {condition}\n'
+            # The split contract pins this job's full phase/identity boundary.
+            finding = (f'release.yml {job} must retain its reviewed header, permissions, '
+                       'dependencies and outputs')
+            self.assertEqual(_jobs(release)[job].count(guard), 1)
+            for replacement in (
+                    '', '    if: ${{ always() }}\n',
+                    '    if: ${{ always() || ' + condition[4:-3] + ' }}\n'):
+                with self.subTest(job=job, replacement=replacement):
+                    changed = in_job(release, job, guard, replacement)
+                    self.assertNotEqual(changed, release)
+                    for other_job in _jobs(release):
+                        if other_job != job:
+                            self.assertEqual(_jobs(changed)[other_job], _jobs(release)[other_job])
+                    self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(changed),
+                                     [finding])
+                    self.assertIn(finding, ci_workflow_findings(
+                        *original, others={**others, 'release.yml': changed}))
 
     def test_release_bump_app_token_mutations_refuse(self):
         original, others = self.ci_sources(), self.other_sources()
@@ -9715,10 +9877,49 @@ finally:
                               ci_workflow_findings(
                                   *original, others={**others, 'release.yml': changed}))
 
+    def test_release_receipt_is_always_retained_with_exact_upload_contract(self):
+        original, others = self.ci_sources(), self.other_sources()
+        release = others['release.yml']
+        name = 'Keep release gate receipt'
+        finding = ('release.yml must always retain the exact release gate receipt artifact '
+                   'before planning or publishing')
+        self.assertEqual(ci_preflight.release_bump_workflow_findings(release), [])
+        for before, after in (
+                ('        if: ${{ always() }}\n', ''),
+                ('        if: ${{ always() }}', '        if: ${{ success() }}'),
+                ('        if: ${{ always() }}', '        if: ${{ inputs.dry_run }}'),
+                ('ea165f8d65b6e75b540449e92b4886f43607fa02', 'v4'),
+                ('name: release-gate-${{ inputs.phase }}-${{ github.run_id }}-${{ github.run_attempt }}',
+                 'name: other-evidence'),
+                ('path: ${{ runner.temp }}/release-gate-receipt.json',
+                 'path: ${{ runner.temp }}/*'),
+                ('if-no-files-found: error', 'if-no-files-found: warn'),
+                ('retention-days: 7', 'retention-days: 1'),
+                ('        with:', '        continue-on-error: true\n        with:')):
+            with self.subTest(after=after):
+                changed = in_step(release, 'release', name, before, after)
+                self.assertNotEqual(changed, release)
+                self.assertIn(finding, ci_preflight.release_bump_workflow_findings(changed))
+                self.assertIn(finding, ci_workflow_findings(
+                    *original, others={**others, 'release.yml': changed}))
+        for before, after in (
+                ('--receipt "${RECEIPT}"', '--receipt ignored.json'),
+                ('--dry-run "${DRY_RUN}"', '--dry-run false')):
+            with self.subTest(gate=after):
+                changed = in_step(
+                    release, 'release',
+                    'Refuse unless authenticated parity and exact-SHA full CI are green',
+                    before, after)
+                self.assertNotEqual(changed, release)
+                self.assertIn(
+                    'release.yml must keep the unconditional release gate with its release App token '
+                    'for the App-only main pull_request barrier',
+                    ci_preflight.release_bump_workflow_findings(changed))
+
     def test_release_ruleset_reader_token_and_invocation_mutations_refuse(self):
         original, others = self.ci_sources(), self.other_sources()
         release = others['release.yml']
-        gate_name = 'Refuse unless pineforge/verify and pineforge/parity are green'
+        gate_name = 'Refuse unless authenticated parity and exact-SHA full CI are green'
         for before, after in (
                 ('GH_TOKEN: ${{ steps.app.outputs.token }}', 'GH_TOKEN: ${{ github.token }}'),
                 ('        id: gate', '        id: gate\n        if: inputs.dry_run'),
@@ -12699,11 +12900,10 @@ class GkeAdmissionRuleTests(unittest.TestCase):
             self.assertEqual(contradictory, normal)
 
     def test_admission_accepts_the_release_matrix_runner_under_its_fetched_path(self) -> None:
-        # Admission names a fetched file by its repository path, so the one
-        # `runs-on: ${{ matrix.runner }}` that release.yml carries must be
+        # Admission names a fetched file by its repository path, so the
+        # historical matrix's `runs-on: ${{ matrix.runner }}` must be
         # excused under `.github/workflows/release.yml`, not only as a bare name.
-        release = hosted_matrix_release_workflow(
-            (ROOT / '.github/workflows/release.yml').read_text())
+        release = (ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
         self.assertIn('runs-on: ${{ matrix.runner }}', release)
         refusal = 'every runs-on must be a literal value'
         with tempfile.TemporaryDirectory() as fetched:
@@ -12746,10 +12946,13 @@ class GkeAdmissionRuleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as fetched:
             directory = Path(fetched)
             self.copy_repository_admission_inputs(directory)
+            # Check the actual HEAD before selecting the historical matrix
+            # needed to discriminate the fetched-path runner exemption.
+            self.assertEqual(admit_rule_findings(directory, run_actionlint=False), [])
             release_path = '.github/workflows/release.yml'
-            release = hosted_matrix_release_workflow(
-                (directory / release_path).read_text(encoding='utf-8'))
+            release = (ROOT / 'scripts/fixtures/ci_preflight/release_legacy.yml').read_text()
             (directory / release_path).write_text(release)
+            self.assertEqual(admit_rule_findings(directory, run_actionlint=False), [])
             runner = '    runs-on: ${{ matrix.runner }}'
             self.assertIn(runner, _jobs(release)['prebuilt'])
             lines = release.splitlines()
@@ -13264,6 +13467,434 @@ class SplitHostedReleaseAdmission(unittest.TestCase):
             self.assertIn(finding, ci_preflight.runner_findings({'release.yml': changed}))
             self.assertIn(finding, main_admission_data_findings(
                 {'gke-pr.yml': self.gke, 'release.yml': changed}))
+
+
+class SplitPhaseReleaseAdmission(unittest.TestCase):
+    """Independent planned data exercises the complete split-phase contract."""
+
+    JOBS = ('release', 'prebuilt-x86', 'prebuilt-arm', 'upload', 'notify-hub')
+    HEADER = 'release.yml {} must retain its reviewed header, permissions, dependencies and outputs'
+    ORDER = 'release.yml {} must retain exactly its reviewed ordered steps'
+    STEP = 'release.yml {} must retain step {} with its reviewed command and context'
+    TRIGGER = ('release.yml split prebuilt must retain exactly its workflow_dispatch '
+               'trigger and reviewed inputs')
+    CREDENTIAL = ('release.yml job {} must not receive the protected release '
+                  'environment or release credentials')
+    X86_IDENTITY = (
+        "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && "
+        "github.workflow_ref == format('pineforge-4pass/pineforge-engine/"
+        ".github/workflows/release.yml@{0}', github.ref)")
+    GUARDS = {
+        'prebuilt-x86': '${{ ' + X86_IDENTITY + " && inputs.phase == 'tag' }}",
+        'prebuilt-arm': "${{ inputs.phase == 'tag' }}",
+        'upload': "${{ inputs.phase == 'tag' }}",
+        'notify-hub': "${{ inputs.phase == 'tag' && !inputs.dry_run }}",
+    }
+    RELEASE_NAMES = (
+        'Mint org App token', 'Checkout (full history)', 'Configure git identity',
+        'Refuse unless authenticated parity and exact-SHA full CI are green',
+        'Keep release gate receipt', 'Compute next version', 'Refuse if tag already exists',
+        'Stamp the run-failure catalog diff', 'Write bumped VERSION, commit, tag, push',
+        'Bump phase summary', 'Generate release notes', 'Create GitHub Release',
+        'Dry run summary', "Keep the dry run's run-failure catalog assets as a workflow artifact",
+    )
+
+    def setUp(self):
+        paths = [ROOT / 'scripts/fixtures/ci_preflight' / name for name in (
+            'release_split_phase_planned.yml', 'release_split_hosted_2167.yml',
+            'release_legacy.yml', 'gke_pr_legacy.yml')]
+        announce_compare_fixture_paths(*paths)
+        self.phase, self.current, self.legacy, self.gke = (
+            path.read_text(encoding='utf-8') for path in paths)
+        self.assertTrue(self.phase.startswith('# PLANNED split+phase admission fixture;'))
+        self.assertNotEqual(self.phase, self.current)
+
+    def assert_phase_refused(self, changed, finding):
+        self.assertNotEqual(changed, self.phase)
+        # Exact whole messages are fixed independently of validator output.
+        self.assertIn(finding, ci_preflight.release_prebuilt_workflow_findings(changed))
+        self.assertIn(finding, ci_preflight.runner_findings({'release.yml': changed}))
+        self.assertIn(finding, main_admission_data_findings({
+            'gke-pr.yml': self.gke, 'release.yml': changed}))
+        self.assertIsNone(ci_preflight._release_split_mode(changed))
+        self.assertFalse(ci_preflight._release_split_toolchain_reader_is_pinned(
+            changed, _jobs(changed)['prebuilt-x86']))
+
+    def test_complete_literal_modes_pass_real_admission_interfaces(self):
+        for workflow, mode in ((self.current, 'current'), (self.phase, 'phase')):
+            with self.subTest(mode=mode):
+                self.assertEqual(ci_preflight._release_split_mode(workflow), mode)
+                self.assertEqual(ci_preflight.release_credential_findings(workflow), [])
+                self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(workflow), [])
+                self.assertEqual(ci_preflight.release_bump_workflow_findings(workflow), [])
+                self.assertEqual(ci_preflight.runner_findings({'release.yml': workflow}), [])
+                self.assertEqual(main_admission_data_findings({
+                    'gke-pr.yml': self.gke, 'release.yml': workflow}), [])
+        # Include the required diagnostic and probe, as the real rules entry does.
+        paths = [ROOT / path for path in CI_SOURCES]
+        probe = ROOT / '.github/workflows/release-ruleset-probe.yml'
+        diagnostic = ROOT / '.github/workflows/prebuilt-hosted-diagnostic.yml'
+        announce_compare_fixture_paths(*paths, probe, diagnostic)
+        self.assertEqual(ci_workflow_findings(
+            *(path.read_text(encoding='utf-8') for path in paths),
+            others={'release.yml': self.phase, 'gke-pr.yml': self.gke,
+                    'release-ruleset-probe.yml': probe.read_text(encoding='utf-8'),
+                    'prebuilt-hosted-diagnostic.yml': diagnostic.read_text(encoding='utf-8')}), [])
+        for workflow in (self.legacy, legacy_release_workflow(self.legacy)):
+            with self.subTest(rollback=ci_preflight._job_values(_jobs(workflow)['release'], 'runs-on')):
+                self.assertEqual(ci_preflight.release_prebuilt_workflow_findings(workflow), [])
+                self.assertEqual(ci_preflight.runner_findings({'release.yml': workflow}), [])
+
+    def test_mode_requires_each_of_the_four_guards_together(self):
+        for job, guard in self.GUARDS.items():
+            with self.subTest(job=job):
+                changed = in_job(self.phase, job, '    if: ' + guard + '\n', '')
+                self.assertEqual(ci_preflight._release_split_job_findings(
+                    job, _jobs(changed)[job], 'phase'), [self.HEADER.format(job)])
+                self.assert_phase_refused(changed, self.HEADER.format(job))
+        # Old inputs cannot acquire phase steps; new inputs cannot use old steps.
+        for source, replacement in ((self.phase, self.current), (self.current, self.phase)):
+            before, after = (_jobs(text)['release'] for text in (source, replacement))
+            # Keep the source mode's declaration and all four job guards.
+            changed = in_job(source, 'release', before, after)
+            self.assertIsNone(ci_preflight._release_split_mode(changed))
+            self.assertIn(self.ORDER.format('release'),
+                          ci_preflight.release_prebuilt_workflow_findings(changed))
+        phase_on = self.phase[self.phase.index('\non:\n'):self.phase.index('\npermissions:\n')]
+        current_on = self.current[self.current.index('\non:\n'):self.current.index('\npermissions:\n')]
+        for source, before, after in ((self.phase, phase_on, current_on),
+                                      (self.current, current_on, phase_on)):
+            changed = source.replace(before, after, 1)
+            self.assertIsNone(ci_preflight._release_split_mode(changed))
+            self.assertIn(self.HEADER.format('prebuilt-x86'),
+                          ci_preflight.release_prebuilt_workflow_findings(changed))
+
+    def test_guard_equality_rejects_every_unreviewed_expression(self):
+        bad_expressions = (
+            "${{ inputs.phase == 'tag' || true }}", "${{ inputs.phase != 'bump' }}",
+            "${{ inputs.phase == 'bump' }}", '${{ inputs.phase == "tag" }}',
+            "${{ inputs.phase=='tag' }}", "${{ inputs.phase == 'TAG' }}",
+            "prefix ${{ inputs.phase == 'tag' }}", "${{ inputs.phase == 'tag' }} suffix",
+            "inputs.phase == 'tag'", "${{ always() && inputs.phase == 'tag' }}",
+            "${{ failure() && inputs.phase == 'tag' }}", '${{ always() }}',
+            '${{ failure() }}', "${{ !inputs.dry_run && inputs.phase == 'tag' }}",
+        )
+        for job, guard in self.GUARDS.items():
+            for expression in bad_expressions:
+                with self.subTest(job=job, expression=expression):
+                    changed = in_job(self.phase, job, '    if: ' + guard,
+                                     '    if: ' + expression)
+                    self.assertEqual(ci_preflight._release_split_job_findings(
+                        job, _jobs(changed)[job], 'phase'), [self.HEADER.format(job)])
+                    self.assert_phase_refused(changed, self.HEADER.format(job))
+            # Preserve x86's identity while changing only its appended phase term.
+            if job == 'prebuilt-x86':
+                for term in ("inputs.phase != 'bump'", "inputs.phase == 'bump'",
+                             "inputs.phase == 'tag' || true", 'inputs.phase == "tag"'):
+                    with self.subTest(x86_term=term):
+                        expression = '${{ ' + self.X86_IDENTITY + ' && ' + term + ' }}'
+                        changed = in_job(self.phase, job, guard, expression)
+                        self.assert_phase_refused(changed, self.HEADER.format(job))
+                expression = "${{ inputs.phase == 'tag' && " + self.X86_IDENTITY + ' }}'
+                self.assert_phase_refused(in_job(self.phase, job, guard, expression),
+                                          self.HEADER.format(job))
+
+    def test_duplicate_guards_overrides_and_release_guard_are_refused(self):
+        for job, guard in self.GUARDS.items():
+            for declaration in (
+                    '    if: ' + guard + '\n', '    if: always()\n',
+                    '    continue-on-error: true\n',
+                    '    defaults:\n      run:\n        shell: sh\n'):
+                with self.subTest(job=job, declaration=declaration):
+                    changed = in_job(self.phase, job, '    steps:\n',
+                                     declaration + '    steps:\n')
+                    self.assert_phase_refused(changed, self.HEADER.format(job))
+        changed = in_job(self.phase, 'release', '    steps:\n',
+                         "    if: ${{ inputs.phase == 'tag' }}\n    steps:\n")
+        self.assert_phase_refused(changed, self.HEADER.format('release'))
+
+    def test_entire_phase_and_dispatch_sha_declarations_are_binding(self):
+        phase_block = (
+            '      phase:\n'
+            "        description: 'bump: push the untagged version commit and stop; tag: publish that checked commit'\n"
+            '        required: true\n        type: choice\n        default: bump\n'
+            '        options:\n          - bump\n          - tag\n')
+        sha_block = (
+            '      dispatch_sha:\n'
+            "        description: 'Tag phase only: exact SHA checked by phase bump, the bump commit single parent'\n"
+            "        required: false\n        type: string\n        default: ''\n")
+        self.assertIn(phase_block, self.phase)
+        self.assertIn(sha_block, self.phase)
+        mutations = [(phase_block, ''), (sha_block, ''), (phase_block, phase_block * 2)]
+        for before, after in (
+                ('required: true', 'required: false'), ('type: choice', 'type: string'),
+                ('default: bump', 'default: tag'), ('default: bump\n', ''),
+                ('          - tag\n', '          - tag\n          - other\n'),
+                ('          - bump\n          - tag\n', '          - tag\n          - bump\n'),
+                ('          - tag\n', ''), ('options:\n', 'options: [bump, tag]\n')):
+            mutations.append((phase_block, phase_block.replace(before, after, 1)))
+        for before, after in (
+                ('required: false', 'required: true'), ('type: string', 'type: choice'),
+                ("default: ''", "default: main"), ("        default: ''\n", '')):
+            mutations.append((sha_block, sha_block.replace(before, after, 1)))
+        mutations += [
+            ("description: 'Bump phase only: version increment; leave patch in tag phase'",
+             "description: 'Version bump'"),
+            ("description: 'Bump phase only: exact X.Y.Z or X.Y.Z-rc.N; wins over bump'",
+             "description: 'Exact version'"),
+            ('        default: patch\n', '        default: minor\n'),
+            ('        type: boolean\n', '        type: string\n'),
+            ('        default: false\n', '        default: true\n'),
+            ('    inputs:\n', '    inputs:\n      extra:\n        type: string\n'),
+        ]
+        for before, after in mutations:
+            with self.subTest(before=before, after=after):
+                self.assertIn(before, self.phase)
+                changed = self.phase.replace(before, after, 1)
+                self.assert_phase_refused(changed, self.TRIGGER)
+
+    def test_phase_release_binds_all_raw_steps_env_arguments_and_order(self):
+        steps = ci_preflight._steps(_jobs(self.phase)['release'])
+        self.assertEqual(tuple(ci_preflight._step_values(step, 'name')[0] for step in steps),
+                         self.RELEASE_NAMES)
+        for step, name in zip(steps, self.RELEASE_NAMES):
+            with self.subTest(step=name):
+                # This alters the whole step, including otherwise unchanged App/checkout steps.
+                changed = in_job(self.phase, 'release', step,
+                                 step.replace('\n', '\n        continue-on-error: true\n', 1))
+                self.assertEqual(ci_preflight._release_split_job_findings(
+                    'release', _jobs(changed)['release'], 'phase'),
+                    [self.ORDER.format('release'), self.STEP.format('release', name)])
+                self.assert_phase_refused(changed, self.STEP.format('release', name))
+        for name, before, after in (
+                (self.RELEASE_NAMES[3], '--dispatch-sha "${DISPATCH_SHA}"', '--dispatch-sha main'),
+                ('Keep release gate receipt', 'if: ${{ always() }}', 'if: ${{ success() }}'),
+                ('Compute next version', '--phase "${PHASE}"', '--phase tag'),
+                ('Stamp the run-failure catalog diff', 'source=HEAD^', 'source=HEAD'),
+                ('Write bumped VERSION, commit, tag, push', 'test "${rc}" -eq 2', 'true'),
+                ('Write bumped VERSION, commit, tag, push',
+                 'git push origin "${sha}:refs/heads/main"', 'git push origin HEAD --tags'),
+                ('Bump phase summary', 'DRY_RUN: ${{ inputs.dry_run }}', 'DRY_RUN: true'),
+                ('Generate release notes', "inputs.phase == 'tag'", "inputs.phase != 'bump'"),
+                ('Create GitHub Release', '--verify-tag', ''),
+                ('Dry run summary', "inputs.phase == 'tag' && inputs.dry_run", 'inputs.dry_run')):
+            with self.subTest(step=name, before=before):
+                self.assert_phase_refused(
+                    in_step(self.phase, 'release', name, before, after),
+                    self.STEP.format('release', name))
+        # Reordering intact bodies also fails the ordered contract.
+        first, second = (step.rstrip('\n') for step in steps[:2])
+        changed = in_job(self.phase, 'release', first + '\n\n' + second,
+                         second + '\n\n' + first)
+        self.assert_phase_refused(changed, self.ORDER.format('release'))
+
+    def test_phase_retains_x86_event_main_workflow_and_shell_identity(self):
+        for before, after in (
+                ("github.event_name == 'workflow_dispatch'", "github.event_name == 'push'"),
+                ("github.ref == 'refs/heads/main'", "startsWith(github.ref, 'refs/tags/v')"),
+                ("github.ref == 'refs/heads/main'",
+                 "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))"),
+                ('release.yml@{0}', 'other.yml@{0}')):
+            with self.subTest(header=after):
+                changed = in_job(self.phase, 'prebuilt-x86', before, after)
+                self.assert_phase_refused(changed, self.HEADER.format('prebuilt-x86'))
+                self.assertIn(self.CREDENTIAL.format('prebuilt-x86'),
+                              ci_preflight.release_credential_findings(changed))
+        for before, after in (
+                ('case "${REF}" in refs/heads/main)', 'case "${REF}" in refs/heads/main|refs/tags/v*)'),
+                ('[[ "${EVENT}" == workflow_dispatch ]]', '[[ "${EVENT}" == push ]]'),
+                ('release.yml@${REF}', 'other.yml@${REF}')):
+            with self.subTest(shell=after):
+                name = 'Refuse an untrusted toolchain caller'
+                changed = in_step(self.phase, 'prebuilt-x86', name, before, after)
+                self.assert_phase_refused(changed, self.STEP.format('prebuilt-x86', name))
+
+    def test_phase_cannot_add_a_credential_recipient_runner_or_other_workflow_exception(self):
+        for base in (self.current, self.phase):
+            for payload in ('    environment: release\n',
+                            '    env:\n      KEY: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\n'):
+                with self.subTest(phase=base == self.phase, payload=payload):
+                    changed = base + ('\n  bump:\n    runs-on: unpinned-runner\n' + payload
+                                      + "    if: ${{ inputs.phase == 'tag' }}\n"
+                                      + '    steps:\n      - run: true\n')
+                    findings = ci_preflight.runner_findings({'release.yml': changed})
+                    self.assertIn(self.CREDENTIAL.format('bump'), findings)
+                    self.assertIn('release.yml job bump needs a pinned runner and time limit', findings)
+                    self.assertIn(self.CREDENTIAL.format('bump'),
+                                  main_admission_data_findings({
+                                      'gke-pr.yml': self.gke, 'release.yml': changed}))
+        other_path = ROOT / '.github/workflows/ci.yml'
+        announce_compare_fixture_paths(other_path)
+        other = (other_path.read_text(encoding='utf-8')
+                 + '\n  prebuilt-x86:' + _jobs(self.phase)['prebuilt-x86'])
+        renamed = ci_preflight.runner_findings({'ci.yml': other})
+        self.assertIn('ci.yml job prebuilt-x86 needs a pinned runner and time limit', renamed)
+        self.assertEqual(ci_preflight.release_credential_findings(self.phase, 'other.yml'),
+                         [self.CREDENTIAL.format('prebuilt-x86').replace('release.yml', 'other.yml')])
+
+    def test_current_neighbor_refusals_keep_original_x86_reader_pin(self):
+        # CURRENT's existing x86 exception is not contingent on neighbor bodies.
+        # Both complete workflow contracts must still refuse these bad inputs.
+        mutations = (
+            ('prebuilt-arm', 'Build', 'cmake --build build -j 4', 'true'),
+            ('prebuilt-arm', 'Configure', '-DFETCHCONTENT_FULLY_DISCONNECTED=ON',
+             '-DFETCHCONTENT_FULLY_DISCONNECTED=OFF'),
+            ('upload', 'Verify both tarballs against build outputs',
+             '| sha256sum --check --strict -', '| cat'),
+            ('upload', 'Upload to release', '          GH_REPO: ${{ github.repository }}\n', ''),
+            ('prebuilt-arm', 'Assert tag still names the emitted release commit',
+             '        if: ${{ !inputs.dry_run }}\n', ''),
+            ('upload', 'Upload to release', '        if: ${{ !inputs.dry_run }}\n', ''),
+            ('prebuilt-arm', 'Build', None, None),
+            ('upload', 'Download ARM tarball', None, None),
+        )
+        for job, name, before, after in mutations:
+            for base, phase in ((self.current, False), (self.phase, True)):
+                with self.subTest(job=job, step=name, phase=phase, before=before):
+                    step = ci_preflight._step_named(ci_preflight._steps(_jobs(base)[job]),
+                                                    '      - name: ' + name)
+                    self.assertTrue(step, (job, name))
+                    if before is None:
+                        changed = in_job(base, job, step, '')
+                    else:
+                        self.assertIn(before, step)
+                        changed = in_job(base, job, step, step.replace(before, after, 1))
+                    self.assertNotEqual(changed, base)
+                    original_jobs, changed_jobs = _jobs(base), _jobs(changed)
+                    self.assertEqual(set(changed_jobs), set(original_jobs))
+                    for other, original in original_jobs.items():
+                        if other != job:
+                            self.assertEqual(changed_jobs[other].encode('utf-8'),
+                                             original.encode('utf-8'), (job, name, other))
+                    finding = self.STEP.format(job, name)
+                    self.assertIn(finding, ci_preflight.release_prebuilt_workflow_findings(changed))
+                    self.assertIn(finding, ci_preflight.runner_findings({'release.yml': changed}))
+                    self.assertIn(finding, main_admission_data_findings({
+                        'gke-pr.yml': self.gke, 'release.yml': changed}))
+                    self.assertIsNone(ci_preflight._release_split_mode(changed))
+                    self.assertEqual(ci_preflight._release_split_toolchain_reader_is_pinned(
+                        changed, _jobs(changed)['prebuilt-x86']), not phase)
+                    self.assertEqual(ci_preflight.release_credential_findings(changed),
+                                     [self.CREDENTIAL.format('prebuilt-x86')] if phase else [])
+        for job, name in (('prebuilt-arm', 'Configure'),
+                          ('upload', 'Verify both tarballs against build outputs')):
+            for base, phase in ((self.current, False), (self.phase, True)):
+                step = ci_preflight._step_named(ci_preflight._steps(_jobs(base)[job]),
+                                                '      - name: ' + name)
+                self.assertTrue(step, (job, name))
+                self.assertIn('          set -euo pipefail\n', step)
+                changed = in_job(base, job, step, step.replace(
+                    '          set -euo pipefail\n',
+                    '          set -euo pipefail\n          # ${{ secrets.DEPLOY_TOKEN }}\n', 1))
+                self.assertNotEqual(changed, base)
+                for off_hosted in (False, True):
+                    with self.subTest(raw=job, phase=phase, off_hosted=off_hosted):
+                        variant = changed
+                        if off_hosted:
+                            runner, = ci_preflight._job_values(_jobs(variant)[job], 'runs-on')
+                            variant = in_job(variant, job, 'runs-on: ' + runner,
+                                             'runs-on: self-hosted')
+                        self.assertNotEqual(variant, base)
+                        original_jobs, variant_jobs = _jobs(base), _jobs(variant)
+                        self.assertEqual(set(variant_jobs), set(original_jobs))
+                        for other, original in original_jobs.items():
+                            if other != job:
+                                self.assertEqual(variant_jobs[other].encode('utf-8'),
+                                                 original.encode('utf-8'), (job, name, other))
+                        self.assertEqual(ci_preflight._release_split_toolchain_reader_is_pinned(
+                            variant, _jobs(variant)['prebuilt-x86']), not phase)
+                        credentials = ([self.CREDENTIAL.format('prebuilt-x86')] if phase else [])
+                        self.assertEqual(ci_preflight.release_credential_findings(variant),
+                                         credentials + [self.CREDENTIAL.format(job)])
+                        self.assertIn(self.STEP.format(job, name),
+                                      ci_preflight.release_prebuilt_workflow_findings(variant))
+                        findings = ci_preflight.runner_findings({'release.yml': variant})
+                        self.assertIn(self.CREDENTIAL.format(job), findings)
+                        if off_hosted:
+                            self.assertIn(
+                                f'release.yml job {job} must keep production credentials '
+                                'on a hosted standard runner', findings)
+                        self.assertIn(self.STEP.format(job, name), main_admission_data_findings({
+                            'gke-pr.yml': self.gke, 'release.yml': variant}))
+
+    def test_current_reader_fallback_requires_original_declaration_and_x86_contract(self):
+        for base in (self.current, self.phase):
+            self.assertTrue(ci_preflight._release_split_toolchain_reader_is_pinned(
+                base, _jobs(base)['prebuilt-x86']))
+            self.assertFalse(ci_preflight._release_split_toolchain_reader_is_pinned(
+                base, _jobs(base)['prebuilt-arm']))
+        current_on = self.current[self.current.index('\non:\n'):self.current.index('\npermissions:\n')]
+        phase_on = self.phase[self.phase.index('\non:\n'):self.phase.index('\npermissions:\n')]
+        hybrids = (
+            self.current.replace(current_on, phase_on, 1),
+            self.phase.replace(phase_on, current_on, 1),
+            in_job(self.current, 'prebuilt-x86', '${{ ' + self.X86_IDENTITY + ' }}',
+                   self.GUARDS['prebuilt-x86']),
+            in_job(self.phase, 'prebuilt-x86', self.GUARDS['prebuilt-x86'],
+                   '${{ ' + self.X86_IDENTITY + ' }}'),
+        )
+        for changed in hybrids:
+            with self.subTest(declaration=changed[changed.index('\non:\n'):changed.index('\npermissions:\n')]):
+                self.assertIsNone(ci_preflight._release_split_mode(changed))
+                self.assertFalse(ci_preflight._release_split_toolchain_reader_is_pinned(
+                    changed, _jobs(changed)['prebuilt-x86']))
+                self.assertIn(self.CREDENTIAL.format('prebuilt-x86'),
+                              ci_preflight.release_credential_findings(changed))
+        # None of the OLD pin's workflow/x86 prerequisites may be discarded.
+        workflow_mutations = (
+            ('  workflow_dispatch:\n', '  push:\n'),
+            ('        default: patch\n', '        default: minor\n'),
+            ('permissions:\n  contents: read\n', 'permissions:\n  contents: write\n'),
+            ('  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"\n', '  PINEFORGE_REQUIRE_RELEASE_TAGS: "0"\n'),
+            ('\nenv:\n', '\ndefaults:\n  run:\n    shell: sh\nenv:\n'),
+        )
+        for before, after in workflow_mutations:
+            with self.subTest(current_prerequisite=before):
+                self.assertIn(before, self.current)
+                changed = self.current.replace(before, after, 1)
+                self.assertFalse(ci_preflight._release_split_toolchain_reader_is_pinned(
+                    changed, _jobs(changed)['prebuilt-x86']))
+                self.assertIn(self.CREDENTIAL.format('prebuilt-x86'),
+                              ci_preflight.release_credential_findings(changed))
+        for before, after in (
+                ("github.event_name == 'workflow_dispatch'", "github.event_name == 'push'"),
+                ("github.ref == 'refs/heads/main'", "startsWith(github.ref, 'refs/tags/v')"),
+                ('release.yml@{0}', 'other.yml@{0}'),
+                ('create_credentials_file: false', 'create_credentials_file: true'),
+                ('export_environment_variables: false', 'export_environment_variables: true')):
+            with self.subTest(current_x86_prerequisite=before):
+                changed = in_job(self.current, 'prebuilt-x86', before, after)
+                self.assertFalse(ci_preflight._release_split_toolchain_reader_is_pinned(
+                    changed, _jobs(changed)['prebuilt-x86']))
+                self.assertEqual(ci_preflight.release_credential_findings(changed),
+                                 [self.CREDENTIAL.format('prebuilt-x86')])
+
+    def test_phase_reader_controls_and_arm_upload_raw_scans_stay_strict(self):
+        for before, after in (('create_credentials_file: false', 'create_credentials_file: true'),
+                              ('export_environment_variables: false', 'export_environment_variables: true')):
+            with self.subTest(reader=after):
+                name = 'Authenticate the dedicated toolchain reader'
+                changed = in_step(self.phase, 'prebuilt-x86', name, before, after)
+                self.assert_phase_refused(changed, self.STEP.format('prebuilt-x86', name))
+                self.assertEqual(ci_preflight.release_credential_findings(changed),
+                                 [self.CREDENTIAL.format('prebuilt-x86')])
+        for job, name in (('prebuilt-arm', 'Configure'),
+                          ('upload', 'Verify both tarballs against build outputs')):
+            with self.subTest(raw=job):
+                changed = in_step(
+                    self.phase, job, name, '          set -euo pipefail\n',
+                    '          set -euo pipefail\n          # ${{ secrets.DEPLOY_TOKEN }}\n')
+                runner, = ci_preflight._job_values(_jobs(changed)[job], 'runs-on')
+                changed = in_job(changed, job, 'runs-on: ' + runner, 'runs-on: self-hosted')
+                finding = f'release.yml job {job} must keep production credentials on a hosted standard runner'
+                self.assertIn(finding, ci_preflight.runner_findings({'release.yml': changed}))
+                self.assertIn(self.CREDENTIAL.format(job),
+                              ci_preflight.release_credential_findings(changed))
+                self.assert_phase_refused(changed, self.STEP.format(job, name))
+        leaked = '# ${{ steps.toolchain-auth.outputs.access_token }}\n' + self.phase
+        self.assert_phase_refused(
+            leaked, 'release.yml Option C registry token must remain in the exact x86 '
+            'auth output and login step environment only')
 
 
 class GkeSmokeOutputAdmission(unittest.TestCase):

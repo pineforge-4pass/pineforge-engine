@@ -13,6 +13,7 @@ version number follows semantic versioning over the surfaces the
 - A named `strategy.exit` placed with a same-side `strategy.entry` of another id on the bar where the position's earlier entry is closed by `strategy.close` is now kept; before, it was removed when the position went flat (#803).
 - A reversing `strategy.entry` placed after a partial `strategy.close` of the position it opposes now closes the rest of that position and opens the new one, as the same entry does without the close; before, it closed the rest and opened nothing (#803).
 - With the default FIFO close rule, a named `strategy.exit` placed while its entry id holds lots now ends when a `strategy.entry` of the same id reverses those lots; before, it could close the new position instead (#803).
+- `strategy.risk.max_drawdown` is now tested at the order fills that close units, on the equity at that fill with open positions included, against the highest equity at such fills (the equity at an opening fill or at a bar close does not raise it), and a breach closes every open position at that fill's price (exit text "Close Position (Max Drawdown)"), cancels the pending orders and blocks later entries; before, it was measured once per bar close and only refused new entries (#804).
 - The internal native Store live-object policy defaults to 0 (unbounded).
   The former capped default of 1,048,576 is now 0. Native limits are kept
   exactly: every positive uint64, including UINT64_MAX, is finite;
@@ -209,6 +210,16 @@ version number follows semantic versioning over the surfaces the
   occupant, and deleting the oldest drawing moves the directory's entries).
   The bound, the typed overflow outcome, the slot reuse order, the
   stale-handle behaviour and every value a script reads are unchanged.
+- The closed-trade read cache of the trade ledger places rows by count. While a
+  run holds no more closed trades than the cache has entries (215,070 by
+  default) each trade owns the slot of its ordinal: a read makes one probe, and
+  the cache commits only the pages the trades reach (25,000 closed trades hold
+  98 pages, 7.8 MB, where four-way sets hold 391, 31.2 MB). With more closed
+  trades the four-way sets apply, and the cached rows are dropped when a run
+  crosses the capacity in either direction. In a four-way set a hit on the most
+  recent entry changes nothing and a hit on another entry ages only the entries
+  more recent than it, so a full set replaces the entry touched longest ago. A
+  miss is probed once. Every value a script reads is unchanged.
 
 ## 1.9.1 — 2026-10-31
 
