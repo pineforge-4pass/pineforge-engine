@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed if a native/generic include root reaches a source/Pine header.
+"""Guard native source boundaries, member definitions and sync portability.
 
 This is the inexpensive textual companion to check_native_include_independence:
 the latter proves the installed closure and object symbols after a build; this
@@ -7,6 +7,7 @@ guard runs in preflight and rejects a forbidden include before compilation.
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from contextlib import redirect_stderr
 import io
 from pathlib import Path
@@ -123,6 +124,13 @@ def _mask_cpp(text: str) -> str:
                     blank(index, end)
                     index = end
                     continue
+        # C++17 digit separators are not opening character-literal quotes.
+        if (text[index].isdigit()
+                and (index == 0 or not re.match(r"\w", text[index - 1]))):
+            index += 1
+            while index < length and (text[index].isalnum() or text[index] in "_.'"):
+                index += 1
+            continue
         if text[index] in {'"', "'"}:
             quote = text[index]
             end = index + 1
@@ -298,7 +306,209 @@ def run_scan(pattern: re.Pattern[str], paths: list[Path], label: str,
     return 0
 
 
+def _apple_condition(expression: str) -> set[bool]:
+    """Possible truth values on Apple; unsupported syntax stays unknown."""
+    tokens = re.findall(r"[A-Za-z_]\w*|\d+|&&|\|\||[!()]|\S", expression)
+    position = 0
+
+    def take() -> str:
+        nonlocal position
+        if position == len(tokens):
+            raise ValueError("incomplete condition")
+        token = tokens[position]
+        position += 1
+        return token
+
+    def parse(level: int = 0) -> set[bool]:
+        nonlocal position
+        if level < 2:
+            left = parse(level + 1)
+            operator = ("||", "&&")[level]
+            while position < len(tokens) and tokens[position] == operator:
+                position += 1
+                right = parse(level + 1)
+                left = {(a or b) if level == 0 else (a and b)
+                        for a in left for b in right}
+            return left
+        token = take()
+        if token == "!":
+            return {not value for value in parse(2)}
+        if token == "(":
+            value = parse()
+            if take() != ")":
+                raise ValueError("unclosed condition")
+            return value
+        if token == "defined":
+            token = take()
+            if token == "(":
+                token = take()
+                if take() != ")":
+                    raise ValueError("unclosed defined")
+            if not re.fullmatch(r"[A-Za-z_]\w*", token):
+                raise ValueError("invalid defined")
+        if token in {"__APPLE__", "1"}:
+            return {True}
+        if token in {"__linux__", "0"}:
+            return {False}
+        return {False, True}
+
+    try:
+        result = parse()
+        return result if position == len(tokens) else {False, True}
+    except ValueError:
+        return {False, True}
+
+
+def _apple_fdatasync(text: str) -> tuple[int, list[int]]:
+    """Count lexical calls and locate those not provably excluded on Apple."""
+    # Splice before masking, as C++ does, including continued // comments.
+    # Keep enough offset information to report physical source line numbers.
+    splices = [match.start() - 2 * index for index, match in
+               enumerate(re.finditer(r"\\\n", text))]
+    masked = _mask_cpp(text.replace("\\\n", ""))
+    calls: dict[int, list[int]] = {}
+    count = 0
+    for match in re.finditer(r"::\s*fdatasync\s*\(", masked):
+        logical_line = masked.count("\n", 0, match.start()) + 1
+        physical_offset = match.start() + 2 * bisect_right(splices, match.start())
+        calls.setdefault(logical_line, []).append(
+            text.count("\n", 0, physical_offset) + 1)
+        count += 1
+    if not count:
+        return 0, []
+
+    # Each frame holds the parent's reachability, whether a later arm may
+    # still be selected, and whether #else has already appeared.
+    stack: list[tuple[bool, bool, bool]] = []
+    reachable = True
+    exposed: list[int] = []
+    for line_number, line in enumerate(masked.splitlines(), 1):
+        directive = re.match(r"^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)", line)
+        if directive:
+            kind, expression = directive.groups()
+            if kind in {"if", "ifdef", "ifndef"}:
+                if kind != "if":
+                    expression = ("!" if kind == "ifndef" else "") + (
+                        "defined(" + expression.strip() + ")")
+                condition = _apple_condition(expression)
+                stack.append((reachable, False in condition, False))
+                reachable = reachable and True in condition
+            else:
+                if not stack or (kind != "endif" and stack[-1][2]):
+                    raise ValueError(f"line {line_number}: unexpected #{kind}")
+                parent, remaining, _ = stack[-1]
+                if kind == "endif":
+                    reachable = parent
+                    stack.pop()
+                else:
+                    condition = _apple_condition(expression) if kind == "elif" else {True}
+                    reachable = parent and remaining and True in condition
+                    stack[-1] = (parent, remaining and False in condition, kind == "else")
+        if reachable:
+            exposed.extend(calls.get(line_number, []))
+    if stack:
+        raise ValueError("unterminated preprocessor conditional")
+    return count, exposed
+
+
+def run_portability_scan(root: Path) -> int:
+    """Read every C/C++ source/header in both roots; fail on incomplete input."""
+    suffixes = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inc", ".inl"}
+    findings: list[str] = []
+    calls = 0
+    path = root
+    try:
+        for relative in ("src", "include"):
+            path = root / relative
+            if not path.is_dir():
+                raise OSError("missing source directory")
+            pending = [path]
+            files = 0
+            while pending:
+                path = pending.pop()
+                if path.is_symlink():
+                    raise OSError("refusing symbolic link in source tree")
+                if path.is_dir():
+                    pending.extend(sorted(path.iterdir(), reverse=True))
+                    continue
+                if path.suffix.lower() not in suffixes:
+                    continue
+                text = path.read_text(encoding="utf-8")
+                files += 1
+                count, exposed = _apple_fdatasync(text)
+                calls += count
+                findings.extend(
+                    f"{path}:{line}: ::fdatasync call may be compiled on Apple; "
+                    "exclude Apple and use its portable sync branch\n"
+                    for line in exposed)
+            if not files:
+                raise OSError("no C/C++ source/header inputs")
+        if not calls:
+            raise ValueError("no ::fdatasync calls scanned")
+    except (OSError, UnicodeError, ValueError) as error:
+        print(f"native source guard: portability scan failed: {path}: {error}",
+              file=sys.stderr)
+        return 1
+    if findings:
+        print("native source guard: Apple-exposed ::fdatasync call(s) found",
+              file=sys.stderr)
+        sys.stderr.writelines(findings)
+        return 1
+    return 0
+
+
+def portability_self_test() -> int:
+    # Independent discriminators exercise the same scanner as the real tree;
+    # no production path, call count or line number is an acceptance whitelist.
+    cases = (
+        ("unguarded", "::fdatasync(fd);\n", 1, [1]),
+        ("Apple else", "#if defined(__APPLE__)\n::fsync(fd);\n"
+         "#else\n::fdatasync(fd);\n#endif\n", 1, []),
+        ("Linux else", "#if defined(__linux__)\n::fdatasync(fd);\n"
+         "#else\n::fsync(fd);\n#endif\n", 1, []),
+        ("unrelated Apple arm", "#ifndef __APPLE__\n::fsync(fd);\n#endif\n"
+         "::fdatasync(fd);\n", 1, [4]),
+        ("Apple positive", "#if defined(__APPLE__)\n::fdatasync(fd);\n#endif\n", 1, [2]),
+        ("wrong nested arm", "#ifndef __APPLE__\n::fsync(fd);\n#else\n"
+         "#if FEATURE\n::fdatasync(fd);\n#endif\n#endif\n", 1, [5]),
+        ("outer exclusion", "#ifndef __APPLE__\n#if FEATURE\n"
+         "::fdatasync(fd);\n#endif\n#endif\n", 1, []),
+        ("elif exclusion", "#if FEATURE\n::fsync(fd);\n"
+         "#elif defined(__linux__)\n::fdatasync(fd);\n"
+         "#elif defined(__APPLE__)\n::fsync(fd);\n#endif\n", 1, []),
+        ("elif Apple", "#if defined(__linux__)\n::fsync(fd);\n"
+         "#elif defined(__APPLE__)\n::fdatasync(fd);\n#endif\n", 1, [4]),
+        ("unknown else", "#if FEATURE\n::fsync(fd);\n#else\n"
+         "::fdatasync(fd);\n#endif\n", 1, [4]),
+        ("boolean exclusion", "#if !defined(__APPLE__) && FEATURE\n"
+         "::fdatasync(fd);\n#endif\n", 1, []),
+        ("boolean exposure", "#if !defined(__APPLE__) || FEATURE\n"
+         "::fdatasync(fd);\n#endif\n", 1, [2]),
+        ("unsupported condition", "#if __APPLE__ == 1\n::fdatasync(fd);\n#endif\n", 1, [2]),
+        ("comments and strings", "// #ifndef __APPLE__\n/* __APPLE__ */\n"
+         'const char* marker = "__APPLE__";\n::fdatasync(fd);\n', 1, [4]),
+        ("masked calls", "// ::fdatasync(fd);\n/* ::fdatasync(fd); */\n"
+         'const char* text = "::fdatasync(fd);";\n'
+         'const char* raw = R"tag(::fdatasync(fd);)tag";\n', 0, []),
+        ("continued condition", "#if !defined(\\\n__APPLE__)\n"
+         "::fdatasync(fd);\n#endif\n", 1, []),
+        ("continued comment", "// ignored \\\n#ifndef __APPLE__\n"
+         "::fdatasync(fd);\n", 1, [3]),
+        ("split call", "::\nfdatasync\n(fd);\n", 1, [1]),
+        ("digit separator", "auto size = 1'024;\n::fdatasync(fd);\n", 1, [2]),
+    )
+    for label, text, expected_count, expected in cases:
+        count, exposed = _apple_fdatasync(text)
+        if (count, exposed) != (expected_count, expected):
+            print(f"native source guard: portability self-test failed: {label}: "
+                  f"{(count, exposed)!r} != {(expected_count, expected)!r}", file=sys.stderr)
+            return 1
+    return 0
+
+
 def self_test() -> int:
+    if portability_self_test():
+        return 1
     with tempfile.TemporaryDirectory(prefix="pf-native-source-guard-") as temporary:
         fixture = Path(temporary) / "include/pineforge/engine.hpp"
         fixture.parent.mkdir(parents=True)
@@ -362,6 +572,8 @@ def self_test() -> int:
 
 def main() -> int:
     if self_test():
+        return 1
+    if run_portability_scan(ROOT):
         return 1
     roots = native_roots()
     if not all(path.is_file() for path in roots):
