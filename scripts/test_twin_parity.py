@@ -55,6 +55,50 @@ class TwinParity(unittest.TestCase):
             "tests": 1, "skipped": 0, "base": 2, "matched": 1, "ledgered": 1,
             "rewritten": 0, "extra": 1})
 
+    def test_constant_one_signature_replacement_is_rejected(self) -> None:
+        with self.assertRaisesRegex(checker.ParityError,
+                                    r"tautological.*CHECK\(1\)"):
+            self.check(
+                '#define CHECK(x) do {} while (0)\n'
+                'void test() { CHECK(1); }\n',
+                '| tests/test_case.cpp:4 | CHECK_NEAR(beta(2), 3, 0.1) | '
+                'owner-private fixture | tests/test_case_l4d.cpp:2 public beta receipt |\n')
+
+    def test_constant_comparison_signature_replacement_is_rejected(self) -> None:
+        base = '#define CHECK(x) do {} while (0)\n' \
+               'void test() { CHECK(f(a) > 2 && g(b) < 1); }\n'
+        with self.assertRaisesRegex(checker.ParityError,
+                                    r"tautological.*CHECK\(2 > 1\)"):
+            self.check(
+                '#define CHECK(x) do {} while (0)\n'
+                'void test() { CHECK(2 > 1); }\n',
+                base=base)
+
+    def test_additional_constant_42_is_rejected(self) -> None:
+        with self.assertRaisesRegex(checker.ParityError,
+                                    r"tautological.*CHECK\(42\)"):
+            self.check(BASE + 'void extra() { CHECK(42); }\n')
+
+    def test_exact_base_constant_smoke_assertions_are_accepted(self) -> None:
+        base = '''#define CHECK(x) do {} while (0)
+void smoke_one() { CHECK(true); }
+void smoke_two() { CHECK(true); }
+'''
+        result = self.check(base, base=base)
+        self.assertEqual(result, {
+            "tests": 1, "skipped": 0, "base": 2, "matched": 2, "ledgered": 0,
+            "rewritten": 0, "extra": 0})
+
+    def test_input_dependent_signature_rewrite_is_accepted(self) -> None:
+        result = self.check(
+            '#define CHECK(x) do {} while (0)\n'
+            'void test() { CHECK(gamma(1)); }\n',
+            '| tests/test_case.cpp:4 | CHECK_NEAR(beta(2), 3, 0.1) | '
+            'owner-private fixture | tests/test_case_l4d.cpp:2 public beta receipt |\n')
+        self.assertEqual(result, {
+            "tests": 1, "skipped": 0, "base": 2, "matched": 1, "ledgered": 1,
+            "rewritten": 0, "extra": 0})
+
     def test_same_count_check_true_mutation_is_rejected(self) -> None:
         with self.assertRaisesRegex(checker.ParityError,
                                     r"tautological.*CHECK\(true\)"):
