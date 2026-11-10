@@ -15,43 +15,29 @@ The current PR admission and post-merge trigger map is:
 | `gke-pr / build-arm` | Hosted arm64 Debug build and tests when `arm_relevant=true` | Skipped | Not triggered |
 | `macos-compile / macOS compile` | Advisory Debug library and test-binary compilation | Same compile coverage | Main pushes and manual dispatch only; no nightly trigger |
 
-`macos-compile.yml` has one independent `compile-macos` job on `macos-latest`.
-It authorizes before checkout, compiles the exact same-repository nonfork PR head
-or main push SHA, and prints the actual HEAD, tree, compiler and configuration.
-Manual dispatch accepts an optional `source_ref`: an existing repository commit's
-full lowercase 40-hex SHA, defaulting to the dispatch SHA. Debug enables the
-source layer, tests and tutorial, then builds ALL targets without executing tests.
-Homebrew downloads and ccache restore on every admitted event; only successful
-main pushes save them. This workflow is outside every merge/release aggregate,
-required context and release archive. Maintainers may reconsider requiring it only after
-three real green main runs; this workflow never changes that policy automatically.
+`macos-compile.yml` has one independent advisory `compile-macos` job on `macos-latest` and requires Darwin.
+It authorizes before checkout, admits same-repository nonfork, non-draft PRs to `main`, compiles the exact PR head or main push SHA, and prints the actual HEAD, tree, compiler and configuration.
+Manual dispatch accepts an optional `source_ref`: an existing repository commit's full lowercase 40-hex SHA, defaulting to the dispatch SHA; checkout verifies the selected commit.
+Debug enables the source layer, tests and tutorial, then builds ALL targets without executing tests; this workflow adds no new CTest `slow` rows.
+Homebrew downloads and ccache restore on every admitted event; only successful main pushes save them.
+This workflow is outside every merge/release aggregate, required context and release archive.
+Maintainers may reconsider requiring it only after three real green main runs; this workflow never changes that policy automatically.
 
-The admission workflow is defined on `main` and runs on hosted `ubuntu-24.04`
-runners with no runner-group allowlist entry. Its proof legs use the same hosted
-Release, Debug and parity images as the post workflow; the hosted result is red for refusal,
+The admission workflow is defined on `main` and runs on hosted `ubuntu-24.04` runners with no runner-group allowlist entry.
+Its proof legs use the same hosted Release, Debug and parity images as the post workflow; the hosted result is red for refusal,
 failure, cancellation, disagreement or an unanswered class. The native x86 GNU 13.3.0 job runs for every admitted PR and every post event, including documentation-only and GitHub-only changes: it checks out the exact head, configures a fresh C++17 Release tree with the source layer enabled and optional targets and tests disabled, then invokes the ordinary all-target Unix Makefiles build with the runner's parallelism, and retains the configure and build logs, the compiler identity, CMake cache and compile commands as failure diagnostics.
 
-The nightly CI schedule is 01:30 UTC. The existing docs-only classification
-still skips the existing code proof jobs on a documentation-only PR or main push; the native x86 build remains required. Both
-preflight tiers together retain the original full stage inventory; the slow
-tier still runs on a docs-only main push. Scheduled and manual runs execute
-every profile. `ci.yml` retains authorization and draft event handling;
-`gke-pr` owns admission, classification, preflight and proof legs. Docs-only
-and GitHub-only changes still run preflight, while only the proof legs skip.
+The nightly CI schedule is 01:30 UTC. The existing docs-only classification still skips the existing code proof jobs on a documentation-only PR or main push; the native x86 build remains required.
+Both preflight tiers together retain the original full stage inventory; the slow tier still runs on a docs-only main push. Scheduled and manual runs execute every profile.
+`ci.yml` retains authorization and draft event handling; `gke-pr` owns admission, classification, preflight and proof legs. Docs-only and GitHub-only changes still run preflight, while only the proof legs skip.
 Failed, cancelled or unclassified work is red in the hosted result.
 
-`rerun-preempted.yml` retries only failed jobs of completed, failed `CI post-merge`
-push/schedule runs on `main`, including called native jobs. Every failed job must
-have an amd64 `gke-*` label and runner-loss evidence without an independent error.
-Missing logs, mixed failures, arm64/`gkp-*` jobs, stale attempts and changed runs
-refuse the retry; three total attempts are allowed. PRs, manual dispatches and
-release/publish/deploy/promotion workflows are excluded. The controller runs on
-hosted `ubuntu-24.04`, uses its trusted default-branch workflow commit, and never
+`rerun-preempted.yml` retries only failed jobs of completed, failed `CI post-merge` push/schedule runs on `main`, including called native jobs.
+Every failed job must have an amd64 `gke-*` label and runner-loss evidence without an independent error. Missing logs, mixed failures, arm64/`gkp-*` jobs, stale attempts and changed runs refuse the retry; three total attempts are allowed.
+PRs, manual dispatches and release/publish/deploy/promotion workflows are excluded. The controller runs on hosted `ubuntu-24.04`, uses its trusted default-branch workflow commit, and never
 prints log bodies. Missing `gh`, `python3` or the log escape flag fails the job. The post-merge on-demand amd64 labels are included in the same loss-retry fleet; if that routing is rolled back, land a revert PR for the label commit before the next post-merge run.
 
-A GitHub-only PR changes at least one path, all under `.github/`, including both sides of a rename.
-`scripts/ci_*.py` changes, alone or mixed with `.github/`, follow the ordinary proof plan.
-`gke-pr` reads the SHA-bound three-dot compare API twice, writes a NUL-separated path file and gives it to the base tree's `scripts/ci_docs_only.py --paths`.
+A GitHub-only PR changes at least one path, all under `.github/`, including both sides of a rename. `scripts/ci_*.py` changes, alone or mixed with `.github/`, follow the ordinary proof plan. `gke-pr` reads the SHA-bound three-dot compare API twice, writes a NUL-separated path file and gives it to the base tree's `scripts/ci_docs_only.py --paths`.
 Empty, missing, malformed, truncated or unreadable lists are neither class; exact `.github/` and `docs/` prefixes prevent lookalikes or the classifier itself from creating a skip.
 
 The classifier also emits `arm_relevant`: source/build inputs under `tests/`, `runner/`, `include/`, `src/` or `docker/` set it true,
@@ -91,7 +77,7 @@ executables, including `test_abi_layout_probe`, whose size and offset pins
 apply on Linux x86_64 with GNU libstdc++. Configure refuses missing, disabled,
 skippable, private-fixture or `slow` rows. The target rebuilds those executables
 with their library.
-PR proof legs build cold; trusted post workflows also build cold and contain
+Linux PR proof legs build cold; trusted Linux post workflows also build cold and contain
 no Actions cache restore or save.
 
 Verification jobs keep exact runner pins at the workflow boundary: Every migrated
@@ -209,7 +195,7 @@ Release and native profiles also install into a disposable prefix, remove the
 source-only header trees, and compile the native public roots and examples;
 the preflight source guard rejects those includes before a build.
 
-CI uses Ubuntu 24.04 amd64 and arm64 cells and selects Python 3.12 explicitly.
+For the Linux verification fleet, CI uses Ubuntu 24.04 amd64 and arm64 cells and selects Python 3.12 explicitly.
 The amd64 post build shards use the hosted `ubuntu-24.04` image and the two arm64 post cells use
 `ubuntu-24.04-arm`; each runs directly on that image. All three build jobs refuse an OS mismatch.
 Hosted pins cover every PR and post job outside `release.yml`; the existing hosted release cell keeps `ubuntu-22.04-arm`.
@@ -222,7 +208,7 @@ runs each image, and the platform's maximum, is in
 
 The two source-only benchmark CTest rows run the 25 harness unit tests and
 `benchmarks/check_provenance.py`. The latter reads historical commits (including
-`933fe583`), so every checkout in the CI workflows and the admission base
+`933fe583`), so their verification checkouts in the CI workflows and the admission base
 checkout fetches full Git history. A depth-1 checkout fails the provenance row
 even when the current benchmark files are correct.
 
@@ -828,7 +814,7 @@ only examples or tests include fails no profile. A database without the
 archive's compiles fails the stage.
 
 Pass `--ccache` when ccache is installed; it is an empty local directory on
-the hosted proof and trusted post jobs. Actions cache restore and save steps were
+the Linux hosted proof and trusted post jobs. Actions cache restore and save steps were
 removed from those jobs, so no PR run can plant an object that a trusted job
 later restores. The native curl action remains a separate dependency path and
 is an outstanding allow-list deviation for this change.
@@ -842,7 +828,7 @@ maximum is the only bound.
 The summary records discovered and selected row counts, executed rows,
 skipped or not-run rows, and stage timings, including when a test fails.
 
-Every trusted post and PR proof job is a cold proof by construction. Manual
+Every Linux trusted post and PR proof job is a cold proof by construction. Manual
 runs select the full main-equivalent row set; there is no cache warm-up
 exception. A cold proof must inspect each profile's verdict and retained
 counts, not just the caller aggregate. A local Spot run is evidence about that
@@ -1681,7 +1667,7 @@ The four full build checks are `build (ubuntu-24.04, Release)`,
 Every shard builds the full tree and runs `--ctest-shard I/N` at the runner's core count. Each build refuses an OS mismatch before checkout.
 Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on `ubuntu-24.04-arm`. All three build jobs use the same verification steps and profiles.
 Shard jobs and leg aggregates skip together only on classified docs-only changes.
-Trusted post workflows and PR proof legs build cold; no trusted job restores an Actions cache.
+Within the Linux verification fleet, trusted post workflows and PR proof legs build cold; no trusted job restores an Actions cache.
 `HOSTED_JOB_RUNNERS` pins the hosted x86 and arm64 jobs and the native profile runner matrix; `GKP_JOB_RUNNERS` separately pins the protected release jobs and sizes. Every pinned job runs directly on its hosted image. PR checks are
 `build`, `build-debug`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`. With the arm leg, the full set is `build`, `build-debug`, `build-arm`, `corpus-parity-subset`, `legs` and `result` in `gke-pr.yml`.
 
@@ -2086,7 +2072,7 @@ A class disagreement is red even when the proof jobs were skipped.
 The result re-reads with the immutable payload shas to avoid branch races.
 The code-extension veto can only require proof legs, never skip them.
 
-Trusted post workflows build cold and contain no Actions cache restore or save.
+Trusted Linux post workflows build cold and contain no Actions cache restore or save.
 PR pods also build cold, so their runtime cache credential has no trusted reader.
 No trusted job consumes an artifact from the admission workflow.
 The runner group accepts only the main branch admission workflow definition.
