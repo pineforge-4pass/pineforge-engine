@@ -13,13 +13,15 @@ cache_sweep::Result private_ledger_rows(cache_sweep::Setting setting) {
     // retirement disabled. Model the declared geometry from that input,
     // independently of every cache/accounting observation: an omitted setting
     // holds the provisional byte default's rows, found by search, and a complete
-    // in-order walk allocates the pages of the four-way sets its ordinals reach
-    // (ledger_default_cache_rows.hpp); an explicit row setting holds its rows.
+    // in-order walk allocates the pages its ordinals reach: their own slots when
+    // the cache holds every retained row, the four-way sets' pages when it holds
+    // fewer (ledger_default_cache_rows.hpp); an explicit row setting holds its rows.
     constexpr std::size_t retained_rows = 100003;
     auto rows = setting.defaults ? ledger_oracle::default_cache_rows() : setting.units;
     const auto directory = (rows / Ledger::kCachePageSlots
         + (rows % Ledger::kCachePageSlots != 0)) * sizeof(void*);
-    const auto expected_slots = ledger_oracle::touched_slots(rows, 0, retained_rows);
+    const auto expected_slots =
+        ledger_oracle::touched_slots(rows, retained_rows, 0, retained_rows);
     std::printf("LEDGER_CACHE_EXPECTED setting=%s policy=%s retained_rows=%zu "
                 "initial_rows=%zu expected_geometry_rows=%zu expected_allocated_slots=%zu "
                 "expected_payload=%zu expected_directory=%zu\n",

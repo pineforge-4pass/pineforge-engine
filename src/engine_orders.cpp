@@ -573,6 +573,8 @@ struct TradeLedger::State {
     mutable bool cache_allocation_failed = false;
     mutable size_type cache_failed_population = 0;
     mutable CacheStats cache_stats;
+    // true while the ledger holds at most cache_rows rows: one slot per row (see cache_slot)
+    bool cache_direct = true;
     // Zero-row policy reads use fixed owner storage without allocating pages.
     mutable CacheEntry uncached;
     detail::RunCacheSource cache_diagnostics{this, [](const void* owner) noexcept {
@@ -603,8 +605,23 @@ struct TradeLedger::State {
     }
     [[gnu::always_inline]] size_type cache_slot(size_type global) const {
         // A global ordinal chooses a bounded set, never a history directory.
+        // Direct mode: row number == slot; an id past the end (a prefetch) maps to slot 0, which is always valid.
+        if (cache_direct) return global < cache_rows ? global : size_type{0};
         const auto sets = cache_rows / kCacheWays + (cache_rows % kCacheWays != 0);
         return (global % sets) * kCacheWays;
+    }
+    // Ways of the set at a slot: one in direct mode, up to four otherwise.
+    [[gnu::always_inline]] size_type cache_ways(size_type slot) const {
+        return cache_direct ? size_type{1} : std::min(kCacheWays, cache_rows - slot);
+    }
+    // Called after the number of rows changed: the mapping from rows to slots depends on whether
+    // the ledger still fits the cache, so every flip drops the cached rows (a generation bump).
+    void sync_cache_mode() {
+        const bool direct = end <= cache_rows;
+        if (direct != cache_direct) {
+            cache_direct = direct;
+            invalidate_cache();
+        }
     }
     size_type cache_table_size() const {
         return cache_rows / kCachePageSlots + (cache_rows % kCachePageSlots != 0);
@@ -631,15 +648,32 @@ struct TradeLedger::State {
             entry.generation = (entry.generation & ~rank_mask) | (rank << 8);
         }
     }
+    // A hit reorders ranks like a least-recently-used list: an entry that is
+    // already the most recent changes nothing; otherwise only the entries more
+    // recent than it age by one and it becomes the most recent.
+    [[gnu::always_inline]]
+    void touch_hit(CacheEntry* entries, size_type ways, CacheEntry* selected) const noexcept {
+        constexpr size_type rank_shift = 8;
+        constexpr size_type rank_mask = size_type{3} << rank_shift;
+        const auto old_rank = selected->generation & rank_mask;
+        if (old_rank == 0) return;
+        for (size_type i = 0; i < ways; ++i) {
+            auto& entry = entries[i];
+            if (&entry == selected || !current(entry)) continue;
+            if ((entry.generation & rank_mask) < old_rank)
+                entry.generation += size_type{1} << rank_shift;
+        }
+        selected->generation &= ~rank_mask;
+    }
     [[gnu::always_inline]] CacheEntry* cached(size_type global) const {
         auto* entries = cache_entry(global);
         if (!entries) return nullptr;
-        const auto ways = std::min(kCacheWays, cache_rows - cache_slot(global));
+        const auto ways = cache_ways(cache_slot(global));
         for (size_type i = 0; i < ways; ++i) {
             add_counter(cache_stats.lookup_probe_count);
             auto* entry = entries + i;
             if (current(*entry) && entry->global == global) {
-                touch_cache_entry(entries, ways, entry);
+                touch_hit(entries, ways, entry);
                 return entry;
             }
         }
@@ -724,7 +758,7 @@ struct TradeLedger::State {
             cache_allocated_slots += slots;
         }
         auto* entries = page + (slot & (kCachePageSlots - 1));
-        const auto ways = std::min(kCacheWays, cache_rows - slot);
+        const auto ways = cache_ways(slot);
         CacheEntry* victim = entries;
         for (size_type i = 0; i < ways; ++i) {
             auto* entry = entries + i;
@@ -795,8 +829,7 @@ struct TradeLedger::State {
         }
         entry.generation = cache_generation | static_cast<size_type>(strings_valid)
             | (static_cast<size_type>(std::min<std::uint64_t>(record.entry_id.length, 127)) << 1);
-        touch_cache_entry(cache_entry(global),
-            std::min(kCacheWays, cache_rows - cache_slot(global)), &entry);
+        touch_cache_entry(cache_entry(global), cache_ways(cache_slot(global)), &entry);
         ++cache_count;
         return entry;
     }
@@ -805,6 +838,11 @@ struct TradeLedger::State {
             add_counter(cache_stats.hot_hit_count);
             return *entry;
         }
+        return load_miss(global);
+    }
+    // The part of load() after a failed lookup. A caller that has probed already
+    // calls it directly, so that a miss is neither probed nor counted twice.
+    const CacheEntry& load_miss(size_type global) const {
         add_counter(cache_stats.cold_miss_count);
         if (cache_rows == 0 || allocation_blocked()) {
             uncached.record = uncached_descriptor(global);
@@ -818,15 +856,21 @@ struct TradeLedger::State {
     [[gnu::always_inline]]
     auto numeric_field(size_type global) const {
         check(global);
+        if (const auto* entry = cached(global)) {
+            add_counter(cache_stats.hot_hit_count);
+            return entry->record.*Member;
+        }
         // Read the private entry directly; no Trade or owning string is
         // constructed for a numeric field.
-        return load(global).record.*Member;
+        return load_miss(global).record.*Member;
     }
     template<StringExtent Record::*Member>
     // Owning read; the compiler decides inlining of its string construction.
     std::string string_field(size_type global) const {
         check(global);
-        const auto& entry = load(global);
+        const auto* hit = cached(global);
+        if (hit) add_counter(cache_stats.hot_hit_count);
+        const auto& entry = hit ? *hit : load_miss(global);
         const auto text = entry.record.*Member;
         if (!entry.strings_valid()) return get_string(text);
         size_type offset = 0;
@@ -1332,6 +1376,7 @@ TradeLedger::TradeLedger(const TradeLedger& other)
         // intentionally retired prefix. Rebuild only the retained payload.
         state_->retiring = true;
         state_->first = state_->end = state_->resident_first = other.base();
+        state_->sync_cache_mode();
         state_->index_origin = State::absolute_record_offset(other.base());
     }
     for (size_type i = state_->end; i < other.size(); ++i) {
@@ -1669,6 +1714,7 @@ void TradeLedger::push_back(const Trade& trade) {
     state_->rows[(state_->head + state_->count) % kResidentRows] = record;
     ++state_->count;
     ++state_->end;
+    state_->sync_cache_mode();
     if (state_->cache) state_->remember(state_->end - 1, record, &trade);
 }
 
@@ -1687,6 +1733,7 @@ void TradeLedger::resize(size_type global_end) {
         // are already external; discard the bounded descriptor cache.
         while (state_->count != 0) state_->evict();
         state_->end = state_->resident_first = global_end;
+        state_->sync_cache_mode();
         state_->materialized.erase(state_->materialized.lower_bound(global_end),
                                     state_->materialized.end());
     } else {
