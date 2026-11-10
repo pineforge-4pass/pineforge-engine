@@ -2013,12 +2013,13 @@ void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
         CHECK(small.largest_request <= small_budget && small.peak_live <= small_budget);
         CHECK(capped.largest_request <= budget && large.largest_request <= budget);
         CHECK(capped.peak_live <= budget && large.peak_live <= budget);
-        // Formatting can differ by integer width; the tolerance remains one fixed
-        // production scratch window, as in the old witness, around the pages the
-        // larger population commits beyond the smaller one.
-        const auto page_growth = (large_slots - capped_slots) * TradeLedger::kLedgerEntryBytes;
-        CHECK(large.peak_live <= capped.peak_live + page_growth + window);
-        CHECK(capped.peak_live + page_growth <= large.peak_live + window);
+        // CaptureAllocationScope starts after the ledger cache is populated.
+        // Its peak counts terminal-capture/read working allocations, not the
+        // pre-existing cache pages checked exactly above. Keep that working
+        // storage within one fixed scratch window in both directions; adding
+        // resident page growth here would require allocations outside the scope.
+        CHECK(large.peak_live <= capped.peak_live + window);
+        CHECK(capped.peak_live <= large.peak_live + window);
         CHECK(large.largest_request <= capped.largest_request + window);
         CHECK(capped.largest_request <= large.largest_request + window);
     }
