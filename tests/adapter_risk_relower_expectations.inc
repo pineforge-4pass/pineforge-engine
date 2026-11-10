@@ -30,14 +30,22 @@
 
 namespace {
 
+// No units close before the final mark; the same-side opening is admitted.
+// Tape d1 SHA-256: 5beeac719db4c7b6d84c31bf94f8bd9ac80cecaac8483e9900ec0b9532f36fd5
+// Tape d4b SHA-256: 0acb1158cea715b0e6cb5c6a838d997c6baf358c79df2433ad21a12fece399ac
 const Expected kDrawdownCadence{
     "MG10-a",
     "L 100 @0:100->3:99 pnl=-100 id='' c='' cause=6 | L 100 @2:99->3:99 pnl=0 id='' c='' cause=6 | pos=200",
     "pos=100"};
 
+// expectation corrected: two reversals and an open long -> one reversal
+// followed by its drawdown close, because TradingView tests closing fills.
+// The long loses 100 * (94 - 100) = -600; the short closes at its own 94
+// entry for zero, with an empty exit id and risk close cause (4); the book is flat.
+// Tape d4a SHA-256: 8a5bd165a195e74ecf72ce6336a369b7892828acef6ee5dccf662be38440dc4a
 const Expected kDrawdownReversal{
     "MG10-b",
-    "L 100 @0:100->2:94 pnl=-600 id='S' c='' cause=1 | S 100 @2:94->3:94 pnl=0 id='L' c='' cause=1 | L 100 @3:94->4:94 pnl=0 id='' c='' cause=6 | pos=100",
+    "L 100 @0:100->2:94 pnl=-600 id='S' c='' cause=1 | S 100 @2:94->2:94 pnl=0 id='' c='Close Position (Max Drawdown)' cause=4 | pos=0",
     "pos=100"};
 
 const Expected kLossDaysOrdered{

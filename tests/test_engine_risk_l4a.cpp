@@ -107,24 +107,32 @@ public:
         const int index = pine_bar_index();
         if (index <= 3) strategy_entry("D" + std::to_string(index), true, kNaN, kNaN, 1.0);
         if (index == 4) strategy_close_all();
+        if (index == 5) strategy_entry("D4", true, kNaN, kNaN, 1.0);
     }
 };
 
-void test_drawdown_latches_and_blocks_later_commands() {
+void test_drawdown_tests_at_closing_fills_and_blocks_later_entries() {
     const Bar tape[] = {
         bar(kStart, 100.0, 100.0, 100.0, 100.0),
         bar(kStart + 60'000, 110.0, 110.0, 90.0, 90.0),
         bar(kStart + 120'000, 80.0, 80.0, 70.0, 75.0),
         bar(kStart + 180'000, 70.0, 70.0, 60.0, 65.0),
         bar(kStart + 240'000, 60.0, 60.0, 60.0, 60.0),
+        bar(kStart + 300'000, 60.0, 60.0, 60.0, 60.0),
     };
     DrawdownHost host;
-    host.run(tape, 5);
+    host.run(tape, 6);
     CHECK(host.last_error().empty());
-    // D0 is the only accepted opening. D1--D3 are refused after the
-    // close-mark drawdown latches, but the latch gates entries only:
-    // pine_risk.cpp:111-118 never refused the later close_all.
-    CHECK(host.trade_count() == 1);
+    // The drawdown is tested at the fills that close units, never between
+    // fills, so the three later same-side openings D1--D3 all fill although the
+    // marks fell past the limit (TradingView tape
+    // sha256:0acb1158cea715b0e6cb5c6a838d997c6baf358c79df2433ad21a12fece399ac:
+    // a same-side entry fills after an untested breach). The close_all then
+    // closes the four lots, one trade each.
+    // The entry of bar 5 is placed after that breaching closing fill and is
+    // refused (TradingView tape sha256:ee278ee1d5069aae226c93ae9287f1b1129a9e6ddb1d8e528f378e9b98260009:
+    // later entries do not happen after a breach at a closing fill).
+    CHECK(host.trade_count() == 4);
     CHECK(near(host.position(), 0.0));
     CHECK(host.lots() == 0);
     CHECK(near(host.average(), 0.0));
@@ -219,7 +227,7 @@ void test_consecutive_loss_latch_counts_one_row_per_chart_day() {
 
 int main() {
     test_direction_locks_are_source_command_gates();
-    test_drawdown_latches_and_blocks_later_commands();
+    test_drawdown_tests_at_closing_fills_and_blocks_later_entries();
     test_intraday_loss_closes_at_path_extreme_and_rolls_over();
     test_consecutive_loss_latch_counts_one_row_per_chart_day();
     std::printf("%d passed, %d failed\n", passed, failed);
