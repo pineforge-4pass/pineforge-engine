@@ -265,6 +265,40 @@ class SelectedCalendar(HelperCase):
                         0, 0, 0,
                     )
 
+    def test_bare_posix_name_with_missing_zone_root(self):
+        """A bare POSIX name keeps its dated session grid without a zone database root."""
+        missing = self.root / "missing-posix-zoneinfo"
+        self.assertFalse(missing.exists(), f"zone database directory must be absent: {missing}")
+        root_honoured = engine_reads_tzdir()
+        for date, offset, _ in DATE_OFFSETS[:2]:
+            with self.subTest(date=date, offset=offset, row="admitted"):
+                start_ms = utc_ms(*date, OPEN_HOUR - offset, OPEN_MINUTE)
+                process, document = self.process(
+                    start_ms, "EST5EDT", env={"TZDIR": str(missing)},
+                )
+                self.assert_admitted(process, document, start_ms)
+            with self.subTest(date=date, offset=offset, row="other_season"):
+                other_offset = -4 if offset == -5 else -5
+                start_ms = utc_ms(*date, OPEN_HOUR - other_offset, OPEN_MINUTE)
+                previous_ms, next_ms = grid_neighbours(start_ms, offset)
+                process, document = self.process(
+                    start_ms, "EST5EDT", env={"TZDIR": str(missing)},
+                )
+                self.assert_refused(
+                    process, document, "boundary_unaligned", "start_ms", 0,
+                    start_ms, previous_ms, next_ms,
+                )
+        with self.subTest(date=(2024, 7, 17), offset=-4, row="named_zone"):
+            start_ms = utc_ms(2024, 7, 17, OPEN_HOUR + 4, OPEN_MINUTE)
+            process, document = self.process(start_ms, ZONE, env={"TZDIR": str(missing)})
+            if root_honoured:
+                self.assert_refused(
+                    process, document, "calendar_unsupported", "engine_timezone", -1,
+                    0, 0, 0,
+                )
+            else:
+                self.assert_admitted(process, document, start_ms)
+
     def test_utc_calendar(self):
         """UTC keeps its session grid when the zone database root is missing."""
         open_ms = utc_ms(2024, 7, 17, OPEN_HOUR, OPEN_MINUTE)
