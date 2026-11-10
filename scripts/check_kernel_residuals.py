@@ -19,6 +19,9 @@ What the gate judges is what a consumer LINKS, and only that:
     other section, including unknown names; a text-like name alone does not
     make a section executable. Duplicate archive member names are an
     infrastructure error, since `ar p <name>` cannot select them uniquely.
+    Validate every member name in both archives: only the exact BSD symbol
+    table names `__.SYMDEF` and `__.SYMDEF SORTED` are excluded; every other
+    member must end in `.o` or raise an infrastructure error.
 
 The strip is what makes the verdict a property of the code instead of a
 property of the build type. A `-g` archive carries DWARF, and `strings -a` over
@@ -945,22 +948,25 @@ def kernel_translation_units(cmake_text: str) -> list[str]:
 
 
 def archive_members(archive: Path) -> list[str]:
-    """The object members `ar t` lists, rejecting ambiguous duplicate names.
+    """Validate every name `ar t` lists and return the complete object list.
 
     `ar p <name>` reads the first occurrence, so accepting duplicates would
-    silently miss later members. An archive's symbol index is not in `ar t`.
+    silently miss later members. Check duplicates before excluding only the
+    exact BSD symbol-table names `__.SYMDEF` and `__.SYMDEF SORTED`; reject
+    every other name that does not end in `.o`.
     """
     members: list[str] = []
     seen: set[str] = set()
-    for line in run_tool(["ar", "t", str(archive)]).splitlines():
-        member = line.strip()
-        if not member:
-            continue
+    for member in run_tool(["ar", "t", str(archive)]).splitlines():
         if member in seen:
             raise InfrastructureError(f"duplicate archive member {member!r}: {archive}")
         seen.add(member)
-        if member.endswith(".o"):
-            members.append(member)
+        if member in ("__.SYMDEF", "__.SYMDEF SORTED"):
+            continue
+        if not member.endswith(".o"):
+            raise InfrastructureError(
+                f"unsupported non-object archive member {member!r}: {archive}")
+        members.append(member)
     return members
 
 
@@ -968,8 +974,9 @@ def kernel_source_files(root: Path, cmake_text: str, members: list[str]) -> list
     """The translation units `members` were compiled from, then the src/ headers
     they include.
 
-    The archive must be exactly CMakeLists.txt's kernel list -- CMake names
-    each member `<file>.o` -- so the literals read are the ones this archive
+    Compare the complete non-metadata object list from archive_members()
+    with CMakeLists.txt's kernel list, without further filtering. CMake names
+    each member `<file>.o`, so the literals read are the ones this archive
     compiled, never a source-layer TU's (src/compat/pine/ has a
     reservation_expansion.cpp too). A header outside src/ is either an
     installed one, already its own surface, or a system header."""
@@ -1364,12 +1371,14 @@ def read_archive(archive: Path, workdir: Path) -> tuple[list[str], list[str], st
 
     `nm` reads the symbol table and never the debug information, so it is
     already profile-independent and is taken from the archive a consumer
-    actually links. Reject duplicate member names before stripping and again
-    before `ar p`; unpack the stripped copy member by member and apply
+    actually links. Validate every member name, rejecting duplicates and
+    unsupported non-objects, before stripping and again before `ar p`;
+    unpack the stripped copy member by member and apply
     object_data_sections()'s scan-by-default policy before `strings -a`."""
     if not archive.is_file():
         raise InfrastructureError("kernel archive is missing: " + str(archive))
-    # Stripping must not get a chance to coalesce ambiguous original members.
+    # Validate the full original census even though this call's list is unused:
+    # stripping must not hide unsupported names or coalesce duplicate members.
     archive_members(archive)
     workdir.mkdir(parents=True, exist_ok=True)
     stripped = workdir / ("stripped-" + archive.name)
