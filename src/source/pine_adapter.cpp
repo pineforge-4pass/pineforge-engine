@@ -12203,8 +12203,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         ? std::min(std::abs(physical.signed_units), cohort_exposure_for(from_entry))
         : std::abs(physical.signed_units)) + (ancestry_sized_target ? 0.0 : completed_entry_units);
     const double live_reservation_basis = binds_pending_reversal_entry ? 0.0
-        : std::max(0.0, book_basis
-                         - pending_same_bar_close_qty_ + pending_parent_units);
+        : std::max(0.0, book_basis - pending_same_bar_close_qty_) + pending_parent_units;
     const double percentage_basis = ancestry_sized_target
         ? book_basis + completed_entry_units + pending_parent_units
         : live_reservation_basis;
