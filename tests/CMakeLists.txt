@@ -8500,7 +8500,7 @@ if(TARGET pineforge_selected_admit_test_identity)
     add_test(NAME test_selected_admit_manifest
         COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/test_selected_admit_manifest.py
             --parent-build ${CMAKE_BINARY_DIR} --work-dir ${CMAKE_CURRENT_BINARY_DIR}
-            --expected-stages "${_pf_sa_stages_json}")
+            --expected-stages "[\"source\",\"selected\"]")
     add_test(NAME test_selected_admit_imports
         COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/test_selected_admit_imports.py)
     set_property(TEST test_selected_admit_imports APPEND PROPERTY ENVIRONMENT
