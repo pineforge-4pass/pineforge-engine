@@ -2318,6 +2318,15 @@ class WorkflowEventFleets(unittest.TestCase):
                 continue
             if not events & post_events:
                 continue
+            if name == 'macos-compile.yml':
+                # This sole mixed-event exception is a complete source contract,
+                # including authorization and compile-only steps, not an OS exemption.
+                self.assertEqual(set(_jobs(workflow)), {'compile-macos'})
+                self.assertEqual(ci_preflight._job_values(_jobs(workflow)['compile-macos'],
+                                                          'runs-on'), ['macos-latest'])
+                self.assertEqual(ci_preflight.runner_findings({name: workflow}), [])
+                checked += 1
+                continue
             self.assertNotIn('pull_request', events, name)
             for job, body in _jobs(workflow).items():
                 if ci_preflight._job_values(body, 'uses'):
@@ -2368,7 +2377,11 @@ class WorkflowEventFleets(unittest.TestCase):
             if 'pull_request' not in events:
                 continue
             checked += 1
-            self.assertFalse(events & {'push', 'schedule', 'workflow_dispatch'}, name)
+            if name == 'macos-compile.yml':
+                self.assertEqual(events, {'pull_request', 'push', 'workflow_dispatch'})
+                self.assertEqual(ci_preflight.runner_findings({name: workflow}), [])
+            else:
+                self.assertFalse(events & {'push', 'schedule', 'workflow_dispatch'}, name)
             self.assertNotIn('gkp-', workflow, name)
             self.assertIsNone(ci_preflight._RETIRED_VM_LABEL.search(workflow), name)
         self.assertGreater(checked, 0)
@@ -3721,6 +3734,286 @@ class PostCTestShardPolicy(unittest.TestCase):
                                               changed, 'ci-post.yml', pr=False))
 
 
+class MacosCompilePolicy(unittest.TestCase):
+    """Read the real advisory workflow and exercise its policy and shell inputs."""
+
+    NAME = 'macos-compile.yml'
+    JOB = 'compile-macos'
+    REPO = 'pineforge-4pass/pineforge-engine'
+
+    def workflow(self):
+        return (ROOT / '.github/workflows' / self.NAME).read_text()
+
+    def assert_refused(self, changed, *, name=NAME):
+        if name == self.NAME:
+            self.assertNotEqual(changed, self.workflow(), 'the mutation must change the input')
+        self.assertTrue(ci_preflight.workflow_fleet_findings({name: changed}))
+        self.assertTrue(ci_preflight.runner_findings({name: changed}))
+
+    def shell_tree(self, tools):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        (root / 'tools').mkdir()
+        for name, script in tools.items():
+            path = root / 'tools' / name
+            path.write_text('#!/bin/bash\nset -eu\n' + script)
+            path.chmod(0o755)
+        return root, {'PATH': str(root / 'tools') + os.pathsep + os.environ.get('PATH', '')}
+
+    def run_script(self, root, env, step):
+        script = job_script(self.workflow(), self.JOB, step)
+        return subprocess.run(['bash', '-euo', 'pipefail', '-c', script], cwd=root,
+                              env=env, text=True, capture_output=True)
+
+    def test_real_compile_workflow_is_independent_and_admitted(self):
+        workflow = self.workflow()
+        workflows = {path.name: path.read_text()
+                     for path in (ROOT / '.github/workflows').iterdir()
+                     if path.suffix in ('.yml', '.yaml')}
+        self.assertEqual(ci_preflight.runner_findings(workflows), [])
+        sources = [(ROOT / path).read_text() for path in CI_SOURCES]
+        named = {Path(path).name for path in CI_SOURCES}
+        others = {name: text for name, text in workflows.items() if name not in named}
+        self.assertEqual(ci_workflow_findings(*sources, others=others), [])
+        job, = _jobs(workflow)
+        self.assertEqual(job, self.JOB)
+        self.assertEqual(ci_preflight._job_values(_jobs(workflow)[job], 'name'), ['macOS compile'])
+        steps = ci_preflight._steps(_jobs(workflow)[job])
+        canon = ci_preflight._steps(_jobs(workflows['ci.yml'])['authz'])[0]
+        self.assertEqual(steps[0].rstrip(), canon.rstrip())
+        self.assertNotIn('needs:', _jobs(workflow)[job])
+        for name, text in workflows.items():
+            if name == self.NAME:
+                continue
+            for body in _jobs(text).values():
+                self.assertNotIn(self.JOB, ci_preflight._needs(body), name)
+                self.assertNotIn('./.github/workflows/' + self.NAME,
+                                 ci_preflight._job_values(body, 'uses'), name)
+        self.assertNotIn(self.JOB, PROOF_JOBS)
+
+    def test_file_job_runner_and_single_job_shape_are_exact(self):
+        workflow = self.workflow()
+        self.assert_refused('')
+        for name in ('other.yml', 'macos-compile.yaml', 'ci-macos.yml'):
+            with self.subTest(filename=name):
+                self.assert_refused(workflow, name=name)
+        for before, after in (
+                ('  compile-macos:\n', '  build-macos:\n'),
+                ('    name: macOS compile\n', '    name: build\n'),
+                ('    runs-on: macos-latest\n', '    runs-on: ubuntu-24.04\n'),
+                ('    runs-on: macos-latest\n', '    runs-on: macos-26\n'),
+                ('    runs-on: macos-latest\n', '    runs-on: macos-26-xlarge\n'),
+                ('    steps:\n', '    strategy:\n      matrix:\n        mode: [Debug]\n    steps:\n'),
+                ('    steps:\n', '    uses: ./.github/workflows/native-live.yml\n    steps:\n')):
+            with self.subTest(mutation=after):
+                self.assertIn(before, workflow)
+                self.assert_refused(workflow.replace(before, after, 1))
+        self.assert_refused(workflow + '\n  extra:\n    runs-on: macos-latest\n'
+                            '    steps:\n      - run: cmake --version\n')
+
+    def test_triggers_permissions_authz_and_failure_policy_are_exact(self):
+        workflow = self.workflow()
+        for before, after in (
+                ('  pull_request:\n', '  pull_request_target:\n'),
+                ('    branches: [main]\n', '    branches: [dev]\n'),
+                ('  push:\n', '  schedule:\n    - cron: "30 1 * * *"\n  push:\n'),
+                ('  workflow_dispatch:\n', '  workflow_call:\n  workflow_dispatch:\n'),
+                ('  contents: read\n', '  contents: write\n'),
+                ('  contents: read\n', '  contents: read\n  id-token: write\n'),
+                ('    steps:\n', '    environment: release\n    steps:\n'),
+                ('    steps:\n', '    if: false\n    steps:\n'),
+                ('    steps:\n', '    continue-on-error: true\n    steps:\n'),
+                ('    steps:\n', '    timeout-minutes: 30\n    steps:\n'),
+                ('exit 1; }', 'true; }'),
+                ('          set -euo pipefail\n', '          set +e\n'),
+                ('          cmake --build build --parallel "$(sysctl -n hw.ncpu)"',
+                 '          cmake --build build --parallel "$(sysctl -n hw.ncpu)" || true')):
+            with self.subTest(mutation=after):
+                self.assertIn(before, workflow)
+                self.assert_refused(workflow.replace(before, after, 1))
+        steps = ci_preflight._steps(_jobs(workflow)[self.JOB])
+        self.assert_refused(workflow.replace(steps[0], '', 1))
+        self.assert_refused(workflow.replace(steps[0], steps[1], 1))
+
+    def test_ref_checkout_identity_and_cache_policy_are_exact(self):
+        workflow = self.workflow()
+        for before, after in (
+                ('          persist-credentials: false', '          persist-credentials: true'),
+                ('          ref: ${{ steps.source.outputs.sha }}', '          ref: ${{ github.sha }}'),
+                ('          repository: ${{ github.repository }}', '          repository: other/engine'),
+                ('^[0-9a-f]{40}$', '^[0-9a-f]{7,40}$'),
+                ('test "$actual_sha" = "$SOURCE_SHA"', 'test -n "$actual_sha"'),
+                ('test "$resolved_sha" = "$source_sha"', 'test -n "$resolved_sha"'),
+                ('actions/cache/restore@', 'actions/cache@'),
+                ('path: ${{ steps.host.outputs.brew-cache }}', 'path: build'),
+                ('path: ${{ env.CCACHE_DIR }}', 'path: build'),
+                ('key: ${{ steps.ccache-restore.outputs.cache-primary-key }}', 'key: ccache-pr'),
+                ('${{ runner.arch }}-Debug-', '${{ runner.arch }}-Release-')):
+            with self.subTest(mutation=after):
+                self.assertIn(before, workflow)
+                self.assert_refused(workflow.replace(before, after, 1))
+
+        for step in ('Save downloaded Homebrew dependencies on successful main push',
+                     'Save ccache on successful main push'):
+            for before, after in (("github.event_name == 'push'", "github.event_name == 'pull_request'"),
+                                  ("github.ref == 'refs/heads/main'", 'true'),
+                                  ('success() && ', 'always() && ')):
+                with self.subTest(cache_save=step, mutation=after):
+                    self.assert_refused(in_step(workflow, self.JOB, step, before, after))
+
+    def test_configure_and_all_target_build_cannot_become_test_execution(self):
+        workflow = self.workflow()
+        build = 'cmake --build build --parallel "$(sysctl -n hw.ncpu)"'
+        for command in ('ctest --test-dir build', 'python3 scripts/ci_verify.py debug',
+                        'python3 -m pytest', 'python3 -m unittest', './build/bin/test_ta',
+                        'cmake --build build --target test', 'cmake --build build --target check',
+                        'cmake --build build --target pineforge', 'true'):
+            with self.subTest(command=command):
+                self.assert_refused(workflow.replace(build, command, 1))
+        for option, value in (
+                ('PINEFORGE_BUILD_TESTS', 'ON'), ('PINEFORGE_BUILD_SOURCE_LAYER', 'ON'),
+                ('PINEFORGE_BUILD_TUTORIAL', 'ON'), ('PINEFORGE_BUILD_LIVE_RUNNER', 'OFF'),
+                ('PINEFORGE_BUILD_CORPUS_STRATEGIES', 'OFF'), ('PINEFORGE_BUILD_EXAMPLES', 'OFF'),
+                ('PINEFORGE_REQUIRE_ABI_RECEIPTS', 'OFF'), ('CMAKE_EXPORT_COMPILE_COMMANDS', 'ON')):
+            before = f'-D{option}={value}'
+            for after in ('', f'-D{option}={"OFF" if value == "ON" else "ON"}'):
+                with self.subTest(option=option, replacement=after):
+                    self.assertIn(before, workflow)
+                    self.assert_refused(workflow.replace(before, after, 1))
+        for line in ('          test -s build/lib/libpineforge.a\n',
+                     '          test -x build/bin/test_ta\n',
+                     '          test -x build/bin/test_integration\n'):
+            self.assertIn(line, workflow)
+            self.assert_refused(workflow.replace(line, '', 1))
+
+    def test_existing_gate_and_reusable_call_cannot_depend_on_compile(self):
+        workflow = self.workflow()
+        self.assert_refused(workflow.replace('    steps:\n', '    needs: [authz]\n    steps:\n', 1))
+        post = (ROOT / '.github/workflows/ci-post.yml').read_text()
+        needs, = ci_preflight._job_values(_jobs(post)['build-gate'], 'needs')
+        changed = in_job(post, 'build-gate', '    needs: ' + needs,
+                         '    needs: ' + needs[:-1] + ', compile-macos]')
+        self.assertIn('build-gate must aggregate authz, every proof job, preflight and changes',
+                      ci_preflight.pipeline_workflow_findings(changed, 'ci-post.yml', pr=False))
+        for event in ('pull_request', 'push', 'workflow_dispatch'):
+            caller = (f'on: {event}\njobs:\n  call:\n'
+                      '    uses: ./.github/workflows/macos-compile.yml\n')
+            self.assertIn('caller.yml job call must call a readable local reusable workflow',
+                          ci_preflight.runner_findings({'caller.yml': caller, self.NAME: workflow}))
+
+    def test_source_selection_reads_event_sha_input_and_repository_response(self):
+        a, b, c = '12' * 20, '34' * 20, 'ef' * 20
+        root, env = self.shell_tree({'gh': (
+            'printf "%s\\n" "$*" > "$API_LOG"\n'
+            'test "$API_EXIT" = 0 || exit "$API_EXIT"\n'
+            'printf "%s\\n" "$API_SHA"\n')})
+        base = {**env, 'EVENT': 'push', 'REPO': self.REPO, 'REF': 'refs/heads/main',
+                'EVENT_SHA': a, 'PR_HEAD_SHA': b, 'PR_BASE_REF': 'main', 'PR_DRAFT': 'false',
+                'INPUT_SOURCE_REF': '', 'API_SHA': a, 'API_EXIT': '0'}
+        cases = [
+            ({}, a, True), ({'EVENT': 'pull_request', 'API_SHA': b}, b, True),
+            ({'EVENT': 'workflow_dispatch'}, a, True),
+            ({'EVENT': 'workflow_dispatch', 'INPUT_SOURCE_REF': c, 'API_SHA': c}, c, True),
+            ({'REF': 'refs/heads/dev'}, None, False),
+            ({'EVENT': 'pull_request', 'PR_DRAFT': 'true'}, None, False),
+            ({'EVENT': 'pull_request', 'PR_BASE_REF': 'dev'}, None, False),
+            ({'REPO': 'outside/engine'}, None, False),
+            ({'EVENT': 'workflow_run'}, None, False),
+            ({'INPUT_SOURCE_REF': c}, None, False),
+            ({'API_EXIT': '22'}, None, True),
+            ({'API_SHA': c}, None, True),
+        ]
+        for value in ('main', a[:12], 'g' * 40, c + '\n',
+                      '$(touch injected)', '`touch injected`', '--help'):
+            cases.append(({'EVENT': 'workflow_dispatch', 'INPUT_SOURCE_REF': value}, None, False))
+        # Use letters for the uppercase control; digit-only SHAs have no uppercase form.
+        cases.append(({'EVENT': 'workflow_dispatch', 'INPUT_SOURCE_REF': 'AB' * 20}, None, False))
+        for index, (change, selected, lookup) in enumerate(cases):
+            with self.subTest(change=change):
+                output, log = root / f'output-{index}', root / f'api-{index}'
+                ran = self.run_script(root, {**base, **change, 'GITHUB_OUTPUT': str(output),
+                                            'API_LOG': str(log)}, 'Select exact source')
+                self.assertEqual(ran.returncode == 0, selected is not None, ran.stdout + ran.stderr)
+                self.assertEqual(output.read_text() if output.exists() else '',
+                                 f'sha={selected}\n' if selected else '')
+                self.assertEqual(log.exists(), lookup)
+                if lookup:
+                    requested = change.get('INPUT_SOURCE_REF') or (
+                        b if change.get('EVENT') == 'pull_request' else a)
+                    self.assertEqual(log.read_text(),
+                                     f'api repos/{self.REPO}/commits/{requested} --jq .sha\n')
+                self.assertFalse((root / 'injected').exists())
+
+    def test_checkout_identity_reads_actual_head_commit_and_tree(self):
+        root, env = self.shell_tree({'git': (
+            'printf "%s\\n" "$*" >> "$GIT_LOG"\n'
+            'test "$GIT_EXIT" = 0 || exit "$GIT_EXIT"\n'
+            'case "$*" in\n'
+            '  "rev-parse --verify HEAD") printf "%s\\n" "$ACTUAL_SHA" ;;\n'
+            '  "rev-parse --verify ${SOURCE_SHA}^{commit}") printf "%s\\n" "$COMMIT_SHA" ;;\n'
+            '  "rev-parse --verify HEAD^{tree}") printf "%s\\n" "$TREE_SHA" ;;\n'
+            '  *) exit 29 ;;\n'
+            'esac\n')})
+        for index, (source, actual, commit, git_exit) in enumerate((
+                ('ab' * 20, 'ab' * 20, 'ab' * 20, '0'),
+                ('cd' * 20, 'cd' * 20, 'cd' * 20, '0'),
+                ('ab' * 20, 'cd' * 20, 'ab' * 20, '0'),
+                ('ab' * 20, 'ab' * 20, 'cd' * 20, '0'),
+                ('ab' * 20, 'ab' * 20, 'ab' * 20, '37'))):
+            with self.subTest(source=source, actual=actual, commit=commit, git_exit=git_exit):
+                tree = ('12' if index == 0 else '34') * 20
+                log = root / f'git-{index}'
+                ran = self.run_script(root, {**env, 'SOURCE_SHA': source, 'ACTUAL_SHA': actual,
+                                            'COMMIT_SHA': commit, 'TREE_SHA': tree,
+                                            'GIT_EXIT': git_exit, 'GIT_LOG': str(log)},
+                                      'Verify and print source identity')
+                allowed = source == actual == commit and git_exit == '0'
+                self.assertEqual(ran.returncode == 0, allowed, ran.stdout + ran.stderr)
+                if allowed:
+                    self.assertIn(f'source HEAD={source}\nsource tree={tree}\n', ran.stdout)
+                    self.assertEqual(log.read_text().splitlines(), [
+                        'rev-parse --verify HEAD', f'rev-parse --verify {source}^{{commit}}',
+                        'rev-parse --verify HEAD^{tree}'])
+
+    def test_darwin_guard_reads_the_host_instead_of_trusting_the_runner_label(self):
+        root, env = self.shell_tree({'uname': 'test "$*" = -s\nprintf "%s\\n" "$KERNEL"\n'})
+        for label, kernel in (('macOS', 'Darwin'), ('macOS', 'Linux'),
+                              ('Linux', 'Darwin'), ('macOS', '')):
+            with self.subTest(label=label, kernel=kernel):
+                ran = self.run_script(root, {**env, 'ACTUAL_OS': label, 'KERNEL': kernel},
+                                      'Require Darwin')
+                self.assertEqual(ran.returncode == 0, (label, kernel) == ('macOS', 'Darwin'))
+
+    def test_all_build_reads_host_cores_preserves_errors_and_requires_outputs(self):
+        root, env = self.shell_tree({
+            'cmake': 'printf "%s\\n" "$*" > "$BUILD_LOG"\nexit "$BUILD_EXIT"\n',
+            'sysctl': 'test "$*" = "-n hw.ncpu"\nprintf "%s\\n" "$CORES"\n'})
+        outputs = ('build/lib/libpineforge.a', 'build/bin/test_ta', 'build/bin/test_integration')
+        cases = [('3', '0', None), ('7', '0', None), ('3', '41', None),
+                 *(('3', '0', name) for name in outputs)]
+        for index, (cores, build_exit, missing) in enumerate(cases):
+            with self.subTest(cores=cores, build_exit=build_exit, missing=missing):
+                case_root = root / str(index)
+                case_root.mkdir()
+                for name in outputs:
+                    if name == missing:
+                        continue
+                    path = case_root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text('#!/bin/bash\necho ran > "$RUNTIME_LOG"\nexit 99\n')
+                    path.chmod(0o755)
+                log, runtime = case_root / 'build-log', case_root / 'runtime-log'
+                ran = self.run_script(case_root, {**env, 'CORES': cores, 'BUILD_EXIT': build_exit,
+                                                 'BUILD_LOG': str(log), 'RUNTIME_LOG': str(runtime)},
+                                      'Build library and test binaries')
+                self.assertEqual(log.read_text(), f'--build build --parallel {cores}\n')
+                self.assertEqual(ran.returncode == 0, build_exit == '0' and missing is None)
+                if build_exit != '0':
+                    self.assertEqual(ran.returncode, int(build_exit))
+                self.assertFalse(runtime.exists(), 'compile coverage must never execute test binaries')
+
+
 class PostLinuxBuildPolicy(unittest.TestCase):
     """Policy regressions whose inputs can also be constructed from main."""
 
@@ -4711,6 +5004,25 @@ class CiFileLoading(unittest.TestCase):
         # action-pin lint still has to read them as the LF text they always did.
         self.assertEqual(ci_workflow_findings(*(text.replace('\n', '\r\n') for text in sources)), [])
 
+    def test_macos_compile_reader_consumes_changes_and_refuses_a_missing_file(self):
+        name = '.github/workflows/macos-compile.yml'
+        original = (ROOT / name).read_text()
+        code, output = self.run_stage(self.make_tree(), '--check-ci-workflow')
+        self.assertEqual(code, 0, output)
+        for changed in ('', original.replace('PINEFORGE_BUILD_TESTS=ON',
+                                             'PINEFORGE_BUILD_TESTS=OFF', 1), None):
+            with self.subTest(change=changed):
+                tree = self.make_tree()
+                path = tree / name
+                if changed is None:
+                    path.rename(path.with_name('macos-spoof.yml'))
+                else:
+                    self.assertNotEqual(changed, original)
+                    path.write_text(changed)
+                code, output = self.run_stage(tree, '--check-ci-workflow')
+                self.assertEqual(code, 1, output)
+                self.assertIn('macos-compile.yml', output)
+
     def test_a_file_that_is_not_utf8_is_a_finding_not_a_crash(self):
         for name in (self.DOCS, '.github/workflows/release.yml',
                      '.github/actions/setup-live-curl/action.yml', self.CMAKE, self.HELPER):
@@ -5496,6 +5808,11 @@ class PreflightFailures(unittest.TestCase):
                               'post' if routes[name] & {'push', 'schedule', 'workflow_dispatch'} else 'pr')
             for job, body in _jobs(workflow).items():
                 if ci_preflight._job_values(body, 'uses'):
+                    continue
+                if (name, job) == ('macos-compile.yml', 'compile-macos'):
+                    # The independent compile contract has its own varied-input
+                    # controls; it does not add a GCP/proof site or change this floor.
+                    self.assertEqual(ci_preflight.runner_findings({name: workflow}), [])
                     continue
                 gke = EXPECTED_GKE_JOBS.get(name, {}).get(job)
                 gkp = EXPECTED_GKP_JOBS.get(name, {}).get(job)
@@ -9018,6 +9335,7 @@ finally:
                 ('>-\n  pull_request', 'macos-26-xlarge', True),
                 ('[pull_request]', 'ubuntu-latest', True),
                 ('[pull_request]', 'macos-26', True),
+                ('[pull_request]', 'macos-latest', True),
                 ('pull_request_target', 'macos-26', True),
                 ('pull_request_target', 'ubuntu-22.04-arm', True),
                 ('[pull_request]', 'ubuntu-22.04-arm', True),
@@ -10653,12 +10971,15 @@ class BaselinePromotionResolution(unittest.TestCase):
 
 class CanonAuthz(unittest.TestCase):
     def test_real_workflow_scripts_admit_our_events_and_refuse_untrusted_identity(self):
-        paths = (*CI_SOURCES[:2], '.github/workflows/release-ruleset-probe.yml')
+        paths = (*CI_SOURCES[:2], '.github/workflows/release-ruleset-probe.yml',
+                 '.github/workflows/macos-compile.yml')
         scripts = []
         for path in paths:
             workflow = (ROOT / path).read_text()
-            self.assertIn('authz', _jobs(workflow), f'{path} must authorize before repository code')
-            scripts.append(job_script(workflow, 'authz'))
+            job = 'compile-macos' if path.endswith('/macos-compile.yml') else 'authz'
+            self.assertIn(job, _jobs(workflow), f'{path} must authorize before repository code')
+            scripts.append(job_script(workflow, job,
+                                      'Only our own pull requests and our own events run CI'))
         for script in scripts[1:]:
             self.assertEqual(scripts[0], script)
         base = {'EVENT': 'pull_request', 'REPO': 'owner/engine', 'HEAD_REPO': 'owner/engine',

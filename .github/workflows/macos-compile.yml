@@ -1,0 +1,248 @@
+name: macOS compile
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Existing repository commit to compile (full lowercase 40-hex SHA; empty uses dispatch SHA)
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: '1'
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPILERCHECK: content
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  compile-macos:
+    name: macOS compile
+    runs-on: macos-latest
+    steps:
+      - name: Only our own pull requests and our own events run CI
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          WR_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          WR_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: one permission lookup for workflow_run
+          # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
+          # and the org's own GitHub App bot logins by name (space-separated), nothing else.
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -eu
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            push|workflow_dispatch|schedule|merge_group|release|workflow_call|repository_dispatch)
+              # Only someone with write access to this repository (or our App's token) can cause these
+              # events; none of them runs pull-request code.
+              ;;
+            workflow_run)
+              # LB-437: bind identity to the triggering run and its re-runner.
+              # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
+              [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
+              [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
+              [ "$WR_HEAD_REPO" = "$REPO" ] || fail "workflow_run head repository does not match this repository"
+              case "$WR_ACTOR" in
+                "pineforge-app[bot]"|"pineforge-ci-dispatcher[bot]") ;;
+                *"[bot]") fail "workflow_run bot is not on the canon allowlist" ;;
+                *)
+                  perm=$(gh api "repos/$REPO/collaborators/$WR_ACTOR/permission" --jq .permission 2>/dev/null) || fail "workflow_run permission lookup failed"
+                  case "$perm" in admin|maintain|write) ;; *) fail "workflow_run triggering actor does not have write permission" ;; esac ;;
+              esac ;;
+            pull_request)
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run CI (pull_request_target and other events are not allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Require Darwin
+        env:
+          ACTUAL_OS: ${{ runner.os }}
+        run: |
+          set -euo pipefail
+          test "$ACTUAL_OS" = macOS
+          test "$(uname -s)" = Darwin
+
+      - name: Select exact source
+        id: source
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          INPUT_SOURCE_REF: ${{ inputs.source_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=macOS compile::$1" >&2; exit 1; }
+          test "$REPO" = pineforge-4pass/pineforge-engine || fail "unexpected repository"
+          case "$EVENT" in
+            pull_request)
+              test "$PR_BASE_REF" = main || fail "pull request base is not main"
+              test "$PR_DRAFT" = false || fail "pull request is a draft"
+              test -z "$INPUT_SOURCE_REF" || fail "source_ref is dispatch-only"
+              source_sha="$PR_HEAD_SHA"
+              ;;
+            push)
+              test "$REF" = refs/heads/main || fail "push is not main"
+              test -z "$INPUT_SOURCE_REF" || fail "source_ref is dispatch-only"
+              source_sha="$EVENT_SHA"
+              ;;
+            workflow_dispatch)
+              source_sha="${INPUT_SOURCE_REF:-$EVENT_SHA}"
+              ;;
+            *) fail "event is not admitted by macOS compile" ;;
+          esac
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || fail "source_ref must be a full lowercase 40-hex commit SHA"
+          resolved_sha=$(gh api "repos/$REPO/commits/$source_sha" --jq .sha) || fail "source commit is unknown or unreadable"
+          test "$resolved_sha" = "$source_sha" || fail "repository commit does not match the requested SHA"
+          printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify and print source identity
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha=$(git rev-parse --verify HEAD)
+          test "$actual_sha" = "$SOURCE_SHA"
+          test "$(git rev-parse --verify "${SOURCE_SHA}^{commit}")" = "$SOURCE_SHA"
+          actual_tree=$(git rev-parse --verify 'HEAD^{tree}')
+          printf 'source HEAD=%s\nsource tree=%s\n' "$actual_sha" "$actual_tree"
+
+      - name: Identify compiler and cache paths
+        id: host
+        run: |
+          set -euo pipefail
+          sw_vers
+          uname -m
+          xcodebuild -version
+          c_compiler=$(xcrun --find clang)
+          cxx_compiler=$(xcrun --find clang++)
+          "$c_compiler" --version
+          "$cxx_compiler" --version
+          cmake --version
+          compiler_digest=$(shasum -a 256 "$cxx_compiler")
+          compiler_digest=${compiler_digest%% *}
+          [[ "$compiler_digest" =~ ^[0-9a-f]{64}$ ]]
+          brew_cache=$(brew --cache)
+          test -n "$brew_cache"
+          {
+            printf 'c-compiler=%s\ncxx-compiler=%s\n' "$c_compiler" "$cxx_compiler"
+            printf 'compiler=%s\nbrew-cache=%s\n' "$compiler_digest" "$brew_cache"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore downloaded Homebrew dependencies
+        id: brew-restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.host.outputs.brew-cache }}
+          key: macos-compile-v1-${{ runner.os }}-${{ runner.arch }}-Debug-brew-eigen-ccache-${{ steps.source.outputs.sha }}
+          restore-keys: |
+            macos-compile-v1-${{ runner.os }}-${{ runner.arch }}-Debug-brew-eigen-ccache-
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          brew install eigen ccache
+          eigen_prefix=$(brew --prefix eigen)
+          test -f "$eigen_prefix/share/eigen3/cmake/Eigen3Config.cmake"
+          echo "CMAKE_PREFIX_PATH=$eigen_prefix${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+          ccache --version
+
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: macos-compile-v1-${{ runner.os }}-${{ runner.arch }}-Debug-${{ steps.host.outputs.compiler }}-ccache-${{ steps.source.outputs.sha }}
+          restore-keys: |
+            macos-compile-v1-${{ runner.os }}-${{ runner.arch }}-Debug-${{ steps.host.outputs.compiler }}-ccache-
+
+      - name: Configure Debug library and test binaries
+        env:
+          C_COMPILER: ${{ steps.host.outputs.c-compiler }}
+          CXX_COMPILER: ${{ steps.host.outputs.cxx-compiler }}
+        run: |
+          set -euo pipefail
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER:FILEPATH="$C_COMPILER" \
+            -DCMAKE_CXX_COMPILER:FILEPATH="$CXX_COMPILER" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DEigen3_DIR:PATH="$(brew --prefix eigen)/share/eigen3/cmake" \
+            -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+            -DPINEFORGE_BUILD_TESTS=ON \
+            -DPINEFORGE_BUILD_SOURCE_LAYER=ON \
+            -DPINEFORGE_BUILD_TUTORIAL=ON \
+            -DPINEFORGE_BUILD_LIVE_RUNNER=OFF \
+            -DPINEFORGE_BUILD_CORPUS_STRATEGIES=OFF \
+            -DPINEFORGE_BUILD_EXAMPLES=OFF \
+            -DPINEFORGE_REQUIRE_ABI_RECEIPTS=OFF
+          sed -n '/^CMAKE_.*COMPILER/p; /^CMAKE_BUILD_TYPE:/p; /^PINEFORGE_BUILD_/p; /^PINEFORGE_REQUIRE_ABI_RECEIPTS:/p; /^Eigen3_DIR:/p' build/CMakeCache.txt
+
+      - name: Build library and test binaries
+        run: |
+          set -euo pipefail
+          cmake --build build --parallel "$(sysctl -n hw.ncpu)"
+          test -s build/lib/libpineforge.a
+          test -x build/bin/test_ta
+          test -x build/bin/test_integration
+
+      - name: Save downloaded Homebrew dependencies on successful main push
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.brew-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.host.outputs.brew-cache }}
+          key: ${{ steps.brew-restore.outputs.cache-primary-key }}
+
+      - name: Save ccache on successful main push
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
