@@ -203,6 +203,16 @@ version number follows semantic versioning over the surfaces the
   occupant, and deleting the oldest drawing moves the directory's entries).
   The bound, the typed overflow outcome, the slot reuse order, the
   stale-handle behaviour and every value a script reads are unchanged.
+- The closed-trade read cache of the trade ledger places rows by count. While a
+  run holds no more closed trades than the cache has entries (215,070 by
+  default) each trade owns the slot of its ordinal: a read makes one probe, and
+  the cache commits only the pages the trades reach (25,000 closed trades hold
+  98 pages, 7.8 MB, where four-way sets hold 391, 31.2 MB). With more closed
+  trades the four-way sets apply, and the cached rows are dropped when a run
+  crosses the capacity in either direction. In a four-way set a hit on the most
+  recent entry changes nothing and a hit on another entry ages only the entries
+  more recent than it, so a full set replaces the entry touched longest ago. A
+  miss is probed once. Every value a script reads is unchanged.
 
 ## 1.9.1 — 2026-10-31
 
