@@ -2588,6 +2588,7 @@ private:
     // policy: the money the percentage is taken of (with its equity mark and
     // its ten-significant-digit rounding), whether a percentage fee is
     // reserved out of it, and the lot floor applied to the core's quotient.
+    double default_percent_of_equity() const noexcept;
     double default_sizing_cash(const PineSizingSnapshot&) const;
     bool default_sizing_reserves_percent_fee() const noexcept;
     // A percent-of-equity default quantity under a cash commission (per

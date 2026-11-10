@@ -3244,6 +3244,17 @@ PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
     return snapshot;
 }
 
+// TradingView sizes an order from flat at no more than 100 percent of equity
+// when both margins are off (measured without commission). Apply the cap to
+// the money, before taking any commission out of it.
+double PineExecutionAdapter::default_percent_of_equity() const noexcept {
+    if (config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        && margins_disabled()) {
+        return std::min(config_.default_qty_value, 100.0);
+    }
+    return config_.default_qty_value;
+}
+
 // The money a default-quantity declaration converts.  CASH is the declared
 // value itself; a percentage is taken of the equity the snapshot marked, and
 // that money -- not the equity it is a percentage of -- goes on the
@@ -3290,7 +3301,7 @@ double PineExecutionAdapter::default_sizing_cash(
         }
         const double equity = staged_.quantity_grid ? source_money_round(sizing.strategy_equity)
                                                     : sizing.strategy_equity;
-        const double money = config_.default_qty_value / 100.0 * equity;
+        const double money = default_percent_of_equity() / 100.0 * equity;
         if (!std::isfinite(money)) {
             engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
                                                  EngineValueReason::nonfinite);
@@ -3332,7 +3343,7 @@ double PineExecutionAdapter::default_sizing_cash(
         }
         return kNaN;
     }
-    const double money = config_.default_qty_value / 100.0 * sizing.equity;
+    const double money = default_percent_of_equity() / 100.0 * sizing.equity;
     const double cash = staged_.quantity_grid ? source_money_round(money) : money;
     if (!std::isfinite(money) || !std::isfinite(cash)) {
         engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
@@ -3507,7 +3518,7 @@ std::optional<double> PineExecutionAdapter::pooc_fee_units(
         || !std::isfinite(sizing.equity)) {
         return std::nullopt;
     }
-    const double money = config_.default_qty_value / 100.0 * sizing.equity;
+    const double money = default_percent_of_equity() / 100.0 * sizing.equity;
     const double cash = source_money_round(money);
     const double unit = tv_pooc_fee_grossed_unit(sizing.price);
     if (!finite_positive(cash) || !finite_positive(unit)) return std::nullopt;

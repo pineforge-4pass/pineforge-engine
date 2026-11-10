@@ -7,6 +7,7 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- A percent-of-equity default quantity above 100 percent is now capped at 100 percent of equity when `margin_long` and `margin_short` are both 0 (#805).
 - The internal native Store live-object policy defaults to 0 (unbounded).
   The former capped default of 1,048,576 is now 0. Native limits are kept
   exactly: every positive uint64, including UINT64_MAX, is finite;

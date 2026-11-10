@@ -377,6 +377,7 @@ set(TEST_SOURCES
     test_market_admission_commission
     test_explicit_qty_fill_admission
     test_market_entry_affordability
+    test_percent_equity_cap_margins_off
     test_percent_equity_affordability
     test_stop_tick_rounding
     test_coof_chart_tick_touch
