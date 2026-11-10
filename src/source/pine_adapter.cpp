@@ -12130,6 +12130,12 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         if (parent != placement_.end()) observe_pending_parent(parent->second);
     }
     for (const auto& parent : pending_entries_) observe_pending_parent(parent.snapshot);
+    // A parked reversing entry is absent from the live and pending entry lists.
+    // Without it, the exit percentage falls back to the open position.
+    for (const auto& pending : pending_same_bar_commands_)
+        if (physical.signed_units != 0.0
+            && pending.snapshot.is_long != (physical.signed_units > 0.0))
+            observe_pending_parent(pending.snapshot);
     // TradingView's default strategy.exit(from_entry) under FIFO closes the
     // entry's own quantity -- the oldest lots first -- not the whole book
     // (tests/test_pyramiding_count_differential.cpp, P10 on its lab tv tape).
@@ -12204,8 +12210,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         ? std::min(std::abs(physical.signed_units), cohort_exposure_for(from_entry))
         : std::abs(physical.signed_units)) + (ancestry_sized_target ? 0.0 : completed_entry_units);
     const double live_reservation_basis = binds_pending_reversal_entry ? 0.0
-        : std::max(0.0, book_basis
-                         - pending_same_bar_close_qty_ + pending_parent_units);
+        : std::max(0.0, book_basis - pending_same_bar_close_qty_) + pending_parent_units;
     const double percentage_basis = ancestry_sized_target
         ? book_basis + completed_entry_units + pending_parent_units
         : live_reservation_basis;
