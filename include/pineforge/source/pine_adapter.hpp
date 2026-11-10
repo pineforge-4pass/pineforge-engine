@@ -64,6 +64,7 @@ inline constexpr char kSourceAdapterDomain[] = "pineforge-source-adapter/v4";
 // layer supplies the corresponding report labels.
 inline constexpr char kMarginCallLabel[] = "__margin_call__";
 inline constexpr char kIntradayLossComment[] = "Close Position (Max intraday Loss)";
+inline constexpr char kMaxDrawdownComment[] = "Close Position (Max Drawdown)";
 // The published C contract matched this PREFIX, not the whole comment, so the
 // classifier keeps matching the prefix.
 inline constexpr char kFillCapCommentPrefix[] =
@@ -1573,6 +1574,7 @@ struct PineRiskState {
     // its latches.
     double observed_peak_equity = std::numeric_limits<double>::quiet_NaN();
     double observed_max_drawdown = 0.0;
+    double fill_peak_equity = std::numeric_limits<double>::quiet_NaN();
     std::int64_t intraday_block_day = std::numeric_limits<std::int64_t>::min();
     bool intraday_cancel_pending = false;
 };

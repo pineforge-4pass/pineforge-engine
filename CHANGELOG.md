@@ -7,6 +7,7 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- `strategy.risk.max_drawdown` is now tested at the order fills that close units, on the equity at that fill with open positions included, against the highest equity at such fills (the equity at an opening fill or at a bar close does not raise it), and a breach closes every open position at that fill's price (exit text "Close Position (Max Drawdown)"), cancels the pending orders and blocks later entries; before, it was measured once per bar close and only refused new entries (#804).
 - The internal native Store live-object policy defaults to 0 (unbounded).
   The former capped default of 1,048,576 is now 0. Native limits are kept
   exactly: every positive uint64, including UINT64_MAX, is finite;
