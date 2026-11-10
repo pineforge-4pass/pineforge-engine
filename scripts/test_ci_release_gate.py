@@ -405,7 +405,7 @@ class ReleaseSnapshot:
 
 
 # Bounded recorded-data projection, not a complete run or release-App proof.
-# Capture: cr900-rerun41767951876-{latest,attempt1,attempt2,attempt3}-jobs-0156.raw.json.
+# Capture: GitHub job listings of run 41767951876, latest and attempts 1-3.
 # Select jobs named preflight, corpus-parity / authz, or build; retain every
 # matching row, including duplicate names and nulls. Copy the fields below
 # verbatim, including complete step arrays; omit URLs and runner/host fields.
