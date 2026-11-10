@@ -1,0 +1,1006 @@
+name: macOS compile
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Existing repository commit to compile (full lowercase 40-hex SHA; empty uses dispatch SHA)
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: '1'
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPILERCHECK: content
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  compile-macos:
+    name: macOS compile
+    runs-on: macos-latest
+    steps:
+      - name: Only our own pull requests and our own events run CI
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          WR_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          WR_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: one permission lookup for workflow_run
+          # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
+          # and the org's own GitHub App bot logins by name (space-separated), nothing else.
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -eu
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            push|workflow_dispatch|schedule|merge_group|release|workflow_call|repository_dispatch)
+              # Only someone with write access to this repository (or our App's token) can cause these
+              # events; none of them runs pull-request code.
+              ;;
+            workflow_run)
+              # LB-437: bind identity to the triggering run and its re-runner.
+              # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
+              [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
+              [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
+              [ "$WR_HEAD_REPO" = "$REPO" ] || fail "workflow_run head repository does not match this repository"
+              case "$WR_ACTOR" in
+                "pineforge-app[bot]"|"pineforge-ci-dispatcher[bot]") ;;
+                *"[bot]") fail "workflow_run bot is not on the canon allowlist" ;;
+                *)
+                  perm=$(gh api "repos/$REPO/collaborators/$WR_ACTOR/permission" --jq .permission 2>/dev/null) || fail "workflow_run permission lookup failed"
+                  case "$perm" in admin|maintain|write) ;; *) fail "workflow_run triggering actor does not have write permission" ;; esac ;;
+              esac ;;
+            pull_request)
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run CI (pull_request_target and other events are not allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Require Darwin
+        env:
+          ACTUAL_OS: ${{ runner.os }}
+        run: |
+          set -euo pipefail
+          test "$ACTUAL_OS" = macOS
+          test "$(uname -s)" = Darwin
+
+      - name: Select exact source
+        id: source
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          INPUT_SOURCE_REF: ${{ inputs.source_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=macOS compile::$1" >&2; exit 1; }
+          test "$REPO" = pineforge-4pass/pineforge-engine || fail "unexpected repository"
+          case "$EVENT" in
+            pull_request)
+              test "$PR_BASE_REF" = main || fail "pull request base is not main"
+              test "$PR_DRAFT" = false || fail "pull request is a draft"
+              test -z "$INPUT_SOURCE_REF" || fail "source_ref is dispatch-only"
+              source_sha="$PR_HEAD_SHA"
+              ;;
+            push)
+              test "$REF" = refs/heads/main || fail "push is not main"
+              test -z "$INPUT_SOURCE_REF" || fail "source_ref is dispatch-only"
+              source_sha="$EVENT_SHA"
+              ;;
+            workflow_dispatch)
+              source_sha="${INPUT_SOURCE_REF:-$EVENT_SHA}"
+              ;;
+            *) fail "event is not admitted by macOS compile" ;;
+          esac
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || fail "source_ref must be a full lowercase 40-hex commit SHA"
+          resolved_sha=$(gh api "repos/$REPO/commits/$source_sha" --jq .sha) || fail "source commit is unknown or unreadable"
+          test "$resolved_sha" = "$source_sha" || fail "repository commit does not match the requested SHA"
+          printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify and print source identity
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha=$(git rev-parse --verify HEAD)
+          test "$actual_sha" = "$SOURCE_SHA"
+          test "$(git rev-parse --verify "${SOURCE_SHA}^{commit}")" = "$SOURCE_SHA"
+          actual_tree=$(git rev-parse --verify 'HEAD^{tree}')
+          printf 'source HEAD=%s\nsource tree=%s\n' "$actual_sha" "$actual_tree"
+
+      # Diagnostic tooling is materialized by Actions from this workflow, never
+      # loaded from the possibly historical source_ref checkout.
+      - name: Prepare bounded link evidence directory
+        id: capture_prepare
+        if: ${{ success() && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') }}
+        timeout-minutes: 1
+        shell: python3 {0}
+        env:
+          CAPTURE_REPOSITORY: ${{ github.repository }}
+          CAPTURE_WORKFLOW_REF: ${{ github.workflow_ref }}
+          CAPTURE_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          CAPTURE_EVENT_SHA: ${{ github.sha }}
+          CAPTURE_RUN_ID: ${{ github.run_id }}
+          CAPTURE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CAPTURE_JOB: ${{ github.job }}
+          CAPTURE_SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          CAPTURE_SOURCE_INPUT: ${{ inputs.source_ref }}
+          CAPTURE_RUNNER_OS: ${{ runner.os }}
+          CAPTURE_RUNNER_ARCH: ${{ runner.arch }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import tempfile
+
+          def value(name):
+              return os.environ.get("CAPTURE_" + name) or None
+
+          run_id, attempt = value("RUN_ID"), value("RUN_ATTEMPT")
+          if not run_id or not run_id.isdecimal() or not attempt or not attempt.isdecimal():
+              raise ValueError("missing numeric run/attempt context")
+          parent = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+          directory = Path(tempfile.mkdtemp(prefix=f"macos-link-capture-{run_id}-{attempt}-", dir=parent))
+          manifest = {
+              "schema": "macos-link-capture.v1",
+              "purpose": "capture only; no repair or native acceptance",
+              "proof_state": "incomplete; independent external joins pending",
+              "identity": {
+                  "repository": value("REPOSITORY"),
+                  "workflow_ref": value("WORKFLOW_REF"),
+                  "workflow_sha": value("WORKFLOW_SHA"),
+                  "event_sha": value("EVENT_SHA"),
+                  "run_id": run_id, "run_attempt": attempt,
+                  "job_key": value("JOB"), "job_display_name": "macOS compile",
+                  "numeric_job_id": None,
+                  "requested_source_ref": value("SOURCE_INPUT"),
+                  "selected_source_sha": value("SOURCE_SHA"),
+                  "observed_source_sha": None, "observed_source_tree": None,
+                  "runner_os_context": value("RUNNER_OS"),
+                  "runner_arch_context": value("RUNNER_ARCH"),
+                  "binding": "producer context only; not independently verified",
+              },
+              "build": {
+                  "step_outcome": None, "step_conclusion": None,
+                  "exact_build_exit": None, "failure_kind": "unknown",
+                  "raw_stdout_stderr": "external GitHub step logs; not captured locally",
+                  "verbose_build_output": "not requested; original build body unchanged",
+              },
+              "collection": {"state": "prepared; collector not yet observed"},
+              "upload": {
+                  "state": "not yet observed; immutable manifest precedes upload",
+                  "artifact_name": f"macos-link-capture-{run_id}-{attempt}",
+                  "artifact_id": None, "artifact_digest": None,
+                  "result_route": "post-upload step logs/summary and independent API records",
+              },
+              "external_join": {
+                  "state": "pending",
+                  "required": [
+                      "full ordinary build raw stdout/stderr and exact exit",
+                      "run and numeric jobs records, including attempt and step outcomes",
+                      "reviewed workflow SHA/ref and selected product SHA/tree binding",
+                      "artifact API record and independent downloaded size/digest verification",
+                      "actual architecture and failure-kind reconciliation by maintainers",
+                      "whole undefined/provider reconciliation; ownership remains unknown",
+                  ],
+              },
+              "files": [], "commands": [], "archives": [], "gaps": [],
+          }
+          (directory / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"directory={directory}\n")
+
+      - name: Identify compiler and cache paths
+        id: host
+        run: |
+          set -euo pipefail
+          sw_vers
+          uname -m
+          xcodebuild -version
+          c_compiler=$(xcrun --find clang)
+          cxx_compiler=$(xcrun --find clang++)
+          "$c_compiler" --version
+          "$cxx_compiler" --version
+          cmake --version
+          compiler_digest=$(shasum -a 256 "$cxx_compiler")
+          compiler_digest=${compiler_digest%% *}
+          [[ "$compiler_digest" =~ ^[0-9a-f]{64}$ ]]
+          brew_cache=$(brew --cache)
+          test -n "$brew_cache"
+          {
+            printf 'c-compiler=%s\ncxx-compiler=%s\n' "$c_compiler" "$cxx_compiler"
+            printf 'compiler=%s\nbrew-cache=%s\n' "$compiler_digest" "$brew_cache"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore downloaded Homebrew dependencies
+        id: brew-restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.host.outputs.brew-cache }}
+          key: macos-compile-v2-${{ runner.os }}-${{ runner.arch }}-Debug-brew-ccache-${{ steps.source.outputs.sha }}
+          restore-keys: |
+            macos-compile-v2-${{ runner.os }}-${{ runner.arch }}-Debug-brew-ccache-
+
+      - name: Install dependencies
+        id: dependencies
+        run: |
+          set -euo pipefail
+          brew install ccache
+          ccache --version
+          eigen_work=$(mktemp -d "$RUNNER_TEMP/pineforge-eigen-3.4.0.XXXXXX")
+          eigen_archive="$eigen_work/eigen-3.4.0.tar.gz"
+          eigen_prefix="$eigen_work/install"
+          curl --fail --location --show-error --silent \
+            --output "$eigen_archive" \
+            https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
+          printf '8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72  %s\n' "$eigen_archive" | shasum -a 256 --check
+          tar -xzf "$eigen_archive" -C "$eigen_work"
+          cmake -S "$eigen_work/eigen-3.4.0" -B "$eigen_work/build" \
+            -DCMAKE_INSTALL_PREFIX:PATH="$eigen_prefix" \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DEIGEN_BUILD_DOC=OFF \
+            -DEIGEN_BUILD_TESTING=OFF \
+            -DBUILD_TESTING=OFF \
+            -DEIGEN_BUILD_BLAS=OFF \
+            -DEIGEN_BUILD_LAPACK=OFF
+          cmake --install "$eigen_work/build"
+          eigen3_dir="$eigen_prefix/share/eigen3/cmake"
+          eigen_macros="$eigen_prefix/include/eigen3/Eigen/src/Core/util/Macros.h"
+          test -f "$eigen3_dir/Eigen3Config.cmake"
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "$eigen_macros"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "$eigen_macros"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "$eigen_macros"
+          printf 'Eigen version=3.4.0\nEigen3_DIR=%s\n' "$eigen3_dir"
+          printf 'eigen3-dir=%s\n' "$eigen3_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: macos-compile-v1-${{ runner.os }}-${{ runner.arch }}-Debug-${{ steps.host.outputs.compiler }}-ccache-${{ steps.source.outputs.sha }}
+          restore-keys: |
+            macos-compile-v1-${{ runner.os }}-${{ runner.arch }}-Debug-${{ steps.host.outputs.compiler }}-ccache-
+
+      - name: Configure Debug library and test binaries
+        env:
+          C_COMPILER: ${{ steps.host.outputs.c-compiler }}
+          CXX_COMPILER: ${{ steps.host.outputs.cxx-compiler }}
+          EIGEN3_DIR: ${{ steps.dependencies.outputs.eigen3-dir }}
+        run: |
+          set -euo pipefail
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER:FILEPATH="$C_COMPILER" \
+            -DCMAKE_CXX_COMPILER:FILEPATH="$CXX_COMPILER" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DEigen3_DIR:PATH="$EIGEN3_DIR" \
+            -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+            -DPINEFORGE_BUILD_TESTS=ON \
+            -DPINEFORGE_BUILD_SOURCE_LAYER=ON \
+            -DPINEFORGE_BUILD_TUTORIAL=ON \
+            -DPINEFORGE_BUILD_LIVE_RUNNER=OFF \
+            -DPINEFORGE_BUILD_CORPUS_STRATEGIES=OFF \
+            -DPINEFORGE_BUILD_EXAMPLES=OFF \
+            -DPINEFORGE_REQUIRE_ABI_RECEIPTS=OFF
+          sed -n '/^CMAKE_.*COMPILER/p; /^CMAKE_BUILD_TYPE:/p; /^PINEFORGE_BUILD_/p; /^PINEFORGE_REQUIRE_ABI_RECEIPTS:/p; /^Eigen3_DIR:/p' build/CMakeCache.txt
+
+      - name: Build library and test binaries
+        id: build_debug
+        run: |
+          set -euo pipefail
+          cmake --build build --parallel "$(sysctl -n hw.ncpu)"
+          test -s build/lib/libpineforge.a
+          test -x build/bin/test_ta
+          test -x build/bin/test_integration
+
+      - name: Collect actual archive and link evidence
+        id: capture_collect
+        if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') && steps.capture_prepare.outputs.directory != '' }}
+        timeout-minutes: 12
+        shell: python3 {0}
+        env:
+          CAPTURE_DIRECTORY: ${{ steps.capture_prepare.outputs.directory }}
+          CAPTURE_BUILD_OUTCOME: ${{ steps.build_debug.outcome }}
+          CAPTURE_BUILD_CONCLUSION: ${{ steps.build_debug.conclusion }}
+          CAPTURE_PREPARE_OUTCOME: ${{ steps.capture_prepare.outcome }}
+          CAPTURE_JOB_STATUS: ${{ job.status }}
+          CAPTURE_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          CAPTURE_WORKFLOW_REF: ${{ github.workflow_ref }}
+          CAPTURE_SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          import collections
+          import hashlib
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import selectors
+          import shlex
+          import shutil
+          import stat
+          import subprocess
+          import sys
+          import time
+
+          # Only these build roots are inspected. No source helper, home scan,
+          # environment dump, build invocation, or symbol-name filter is used.
+          targets = (
+              "tests/CMakeFiles/test_pine_to_native_worked.dir",
+              "CMakeFiles/pineforge_window_plan.dir",
+              "CMakeFiles/pineforge.dir",
+              "CMakeFiles/pineforge_kernel.dir",
+          )
+          limits = {
+              "file_bytes": 2 * 1024**3, "total_bytes": 6 * 1024**3,
+              "command_stream_bytes": 128 * 1024**2, "command_seconds": 45,
+              "collector_seconds": 540, "commands": 96, "directory_entries": 4096,
+              "link_tokens_per_file": 16384, "link_references": 4096,
+          }
+          deadline = time.monotonic() + limits["collector_seconds"]
+          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          temporary = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+
+          def safe(anchor, relative, directory=False):
+              part = PurePosixPath(relative)
+              if part.is_absolute() or not part.parts or any(
+                  not p or p.startswith(".") for p in str(relative).split("/")
+              ):
+                  raise ValueError(f"unsafe relative path: {relative!r}")
+              path = anchor
+              for index, component in enumerate(part.parts):
+                  path = path / component
+                  info = path.lstat()
+                  if stat.S_ISLNK(info.st_mode):
+                      raise ValueError(f"symlink refused: {relative!r}")
+                  want_dir = directory or index < len(part.parts) - 1
+                  if not (stat.S_ISDIR(info.st_mode) if want_dir else stat.S_ISREG(info.st_mode)):
+                      raise ValueError(f"non-regular path refused: {relative!r}")
+              return path
+
+          root = safe(temporary, Path(os.environ["CAPTURE_DIRECTORY"]).relative_to(temporary).as_posix(), True)
+          manifest_path = safe(root, "manifest.json")
+          manifest = json.loads(manifest_path.read_text())
+          manifest["collection"] = {
+              "state": "running", "limits": limits,
+              "prepare_step_outcome": os.environ.get("CAPTURE_PREPARE_OUTCOME") or None,
+              "job_status_before_collection": os.environ.get("CAPTURE_JOB_STATUS") or None,
+              "symbol_interpretation": "raw original spellings; no provider ownership conclusion",
+              "byte_accounting": "input/command/inline bytes; bounded manifest metadata is additional",
+          }
+          build = manifest["build"]
+          build["step_outcome"] = os.environ.get("CAPTURE_BUILD_OUTCOME") or None
+          build["step_conclusion"] = os.environ.get("CAPTURE_BUILD_CONCLUSION") or None
+          build["observation"] = {
+              "failure": "ordinary build step failed; link failure not established without logs",
+              "success": "ordinary build step succeeded; no native acceptance inferred",
+              "skipped": "ordinary build step skipped; not a target link RED",
+              "cancelled": "ordinary build step cancelled; not a target link RED",
+          }.get(build["step_outcome"], "ordinary build step unobserved/unreached")
+          used_bytes = 0
+          copied = {}
+
+          def gap(message):
+              manifest["gaps"].append(message)
+
+          def save():
+              manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+          def describe(path):
+              digest = hashlib.sha256()
+              size = 0
+              with path.open("rb") as data:
+                  for block in iter(lambda: data.read(1024 * 1024), b""):
+                      digest.update(block)
+                      size += len(block)
+              return {"path": path.relative_to(root).as_posix(), "size": size, "sha256": digest.hexdigest()}
+
+          def capture(relative, required=True):
+              file_record = {"source": "build/" + relative, "state": "unobserved", "required": required}
+              if relative in copied:
+                  return copied[relative]
+              manifest["files"].append(file_record)
+              copied[relative] = file_record
+              destination = None
+              try:
+                  source = safe(workspace, "build/" + relative)
+                  before = source.stat()
+                  file_record["observed_source_size"] = before.st_size
+                  if before.st_size > limits["file_bytes"]:
+                      raise ValueError("file byte limit exceeded")
+                  if used_bytes + before.st_size > limits["total_bytes"]:
+                      raise ValueError("total byte limit exceeded")
+                  destination = root / "files" / relative
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  # O_NOFOLLOW also protects the final open; intermediate components
+                  # were checked above. Nothing is extracted into the source tree.
+                  with os.fdopen(os.open(source, os.O_RDONLY | os.O_NOFOLLOW), "rb") as data:
+                      opened = os.fstat(data.fileno())
+                      if not stat.S_ISREG(opened.st_mode) or opened.st_ino != before.st_ino:
+                          raise ValueError("source changed before open")
+                      with destination.open("xb") as output:
+                          count = 0
+                          while True:
+                              if time.monotonic() >= deadline:
+                                  raise TimeoutError("collector deadline during copy")
+                              block = data.read(1024 * 1024)
+                              if not block:
+                                  break
+                              count += len(block)
+                              if count > limits["file_bytes"] or used_bytes + count > limits["total_bytes"]:
+                                  raise ValueError("byte limit during copy")
+                              output.write(block)
+                      after = os.fstat(data.fileno())
+                  if (before.st_size, before.st_mtime_ns, before.st_ino) != (
+                      after.st_size, after.st_mtime_ns, after.st_ino
+                  ) or count != before.st_size:
+                      raise ValueError("source changed during copy")
+                  file_record["state"] = "captured"
+              except FileNotFoundError as error:
+                  file_record.update(state="missing", error=str(error))
+              except Exception as error:
+                  file_record.update(state="incomplete", error=f"{type(error).__name__}: {error}")
+              if destination is not None and destination.exists():
+                  file_record.update(describe(destination))
+                  account(file_record["size"])
+              if file_record["state"] != "captured" and (required or file_record["state"] != "missing"):
+                  gap(f'{relative}: {file_record["state"]}')
+              save()
+              return file_record
+
+          def account(size):
+              global used_bytes
+              used_bytes += size
+
+          def command(argv, cwd=None):
+              record = {
+                  "argv": [str(arg) for arg in argv], "cwd": str(cwd or workspace),
+                  "rc": None, "state": "not_started", "stdout": None, "stderr": None,
+              }
+              manifest["commands"].append(record)
+              index = len(manifest["commands"])
+              record["id"] = index
+              if index > limits["commands"] or time.monotonic() >= deadline:
+                  record["state"] = "not_run_limit"
+                  gap(f"command not run: {record['argv']}")
+                  save()
+                  return record
+              folder = root / "commands"
+              folder.mkdir(exist_ok=True)
+              outputs = [folder / f"{index:03d}.{name}" for name in ("stdout", "stderr")]
+              process = None
+              try:
+                  with outputs[0].open("xb") as stdout, outputs[1].open("xb") as stderr:
+                      process = subprocess.Popen(
+                          record["argv"], cwd=record["cwd"], stdin=subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                      )
+                      record["executable"] = shutil.which(record["argv"][0])
+                      if record["executable"]:
+                          record["executable_realpath"] = str(Path(record["executable"]).resolve())
+                      sizes = {stdout: 0, stderr: 0}
+                      stop = min(deadline, time.monotonic() + limits["command_seconds"])
+                      with selectors.DefaultSelector() as selector:
+                          selector.register(process.stdout, selectors.EVENT_READ, stdout)
+                          selector.register(process.stderr, selectors.EVENT_READ, stderr)
+                          while selector.get_map():
+                              if time.monotonic() >= stop:
+                                  record.setdefault("limit", "command timeout/deadline; output incomplete")
+                                  if process.poll() is None:
+                                      process.kill()
+                                  break
+                              for key, _ in selector.select(timeout=0.1):
+                                  block = os.read(key.fileobj.fileno(), 65536)
+                                  if not block:
+                                      selector.unregister(key.fileobj)
+                                      key.fileobj.close()
+                                      continue
+                                  sink = key.data
+                                  remaining = min(
+                                      limits["command_stream_bytes"] - sizes[sink],
+                                      limits["total_bytes"] - used_bytes - sum(sizes.values()),
+                                  )
+                                  sink.write(block[:max(0, remaining)])
+                                  sizes[sink] += min(len(block), max(0, remaining))
+                                  if len(block) > remaining:
+                                      record["limit"] = "output byte limit; output incomplete"
+                                      if process.poll() is None:
+                                          process.kill()
+                                      stop = time.monotonic()
+                      record["rc"] = process.wait(timeout=5)
+                      record["state"] = "ok" if record["rc"] == 0 and "limit" not in record else "failed_or_incomplete"
+              except Exception as error:
+                  record.update(state="error", error=f"{type(error).__name__}: {error}")
+                  if process is not None:
+                      if process.poll() is None:
+                          process.kill()
+                      record["rc"] = process.wait(timeout=5)
+              finally:
+                  if process is not None:
+                      process.stdout.close()
+                      process.stderr.close()
+              for name, path in zip(("stdout", "stderr"), outputs):
+                  if path.exists():
+                      record[name] = describe(path)
+                      account(record[name]["size"])
+              if record["state"] != "ok":
+                  gap(f"command {index}: {record['state']}: {record['argv']}")
+              save()
+              return record
+
+          def text(record, strip=True):
+              if record["state"] != "ok" or not record["stdout"]:
+                  return None
+              try:
+                  result = (root / record["stdout"]["path"]).read_text(encoding="utf-8")
+                  return result.strip() if strip else result
+              except UnicodeError:
+                  gap(f"non-UTF8 command output: {record['argv']}")
+                  return None
+
+          def symbols(path):
+              if tools.get("nm"):
+                  for option in ("-a", "-u", "-m"):
+                      result = command([tools["nm"], "-arch", "all", option, str(path)])
+                      if option != "-u" and result["state"] == "ok" and not result["stdout"]["size"]:
+                          gap(f"empty native symbol output: {path.relative_to(root)} {option}")
+              else:
+                  gap(f"native nm unavailable for {path.relative_to(root)}")
+
+          def archive_members(path, archive):
+              # Validate BSD/short-name ar headers as well as the native listing.
+              # A newline in a stored member name must not become two safe names.
+              with path.open("rb") as data:
+                  if data.read(8) != b"!<arch>\n":
+                      raise ValueError("unsupported archive container; no member extraction")
+                  offset, total = 8, path.stat().st_size
+                  while offset < total:
+                      if len(archive["members"]) >= limits["directory_entries"] or time.monotonic() >= deadline:
+                          raise ValueError("archive member limit/deadline")
+                      data.seek(offset)
+                      header = data.read(60)
+                      if len(header) != 60 or header[58:] != b"`\n":
+                          raise ValueError("missing/malformed archive member header")
+                      field = header[:16].rstrip(b" ")
+                      size_field = header[48:58].strip()
+                      if not size_field.isdigit():
+                          raise ValueError("invalid archive member size")
+                      size = int(size_field)
+                      payload, name_size = offset + 60, 0
+                      if payload + size > total:
+                          raise ValueError("truncated archive member")
+                      if field.startswith(b"#1/"):
+                          if not field[3:].isdigit():
+                              raise ValueError("invalid BSD member name length")
+                          name_size = int(field[3:])
+                          if name_size > size or name_size > 4096:
+                              raise ValueError("BSD member name length limit")
+                          stored_name = data.read(name_size)
+                          raw_name = stored_name.rstrip(b"\0")
+                      elif field.startswith(b"/"):
+                          raise ValueError("unsupported GNU archive name table/reference")
+                      else:
+                          stored_name = field
+                          raw_name = field[:-1] if field.endswith(b"/") else field
+                      name = raw_name.decode("utf-8", errors="replace")
+                      metadata = raw_name in (
+                          b"__.SYMDEF", b"__.SYMDEF SORTED",
+                          b"__.SYMDEF_64", b"__.SYMDEF_64 SORTED",
+                      )
+                      member = {
+                          "ordinal": len(archive["members"]) + 1,
+                          "name": name, "stored_name_hex": stored_name.hex(),
+                          "name_hex": raw_name.hex(), "metadata": metadata,
+                          "object_offset": payload + name_size, "object_size": size - name_size,
+                          "safe_basename": metadata or bool(re.fullmatch(rb"[A-Za-z0-9_][A-Za-z0-9_.+-]*", raw_name))
+                              and raw_name not in (b".", b".."),
+                      }
+                      archive["members"].append(member)
+                      if raw_name == b"engine_report.cpp.o":
+                          data.seek(member["object_offset"])
+                          remaining, digest = member["object_size"], hashlib.sha256()
+                          while remaining:
+                              block = data.read(min(remaining, 1024 * 1024))
+                              if not block or time.monotonic() >= deadline:
+                                  raise ValueError("reported member truncated/deadline")
+                              digest.update(block)
+                              remaining -= len(block)
+                          member["object_sha256"] = digest.hexdigest()
+                      offset = payload + size + size % 2
+                  if offset != total:
+                      raise ValueError("archive alignment/trailing bytes incomplete")
+
+          try:
+              for key, actual in (
+                  ("repository", os.environ.get("GITHUB_REPOSITORY")),
+                  ("run_id", os.environ.get("GITHUB_RUN_ID")),
+                  ("run_attempt", os.environ.get("GITHUB_RUN_ATTEMPT")),
+                  ("workflow_sha", os.environ.get("CAPTURE_WORKFLOW_SHA")),
+                  ("workflow_ref", os.environ.get("CAPTURE_WORKFLOW_REF")),
+                  ("selected_source_sha", os.environ.get("CAPTURE_SOURCE_SHA")),
+              ):
+                  if not actual or manifest["identity"].get(key) != actual:
+                      raise ValueError(f"prepared identity missing/mismatch: {key}")
+              # Retain the exact Actions-materialized collector as tooling evidence,
+              # independently of the product checkout (not an independent SHA binding).
+              inline = Path(__file__).read_bytes()
+              (root / "collector-inline.py").write_bytes(inline)
+              manifest["collection"]["inline_source"] = describe(root / "collector-inline.py")
+              account(len(inline))
+              sha = text(command(["git", "--no-optional-locks", "rev-parse", "--verify", "HEAD"]))
+              tree = text(command(["git", "--no-optional-locks", "rev-parse", "--verify", "HEAD^{tree}"]))
+              manifest["identity"].update(observed_source_sha=sha, observed_source_tree=tree)
+              selected = manifest["identity"]["selected_source_sha"]
+              if not sha or sha != selected or not tree or not re.fullmatch("[0-9a-f]{40}", tree):
+                  raise ValueError("source identity missing/mismatch; refuse build-output attribution")
+              # Copy the original archives before optional tool queries/traversal.
+              # Later command failures cannot take already-retained bytes away.
+              for name in ("libpineforge.a", "libpineforge_kernel.a"):
+                  manifest["archives"].append({
+                      "source": "build/lib/" + name, "members": [], "member_state": "unobserved",
+                      "file": capture("lib/" + name),
+                  })
+              for argv in (
+                  ["uname", "-s"], ["uname", "-m"], ["sw_vers"], ["xcodebuild", "-version"],
+                  ["xcrun", "--version"], ["xcrun", "--show-sdk-path"],
+                  ["xcrun", "--show-sdk-version"], ["xcrun", "--show-sdk-build-version"],
+                  ["cmake", "--version"],
+              ):
+                  command(argv)
+              tools = {}
+              for name, version in (
+                  ("ar", "-V"), ("nm", "--version"), ("ld", "-v"),
+                  ("clang", "--version"), ("clang++", "--version"), ("lipo", "-version"),
+              ):
+                  found = text(command(["xcrun", "--find", name]))
+                  if found and Path(found).is_absolute() and "\n" not in found:
+                      tools[name] = found
+                      command([found, version])
+                  else:
+                      gap(f"resolved native tool unavailable: {name}")
+              manifest["collection"]["resolved_tools"] = tools
+              if tools.get("clang++"):
+                  command([tools["clang++"], "-print-prog-name=ld"])
+                  command([tools["clang++"], "-print-target-triple"])
+              cache = capture("CMakeCache.txt")
+              if cache["state"] == "captured":
+                  wanted = (
+                      "CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER", "CMAKE_LINKER", "CMAKE_AR",
+                      "CMAKE_NM", "CMAKE_OSX_SYSROOT", "CMAKE_OSX_ARCHITECTURES",
+                      "CMAKE_BUILD_TYPE", "CMAKE_GENERATOR",
+                  )
+                  observed = {}
+                  for line in (root / cache["path"]).read_text().splitlines():
+                      if "=" in line and ":" in line.split("=", 1)[0]:
+                          key = line.split(":", 1)[0]
+                          if key in wanted:
+                              observed[key] = line.split("=", 1)[1]
+                  manifest["collection"]["cache_toolchain"] = {key: observed.get(key) for key in wanted}
+                  for key, name in (
+                      ("CMAKE_C_COMPILER", "clang"), ("CMAKE_CXX_COMPILER", "clang++"),
+                      ("CMAKE_LINKER", "ld"), ("CMAKE_AR", "ar"), ("CMAKE_NM", "nm"),
+                  ):
+                      if not observed.get(key) or not tools.get(name) or (
+                          Path(observed[key]).resolve() != Path(tools[name]).resolve()
+                      ):
+                          gap(f"cached {key} not reconciled to inspected xcrun tool")
+              capture("compile_commands.json")
+              capture("build.ninja", required=False)
+              capture("CMakeFiles/rules.ninja", required=False)
+              try:
+                  cmake_files = safe(workspace, "build/CMakeFiles", True)
+                  versions = []
+                  for index, entry in enumerate(cmake_files.iterdir()):
+                      if index >= limits["directory_entries"]:
+                          gap("top-level CMake context entry limit exceeded")
+                          break
+                      if re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?", entry.name):
+                          versions.append(entry.name)
+                  versions.sort()
+              except Exception as error:
+                  versions = []
+                  gap(f"generated CMake context unavailable: {error}")
+              if not versions:
+                  gap("generated compiler/platform CMake context missing")
+              for version in versions[:8]:
+                  for name in ("CMakeCCompiler.cmake", "CMakeCXXCompiler.cmake", "CMakeSystem.cmake"):
+                      capture(f"CMakeFiles/{version}/{name}")
+              if len(versions) > 8:
+                  gap("CMake version directory limit exceeded")
+
+              object_inputs = []
+              response_inputs = []
+              link_inputs = []
+              visited = 0
+              for target in targets:
+                  link_cwd = "tests" if target.startswith("tests/") else ""
+                  for name in ("link.txt", "flags.make", "DependInfo.cmake", "build.make"):
+                      item = capture(f"{target}/{name}")
+                      if name == "link.txt":
+                          link_inputs.append((item, link_cwd))
+                  try:
+                      start = safe(workspace, "build/" + target, True)
+                      pending = [(start, 0)]
+                      target_objects = 0
+                      while pending:
+                          directory, depth = pending.pop()
+                          for entry in directory.iterdir():
+                              visited += 1
+                              if visited > limits["directory_entries"] or time.monotonic() >= deadline:
+                                  raise ValueError("target traversal limit/deadline")
+                              relative = entry.relative_to(workspace / "build").as_posix()
+                              info = entry.lstat()
+                              if stat.S_ISLNK(info.st_mode):
+                                  gap(f"target symlink refused: {relative}")
+                              elif stat.S_ISDIR(info.st_mode):
+                                  if depth >= 8:
+                                      gap(f"target depth limit: {relative}")
+                                  else:
+                                      pending.append((safe(workspace, "build/" + relative, True), depth + 1))
+                              elif entry.suffix in (".rsp", ".response"):
+                                  item = capture(relative)
+                                  response_inputs.append(item)
+                                  link_inputs.append((item, link_cwd))
+                              elif entry.suffix == ".o" and target in targets[:2]:
+                                  object_inputs.append(capture(relative))
+                                  target_objects += 1
+                      if target in targets[:2] and target_objects == 0:
+                          gap(f"no actual target object inputs: {target}")
+                  except Exception as error:
+                      gap(f"target context incomplete: {target}: {type(error).__name__}: {error}")
+              # Parse command records as data, never execute/reconstruct a link.
+              # Follow only response/object inputs within the explicit target roots.
+              references = []
+              manifest["collection"]["link_reference_observations"] = references
+              seen_inputs = set()
+              while link_inputs:
+                  item, link_cwd = link_inputs.pop(0)
+                  key = (item["source"], link_cwd)
+                  if key in seen_inputs or item["state"] != "captured":
+                      continue
+                  seen_inputs.add(key)
+                  if len(seen_inputs) > 128 or item["size"] > 2 * 1024**2 or time.monotonic() >= deadline:
+                      gap(f"link/response parsing limit: {item['source']}")
+                      continue
+                  try:
+                      tokens = shlex.split((root / item["path"]).read_text(), comments=False, posix=True)
+                  except Exception as error:
+                      gap(f"link/response syntax unparsed: {item['source']}: {error}")
+                      continue
+                  if len(tokens) > limits["link_tokens_per_file"]:
+                      gap(f"link token limit; raw file retained: {item['source']}")
+                      tokens = tokens[:limits["link_tokens_per_file"]]
+                  requested = []
+                  for index, token in enumerate(tokens):
+                      options = token[4:].split(",") if token.startswith("-Wl,") else [token]
+                      for option_index, option in enumerate(options):
+                          if option.startswith("@"):
+                              requested.append(("response", option[1:]))
+                          elif option == "-filelist":
+                              following = options[option_index + 1:] or tokens[index + 1:index + 2]
+                              if following:
+                                  requested.append(("response", following[0]))
+                              else:
+                                  gap(f"missing filelist operand: {item['source']}")
+                          elif option.endswith(".o") and not option.startswith("-"):
+                              requested.append(("object", option))
+                  for kind, reference in requested:
+                      if len(references) >= limits["link_references"] or time.monotonic() >= deadline:
+                          gap("link reference limit/deadline; remaining inputs not followed")
+                          break
+                      observation = {
+                          "from": item["source"], "cwd_relative_to_build": link_cwd,
+                          "cwd_basis": "CMake target layout; reconcile with retained build.make/link.txt",
+                          "kind": kind, "reference": reference, "state": "unobserved",
+                      }
+                      references.append(observation)
+                      try:
+                          part = PurePosixPath(reference)
+                          if not part.parts or ".." in part.parts:
+                              raise ValueError("empty/traversing reference refused")
+                          path = Path(reference) if part.is_absolute() else workspace / "build" / link_cwd / reference
+                          relative = path.relative_to(workspace / "build").as_posix()
+                          if not any(PurePosixPath(target) in PurePosixPath(relative).parents for target in targets):
+                              raise ValueError("reference outside explicit target roots refused")
+                          result = capture(relative)
+                          observation.update(state=result["state"], build_relative_path=relative)
+                          if kind == "response":
+                              response_inputs.append(result)
+                              link_inputs.append((result, link_cwd))
+                          elif result not in object_inputs:
+                              object_inputs.append(result)
+                      except Exception as error:
+                          observation.update(state="refused_or_missing", error=str(error))
+                          gap(f"link input incomplete: {item['source']}: {reference!r}: {error}")
+                  if len(references) >= limits["link_references"] or time.monotonic() >= deadline:
+                      break
+              manifest["collection"]["response_files"] = [
+                  item.get("path", item["source"]) for item in response_inputs
+              ]
+              for archive in manifest["archives"]:
+                  name = PurePosixPath(archive["source"]).name
+                  item = archive["file"]
+                  if item["state"] != "captured":
+                      archive["member_state"] = "archive unavailable"
+                      continue
+                  path = root / item["path"]
+                  symbols(path)
+                  if tools.get("lipo"):
+                      command([tools["lipo"], "-info", str(path)])
+                  if not tools.get("ar"):
+                      archive["member_state"] = "native ar unavailable"
+                      gap(f"{name}: native ar unavailable")
+                      continue
+                  listing = command([tools["ar"], "-t", str(path)])
+                  archive["member_listing_command"] = len(manifest["commands"])
+                  command([tools["ar"], "-tv", str(path)])
+                  raw = text(listing, strip=False)
+                  if not raw:
+                      archive["member_state"] = "missing/empty/failed member listing"
+                      gap(f"{name}: no complete nonempty member listing")
+                      continue
+                  try:
+                      archive_members(path, archive)
+                  except Exception as error:
+                      archive["member_state"] = "incomplete; extraction refused"
+                      gap(f"{name}: member header validation: {error}")
+                      continue
+                  members = archive["members"]
+                  counts = collections.Counter(m["name_hex"] for m in members)
+                  valid = True
+                  for member in members:
+                      member["occurrences"] = counts[member["name_hex"]]
+                      if not member["safe_basename"] or member["occurrences"] != 1:
+                          valid = False
+                          gap(f"{name}: unsafe/repeated member at ordinal {member['ordinal']}: {member['name']!r}")
+                  native_names = raw.split("\n")
+                  if native_names[-1] == "":
+                      native_names.pop()
+                  if native_names not in (
+                      [m["name"] for m in members],
+                      [m["name"] for m in members if not m["metadata"]],
+                  ):
+                      valid = False
+                      gap(f"{name}: native member listing does not match binary member headers")
+                  archive["member_state"] = "listed" if valid else "incomplete; extraction refused"
+                  relevant = [m for m in members if m["name"] == "engine_report.cpp.o"]
+                  if not relevant:
+                      gap(f"{name}: reported engine_report.cpp.o member missing")
+                  if valid and len(relevant) == 1:
+                      extracted = command([tools["ar"], "-p", str(path), relevant[0]["name"]])
+                      archive["reported_member_object"] = extracted["stdout"]
+                      if extracted["state"] == "ok" and extracted["stdout"] and (
+                          extracted["stdout"]["size"] == relevant[0]["object_size"] > 0
+                          and extracted["stdout"]["sha256"] == relevant[0]["object_sha256"]
+                      ):
+                          symbols(root / extracted["stdout"]["path"])
+                      else:
+                          gap(f"{name}: reported member object unavailable/empty")
+                  # All remaining original member bytes stay in the whole archive;
+                  # none is assigned assumed strategy/system/provider ownership.
+              for item in object_inputs:
+                  if item["state"] == "captured":
+                      symbols(root / item["path"])
+          except Exception as error:
+              gap(f"collector interrupted: {type(error).__name__}: {error}")
+          finally:
+              manifest["collection"].update(
+                  state="finished_with_gaps" if manifest["gaps"] else "locally_collected_external_join_pending",
+                  recorded_bytes=used_bytes,
+                  build_step_outcome_does_not_change=build["step_outcome"],
+              )
+              save()
+              digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+              (root / "manifest.sha256").write_text(f"{digest}  manifest.json\n")
+              print(json.dumps({
+                  "collection_state": manifest["collection"]["state"],
+                  "gap_count": len(manifest["gaps"]), "proof_state": manifest["proof_state"],
+                  "build_step_outcome": build["step_outcome"], "exact_build_exit": None,
+              }))
+          sys.exit(1 if manifest["gaps"] else 0)
+
+      - name: Upload bounded link evidence even after failure
+        id: capture_upload
+        if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') && steps.capture_prepare.outputs.directory != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-link-capture-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.capture_prepare.outputs.directory }}/
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 7
+
+      # An artifact cannot contain its own future upload result. Keep that
+      # distinction explicit; maintainers join these observations with API records.
+      - name: Report capture and upload Actions outcomes
+        if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') && steps.capture_prepare.outputs.directory != '' }}
+        timeout-minutes: 1
+        shell: python3 {0}
+        env:
+          BUILD_OUTCOME: ${{ steps.build_debug.outcome }}
+          COLLECT_OUTCOME: ${{ steps.capture_collect.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.capture_upload.outcome }}
+          ARTIFACT_ID: ${{ steps.capture_upload.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.capture_upload.outputs.artifact-digest }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          import json
+          import os
+
+          observation = {
+              "build_step_outcome": os.environ.get("BUILD_OUTCOME") or None,
+              "collector_step_outcome": os.environ.get("COLLECT_OUTCOME") or None,
+              "upload_step_outcome": os.environ.get("UPLOAD_OUTCOME") or None,
+              "artifact_id_output": os.environ.get("ARTIFACT_ID") or None,
+              "artifact_digest_output": os.environ.get("ARTIFACT_DIGEST") or None,
+              "run_id": os.environ.get("RUN_ID") or None,
+              "run_attempt": os.environ.get("RUN_ATTEMPT") or None,
+              "exact_build_exit": None,
+              "external_binding": "pending independent run/jobs/artifact/download verification",
+              "manifest_upload_state": "pre-upload snapshot; join with this later observation",
+          }
+          text = json.dumps(observation, indent=2)
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("macOS link capture observations (not native acceptance)\n\n```json\n" + text + "\n```\n")
+
+      - name: Save downloaded Homebrew dependencies on successful main push
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.brew-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.host.outputs.brew-cache }}
+          key: ${{ steps.brew-restore.outputs.cache-primary-key }}
+
+      - name: Save ccache on successful main push
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
