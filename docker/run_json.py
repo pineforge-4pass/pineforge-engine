@@ -5359,9 +5359,13 @@ def main(argv=None) -> int:
         try:
             with ExitStack() as binary_inputs:
                 binary_inputs._sigterm_abort = abort
-                return _main(argv, binary_inputs)
+                ordinary_argv, start_fd, start_manifest = _ordinary_start_take_ingress(tokens)
+                binary_inputs._ordinary_start_ingress = start_fd, start_manifest
+                return _main(ordinary_argv, binary_inputs)
         except RunFailure as failure:
             if not abort.started and abort.requested():
+                if isinstance(failure, _OrdinaryStartFailure):
+                    _write_diagnostic(str(failure) + "\n")
                 failure = abort.failure()
             _write_run_failure(failure)
             return failure.exit_status
@@ -5574,6 +5578,13 @@ def _main(argv, binary_inputs) -> int:
         for name, limit in TV_COMPAT_LIMITS.items():
             if getattr(args, name) is None:
                 setattr(args, name, limit)
+    start_fd, start_manifest = getattr(binary_inputs, "_ordinary_start_ingress", (None, None))
+    start = None
+    if start_fd is not None:
+        if (_selected_requested(args) or args.capabilities_json or args.report_shape is not None
+                or args.curve_point_budget is not None or args.results_digest is not None):
+            raise _OrdinaryStartFailure("ordinary_only")
+        start = _OrdinaryStartSession(start_fd, start_manifest, args, binary_inputs)
     if args.profile not in ("unjailed", "jailed"):
         raise _request_invalid("PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed", "arguments")
     missing = []
@@ -5642,6 +5653,12 @@ def _main(argv, binary_inputs) -> int:
         return _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
                              magnifier_samples, magnifier_dist, binary_inputs)
 
+    if start is not None:
+        _ordinary_options_int(magnifier_samples, 2, (1 << 31) - 1)
+        _ordinary_options_int(magnifier_dist, -(1 << 31), (1 << 31) - 1)
+        if args.trade_start_ms is not None:
+            _ordinary_options_int(args.trade_start_ms, -(1 << 63), (1 << 63) - 1)
+        start.freeze_sources(binary_inputs)
     _resolve_chart_source(args)
 
     # Ordinary mode. --run-phase-fd alone adds the run's phase records (preflight, execution,
@@ -5649,7 +5666,9 @@ def _main(argv, binary_inputs) -> int:
     # flush); the report and every other output are unchanged. None without the flag.
     phases = _open_phases(args.run_phase_fd, always=False)
     _advance(phases, "preflight")
-    if args.ohlcv_bin is not None:
+    if start is not None:
+        chart, n, source_feed_sha256 = start.load_chart(binary_inputs)
+    elif args.ohlcv_bin is not None:
         chart = binary_inputs.enter_context(load_bars_bin(args.ohlcv_bin, verify_bin=args.verify_bin))
         n, source_feed_sha256 = chart["n"], chart["source_values_sha256"]
     else:
@@ -5660,7 +5679,7 @@ def _main(argv, binary_inputs) -> int:
     first_ts, last_ts = chart["bars"][0].timestamp, chart["bars"][n - 1].timestamp
 
     _advance(phases, "execution")
-    lib = load_strategy(args.so)
+    lib = load_strategy(args.so) if start is None else start.load_module(args.so)
     if abort is not None:
         abort.attach(lib)
     checked = uses_checked_settings(lib)
@@ -5676,7 +5695,9 @@ def _main(argv, binary_inputs) -> int:
     # Other symbols' bars, read once before the first state (None without
     # --symbol-feeds).
     symbol_feeds = None
-    metrics = _MetricsOnlyRun(lib, args, checked) if args.metrics_only is not None else None
+    setup_lib = lib if start is None else start.capture
+    metrics = _MetricsOnlyRun(setup_lib, args, checked) if args.metrics_only is not None else None
+    ordinary_calls = _OrdinaryCallSequence()
     def _make_state(*, body=False, metrics_legacy=False):
         """Fully configure a fresh handle outside the timed run_backtest_full call.
         Match the validation harness's setup and free a state whose
@@ -5686,14 +5707,17 @@ def _main(argv, binary_inputs) -> int:
                              getattr(args, "max_map_pairs", None))
         sink = None
         try:
-            apply_settings(lib, st, inputs, overrides, checked)
+            ordinary_calls.created(st)
+            if start is not None:
+                start.capture.reset(symbol_feeds, body=body, force_legacy=metrics_legacy)
+            apply_settings(setup_lib, st, inputs, overrides, checked)
             if args.syminfo:
                 r = (metrics.apply_syminfo(st) if metrics is not None
-                     else apply_syminfo(lib, st, args.syminfo))
+                     else apply_syminfo(setup_lib, st, args.syminfo))
                 syminfo_applied = series_origin_echo(
                     r if isinstance(r, dict) else {}, first_ts)
             if symbol_feeds:
-                install_symbol_feeds(lib, st, symbol_feeds)
+                install_symbol_feeds(setup_lib, st, symbol_feeds)
             if args.trade_start_ms is not None and hasattr(lib, "strategy_set_trade_start_time"):
                 lib.strategy_set_trade_start_time(st, int(args.trade_start_ms))
             if args.chart_tz and hasattr(lib, "strategy_set_chart_timezone"):
@@ -5721,15 +5745,20 @@ def _main(argv, binary_inputs) -> int:
             raise
         return st, sink
 
-    def _run(st, rep):
-        if abort is not None:
-            abort.begin_call()
-        lib.run_backtest_full(
+    def _run(st, rep, *, role):
+        arguments = (
             st, chart["bars"], n,
             input_tf, script_tf,
             bar_magnifier, magnifier_samples, magnifier_dist,
             ctypes.byref(rep),
         )
+        try:
+            if start is not None:
+                return start.invoke(lib, arguments, ordinary_calls, role, abort)
+            return _invoke_ordinary(lib, arguments, ordinary_calls, role,
+                                    abort=abort, timed=role == "repeat")
+        finally:
+            arguments = None  # release mapped-array borrows even on a typed refusal
 
     # --- Bench mode: warm up, then time ONLY run_backtest_full over N repeats. ---
     # Setup (create/set_input/free) is OUTSIDE the timed region so the sample
@@ -5746,7 +5775,7 @@ def _main(argv, binary_inputs) -> int:
         for _ in range(warmup):
             rep = ReportC(); st, sink = _make_state()
             try:
-                _run(st, rep)
+                _run(st, rep, role="warmup")
                 if sink is not None or args.profile == "jailed":
                     _check_bench_run(lib, st)
             finally:
@@ -5755,10 +5784,10 @@ def _main(argv, binary_inputs) -> int:
         for _ in range(repeats):
             rep = ReportC(); st, sink = _make_state()
             try:
-                t0 = time.perf_counter_ns(); _run(st, rep); t1 = time.perf_counter_ns()
+                sample = _run(st, rep, role="repeat")
                 if sink is not None or args.profile == "jailed":
                     _check_bench_run(lib, st)
-                samples_ns.append(t1 - t0)
+                samples_ns.append(sample)
             finally:
                 _free_sink_run(lib, st, rep, sink)
         timing = _timing_block(
@@ -5774,18 +5803,23 @@ def _main(argv, binary_inputs) -> int:
     if metrics is not None:
         metrics.own(state, sink, report)
     try:
-        _release_copied_feeds(symbol_feeds)
+        if start is None or metrics is None:
+            _release_copied_feeds(symbol_feeds)
         started = time.time()
         settings_receipt = _release_settings_receipt(lib, state, checked)
         if phases is not None:
             binding = _observer_binding(lib, state, phases.writer)
             binding.attach()
         if metrics is None:
-            _run(state, report)
+            _run(state, report, role="body")
         else:
             state, sink, report, settings_receipt = metrics.execute(
                 _run, _make_state, settings_receipt, abort)
         elapsed = time.time() - started
+        if start is not None and metrics is not None:
+            # Actual recovery must be able to reinstall and fingerprint the
+            # original copied feeds on its fresh handle.
+            _release_copied_feeds(symbol_feeds)
         if binding is not None:
             binding.raise_if_failed()  # the callback's exception, before any report access
         failure = metrics.failure if metrics is not None else run_failure(lib, state)
@@ -9435,7 +9469,7 @@ class _MetricsOnlyRun:
 
     def execute(self, run, make_state, settings_receipt, abort):
         state, sink, report = self.active
-        run(state, report)
+        run(state, report, role="body")
         self.failure = run_failure(self.lib, state)
         if not self.streaming:
             return self.result(settings_receipt)
@@ -9488,7 +9522,12 @@ class _MetricsOnlyRun:
             recovered_settings = _release_settings_receipt(self.lib, state, self.checked)
             if recovered_settings != settings_receipt:
                 raise _engine_invariant("the metrics recovery changed effective settings")
-            run(state, report)
+            run(state, report, role="metrics_recovery")
+        except _OrdinaryStartFailure as error:
+            error.earlier_failure = failure
+            if failure is not None:
+                raise error from RunFailure(*failure)
+            raise
         except Exception:
             if failure is not None:
                 self.failure = failure
@@ -9620,6 +9659,9 @@ def create_strategy(lib, checked: bool, max_output_series=None, max_map_pairs=No
 
 
 def _write_run_failure(failure):
+    if isinstance(failure, _OrdinaryStartFailure) and failure.earlier_failure is not None:
+        _write_diagnostic("ordinary START: previous native failure: "
+                          + failure_line(*failure.earlier_failure) + "\n")
     cause = getattr(failure, "cause", None)
     if cause is None:
         write_failure(str(failure), failure.code, failure.code_args)
@@ -9645,6 +9687,1053 @@ def _output_series_resources(sink, series):
 
 def _report_series_count(document):
     return len((document.get("outputs") or {}).get("series", ()))
+
+
+# Ordinary START v1; parent manifest/options pin ec8c7d0df8466832760635888388a4553
+# 36191ac719cae5a818c32d082a5154f. This private channel changes no public ABI.
+_ORDINARY_START_ROLES = ("warmup", "repeat", "body", "metrics_recovery")
+_ORDINARY_START_KEYS = (
+    "record", "version", "boundary", "launch_nonce", "nonce", "run_id_sha256",
+    "call_serial", "handle_serial", "role", "role_index", "loaded_values_sha256",
+    "bar_count", "first_timestamp", "last_timestamp", "call_options_sha256",
+    "module_sha256", "engine_version", "start_monotonic_ns", "feed_bytes_sha256",
+)
+_ORDINARY_START_IDENTITY_KEYS = (
+    "launch_nonce", "run_id_sha256", "loaded_values_sha256", "bar_count",
+    "first_timestamp", "last_timestamp", "module_sha256", "engine_version",
+    "feed_bytes_sha256",
+)
+_ORDINARY_START_U64_MAX = (1 << 64) - 1
+_ORDINARY_START_RETAINED_MODULES = []
+
+
+class _OrdinaryStartFailure(RunFailure):
+    """Infrastructure failure, separate from native refusals and recovery."""
+
+    def __init__(self, reason, field=None):
+        super().__init__("ordinary START: " + reason + ("" if field is None else " (" + field + ")"),
+                         "harness_internal_error")
+        self.reason = reason
+        self.field = field
+        self.earlier_failure = None
+
+
+def _ordinary_start_integer(value, field, *, signed=False, positive=False):
+    grammar = r"(0|-?[1-9][0-9]*)" if signed else r"(0|[1-9][0-9]*)"
+    if (type(value) is not str or len(value) > 20
+            or re.fullmatch(grammar, value, flags=re.ASCII) is None):
+        raise _OrdinaryStartFailure("integer_encoding", field)
+    number = int(value)
+    lower, upper = (-(1 << 63), (1 << 63) - 1) if signed else (0, _ORDINARY_START_U64_MAX)
+    if number < lower or number > upper or (positive and number == 0):
+        raise _OrdinaryStartFailure("integer_range", field)
+    return number
+
+
+def _ordinary_start_hex(value, field, length=64):
+    if (type(value) is not str or len(value) != length
+            or re.fullmatch(r"[0-9a-f]+", value, flags=re.ASCII) is None):
+        raise _OrdinaryStartFailure("hex_encoding", field)
+
+
+def _ordinary_start_validate_identity(identity):
+    if set(identity) != set(_ORDINARY_START_IDENTITY_KEYS):
+        raise _OrdinaryStartFailure("identity_keys")
+    _ordinary_start_hex(identity["launch_nonce"], "launch_nonce", 32)
+    for field in ("run_id_sha256", "loaded_values_sha256", "module_sha256",
+                  "feed_bytes_sha256"):
+        _ordinary_start_hex(identity[field], field)
+    count = identity["bar_count"]
+    if type(count) is not int or not 0 <= count <= (1 << 31) - 1:
+        raise _OrdinaryStartFailure("bar_count", "bar_count")
+    for field in ("first_timestamp", "last_timestamp"):
+        if count == 0:
+            if identity[field] is not None:
+                raise _OrdinaryStartFailure("empty_endpoint", field)
+        else:
+            _ordinary_start_integer(identity[field], field, signed=True)
+    version = identity["engine_version"]
+    if type(version) is not str or len(version) > 32:
+        raise _OrdinaryStartFailure("version_encoding", "engine_version")
+    parts = version.split(".")
+    if len(parts) != 3:
+        raise _OrdinaryStartFailure("version_encoding", "engine_version")
+    for part in parts:
+        number = _ordinary_start_integer(part, "engine_version")
+        if number > (1 << 32) - 1:
+            raise _OrdinaryStartFailure("version_range", "engine_version")
+
+
+def _ordinary_start_validate_frame(frame, *, stamped):
+    keys = set(_ORDINARY_START_KEYS)
+    if not stamped:
+        keys.remove("start_monotonic_ns")
+    if type(frame) is not dict or set(frame) != keys:
+        raise _OrdinaryStartFailure("frame_keys")
+    if (type(frame["record"]) is not str or frame["record"] != "ordinary_start"
+            or type(frame["version"]) is not int or frame["version"] != 1
+            or type(frame["boundary"]) is not str
+            or frame["boundary"] != "before_run_backtest_full"):
+        raise _OrdinaryStartFailure("frame_tags")
+    _ordinary_start_validate_identity({key: frame[key] for key in _ORDINARY_START_IDENTITY_KEYS})
+    _ordinary_start_hex(frame["nonce"], "nonce", 32)
+    if frame["nonce"] != frame["launch_nonce"]:
+        raise _OrdinaryStartFailure("nonce_mismatch", "nonce")
+    _ordinary_start_integer(frame["call_serial"], "call_serial", positive=True)
+    _ordinary_start_integer(frame["handle_serial"], "handle_serial", positive=True)
+    _ordinary_start_integer(frame["role_index"], "role_index")
+    if type(frame["role"]) is not str or frame["role"] not in _ORDINARY_START_ROLES:
+        raise _OrdinaryStartFailure("role", "role")
+    _ordinary_start_hex(frame["call_options_sha256"], "call_options_sha256")
+    if stamped:
+        _ordinary_start_integer(frame["start_monotonic_ns"], "start_monotonic_ns")
+
+
+def _ordinary_start_encode(frame):
+    """Strict nineteen-key producer encoding, not an App stream receiver."""
+    _ordinary_start_validate_frame(frame, stamped=True)
+    ordered = {key: frame[key] for key in _ORDINARY_START_KEYS}
+    line = json.dumps(ordered, ensure_ascii=True, allow_nan=False,
+                      separators=(",", ":")).encode("ascii") + b"\n"
+    if len(line) > 2048:
+        raise _OrdinaryStartFailure("frame_oversize")
+    return line
+
+
+def _ordinary_start_role_options(values):
+    if not isinstance(values, (dict, types.MappingProxyType)) or not values:
+        raise _OrdinaryStartFailure("role_options")
+    result = dict(values)
+    for role, digest in result.items():
+        if type(role) is not str or role not in _ORDINARY_START_ROLES:
+            raise _OrdinaryStartFailure("role_options")
+        _ordinary_start_hex(digest, "call_options_sha256_by_role")
+    return types.MappingProxyType(result)
+
+
+def _ordinary_start_freeze(value):
+    if isinstance(value, dict):
+        return types.MappingProxyType({_ordinary_start_freeze(key): _ordinary_start_freeze(item)
+                                       for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_ordinary_start_freeze(item) for item in value)
+    if isinstance(value, str):
+        value.encode("utf-8", "strict")
+    return value
+
+
+def _ordinary_start_parse_ingress(tokens, context_text):
+    """Extract exact private tokens and validate the pinned twelve-key envelope."""
+    remaining, descriptor = [], None
+    tokens = list(tokens)
+    if any(type(token) is not str for token in tokens):
+        raise _OrdinaryStartFailure("argument_encoding")
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            remaining.extend(tokens[index:])
+            break
+        name, equals, value = token.partition("=")
+        if name != "--_run-start-fd":
+            remaining.append(token)
+            index += 1
+            continue
+        if descriptor is not None:
+            raise _OrdinaryStartFailure("duplicate_ingress")
+        if not equals:
+            index += 1
+            if index == len(tokens):
+                raise _OrdinaryStartFailure("missing_descriptor")
+            value = tokens[index]
+        if re.fullmatch(r"[0-9]{1,10}", value, flags=re.ASCII) is None:
+            raise _OrdinaryStartFailure("invalid_descriptor")
+        descriptor = int(value)
+        if not 3 <= descriptor <= (1 << 31) - 1 or descriptor in (3, 5):
+            raise _OrdinaryStartFailure("reserved_descriptor")
+        index += 1
+    if descriptor is None and context_text is None:
+        return remaining, None, None
+    if descriptor is None or context_text is None:
+        raise _OrdinaryStartFailure("incomplete_ingress")
+
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise _OrdinaryStartFailure("duplicate_context_key")
+            result[key] = value
+        return result
+
+    def nonfinite(_value):
+        raise _OrdinaryStartFailure("nonfinite_context")
+
+    def finite_float(value):
+        number = float(value)
+        if not math.isfinite(number):
+            raise _OrdinaryStartFailure("nonfinite_context")
+        return number
+
+    try:
+        if type(context_text) is not str:
+            raise _OrdinaryStartFailure("context_encoding")
+        context = json.loads(context_text, object_pairs_hook=pairs,
+                             parse_constant=nonfinite, parse_float=finite_float)
+    except (ValueError, TypeError, RecursionError) as error:
+        raise _OrdinaryStartFailure("context_encoding") from error
+    _ordinary_start_validate_manifest(context)
+    try:
+        return remaining, descriptor, _ordinary_start_freeze(context)
+    except (UnicodeError, RecursionError) as error:
+        raise _OrdinaryStartFailure("context_encoding") from error
+
+
+def _ordinary_start_take_ingress(tokens):
+    """Consume the private value before any strategy library can be loaded."""
+    context = os.environ.pop("PINEFORGE_ORDINARY_START_CONTEXT_V1", None)
+    return _ordinary_start_parse_ingress(tokens, context)
+
+
+class _OrdinaryStartPrepared:
+    __slots__ = ("owner", "fields")
+
+    def __init__(self, owner, fields):
+        self.owner = owner
+        self.fields = types.MappingProxyType(dict(fields))
+
+
+class _OrdinaryStartWriter:
+    """One borrowed socket, bounded per-call state, no receipt or RUN timer.
+
+    expected_identity is an internal projection of the pinned frame fields,
+    not a newly invented serialized launch manifest.
+    """
+
+    def __init__(self, fd, expected_identity, call_options_sha256_by_role, *, reserved_fds=()):
+        import fcntl
+        import socket
+
+        self._socket = None
+        self._failure = None
+        if not isinstance(expected_identity, (dict, types.MappingProxyType)):
+            raise _OrdinaryStartFailure("identity_keys")
+        self._identity = types.MappingProxyType(dict(expected_identity))
+        _ordinary_start_validate_identity(self._identity)
+        self._options = _ordinary_start_role_options(call_options_sha256_by_role)
+        if type(fd) is not int or not 3 <= fd <= (1 << 31) - 1:
+            raise _OrdinaryStartFailure("invalid_descriptor")
+        owner = _REPORT_OUTPUT
+        reserved = (1, 2, 3, 5, *reserved_fds)
+        if owner is not None and owner.fd is not None:
+            reserved = (*reserved, owner.fd)
+        if any(type(other) is int and (fd == other or _same_open_file(fd, other))
+               for other in reserved):
+            raise _OrdinaryStartFailure("descriptor_collision")
+        probe = None
+        try:
+            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+            if (flags & os.O_ACCMODE) not in (os.O_WRONLY, os.O_RDWR):
+                raise _OrdinaryStartFailure("not_writable")
+            probe = socket.socket(fileno=fd)
+            if (probe.family != socket.AF_UNIX
+                    or probe.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM
+                    or probe.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN)):
+                raise _OrdinaryStartFailure("invalid_socket")
+            probe.getpeername()
+            self._send_flags = socket.MSG_DONTWAIT | getattr(socket, "MSG_NOSIGNAL", 0)
+            self._socket, probe = probe, None
+        except (OSError, ValueError, OverflowError) as error:
+            raise _OrdinaryStartFailure("invalid_descriptor") from error
+        finally:
+            if probe is not None:
+                probe.detach()
+        self._call_serial = self._handle_serial = 0
+        self._indices = {role: 0 for role in _ORDINARY_START_ROLES}
+        self._first_stamp = self._last_stamp = None
+
+    @property
+    def first_start_monotonic_ns(self):
+        return self._first_stamp
+
+    def close(self):
+        if getattr(self, "_socket", None) is not None:
+            self._socket.detach()  # borrowed descriptor remains the caller's
+            self._socket = None
+
+    def __del__(self):
+        self.close()
+
+    def _sequence(self, frame):
+        call = _ordinary_start_integer(frame["call_serial"], "call_serial", positive=True)
+        handle = _ordinary_start_integer(frame["handle_serial"], "handle_serial", positive=True)
+        index = _ordinary_start_integer(frame["role_index"], "role_index")
+        if (call <= self._call_serial or handle < self._handle_serial
+                or index != self._indices[frame["role"]]):
+            raise _OrdinaryStartFailure("call_order")
+
+    def prepare(self, frame):
+        if self._socket is None or self._failure is not None:
+            raise _OrdinaryStartFailure("writer_unusable")
+        _ordinary_start_validate_frame(frame, stamped=False)
+        for key, expected in self._identity.items():
+            if frame[key] != expected:
+                raise _OrdinaryStartFailure("identity_mismatch", key)
+        role = frame["role"]
+        if self._options.get(role) != frame["call_options_sha256"]:
+            raise _OrdinaryStartFailure("identity_mismatch", "call_options_sha256")
+        self._sequence(frame)
+        return _OrdinaryStartPrepared(self, frame)
+
+    def handover(self, prepared):
+        if self._socket is None or self._failure is not None:
+            raise _OrdinaryStartFailure("writer_unusable")
+        if not isinstance(prepared, _OrdinaryStartPrepared) or prepared.owner is not self:
+            raise _OrdinaryStartFailure("unowned_frame")
+        frame = dict(prepared.fields)
+        self._sequence(frame)
+        try:
+            stamp = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+            if (type(stamp) is not int or not 0 <= stamp <= _ORDINARY_START_U64_MAX
+                    or (self._last_stamp is not None and stamp < self._last_stamp)):
+                raise _OrdinaryStartFailure("clock_invalid")
+            frame["start_monotonic_ns"] = str(stamp)
+            line = _ordinary_start_encode(frame)
+            written = self._socket.send(line, self._send_flags)
+            if written != len(line):
+                raise _OrdinaryStartFailure("short_write")
+        except _OrdinaryStartFailure as error:
+            self._failure = error.reason
+            raise
+        except BlockingIOError as error:
+            self._failure = "would_block"
+            raise _OrdinaryStartFailure("would_block") from error
+        except OSError as error:
+            self._failure = "transport_failed"
+            raise _OrdinaryStartFailure("transport_failed") from error
+        except Exception as error:
+            self._failure = "handover_failed"
+            raise _OrdinaryStartFailure("handover_failed") from error
+        self._call_serial = int(frame["call_serial"])
+        self._handle_serial = int(frame["handle_serial"])
+        self._indices[frame["role"]] += 1
+        if self._first_stamp is None:
+            self._first_stamp = stamp
+        self._last_stamp = stamp
+
+
+def _ordinary_start_run_id(value):
+    if type(value) is not str:
+        raise _OrdinaryStartFailure("run_id_encoding")
+    try:
+        return hashlib.sha256(os.fsencode(value)).hexdigest()
+    except UnicodeError as error:
+        raise _OrdinaryStartFailure("run_id_encoding") from error
+
+
+def _ordinary_start_preimage_digest(raw, expected, *, field="call_options_sha256"):
+    """Verify a byte preimage independently of its expected digest."""
+    _ordinary_start_hex(expected, field)
+    if type(raw) is not bytes:
+        raise _OrdinaryStartFailure("preimage_type", field)
+    actual = hashlib.sha256(raw).hexdigest()
+    if actual != expected:
+        raise _OrdinaryStartFailure("identity_mismatch", field)
+    return actual
+
+
+def _ordinary_start_version(lib):
+    try:
+        observed = engine_version(lib)
+    except Exception as error:
+        raise _OrdinaryStartFailure("runtime_version_unavailable") from error
+    parts = [observed.get(key) for key in ("major", "minor", "patch")]
+    if any(type(part) is not int or not 0 <= part <= (1 << 32) - 1 for part in parts):
+        raise _OrdinaryStartFailure("runtime_version_unavailable")
+    return ".".join(str(part) for part in parts)
+
+
+def _ordinary_start_loaded_values(bars, count):
+    try:
+        if (type(count) is not int or not 0 <= count <= (1 << 31) - 1
+                or not isinstance(bars, ctypes.Array) or bars._type_ is not BarC
+                or count > len(bars)):
+            raise _OrdinaryStartFailure("actual_bars")
+        hasher = _new_source_feed_hasher()
+        if _bar_bulk_layout_matches():
+            with memoryview(bars).cast("B") as view:
+                hasher.update(view[:count * _SOURCE_FEED_RECORD.size])
+        else:
+            for index in range(count):
+                bar = bars[index]
+                _update_source_feed_hash(hasher, (bar.open, bar.high, bar.low, bar.close,
+                                                  bar.volume, bar.timestamp))
+        return {
+            "loaded_values_sha256": hasher.hexdigest(),
+            "bar_count": count,
+            "first_timestamp": str(bars[0].timestamp) if count else None,
+            "last_timestamp": str(bars[count - 1].timestamp) if count else None,
+        }
+    finally:
+        bars = bar = None  # tracebacks must not retain a mapped ctypes view
+
+
+def _ordinary_start_load_csv(path, expected_file_sha256):
+    raw = _read_bar_bytes(path)  # original file closes before parsing/native entry
+    file_digest = _ordinary_start_preimage_digest(
+        raw, expected_file_sha256, field="feed_bytes_sha256")
+    loaded = _load_bars_bulk(raw)
+    bars, count, _source = loaded if loaded is not None else _load_bars_legacy(path, raw)
+    return bars, count, {
+        **_ordinary_start_loaded_values(bars, count), "feed_bytes_sha256": file_digest}
+
+
+def _ordinary_start_load_bin(path, expected_file_sha256, *, verify_bin="full"):
+    """Honor structural verification policy; independently hash consumed bytes/values."""
+    chart = load_bars_bin(path, verify_bin=verify_bin)
+    try:
+        _ordinary_start_hex(expected_file_sha256, "feed_bytes_sha256")
+        with memoryview(chart.maps[0]) as view:
+            actual = hashlib.sha256(view).hexdigest()
+        if actual != expected_file_sha256:
+            raise _OrdinaryStartFailure("identity_mismatch", "feed_bytes_sha256")
+        fields = {**_ordinary_start_loaded_values(chart["bars"], chart["n"]),
+                  "feed_bytes_sha256": actual}
+        return chart, fields
+    except BaseException:
+        chart.close()
+        raise
+
+
+def _ordinary_start_hash_fd(fd):
+    before = os.fstat(fd)
+    if not stat.S_ISREG(before.st_mode):
+        raise _OrdinaryStartFailure("module_not_regular")
+    hasher, offset = hashlib.sha256(), 0
+    while True:
+        piece = os.pread(fd, 1024 * 1024, offset)
+        if not piece:
+            break
+        hasher.update(piece)
+        offset += len(piece)
+    after = os.fstat(fd)
+    signature = lambda info: (info.st_dev, info.st_ino, info.st_size,
+                              info.st_mtime_ns, info.st_ctime_ns)
+    if signature(before) != signature(after) or offset != after.st_size:
+        raise _OrdinaryStartFailure("module_changed")
+    return after, hasher.hexdigest()
+
+
+class _OrdinaryStartModule:
+    """Open/hash/load one descriptor; parent publication must be write-once.
+
+    Once dlopen is attempted, retain even on refusal: the loader may have
+    mapped code. Keeping that fd number occupied also avoids a later dlopen
+    mistaking a reused /proc/self/fd/N spelling for the earlier module.
+    """
+
+    def __init__(self, path, expected_sha256):
+        _ordinary_start_hex(expected_sha256, "module_sha256")
+        self.fd, self._lib, self._retained = None, None, False
+        self._expected = expected_sha256
+        try:
+            self.fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK)
+            info, actual = _ordinary_start_hash_fd(self.fd)
+            if actual != expected_sha256:
+                raise _OrdinaryStartFailure("identity_mismatch", "module_sha256")
+            self.device, self.inode = info.st_dev, info.st_ino
+            self.load_path = "/proc/self/fd/" + str(self.fd)
+        except BaseException as error:
+            self.close()
+            if isinstance(error, OSError):
+                raise _OrdinaryStartFailure("module_open_failed") from error
+            raise
+
+    def verify(self):
+        try:
+            info, actual = _ordinary_start_hash_fd(self.fd)
+        except (OSError, TypeError) as error:
+            raise _OrdinaryStartFailure("module_descriptor") from error
+        if ((info.st_dev, info.st_ino) != (self.device, self.inode)
+                or actual != self._expected):
+            raise _OrdinaryStartFailure("identity_mismatch", "module_sha256")
+        return actual
+
+    def load(self):
+        self.verify()
+        if not self._retained:
+            _ORDINARY_START_RETAINED_MODULES.append(self)
+            self._retained = True
+        if self._lib is None:
+            self._lib = load_strategy(Path(self.load_path))
+        self.verify()
+        return self._lib
+
+    def close(self):
+        # Mapped modules intentionally keep fd and library through process exit.
+        if self.fd is not None and not self._retained:
+            os.close(self.fd)
+            self.fd = None
+
+
+class _OrdinaryCallSequence:
+    """Actual single-threaded calls and the one currently created handle."""
+
+    def __init__(self):
+        self.call_serial = self.handle_serial = 0
+        self._state = None
+        self._indices = {role: 0 for role in _ORDINARY_START_ROLES}
+
+    def created(self, state):
+        if state is None or state is False or state == 0:
+            raise _OrdinaryStartFailure("invalid_handle")
+        if self.handle_serial >= _ORDINARY_START_U64_MAX:
+            raise _OrdinaryStartFailure("handle_serial_overflow")
+        self.handle_serial += 1
+        self._state = state
+
+    def prepare(self, state, role):
+        if (type(role) is not str or role not in self._indices or state != self._state
+                or self.handle_serial == 0):
+            raise _OrdinaryStartFailure("call_context")
+        if (self.call_serial >= _ORDINARY_START_U64_MAX
+                or self._indices[role] > _ORDINARY_START_U64_MAX):
+            raise _OrdinaryStartFailure("call_serial_overflow")
+        return self.call_serial + 1, self.handle_serial, role, self._indices[role]
+
+    def commit(self, ticket):
+        self.call_serial = ticket[0]
+        self._indices[ticket[2]] += 1
+
+
+def _invoke_ordinary(lib, arguments, sequence, role, *, abort=None, start=None,
+                     identity=None, timed=False):
+    """Resolve the rebound callable, validate, hand over, then enter actual FFI."""
+    try:
+        function = lib.run_backtest_full  # after load and App attribute rebinding
+        ticket = sequence.prepare(arguments[0], role)
+        prepared = None
+        if start is not None:
+            if identity is None:
+                raise _OrdinaryStartFailure("missing_actual_identity")
+            actual = dict(identity)
+            actual.update(_ordinary_start_loaded_values(arguments[1], arguments[2]))
+            actual.update(record="ordinary_start", version=1, boundary="before_run_backtest_full",
+                          engine_version=_ordinary_start_version(lib),
+                          call_serial=str(ticket[0]), handle_serial=str(ticket[1]),
+                          role=role, role_index=str(ticket[3]))
+            prepared = start.prepare(actual)
+        elif identity is not None:
+            raise _OrdinaryStartFailure("missing_writer")
+        if abort is not None:
+            abort.check_before_start()
+        if start is not None:
+            start.handover(prepared)
+        sequence.commit(ticket)
+        if abort is not None:
+            abort.started = True
+        if timed:
+            before = time.perf_counter_ns()
+            function(*arguments)
+            return time.perf_counter_ns() - before
+        function(*arguments)
+        return None
+    finally:
+        arguments = None
+
+
+def _ordinary_start_validate_manifest(context):
+    keys = {*_ORDINARY_START_IDENTITY_KEYS, "context_version", "nonce",
+            "call_options_sha256_by_role"}
+    if type(context) is not dict or set(context) != keys:
+        raise _OrdinaryStartFailure("context_keys")
+    if type(context["context_version"]) is not int or context["context_version"] != 1:
+        raise _OrdinaryStartFailure("context_version")
+    _ordinary_start_validate_identity({key: context[key] for key in _ORDINARY_START_IDENTITY_KEYS})
+    _ordinary_start_hex(context["nonce"], "nonce", 32)
+    if context["nonce"] != context["launch_nonce"]:
+        raise _OrdinaryStartFailure("nonce_mismatch")
+    options = context["call_options_sha256_by_role"]
+    if type(options) is not dict or set(options) != set(_ORDINARY_START_ROLES):
+        raise _OrdinaryStartFailure("role_options")
+    _ordinary_start_role_options(options)
+
+
+def _ordinary_start_canonical(value):
+    """Compact ASCII JSON of the parent's typed C value, without normalization."""
+    def encode(item):
+        if item is None:
+            return ["n"]
+        if type(item) is bool:
+            return ["b", item]
+        if type(item) is int:
+            return ["i", str(item)]
+        if type(item) is float:
+            return ["f", struct.pack(">d", item).hex()]
+        if type(item) is str:
+            return ["s", item.encode("utf-8", "strict").hex()]
+        if type(item) is bytes:
+            return ["x", item.hex()]
+        if type(item) in (tuple, list):
+            return ["a", [encode(child) for child in item]]
+        if isinstance(item, (dict, types.MappingProxyType)):
+            pairs = []
+            for key, child in item.items():
+                if type(key) is not str:
+                    raise _OrdinaryStartFailure("options_key_type")
+                pairs.append((key.encode("utf-8", "strict"), child))
+            pairs.sort(key=lambda pair: pair[0])
+            return ["m", [[key.hex(), encode(child)] for key, child in pairs]]
+        raise _OrdinaryStartFailure("options_value_type")
+    try:
+        return json.dumps(encode(value), ensure_ascii=True, allow_nan=False,
+                          separators=(",", ":")).encode("ascii")
+    except (UnicodeError, ValueError, TypeError, RecursionError, OverflowError) as error:
+        raise _OrdinaryStartFailure("options_encoding") from error
+
+
+def _ordinary_options_keys(value, keys):
+    if not isinstance(value, (dict, types.MappingProxyType)) or set(value) != set(keys):
+        raise _OrdinaryStartFailure("options_keys")
+
+
+def _ordinary_options_int(value, lower, upper=None):
+    if type(value) is not int or value < lower or (upper is not None and value > upper):
+        raise _OrdinaryStartFailure("options_integer_range")
+
+
+def _ordinary_options_bytes(value):
+    if type(value) is not bytes:
+        raise _OrdinaryStartFailure("options_bytes")
+
+
+def _ordinary_options_bool(value):
+    if type(value) is not bool:
+        raise _OrdinaryStartFailure("options_boolean")
+
+
+def _ordinary_options_array(value):
+    if type(value) not in (list, tuple):
+        raise _OrdinaryStartFailure("options_sequence")
+    return value
+
+
+def _ordinary_options_pairs(value):
+    for pair in _ordinary_options_array(value):
+        if type(pair) not in (list, tuple) or len(pair) != 2:
+            raise _OrdinaryStartFailure("options_pair")
+        for child in pair:
+            _ordinary_options_bytes(child)
+
+
+def _ordinary_options_digest_or_null(value):
+    if value is not None:
+        _ordinary_start_hex(value, "options_file_sha256")
+
+
+def _ordinary_options_feed(value, *, extra=False):
+    keys = {"loaded_values_sha256", "bar_count", "first_timestamp", "last_timestamp"}
+    if extra:
+        keys.add("timeframe")
+    _ordinary_options_keys(value, keys)
+    if extra:
+        _ordinary_options_bytes(value["timeframe"])
+    _ordinary_start_hex(value["loaded_values_sha256"], "loaded_values_sha256")
+    count = value["bar_count"]
+    _ordinary_options_int(count, 0, (1 << 31) - 1)
+    for field in ("first_timestamp", "last_timestamp"):
+        endpoint = value[field]
+        if count:
+            _ordinary_options_int(endpoint, -(1 << 63), (1 << 63) - 1)
+        elif endpoint is not None:
+            raise _OrdinaryStartFailure("options_empty_endpoint")
+
+
+def _ordinary_start_options_digest(document):
+    """Validate exact O and hash the pinned domain plus C(O); never an expected echo."""
+    _ordinary_options_keys(document, (
+        "options_version", "role", "ffi", "settings", "syminfo", "feeds", "time",
+        "volume_weighted", "output", "limits", "benchmark", "metrics_attempt_policy",
+        "source_manifest"))
+    if type(document["options_version"]) is not int or document["options_version"] != 1:
+        raise _OrdinaryStartFailure("options_version")
+    if type(document["role"]) is not str or document["role"] not in _ORDINARY_START_ROLES:
+        raise _OrdinaryStartFailure("role")
+    ffi = document["ffi"]
+    _ordinary_options_keys(ffi, ("input_tf", "script_tf", "bar_magnifier",
+                                 "magnifier_samples", "magnifier_dist"))
+    for field in ("input_tf", "script_tf"):
+        _ordinary_options_bytes(ffi[field])
+    _ordinary_options_int(ffi["bar_magnifier"], 0, 1)
+    _ordinary_options_int(ffi["magnifier_samples"], 2, (1 << 31) - 1)
+    _ordinary_options_int(ffi["magnifier_dist"], -(1 << 31), (1 << 31) - 1)
+    settings = document["settings"]
+    _ordinary_options_keys(settings, ("inputs", "overrides"))
+    for value in settings.values():
+        _ordinary_options_pairs(value)
+    syminfo = document["syminfo"]
+    _ordinary_options_keys(syminfo, ("file_bytes_sha256", "calls"))
+    _ordinary_options_digest_or_null(syminfo["file_bytes_sha256"])
+    signatures = {
+        "strategy_set_syminfo_metadata": (bytes, float),
+        "strategy_set_syminfo_mintick": (float,),
+        "strategy_set_syminfo_pointvalue": (float,),
+        "strategy_set_syminfo_timezone": (bytes,),
+        "strategy_set_syminfo_session": (bytes,),
+    }
+    for call in _ordinary_options_array(syminfo["calls"]):
+        if type(call) not in (list, tuple) or len(call) != 2 or type(call[0]) is not str:
+            raise _OrdinaryStartFailure("options_syminfo_call")
+        signature = signatures.get(call[0])
+        values = _ordinary_options_array(call[1])
+        if signature is None or tuple(type(value) for value in values) != signature:
+            raise _OrdinaryStartFailure("options_syminfo_types")
+    if syminfo["file_bytes_sha256"] is None and syminfo["calls"]:
+        raise _OrdinaryStartFailure("options_syminfo_source")
+    feeds = document["feeds"]
+    _ordinary_options_keys(feeds, ("primary", "extras"))
+    _ordinary_options_feed(feeds["primary"])
+    for symbol in _ordinary_options_array(feeds["extras"]):
+        _ordinary_options_keys(symbol, ("symbol", "facts", "feeds"))
+        _ordinary_options_bytes(symbol["symbol"])
+        _ordinary_options_pairs(symbol["facts"])
+        for feed in _ordinary_options_array(symbol["feeds"]):
+            _ordinary_options_feed(feed, extra=True)
+    time_options = document["time"]
+    _ordinary_options_keys(time_options, ("trade_start_ms", "chart_tz"))
+    if time_options["trade_start_ms"] is not None:
+        _ordinary_options_int(time_options["trade_start_ms"], -(1 << 63), (1 << 63) - 1)
+    _ordinary_options_bytes(time_options["chart_tz"])
+    _ordinary_options_bool(document["volume_weighted"])
+    output = document["output"]
+    _ordinary_options_keys(output, ("outputs", "profile", "report_mode", "sink_kind",
+                                    "sink_format", "replay", "replay_sink", "spill_dir",
+                                    "verify_bin"))
+    for field in ("outputs", "replay", "replay_sink"):
+        _ordinary_options_bool(output[field])
+    for field, permitted in (
+            ("profile", ("unjailed", "jailed")), ("report_mode", ("FULL",)),
+            ("sink_kind", ("none", "path", "fd")), ("verify_bin", ("full", "sidecar"))):
+        if type(output[field]) is not str or output[field] not in permitted:
+            raise _OrdinaryStartFailure("options_output")
+    _ordinary_options_int(output["sink_format"], 1, 2)
+    if output["spill_dir"] is not None:
+        _ordinary_options_bytes(output["spill_dir"])
+    limits = document["limits"]
+    _ordinary_options_keys(limits, ("max_output_series", "max_map_pairs",
+                                    "max_symbol_feeds", "max_inventory_bytes"))
+    for value in limits.values():
+        if value is not None:
+            _ordinary_options_int(value, 0)
+    benchmark = document["benchmark"]
+    _ordinary_options_keys(benchmark, ("enabled", "warmup", "repeats"))
+    _ordinary_options_bool(benchmark["enabled"])
+    _ordinary_options_int(benchmark["warmup"], 0)
+    _ordinary_options_int(benchmark["repeats"], 1 if benchmark["enabled"] else 0)
+    if not benchmark["enabled"] and (benchmark["warmup"] or benchmark["repeats"]):
+        raise _OrdinaryStartFailure("options_benchmark")
+    metrics = document["metrics_attempt_policy"]
+    _ordinary_options_keys(metrics, ("requested_mode", "force_legacy"))
+    if metrics["requested_mode"] is not None and (
+            type(metrics["requested_mode"]) is not str
+            or metrics["requested_mode"] not in ("auto", "legacy")):
+        raise _OrdinaryStartFailure("options_metrics_policy")
+    _ordinary_options_bool(metrics["force_legacy"])
+    source = document["source_manifest"]
+    _ordinary_options_keys(source, ("generated_cpp_sha256", "transpiled_request",
+                                    "symbol_inventory_bytes_sha256"))
+    _ordinary_options_digest_or_null(source["generated_cpp_sha256"])
+    _ordinary_options_digest_or_null(source["symbol_inventory_bytes_sha256"])
+    if type(source["transpiled_request"]) is not str:
+        raise _OrdinaryStartFailure("options_transpiled_type")
+    preimage = b"pineforge:ordinary-start:actual-options:v1\0" + _ordinary_start_canonical(document)
+    return hashlib.sha256(preimage).hexdigest()
+
+
+class _OrdinaryInputSnapshot:
+    """An opened optional input, retaining original path resolution and bytes.
+
+    Path.read_* consumers use the captured bytes. Existing open(path) consumers
+    open the retained descriptor's proc path, never a replacement publication
+    path. verify() detects observed in-place changes; publication is write-once,
+    not sealed, as required by C2.
+    """
+
+    def __init__(self, path, field):
+        self.original, self.field, self.fd = path, field, None
+        try:
+            self.fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK)
+            info, self.sha256 = _ordinary_start_hash_fd(self.fd)
+            self.device, self.inode = info.st_dev, info.st_ino
+            chunks, offset = [], 0
+            while True:
+                chunk = os.pread(self.fd, 1024 * 1024, offset)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                offset += len(chunk)
+            self.raw = b"".join(chunks)
+            if hashlib.sha256(self.raw).hexdigest() != self.sha256:
+                raise _OrdinaryStartFailure("input_changed", field)
+            self.verify()
+        except BaseException as error:
+            self.close()
+            if isinstance(error, OSError):
+                raise _OrdinaryStartFailure("input_unreadable", field) from error
+            raise
+
+    def __fspath__(self):
+        return "/proc/self/fd/" + str(self.fd)
+
+    def __str__(self):
+        return str(self.original)
+
+    @property
+    def parent(self):
+        return self.original.parent
+
+    def read_bytes(self):
+        return self.raw
+
+    def read_text(self, encoding=None, errors=None):
+        with io.TextIOWrapper(io.BytesIO(self.raw), encoding=encoding, errors=errors) as source:
+            return source.read()
+
+    def verify(self):
+        try:
+            info, actual = _ordinary_start_hash_fd(self.fd)
+        except (OSError, TypeError) as error:
+            raise _OrdinaryStartFailure("input_descriptor", self.field) from error
+        if ((info.st_dev, info.st_ino) != (self.device, self.inode)
+                or actual != self.sha256):
+            raise _OrdinaryStartFailure("input_changed", self.field)
+        return actual
+
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+
+def _ordinary_start_extra_values(bars, closes, count):
+    try:
+        primary = _ordinary_start_loaded_values(bars, count)
+        if (not isinstance(closes, ctypes.Array) or closes._type_ is not ctypes.c_int64
+                or len(closes) < count):
+            raise _OrdinaryStartFailure("actual_feed_closes")
+        hasher = hashlib.sha256(_SYMBOL_FEED_HASH_PREFIX)
+        if _bar_bulk_layout_matches():
+            with memoryview(bars).cast("B") as view:
+                for index in range(count):
+                    hasher.update(view[index * 48:(index + 1) * 48])
+                    hasher.update(struct.pack("<q", closes[index]))
+        else:
+            for index in range(count):
+                bar = bars[index]
+                hasher.update(_SYMBOL_FEED_RECORD.pack(
+                    bar.open, bar.high, bar.low, bar.close, bar.volume,
+                    bar.timestamp, closes[index]))
+        return {
+            "loaded_values_sha256": hasher.hexdigest(), "bar_count": count,
+            "first_timestamp": int(primary["first_timestamp"]) if count else None,
+            "last_timestamp": int(primary["last_timestamp"]) if count else None,
+        }
+    finally:
+        bars = closes = bar = None
+
+
+class _OrdinaryOptionsCapture:
+    """Forward existing setup calls and record only their actual data arguments."""
+
+    def __init__(self, lib):
+        self.lib = lib
+        self.reset(None, body=False, force_legacy=False)
+
+    def reset(self, symbols, *, body, force_legacy):
+        self.body, self.force_legacy = body, force_legacy
+        self.settings = {"inputs": [], "overrides": []}
+        self.syminfo = []
+        self.extras = [{"symbol": sym["symbol"].encode(), "facts": [], "feeds": []}
+                       for sym in symbols or ()]
+        self._symbols = {item["symbol"]: item for item in self.extras}
+
+    def __getattr__(self, name):
+        function = getattr(self.lib, name)  # keep existing missing-export refusals
+        settings = {
+            "strategy_set_input": "inputs", "strategy_set_input_checked": "inputs",
+            "strategy_set_override": "overrides", "strategy_set_override_checked": "overrides",
+        }
+        syminfo = {
+            "strategy_set_syminfo_metadata", "strategy_set_syminfo_mintick",
+            "strategy_set_syminfo_pointvalue", "strategy_set_syminfo_timezone",
+            "strategy_set_syminfo_session",
+        }
+        feeds = {"strategy_set_symbol_feed", "strategy_set_symbol_feed_borrowed_v1"}
+        if name not in settings and name not in syminfo and name not in feeds and (
+                name != "strategy_set_symbol_facts"):
+            return function
+
+        def record(state, *values):
+            try:
+                if name in feeds:
+                    _ordinary_options_int(values[4], 0, (1 << 31) - 1)
+                normalized = None
+                if name in syminfo:
+                    if name == "strategy_set_syminfo_metadata":
+                        normalized = [values[0], ctypes.c_double(values[1]).value]
+                    elif name in ("strategy_set_syminfo_mintick", "strategy_set_syminfo_pointvalue"):
+                        normalized = [ctypes.c_double(values[0]).value]
+                    else:
+                        normalized = list(values)
+                result = function(state, *values)
+                if name in settings:
+                    self.settings[settings[name]].append([values[0], values[1]])
+                elif name in syminfo:
+                    self.syminfo.append([name, normalized])
+                elif result == 0 and name == "strategy_set_symbol_facts":
+                    self._symbols[values[0]]["facts"].append([values[1], values[2]])
+                elif result == 0 and name in feeds:
+                    self._symbols[values[0]]["feeds"].append({
+                        "timeframe": values[1],
+                        **_ordinary_start_extra_values(values[2], values[3], values[4])})
+                return result
+            finally:
+                values = ()  # no mapped feed borrows in an exceptional traceback
+
+        record.argtypes = getattr(function, "argtypes", None)
+        record.restype = getattr(function, "restype", None)
+        return record
+
+
+class _OrdinaryStartSession:
+    """One immutable launch context, independently observed inputs and per-call O."""
+
+    def __init__(self, fd, manifest, args, owners):
+        self.manifest, self.args, self.files = manifest, args, {}
+        reserved = []
+        for name in ("report_sink_fd", "run_phase_fd"):
+            value = getattr(args, name, None)
+            if value is not None:
+                if type(value) is str:
+                    if re.fullmatch(r"[0-9]{1,10}", value, flags=re.ASCII) is None:
+                        raise _OrdinaryStartFailure("invalid_reserved_descriptor")
+                    value = int(value)
+                reserved.append(value)
+        if _SUPERVISED_NATIVE_SINK_OWNER is not None:
+            reserved.append(_SUPERVISED_NATIVE_SINK_OWNER.fd)
+        self.writer = _OrdinaryStartWriter(
+            fd, {key: manifest[key] for key in _ORDINARY_START_IDENTITY_KEYS},
+            manifest["call_options_sha256_by_role"], reserved_fds=tuple(reserved))
+        owners.callback(self.writer.close)
+        self.run_id_sha256 = _ordinary_start_run_id(args.run_id)
+        self._match({"run_id_sha256": self.run_id_sha256})
+        self.module = self.capture = self.primary = None
+
+    def _match(self, actual):
+        for key, value in actual.items():
+            if value != self.manifest[key]:
+                raise _OrdinaryStartFailure("identity_mismatch", key)
+
+    def freeze_sources(self, owners):
+        for field in ("syminfo", "generated_cpp", "symbol_feeds"):
+            path = getattr(self.args, field)
+            if path is not None:
+                snapshot = _OrdinaryInputSnapshot(path, field)
+                owners.callback(snapshot.close)
+                self.files[field] = snapshot
+                setattr(self.args, field, snapshot)
+
+    def load_chart(self, owners):
+        args = self.args
+        if args.ohlcv_bin is not None:
+            chart, actual = _ordinary_start_load_bin(
+                args.ohlcv_bin, self.manifest["feed_bytes_sha256"], verify_bin=args.verify_bin)
+            owners.enter_context(chart)
+        else:
+            bars, count, actual = _ordinary_start_load_csv(
+                args.ohlcv, self.manifest["feed_bytes_sha256"])
+            chart = {"bars": bars, "n": count}
+        self._match(actual)
+        self.primary = actual
+        return chart, actual["bar_count"], actual["loaded_values_sha256"]
+
+    def load_module(self, path):
+        self.module = _OrdinaryStartModule(path, self.manifest["module_sha256"])
+        try:
+            lib = self.module.load()
+            self._match({"engine_version": _ordinary_start_version(lib)})
+        except BaseException:
+            self.module.close()
+            raise
+        self.capture = _OrdinaryOptionsCapture(lib)
+        return lib
+
+    def source_digest(self, field):
+        source = self.files.get(field)
+        return source.sha256 if source is not None else None
+
+    def document(self, role, primary, ffi):
+        args, capture = self.args, self.capture
+        if (capture.body != (role in ("body", "metrics_recovery"))
+                or capture.force_legacy != (role == "metrics_recovery")):
+            raise _OrdinaryStartFailure("role_construction")
+        body = capture.body
+        sink_kind = ("fd" if args.report_sink_fd is not None else
+                     "path" if args.report_sink is not None else "none") if body else "none"
+        return {
+            "options_version": 1, "role": role,
+            "ffi": {"input_tf": ffi[0], "script_tf": ffi[1],
+                    "bar_magnifier": ffi[2], "magnifier_samples": ffi[3],
+                    "magnifier_dist": ffi[4]},
+            "settings": capture.settings,
+            "syminfo": {"file_bytes_sha256": self.source_digest("syminfo"),
+                        "calls": capture.syminfo},
+            "feeds": {"primary": {
+                "loaded_values_sha256": primary["loaded_values_sha256"],
+                "bar_count": primary["bar_count"],
+                "first_timestamp": int(primary["first_timestamp"]) if primary["bar_count"] else None,
+                "last_timestamp": int(primary["last_timestamp"]) if primary["bar_count"] else None},
+                "extras": capture.extras},
+            "time": {"trade_start_ms": args.trade_start_ms, "chart_tz": args.chart_tz.encode()},
+            "volume_weighted": bool(args.magnifier_volume_weighted) and ffi[2] == 1,
+            "output": {"outputs": args.outputs, "profile": args.profile,
+                       "report_mode": args.report_mode or "FULL", "sink_kind": sink_kind,
+                       "sink_format": args.report_sink_format,
+                       "replay": body and bool(args.report_replay or args.report_replay_sink),
+                       "replay_sink": body and args.report_replay_sink is not None,
+                       "spill_dir": os.fsencode(args.spill_dir) if args.spill_dir is not None else None,
+                       "verify_bin": args.verify_bin},
+            "limits": {key: getattr(args, key, None) for key in (
+                "max_output_series", "max_map_pairs", "max_symbol_feeds", "max_inventory_bytes")},
+            "benchmark": {"enabled": args.bench,
+                          "warmup": max(0, args.warmup) if args.bench else 0,
+                          "repeats": max(1, args.repeats) if args.bench else 0},
+            "metrics_attempt_policy": {"requested_mode": args.metrics_only,
+                                       "force_legacy": capture.force_legacy},
+            "source_manifest": {"generated_cpp_sha256": self.source_digest("generated_cpp"),
+                                "transpiled_request": args.transpiled,
+                                "symbol_inventory_bytes_sha256": self.source_digest("symbol_feeds")},
+        }
+
+    def invoke(self, lib, arguments, sequence, role, abort):
+        try:
+            for source in self.files.values():
+                source.verify()
+            module_digest = self.module.verify()
+            primary = _ordinary_start_loaded_values(arguments[1], arguments[2])
+            actual_options = self.document(role, primary, arguments[3:8])
+            options_digest = _ordinary_start_options_digest(actual_options)
+            if options_digest != self.manifest["call_options_sha256_by_role"][role]:
+                raise _OrdinaryStartFailure("identity_mismatch", "call_options_sha256")
+            identity = {
+                "launch_nonce": self.manifest["launch_nonce"], "nonce": self.manifest["nonce"],
+                "run_id_sha256": self.run_id_sha256, "module_sha256": module_digest,
+                "feed_bytes_sha256": self.primary["feed_bytes_sha256"],
+                "call_options_sha256": options_digest,
+            }
+            return _invoke_ordinary(lib, arguments, sequence, role, abort=abort,
+                                    start=self.writer, identity=identity, timed=role == "repeat")
+        finally:
+            arguments = None
 
 
 if __name__ == "__main__":
