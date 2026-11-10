@@ -8870,15 +8870,8 @@ def _build_replay_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, ela
         report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
         applied_inputs, applied_overrides, applied_runtime, sink,
         window_anchor=window_anchor, initial_capital=initial_capital)
-    if replay_rows is not None and "trades" in out:
-        # The fused path hands back already encoded JSON columns, which hold
-        # no rows to annotate: replay reads the verified sink records instead.
-        if isinstance(out["trades"], _JSONColumn):
-            out["trades"] = _JSONRecordArray(
-                lambda: (_sink_trade(row) for row in sink.records("T")), sink.counts["T"])
-        if isinstance(out.get("equity_curve"), _JSONColumn):
-            out["equity_curve"] = _JSONRecordArray(
-                lambda: (row.as_dict() for row in sink.records("E")), sink.counts["E"])
+    # Fused columns are iterable with bounded read windows. Join their rows
+    # from the verified pass without reopening either primary record stream.
     return _annotate_replay_report(
         out, replay, replay_rows if "trades" in out else None, sink)
 
@@ -8997,7 +8990,17 @@ class _ReplayCapture:
                 raise _engine_invariant("the primary receipt is incomplete for replay binding")
             sink.sha256 = bytes(receipt.sha256_hex).decode("ascii")
         try:
-            with ReplaySinkReader(self.path, primary_path=self.primary_path) as reader:
+            verified_primary = None
+            if (sink is not None and self.primary_path is not None
+                    and not sink.named and getattr(sink, "_fused_pass", False)
+                    and sink._spool_failure is None
+                    and isinstance(sink._trades_spool, _JSONColumn)
+                    and isinstance(sink._equity_spool, _JSONColumn)):
+                verified_primary = (
+                    sink.sha256, sink._trades_spool, sink._equity_spool)
+            with ReplaySinkReader(
+                    self.path, primary_path=self.primary_path,
+                    verified_primary=verified_primary) as reader:
                 for record in reader:
                     _replay_record_finite(record)
                     if record.tag == "S":

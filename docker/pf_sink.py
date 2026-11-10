@@ -591,9 +591,12 @@ class ReplaySinkReader:
     value is re-encoded before its bit comparison.
     The database, streams and scratch are released on success or refusal.
     """
-    def __init__(self, path=None, *, stream=None, primary_path=None):
+    def __init__(self, path=None, *, stream=None, primary_path=None,
+                 verified_primary=None):
         if (path is None) == (stream is None):
             raise TypeError("supply exactly one of path and stream")
+        if verified_primary is not None and primary_path is None:
+            raise TypeError("a verified primary requires primary_path")
         self.header, self.trailer = {}, None
         self.complete, self.sha256 = False, ""
         self._file = self._db = None
@@ -602,6 +605,7 @@ class ReplaySinkReader:
         self._counts, self._hash = {}, hashlib.sha256()
         self._scalars = None
         self._primary = primary_path
+        self._verified_primary = verified_primary
         try:
             self._file = stream if stream is not None else open(path, "rb")
             line = self._file.readline(MAX_LINE_BYTES + 1)
@@ -747,16 +751,38 @@ class ReplaySinkReader:
     def _validate_bound(self, trailer):
         db = self._db
         try:
-            raw = _ReplayPrimaryStream(self._primary)
-            with SinkReader(stream=raw) as primary:
-                primary_parser = RecordParser(primary.header)
+            if self._verified_primary is not None:
+                # Internal handoff from an exhausted strict primary reader:
+                # its digest is of the original bytes, never these projections.
+                # The report columns retain every operand used below, including
+                # signed zero; the other trade fields remain sink-only.
+                primary_digest, trades, points = self._verified_primary
+
+                class ProjectionParser:
+                    @staticmethod
+                    def parse(text):
+                        row = json.loads(text)
+                        return Record("", tuple(row), tuple(row.values()))
+
+                primary_parser = ProjectionParser()
                 counts = {"T": 0, "E": 0}
-                for record in primary:
-                    if record.tag in counts:
+                for tag, column in (("T", trades), ("E", points)):
+                    for row in column:
                         db.execute("INSERT INTO base VALUES(?,?,?)",
-                            (record.tag, counts[record.tag], raw.line))
-                        counts[record.tag] += 1
-                primary_digest = primary.sha256
+                            (tag, counts[tag], json.dumps(
+                                row, separators=(",", ":"), allow_nan=False)))
+                        counts[tag] += 1
+            else:
+                raw = _ReplayPrimaryStream(self._primary)
+                with SinkReader(stream=raw) as primary:
+                    primary_parser = RecordParser(primary.header)
+                    counts = {"T": 0, "E": 0}
+                    for record in primary:
+                        if record.tag in counts:
+                            db.execute("INSERT INTO base VALUES(?,?,?)",
+                                (record.tag, counts[record.tag], raw.line))
+                            counts[record.tag] += 1
+                    primary_digest = primary.sha256
         except (OSError, SinkFormatError, ValueError) as error:
             raise ReplaySinkFormatError("primary_invalid", str(error)) from error
         # Foreign bindings must be refused before using their associations.

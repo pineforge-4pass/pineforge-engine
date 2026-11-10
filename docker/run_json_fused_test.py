@@ -1118,9 +1118,9 @@ def test_fused_sink_read_once_hostile_bound(tmp_path, monkeypatch):
         assert not audit.seeks
 
 
-@pytest.mark.parametrize("mode", ("outputs", "named", "selected-window"))
+@pytest.mark.parametrize("mode", ("default", "outputs", "named", "selected-window"))
 def test_fused_sink_read_once_entrypoints(tmp_path, monkeypatch, mode):
-    """Audit main(), including output preparation and selected anchor checks."""
+    """GUARD on unchanged main: real default/other entries already read once."""
     captured = []
     original_verify = run_json._ReportSink.verify
     with ExitStack() as scopes, monkeypatch.context() as patch:
@@ -1135,7 +1135,10 @@ def test_fused_sink_read_once_entrypoints(tmp_path, monkeypatch, mode):
             return original_verify(sink, *args, **kwargs)
 
         patch.setattr(run_json._ReportSink, "verify", verify)
-        if mode == "outputs":
+        if mode == "default":
+            library = ordinary.SinkLibrary(pnls=(4.25, -1.75, -0.0))
+            result = ordinary.invoke(tmp_path, monkeypatch, library=library)
+        elif mode == "outputs":
             result = ordinary.invoke(
                 tmp_path, monkeypatch, library=ordinary.SinkLibrary(outputs=True),
                 extra=["--outputs"], forbid_output_arrays=True)
@@ -1151,7 +1154,13 @@ def test_fused_sink_read_once_entrypoints(tmp_path, monkeypatch, mode):
     audit, raw = captured[0]
     audit.assert_one_pass(raw)
     document = json.loads(text)
-    if mode == "outputs":
+    if mode == "default":
+        assert len(document["trades"]) == len(library.pnls)
+        _assert_decoded_rows(
+            [trade["pnl"] for trade in document["trades"]], list(library.pnls))
+        _assert_decoded_rows(document["summary"]["net_pnl"], sum(library.pnls))
+        assert "report_sink" not in document and "replay" not in document
+    elif mode == "outputs":
         assert "outputs" in document
     elif mode == "named":
         assert document["report_sink"]["path"] == str(tmp_path / "named-cli.sink")
@@ -2292,6 +2301,7 @@ def test_bulk_load_bars_bulk_engagement(tmp_path, monkeypatch):
 _CORPUS_DRIVER = r"""
 import importlib.util
 import pathlib
+import shutil
 import sys
 
 root = pathlib.Path(sys.argv[1])
@@ -2311,7 +2321,27 @@ sys.modules[runner_spec.name] = runner
 runner.__file__ = str(root / "docker" / "run_json.py")
 runner_spec.loader.exec_module(runner)
 runner.time.time = lambda: 10.0
-raise SystemExit(runner.main(["--so", sys.argv[4], *sys.argv[5:]]))
+if sys.argv[5]:
+    capture = pathlib.Path(sys.argv[5])
+    capture.mkdir(parents=True, exist_ok=True)
+
+    def capture_close(cls, role):
+        original = cls.close
+
+        def close(owner):
+            if not owner.closed and pathlib.Path(owner.path).is_file():
+                target = capture / role
+                assert not target.exists(), ("duplicate sink", role)
+                shutil.copyfile(owner.path, target)
+            return original(owner)
+
+        cls.close = close
+
+    capture_close(runner._ReportSink, "primary")
+    capture_close(runner._ReplayCapture, "replay")
+if sys.argv[6]:
+    runner.trusted_planner_path = lambda: sys.argv[6]
+raise SystemExit(runner.main(["--so", sys.argv[4], *sys.argv[7:]]))
 """
 
 
@@ -2320,7 +2350,8 @@ def _corpus_run(runner_path, frozen_pf, case):
     assert "--so" not in argv
     return subprocess.run(
         [sys.executable, "-B", "-c", _CORPUS_DRIVER, str(ROOT),
-         str(runner_path), str(frozen_pf), str(case["so"]), *argv],
+         str(runner_path), str(frozen_pf), str(case["so"]),
+         str(case.get("sink_capture", "")), str(case.get("planner", "")), *argv],
         cwd=ROOT, capture_output=True)
 
 
