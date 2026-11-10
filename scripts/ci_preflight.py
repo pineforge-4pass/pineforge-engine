@@ -3371,9 +3371,16 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         # hub; a rehearsal must never reach it (owner, the 1.6.2 dry cut: the
         # hub's receivers are disabled, so a real dispatch would be lost).
         notify = _jobs(workflows['release.yml']).get('notify-hub', '')
-        if _job_values(notify, 'if') != ['${{ !inputs.dry_run }}']:
+        # The whole declaration selects diagnostics, never a mode or exception.
+        phase_dispatch = (_job_block(workflows['release.yml'], 'on')
+                          == _code(RELEASE_SPLIT_PHASE_DISPATCH))
+        notify_if = ("${{ inputs.phase == 'tag' && !inputs.dry_run }}"
+                     if phase_dispatch else '${{ !inputs.dry_run }}')
+        notify_tail = ('so phase 1 and dry runs dispatch nothing' if phase_dispatch
+                       else 'so a dry run dispatches nothing')
+        if _job_values(notify, 'if') != [notify_if]:
             findings.append('release.yml job notify-hub must carry '
-                            'if: ${{ !inputs.dry_run }} so a dry run dispatches nothing')
+                            f'if: {notify_if} {notify_tail}')
         # The guard reads a dispatch input: a workflow that dropped or
         # retyped that declaration would not be the one this contract pins.
         dispatch = workflows['release.yml'].split('\n  workflow_dispatch:\n', 1)
@@ -4250,6 +4257,45 @@ RELEASE_SPLIT_DISPATCH = '''on:
         default: false
 '''
 
+# Public304's declaration is a second complete split contract. It grants no
+# Git ref, runner, environment or credential exception on its own.
+RELEASE_SPLIT_PHASE_DISPATCH = '''on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: 'bump: push the untagged version commit and stop; tag: publish that checked commit'
+        required: true
+        type: choice
+        default: bump
+        options:
+          - bump
+          - tag
+      dispatch_sha:
+        description: 'Tag phase only: exact SHA checked by phase bump, the bump commit single parent'
+        required: false
+        type: string
+        default: ''
+      bump:
+        description: 'Bump phase only: version increment; leave patch in tag phase'
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      override:
+        description: 'Bump phase only: exact X.Y.Z or X.Y.Z-rc.N; wins over bump'
+        required: false
+        type: string
+        default: ''
+      dry_run:
+        description: 'Rehearse: build and verify the tarballs; commit, tag, release, upload and dispatch nothing'
+        required: false
+        type: boolean
+        default: false
+'''
+
 RELEASE_SPLIT_RELEASE_STEPS = r'''      - name: Mint org App token
         id: app
         uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
@@ -4504,6 +4550,287 @@ RELEASE_SPLIT_RELEASE_STEPS = r'''      - name: Mint org App token
           path: ${{ steps.catalog.outputs.assets }}
           retention-days: 7
 '''
+# Ordered raw step bodies from public304; the legacy writer/gate templates
+# remain unchanged. Inter-step prose is outside the raw step contracts.
+RELEASE_SPLIT_PHASE_RELEASE_STEPS = r'''      - name: Mint org App token
+        id: app
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        with:
+          app-id: ${{ secrets.PINEFORGE_APP_ID }}
+          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: pineforge-engine
+
+      - name: Checkout (full history)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          # App token bypasses the org ruleset (PR-required) for the bump push.
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Refuse unless authenticated parity and exact-SHA full CI are green
+        id: gate
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF: ${{ github.ref }}
+          PHASE: ${{ inputs.phase }}
+          DISPATCH_SHA: ${{ inputs.dispatch_sha }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          RECEIPT: ${{ runner.temp }}/release-gate-receipt.json
+        run: |
+          python3 scripts/ci_release_gate.py gate \
+            --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF}" \
+            --phase "${PHASE}" --dispatch-sha "${DISPATCH_SHA}" \
+            --receipt "${RECEIPT}" --dry-run "${DRY_RUN}"
+
+      - name: Keep release gate receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-gate-${{ inputs.phase }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-gate-receipt.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Compute next version
+        id: bump
+        env:
+          BUMP:     ${{ inputs.bump }}
+          OVERRIDE: ${{ inputs.override }}
+          PHASE: ${{ inputs.phase }}
+          DISPATCH_SHA: ${{ inputs.dispatch_sha }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci_release_gate.py plan \
+            --sha "${GITHUB_SHA}" --phase "${PHASE}" --dispatch-sha "${DISPATCH_SHA}" \
+            --bump "${BUMP}" --override "${OVERRIDE}" \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Refuse if tag already exists
+        if: ${{ inputs.phase == 'bump' }}
+        env:
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "tag ${TAG} already exists -- pick a different bump" >&2
+            exit 1
+          fi
+
+      - name: Stamp the run-failure catalog diff
+        id: catalog
+        env:
+          NEXT: ${{ steps.bump.outputs.next }}
+          TAG:  ${{ steps.bump.outputs.tag }}
+          PREV: ${{ steps.bump.outputs.previous }}
+          PHASE: ${{ inputs.phase }}
+        run: |
+          set -euo pipefail
+          source=HEAD
+          if [[ "${PHASE}" == tag ]]; then source=HEAD^; fi
+          base="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${source}")"
+          assets="${RUNNER_TEMP}/run-failure-catalog"
+          chain="run_failure_codes_diff-${TAG}-from-${base}.json"
+          mkdir -p "${assets}"
+          if [[ "${PHASE}" == tag ]] && git show-ref --verify --quiet "refs/tags/${TAG}"; then
+            python3 scripts/gen_run_failure_catalog_diff.py --stamp \
+              --to-tag "${TAG}" --previous-tag "${PREV}" \
+              --output "${assets}/run_failure_codes_diff-${TAG}.json"
+            if [[ "${base}" != "${PREV}" ]]; then
+              python3 scripts/gen_run_failure_catalog_diff.py --stamp \
+                --to-tag "${TAG}" --previous-tag "${base}" \
+                --output "${assets}/${chain}"
+            fi
+          else
+            python3 scripts/gen_run_failure_catalog_diff.py --stamp \
+              --to-version "${NEXT}" --previous-tag "${PREV}" \
+              --output "${assets}/run_failure_codes_diff-${TAG}.json" \
+              --chain-output "${assets}/${chain}"
+          fi
+          if [[ ! -f "${assets}/${chain}" ]]; then chain=""; fi
+          cp docker/run_failure_codes.json "${assets}/run_failure_codes-${TAG}.json"
+          python3 scripts/gen_run_failure_catalog_diff.py --reset --tag "${TAG}" \
+            --output "${RUNNER_TEMP}/run_failure_codes_diff.reset.json"
+          {
+            echo "base=${base}"
+            echo "assets=${assets}"
+            echo "chain=${chain}"
+            echo "reset=${RUNNER_TEMP}/run_failure_codes_diff.reset.json"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Write bumped VERSION, commit, tag, push
+        id: publish
+        if: ${{ !inputs.dry_run }}
+        env:
+          NEXT:  ${{ steps.bump.outputs.next }}
+          TAG:   ${{ steps.bump.outputs.tag }}
+          RESET: ${{ steps.catalog.outputs.reset }}
+          PHASE: ${{ inputs.phase }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git ls-remote --refs origin refs/heads/main)" = "$(printf '%s\trefs/heads/main' "${GITHUB_SHA}")"
+          if [[ "${PHASE}" == bump ]]; then
+            if git ls-remote --exit-code --refs origin "refs/tags/${TAG}"; then
+              echo "::error::release tag ${TAG} already exists" >&2
+              exit 1
+            else
+              rc=$?
+              test "${rc}" -eq 2
+            fi
+            printf '%s\n' "${NEXT}" > VERSION
+            cp "${RESET}" docker/run_failure_codes_diff.json
+            git add VERSION docker/run_failure_codes_diff.json
+            git commit -m "chore(release): ${TAG}"
+            test "$(git rev-parse HEAD^)" = "${GITHUB_SHA}"
+            python3 scripts/gen_run_failure_catalog_diff.py --check
+            sha="$(git rev-parse HEAD)"
+            git push origin "${sha}:refs/heads/main"
+            echo "Phase 1 pushed untagged bump ${sha}; wait for its own full CI, then dispatch phase tag with dispatch_sha=${GITHUB_SHA}"
+          else
+            test "${PHASE}" = tag
+            sha="${GITHUB_SHA}"
+            if git show-ref --verify --quiet "refs/tags/${TAG}"; then
+              test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${sha}"
+            else
+              git tag -a "${TAG}" -m "Release ${TAG}"
+            fi
+            test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${sha}"
+            python3 scripts/gen_run_failure_catalog_diff.py --check
+            git push origin "refs/tags/${TAG}"
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump phase summary
+        if: ${{ inputs.phase == 'bump' }}
+        env:
+          SHA: ${{ steps.publish.outputs.sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+          NEXT: ${{ steps.bump.outputs.next }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [[ "${DRY_RUN}" == true ]]; then
+            echo "Phase 1 dry run: would push VERSION=${NEXT} without a tag; no bump SHA was created."
+          else
+            echo "Phase 1 pushed ${SHA}; no tag or release was published."
+            echo "After ${SHA}'s own full CI is green, dispatch phase tag on that main SHA with dispatch_sha=${DISPATCH_SHA}."
+          fi
+
+      - name: Generate release notes
+        id: notes
+        if: ${{ inputs.phase == 'tag' }}
+        env:
+          TAG:       ${{ steps.bump.outputs.tag }}
+          PREV:      ${{ steps.bump.outputs.previous }}
+          RANGE_END: ${{ inputs.dry_run && github.sha || steps.bump.outputs.tag }}
+          BASE:      ${{ steps.catalog.outputs.base }}
+          CHAIN:     ${{ steps.catalog.outputs.chain }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## ${TAG}"
+            echo
+            if [[ -n "$PREV" ]]; then
+              echo "### Changes since ${PREV}"
+              echo
+              git log --pretty=format:'- %s (%h)' "${PREV}..${RANGE_END}"
+            else
+              echo "### Initial release"
+              echo
+              git log --pretty=format:'- %s (%h)' "${RANGE_END}"
+            fi
+            echo
+            echo
+            echo "### Prebuilt libraries"
+            echo
+            echo "Linux amd64 and arm64 static-lib + headers tarballs are attached below (C ABI)."
+            echo "For the full PineScript -> backtest image, use \`ghcr.io/pineforge-4pass/pineforge-release\`."
+            echo
+            echo "### Run-failure codes"
+            echo
+            echo "\`run_failure_codes-${TAG}.json\` is the run-failure code catalog this release publishes;"
+            echo "\`run_failure_codes_diff-${TAG}.json\` lists its changes since ${PREV}."
+            if [[ -n "${CHAIN}" ]]; then
+              echo "\`${CHAIN}\` lists them since ${BASE}, the release candidate before this release:"
+              echo "the step in the chain of diffs through every release, candidates included."
+            fi
+          } > RELEASE_NOTES.md
+          echo "path=RELEASE_NOTES.md" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: ${{ inputs.phase == 'tag' && !inputs.dry_run }}
+        env:
+          GH_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
+          TAG:        ${{ steps.bump.outputs.tag }}
+          NOTES:      ${{ steps.notes.outputs.path }}
+          PRERELEASE: ${{ steps.bump.outputs.prerelease }}
+          ASSETS:     ${{ steps.catalog.outputs.assets }}
+        run: |
+          set -euo pipefail
+          prerelease=()
+          if [[ "${PRERELEASE}" == "true" ]]; then prerelease=(--prerelease); fi
+          # The catalog, its diff, and the chain step when there is one.
+          if existing="$(gh release view "${TAG}" --json tagName --jq .tagName 2> "${RUNNER_TEMP}/release-view.err")"; then
+            test "${existing}" = "${TAG}"
+            gh release upload "${TAG}" "${ASSETS}"/*.json --clobber
+          else
+            cat "${RUNNER_TEMP}/release-view.err" >&2
+            grep -Fxq 'release not found' "${RUNNER_TEMP}/release-view.err"
+            gh release create "${TAG}" \
+              --title "${TAG}" \
+              --notes-file "${NOTES}" \
+              --verify-tag \
+              "${prerelease[@]}" \
+              "${ASSETS}"/*.json
+          fi
+
+      - name: Dry run summary
+        if: ${{ inputs.phase == 'tag' && inputs.dry_run }}
+        env:
+          CURRENT:    ${{ steps.bump.outputs.current }}
+          NEXT:       ${{ steps.bump.outputs.next }}
+          TAG:        ${{ steps.bump.outputs.tag }}
+          PRERELEASE: ${{ steps.bump.outputs.prerelease }}
+          PREV:       ${{ steps.bump.outputs.previous }}
+          NOTES:      ${{ steps.notes.outputs.path }}
+          RUN_ID:     ${{ github.run_id }}
+          BASE:       ${{ steps.catalog.outputs.base }}
+          CHAIN:      ${{ steps.catalog.outputs.chain }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Dry run: ${CURRENT} -> ${NEXT}"
+            echo
+            echo "- would tag the exact dispatched bump commit as ${TAG}; VERSION=${NEXT} is already committed"
+            echo "- would create the GitHub release ${TAG} (prerelease: ${PRERELEASE}), notes since ${PREV:-the first commit}"
+            echo "- would attach run_failure_codes-${TAG}.json and run_failure_codes_diff-${TAG}.json (stamped ${PREV} -> ${NEXT}; kept as a workflow artifact)"
+            if [[ -n "${CHAIN}" ]]; then
+              echo "- and the chain step ${CHAIN} (stamped ${BASE} -> ${NEXT}; kept too)"
+            fi
+            echo "- would dispatch engine-release to pineforge-release with client_payload {\"version\": \"${TAG}\", \"prerelease\": ${PRERELEASE}, \"run_id\": ${RUN_ID}}"
+            echo
+            cat "${NOTES}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          cat "${GITHUB_STEP_SUMMARY}"
+
+      - name: Keep the dry run's run-failure catalog assets as a workflow artifact
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: run-failure-catalog-${{ steps.bump.outputs.tag }}
+          path: ${{ steps.catalog.outputs.assets }}
+          retention-days: 7
+'''
+
 RELEASE_SPLIT_NOTIFY_STEPS = r'''      - name: Mint org App token (hub dispatch)
         id: app
         uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
@@ -4576,6 +4903,50 @@ RELEASE_SPLIT_HEADERS = {
     runs-on: ubuntu-24.04
     environment: release
 ''',
+}
+
+RELEASE_SPLIT_PHASE_HEADERS = {
+    'release': RELEASE_SPLIT_HEADERS['release'],
+    'prebuilt-x86': '''    needs: release
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.workflow_ref == format('pineforge-4pass/pineforge-engine/.github/workflows/release.yml@{0}', github.ref) && inputs.phase == 'tag' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.digest }}
+''',
+    'prebuilt-arm': '''    needs: release
+    if: ${{ inputs.phase == 'tag' }}
+    runs-on: ubuntu-22.04-arm
+    permissions:
+      contents: read
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.digest }}
+''',
+    'upload': '''    needs: [release, prebuilt-x86, prebuilt-arm]
+    if: ${{ inputs.phase == 'tag' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+''',
+    'notify-hub': '''    permissions:
+      contents: read
+    needs: [release, upload]
+    if: ${{ inputs.phase == 'tag' && !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    environment: release
+''',
+}
+
+# Dispatch, all five headers and ordered release steps travel together.
+# Build, artifact, upload and notify step templates are shared unchanged.
+RELEASE_SPLIT_MODES = {
+    'current': (RELEASE_SPLIT_DISPATCH, RELEASE_SPLIT_HEADERS, RELEASE_SPLIT_RELEASE_STEPS),
+    'phase': (RELEASE_SPLIT_PHASE_DISPATCH, RELEASE_SPLIT_PHASE_HEADERS,
+              RELEASE_SPLIT_PHASE_RELEASE_STEPS),
 }
 
 RELEASE_SPLIT_CALLER_STEP = r'''      - name: Refuse an untrusted toolchain caller
@@ -4755,11 +5126,11 @@ def _release_split_build_steps(triple: str) -> list[str]:
     return [step.rstrip('\n') for step in steps]
 
 
-def _release_split_steps(job: str) -> list[str]:
+def _release_split_steps(job: str, mode: str = 'current') -> list[str]:
     if job in ('prebuilt-x86', 'prebuilt-arm'):
         return _release_split_build_steps(
             'linux-x86_64' if job == 'prebuilt-x86' else 'linux-aarch64')
-    template = {'release': RELEASE_SPLIT_RELEASE_STEPS,
+    template = {'release': RELEASE_SPLIT_MODES[mode][2],
                 'upload': RELEASE_SPLIT_UPLOAD_STEPS,
                 'notify-hub': RELEASE_SPLIT_NOTIFY_STEPS}[job]
     return [step.rstrip('\n') for step in _steps(template)]
@@ -4769,7 +5140,7 @@ EIGEN_DIR_UNTYPED = '-DEigen3_DIR=/usr/share/eigen3/cmake'
 EIGEN_DIR_TYPED = '-DEigen3_DIR:PATH=/usr/share/eigen3/cmake'
 
 
-def _release_split_job_findings(job: str, body: str) -> list[str]:
+def _release_split_job_findings(job: str, body: str, mode: str = 'current') -> list[str]:
     findings = []
     metadata = []
     in_steps, step_mappings = False, 0
@@ -4781,11 +5152,12 @@ def _release_split_job_findings(job: str, body: str) -> list[str]:
                 continue
         if not in_steps:
             metadata.append(line)
-    if step_mappings != 1 or _code('\n'.join(metadata)) != _code(RELEASE_SPLIT_HEADERS[job]):
+    if (step_mappings != 1
+            or _code('\n'.join(metadata)) != _code(RELEASE_SPLIT_MODES[mode][1][job])):
         findings.append(f'release.yml {job} must retain its reviewed header, permissions, '
                         'dependencies and outputs')
     steps = _steps(body)
-    reviewed = _release_split_steps(job)
+    reviewed = _release_split_steps(job, mode)
     if [step.rstrip('\n') for step in steps] != reviewed:
         findings.append(f'release.yml {job} must retain exactly its reviewed ordered steps')
     for required_step in reviewed:
@@ -4800,8 +5172,8 @@ def _release_split_job_findings(job: str, body: str) -> list[str]:
     return findings
 
 
-def _release_split_toolchain_reader_is_pinned(workflow: str, body: str) -> bool:
-    """Admit only the reviewed OIDC reader; scan all other raw credential inputs."""
+def _release_split_current_toolchain_reader_is_pinned(workflow: str, body: str) -> bool:
+    """Preserve the reviewed OLD6e9b reader predicate for the CURRENT form."""
     jobs = _jobs(workflow)
     if (set(jobs) != set(SPLIT_RELEASE_JOB_RUNNERS)
             or len(_JOB_HEADER.findall(_jobs_text(workflow) or '')) != len(jobs)
@@ -4819,7 +5191,25 @@ def _release_split_toolchain_reader_is_pinned(workflow: str, body: str) -> bool:
     return not _holds_credentials(workflow, token_only_body, strict=True)
 
 
-def _release_split_workflow_findings(workflow: str) -> list[str]:
+def _release_split_toolchain_reader_is_pinned(workflow: str, body: str) -> bool:
+    """Admit only the reviewed OIDC reader; scan all other raw credential inputs."""
+    # CURRENT keeps its exact original pin even when a neighbor is malformed;
+    # the full workflow validator still refuses that neighbor. PHASE receives
+    # no such fallback unless it satisfies those original CURRENT conditions.
+    if _release_split_current_toolchain_reader_is_pinned(workflow, body):
+        return True
+    jobs = _jobs(workflow)
+    mode = _release_split_mode(workflow)
+    if mode != 'phase' or body != jobs.get('prebuilt-x86'):
+        return False
+    # The full job comparison above accounts for this one permission. Retain
+    # strict scanning of inherited/raw secrets, environments and private keys.
+    token_only_body = body.replace('      id-token: write\n', '', 1)
+    return not _holds_credentials(workflow, token_only_body, strict=True)
+
+
+def _release_split_contract_findings(workflow: str, mode: str) -> list[str]:
+    """Check one entire canonical contract, including the unchanged custody scan."""
     jobs = _jobs(workflow)
     findings = []
     headers = _JOB_HEADER.findall(_jobs_text(workflow) or '')
@@ -4828,7 +5218,7 @@ def _release_split_workflow_findings(workflow: str) -> list[str]:
         findings.append('release.yml split prebuilt must contain exactly release, prebuilt-x86, '
                         'prebuilt-arm, upload and notify-hub jobs')
     if (_events(workflow) != {'workflow_dispatch'}
-            or _job_block(workflow, 'on') != _code(RELEASE_SPLIT_DISPATCH)):
+            or _job_block(workflow, 'on') != _code(RELEASE_SPLIT_MODES[mode][0])):
         findings.append('release.yml split prebuilt must retain exactly its workflow_dispatch '
                         'trigger and reviewed inputs')
     if (_events(workflow) != {'workflow_dispatch'}
@@ -4838,7 +5228,7 @@ def _release_split_workflow_findings(workflow: str) -> list[str]:
         findings.append('release.yml split prebuilt must retain its read-only workflow permissions, '
                         'release-tag environment and default shell')
     for job in SPLIT_RELEASE_JOB_RUNNERS:
-        findings += _release_split_job_findings(job, jobs.get(job, ''))
+        findings += _release_split_job_findings(job, jobs.get(job, ''), mode)
     auth_jobs = [job for job, body in jobs.items() for step in _steps(body)
                  for action in _step_values(step, 'uses')
                  if action.startswith('google-github-actions/auth@')]
@@ -4858,6 +5248,24 @@ def _release_split_workflow_findings(workflow: str) -> list[str]:
         findings.append('release.yml Option C registry token must remain in the exact x86 '
                         'auth output and login step environment only')
     return findings
+
+
+def _release_split_mode(workflow: str) -> str | None:
+    """Return a mode only when its dispatch, all jobs and raw custody agree."""
+    for mode in RELEASE_SPLIT_MODES:
+        if not _release_split_contract_findings(workflow, mode):
+            return mode
+    return None
+
+
+def _release_split_workflow_findings(workflow: str) -> list[str]:
+    mode = _release_split_mode(workflow)
+    if mode is None:
+        # Choose diagnostics by the whole declaration, never by one guard.
+        # This fallback cannot grant a mode or the registry-reader exception.
+        mode = ('phase' if _job_block(workflow, 'on') == _code(RELEASE_SPLIT_PHASE_DISPATCH)
+                else 'current')
+    return _release_split_contract_findings(workflow, mode)
 
 
 def release_prebuilt_workflow_findings(workflow: str) -> list[str]:
@@ -4919,7 +5327,8 @@ def release_prebuilt_workflow_findings(workflow: str) -> list[str]:
     return findings
 
 
-# ci_release_gate.py's phase-1 exemption is bounded by this exact writer.
+# CURRENT and historical legacy keep this exact atomic writer. PHASE's
+# two-phase writer is pinned in RELEASE_SPLIT_PHASE_RELEASE_STEPS.
 RELEASE_BUMP_PUBLISH_STEP = r'''      - name: Write bumped VERSION, commit, tag, push
         id: publish
         if: ${{ !inputs.dry_run }}
@@ -4939,6 +5348,37 @@ RELEASE_BUMP_PUBLISH_STEP = r'''      - name: Write bumped VERSION, commit, tag,
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 '''
 
+RELEASE_PHASE_INPUTS = '''      phase:
+        description: 'bump: push the untagged version commit and stop; tag: publish that checked commit'
+        required: true
+        type: choice
+        default: bump
+        options:
+          - bump
+          - tag
+      dispatch_sha:
+        description: 'Tag phase only: exact SHA checked by phase bump, the bump commit single parent'
+        required: false
+        type: string
+        default: ''
+'''
+
+RELEASE_PLAN_STEP = r'''      - name: Compute next version
+        id: bump
+        env:
+          BUMP:     ${{ inputs.bump }}
+          OVERRIDE: ${{ inputs.override }}
+          PHASE: ${{ inputs.phase }}
+          DISPATCH_SHA: ${{ inputs.dispatch_sha }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci_release_gate.py plan \
+            --sha "${GITHUB_SHA}" --phase "${PHASE}" --dispatch-sha "${DISPATCH_SHA}" \
+            --bump "${BUMP}" --override "${OVERRIDE}" \
+            --github-output "${GITHUB_OUTPUT}"
+'''
+
 # The release App token must see bypass_actors on every branch ruleset.
 # release-ruleset-probe.yml reports that visibility with the same token mint.
 # The gate requires one active main pull_request ruleset whose own bypass list
@@ -4954,6 +5394,16 @@ RELEASE_GATE_STEP = r'''      - name: Refuse unless pineforge/verify and pinefor
         run: |
           python3 scripts/ci_release_gate.py gate \
             --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF}"
+'''
+
+RELEASE_RECEIPT_STEP = '''      - name: Keep release gate receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-gate-${{ inputs.phase }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-gate-receipt.json
+          if-no-files-found: error
+          retention-days: 7
 '''
 
 # This tiny release-class workflow has no writer or release-gate phases.
@@ -5084,17 +5534,71 @@ def release_rulesets_probe_workflow_findings(workflow: str, release: str) -> lis
 
 
 def release_bump_workflow_findings(workflow: str) -> list[str]:
-    steps = _steps(_jobs(workflow).get('release', ''))
+    jobs = _jobs(workflow)
+    steps = _steps(jobs.get('release', ''))
+    split_release = _release_split_requested(jobs)
+    split_mode = _release_split_mode(workflow) if split_release else None
+    phase_steps = _release_split_steps('release', 'phase') if split_mode == 'phase' else []
     publish = _step_named(steps, '      - name: Write bumped VERSION, commit, tag, push')
+    reviewed_publish = (_step_named(phase_steps, '      - name: Write bumped VERSION, commit, tag, push')
+                        if split_mode == 'phase' else RELEASE_BUMP_PUBLISH_STEP)
     findings = []
-    if _code(publish) != _code(RELEASE_BUMP_PUBLISH_STEP):
-        findings.append('release.yml must keep the exact two-file release bump writer, '
-                        'commit and atomic push')
-    gate = _step_named(steps, '      - name: Refuse unless pineforge/verify and pineforge/parity are green')
-    if _code(gate) != _code(RELEASE_GATE_STEP):
+    if (_code(publish) != _code(reviewed_publish)
+            or sum(_step_values(step, 'id') == ['publish'] for step in steps) != 1):
+        # Match the complete declaration only to choose a refusal message.
+        # It cannot select PHASE bodies or grant a split mode.
+        if _job_block(workflow, 'on') == _code(RELEASE_SPLIT_PHASE_DISPATCH):
+            findings.append('release.yml must keep the exact two-phase release writer, '
+                            'untagged bump push and same-SHA tag retry')
+        else:
+            findings.append('release.yml must keep the exact two-file release bump writer, '
+                            'commit and atomic push')
+    gate_marker = ('      - name: Refuse unless authenticated parity and exact-SHA full CI are green'
+                   if split_mode == 'phase' else
+                   '      - name: Refuse unless pineforge/verify and pineforge/parity are green')
+    gate = _step_named(steps, gate_marker)
+    reviewed_gate = (_step_named(phase_steps, gate_marker)
+                     if split_mode == 'phase' else RELEASE_GATE_STEP)
+    if (_code(gate) != _code(reviewed_gate)
+            or sum(_step_values(step, 'id') == ['gate'] for step in steps) != 1):
         findings.append('release.yml must keep the unconditional release gate '
                         'with its release App token '
                         'for the App-only main pull_request barrier')
+    # CURRENT and non-split legacy retain their reviewed historical contract.
+    # Invalid split inputs still receive every phase check; this cannot grant
+    # them a mode or substitute PHASE bodies for the exact selections above.
+    if split_release and split_mode != 'current':
+        plan = _step_named(steps, '      - name: Compute next version')
+        if _code(plan) != _code(RELEASE_PLAN_STEP):
+            findings.append('release.yml must compute a version only in bump phase and '
+                            'read the validated committed VERSION in tag phase')
+        receipt = _step_named(steps, '      - name: Keep release gate receipt')
+        if (_code(receipt) != _code(RELEASE_RECEIPT_STEP)
+                or sum(_step_values(step, 'name') == ['Keep release gate receipt']
+                       for step in steps) != 1
+                or gate not in steps or receipt not in steps or plan not in steps
+                or not (steps.index(gate) < steps.index(receipt) < steps.index(plan))):
+            findings.append('release.yml must always retain the exact release gate receipt artifact '
+                            'before planning or publishing')
+        dispatch = workflow.split('\n  workflow_dispatch:\n', 1)
+        dispatch = dispatch[1].split('\npermissions:', 1)[0] if len(dispatch) == 2 else ''
+        if (_code(RELEASE_PHASE_INPUTS) != _code(
+                '      phase:\n' + dispatch.split('      phase:\n', 1)[-1].split('      bump:\n', 1)[0])
+                or dispatch.count('      phase:\n') != 1
+                or dispatch.count('      dispatch_sha:\n') != 1):
+            findings.append('release.yml must declare bump-default/tag phases and the explicit '
+                            'phase1 dispatch SHA input')
+        for name, condition in (
+                ('Generate release notes', "${{ inputs.phase == 'tag' }}"),
+                ('Create GitHub Release', "${{ inputs.phase == 'tag' && !inputs.dry_run }}"),
+                ('Dry run summary', "${{ inputs.phase == 'tag' && inputs.dry_run }}"),
+                ('Refuse if tag already exists', "${{ inputs.phase == 'bump' }}")):
+            step = _step_named(steps, '      - name: ' + name)
+            if _step_values(step, 'if') != [condition]:
+                findings.append(f'release.yml {name} must carry if: {condition}')
+        if (gate not in steps or plan not in steps or publish not in steps
+                or not (steps.index(gate) < steps.index(plan) < steps.index(publish))):
+            findings.append('release.yml must gate the dispatch before planning or publishing')
     app = _step_named(steps, '      - name: Mint org App token')
     checkout = _step_named(steps, '      - name: Checkout (full history)')
     if (_step_values(app, 'id') != ['app']
