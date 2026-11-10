@@ -6640,10 +6640,7 @@ void PineExecutionAdapter::retire_in_position_exits_at_flat(
             return paired_close == nullptr
                 || row.command_sequence > paired_close->command_sequence
                 || (parent.projection_created_bar == row.projection_created_bar
-                    && row.command_sequence > parent.command_sequence
-                    && paired_close->projection_position_side
-                        == static_cast<std::int32_t>(parent.is_long ? PositionSide::SHORT
-                                                                    : PositionSide::LONG));
+                    && row.command_sequence > parent.command_sequence);
         };
         for (const auto& handle : live_handles_) {
             const auto found = placement_.find(handle.incarnation);
@@ -12110,6 +12107,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     }
     double reserved_exit_qty = kNaN;
     double pending_parent_units = 0.0;
+    bool pending_parent_opposes_position = false;
     const auto reservation_point = detail::callback_point(require_host());
     const auto observe_pending_parent = [&](const PlacementSnapshot& parent) {
         if (!reservation_point || !parent.opening
@@ -12122,7 +12120,12 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         }
         const double units = finite_positive(parent.requested_qty)
             ? std::abs(parent.requested_qty) : parent.frozen_market_own_units;
-        if (finite_positive(units)) pending_parent_units += units;
+        if (finite_positive(units)) {
+            pending_parent_units += units;
+            pending_parent_opposes_position = pending_parent_opposes_position
+                || (physical.signed_units != 0.0
+                    && parent.is_long != (physical.signed_units > 0.0));
+        }
     };
     for (const auto& handle : live_handles_) {
         const auto parent = placement_.find(handle.incarnation);
@@ -12207,7 +12210,9 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     }
     const double book_basis = (fifo_named_entry
         ? std::min(std::abs(physical.signed_units), cohort_exposure_for(from_entry))
-        : std::abs(physical.signed_units)) + (ancestry_sized_target ? 0.0 : completed_entry_units);
+        : (pending_parent_opposes_position && !(cohort_exposure_for(from_entry) > 0.0)
+            ? 0.0 : std::abs(physical.signed_units)))
+        + (ancestry_sized_target ? 0.0 : completed_entry_units);
     const double live_reservation_basis = binds_pending_reversal_entry ? 0.0
         : std::max(0.0, book_basis - pending_same_bar_close_qty_) + pending_parent_units;
     const double percentage_basis = ancestry_sized_target

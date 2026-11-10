@@ -9,6 +9,8 @@ version number follows semantic versioning over the surfaces the
 
 - With `process_orders_on_close` and the default FIFO close rule, the named `strategy.exit` calls of a reversing `strategy.entry` with an explicit quantity, placed in the same execution after a `strategy.close` of the old position, are now sized from the new entry's own quantity: a percentage exit takes its share of the new entry and an absolute-quantity exit keeps its quantity, instead of being sized from a basis reduced by the old position (#803).
 - Without `process_orders_on_close`, the named `strategy.exit` calls placed with a reversing `strategy.entry` of explicit quantity now take their percentage from the new entry when its size differs from the position it replaces, and a take-profit given as an absolute quantity now fires; before, the percentage was taken from the position being replaced and an absolute-quantity take-profit never fired (#803).
+- With `close_entries_rule = "ANY"`, the percentage of a named `strategy.exit` placed with a reversing `strategy.entry` is now taken from the new entry, not from the whole position being replaced (#803).
+- A named `strategy.exit` placed with a same-side `strategy.entry` of another id on the bar where the position's earlier entry is closed by `strategy.close` is now kept; before, it was removed when the position went flat (#803).
 - The internal native Store live-object policy defaults to 0 (unbounded).
   The former capped default of 1,048,576 is now 0. Native limits are kept
   exactly: every positive uint64, including UINT64_MAX, is finite;
