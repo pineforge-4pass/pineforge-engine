@@ -3,11 +3,12 @@
 The independent parent plan follows ec8c7d0d. The recorder freezes socket bytes
 at entry, then delegates to the real whole-archive engine fixture. No receiver,
 deadline, forced receipt or fake report lives here. Execute on an admitted
-worker only; the parent owns the separate real automatic-recovery recipe.
+worker only; automatic recovery uses an input-driven native fixture below.
 """
 from __future__ import annotations
 
 import contextlib
+import csv
 import ctypes
 import fcntl
 import hashlib
@@ -32,6 +33,7 @@ import run_json
 import pf_bars
 
 MODULE = None
+RECOVERY_MODULE = None
 BASELINE_HOST = None
 KEYS = {
     "record", "version", "boundary", "launch_nonce", "nonce", "run_id_sha256",
@@ -778,7 +780,9 @@ class OrdinaryCLITests(unittest.TestCase):
         self.version = f"{observed.major}.{observed.minor}.{observed.patch}"
 
     def request(self, run_id, *, count=9, offset=0, bench=False, rich=False,
-                metrics_mode=None, binary=False, verify_bin="full"):
+                metrics_mode=None, binary=False, verify_bin="full", feed=None,
+                module=None):
+        module = MODULE if module is None else module
         rows = [
             [1735776000000 + offset + i * 60000,
              50 + i / 4, 51 + i / 4, 49 + i / 4, 50 + i / 4, i + 1]
@@ -787,13 +791,19 @@ class OrdinaryCLITests(unittest.TestCase):
             ",".join(str(value) for value in row) + "\n" for row in rows)).encode()
         chart = self.root / f"chart-{offset}-{count}.csv"
         chart.write_bytes(raw)
+        if feed is not None:
+            chart = feed
+            raw = chart.read_bytes()
+            rows = [[int(row["timestamp"]), *[float(row[key]) for key in
+                     ("open", "high", "low", "close", "volume")]]
+                    for row in csv.DictReader(io.StringIO(raw.decode("ascii")))]
         chart_option = "--ohlcv"
         if binary:
             converted = chart.with_suffix(".bin")
             pf_bars.convert_csv(chart, converted, symbol="fixture", tf="1")
             chart, chart_option = converted, "--ohlcv-bin"
             raw = chart.read_bytes()
-        argv = ["--so", str(MODULE), chart_option, str(chart),
+        argv = ["--so", str(module), chart_option, str(chart),
                 "--input-tf=1", "--script-tf=1", "--run-id=" + run_id]
         if binary or verify_bin != "full":
             argv += ["--verify-bin=" + verify_bin]
@@ -868,7 +878,7 @@ class OrdinaryCLITests(unittest.TestCase):
         manifest = {
             "context_version": 1, "launch_nonce": nonce, "nonce": nonce,
             "run_id_sha256": digest(os.fsencode(run_id)),
-            "module_sha256": digest(MODULE.read_bytes()), "engine_version": self.version,
+            "module_sha256": digest(module.read_bytes()), "engine_version": self.version,
             "loaded_values_sha256": primary["loaded_values_sha256"],
             "feed_bytes_sha256": digest(raw), "bar_count": len(rows),
             "first_timestamp": str(rows[0][0]), "last_timestamp": str(rows[-1][0]),
@@ -962,6 +972,94 @@ class OrdinaryCLITests(unittest.TestCase):
                 self.assertEqual(frames[0]["run_id_sha256"], digest(os.fsencode(value)))
                 self.assertNotEqual(frames[0]["run_id_sha256"],
                                     digest(os.fsencode("--run-id=" + value)))
+
+    def test_recorded_recovery_wire_bytes(self):
+        fixture = json.loads((ROOT / "tests/fixtures/ordinary_start/recovery-recorded.json").read_bytes())
+        baseline = fixture["cases"]["trigger-baseline"]
+        candidate = fixture["cases"]["trigger-candidate"]
+        self.assertEqual(baseline["wire_hex"], ["", ""])
+        self.assertEqual((baseline["exit_code"], candidate["exit_code"]), (1, 1))
+        self.assertEqual((baseline["ffi_calls"], candidate["ffi_calls"]), (2, 2))
+        self.assertEqual(baseline["stdout_hex"], candidate["stdout_hex"])
+        manifest = json.loads(candidate["ingress_utf8"])
+        self.assertEqual(manifest, candidate["recorded_manifest"])
+        frames = []
+        for encoded, role in zip(candidate["wire_hex"], ("body", "metrics_recovery")):
+            raw = bytes.fromhex(encoded)
+            frame = json.loads(raw)
+            self.assertEqual(set(frame), KEYS)
+            self.assertEqual(frame["role"], role)
+            self.assertEqual(run_json._ordinary_start_encode(frame), raw)
+            # Exercise changed input too: a captured-frame constant cannot pass.
+            changed = dict(frame, role_index=str(int(frame["role_index"]) + 1))
+            independent = json.dumps(changed, ensure_ascii=True, allow_nan=False,
+                                     separators=(",", ":")).encode("ascii") + b"\n"
+            self.assertEqual(run_json._ordinary_start_encode(changed), independent)
+            self.assertNotEqual(independent, raw)
+            frames.append(frame)
+        self.assertEqual(len(frames), 2)
+        self.assertEqual([f["call_serial"] for f in frames], ["1", "2"])
+        self.assertEqual([f["handle_serial"] for f in frames], ["1", "2"])
+        for frame in frames:
+            for key in ("launch_nonce", "nonce", "module_sha256", "engine_version",
+                        "run_id_sha256", "feed_bytes_sha256", "loaded_values_sha256",
+                        "bar_count", "first_timestamp", "last_timestamp"):
+                self.assertEqual(frame[key], manifest[key], key)
+            self.assertEqual(frame["call_options_sha256"],
+                             manifest["call_options_sha256_by_role"][frame["role"]])
+
+    def test_cli_automatic_native_recovery_preserves_failure(self):
+        fixture_root = ROOT / "tests/fixtures/ordinary_start"
+        recorded = json.loads((fixture_root / "recovery-recorded.json").read_bytes())
+        control = self.request("-recovery=control-" + "x" * 2050,
+                               feed=fixture_root / "recovery-control.csv",
+                               module=RECOVERY_MODULE, metrics_mode="auto")
+        control_result = self.launch(control)
+        self.assertEqual(control_result.status, 0, control_result.diagnostics)
+        self.assertNotIn("error", json.loads(control_result.stdout))
+        self.assertEqual(len(control_result.entries), 1)
+        self.assertEqual(control_result.entries[0]["rows"], control.rows)
+        self.assertEqual(control_result.entries[0]["reported_bars"], len(control.rows))
+        request = self.request("-recovery=trigger-" + "x" * 2050,
+                               feed=fixture_root / "recovery-trigger.csv",
+                               module=RECOVERY_MODULE, metrics_mode="auto")
+        result = self.launch(request)
+        # Confirm the native failure and both real entries BEFORE checking START.
+        self.assertEqual(result.status, recorded["cases"]["trigger-candidate"]["exit_code"])
+        self.assertEqual(result.stdout,
+                         bytes.fromhex(recorded["cases"]["trigger-candidate"]["stdout_hex"]))
+        self.assertEqual(len(result.entries), 2, result.diagnostics)
+        receipts = [json.loads(line.partition("=")[2]) for line in result.diagnostics
+                    if line.startswith("ORDINARY_RECOVERY_NATIVE_RECEIPT=")]
+        self.assertEqual(len(receipts), 2, result.diagnostics)
+        self.assertEqual([r["status"] for r in receipts], [0, 0])
+        self.assertEqual([r["route"] for r in receipts], [3, 2])
+        self.assertEqual([r["reason"] for r in receipts], [10, 10])
+        self.assertEqual([r["replays"] for r in receipts], [1, 0])
+        self.assertEqual([r["count"] for r in receipts], [4, 4])
+        self.assertEqual([r["reported_bars"] for r in result.entries], [0, 3])
+        frames = []
+        for number, (entry, role) in enumerate(zip(result.entries, ("body", "metrics_recovery")), 1):
+            self.assertEqual(entry["rows"], request.rows)
+            raw = bytes.fromhex(entry["wire_hex"])
+            self.assertTrue(raw.endswith(b"\n"),
+                            "ORDINARY_START_MISSING_START_BEFORE_RUN_BACKTEST_FULL")
+            self.assertEqual(raw.count(b"\n"), 1)
+            frame = json.loads(raw)
+            self.assertEqual(set(frame), KEYS)
+            self.assertEqual((frame["role"], frame["role_index"]), (role, "0"))
+            self.assertEqual((frame["call_serial"], frame["handle_serial"]),
+                             (str(number), str(number)))
+            for key in ("launch_nonce", "nonce", "module_sha256", "engine_version",
+                        "run_id_sha256", "feed_bytes_sha256", "loaded_values_sha256",
+                        "bar_count", "first_timestamp", "last_timestamp"):
+                self.assertEqual(frame[key], request.manifest[key], key)
+            self.assertEqual(frame["call_options_sha256"],
+                             reference_options_digest(request.documents[role]))
+            self.assertLessEqual(int(frame["start_monotonic_ns"]), int(entry["entry_ns"]))
+            frames.append(frame)
+        self.assertLess(int(frames[0]["start_monotonic_ns"]),
+                        int(frames[1]["start_monotonic_ns"]))
 
     def test_cli_empty_id_and_bare_deterministic_compatibility(self):
         request = self.request("")
@@ -1130,12 +1228,16 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--module", type=Path, required=True)
+    parser.add_argument("--recovery-module", type=Path, required=True)
     parser.add_argument("--baseline-host", type=Path)
     own, remaining = parser.parse_known_args()
     MODULE = own.module.resolve()
+    RECOVERY_MODULE = own.recovery_module.resolve()
     BASELINE_HOST = own.baseline_host.resolve() if own.baseline_host is not None else None
     if not MODULE.is_file():
         parser.error("the existing whole-archive strategy fixture is required")
+    if not RECOVERY_MODULE.is_file():
+        parser.error("the real automatic-recovery strategy fixture is required")
     if BASELINE_HOST is not None and not BASELINE_HOST.is_file():
         parser.error("the parent-staged pinned baseline host is missing; this is not behavioral RED")
     unittest.main(argv=[sys.argv[0], *remaining])
