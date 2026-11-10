@@ -80,6 +80,8 @@ class AssertionLiteral:
     path: str
     line: int
     text: str
+    # Classification needs the original newlines, especially after // comments.
+    raw_text: str | None = None
 
     @property
     def location(self) -> str:
@@ -159,8 +161,31 @@ def literal_signature(value: str) -> tuple[str, ...]:
 def _is_digit_separator(text: str, index: int) -> bool:
     if text[index] != "'" or index == 0 or index + 1 >= len(text):
         return False
-    return (text[index - 1] in "0123456789abcdefABCDEF"
-            and text[index + 1] in "0123456789abcdefABCDEF")
+    if (text[index - 1] not in "0123456789abcdefABCDEF"
+            or text[index + 1] not in "0123456789abcdefABCDEF"):
+        return False
+    start = index - 1
+    while start > 0 and (text[start - 1].isalnum() or text[start - 1] in "_.'"):
+        start -= 1
+    # In particular, u8'a' starts a character literal, not a number.
+    return (text[start] in "0123456789"
+            or (text[start] == "." and start + 1 < index
+                and text[start + 1] in "0123456789"))
+
+
+_RAW_STRING_START = re.compile(
+    r'(?<!\w)(?:u8|[uUL])?R"(?P<delimiter>[^\s()\\]{0,16})\(')
+
+
+def _raw_string_end(text: str, index: int) -> int | None:
+    match = _RAW_STRING_START.match(text, index)
+    if match is None:
+        return None
+    terminator = ")" + match["delimiter"] + '"'
+    end = text.find(terminator, match.end())
+    if end < 0:
+        raise ParityError("unterminated C++ raw string literal")
+    return end + len(terminator)
 
 
 def _mask_comments(text: str) -> str:
@@ -172,6 +197,14 @@ def _mask_comments(text: str) -> str:
         char = text[index]
         following = text[index + 1] if index + 1 < len(text) else ""
         if state == "code":
+            raw_end = _raw_string_end(text, index)
+            if raw_end is not None:
+                # One non-identifier marker retains the literal's presence;
+                # quotes, comments and parentheses inside it are not code.
+                result.append("@")
+                result.extend("\n" if value == "\n" else " "
+                              for value in text[index + 1:raw_end])
+                index = raw_end; continue
             if char == "/" and following == "/":
                 state = "line"; result.extend("  "); index += 2; continue
             if char == "/" and following == "*":
@@ -233,8 +266,9 @@ def extract_assertions(text: str, path: str) -> list[AssertionLiteral]:
         if DIRECTIVE.match(masked[line_start:match.start()]):
             continue
         end = _balanced_call(masked, match.start())
+        raw_text = text[match.start():end]
         found.append(AssertionLiteral(path, _line_of(masked, match.start()),
-                                      normalize(text[match.start():end])))
+                                      normalize(raw_text), raw_text))
     return found
 
 
@@ -426,11 +460,49 @@ def validate_covering_row(root: Path, row: LedgerLiteral | RangeLedgerLiteral) -
                               + match.group(0).strip())
 
 
+_CPP_DIGITS = r"[0-9](?:'?[0-9])*"
+_CPP_HEX_DIGITS = r"[0-9A-Fa-f](?:'?[0-9A-Fa-f])*"
+_CPP_NUMBER = re.compile(
+    rf"(?:0[xX](?:{_CPP_HEX_DIGITS}(?:\.(?:{_CPP_HEX_DIGITS})?)?"
+    rf"|\.{_CPP_HEX_DIGITS})[pP][+-]?{_CPP_DIGITS}[fFlL]?"
+    rf"|(?:{_CPP_DIGITS}\.(?:{_CPP_DIGITS})?|\.{_CPP_DIGITS})"
+    rf"(?:[eE][+-]?{_CPP_DIGITS})?[fFlL]?"
+    rf"|{_CPP_DIGITS}[eE][+-]?{_CPP_DIGITS}[fFlL]?"
+    rf"|(?:0[xX]{_CPP_HEX_DIGITS}|0[bB][01](?:'?[01])*"
+    rf"|0(?:'?[0-7])*|[1-9](?:'?[0-9])*)"
+    r"(?:[uU](?:ll|LL|[lL])?|(?:ll|LL|[lL])[uU]?)?)")
+_CPP_PP_NUMBER = re.compile(
+    r"(?<!\w)(?:[0-9]|\.[0-9])(?:[eEpP][+-]|[\w.'])*")
+_CPP_QUOTED_LITERAL = re.compile(
+    r'''(?<!\w)(?:u8|[uUL])?(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*')''')
+
+
+def _is_literal_constant_body(body: str) -> bool:
+    """Bounded C++17 lexical check; never evaluate an expression.
+
+    Remove comments, ordinary/prefixed/raw strings and characters, standard
+    numeric literals, and true/false/nullptr. A residual identifier or call
+    keeps a row eligible for the existing rewrite path. User-defined literal
+    suffixes, casts, constexpr names and compiler extensions are not resolved.
+    Preprocessing, including escaped-newline token joining, is not performed.
+    """
+    masked = _mask_comments(body)
+    # Consume whole preprocessing-number tokens so digits/suffixes belonging
+    # to identifiers or user-defined literals cannot be silently stripped.
+    masked = _CPP_PP_NUMBER.sub(
+        lambda match: " @ " if _CPP_NUMBER.fullmatch(match[0]) else match[0],
+        masked)
+    masked = _CPP_QUOTED_LITERAL.sub(" @ ", masked)
+    masked = re.sub(r"\b(?:true|false|nullptr)\b", " @ ", masked)
+    return (re.search(r"[^\W\d]\w*", masked) is None
+            and re.search(r"(?:@|\)|\])\s*\(", masked) is None)
+
+
 def _is_obvious_tautology(assertion: AssertionLiteral) -> bool:
-    text = assertion.text
+    text = assertion.raw_text if assertion.raw_text is not None else assertion.text
     open_at, close_at = text.find("("), text.rfind(")")
     body = text[open_at + 1:close_at].strip() if open_at >= 0 and close_at > open_at else ""
-    if body in {"true", "1"}: return True
+    if _is_literal_constant_body(body): return True
     return re.fullmatch(r"([A-Za-z_]\w*)\s*==\s*\1", body) is not None
 
 
@@ -548,6 +620,11 @@ def check_inventory(*, root: Path = ROOT, inventory: Path = INVENTORY,
                 if len(signature) > 1 and index in remaining_by_signature.get(signature, []):
                     remaining_by_signature[signature].remove(index)
                 continue
+            # Exact base constants keep their own credit. Every other row is
+            # classified before signature candidates or accounting can change.
+            if _is_obvious_tautology(assertion):
+                raise ParityError("tautological additional twin assertion: "
+                                  + assertion.location + " " + assertion.text)
             signature = literal_signature(assertion.text)
             candidates = remaining_by_signature.get(signature) if len(signature) > 1 else None
             while candidates and candidates[0] not in remaining:
@@ -559,9 +636,6 @@ def check_inventory(*, root: Path = ROOT, inventory: Path = INVENTORY,
                     remaining_by_text[base[index].text].remove(index)
                 matched += 1
             else:
-                if _is_obvious_tautology(assertion):
-                    raise ParityError("tautological additional twin assertion: "
-                                      + assertion.location + " " + assertion.text)
                 extra += 1
 
         for row in ordered_ranges:
