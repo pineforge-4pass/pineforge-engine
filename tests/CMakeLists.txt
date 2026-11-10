@@ -8489,7 +8489,7 @@ if(PINEFORGE_ENABLE_COVERAGE)
 endif()
 add_test(NAME test_o1_live_limit_backing COMMAND test_o1_live_limit_backing)
 # --- CR-150 o1-live-limit-policy end ---
-# --- CR-150 win-cr831-helper begin ---
+# --- CR-150 selected-admit-helper begin ---
 if(TARGET pineforge_selected_admit_test_identity)
     add_test(NAME test_selected_admit_stages
         COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/test_selected_admit_stages.py
@@ -8512,10 +8512,10 @@ if(TARGET pineforge_selected_admit_test_identity)
         "PINEFORGE_SELECTED_ADMIT_HELPER=$<TARGET_FILE:pineforge_selected_admit_test_identity>"
         "PINEFORGE_SELECTED_ADMIT_EXPECT_GIT_SHA=${PINEFORGE_SELECTED_ADMIT_TEST_GIT_SHA}")
     set_tests_properties(test_selected_admit_stages test_selected_admit_manifest
-        test_selected_admit_imports test_selected_admit_calendar PROPERTIES LABELS "win_cr831_helper")
+        test_selected_admit_imports test_selected_admit_calendar PROPERTIES LABELS "selected_admit_helper")
     set_tests_properties(test_selected_admit_manifest PROPERTIES RUN_SERIAL TRUE)
 endif()
-# --- CR-150 win-cr831-helper end ---
+# --- CR-150 selected-admit-helper end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
