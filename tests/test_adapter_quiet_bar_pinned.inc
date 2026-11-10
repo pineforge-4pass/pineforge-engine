@@ -2324,6 +2324,34 @@
 // reproduced the committed pins.
 // Re-harvested with PINEFORGE_QUIET_BAR_HARVEST: 132 of 276 rows change,
 // all flagged reversal_on_reused_id; every other row is retained byte for byte.
+// expectation corrected (12 of 276 rows: SameBarBatch, Random08 and Random45, four rows each), because a
+// strategy.entry placed after a partial strategy.close of the opposite position now closes the rest of that
+// position and opens the new one, as the same entry does without the close; before, it closed the rest and
+// opened nothing (#803; TradingView tape sha256:c3e77e4e697fe85e5ba7d0e27bd1a14e47e569ed1c0a49f84cf29e68d045af1e).
+// Boundary, trade and final hashes move in every run of these scenarios; the recorded-row digest moves only
+// in the rows with the recorded flag set.
+//   SameBarBatch/0/1: boundary 0x6a2e851364a77eebull -> 0x3bb5edc7fd8c7bbcull; rows 0xc0453fdda3979b2aull -> 0x777513c65e590c51ull; trades 0xa1c83f47f2e97c0dull -> 0x4da4b51a25292705ull; final 0x443e2980fc8994cdull -> 0x5ce9ce36952abefbull
+//   SameBarBatch/0/0: boundary 0x6a2e851364a77eebull -> 0x3bb5edc7fd8c7bbcull; trades 0xa1c83f47f2e97c0dull -> 0x4da4b51a25292705ull; final 0x443e2980fc8994cdull -> 0x5ce9ce36952abefbull
+//   SameBarBatch/1/1: boundary 0xd4da658687948eacull -> 0xde53be7a0a4510f7ull; rows 0xd27da81399c4c280ull -> 0xd9a19f4bfecd0e2bull; trades 0xa1c83f47f2e97c0dull -> 0x4da4b51a25292705ull; final 0xd13197fc29a6b876ull -> 0x0b98bfa2a362ddeaull
+//   SameBarBatch/1/0: boundary 0xd4da658687948eacull -> 0xde53be7a0a4510f7ull; trades 0xa1c83f47f2e97c0dull -> 0x4da4b51a25292705ull; final 0xd13197fc29a6b876ull -> 0x0b98bfa2a362ddeaull
+//   Random08/0/1: boundary 0xe9c82c3f03e574e3ull -> 0xb5ff6fac99412656ull; rows 0x6f1f1b495bab6386ull -> 0xe3580e578ec466ceull; trades 0xed33a299c79b5cc8ull -> 0x476161e31762bfeaull; final 0x80e3e70b6c9da4b9ull -> 0xbd6be6ac8568afb7ull
+//   Random08/0/0: boundary 0xe9c82c3f03e574e3ull -> 0xb5ff6fac99412656ull; trades 0xed33a299c79b5cc8ull -> 0x476161e31762bfeaull; final 0x80e3e70b6c9da4b9ull -> 0xbd6be6ac8568afb7ull
+//   Random08/1/1: boundary 0x9d37d1cb690d0c02ull -> 0x36650058161a94f9ull; rows 0x43e5f1e789266c92ull -> 0x809669cdc4cd00dcull; trades 0xe0c0cf797b6f9949ull -> 0xeaf541909e90bcd0ull; final 0xdc3128069d7af835ull -> 0x7c4f9c455e12a6bcull
+//   Random08/1/0: boundary 0x9d37d1cb690d0c02ull -> 0x36650058161a94f9ull; trades 0xe0c0cf797b6f9949ull -> 0xeaf541909e90bcd0ull; final 0xdc3128069d7af835ull -> 0x7c4f9c455e12a6bcull
+//   Random45/0/1: boundary 0x1d02415bbcde15cbull -> 0xfbcfc4e157e52d1dull; rows 0xe68f560e2715f063ull -> 0xec33fe5a8f8a6924ull; trades 0x4ab135e750cf9995ull -> 0x65c27cc60b70a39bull; final 0x8ddb567160848c9dull -> 0x2bbc370e66f0258aull
+//   Random45/0/0: boundary 0x1d02415bbcde15cbull -> 0xfbcfc4e157e52d1dull; trades 0x4ab135e750cf9995ull -> 0x65c27cc60b70a39bull; final 0x8ddb567160848c9dull -> 0x2bbc370e66f0258aull
+//   Random45/1/1: boundary 0x6a8b2fd23b063827ull -> 0x980afb226af9f6f9ull; rows 0x6d1f7cd062f83ff3ull -> 0x9976dddb6e471030ull; trades 0xc94252e278b94819ull -> 0x69db6f48df497a65ull; final 0xcf704f58b174a08dull -> 0x8cd5d88ed0175759ull
+//   Random45/1/0: boundary 0x6a8b2fd23b063827ull -> 0x980afb226af9f6f9ull; trades 0xc94252e278b94819ull -> 0x69db6f48df497a65ull; final 0xcf704f58b174a08dull -> 0x8cd5d88ed0175759ull
+// expectation corrected (4 of 276 rows: Random25, four rows), because a strategy.exit placed while its entry
+// id holds lots is now cancelled when a strategy.entry of the same id reverses those lots, as the lots it
+// protected are closed with the reversal, instead of surviving to act on the new position (#803; TradingView
+// tape sha256:638438371ac6e073b61b689d01af352db6e602230f217c75336492de4e26033e). The boundary and final
+// hashes move, and the recorded-row digest in the rows with the recorded flag set; the trade list is
+// identical.
+//   Random25/0/1: boundary 0xfd252c2d9fd495d5ull -> 0xf4dfb33fe7f4162full; rows 0xa931b076f5c9dbcfull -> 0x8f8f719dedd9876aull; final 0xcd740a40eeabe2a8ull -> 0x7a37a8adf98fc6c2ull
+//   Random25/0/0: boundary 0xfd252c2d9fd495d5ull -> 0xf4dfb33fe7f4162full; final 0xcd740a40eeabe2a8ull -> 0x7a37a8adf98fc6c2ull
+//   Random25/1/1: boundary 0x675e97b37941691bull -> 0x2a456c73b2b5d45full; rows 0xa6ab952077ebdb70ull -> 0x38ba765da23a4f64ull; final 0x3df4a8457b14cf0aull -> 0xe2abd2f0c1f3cf7cull
+//   Random25/1/0: boundary 0x675e97b37941691bull -> 0x2a456c73b2b5d45full; final 0x3df4a8457b14cf0aull -> 0xe2abd2f0c1f3cf7cull
 constexpr Pinned kPinned[] = {
     {"Quiet", 0, 1, 0x5854542c111b5b15ull, 0x5f6fcf01d416e3eeull, 0x47fe0d7eaf8e51e3ull, 0x272bf9cb4096fadeull, 40, 40, 0},
     {"Quiet", 0, 0, 0x5854542c111b5b15ull, 0x14650fb0739d0383ull, 0x47fe0d7eaf8e51e3ull, 0x272bf9cb4096fadeull, 40, 0, 0},
@@ -2397,10 +2425,10 @@ constexpr Pinned kPinned[] = {
     {"PreopenSlice", 0, 0, 0x2ce015b9eef780a6ull, 0x14650fb0739d0383ull, 0x96bb4615ab0ad33bull, 0xb1673ce8cc378cb1ull, 36, 0, 1},
     {"PreopenSlice", 1, 1, 0x7684da1ab2140563ull, 0x5e1d0af8740f91b0ull, 0x96bb4615ab0ad33bull, 0x838f899566de6ae7ull, 36, 36, 1},
     {"PreopenSlice", 1, 0, 0x7684da1ab2140563ull, 0x14650fb0739d0383ull, 0x96bb4615ab0ad33bull, 0x838f899566de6ae7ull, 36, 0, 1},
-    {"SameBarBatch", 0, 1, 0x6a2e851364a77eebull, 0xc0453fdda3979b2aull, 0xa1c83f47f2e97c0dull, 0x443e2980fc8994cdull, 36, 36, 8},
-    {"SameBarBatch", 0, 0, 0x6a2e851364a77eebull, 0x14650fb0739d0383ull, 0xa1c83f47f2e97c0dull, 0x443e2980fc8994cdull, 36, 0, 8},
-    {"SameBarBatch", 1, 1, 0xd4da658687948eacull, 0xd27da81399c4c280ull, 0xa1c83f47f2e97c0dull, 0xd13197fc29a6b876ull, 36, 36, 8},
-    {"SameBarBatch", 1, 0, 0xd4da658687948eacull, 0x14650fb0739d0383ull, 0xa1c83f47f2e97c0dull, 0xd13197fc29a6b876ull, 36, 0, 8},
+    {"SameBarBatch", 0, 1, 0x3bb5edc7fd8c7bbcull, 0x777513c65e590c51ull, 0x4da4b51a25292705ull, 0x5ce9ce36952abefbull, 36, 36, 12},
+    {"SameBarBatch", 0, 0, 0x3bb5edc7fd8c7bbcull, 0x14650fb0739d0383ull, 0x4da4b51a25292705ull, 0x5ce9ce36952abefbull, 36, 0, 12},
+    {"SameBarBatch", 1, 1, 0xde53be7a0a4510f7ull, 0xd9a19f4bfecd0e2bull, 0x4da4b51a25292705ull, 0x0b98bfa2a362ddeaull, 36, 36, 12},
+    {"SameBarBatch", 1, 0, 0xde53be7a0a4510f7ull, 0x14650fb0739d0383ull, 0x4da4b51a25292705ull, 0x0b98bfa2a362ddeaull, 36, 0, 12},
     {"CommissionedShort", 0, 1, 0xb4a9b554144f1492ull, 0x9d22eba3b3b96351ull, 0x35b634c9ced2d3caull, 0x4e098a441787de45ull, 32, 32, 1},
     {"CommissionedShort", 0, 0, 0xb4a9b554144f1492ull, 0x14650fb0739d0383ull, 0x35b634c9ced2d3caull, 0x4e098a441787de45ull, 32, 0, 1},
     {"CommissionedShort", 1, 1, 0x4880fb886dd1963dull, 0x8d8f5a8e8bd6e5bfull, 0x35b634c9ced2d3caull, 0x0872d49c4b6b6798ull, 32, 32, 1},
@@ -2437,10 +2465,10 @@ constexpr Pinned kPinned[] = {
     {"Random07", 0, 0, 0xfccc10c57d1a55a1ull, 0x14650fb0739d0383ull, 0x67ce7c56c16f12a7ull, 0x11318e8304af0a31ull, 46, 0, 12},
     {"Random07", 1, 1, 0x41d1cd1e864edda1ull, 0xde622faf400acedbull, 0x9cbc1f07c0648d08ull, 0xda1a64ffd95d3e68ull, 46, 46, 12},
     {"Random07", 1, 0, 0x41d1cd1e864edda1ull, 0x14650fb0739d0383ull, 0x9cbc1f07c0648d08ull, 0xda1a64ffd95d3e68ull, 46, 0, 12},
-    {"Random08", 0, 1, 0xe9c82c3f03e574e3ull, 0x6f1f1b495bab6386ull, 0xed33a299c79b5cc8ull, 0x80e3e70b6c9da4b9ull, 90, 59, 23},
-    {"Random08", 0, 0, 0xe9c82c3f03e574e3ull, 0x14650fb0739d0383ull, 0xed33a299c79b5cc8ull, 0x80e3e70b6c9da4b9ull, 90, 0, 23},
-    {"Random08", 1, 1, 0x9d37d1cb690d0c02ull, 0x43e5f1e789266c92ull, 0xe0c0cf797b6f9949ull, 0xdc3128069d7af835ull, 90, 59, 22},
-    {"Random08", 1, 0, 0x9d37d1cb690d0c02ull, 0x14650fb0739d0383ull, 0xe0c0cf797b6f9949ull, 0xdc3128069d7af835ull, 90, 0, 22},
+    {"Random08", 0, 1, 0xb5ff6fac99412656ull, 0xe3580e578ec466ceull, 0x476161e31762bfeaull, 0xbd6be6ac8568afb7ull, 91, 59, 24},
+    {"Random08", 0, 0, 0xb5ff6fac99412656ull, 0x14650fb0739d0383ull, 0x476161e31762bfeaull, 0xbd6be6ac8568afb7ull, 91, 0, 24},
+    {"Random08", 1, 1, 0x36650058161a94f9ull, 0x809669cdc4cd00dcull, 0xeaf541909e90bcd0ull, 0x7c4f9c455e12a6bcull, 91, 59, 23},
+    {"Random08", 1, 0, 0x36650058161a94f9ull, 0x14650fb0739d0383ull, 0xeaf541909e90bcd0ull, 0x7c4f9c455e12a6bcull, 91, 0, 23},
     {"Random09", 0, 1, 0x26f5ebe03f90d9ddull, 0x329e1aae417aa455ull, 0xcda6a598aa82b5f0ull, 0x850b243b1ed31751ull, 58, 58, 2},
     {"Random09", 0, 0, 0x26f5ebe03f90d9ddull, 0x14650fb0739d0383ull, 0xcda6a598aa82b5f0ull, 0x850b243b1ed31751ull, 58, 0, 2},
     {"Random09", 1, 1, 0x50f419dac7461356ull, 0x959ba5ef082b2cc6ull, 0x86b2bbc1465372d7ull, 0xc25779b77fc30260ull, 58, 58, 2},
@@ -2505,10 +2533,10 @@ constexpr Pinned kPinned[] = {
     {"Random24", 0, 0, 0xe0b23373f130ac6aull, 0x14650fb0739d0383ull, 0xcdafd09a1c076093ull, 0x0801ef11f905fa55ull, 60, 0, 16},
     {"Random24", 1, 1, 0x1399be76e0f648d7ull, 0xbd6d810dac156dddull, 0x5971bdf0158339a3ull, 0xc76569a829c9bac8ull, 60, 60, 16},
     {"Random24", 1, 0, 0x1399be76e0f648d7ull, 0x14650fb0739d0383ull, 0x5971bdf0158339a3ull, 0xc76569a829c9bac8ull, 60, 0, 16},
-    {"Random25", 0, 1, 0xfd252c2d9fd495d5ull, 0xa931b076f5c9dbcfull, 0x0f04fd051ade0867ull, 0xcd740a40eeabe2a8ull, 44, 44, 9},
-    {"Random25", 0, 0, 0xfd252c2d9fd495d5ull, 0x14650fb0739d0383ull, 0x0f04fd051ade0867ull, 0xcd740a40eeabe2a8ull, 44, 0, 9},
-    {"Random25", 1, 1, 0x675e97b37941691bull, 0xa6ab952077ebdb70ull, 0xdb6660f55ead69e5ull, 0x3df4a8457b14cf0aull, 44, 44, 9},
-    {"Random25", 1, 0, 0x675e97b37941691bull, 0x14650fb0739d0383ull, 0xdb6660f55ead69e5ull, 0x3df4a8457b14cf0aull, 44, 0, 9},
+    {"Random25", 0, 1, 0xf4dfb33fe7f4162full, 0x8f8f719dedd9876aull, 0x0f04fd051ade0867ull, 0x7a37a8adf98fc6c2ull, 44, 44, 9},
+    {"Random25", 0, 0, 0xf4dfb33fe7f4162full, 0x14650fb0739d0383ull, 0x0f04fd051ade0867ull, 0x7a37a8adf98fc6c2ull, 44, 0, 9},
+    {"Random25", 1, 1, 0x2a456c73b2b5d45full, 0x38ba765da23a4f64ull, 0xdb6660f55ead69e5ull, 0xe2abd2f0c1f3cf7cull, 44, 44, 9},
+    {"Random25", 1, 0, 0x2a456c73b2b5d45full, 0x14650fb0739d0383ull, 0xdb6660f55ead69e5ull, 0xe2abd2f0c1f3cf7cull, 44, 0, 9},
     {"Random26", 0, 1, 0xab6d64a6753f7a86ull, 0xb2c57eadbbef71e2ull, 0x8c7da6d2877ba4b9ull, 0xc9742a5aa566b37bull, 42, 42, 11},
     {"Random26", 0, 0, 0xab6d64a6753f7a86ull, 0x14650fb0739d0383ull, 0x8c7da6d2877ba4b9ull, 0xc9742a5aa566b37bull, 42, 0, 11},
     {"Random26", 1, 1, 0xe0dbd4b0f2f308c3ull, 0x3f6e14c48cfd2a6eull, 0xc8a8ad2df2f70a7dull, 0x1f8009882e2e132dull, 42, 42, 12},
@@ -2585,10 +2613,10 @@ constexpr Pinned kPinned[] = {
     {"Random44", 0, 0, 0x1233692d58bd5318ull, 0x14650fb0739d0383ull, 0x54da85b53b86d17cull, 0x542c23e8443eaaa3ull, 65, 0, 12},
     {"Random44", 1, 1, 0x46a72187f31b68f6ull, 0x325f8d542908c524ull, 0x3d79b893b246948eull, 0xfab331f3f258c00bull, 65, 47, 13},
     {"Random44", 1, 0, 0x46a72187f31b68f6ull, 0x14650fb0739d0383ull, 0x3d79b893b246948eull, 0xfab331f3f258c00bull, 65, 0, 13},
-    {"Random45", 0, 1, 0x1d02415bbcde15cbull, 0xe68f560e2715f063ull, 0x4ab135e750cf9995ull, 0x8ddb567160848c9dull, 96, 63, 24},
-    {"Random45", 0, 0, 0x1d02415bbcde15cbull, 0x14650fb0739d0383ull, 0x4ab135e750cf9995ull, 0x8ddb567160848c9dull, 96, 0, 24},
-    {"Random45", 1, 1, 0x6a8b2fd23b063827ull, 0x6d1f7cd062f83ff3ull, 0xc94252e278b94819ull, 0xcf704f58b174a08dull, 98, 63, 24},
-    {"Random45", 1, 0, 0x6a8b2fd23b063827ull, 0x14650fb0739d0383ull, 0xc94252e278b94819ull, 0xcf704f58b174a08dull, 98, 0, 24},
+    {"Random45", 0, 1, 0xfbcfc4e157e52d1dull, 0xec33fe5a8f8a6924ull, 0x65c27cc60b70a39bull, 0x2bbc370e66f0258aull, 96, 63, 24},
+    {"Random45", 0, 0, 0xfbcfc4e157e52d1dull, 0x14650fb0739d0383ull, 0x65c27cc60b70a39bull, 0x2bbc370e66f0258aull, 96, 0, 24},
+    {"Random45", 1, 1, 0x980afb226af9f6f9ull, 0x9976dddb6e471030ull, 0x69db6f48df497a65ull, 0x8cd5d88ed0175759ull, 96, 63, 23},
+    {"Random45", 1, 0, 0x980afb226af9f6f9ull, 0x14650fb0739d0383ull, 0x69db6f48df497a65ull, 0x8cd5d88ed0175759ull, 96, 0, 23},
     {"Random46", 0, 1, 0xdb18a3216f0fed28ull, 0x2fe4677a07d50f9full, 0xfaba8060a07d20fdull, 0xc91b0d5649b74023ull, 52, 52, 1},
     {"Random46", 0, 0, 0xdb18a3216f0fed28ull, 0x14650fb0739d0383ull, 0xfaba8060a07d20fdull, 0xc91b0d5649b74023ull, 52, 0, 1},
     {"Random46", 1, 1, 0x2bc0a6a2a2c9ba2aull, 0x6d2c649e9cdcd234ull, 0xfaba8060a07d20fdull, 0x966d6c84c7d1d1faull, 52, 52, 1},
