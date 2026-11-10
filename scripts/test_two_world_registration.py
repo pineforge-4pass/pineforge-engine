@@ -349,6 +349,25 @@ endif()
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
         self.assertIn('unmodelled list()', result.stdout + result.stderr)
 
+    def test_an_unmodelled_subdirectory_fails_closed(self):
+        # The child can register a fixture-dependent row. Refuse its parent
+        # command even in the absent world, without needing a physical overlay.
+        self.tree._write_target('tests/e2e_subdir').mkdir()
+        self.tree.append('tests/e2e_subdir/CMakeLists.txt', f'''
+if(EXISTS "${{PROJECT_SOURCE_DIR}}/{CHECK_MODULE.OVERLAY_MARKER}")
+    add_test(NAME e2e_two_world_subdirectory_private
+        COMMAND ${{CMAKE_COMMAND}} -E cat
+            "${{PROJECT_SOURCE_DIR}}/{CHECK_MODULE.OVERLAY_MARKER}")
+endif()
+''')
+        self.tree.append(TREES_DIR, '\nadd_subdirectory(e2e_subdir)\n')
+        result = self.run_check()
+        output = result.stdout + result.stderr
+        self.assertEqual(2, result.returncode, output)
+        self.assertRegex(
+            output, re.escape(str(self.root / TREES_DIR))
+            + r":\d+: unmodelled command 'add_subdirectory'")
+
     # control 5: the tree as it is evaluates the absent world, exit 0
     def test_the_tree_as_is_is_clean(self):
         result = self.run_check()
