@@ -2617,6 +2617,13 @@ def workflow_fleet_findings(workflows: dict[str, str]) -> list[str]:
     for name, workflow in workflows.items():
         if name == 'gke-pr.yml':
             continue
+        if name == MACOS_COMPILE_FILE:
+            compile_findings = macos_compile_workflow_findings(workflow, name)
+            findings += compile_findings
+            # Only the complete advisory compile contract admits mixed events.
+            # An altered file falls through to the ordinary event/fleet refusals.
+            if not compile_findings:
+                continue
         # Per-job release/probe pins are checked by runner_findings; the probe
         # shares release.yml's App credential and uses the protected fleet.
         if name in RELEASE_JOB_RUNNERS:
@@ -3052,7 +3059,11 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         split_release_form = name == 'release.yml' and _release_split_requested(jobs)
         arm_variant = _gke_pr_arm_variant(name, jobs)
         corpus_variant = _gke_pr_corpus_variant(name, jobs)
+        compile_exception = (name == MACOS_COMPILE_FILE
+                             and not macos_compile_workflow_findings(workflow, name))
         timed = GKE_PR_ARM_JOB_COMMANDS if arm_variant else JOB_COMMANDS.get(name, {})
+        if compile_exception:
+            timed = {'compile-macos': None}
         gke_pins = GKE_PR_ARM_JOB_LABELS if arm_variant else GKE_JOB_RUNNERS.get(name, {})
         if corpus_variant:
             timed = {**timed, **GKE_PR_CORPUS_JOB_COMMANDS}
@@ -3065,6 +3076,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         fixed_hosted = {job: label for job, label in hosted_pins.items()
                         if label == HOSTED_X86_RUNNER or name == 'gke-pr.yml'
                         or (routes[name] & POST_EVENTS and 'pull_request' not in routes[name])}
+        if compile_exception:
+            fixed_hosted['compile-macos'] = 'macos-latest'
         if _LARGER_RUNNER_LABEL.search(code):
             findings.append(f'{name} must not use larger-runner labels; use the GCP fleet or hosted exceptions')
         fixed_release = (SPLIT_RELEASE_JOB_RUNNERS if split_release_form
@@ -4128,6 +4141,219 @@ RELEASE_OPTION_C_JOBS = {
             "artifacts/arm/${ARM_TARBALL}" "artifacts/arm/${ARM_TARBALL}.sha256" --clobber
 ''',
 }
+
+MACOS_COMPILE_FILE = 'macos-compile.yml'
+# This source contract grants one independent compile job its hosted/mixed-event
+# exception. Keep the authorization canon shared, and pin every other byte so
+# extra steps, permissions, cache writes, event/ref shortcuts or test execution
+# cannot inherit the exception. This is workflow policy, never compile evidence.
+MACOS_COMPILE_HEADER = r'''name: macOS compile
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Existing repository commit to compile (full lowercase 40-hex SHA; empty uses dispatch SHA)
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: '1'
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPILERCHECK: content
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  compile-macos:
+    name: macOS compile
+    runs-on: macos-latest
+    steps:
+'''
+MACOS_COMPILE_STEPS = r'''      - name: Require Darwin
+        env:
+          ACTUAL_OS: ${{ runner.os }}
+        run: |
+          set -euo pipefail
+          test "$ACTUAL_OS" = macOS
+          test "$(uname -s)" = Darwin
+
+      - name: Select exact source
+        id: source
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          INPUT_SOURCE_REF: ${{ inputs.source_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=macOS compile::$1" >&2; exit 1; }
+          test "$REPO" = pineforge-4pass/pineforge-engine || fail "unexpected repository"
+          case "$EVENT" in
+            pull_request)
+              test "$PR_BASE_REF" = main || fail "pull request base is not main"
+              test "$PR_DRAFT" = false || fail "pull request is a draft"
+              test -z "$INPUT_SOURCE_REF" || fail "source_ref is dispatch-only"
+              source_sha="$PR_HEAD_SHA"
+              ;;
+            push)
+              test "$REF" = refs/heads/main || fail "push is not main"
+              test -z "$INPUT_SOURCE_REF" || fail "source_ref is dispatch-only"
+              source_sha="$EVENT_SHA"
+              ;;
+            workflow_dispatch)
+              source_sha="${INPUT_SOURCE_REF:-$EVENT_SHA}"
+              ;;
+            *) fail "event is not admitted by macOS compile" ;;
+          esac
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || fail "source_ref must be a full lowercase 40-hex commit SHA"
+          resolved_sha=$(gh api "repos/$REPO/commits/$source_sha" --jq .sha) || fail "source commit is unknown or unreadable"
+          test "$resolved_sha" = "$source_sha" || fail "repository commit does not match the requested SHA"
+          printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify and print source identity
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha=$(git rev-parse --verify HEAD)
+          test "$actual_sha" = "$SOURCE_SHA"
+          test "$(git rev-parse --verify "${SOURCE_SHA}^{commit}")" = "$SOURCE_SHA"
+          actual_tree=$(git rev-parse --verify 'HEAD^{tree}')
+          printf 'source HEAD=%s\nsource tree=%s\n' "$actual_sha" "$actual_tree"
+
+      - name: Identify compiler and cache paths
+        id: host
+        run: |
+          set -euo pipefail
+          sw_vers
+          uname -m
+          xcodebuild -version
+          c_compiler=$(xcrun --find clang)
+          cxx_compiler=$(xcrun --find clang++)
+          "$c_compiler" --version
+          "$cxx_compiler" --version
+          cmake --version
+          compiler_digest=$(shasum -a 256 "$cxx_compiler")
+          compiler_digest=${compiler_digest%% *}
+          [[ "$compiler_digest" =~ ^[0-9a-f]{64}$ ]]
+          brew_cache=$(brew --cache)
+          test -n "$brew_cache"
+          {
+            printf 'c-compiler=%s\ncxx-compiler=%s\n' "$c_compiler" "$cxx_compiler"
+            printf 'compiler=%s\nbrew-cache=%s\n' "$compiler_digest" "$brew_cache"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore downloaded Homebrew dependencies
+        id: brew-restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.host.outputs.brew-cache }}
+          key: macos-compile-v1-${{ runner.os }}-${{ runner.arch }}-Debug-brew-eigen-ccache-${{ steps.source.outputs.sha }}
+          restore-keys: |
+            macos-compile-v1-${{ runner.os }}-${{ runner.arch }}-Debug-brew-eigen-ccache-
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          brew install eigen ccache
+          eigen_prefix=$(brew --prefix eigen)
+          test -f "$eigen_prefix/share/eigen3/cmake/Eigen3Config.cmake"
+          echo "CMAKE_PREFIX_PATH=$eigen_prefix${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+          ccache --version
+
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: macos-compile-v1-${{ runner.os }}-${{ runner.arch }}-Debug-${{ steps.host.outputs.compiler }}-ccache-${{ steps.source.outputs.sha }}
+          restore-keys: |
+            macos-compile-v1-${{ runner.os }}-${{ runner.arch }}-Debug-${{ steps.host.outputs.compiler }}-ccache-
+
+      - name: Configure Debug library and test binaries
+        env:
+          C_COMPILER: ${{ steps.host.outputs.c-compiler }}
+          CXX_COMPILER: ${{ steps.host.outputs.cxx-compiler }}
+        run: |
+          set -euo pipefail
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER:FILEPATH="$C_COMPILER" \
+            -DCMAKE_CXX_COMPILER:FILEPATH="$CXX_COMPILER" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DEigen3_DIR:PATH="$(brew --prefix eigen)/share/eigen3/cmake" \
+            -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+            -DPINEFORGE_BUILD_TESTS=ON \
+            -DPINEFORGE_BUILD_SOURCE_LAYER=ON \
+            -DPINEFORGE_BUILD_TUTORIAL=ON \
+            -DPINEFORGE_BUILD_LIVE_RUNNER=OFF \
+            -DPINEFORGE_BUILD_CORPUS_STRATEGIES=OFF \
+            -DPINEFORGE_BUILD_EXAMPLES=OFF \
+            -DPINEFORGE_REQUIRE_ABI_RECEIPTS=OFF
+          sed -n '/^CMAKE_.*COMPILER/p; /^CMAKE_BUILD_TYPE:/p; /^PINEFORGE_BUILD_/p; /^PINEFORGE_REQUIRE_ABI_RECEIPTS:/p; /^Eigen3_DIR:/p' build/CMakeCache.txt
+
+      - name: Build library and test binaries
+        run: |
+          set -euo pipefail
+          cmake --build build --parallel "$(sysctl -n hw.ncpu)"
+          test -s build/lib/libpineforge.a
+          test -x build/bin/test_ta
+          test -x build/bin/test_integration
+
+      - name: Save downloaded Homebrew dependencies on successful main push
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.brew-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.host.outputs.brew-cache }}
+          key: ${{ steps.brew-restore.outputs.cache-primary-key }}
+
+      - name: Save ccache on successful main push
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
+'''
+
+
+def macos_compile_workflow_findings(workflow: str, name: str = MACOS_COMPILE_FILE) -> list[str]:
+    """Validate the supplied file, never a filename/OS or test-fixture shortcut."""
+    canon = _steps(_jobs(RELEASE_RULESETS_PROBE_WORKFLOW)['authz'])[0].rstrip('\n')
+    expected = MACOS_COMPILE_HEADER + canon + '\n\n' + MACOS_COMPILE_STEPS
+    if name != MACOS_COMPILE_FILE or _universal_newlines(workflow).rstrip('\n') != expected.rstrip('\n'):
+        return [f'{name} must keep the exact independent advisory macOS compile contract: '
+                'one compile-macos job, canonical authorization, immutable source, read-only '
+                'permissions, main-only cache saves and a Debug ALL build without test execution']
+    return []
+
 
 PREBUILT_HOSTED_DIAGNOSTIC = r'''name: Prebuilt hosted diagnostic
 
@@ -6487,6 +6713,10 @@ def main() -> int:
         actions = {path.relative_to(ROOT).as_posix(): read_ci_text(path, findings)
                    for path in sorted((ROOT / '.github/actions').rglob('*'))
                    if path.name in ('action.yml', 'action.yaml') and path.is_file()}
+        others = {path.name: read_ci_text(path, findings) for path in sorted(workflows.iterdir())
+                  if path.suffix in ('.yml', '.yaml') and path.name not in named}
+        if MACOS_COMPILE_FILE not in others:
+            findings.append(f'{MACOS_COMPILE_FILE}: required advisory compile workflow is missing')
         checked = ci_workflow_findings(
             read_ci_text(workflows / 'ci.yml', findings),
             read_ci_text(workflows / 'native-live.yml', findings),
@@ -6496,8 +6726,7 @@ def main() -> int:
             read_ci_text(workflows / 'docs.yml', findings),
             read_ci_text(workflows / 'ci-post.yml', findings),
             read_ci_text(workflows / 'docs-post.yml', findings),
-            {path.name: read_ci_text(path, findings) for path in sorted(workflows.iterdir())
-             if path.suffix in ('.yml', '.yaml') and path.name not in named},
+            others,
             curl_action=read_ci_text(ROOT / '.github/actions/setup-live-curl/action.yml', findings),
             actions=actions)
         image_path = ROOT / '.github/engine-toolchain-image.txt'

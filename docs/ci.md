@@ -13,6 +13,18 @@ The current PR admission and post-merge trigger map is:
 | `corpus-parity.yml` | Not triggered | Not triggered | Full parity and its post-merge subset |
 | `docs.yml` | Documentation build except `.github/**`-only changes | Skipped by its path filter | Documentation build on its own trigger |
 | `gke-pr / build-arm` | Hosted arm64 Debug build and tests when `arm_relevant=true` | Skipped | Not triggered |
+| `macos-compile / macOS compile` | Advisory Debug library and test-binary compilation | Same compile coverage | Main pushes and manual dispatch only; no nightly trigger |
+
+`macos-compile.yml` has one independent `compile-macos` job on `macos-latest`.
+It authorizes before checkout, compiles the exact same-repository nonfork PR head
+or main push SHA, and prints the actual HEAD, tree, compiler and configuration.
+Manual dispatch accepts an optional `source_ref`: an existing repository commit's
+full lowercase 40-hex SHA, defaulting to the dispatch SHA. Debug enables the
+source layer, tests and tutorial, then builds ALL targets without executing tests.
+Homebrew downloads and ccache restore on every admitted event; only successful
+main pushes save them. This workflow is outside every merge/release aggregate,
+required context and release archive. Maintainers may reconsider requiring it only after
+three real green main runs; this workflow never changes that policy automatically.
 
 The admission workflow is defined on `main` and runs on hosted `ubuntu-24.04`
 runners with no runner-group allowlist entry. Its proof legs use the same hosted
@@ -1648,13 +1660,15 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `docs-post.yml` | Push to `main`, dispatch | `authz` and credentialed `build`: `ubuntu-24.04` |
 | `release.yml` | Dispatch from `main`; the toolchain caller additionally checks its ref | `release`, `prebuilt-x86`, `upload` and `notify-hub`: hosted `ubuntu-24.04`; `prebuilt-arm`: hosted `ubuntu-22.04-arm` |
 | `prebuilt-hosted-diagnostic.yml` | Same-repository PRs to `main` | `observe`: hosted `ubuntu-24.04`, read-only host observations |
+| `macos-compile.yml` | Admitted PRs to `main`, main pushes, dispatch | One advisory `compile-macos`: hosted `macos-latest`, compile only |
 | `promote-baseline.yml` | Push to `main`, dispatch from `main` | `promote-guard` and `promote`: `ubuntu-24.04` |
 | `release-ruleset-probe.yml` | Dispatch from `main` | `authz` and `probe`: `ubuntu-24.04` |
 
 Post CI starts on push to `main`, schedule and dispatch; its routing checker
 refuses all PR events. Reusable workflows inherit their caller's event.
 `workflow_event_routes` and `workflow_fleet_findings` in `scripts/ci_preflight.py`
-follow local calls to a fixed point, refuse mixed event classes and require
+follow local calls to a fixed point, refuse mixed event classes except the
+complete pinned advisory macOS compile contract, and require
 the exact hosted image of each pinned job or the exact native profile runner matrix; job conditions cannot excuse routing.
 Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal hook is not needed.
 Pinned verification jobs carry no deployment secrets, effective id-token permissions or environment and declare no job container or services; pull_request workflows cannot name `gke-*` or `gkp-*` routing. All current workflow jobs use hosted images and need no runner-group entry. The exact legacy isolated and hosted-matrix release forms remain admitted for rollback; restoring a protected route also requires its live group membership and committed mirror entry.
