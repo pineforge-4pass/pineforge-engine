@@ -202,15 +202,18 @@ void run_case(const Scenario& spec) {
 int main() {
     // TradingView tape sha256:638438371ac6e073b61b689d01af352db6e602230f217c75336492de4e26033e
     run_case({"E1", false, Placement::WithReversal});
-    // TradingView tape sha256:638438371ac6e073b61b689d01af352db6e602230f217c75336492de4e26033e
+    // Control with no tape of its own: the long mirror of the row above; it passes
+    // on the base too.
     run_case({"E1m", true, Placement::WithReversal});
-    // TradingView tape sha256:638438371ac6e073b61b689d01af352db6e602230f217c75336492de4e26033e
+    // Control with no tape of its own: exits placed after a close of the old
+    // position; it passes on the base too.
     run_case({"E2", false, Placement::AfterClose});
-    // TradingView tape sha256:638438371ac6e073b61b689d01af352db6e602230f217c75336492de4e26033e
+    // Control with no tape of its own: the new entry has another id; it passes on
+    // the base too.
     run_case({"E3", false, Placement::OtherEntry});
-    // The earlier exits protect the old long at limit P + 1 and stop P - 2;
-    // flat bars 1 and 2 touch neither. They end with that long's reversal.
-    // TradingView tape sha256:638438371ac6e073b61b689d01af352db6e602230f217c75336492de4e26033e
+    // Control with no tape of its own, and it passes on the base too: the earlier
+    // exits protect the old long at limit P + 1 and stop P - 2; flat bars 1 and 2
+    // touch neither. They end with that long's reversal.
     run_case({"E4", false, Placement::BeforeReversal});
     return failures == 0 ? 0 : 1;
 }

@@ -330,7 +330,8 @@ int main() {
     run_case({"ANY-with-close", 3.0, 2.0, false, true, true});
     // TradingView tape sha256:eb316d4fa17c2233145a09dfed7d3099a1992d1dd647937ea3c5cedf1c440471
     run_case({"same-side-behind-close", 3.0, 2.0, true, false, true});
-    // TradingView tape sha256:3936cfbdaa05837dc446ef13182d42536147cddb59e3e0c5f7e54be0cf39979b
+    // Control, with no tape of its own: a reused entry id behind a close keeps no
+    // exit, and the row passes on the base too.
     run_case({"same-id-behind-close", 3.0, 2.0, true, false, true, true});
     // A named exit under ANY keeps the whole same-side book as its basis.
     run_case({"ANY-held-same-side-book", 1.0, 3.0, true, true, false, false, true});

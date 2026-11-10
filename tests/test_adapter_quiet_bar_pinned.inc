@@ -2329,7 +2329,8 @@
 // position and opens the new one, as the same entry does without the close; before, it closed the rest and
 // opened nothing (#803; TradingView tape sha256:c3e77e4e697fe85e5ba7d0e27bd1a14e47e569ed1c0a49f84cf29e68d045af1e).
 // Boundary, trade and final hashes move in every run of these scenarios; the recorded-row digest moves only
-// in the rows with the recorded flag set.
+// in the rows with the recorded flag set. The trade count moves in 10 of the 12 rows and the boundary count
+// in 6 of them; the row count does not move.
 //   SameBarBatch/0/1: boundary 0x6a2e851364a77eebull -> 0x3bb5edc7fd8c7bbcull; rows 0xc0453fdda3979b2aull -> 0x777513c65e590c51ull; trades 0xa1c83f47f2e97c0dull -> 0x4da4b51a25292705ull; final 0x443e2980fc8994cdull -> 0x5ce9ce36952abefbull
 //   SameBarBatch/0/0: boundary 0x6a2e851364a77eebull -> 0x3bb5edc7fd8c7bbcull; trades 0xa1c83f47f2e97c0dull -> 0x4da4b51a25292705ull; final 0x443e2980fc8994cdull -> 0x5ce9ce36952abefbull
 //   SameBarBatch/1/1: boundary 0xd4da658687948eacull -> 0xde53be7a0a4510f7ull; rows 0xd27da81399c4c280ull -> 0xd9a19f4bfecd0e2bull; trades 0xa1c83f47f2e97c0dull -> 0x4da4b51a25292705ull; final 0xd13197fc29a6b876ull -> 0x0b98bfa2a362ddeaull

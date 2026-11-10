@@ -7781,7 +7781,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     }
     const bool projection_closes_cover_book = !close_precedes_entry || current == 0.0
         || ((current > 0.0) == is_long)
-        || preceding_close_units >= std::abs(current);
+        || preceding_close_units + internal::kQtyEpsilon >= std::abs(current);
     limit_price = source_level_on_price_grid(
         limit_price, staged_.syminfo.mintick, value_field::entry_limit_price);
     stop_price = source_level_on_price_grid(
