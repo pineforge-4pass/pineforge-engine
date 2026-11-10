@@ -7711,6 +7711,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     }
     bool close_precedes_entry = pending_same_bar_close_qty_ > 0.0;
     const double preceding_close_qty = pending_same_bar_close_qty_;
+    double preceding_close_units = pending_same_bar_close_qty_;
     // The close-first fact (MarginRuleSwitches::close_first_admission): the
     // script closed the position this entry opposes -- strategy.close(<held
     // id>) or strategy.close_all() -- earlier on this script bar, however
@@ -7737,11 +7738,28 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
                 && row.placement_script_open_ms
                     == source_point->decision.script_bar_open_ms) {
                 close_precedes_entry = true;
-                preceding_close_request = handle;
-                break;
+                if (preceding_close_request.incarnation == 0)
+                    preceding_close_request = handle;
+                const double held = std::abs(current);
+                double close_units = held;
+                if (row.family != PineOrderFamily::CloseAll) {
+                    if (row.frozen_market_instruction
+                        && std::isfinite(row.frozen_market_transaction_units)) {
+                        close_units = row.frozen_market_transaction_units;
+                    } else if (std::isfinite(row.requested_qty)) {
+                        close_units = row.requested_qty;
+                    } else if (std::isfinite(row.qty_percent)) {
+                        close_units = quantize_close_units(held, row.qty_percent);
+                    }
+                }
+                // An unresolved close retains whole-book coverage.
+                preceding_close_units += close_units;
             }
         }
     }
+    const bool projection_closes_cover_book = !close_precedes_entry || current == 0.0
+        || ((current > 0.0) == is_long)
+        || preceding_close_units >= std::abs(current);
     limit_price = source_level_on_price_grid(
         limit_price, staged_.syminfo.mintick, value_field::entry_limit_price);
     stop_price = source_level_on_price_grid(
@@ -8540,7 +8558,8 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     snapshot.birth_reach = compat::pine::select_historical_birth_reach(
         snapshot.birth, false);
     snapshot.reverse_to = reverses || paired_all_in_reentry;
-    snapshot.projection_after_close = close_precedes_entry;
+    // A partial close leaves an opposite position for this entry to reverse.
+    snapshot.projection_after_close = close_precedes_entry && projection_closes_cover_book;
     snapshot.close_first_entry = close_first_fact;
     snapshot.signal_price_refused = signal_price_refused;
     snapshot.sizing = sizing_snapshot();
