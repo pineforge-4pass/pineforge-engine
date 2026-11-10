@@ -1132,6 +1132,8 @@ void source::PineStrategyHost::on_native_applied(
                 row.close_cause = execution::CloseCause::FillCap;
             else if (row.exit_comment.rfind(source::kIntradayLossComment, 0) == 0)
                 row.close_cause = execution::CloseCause::RiskLimit;
+            else if (row.exit_comment.rfind(source::kMaxDrawdownComment, 0) == 0)
+                row.close_cause = execution::CloseCause::RiskLimit;
         }
         adapter_.invalidate_exit_group(index); if (row.close_cause != previous_cause || index < trades_.base()) trades_.replace(index, row);
     }

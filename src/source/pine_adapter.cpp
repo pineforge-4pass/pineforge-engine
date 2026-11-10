@@ -2718,6 +2718,7 @@ void PineExecutionAdapter::reset_for_run() {
     day_ledger_ = {};
     risk_.observed_peak_equity = kNaN;
     risk_.observed_max_drawdown = 0.0;
+    risk_.fill_peak_equity = kNaN;
     risk_.intraday_block_day = std::numeric_limits<std::int64_t>::min();
     risk_.intraday_cancel_pending = false;
     policy_script_bar_ = {};
@@ -18199,10 +18200,6 @@ void PineExecutionAdapter::update_risk_state(double mark_price) {
             engine_command_value_invalid_or_count("risk.threshold",
                 EngineValueStage::risk, EngineValueReason::numeric_overflow);
         }
-        if (risk_.observed_max_drawdown >= threshold) {
-            risk_.halted = true;
-            return;
-        }
     }
     if (risk_.max_cons_loss_days > 0
         && day_ledger_.consecutive_loss_days >= risk_.max_cons_loss_days) {
@@ -25197,6 +25194,36 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             pine_host->adapter_label_bracket_trades(event, from_bracket);
         }
     }
+    bool max_drawdown_breached = false;
+    if (risk_.max_drawdown > 0.0 && !risk_.halted) {
+        // A reversal has already closed the old position and opened the
+        // new one. Capture its equity before any further fills.
+        const double equity = require_host().native_marked_equity(event.resolved_price);
+        if (std::isfinite(equity)) {
+            // The peak is seeded at the first applied fill and afterwards
+            // follows the equity at fills that close units only: the equity
+            // at an opening fill never raises it.
+            if (!std::isfinite(risk_.fill_peak_equity)) {
+                risk_.fill_peak_equity = equity;
+            }
+            if (event.closed_units > 0.0) {
+                if (equity > risk_.fill_peak_equity) {
+                    risk_.fill_peak_equity = equity;
+                }
+                const double threshold = risk_.max_drawdown_percent
+                    ? risk_.fill_peak_equity * risk_.max_drawdown / 100.0
+                    : risk_.max_drawdown;
+                if (std::isfinite(risk_.max_drawdown) && !std::isfinite(threshold)) {
+                    engine_command_value_invalid_or_count("risk.threshold",
+                        EngineValueStage::risk, EngineValueReason::numeric_overflow);
+                }
+                max_drawdown_breached = risk_.fill_peak_equity - equity >= threshold;
+                // Latch before the forced close so its fill cannot trigger
+                // another drawdown test or a second close.
+                if (max_drawdown_breached) risk_.halted = true;
+            }
+        }
+    }
     if (placement_snapshot && placement_snapshot->opening) {
         detail::ExitScratchRows<native_order::RequestHandle> paired_closes(*this);
         for (const auto& handle : live_handles_) {
@@ -26588,6 +26615,29 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             risk_.intraday_block_day = chart_day_key(context.sub_bar_open_ms);
             risk_.intraday_cancel_pending = true;
         }
+    }
+    if (max_drawdown_breached) {
+        // Close every remaining position, including a reversal's new side.
+        if (detail::run_position(require_host()).signed_units != 0.0) {
+            native_order::Request request;
+            request.intent = native_order::Flatten{};
+            request.comment = kMaxDrawdownComment;
+            PlacementSnapshot snapshot;
+            // This close does not start a separate intraday-loss block.
+            snapshot.family = PineOrderFamily::CloseAll;
+            snapshot.source_id = "__max_drawdown__";
+            snapshot.comment = request.comment;
+            snapshot.sizing = sizing_snapshot();
+            snapshot.forced_execution_price = event.resolved_price;
+            const auto accepted = submit_or_replace(
+                std::move(request), std::move(snapshot), false,
+                "__max_drawdown_close__");
+            if (accepted) {
+                (void)require_host().execute_current(
+                    {*accepted, NativeCurrentPriceRule::NearestTick});
+            }
+        }
+        cancel_all();
     }
     if (preclose_intraday_loss) {
         risk_.intraday_block_day = chart_day_key(context.sub_bar_open_ms);
