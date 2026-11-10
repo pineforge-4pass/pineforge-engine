@@ -28137,6 +28137,70 @@
    "ordinal": 1
   },
   {
+   "file": "src/selected_capacity_source_stage.cpp",
+   "symbol": "window_",
+   "scope": [
+    "namespace pineforge :: detail :: selected_capacity #1",
+    "namespace #1",
+    "class SourceRecordBuffer final : public std :: streambuf #1",
+    "public : SourceRecordBuffer ( const SourceStageInput & input , const SourceStageOptions & options , std :: size_t index ) : input_ ( input ) , options_ ( options ) , index_ ( index ) , tracker_ ( options . max_record_bytes ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "window_ . reserve ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/selected_capacity_source_stage.cpp",
+   "symbol": "chunk_",
+   "scope": [
+    "namespace pineforge :: detail :: selected_capacity #1",
+    "namespace #1",
+    "class SourceRecordBuffer final : public std :: streambuf #1",
+    "protected : int_type underflow ( ) override #1",
+    "try #1"
+   ],
+   "cls": "alloc",
+   "spelling": "make_unique",
+   "ordinal": 1
+  },
+  {
+   "file": "src/selected_capacity_source_stage.cpp",
+   "symbol": "window_",
+   "scope": [
+    "namespace pineforge :: detail :: selected_capacity #1",
+    "namespace #1",
+    "class SourceRecordBuffer final : public std :: streambuf #1",
+    "int_type uflow ( ) override #1",
+    "try #1"
+   ],
+   "cls": "grow",
+   "spelling": "window_ . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/selected_capacity_source_stage.cpp",
+   "symbol": "window_",
+   "scope": [
+    "namespace pineforge :: detail :: selected_capacity #1",
+    "namespace #1",
+    "class SourceRecordBuffer final : public std :: streambuf #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/selected_capacity_source_stage.hpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: detail :: selected_capacity #1",
+    "struct SourceStageResult #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
    "file": "src/selected_report_view.cpp",
    "symbol": "points",
    "scope": [
