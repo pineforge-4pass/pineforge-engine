@@ -58,9 +58,6 @@ struct Scenario {
     bool limit_only = false;
     bool default_quantity = false;
     bool process_orders_on_close = true;
-    // When false without process_orders_on_close, compare the reversal's TP/SL
-    // split only between the close run and the control; assert totals, times and prices.
-    bool assert_exit_split = true;
 
     double direction() const { return new_is_long ? 1.0 : -1.0; }
     bool old_is_long() const { return !new_is_long; }
@@ -288,9 +285,7 @@ void check_exits(const Scenario& spec, const std::vector<Bar>& bars, const Obser
     if (!spec.process_orders_on_close) {
         CHECK(got.units_after_old_fill == -spec.direction() * spec.old_qty);
         CHECK(got.units_after_entry_fill == spec.direction() * spec.new_qty);
-        if (spec.assert_exit_split) {
-            CHECK(got.units_after_tp == spec.direction() * remaining);
-        }
+        CHECK(got.units_after_tp == spec.direction() * remaining);
     }
     double tp_qty = 0.0;
     double sl_qty = 0.0;
@@ -320,12 +315,10 @@ void check_exits(const Scenario& spec, const std::vector<Bar>& bars, const Obser
         }
         CHECK(trade.pnl == spec.direction() * (trade.exit_price - entry_price) * trade.qty);
     }
-    if (spec.assert_exit_split) {
-        CHECK(tp_rows == 1);
-        CHECK(sl_rows == (spec.limit_only ? 0 : 1));
-        CHECK(tp_qty == expected_tp);
-        CHECK(sl_qty == expected_sl);
-    }
+    CHECK(tp_rows == 1);
+    CHECK(sl_rows == (spec.limit_only ? 0 : 1));
+    CHECK(tp_qty == expected_tp);
+    CHECK(sl_qty == expected_sl);
     if (spec.limit_only) {
         CHECK(tp_qty + remaining == spec.new_qty);
         CHECK(got.units_after_stop == spec.direction() * remaining);
@@ -447,17 +440,23 @@ int main() {
     run_case({"short-old-larger", 3.0, 2.0, false});
     run_case({"short-old-equal", 2.0, 2.0, false});
 
-    // For unequal sizes without process_orders_on_close, compare the reversal's
-    // TP/SL split only between the close run and the control; assert totals, times and prices.
     const Scenario next_bar[] = {
-        {"next-bar-long-old-larger", 3.0, 2.0, true, kNaN, false, false, false, false},
-        {"next-bar-long-old-smaller", 1.0, 3.0, true, kNaN, false, false, false, false},
+        {"next-bar-long-old-larger", 3.0, 2.0, true, kNaN, false, false, false},
+        {"next-bar-long-old-smaller", 1.0, 3.0, true, kNaN, false, false, false},
         {"next-bar-long-old-equal", 2.0, 2.0, true, kNaN, false, false, false},
-        {"next-bar-short-old-larger", 3.0, 2.0, false, kNaN, false, false, false, false},
-        {"next-bar-short-old-smaller", 1.0, 3.0, false, kNaN, false, false, false, false},
+        {"next-bar-short-old-larger", 3.0, 2.0, false, kNaN, false, false, false},
+        {"next-bar-short-old-smaller", 1.0, 3.0, false, kNaN, false, false, false},
         {"next-bar-short-old-equal", 2.0, 2.0, false, kNaN, false, false, false},
     };
     for (const auto& spec : next_bar) run_case(spec);
+
+    const Scenario next_bar_absolute_qty[] = {
+        {"next-bar-absolute-qty-long-old-larger", 4.0, 2.0, true, 1.0, false, false, false},
+        {"next-bar-absolute-qty-long-old-smaller", 2.0, 4.0, true, 2.0, false, false, false},
+        {"next-bar-absolute-qty-short-old-larger", 4.0, 2.0, false, 1.0, false, false, false},
+        {"next-bar-absolute-qty-short-old-smaller", 2.0, 4.0, false, 2.0, false, false, false},
+    };
+    for (const auto& spec : next_bar_absolute_qty) run_case(spec);
     std::printf("test_adapter_named_exit_after_reversing_close: %d checks, %d failures\n",
                 checks, failures);
     return failures == 0 ? 0 : 1;
