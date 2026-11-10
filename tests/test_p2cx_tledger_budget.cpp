@@ -70,6 +70,59 @@ void sealed_refusal(F action) {
     REQUIRE(caught);
 }
 
+// One budget and one population. A population within the budget gives every row
+// the slot of its ordinal (direct); one row past the budget fills four-way sets.
+void accounting_of(const Size budget, const Size population) {
+    TradeLedger ledger;
+    // An omitted setting holds the provisional byte default, not the
+    // legacy row geometry that the explicit budgets below select.
+    CHECK(ledger.cache_rows() == default_cache_rows());
+    CHECK(ledger.ledger_cache_max_bytes() == TradeLedger::kDefaultLedgerCacheMaxBytes);
+    ledger.set_scratch_directory(".");
+    ledger.set_cache_rows(budget);
+    REQUIRE(ledger.cache_rows() == budget);
+    CHECK(ledger.cache_size() == 0);
+    const auto fixed_bytes = ledger.cache_resident_bytes();
+    CHECK(TradeLedger::resident_cache_bytes(budget)
+          == fixed_bytes + budget * TradeLedger::kLedgerEntryBytes + table_bytes(budget));
+    std::vector<Trade> expected;
+    for (Size i = 0; i < population; ++i) {
+        expected.push_back(row(static_cast<int>(i)));
+        ledger.push_back(expected.back());
+        CHECK(ledger.cache_size() == 0); // Appending does not populate it.
+        bounded(ledger);
+    }
+    CHECK(ledger.cache_resident_bytes() == fixed_bytes);
+    for (Size i = 0; i < expected.size(); ++i) {
+        same_trade(ledger.read(i), expected[i]);
+        CHECK(ledger.cache_size() == std::min(i + 1, budget));
+        // In-order reads touch the pages their ordinals fall in. Within the
+        // budget ordinal n owns slot n: 256 ordinals to a page. Past it,
+        // ordinals 0..n-1 fill four-way sets 0..n-1, sixty-four sets to a page,
+        // and every set once n reaches the set count. The final page is
+        // clipped to cap; a full final page fails this row
+        // (ledger_default_cache_rows.hpp).
+        CHECK(ledger.cache_resident_bytes()
+              == fixed_bytes + table_bytes(budget)
+                 + ledger_oracle::touched_slots(budget, population, 0, i + 1)
+                       * TradeLedger::kLedgerEntryBytes);
+        bounded(ledger);
+    }
+    // Reverse traversal reuses/evicts the entries of a set (past the budget)
+    // and checks the value of colliding keys against independent rows.
+    for (Size i = expected.size(); i != 0; --i) {
+        same_trade(ledger.read(i - 1), expected[i - 1]);
+        CHECK(ledger.cache_size() == std::min(population, budget));
+        bounded(ledger);
+    }
+    CHECK(ledger.resident_size()
+          == std::min(expected.size(), TradeLedger::kResidentRows));
+    ledger.clear();
+    CHECK(ledger.cache_rows() == budget);
+    CHECK(ledger.cache_size() == 0);
+    CHECK(ledger.cache_resident_bytes() == fixed_bytes);
+}
+
 void budgets_and_accounting() {
     CHECK(TradeLedger::kLedgerEntryBytes == 312);
     CHECK(TradeLedger::kDefaultCacheRows == 65536);
@@ -79,59 +132,19 @@ void budgets_and_accounting() {
     CHECK(sink_bound == empty.cache_resident_bytes() + 20447232
                        + table_bytes(TradeLedger::kSinkCacheRows));
     CHECK(sink_bound <= TradeLedger::resident_cache_bytes(TradeLedger::kDefaultCacheRows));
-    // Exceed the small/default caps. For the maximum setting, verify real
-    // lazy allocation with 129 rows instead of constructing a million-row run.
+    // Exceed the small/default caps by three rows, and fill each exactly (a
+    // bypassed cache has no placement to tell apart). For the maximum setting,
+    // verify real lazy allocation with 129 rows, all within the budget, instead
+    // of constructing a million-row run.
     for (const Size budget : {Size{0}, Size{1}, Size{4}, Size{7}, Size{128}, Size{300},
                               TradeLedger::kDefaultCacheRows,
                               TradeLedger::kMaxCacheRows}) {
-        TradeLedger ledger;
-        // An omitted setting holds the provisional byte default, not the
-        // legacy row geometry that the explicit budgets below select.
-        CHECK(ledger.cache_rows() == default_cache_rows());
-        CHECK(ledger.ledger_cache_max_bytes() == TradeLedger::kDefaultLedgerCacheMaxBytes);
-        ledger.set_scratch_directory(".");
-        ledger.set_cache_rows(budget);
-        REQUIRE(ledger.cache_rows() == budget);
-        CHECK(ledger.cache_size() == 0);
-        const auto fixed_bytes = ledger.cache_resident_bytes();
-        CHECK(TradeLedger::resident_cache_bytes(budget)
-              == fixed_bytes + budget * TradeLedger::kLedgerEntryBytes + table_bytes(budget));
-        const Size population = budget == TradeLedger::kMaxCacheRows ? 129 : budget + 3;
-        std::vector<Trade> expected;
-        for (Size i = 0; i < population; ++i) {
-            expected.push_back(row(static_cast<int>(i)));
-            ledger.push_back(expected.back());
-            CHECK(ledger.cache_size() == 0); // Appending does not populate it.
-            bounded(ledger);
+        if (budget == TradeLedger::kMaxCacheRows) {
+            accounting_of(budget, 129);
+            continue;
         }
-        CHECK(ledger.cache_resident_bytes() == fixed_bytes);
-        for (Size i = 0; i < expected.size(); ++i) {
-            same_trade(ledger.read(i), expected[i]);
-            CHECK(ledger.cache_size() == std::min(i + 1, budget));
-            // In-order reads touch the pages of the four-way sets their
-            // ordinals fall in: ordinals 0..n-1 fill sets 0..n-1, sixty-four
-            // sets to a page, and every set once n reaches the set count.
-            // The final page is clipped to cap; a full final page fails this
-            // row (ledger_default_cache_rows.hpp).
-            CHECK(ledger.cache_resident_bytes()
-                  == fixed_bytes + table_bytes(budget)
-                     + ledger_oracle::touched_slots(budget, 0, i + 1)
-                           * TradeLedger::kLedgerEntryBytes);
-            bounded(ledger);
-        }
-        // Reverse traversal reuses/evicts the direct-mapped entries and
-        // checks the value of colliding keys against independent rows.
-        for (Size i = expected.size(); i != 0; --i) {
-            same_trade(ledger.read(i - 1), expected[i - 1]);
-            CHECK(ledger.cache_size() == std::min(population, budget));
-            bounded(ledger);
-        }
-        CHECK(ledger.resident_size()
-              == std::min(expected.size(), TradeLedger::kResidentRows));
-        ledger.clear();
-        CHECK(ledger.cache_rows() == budget);
-        CHECK(ledger.cache_size() == 0);
-        CHECK(ledger.cache_resident_bytes() == fixed_bytes);
+        accounting_of(budget, budget + 3);
+        if (budget != 0) accounting_of(budget, budget);
     }
 }
 
@@ -149,12 +162,13 @@ void lazy_growth_boundaries() {
         CHECK(ledger.cache_resident_bytes() == fixed_bytes); // No read yet.
         matches(ledger, expected);
         CHECK(ledger.cache_size() == 64);
-        // Sixty-four ordinals fill sixty-four sets, which are one page of 256
-        // slots; a page is allocated whole on its first touch, so the next
-        // ordinal that falls in another page allocates another page.
+        // Both budgets exceed these rows, so ordinal n owns slot n and 256
+        // ordinals fill one page of 256 slots; a page is allocated whole on its
+        // first touch, so the first ordinal that falls in another page (256)
+        // allocates another page.
         const auto resident_after = [&](Size rows_held) {
             return fixed_bytes + table_bytes(budget)
-                + ledger_oracle::touched_slots(budget, 0, rows_held)
+                + ledger_oracle::touched_slots(budget, rows_held, 0, rows_held)
                       * TradeLedger::kLedgerEntryBytes;
         };
         const auto one_page_bytes = fixed_bytes + table_bytes(budget) + kPageBytes;
@@ -168,10 +182,10 @@ void lazy_growth_boundaries() {
         expected.push_back(row(64));
         ledger.push_back(expected.back()); // Crossing 64 preserves old entries.
         CHECK(ledger.cache_size() == expected.size());
-        // Ordinal 64 is the first of the second page's sets: that page is
-        // allocated by the append, and the first page and its occupants stay.
+        // Ordinal 64 still lies on the first page: no page is allocated by the
+        // append, and the first page and its occupants stay.
         CHECK(ledger.cache_resident_bytes() == resident_after(expected.size()));
-        CHECK(ledger.cache_resident_bytes() == one_page_bytes + kPageBytes);
+        CHECK(ledger.cache_resident_bytes() == one_page_bytes);
         matches(ledger, expected);
         for (int n = 65; n < 129; ++n) {
             expected.push_back(row(n));
@@ -179,16 +193,21 @@ void lazy_growth_boundaries() {
         }
         CHECK(ledger.cache_size() == expected.size()); // Append fills without discarding.
         CHECK(ledger.cache_resident_bytes() == resident_after(expected.size()));
-        CHECK(ledger.cache_resident_bytes() == one_page_bytes + 2 * kPageBytes);
+        CHECK(ledger.cache_resident_bytes() == one_page_bytes);
         matches(ledger, expected);
         for (Size n = expected.size(); n <= kPageSlots; ++n) {
             expected.push_back(row(static_cast<int>(n)));
             ledger.push_back(expected.back());
             CHECK(ledger.cache_size() == expected.size());
-            // A new page appears each time sixty-four more sets are touched;
-            // the old pages and all their occupants survive. Discard-on-growth
-            // fails.
+            // A new page appears each time 256 more ordinals are touched; the
+            // old pages and all their occupants survive. Discard-on-growth
+            // fails. The literals pin the boundary on both sides: 256 rows
+            // fill the first page, the 257th allocates the second.
             CHECK(ledger.cache_resident_bytes() == resident_after(expected.size()));
+            if (expected.size() == kPageSlots)
+                CHECK(ledger.cache_resident_bytes() == one_page_bytes);
+            if (expected.size() == kPageSlots + 1)
+                CHECK(ledger.cache_resident_bytes() == one_page_bytes + kPageBytes);
         }
         matches(ledger, expected);
         ledger.resize(64);
@@ -203,20 +222,18 @@ void lazy_growth_boundaries() {
     }
 }
 
-void sparse_page_touches() {
-    // 129 sets of four ways, the last one partial (3 ways): sets 0..63 are the
-    // first page, sets 64..127 the second, and set 128 alone is the clipped
-    // third page of 3 slots (ledger_default_cache_rows.hpp).
+// A ledger of `rows` rows over a cache of 2 * 256 + 3 entries, read cold at one
+// ordinal per page, in the order that makes the pages 3, 256, 256 slots:
+// `indices` names the ordinals on the clipped third page, the first and the
+// second.
+void sparse_page_touches_of(const Size rows, const std::array<Size, 3>& indices) {
     constexpr Size budget = 2 * kPageSlots + 3;
     TradeLedger ledger;
     ledger.set_scratch_directory(".");
     ledger.set_cache_rows(budget);
     const auto fixed = ledger.cache_resident_bytes();
-    for (Size i = 0; i < budget; ++i) ledger.push_back(row(static_cast<int>(i)));
+    for (Size i = 0; i < rows; ++i) ledger.push_back(row(static_cast<int>(i)));
     CHECK(ledger.cache_resident_bytes() == fixed);
-    // One ordinal per page, in the order that makes the pages 3, 256, 256 slots:
-    // ordinal 128 belongs to set 128, 0 to set 0 and 64 to set 64.
-    const std::array<Size, 3> indices{128, 0, 64};
     const std::array<Size, 3> cumulative_slots{3, 3 + 256, 3 + 256 + 256};
     std::vector<Size> read_so_far;
     Size touched = 0;
@@ -228,7 +245,8 @@ void sparse_page_touches() {
         CHECK(ledger.cache_size() == touched);
         // Distinct pages contribute 3, 256, 256 slots in this order.
         // An unclipped last page or allocation by population fails this row.
-        CHECK(ledger_oracle::touched_slots_of(budget, read_so_far) == cumulative_slots[step]);
+        CHECK(ledger_oracle::touched_slots_of(budget, rows, read_so_far)
+              == cumulative_slots[step]);
         CHECK(ledger.cache_resident_bytes()
               == fixed + table_bytes(budget)
                  + cumulative_slots[step] * TradeLedger::kLedgerEntryBytes);
@@ -242,6 +260,18 @@ void sparse_page_touches() {
     bounded(ledger);
 }
 
+void sparse_page_touches() {
+    constexpr Size budget = 2 * kPageSlots + 3;
+    // As many rows as the budget: ordinal n owns slot n. Ordinal 514 is on the
+    // clipped third page (slots 512..514), 0 on the first and 256 on the second.
+    sparse_page_touches_of(budget, {2 * kPageSlots + 2, 0, kPageSlots});
+    // One row more: 129 sets of four ways, the last one partial (3 ways); sets
+    // 0..63 are the first page, sets 64..127 the second, and set 128 alone is
+    // the clipped third page of 3 slots (ledger_default_cache_rows.hpp). Ordinal
+    // 128 belongs to set 128, 0 to set 0 and 64 to set 64.
+    sparse_page_touches_of(budget + 1, {128, 0, 64});
+}
+
 void append_preserves_cached_rows() {
     for (const Size budget : {Size{4}, Size{7}, Size{512}, Size{515}}) {
         TradeLedger ledger;
@@ -250,18 +280,27 @@ void append_preserves_cached_rows() {
         ledger.push_back(row(0));
         same_trade(ledger.read(0), row(0));
         // Fill the cap, wrap every set, then reuse its first key once more.
-        // Each four-way set keeps at most its own ways, so the occupancy is the
-        // sets' sum, min(population,cap) whenever the cap is a multiple of four
-        // (ledger_default_cache_rows.hpp); a discarded generation fails at
-        // the first old growth boundary, before a read can hide the discard.
+        // While the ledger holds at most `budget` rows each row owns the slot of
+        // its ordinal, so every append and read stays: the occupancy is the row
+        // count. The append that takes it past the budget changes the placement
+        // and drops every cached row (the pages stay). From then on each
+        // four-way set keeps at most its own ways, so the occupancy is the sets'
+        // sum over the ordinals cached since that append
+        // (ledger_default_cache_rows.hpp), not min(population,cap); a discarded
+        // generation at any other growth boundary fails before a read can hide
+        // the discard.
+        ledger_oracle::FourWayOccupancy four_way(budget);
         for (Size i = 1; i <= 2 * budget; ++i) {
             const Trade value = row(static_cast<int>(i));
             ledger.push_back(value);
-            CHECK(ledger.cache_size() == ledger_oracle::cached_entries(budget, i + 1));
+            const bool direct = ledger_oracle::direct(budget, i + 1);
+            if (!direct) four_way.cache(i); // The append caches its own row.
+            CHECK(ledger.cache_size() == (direct ? i + 1 : four_way.entries()));
             same_trade(ledger.read(i), value);
             const auto oldest = i + 1 > budget ? i + 1 - budget : 0;
             same_trade(ledger.read(oldest), row(static_cast<int>(oldest)));
-            CHECK(ledger.cache_size() == ledger_oracle::cached_entries(budget, i + 1));
+            if (!direct) four_way.cache(oldest); // A miss caches it again.
+            CHECK(ledger.cache_size() == (direct ? i + 1 : four_way.entries()));
             bounded(ledger);
         }
     }

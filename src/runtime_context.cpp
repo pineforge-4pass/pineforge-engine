@@ -266,9 +266,18 @@ struct RuntimeContextService::Impl {
         }
     }
     static void flush_pages(int file, std::uint64_t offset, std::uint64_t bytes) {
+#if defined(__APPLE__)
+        int result;
+        do {
+            result = ::fcntl(file, F_FULLFSYNC) != -1
+                ? 0 : ::fsync(file);
+        } while (result < 0 && errno == EINTR);
+        if (result != 0) storage_error("runtime history sync");
+#else
         while (::fdatasync(file) != 0) {
             if (errno != EINTR) storage_error("runtime history sync");
         }
+#endif
         // No whole-file mapping or resident index. Drop clean backing pages;
         // the final partial page and kernel IO working space are fixed-size.
         discard_pages(file, offset, bytes);

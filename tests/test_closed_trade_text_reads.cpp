@@ -429,17 +429,20 @@ template<Field F> void cache_fit_population(View rhs, const char* label) {
     append_inputs<F>(host, oracle);
     REQUIRE(rhs.size() + 3 <= TradeLedger::kCacheStringBytes); // 96+1+1+1=99<=128.
     warm(host.ledger(), kPopulation);
-    // 25000 contiguous ordinals fill sets 0..24999, sixty-four sets to a page of
-    // 256 slots (79,872 bytes): ceil(25000/64)=391 pages, plus ceil(default
-    // rows/256) owning pointers. Full-cap allocation, or a page count that
-    // follows the population in slots, fails this equality.
+    // The 25000 rows are fewer than the default cache's rows, so each owns the
+    // slot of its ordinal: slots 0..24999 lie on ceil(25000/256)=98 pages of 256
+    // slots (79,872 bytes), plus ceil(default rows/256) owning pointers. Full-cap
+    // allocation, a page count that follows the four-way sets (391 pages), or one
+    // that follows the population in slots, fails this equality.
     const Size fixed = TradeLedger::resident_cache_bytes(1) - TradeLedger::kLedgerEntryBytes - sizeof(void*);
+    EXPECT(ledger_oracle::direct(kDefaultRows, kPopulation));
     EXPECT(host.ledger().cache_resident_bytes()
            == fixed + kTableBytes
-              + ledger_oracle::touched_slots(kDefaultRows, 0, kPopulation)
+              + ledger_oracle::touched_slots(kDefaultRows, kPopulation, 0, kPopulation)
                     * TradeLedger::kLedgerEntryBytes);
-    EXPECT(ledger_oracle::touched_slots(kDefaultRows, 0, kPopulation) == 391 * kPageSlots);
-    // All P contiguous keys occupy distinct sets, so occupied entries=P.
+    EXPECT(ledger_oracle::touched_slots(kDefaultRows, kPopulation, 0, kPopulation)
+           == 98 * kPageSlots);
+    // All P contiguous keys occupy distinct slots, so occupied entries=P.
     EXPECT(host.ledger().cache_size() == kPopulation);
     measured_pass<F, false>(host, oracle, rhs, label, kIterations,
                             kPopulation, Order::Traverse, {});

@@ -170,14 +170,25 @@ void inclusive_byte_caps_at_page_edges() {
         const auto cap = fixed + bytes;
         ledger.push_back(row(0));
         same_trade(ledger.read(0), row(0));
-        // Two complete laps exercise clipped pages, four-way set placement,
-        // append fills and replacements at every set, including the last page
-        // and a last set of fewer than four ways. A set keeps at most its own
-        // ways, so the occupancy follows the sets (ledger_default_cache_rows.hpp),
-        // not min(rows, cap): a cap that is not a multiple of four fills late.
+        // Two complete laps exercise clipped pages, the slot of each row up to
+        // the cap, four-way set placement beyond it, append fills and
+        // replacements at every set, including the last page and a last set of
+        // fewer than four ways. While the ledger holds at most `rows` rows each
+        // append is cached in the slot of its ordinal, so the occupancy is the
+        // row count. The append that takes the ledger past `rows` changes the
+        // placement and drops every cached row; from then on each append fills a
+        // four-way set. A set keeps at most its own ways, so the occupancy follows
+        // the sets (ledger_default_cache_rows.hpp), not min(rows, cap): a cap that
+        // is not a multiple of four fills late.
+        ledger_oracle::FourWayOccupancy four_way(rows);
         for (Size i = 1; i <= 2 * rows; ++i) {
             ledger.push_back(row(static_cast<int>(i)));
-            CHECK(ledger.cache_size() == ledger_oracle::cached_entries(rows, i + 1));
+            if (ledger_oracle::direct(rows, i + 1)) {
+                CHECK(ledger.cache_size() == i + 1);
+            } else {
+                four_way.cache(i);
+                CHECK(ledger.cache_size() == four_way.entries());
+            }
             CHECK(ledger.cache_resident_bytes() <= cap);
             CHECK(ledger.cache_resident_bytes() - fixed <= bytes);
         }

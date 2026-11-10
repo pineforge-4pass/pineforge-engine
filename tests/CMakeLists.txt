@@ -106,6 +106,7 @@ set(TEST_SOURCES
     test_report_terminal_quote
     test_adapter_margin_relower
     test_adapter_risk_relower
+    test_adapter_drawdown_fill_halt
     test_adapter_range_end_relower
     test_native_margin_kernel_r5
     test_adapter_brackets_relower
