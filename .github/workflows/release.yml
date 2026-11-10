@@ -1,16 +1,18 @@
 name: Release
 
-# Bump VERSION, tag, cut a GitHub Release with generated notes, attach the
-# prebuilt static-lib tarballs and the run-failure code catalog with its diff
-# against the previous release, and notify the pineforge-release hub — all
-# from a single workflow_dispatch click. This workflow publishes no container
+# Phase bump gates the dispatch SHA, pushes only the two-file VERSION/reset
+# commit to main, and prints its SHA. After that SHA's own full ci-post ends
+# green, dispatch phase tag on main with dispatch_sha naming the checked
+# phase-bump parent. Tag that same bump commit, cut its GitHub Release,
+# attach prebuilt tarballs and catalog assets, then notify the hub.
+# This workflow publishes no container
 # image: the GHCR image is the hub's, built from these tarballs.
 #
 # Trigger: GitHub UI → Actions → Release → "Run workflow" → pick bump, or
 # name the exact version in `override` (a release candidate is
 # X.Y.Z-rc.N, then the final release is override X.Y.Z). Tick `dry_run` to
-# rehearse: it computes the version, stamps and resets the run-failure
-# catalog diff, builds, installs, verifies and packs every tarball (the
+# rehearse the chosen phase: bump computes and stamps without publication;
+# tag builds, installs, verifies and packs every tarball (the
 # tarballs and the catalog assets are kept as workflow artifacts), and
 # commits, tags, releases, uploads and dispatches nothing.
 #
@@ -37,7 +39,7 @@ name: Release
 #
 # Security notes:
 #   - `bump` is a `choice` enum. `override` is free text: it reaches only
-#     scripts/release_version.py, through an `env:` block, which refuses
+#     ci_release_gate.py plan and release_version.py through `env:`, which refuse
 #     anything but X.Y.Z or X.Y.Z-rc.N before any later step reads it.
 #   - All other interpolations are GitHub-controlled context (repo, actor,
 #     sha, secrets) or values the scripts computed from VERSION, the tags and
@@ -46,8 +48,21 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
+      phase:
+        description: 'bump: push the untagged version commit and stop; tag: publish that checked commit'
+        required: true
+        type: choice
+        default: bump
+        options:
+          - bump
+          - tag
+      dispatch_sha:
+        description: 'Tag phase only: exact SHA checked by phase bump, the bump commit single parent'
+        required: false
+        type: string
+        default: ''
       bump:
-        description: 'Version bump'
+        description: 'Bump phase only: version increment; leave patch in tag phase'
         required: true
         type: choice
         default: patch
@@ -56,7 +71,7 @@ on:
           - minor
           - major
       override:
-        description: 'Exact version, X.Y.Z or X.Y.Z-rc.N (for example 1.0.0-rc.1); wins over bump'
+        description: 'Bump phase only: exact X.Y.Z or X.Y.Z-rc.N; wins over bump'
         required: false
         type: string
         default: ''
@@ -94,7 +109,7 @@ jobs:
       # org ruleset) AND the downstream hub dispatch. Scoped to this repo + the
       # hub. Minted first so checkout can push with it. GitHub records this
       # authenticated pusher as pineforge-app[bot] on exact-main push runs;
-      # ci_release_gate.py pins that login for the one-bump phase-1 exemption.
+      # ci_release_gate.py pins that login for authenticated bump admission.
       - name: Mint org App token
         id: app
         uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
@@ -116,24 +131,39 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      # Phase 1 also accepts an App-pushed two-file bump on a gated PR merge.
-      # No matching post-merge push run yet: refuse; retry after it exists.
+      # Tag phase admits only the App-pushed bump on the named checked parent.
+      # Its own full post-merge CI must have ended green before redispatch.
       # The gate requires one active main pull_request ruleset whose own
       # bypass_actors is exactly Integration 4105147 with bypass_mode always.
       # Other rulesets' bypass lists do not supply or invalidate that barrier.
       # The gate needs bypass_actors visible on every branch ruleset in the inventory.
       # If the release App token cannot see them, the bump is refused.
       # release-ruleset-probe.yml reports whether it can. contents: write scopes GITHUB_TOKEN.
-      - name: Refuse unless pineforge/verify and pineforge/parity are green
+      - name: Refuse unless authenticated parity and exact-SHA full CI are green
         id: gate
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REF: ${{ github.ref }}
+          PHASE: ${{ inputs.phase }}
+          DISPATCH_SHA: ${{ inputs.dispatch_sha }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          RECEIPT: ${{ runner.temp }}/release-gate-receipt.json
         run: |
           python3 scripts/ci_release_gate.py gate \
-            --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF}"
+            --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF}" \
+            --phase "${PHASE}" --dispatch-sha "${DISPATCH_SHA}" \
+            --receipt "${RECEIPT}" --dry-run "${DRY_RUN}"
+
+      - name: Keep release gate receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-gate-${{ inputs.phase }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-gate-receipt.json
+          if-no-files-found: error
+          retention-days: 7
 
       # current / next / tag / prerelease / previous (the release-notes base),
       # validated; see scripts/release_version.py.
@@ -142,15 +172,18 @@ jobs:
         env:
           BUMP:     ${{ inputs.bump }}
           OVERRIDE: ${{ inputs.override }}
+          PHASE: ${{ inputs.phase }}
+          DISPATCH_SHA: ${{ inputs.dispatch_sha }}
+          GITHUB_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          git tag --list 'v*' > "${RUNNER_TEMP}/tags.txt"
-          python3 scripts/release_version.py next \
+          python3 scripts/ci_release_gate.py plan \
+            --sha "${GITHUB_SHA}" --phase "${PHASE}" --dispatch-sha "${DISPATCH_SHA}" \
             --bump "${BUMP}" --override "${OVERRIDE}" \
-            --tags-file "${RUNNER_TEMP}/tags.txt" \
             --github-output "${GITHUB_OUTPUT}"
 
       - name: Refuse if tag already exists
+        if: ${{ inputs.phase == 'bump' }}
         env:
           TAG: ${{ steps.bump.outputs.tag }}
         run: |
@@ -182,16 +215,30 @@ jobs:
           NEXT: ${{ steps.bump.outputs.next }}
           TAG:  ${{ steps.bump.outputs.tag }}
           PREV: ${{ steps.bump.outputs.previous }}
+          PHASE: ${{ inputs.phase }}
         run: |
           set -euo pipefail
-          base="$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD)"
+          source=HEAD
+          if [[ "${PHASE}" == tag ]]; then source=HEAD^; fi
+          base="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${source}")"
           assets="${RUNNER_TEMP}/run-failure-catalog"
           chain="run_failure_codes_diff-${TAG}-from-${base}.json"
           mkdir -p "${assets}"
-          python3 scripts/gen_run_failure_catalog_diff.py --stamp \
-            --to-version "${NEXT}" --previous-tag "${PREV}" \
-            --output "${assets}/run_failure_codes_diff-${TAG}.json" \
-            --chain-output "${assets}/${chain}"
+          if [[ "${PHASE}" == tag ]] && git show-ref --verify --quiet "refs/tags/${TAG}"; then
+            python3 scripts/gen_run_failure_catalog_diff.py --stamp \
+              --to-tag "${TAG}" --previous-tag "${PREV}" \
+              --output "${assets}/run_failure_codes_diff-${TAG}.json"
+            if [[ "${base}" != "${PREV}" ]]; then
+              python3 scripts/gen_run_failure_catalog_diff.py --stamp \
+                --to-tag "${TAG}" --previous-tag "${base}" \
+                --output "${assets}/${chain}"
+            fi
+          else
+            python3 scripts/gen_run_failure_catalog_diff.py --stamp \
+              --to-version "${NEXT}" --previous-tag "${PREV}" \
+              --output "${assets}/run_failure_codes_diff-${TAG}.json" \
+              --chain-output "${assets}/${chain}"
+          fi
           if [[ ! -f "${assets}/${chain}" ]]; then chain=""; fi
           cp docker/run_failure_codes.json "${assets}/run_failure_codes-${TAG}.json"
           python3 scripts/gen_run_failure_catalog_diff.py --reset --tag "${TAG}" \
@@ -203,31 +250,8 @@ jobs:
             echo "reset=${RUNNER_TEMP}/run_failure_codes_diff.reset.json"
           } >> "${GITHUB_OUTPUT}"
 
-      # The reset diff rides the VERSION bump's commit, and the guard main runs
-      # from now on (--check: the diff starts at the newest tag HEAD reaches)
-      # must pass on the tagged commit before anything is pushed. The commit
-      # and the tag go up in one atomic push: both land or neither does, so
-      # main never holds a diff reset to a tag the remote lacks. Keep these
-      # exact two modified regular files: the release gate exempts no others.
-      #
-      # When a step fails after this push (gh release create, say), the tag
-      # exists and re-running this run stops at "Compute next version" (tag
-      # vX already exists); the tagged tree holds the reset diff, which stamps
-      # nothing. Rebuild the
-      # assets from git alone, byte for byte what the stamp step wrote, in any
-      # checkout with the tags (PREV is the run's "Compute next version"
-      # previous; the stamp step's log names the start of each diff it wrote):
-      #   python3 scripts/gen_run_failure_catalog_diff.py --stamp --to-tag <tag> \
-      #     --previous-tag <PREV> --output run_failure_codes_diff-<tag>.json
-      #   git show <tag>:docker/run_failure_codes.json > run_failure_codes-<tag>.json
-      # and, when the run wrote a chain step from <BASE>, the same --stamp
-      # --to-tag with --previous-tag <BASE> --output
-      # run_failure_codes_diff-<tag>-from-<BASE>.json. (Equivalently, check
-      # out <tag>^, the dispatched commit, and run the stamp step's own
-      # --stamp --to-version there.) Then create the release by hand with
-      # those assets (gh release create <tag> --verify-tag), its notes as the
-      # notes step writes them; the prebuilt and notify-hub jobs need it and
-      # did not run.
+      # Phase 1 pushes only the admitted untagged reset. Phase 2 never writes
+      # VERSION or creates a commit; retries reuse only a tag at that same SHA.
       - name: Write bumped VERSION, commit, tag, push
         id: publish
         if: ${{ !inputs.dry_run }}
@@ -235,16 +259,58 @@ jobs:
           NEXT:  ${{ steps.bump.outputs.next }}
           TAG:   ${{ steps.bump.outputs.tag }}
           RESET: ${{ steps.catalog.outputs.reset }}
+          PHASE: ${{ inputs.phase }}
+          GITHUB_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          printf '%s\n' "${NEXT}" > VERSION
-          cp "${RESET}" docker/run_failure_codes_diff.json
-          git add VERSION docker/run_failure_codes_diff.json
-          git commit -m "chore(release): ${TAG}"
-          git tag -a "${TAG}" -m "Release ${TAG}"
-          python3 scripts/gen_run_failure_catalog_diff.py --check
-          git push --atomic origin HEAD "${TAG}"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git ls-remote --refs origin refs/heads/main)" = "$(printf '%s\trefs/heads/main' "${GITHUB_SHA}")"
+          if [[ "${PHASE}" == bump ]]; then
+            if git ls-remote --exit-code --refs origin "refs/tags/${TAG}"; then
+              echo "::error::release tag ${TAG} already exists" >&2
+              exit 1
+            else
+              rc=$?
+              test "${rc}" -eq 2
+            fi
+            printf '%s\n' "${NEXT}" > VERSION
+            cp "${RESET}" docker/run_failure_codes_diff.json
+            git add VERSION docker/run_failure_codes_diff.json
+            git commit -m "chore(release): ${TAG}"
+            test "$(git rev-parse HEAD^)" = "${GITHUB_SHA}"
+            python3 scripts/gen_run_failure_catalog_diff.py --check
+            sha="$(git rev-parse HEAD)"
+            git push origin "${sha}:refs/heads/main"
+            echo "Phase 1 pushed untagged bump ${sha}; wait for its own full CI, then dispatch phase tag with dispatch_sha=${GITHUB_SHA}"
+          else
+            test "${PHASE}" = tag
+            sha="${GITHUB_SHA}"
+            if git show-ref --verify --quiet "refs/tags/${TAG}"; then
+              test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${sha}"
+            else
+              git tag -a "${TAG}" -m "Release ${TAG}"
+            fi
+            test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${sha}"
+            python3 scripts/gen_run_failure_catalog_diff.py --check
+            git push origin "refs/tags/${TAG}"
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump phase summary
+        if: ${{ inputs.phase == 'bump' }}
+        env:
+          SHA: ${{ steps.publish.outputs.sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+          NEXT: ${{ steps.bump.outputs.next }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [[ "${DRY_RUN}" == true ]]; then
+            echo "Phase 1 dry run: would push VERSION=${NEXT} without a tag; no bump SHA was created."
+          else
+            echo "Phase 1 pushed ${SHA}; no tag or release was published."
+            echo "After ${SHA}'s own full CI is green, dispatch phase tag on that main SHA with dispatch_sha=${DISPATCH_SHA}."
+          fi
 
       # The range starts at scripts/release_version.py's `previous`: the last
       # tag below this release in semver order (git's v:refname sort puts
@@ -252,6 +318,7 @@ jobs:
       # A dry run has no tag yet and ends the range at the dispatched commit.
       - name: Generate release notes
         id: notes
+        if: ${{ inputs.phase == 'tag' }}
         env:
           TAG:       ${{ steps.bump.outputs.tag }}
           PREV:      ${{ steps.bump.outputs.previous }}
@@ -293,7 +360,7 @@ jobs:
       # A release candidate is a GitHub prerelease, which GitHub never marks
       # "Latest".
       - name: Create GitHub Release
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.phase == 'tag' && !inputs.dry_run }}
         env:
           GH_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
           TAG:        ${{ steps.bump.outputs.tag }}
@@ -305,15 +372,22 @@ jobs:
           prerelease=()
           if [[ "${PRERELEASE}" == "true" ]]; then prerelease=(--prerelease); fi
           # The catalog, its diff, and the chain step when there is one.
-          gh release create "${TAG}" \
-            --title "${TAG}" \
-            --notes-file "${NOTES}" \
-            --verify-tag \
-            "${prerelease[@]}" \
-            "${ASSETS}"/*.json
+          if existing="$(gh release view "${TAG}" --json tagName --jq .tagName 2> "${RUNNER_TEMP}/release-view.err")"; then
+            test "${existing}" = "${TAG}"
+            gh release upload "${TAG}" "${ASSETS}"/*.json --clobber
+          else
+            cat "${RUNNER_TEMP}/release-view.err" >&2
+            grep -Fxq 'release not found' "${RUNNER_TEMP}/release-view.err"
+            gh release create "${TAG}" \
+              --title "${TAG}" \
+              --notes-file "${NOTES}" \
+              --verify-tag \
+              "${prerelease[@]}" \
+              "${ASSETS}"/*.json
+          fi
 
       - name: Dry run summary
-        if: ${{ inputs.dry_run }}
+        if: ${{ inputs.phase == 'tag' && inputs.dry_run }}
         env:
           CURRENT:    ${{ steps.bump.outputs.current }}
           NEXT:       ${{ steps.bump.outputs.next }}
@@ -329,7 +403,7 @@ jobs:
           {
             echo "## Dry run: ${CURRENT} -> ${NEXT}"
             echo
-            echo "- would commit VERSION=${NEXT} and the run-failure catalog diff reset to ${TAG}, and push it with the tag ${TAG} in one atomic push"
+            echo "- would tag the exact dispatched bump commit as ${TAG}; VERSION=${NEXT} is already committed"
             echo "- would create the GitHub release ${TAG} (prerelease: ${PRERELEASE}), notes since ${PREV:-the first commit}"
             echo "- would attach run_failure_codes-${TAG}.json and run_failure_codes_diff-${TAG}.json (stamped ${PREV} -> ${NEXT}; kept as a workflow artifact)"
             if [[ -n "${CHAIN}" ]]; then
@@ -361,7 +435,7 @@ jobs:
   # release notes / README.
   prebuilt-x86:
     needs: release
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.workflow_ref == format('pineforge-4pass/pineforge-engine/.github/workflows/release.yml@{0}', github.ref) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.workflow_ref == format('pineforge-4pass/pineforge-engine/.github/workflows/release.yml@{0}', github.ref) && inputs.phase == 'tag' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -554,6 +628,7 @@ jobs:
 
   prebuilt-arm:
     needs: release
+    if: ${{ inputs.phase == 'tag' }}
     runs-on: ubuntu-22.04-arm
     permissions:
       contents: read
@@ -709,6 +784,7 @@ jobs:
 
   upload:
     needs: [release, prebuilt-x86, prebuilt-arm]
+    if: ${{ inputs.phase == 'tag' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -772,7 +848,7 @@ jobs:
     permissions:
       contents: read
     needs: [release, upload]
-    if: ${{ !inputs.dry_run }}
+    if: ${{ inputs.phase == 'tag' && !inputs.dry_run }}
     runs-on: ubuntu-24.04
     environment: release
     steps:
