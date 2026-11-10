@@ -2521,6 +2521,8 @@ private:
     void cancel_bracket_siblings(native_order::RequestHandle, std::uint64_t executed_at = 0);
     void cancel_exit_orders_for_full_close(const SourceId& from_entry);
     void cancel_exit_orders_for_full_close(const detail::ScratchByteSource& from_entry);
+    void cancel_exit_orders_for_full_close(const detail::ScratchByteSource& from_entry,
+                                          bool independent_only);
     void retire_in_position_exits_at_flat(bool preserve_pending_parents,
                                           bool dormant_rows_only,
                                           const PlacementSnapshot* paired_close);
@@ -3258,7 +3260,8 @@ private:
     std::uint64_t checked_live_key(const SourceId&) const;
     detail::LiveSourceHandle live_source_value(native_order::RequestHandle, const SourceId&) const;
     void cancel_reversal_exit_owners(const std::vector<SourceId>& preserved,
-                                    detail::ExitScratchRows<SourceId>& selection);
+                                    detail::ExitScratchRows<SourceId>& selection,
+                                    const SourceId* reversed_entry = nullptr);
     // Diagnostic only; never folded into continuation state.
     mutable std::uint64_t projected_raw_pending_calls_ = 0;
     // A disposable projection of current raw positions, never row pointers.

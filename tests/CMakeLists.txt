@@ -112,6 +112,7 @@ set(TEST_SOURCES
     test_adapter_named_exit_after_reversing_close
     test_adapter_exit_class_any_same_side
     test_adapter_partial_close_reversal
+    test_reversal_same_id_exits
     test_exit_without_from_entry_same_execution
     test_adapter_grid_relower
     test_adapter_htf_relower

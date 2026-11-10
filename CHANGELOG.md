@@ -12,6 +12,7 @@ version number follows semantic versioning over the surfaces the
 - With `close_entries_rule = "ANY"`, the percentage of a named `strategy.exit` placed with a reversing `strategy.entry` is now taken from the new entry, not from the whole position being replaced (#803).
 - A named `strategy.exit` placed with a same-side `strategy.entry` of another id on the bar where the position's earlier entry is closed by `strategy.close` is now kept; before, it was removed when the position went flat (#803).
 - A reversing `strategy.entry` placed after a partial `strategy.close` of the position it opposes now closes the rest of that position and opens the new one, as the same entry does without the close; before, it closed the rest and opened nothing (#803).
+- With the default FIFO close rule, a named `strategy.exit` placed while its entry id holds lots now ends when a `strategy.entry` of the same id reverses those lots; before, it could close the new position instead (#803).
 - The internal native Store live-object policy defaults to 0 (unbounded).
   The former capped default of 1,048,576 is now 0. Native limits are kept
   exactly: every positive uint64, including UINT64_MAX, is finite;

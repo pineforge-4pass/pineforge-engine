@@ -6529,6 +6529,11 @@ void PineExecutionAdapter::cancel_exit_orders_for_full_close(
 
 void PineExecutionAdapter::cancel_exit_orders_for_full_close(
         const detail::ScratchByteSource& from_entry) {
+    cancel_exit_orders_for_full_close(from_entry, false);
+}
+
+void PineExecutionAdapter::cancel_exit_orders_for_full_close(
+        const detail::ScratchByteSource& from_entry, bool independent_only) {
     // An exit bound to the id while it held no lot waits for the id's next
     // fill: a close of the id, or of the position, has nothing of it to close
     // (tests/fixtures/exit_binding close-pending-id, cancel-flat-replace).
@@ -6544,30 +6549,46 @@ void PineExecutionAdapter::cancel_exit_orders_for_full_close(
     };
     pending_write(pending_bracket_legs_).erase(
         std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
-            [&](const PendingBracketLeg& row) { return matches(row.snapshot); }),
+            [&](const PendingBracketLeg& row) {
+                return matches(row.snapshot) && (!independent_only
+                    || std::holds_alternative<native_order::Independent>(row.request.owner));
+            }),
         pending_bracket_legs_.end());
     pending_write(pending_coof_requests_).erase(
         std::remove_if(pending_coof_requests_.begin(), pending_coof_requests_.end(),
-            [&](const PendingCoofRequest& row) { return matches(row.snapshot); }),
-        pending_coof_requests_.end());
-    pending_write(source_shadow_pending_).erase(
-        std::remove_if(source_shadow_pending_.begin(), source_shadow_pending_.end(),
-            [&](const SourceShadowPending& row) { return matches(row.snapshot); }),
-        source_shadow_pending_.end());
-    pending_relative_exits_.erase(
-        std::remove_if(pending_relative_exits_.begin(), pending_relative_exits_.end(),
-            [&](const PendingRelativeExit& row) {
-                return detail::exit_scratch_equal(detail::exit_scratch_text(row.from_entry),
-                                                   from_entry);
+            [&](const PendingCoofRequest& row) {
+                return matches(row.snapshot) && (!independent_only
+                    || std::holds_alternative<native_order::Independent>(row.request.owner));
             }),
-        pending_relative_exits_.end());
-    if (from_entry.size() != 0) withdraw_anchored_relative_readers(nullptr, &from_entry);
+        pending_coof_requests_.end());
+    if (!independent_only) {
+        // Unresolved relative exits wait for a parent's opening; anchored
+        // children carry that parent as their owner. Shadows carry only a
+        // command projection. None supplies an executable book-close owner.
+        pending_write(source_shadow_pending_).erase(
+            std::remove_if(source_shadow_pending_.begin(), source_shadow_pending_.end(),
+                [&](const SourceShadowPending& row) { return matches(row.snapshot); }),
+            source_shadow_pending_.end());
+        pending_relative_exits_.erase(
+            std::remove_if(pending_relative_exits_.begin(), pending_relative_exits_.end(),
+                [&](const PendingRelativeExit& row) {
+                    return detail::exit_scratch_equal(detail::exit_scratch_text(row.from_entry),
+                                                       from_entry);
+                }),
+            pending_relative_exits_.end());
+        if (from_entry.size() != 0) withdraw_anchored_relative_readers(nullptr, &from_entry);
+    }
 
     detail::ExitScratchRows<native_order::RequestHandle> handles(*this);
     for (const auto& handle : live_handles_) {
         const auto found = placement_.find(handle.incarnation);
         if (found != placement_.end() && matches(found->second)
             && !coof_leg_reaches_exit(found->second)) {
+            if (independent_only) {
+                const auto working = require_host().native_working_request(handle);
+                if (!working || !std::holds_alternative<native_order::Independent>(
+                        working->definition->request.owner)) continue;
+            }
             handles.push_back(handle);
         }
     }
@@ -25515,7 +25536,22 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // the logical table, not residency/exposure; the helper keeps the old
         // sorted owner order and exact successful scratch allocation.
         detail::ExitScratchRows<SourceId> closed_cohorts(*this);
-        cancel_reversal_exit_owners(preserved_cohorts, closed_cohorts);
+        const SourceId* reversed_entry = nullptr;
+        if (placement_snapshot && placement_snapshot->family == PineOrderFamily::Entry
+            && !config_.close_entries_rule_any) {
+            for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
+                if (require_host().get_trade(static_cast<int>(event.first_trade_index + i)).entry_id
+                    == placement_snapshot->source_id) {
+                    reversed_entry = &placement_snapshot->source_id;
+                    break;
+                }
+            }
+        }
+        // Under FIFO, an exit placed against held lots closes the book;
+        // an exit placed before its id held lots instead waits on its cohort.
+        // Reversing the same id retires only the former, even though the new
+        // entry and its future-bound children otherwise preserve that id.
+        cancel_reversal_exit_owners(preserved_cohorts, closed_cohorts, reversed_entry);
         // Selection handles are reserved before cancellation, exactly where
         // the full text selection used to be built. Its scope remains alive
         // through the remaining reversal cleanup below.
@@ -29326,9 +29362,45 @@ namespace pineforge::source {
 
 void PineExecutionAdapter::cancel_reversal_exit_owners(
         const std::vector<SourceId>& preserved,
-        detail::ExitScratchRows<SourceId>& selection) {
+        detail::ExitScratchRows<SourceId>& selection,
+        const SourceId* reversed_entry) {
+    if (reversed_entry) {
+        const bool keep_pending_bound =
+            detail::exit_binding_rule_switches().pending_bound_exit_survives_flat;
+        const auto matches = [&](const PlacementSnapshot& row) {
+            const bool exit = row.family == PineOrderFamily::ExitLimit
+                || row.family == PineOrderFamily::ExitStop
+                || row.family == PineOrderFamily::ExitTrail;
+            return exit && row.from_entry == *reversed_entry
+                && !(keep_pending_bound && row.pending_bound_exit);
+        };
+        bool has_independent_exit = std::any_of(
+            pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
+            [&](const PendingBracketLeg& row) {
+                return matches(row.snapshot)
+                    && std::holds_alternative<native_order::Independent>(row.request.owner);
+            }) || std::any_of(pending_coof_requests_.begin(), pending_coof_requests_.end(),
+            [&](const PendingCoofRequest& row) {
+                return matches(row.snapshot)
+                    && std::holds_alternative<native_order::Independent>(row.request.owner);
+            });
+        for (const auto& handle : live_handles_) {
+            if (has_independent_exit) break;
+            const auto row = placement_.find(handle.incarnation);
+            if (row == placement_.end() || !matches(row->second)
+                || coof_leg_reaches_exit(row->second)) continue;
+            const auto working = require_host().native_working_request(handle);
+            has_independent_exit = working
+                && std::holds_alternative<native_order::Independent>(
+                    working->definition->request.owner);
+        }
+        // With no retiring exit, retain the original exemptions and scratch
+        // counters, including for a reversal with only future-bound children.
+        if (!has_independent_exit) reversed_entry = nullptr;
+    }
     const auto exempt = [&](const SourceId& id) {
-        return std::binary_search(preserved.begin(), preserved.end(), id);
+        return (!reversed_entry || id != *reversed_entry)
+            && std::binary_search(preserved.begin(), preserved.end(), id);
     };
     // The public-run fixture executes the old selection on a separate run.
     // Shipped objects have no runtime switch or additional adapter state.
@@ -29337,7 +29409,12 @@ void PineExecutionAdapter::cancel_reversal_exit_owners(
             if (!exempt(id)) selection.push_back(id);
         });
         selection.ordered_text([&](const detail::ExitScratchText& id) {
-            cancel_exit_orders_for_full_close(id);
+            if (reversed_entry && detail::exit_scratch_equal(
+                    id, detail::exit_scratch_text(*reversed_entry))) {
+                cancel_exit_orders_for_full_close(id, true);
+            } else {
+                cancel_exit_orders_for_full_close(id);
+            }
             return true;
         });
         return;
@@ -29350,7 +29427,7 @@ void PineExecutionAdapter::cancel_reversal_exit_owners(
     for (const auto& id : preserved) {
         if (previous && *previous == id) continue;
         previous = &id;
-        if (cohorts_by_id_.contains(id)) --count;
+        if (exempt(id) && cohorts_by_id_.contains(id)) --count;
     }
     if (count == 0) return;
 
@@ -29432,7 +29509,11 @@ void PineExecutionAdapter::cancel_reversal_exit_owners(
 
     for (const auto& id : owners) {
         PINEFORGE_FULL_CLOSE_EXIT_CALL();
-        cancel_exit_orders_for_full_close(id);
+        if (reversed_entry && id == *reversed_entry) {
+            cancel_exit_orders_for_full_close(detail::exit_scratch_text(id), true);
+        } else {
+            cancel_exit_orders_for_full_close(id);
+        }
     }
     // A skipped cancel creates empty handles/removed scopes, but no records.
     // Their ordinals are not folded by hash_exit_scratch; preserve the final
