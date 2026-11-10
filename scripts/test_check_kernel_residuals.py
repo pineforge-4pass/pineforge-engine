@@ -213,6 +213,17 @@ def ar_bytes(members: list[tuple[str, bytes]]) -> bytes:
     return bytes(output)
 
 
+def bsd_extended_ar_member(name: str, contents: bytes) -> bytes:
+    """One BSD #1/<length> member, without the archive's global header."""
+    encoded_name = name.encode("ascii")
+    encoded_name += b"\0" * (-len(encoded_name) % 4)
+    payload = encoded_name + contents
+    marker = "#1/" + str(len(encoded_name))
+    header = (f'{marker:<16}{0:<12}{0:<6}{0:<6}'
+              f'{"100644":<8}{len(payload):<10}`\n').encode("ascii")
+    return header + payload + (b"\n" if len(payload) % 2 else b"")
+
+
 def macho_object(sections: list[tuple[str, bytes, int, str]], *,
                  is_64: bool = True, endian: str = "<",
                  cputype: int | None = None) -> bytes:
@@ -720,6 +731,120 @@ class ObjectSectionTests(unittest.TestCase):
         self.assertEqual(tool, "fixture-no-debug")
         self.assertEqual(nm, symbols.splitlines())
         return strings, nm
+
+    def test_archive_members_rejects_extra_non_object_member(self) -> None:
+        """A valid ELF payload cannot disappear because its name lacks .o."""
+        neutral = elf64([(".rodata", b"neutral\0", 2)])
+        forbidden = elf64([(".rodata", b"xx TvJO yy\0", 2)])
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-members-") as directory:
+            root = Path(directory)
+            control = root / "objects.a"
+            control.write_bytes(ar_bytes([("probe.o", neutral), ("blob.o", forbidden)]))
+            self.assertEqual(guard.archive_members(control), ["probe.o", "blob.o"])
+
+            archive = root / "with-blob.a"
+            archive.write_bytes(ar_bytes([("probe.o", neutral), ("blob.bin", forbidden)]))
+            self.assertEqual(guard.run_tool(["ar", "t", str(archive)]).splitlines(),
+                             ["probe.o", "blob.bin"])
+            with self.assertRaises(guard.InfrastructureError) as raised:
+                guard.archive_members(archive)
+            message = str(raised.exception)
+            self.assertIn("blob.bin", message)
+            self.assertRegex(message, r"\bmembers?\b")
+            self.assertRegex(message, r"\b(?:extra|unsupported|non[- ]object)\b")
+            self.assertNotRegex(message,
+                                r"not on PATH|could not run|failed:|malformed|truncated")
+
+    def test_read_archive_rejects_or_reports_extra_member_data(self) -> None:
+        """Real ar/strings/parsing must reject blob.bin or expose its residue."""
+        neutral = elf64([(".rodata", b"neutral\0", 2)])
+        forbidden = elf64([(".rodata", b"xx TvJO yy\0", 2)])
+        data = ar_bytes([("probe.o", neutral), ("blob.bin", forbidden)])
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-member-data-") as directory:
+            root = Path(directory)
+            # The identical payload with a .o name proves it parses and is unruled.
+            strings, nm = self.read_archive_fixture(
+                ar_bytes([("probe.o", neutral), ("blob.o", forbidden)]), root / "objects")
+            self.assertIn("xx TvJO yy", strings)
+            self.assertIn("TvJO", self.unruled_tokens(strings, nm))
+
+            # Existing helper stubs only stripping and nm symbols. Listing,
+            # extraction, strings, object parsing and evaluation remain real.
+            try:
+                strings, nm = self.read_archive_fixture(data, root / "with-blob")
+            except guard.InfrastructureError as error:
+                message = str(error)
+                self.assertIn("blob.bin", message)
+                self.assertRegex(message, r"\bmembers?\b")
+                self.assertRegex(message, r"\b(?:extra|unsupported|non[- ]object)\b")
+                self.assertNotRegex(message,
+                                    r"not on PATH|could not run|failed:|malformed|truncated")
+            else:
+                self.assertIn("xx TvJO yy", strings)
+                self.assertIn("TvJO", self.unruled_tokens(strings, nm))
+
+    def test_kernel_source_files_rejects_extra_member_through_archive_members(self) -> None:
+        """The source-list check cannot look exact after dropping blob.bin."""
+        neutral = elf64([(".rodata", b"neutral\0", 2)])
+        forbidden = elf64([(".rodata", b"xx TvJO yy\0", 2)])
+        cmake = "set(PINEFORGE_KERNEL_SOURCES\n    src/probe.cpp\n)\n"
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-source-members-") as directory:
+            root = Path(directory)
+            source = root / "src" / "probe.cpp"
+            source.parent.mkdir()
+            source.write_text('const char* probe_text = "neutral";\n', encoding="utf-8")
+            control = root / "objects.a"
+            control.write_bytes(ar_bytes([("probe.cpp.o", neutral)]))
+            self.assertEqual(
+                guard.kernel_source_files(root, cmake, guard.archive_members(control)),
+                [source])
+
+            archive = root / "with-blob.a"
+            archive.write_bytes(ar_bytes([("probe.cpp.o", neutral), ("blob.bin", forbidden)]))
+            with self.assertRaises(guard.InfrastructureError) as raised:
+                guard.kernel_source_files(root, cmake, guard.archive_members(archive))
+            message = str(raised.exception)
+            self.assertIn("blob.bin", message)
+            self.assertRegex(message, r"\bmembers?\b")
+            self.assertRegex(message, r"\b(?:extra|unsupported|non[- ]object)\b")
+            self.assertNotRegex(message,
+                                r"missing|not on PATH|could not run|failed:|malformed|truncated")
+
+    def test_archive_members_preserves_legitimate_object_members(self) -> None:
+        """Accept actual .o members and retain each member's neutral data."""
+        data = ar_bytes([
+            ("probe.o", elf64([(".rodata", b"neutral probe data\0", 2)])),
+            ("other.o", elf64([(".rodata", b"neutral other data\0", 2)])),
+        ])
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-object-members-") as directory:
+            root = Path(directory)
+            archive = root / "objects.a"
+            archive.write_bytes(data)
+            self.assertEqual(guard.archive_members(archive), ["probe.o", "other.o"])
+            strings, nm = self.read_archive_fixture(data, root / "read")
+            self.assertEqual(strings, ["neutral probe data", "neutral other data"])
+            self.assertEqual(self.unruled_tokens(strings, nm), set())
+
+    def test_archive_members_preserves_first_macos_symbol_tables(self) -> None:
+        """BSD parsing fixtures only; these are not macOS runtime evidence."""
+        neutral = elf64([(".rodata", b"neutral\0", 2)])
+        objects = ar_bytes([("probe.o", neutral)])
+        # Empty BSD ranlib table: zero entry bytes, then zero string-table bytes.
+        empty_index = struct.pack("<II", 0, 0)
+        with tempfile.TemporaryDirectory(prefix="pineforge-residual-bsd-members-") as directory:
+            root = Path(directory)
+            for index, name in enumerate(("__.SYMDEF", "__.SYMDEF SORTED")):
+                with self.subTest(name=name):
+                    # Full names, including all 16 bytes of the SORTED label,
+                    # precede the index payload in a BSD extended-name member.
+                    data = (objects[:8] + bsd_extended_ar_member(name, empty_index)
+                            + objects[8:])
+                    archive = root / f"index-{index}.a"
+                    archive.write_bytes(data)
+                    self.assertEqual(guard.archive_members(archive), ["probe.o"])
+                    strings, nm = self.read_archive_fixture(data, root / f"read-{index}")
+                    self.assertEqual(strings, ["neutral"])
+                    self.assertEqual(self.unruled_tokens(strings, nm), set())
 
     def test_machine_code_bytes_in_text_are_ignored(self) -> None:
         """Must fail on the old read_archive's whole-archive strings scan."""
