@@ -360,7 +360,12 @@ def _apple_condition(expression: str) -> set[bool]:
 
 
 def _apple_fdatasync(text: str) -> tuple[int, list[int]]:
-    """Count lexical calls and locate those not provably excluded on Apple."""
+    """Count direct lexical calls not provably excluded on Apple.
+
+    Check bare fdatasync(...) and ::fdatasync(...), excluding member calls.
+    Indirect calls through function pointers and token-pasted calls are
+    outside this lexical check.
+    """
     # Splice before masking, as C++ does, including continued // comments.
     # Keep enough offset information to report physical source line numbers.
     splices = [match.start() - 2 * index for index, match in
@@ -368,7 +373,9 @@ def _apple_fdatasync(text: str) -> tuple[int, list[int]]:
     masked = _mask_cpp(text.replace("\\\n", ""))
     calls: dict[int, list[int]] = {}
     count = 0
-    for match in re.finditer(r"::\s*fdatasync\s*\(", masked):
+    for match in re.finditer(r"(?:::\s*|(?<!\w))fdatasync\s*\(", masked):
+        if masked[:match.start()].rstrip().endswith((".", "->")):
+            continue
         logical_line = masked.count("\n", 0, match.start()) + 1
         physical_offset = match.start() + 2 * bisect_right(splices, match.start())
         calls.setdefault(logical_line, []).append(
@@ -382,7 +389,7 @@ def _apple_fdatasync(text: str) -> tuple[int, list[int]]:
     stack: list[tuple[bool, bool, bool]] = []
     reachable = True
     exposed: list[int] = []
-    for line_number, line in enumerate(masked.splitlines(), 1):
+    for line_number, line in enumerate(masked.split("\n"), 1):
         directive = re.match(r"^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)", line)
         if directive:
             kind, expression = directive.groups()
