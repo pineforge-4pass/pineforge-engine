@@ -179,18 +179,41 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ steps.host.outputs.brew-cache }}
-          key: macos-compile-v1-${{ runner.os }}-${{ runner.arch }}-Debug-brew-eigen-ccache-${{ steps.source.outputs.sha }}
+          key: macos-compile-v2-${{ runner.os }}-${{ runner.arch }}-Debug-brew-ccache-${{ steps.source.outputs.sha }}
           restore-keys: |
-            macos-compile-v1-${{ runner.os }}-${{ runner.arch }}-Debug-brew-eigen-ccache-
+            macos-compile-v2-${{ runner.os }}-${{ runner.arch }}-Debug-brew-ccache-
 
       - name: Install dependencies
+        id: dependencies
         run: |
           set -euo pipefail
-          brew install eigen ccache
-          eigen_prefix=$(brew --prefix eigen)
-          test -f "$eigen_prefix/share/eigen3/cmake/Eigen3Config.cmake"
-          echo "CMAKE_PREFIX_PATH=$eigen_prefix${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+          brew install ccache
           ccache --version
+          eigen_work=$(mktemp -d "$RUNNER_TEMP/pineforge-eigen-3.4.0.XXXXXX")
+          eigen_archive="$eigen_work/eigen-3.4.0.tar.gz"
+          eigen_prefix="$eigen_work/install"
+          curl --fail --location --show-error --silent \
+            --output "$eigen_archive" \
+            https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
+          printf '8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72  %s\n' "$eigen_archive" | shasum -a 256 --check
+          tar -xzf "$eigen_archive" -C "$eigen_work"
+          cmake -S "$eigen_work/eigen-3.4.0" -B "$eigen_work/build" \
+            -DCMAKE_INSTALL_PREFIX:PATH="$eigen_prefix" \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DEIGEN_BUILD_DOC=OFF \
+            -DEIGEN_BUILD_TESTING=OFF \
+            -DBUILD_TESTING=OFF \
+            -DEIGEN_BUILD_BLAS=OFF \
+            -DEIGEN_BUILD_LAPACK=OFF
+          cmake --install "$eigen_work/build"
+          eigen3_dir="$eigen_prefix/share/eigen3/cmake"
+          eigen_macros="$eigen_prefix/include/eigen3/Eigen/src/Core/util/Macros.h"
+          test -f "$eigen3_dir/Eigen3Config.cmake"
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "$eigen_macros"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "$eigen_macros"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "$eigen_macros"
+          printf 'Eigen version=3.4.0\nEigen3_DIR=%s\n' "$eigen3_dir"
+          printf 'eigen3-dir=%s\n' "$eigen3_dir" >> "$GITHUB_OUTPUT"
 
       - name: Restore ccache
         id: ccache-restore
@@ -205,6 +228,7 @@ jobs:
         env:
           C_COMPILER: ${{ steps.host.outputs.c-compiler }}
           CXX_COMPILER: ${{ steps.host.outputs.cxx-compiler }}
+          EIGEN3_DIR: ${{ steps.dependencies.outputs.eigen3-dir }}
         run: |
           set -euo pipefail
           cmake -S . -B build \
@@ -214,7 +238,7 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            -DEigen3_DIR:PATH="$(brew --prefix eigen)/share/eigen3/cmake" \
+            -DEigen3_DIR:PATH="$EIGEN3_DIR" \
             -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
             -DPINEFORGE_BUILD_TESTS=ON \
             -DPINEFORGE_BUILD_SOURCE_LAYER=ON \
