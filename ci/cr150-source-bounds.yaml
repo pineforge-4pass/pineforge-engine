@@ -97,7 +97,10 @@ ceilings:
   # accessor and the writer's transfer buffer, transfer bytes, carried bytes and
   # integer text temporaries. None is bounded.
   # expectation corrected: unreviewed 1409 -> 1410, because the merged main's five groups retain the live-object scalar key; OPEN.
-  unreviewed: 1410
+  # Three more unreviewed groups: the selected-capacity Source stage's chunk
+  # buffer, its record window and its stored message. None is bounded in the
+  # gate's sense: no fixed input is declared for them.
+  unreviewed: 1413
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -1748,3 +1751,6 @@ entries:
   - {id: "U1733", file: "src/trade_text_writer.hpp", symbol: "std::to_string", ops: ["temp"], container: "unresolved by the index: std::to_string(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", note: "Decimal text of an unsigned 64-bit integer, at most 20 characters: the row index and the entry incarnation of each row, and the row count of the trailer. OPEN.", line: 83}
   # The live-object scalar was U1729 before main added its trade-text key; retain both under distinct ids.
   - {id: "U1734", file: "include/pineforge/detail/o1_store.hpp", symbol: "value_", ops: ["assign"], container: "unresolved by the index: value_ = ...", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 114}
+  - {id: "U1735", file: "src/selected_capacity_source_stage.cpp", symbol: "chunk_", ops: ["alloc"], container: "unresolved by the index: make_unique", owner: "selected-capacity", phase: "unclassified", state: "unreviewed", line: 38}
+  - {id: "U1736", file: "src/selected_capacity_source_stage.cpp", symbol: "window_", ops: ["decl", "grow"], container: "std::string", owner: "selected-capacity", phase: "unclassified", state: "unreviewed", line: 26}
+  - {id: "U1737", file: "src/selected_capacity_source_stage.hpp", symbol: "message", ops: ["decl"], container: "std::string", owner: "selected-capacity", phase: "unclassified", state: "unreviewed", line: 44}
