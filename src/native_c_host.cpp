@@ -43,6 +43,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -1888,20 +1889,45 @@ std::optional<std::int64_t> CCallbackHost::session_day(std::int64_t ms) const {
     if (!state.spec) return std::nullopt;
     if (!calendar_parsed_ || calendar_session_ != state.spec->session
         || calendar_timezone_ != state.spec->timezone) {
+        calendar_parsed_ = false;
         calendar_.reset();
         calendar_session_ = state.spec->session;
         calendar_timezone_ = state.spec->timezone;
-        calendar_parsed_ = true;
         try {
             calendar_ = pineforge::native_calendar::parse_session(calendar_session_,
                                                                   calendar_timezone_);
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (const std::length_error& error) {
+            throw pineforge::coded<std::length_error>(
+                pineforge::RunFailureCode::out_of_memory, {}, error);
+        } catch (const std::system_error& error) {
+            if (error.code() == std::errc::not_enough_memory
+                || error.code() == std::errc::resource_unavailable_try_again) {
+                throw pineforge::coded<std::system_error>(
+                    pineforge::RunFailureCode::out_of_memory, {}, error);
+            }
+            calendar_.reset();
         } catch (...) {
             calendar_.reset();
         }
+        calendar_parsed_ = true;
     }
     if (!calendar_) return std::nullopt;
     try {
         return pineforge::native_calendar::session_day_ordinal(*calendar_, ms);
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::length_error& error) {
+        throw pineforge::coded<std::length_error>(
+            pineforge::RunFailureCode::out_of_memory, {}, error);
+    } catch (const std::system_error& error) {
+        if (error.code() == std::errc::not_enough_memory
+            || error.code() == std::errc::resource_unavailable_try_again) {
+            throw pineforge::coded<std::system_error>(
+                pineforge::RunFailureCode::out_of_memory, {}, error);
+        }
+        return std::nullopt;
     } catch (...) {
         /* A day the calendar cannot key is no day, never a guessed one. */
         return std::nullopt;
