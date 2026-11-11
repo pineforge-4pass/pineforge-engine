@@ -522,10 +522,11 @@ double OBV::compute(double close, double volume) {
     saved_prev_close_ = prev_close_;
     saved_bar_count_ = bar_count_;
     if (is_na(close) || is_na(volume)) return na<double>();
+    // TradingView's OBV term needs the previous bar's close, so the first bar has no value.
     if (bar_count_ == 0) {
         prev_close_ = close;
         bar_count_++;
-        return 0.0;
+        return na<double>();
     }
     if (close > prev_close_) sum_ += volume;
     else if (close < prev_close_) sum_ -= volume;
