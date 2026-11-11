@@ -39798,7 +39798,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: on_applied ( const native_order :: ExecutionAppliedEvent & event , const NativeDecisionContext & context ) #1",
     "if ( placement_snapshot && placement_snapshot -> opening && std :: abs ( event . opened_units ) > 0 . 0 && policy_script_bar_valid_ ) #1",
-    "if ( ( full_margin_opening || placement_snapshot -> has_full_entry_bracket ) && ! preopen_margin_already_scheduled && stable_opening_fx ) #1",
+    "else if ( ( full_margin_opening || placement_snapshot -> has_full_entry_bracket ) && ! preopen_margin_already_scheduled && stable_opening_fx ) #1",
     "const bool prearmed_entry_bar_margin = std :: any_of ( live_handles_ . begin ( ) , live_handles_ . end ( ) , [ & ] ( const auto & handle ) #1"
    ],
    "cls": "assign",
@@ -39812,7 +39812,7 @@
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
     "void PineExecutionAdapter :: on_applied ( const native_order :: ExecutionAppliedEvent & event , const NativeDecisionContext & context ) #1",
     "if ( placement_snapshot && placement_snapshot -> opening && std :: abs ( event . opened_units ) > 0 . 0 && policy_script_bar_valid_ ) #1",
-    "if ( ( full_margin_opening || placement_snapshot -> has_full_entry_bracket ) && ! preopen_margin_already_scheduled && stable_opening_fx ) #1",
+    "else if ( ( full_margin_opening || placement_snapshot -> has_full_entry_bracket ) && ! preopen_margin_already_scheduled && stable_opening_fx ) #1",
     "else if ( opening_check_due && exit_first_at_open && ! same_point_pair_fill_follows ( * placement_snapshot , event . handle ( ) , event . resolved_price ) ) #1"
    ],
    "cls": "assign",

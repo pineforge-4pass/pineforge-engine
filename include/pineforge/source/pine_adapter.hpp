@@ -1831,6 +1831,7 @@ public:
         // fraction), and whether the book is short.
         double scale = 0.0;
         bool short_book = false;
+        bool long_tick_book = false;
     };
     SourceMarginMoney source_margin_money(double mark_price,
                                           std::int64_t sub_bar_open_ms) const;
@@ -2337,7 +2338,10 @@ private:
                                   bool force_execution_price = true,
                                   std::optional<double> resolved_execution_price = std::nullopt);
     bool submit_tv_money_long_margin_call(const Bar&, const NativeDecisionContext&,
-                                          int* fired_waypoint = nullptr);
+                                          int* fired_waypoint = nullptr,
+                                          bool through_close_point = true);
+    bool long_tick_margin_scope() const;
+    void observe_long_tick_margin_bar(const Bar&);
     void fold_source_money();
     void fold_source_money_through(const PineStrategyHost& pine, std::uint64_t count);
     bool gain_loss_regime() const;
@@ -3072,6 +3076,14 @@ private:
     std::int64_t owed_follow_up_bar_ = std::numeric_limits<std::int64_t>::min();
     std::int32_t owed_follow_up_point_ = -1;
     double owed_follow_up_units_ = 0.0;
+    // A qualifying full-margin long keeps the tick checkpoint policy
+    // through the position. The cursor avoids checking its opening
+    // twice; a single re-check after a sale owes units to the next waypoint,
+    // including the next open after a close. Cleared at flat or reversal.
+    bool long_tick_margin_active_ = false;
+    std::int64_t long_tick_margin_bar_ = std::numeric_limits<std::int64_t>::min();
+    std::int32_t long_tick_margin_point_ = -1;
+    double long_tick_margin_owed_units_ = 0.0;
     // A margin call booked at a close after the script (the close's own
     // check or a follow-up owed there): the script bar, the book the script
     // saw and the units called. A reversal the script placed there keeps the
