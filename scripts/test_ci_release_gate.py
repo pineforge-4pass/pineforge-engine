@@ -1,33 +1,26 @@
 #!/usr/bin/env python3
-"""Release gate decisions, isolated git writers/history and source pins.
-
-Includes local artifact-custody shell controls.
-"""
+"""Release gate decisions, source pins and local artifact-custody shell controls."""
 from __future__ import annotations
 
 import ast
 import contextlib
 from collections import Counter
 import errno
-import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import re
-import shlex
 import subprocess
 import tempfile
 import unicodedata
 import unittest
 from unittest import mock
 
-from ci_preflight import (_jobs, _steps, release_bump_workflow_findings,
-                          release_prebuilt_workflow_findings)
-from ci_docs_only import is_documentation
+import hashlib
 import ci_preflight
+from ci_preflight import _jobs, _steps, release_prebuilt_workflow_findings
 import ci_release_gate
-import gen_run_failure_catalog_diff as catalog_diff
 import release_upload_context_proof
 
 
@@ -52,7 +45,7 @@ DEFAULT_RULESET_API = f"repos/{REPO}/rulesets/101"
 STRICT_RULESET_API = f"repos/{REPO}/rulesets/202"
 BEFORE_TREE_API = f"repos/{REPO}/git/trees/{TREE}?recursive=1"
 AFTER_TREE_API = f"repos/{REPO}/git/trees/{OTHER_TREE}?recursive=1"
-GATE_NAME = "Refuse unless authenticated parity and exact-SHA full CI are green"
+GATE_NAME = "Refuse unless pineforge/verify and pineforge/parity are green"
 RULESET_BARRIER_REFUSAL = (
     "main requires an active applicable pull_request ruleset with bypass_actors "
     "exactly Integration 4105147 with bypass_mode always")
@@ -103,8 +96,7 @@ def http_response(code, body, headers=None):
 
 def push_run(*, actor="pineforge-app[bot]", triggering_actor="pineforge-app[bot]",
              event="push", branch="main", sha=SHA):
-    return {"id": 8801, "run_attempt": 1, "status": "completed", "conclusion": "success",
-            "event": event, "head_branch": branch, "head_sha": sha,
+    return {"event": event, "head_branch": branch, "head_sha": sha,
             "actor": {"login": actor}, "triggering_actor": {"login": triggering_actor}}
 
 
@@ -120,10 +112,6 @@ def ci_post_runs_api(sha, *, repo=REPO):
 
 def ci_post_jobs_api(run_id, *, repo=REPO):
     return f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"
-
-
-def run_metadata_api(run_id, *, repo=REPO):
-    return f"repos/{repo}/actions/runs/{run_id}"
 
 
 def ci_post_run(run_id, *, sha=SHA, branch="main", state="completed", conclusion="success",
@@ -151,23 +139,9 @@ def linux_ci_post_jobs():
         for index, job in enumerate(amd64) for shard in range(1, 5)]
 
 
-def jobs_page(rows, *, total=None, headers=None):
+def jobs_page(rows, *, total=None):
     return http_response(200, json.dumps({
-        "total_count": len(rows) if total is None else total, "jobs": rows}), headers)
-
-
-def attempt_api(run_id, attempt, *, repo=REPO):
-    return f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}"
-
-
-def attempt_jobs_api(run_id, attempt, *, repo=REPO):
-    return attempt_api(run_id, attempt, repo=repo) + "/jobs?per_page=100"
-
-
-def attempt_reads(row, *, repo=REPO):
-    return [call for attempt in range(1, row["run_attempt"] + 1) for call in (
-        (attempt_api(row["id"], attempt, repo=repo), False, None),
-        (attempt_jobs_api(row["id"], attempt, repo=repo), True, None))]
+        "total_count": len(rows) if total is None else total, "jobs": rows}))
 
 
 def bypass(actor_id=4105147, actor_type="Integration", mode="always"):
@@ -229,22 +203,8 @@ def git_tree(sha, entries, *, truncated=False):
     return json.dumps({"sha": sha, "truncated": truncated, "tree": entries})
 
 
-class FixtureResponse(str):
-    """A string view for old gates, retaining the exact synthetic transport bytes.
-
-    Existing text fixtures are UTF-8 encoded at the fake transport boundary,
-    never reconstructed from parsed objects. Recorded projections retain their
-    existing descriptors; these HTTP envelopes are synthetic, not raw captures.
-    """
-
-    def __new__(cls, received_bytes):
-        result = super().__new__(cls, received_bytes.decode("utf-8", errors="surrogateescape"))
-        result.received_bytes = received_bytes
-        return result
-
-
 class FakeAPI:
-    """Exact synthetic gh stdout fixtures; the transport is the only responder fake."""
+    """Raw gh responses keyed by exact endpoint, including jq/pagination flags."""
 
     def __init__(self):
         self.responses = {
@@ -262,50 +222,27 @@ class FakeAPI:
         if endpoint not in self.responses:
             raise AssertionError(f"unexpected API endpoint: {endpoint}")
         response = self.responses[endpoint]
-        if callable(response):
-            response = response()
         if isinstance(response, Exception):
             raise response
-        if isinstance(response, str):
-            return FixtureResponse(response.encode("utf-8"))
-        if isinstance(response, bytes):
-            return FixtureResponse(response)
         return response
 
     def statuses(self, rows):
         self.responses[STATUSES_API] = json.dumps(rows)
 
     def ci_post(self, row, jobs, *, repo=REPO):
-        # Synthetic single-attempt metadata; rerun controls supply every attempt.
-        self.responses.setdefault(f"repos/{repo}/commits/{row['head_sha']}",
-                                  json.dumps(commit(row["head_sha"], TREE)))
+        # Opt in only: old rows retain their exact responses and call lists.
         self.responses.update({
             ci_post_runs_api(row["head_sha"], repo=repo): runs_page([row]),
             ci_post_jobs_api(row["id"], repo=repo): jobs_page(jobs),
         })
-        self.attempts(row, {1: jobs}, repo=repo)
-
-    def attempts(self, row, jobs_by_attempt, *, metadata=None, repo=REPO):
-        self.responses[run_metadata_api(row["id"], repo=repo)] = json.dumps(row)
-        for attempt, jobs in jobs_by_attempt.items():
-            run = {**row, "run_attempt": attempt}
-            if metadata is not None:
-                run.update(metadata[attempt])
-            self.responses[attempt_api(row["id"], attempt, repo=repo)] = json.dumps(run)
-            self.responses[attempt_jobs_api(row["id"], attempt, repo=repo)] = jobs_page(jobs)
 
     def ci_post_runs(self, sha, rows, jobs_by_run, *, repo=REPO):
-        # Default/latest jobs are opt-in. Synthetic one-attempt audit pages
-        # are separate, with an explicitly empty page for docs-health-only rows.
+        # Register only the exact runs/jobs endpoints this fixture supplies.
         self.responses[ci_post_runs_api(sha, repo=repo)] = runs_page(rows)
         self.responses.update({
             ci_post_jobs_api(run_id, repo=repo): jobs_page(jobs)
             for run_id, jobs in jobs_by_run.items()
         })
-        for row in rows:
-            self.responses.setdefault(f"repos/{repo}/commits/{row['head_sha']}",
-                                      json.dumps(commit(row["head_sha"], TREE)))
-            self.attempts(row, {1: jobs_by_run.get(row["id"], [])}, repo=repo)
 
     def rulesets(self, rows):
         self.responses[RULESETS_API] = http_response(200, json.dumps(ruleset_summaries(rows)))
@@ -327,7 +264,6 @@ class FakeAPI:
             AFTER_TREE_API: git_tree(OTHER_TREE, bump_files(after=True)),
         })
         self.rulesets(release_rulesets())
-        self.attempts(push_run(), {1: []})
 
 
 class FakeHistory:
@@ -346,1052 +282,6 @@ class FakeHistory:
             raise response
         parent, paths = response
         return parent, list(paths)
-
-
-class ReleaseSnapshot:
-    """Committed git bytes; the production transition checker judges them."""
-
-    def __init__(self, version="1.1.0", *, tags=("v1.0.0",)):
-        self.ref = SHA
-        self.parent = BUMP_PARENT
-        self.parent_list = [BUMP_PARENT]
-        self.tagged = None
-        self.version = version
-        self.known_tags = list(tags)
-        self.paths = [("VERSION", "100644", "100644", "M"),
-                      ("docker/run_failure_codes_diff.json", "100644", "100644", "M")]
-        self.cfg = catalog_diff.default_config(ROOT)
-        catalog = catalog_diff.canonical_catalog({
-            "schema": catalog_diff.SCHEMA, "codes": {}})
-        self.files = {
-            (BUMP_PARENT, "VERSION"): b"1.0.0\n",
-            (SHA, "VERSION"): (version + "\n").encode(),
-            (BUMP_PARENT, catalog_diff.CATALOG): catalog,
-            (SHA, catalog_diff.CATALOG): catalog,
-            ("v1.0.0", catalog_diff.CATALOG): None,
-            (BUMP_PARENT, catalog_diff.DIFF): catalog_diff.render(
-                catalog_diff.build_diff(None, catalog, "v1.0.0", self.cfg)).encode(),
-            (SHA, catalog_diff.DIFF): catalog_diff.render(
-                catalog_diff.build_diff(catalog, catalog, "v" + version, self.cfg)).encode(),
-        }
-
-    def resolve(self, ref):
-        return SHA if ref == "HEAD" else ref
-
-    def parents(self):
-        return list(self.parent_list)
-
-    def changed_files(self, parent):
-        if parent != self.parent:
-            raise AssertionError("unexpected transition parent")
-        return list(self.paths)
-
-    def file_at(self, ref, path):
-        return self.files.get((ref, path))
-
-    def at(self, ref):
-        view = ReleaseSnapshot()
-        view.__dict__.update(self.__dict__, ref=ref)
-        return view
-
-    def newest_tag(self):
-        return "v1.0.0"
-
-    def tags(self):
-        return list(self.known_tags)
-
-    def tag_target(self, tag):
-        return self.tagged if tag == "v" + self.version else BUMP_PARENT
-
-
-# Bounded recorded-data projection, not a complete run or release-App proof.
-# Capture: GitHub job listings of run 41767951876, latest and attempts 1-3.
-# Select jobs named preflight, corpus-parity / authz, or build; retain every
-# matching row, including duplicate names and nulls. Copy the fields below
-# verbatim, including complete step arrays; omit URLs and runner/host fields.
-# Source SHA256 (latest = attempt3):
-# 575d946ddfe215d8b99137df01d2e8e24dbabaebbd0d36828bca735a0f702cd8
-# attempt1: d515507d370361b6de5648b7e8dedb7570a64edc3d37553dbe2d33519f2732b5
-# attempt2: 14dba00386426928b7e428061bae516d114d8418e31f95e7dd5b22942a08a00f
-RECORDED_CARRIED_JOBS = json.loads(r'''
-{
- "latest": [
-  {
-   "id": 126405132405,
-   "run_id": 41767951876,
-   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
-   "name": "corpus-parity / authz",
-   "run_attempt": 3,
-   "status": "completed",
-   "conclusion": "success",
-   "created_at": "2026-11-04T05:21:26Z",
-   "started_at": "2026-11-04T03:38:45Z",
-   "completed_at": "2026-11-04T03:38:48Z",
-   "steps": []
-  },
-  {
-   "id": 126405164992,
-   "run_id": 41767951876,
-   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
-   "name": "preflight",
-   "run_attempt": 3,
-   "status": "completed",
-   "conclusion": "success",
-   "created_at": "2026-11-04T05:21:32Z",
-   "started_at": "2026-11-04T03:38:56Z",
-   "completed_at": "2026-11-04T03:44:31Z",
-   "steps": [
-    {
-     "name": "Set up job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 1,
-     "started_at": "2026-11-04T03:38:57Z",
-     "completed_at": "2026-11-04T03:38:58Z"
-    },
-    {
-     "name": "Refuse an unauthorised run before anything else",
-     "status": "completed",
-     "conclusion": "skipped",
-     "number": 2,
-     "started_at": "2026-11-04T03:38:58Z",
-     "completed_at": "2026-11-04T03:38:58Z"
-    },
-    {
-     "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 3,
-     "started_at": "2026-11-04T03:38:58Z",
-     "completed_at": "2026-11-04T03:39:04Z"
-    },
-    {
-     "name": "Install workflow linters",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 4,
-     "started_at": "2026-11-04T03:39:04Z",
-     "completed_at": "2026-11-04T03:39:08Z"
-    },
-    {
-     "name": "Verify workflow wiring and source guards",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 5,
-     "started_at": "2026-11-04T03:39:08Z",
-     "completed_at": "2026-11-04T03:44:27Z"
-    },
-    {
-     "name": "Retain preflight diagnostics",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 6,
-     "started_at": "2026-11-04T03:44:27Z",
-     "completed_at": "2026-11-04T03:44:29Z"
-    },
-    {
-     "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 12,
-     "started_at": "2026-11-04T03:44:29Z",
-     "completed_at": "2026-11-04T03:44:29Z"
-    },
-    {
-     "name": "Complete job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 13,
-     "started_at": "2026-11-04T03:44:29Z",
-     "completed_at": "2026-11-04T03:44:29Z"
-    }
-   ]
-  },
-  {
-   "id": 126424565826,
-   "run_id": 41767951876,
-   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
-   "name": "build",
-   "run_attempt": 3,
-   "status": "completed",
-   "conclusion": "success",
-   "created_at": "2026-11-04T06:20:26Z",
-   "started_at": "2026-11-04T06:21:14Z",
-   "completed_at": "2026-11-04T06:21:18Z",
-   "steps": [
-    {
-     "name": "Set up job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 1,
-     "started_at": "2026-11-04T06:21:15Z",
-     "completed_at": "2026-11-04T06:21:15Z"
-    },
-    {
-     "name": "Refuse an unauthorised run before anything else",
-     "status": "completed",
-     "conclusion": "skipped",
-     "number": 2,
-     "started_at": "2026-11-04T06:21:15Z",
-     "completed_at": "2026-11-04T06:21:15Z"
-    },
-    {
-     "name": "Require every verification lane to have passed",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 3,
-     "started_at": "2026-11-04T06:21:15Z",
-     "completed_at": "2026-11-04T06:21:16Z"
-    },
-    {
-     "name": "Complete job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 4,
-     "started_at": "2026-11-04T06:21:16Z",
-     "completed_at": "2026-11-04T06:21:16Z"
-    }
-   ]
-  }
- ],
- "attempt1": [
-  {
-   "id": 126371887906,
-   "run_id": 41767951876,
-   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
-   "name": "preflight",
-   "run_attempt": 1,
-   "status": "completed",
-   "conclusion": "success",
-   "created_at": "2026-11-04T03:38:03Z",
-   "started_at": "2026-11-04T03:38:56Z",
-   "completed_at": "2026-11-04T03:44:31Z",
-   "steps": [
-    {
-     "name": "Set up job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 1,
-     "started_at": "2026-11-04T03:38:57Z",
-     "completed_at": "2026-11-04T03:38:58Z"
-    },
-    {
-     "name": "Refuse an unauthorised run before anything else",
-     "status": "completed",
-     "conclusion": "skipped",
-     "number": 2,
-     "started_at": "2026-11-04T03:38:58Z",
-     "completed_at": "2026-11-04T03:38:58Z"
-    },
-    {
-     "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 3,
-     "started_at": "2026-11-04T03:38:58Z",
-     "completed_at": "2026-11-04T03:39:04Z"
-    },
-    {
-     "name": "Install workflow linters",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 4,
-     "started_at": "2026-11-04T03:39:04Z",
-     "completed_at": "2026-11-04T03:39:08Z"
-    },
-    {
-     "name": "Verify workflow wiring and source guards",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 5,
-     "started_at": "2026-11-04T03:39:08Z",
-     "completed_at": "2026-11-04T03:44:27Z"
-    },
-    {
-     "name": "Retain preflight diagnostics",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 6,
-     "started_at": "2026-11-04T03:44:27Z",
-     "completed_at": "2026-11-04T03:44:29Z"
-    },
-    {
-     "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 12,
-     "started_at": "2026-11-04T03:44:29Z",
-     "completed_at": "2026-11-04T03:44:29Z"
-    },
-    {
-     "name": "Complete job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 13,
-     "started_at": "2026-11-04T03:44:29Z",
-     "completed_at": "2026-11-04T03:44:29Z"
-    }
-   ]
-  },
-  {
-   "id": 126371888529,
-   "run_id": 41767951876,
-   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
-   "name": "corpus-parity / authz",
-   "run_attempt": 1,
-   "status": "completed",
-   "conclusion": "success",
-   "created_at": "2026-11-04T03:38:03Z",
-   "started_at": "2026-11-04T03:38:45Z",
-   "completed_at": "2026-11-04T03:38:48Z",
-   "steps": [
-    {
-     "name": "Set up job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 1,
-     "started_at": "2026-11-04T03:38:46Z",
-     "completed_at": "2026-11-04T03:38:46Z"
-    },
-    {
-     "name": "Only our own pull requests and our own events run CI",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 2,
-     "started_at": "2026-11-04T03:38:46Z",
-     "completed_at": "2026-11-04T03:38:46Z"
-    },
-    {
-     "name": "Complete job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 3,
-     "started_at": "2026-11-04T03:38:46Z",
-     "completed_at": "2026-11-04T03:38:46Z"
-    }
-   ]
-  },
-  {
-   "id": 126392478276,
-   "run_id": 41767951876,
-   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
-   "name": "build",
-   "run_attempt": 1,
-   "status": "completed",
-   "conclusion": "failure",
-   "created_at": "2026-11-04T04:42:05Z",
-   "started_at": "2026-11-04T04:43:33Z",
-   "completed_at": "2026-11-04T04:43:36Z",
-   "steps": [
-    {
-     "name": "Set up job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 1,
-     "started_at": "2026-11-04T04:43:34Z",
-     "completed_at": "2026-11-04T04:43:34Z"
-    },
-    {
-     "name": "Refuse an unauthorised run before anything else",
-     "status": "completed",
-     "conclusion": "skipped",
-     "number": 2,
-     "started_at": "2026-11-04T04:43:34Z",
-     "completed_at": "2026-11-04T04:43:34Z"
-    },
-    {
-     "name": "Require every verification lane to have passed",
-     "status": "completed",
-     "conclusion": "failure",
-     "number": 3,
-     "started_at": "2026-11-04T04:43:34Z",
-     "completed_at": "2026-11-04T04:43:35Z"
-    },
-    {
-     "name": "Complete job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 4,
-     "started_at": "2026-11-04T04:43:35Z",
-     "completed_at": "2026-11-04T04:43:35Z"
-    }
-   ]
-  }
- ],
- "attempt2": [
-  {
-   "id": 126393439911,
-   "run_id": 41767951876,
-   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
-   "name": "corpus-parity / authz",
-   "run_attempt": 2,
-   "status": "pending",
-   "conclusion": null,
-   "created_at": "2026-11-04T04:45:10Z",
-   "started_at": "2026-11-04T04:45:10Z",
-   "completed_at": null,
-   "steps": []
-  },
-  {
-   "id": 126393440242,
-   "run_id": 41767951876,
-   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
-   "name": "preflight",
-   "run_attempt": 2,
-   "status": "completed",
-   "conclusion": "success",
-   "created_at": "2026-11-04T04:45:10Z",
-   "started_at": "2026-11-04T03:38:56Z",
-   "completed_at": "2026-11-04T03:44:31Z",
-   "steps": [
-    {
-     "name": "Set up job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 1,
-     "started_at": "2026-11-04T03:38:57Z",
-     "completed_at": "2026-11-04T03:38:58Z"
-    },
-    {
-     "name": "Refuse an unauthorised run before anything else",
-     "status": "completed",
-     "conclusion": "skipped",
-     "number": 2,
-     "started_at": "2026-11-04T03:38:58Z",
-     "completed_at": "2026-11-04T03:38:58Z"
-    },
-    {
-     "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 3,
-     "started_at": "2026-11-04T03:38:58Z",
-     "completed_at": "2026-11-04T03:39:04Z"
-    },
-    {
-     "name": "Install workflow linters",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 4,
-     "started_at": "2026-11-04T03:39:04Z",
-     "completed_at": "2026-11-04T03:39:08Z"
-    },
-    {
-     "name": "Verify workflow wiring and source guards",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 5,
-     "started_at": "2026-11-04T03:39:08Z",
-     "completed_at": "2026-11-04T03:44:27Z"
-    },
-    {
-     "name": "Retain preflight diagnostics",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 6,
-     "started_at": "2026-11-04T03:44:27Z",
-     "completed_at": "2026-11-04T03:44:29Z"
-    },
-    {
-     "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 12,
-     "started_at": "2026-11-04T03:44:29Z",
-     "completed_at": "2026-11-04T03:44:29Z"
-    },
-    {
-     "name": "Complete job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 13,
-     "started_at": "2026-11-04T03:44:29Z",
-     "completed_at": "2026-11-04T03:44:29Z"
-    }
-   ]
-  },
-  {
-   "id": 126393440365,
-   "run_id": 41767951876,
-   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
-   "name": "corpus-parity / authz",
-   "run_attempt": 2,
-   "status": "completed",
-   "conclusion": "success",
-   "created_at": "2026-11-04T04:45:10Z",
-   "started_at": "2026-11-04T03:38:45Z",
-   "completed_at": "2026-11-04T03:38:48Z",
-   "steps": []
-  },
-  {
-   "id": 126404305583,
-   "run_id": 41767951876,
-   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
-   "name": "build",
-   "run_attempt": 2,
-   "status": "completed",
-   "conclusion": "failure",
-   "created_at": "2026-11-04T05:18:58Z",
-   "started_at": "2026-11-04T05:20:27Z",
-   "completed_at": "2026-11-04T05:20:30Z",
-   "steps": [
-    {
-     "name": "Set up job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 1,
-     "started_at": "2026-11-04T05:20:27Z",
-     "completed_at": "2026-11-04T05:20:28Z"
-    },
-    {
-     "name": "Refuse an unauthorised run before anything else",
-     "status": "completed",
-     "conclusion": "skipped",
-     "number": 2,
-     "started_at": "2026-11-04T05:20:28Z",
-     "completed_at": "2026-11-04T05:20:28Z"
-    },
-    {
-     "name": "Require every verification lane to have passed",
-     "status": "completed",
-     "conclusion": "failure",
-     "number": 3,
-     "started_at": "2026-11-04T05:20:28Z",
-     "completed_at": "2026-11-04T05:20:28Z"
-    },
-    {
-     "name": "Complete job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 4,
-     "started_at": "2026-11-04T05:20:28Z",
-     "completed_at": "2026-11-04T05:20:28Z"
-    }
-   ]
-  }
- ],
- "attempt3": [
-  {
-   "id": 126405132405,
-   "run_id": 41767951876,
-   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
-   "name": "corpus-parity / authz",
-   "run_attempt": 3,
-   "status": "completed",
-   "conclusion": "success",
-   "created_at": "2026-11-04T05:21:26Z",
-   "started_at": "2026-11-04T03:38:45Z",
-   "completed_at": "2026-11-04T03:38:48Z",
-   "steps": []
-  },
-  {
-   "id": 126405164992,
-   "run_id": 41767951876,
-   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
-   "name": "preflight",
-   "run_attempt": 3,
-   "status": "completed",
-   "conclusion": "success",
-   "created_at": "2026-11-04T05:21:32Z",
-   "started_at": "2026-11-04T03:38:56Z",
-   "completed_at": "2026-11-04T03:44:31Z",
-   "steps": [
-    {
-     "name": "Set up job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 1,
-     "started_at": "2026-11-04T03:38:57Z",
-     "completed_at": "2026-11-04T03:38:58Z"
-    },
-    {
-     "name": "Refuse an unauthorised run before anything else",
-     "status": "completed",
-     "conclusion": "skipped",
-     "number": 2,
-     "started_at": "2026-11-04T03:38:58Z",
-     "completed_at": "2026-11-04T03:38:58Z"
-    },
-    {
-     "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 3,
-     "started_at": "2026-11-04T03:38:58Z",
-     "completed_at": "2026-11-04T03:39:04Z"
-    },
-    {
-     "name": "Install workflow linters",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 4,
-     "started_at": "2026-11-04T03:39:04Z",
-     "completed_at": "2026-11-04T03:39:08Z"
-    },
-    {
-     "name": "Verify workflow wiring and source guards",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 5,
-     "started_at": "2026-11-04T03:39:08Z",
-     "completed_at": "2026-11-04T03:44:27Z"
-    },
-    {
-     "name": "Retain preflight diagnostics",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 6,
-     "started_at": "2026-11-04T03:44:27Z",
-     "completed_at": "2026-11-04T03:44:29Z"
-    },
-    {
-     "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 12,
-     "started_at": "2026-11-04T03:44:29Z",
-     "completed_at": "2026-11-04T03:44:29Z"
-    },
-    {
-     "name": "Complete job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 13,
-     "started_at": "2026-11-04T03:44:29Z",
-     "completed_at": "2026-11-04T03:44:29Z"
-    }
-   ]
-  },
-  {
-   "id": 126424565826,
-   "run_id": 41767951876,
-   "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
-   "name": "build",
-   "run_attempt": 3,
-   "status": "completed",
-   "conclusion": "success",
-   "created_at": "2026-11-04T06:20:26Z",
-   "started_at": "2026-11-04T06:21:14Z",
-   "completed_at": "2026-11-04T06:21:18Z",
-   "steps": [
-    {
-     "name": "Set up job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 1,
-     "started_at": "2026-11-04T06:21:15Z",
-     "completed_at": "2026-11-04T06:21:15Z"
-    },
-    {
-     "name": "Refuse an unauthorised run before anything else",
-     "status": "completed",
-     "conclusion": "skipped",
-     "number": 2,
-     "started_at": "2026-11-04T06:21:15Z",
-     "completed_at": "2026-11-04T06:21:15Z"
-    },
-    {
-     "name": "Require every verification lane to have passed",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 3,
-     "started_at": "2026-11-04T06:21:15Z",
-     "completed_at": "2026-11-04T06:21:16Z"
-    },
-    {
-     "name": "Complete job",
-     "status": "completed",
-     "conclusion": "success",
-     "number": 4,
-     "started_at": "2026-11-04T06:21:16Z",
-     "completed_at": "2026-11-04T06:21:16Z"
-    }
-   ]
-  }
- ]
-}
-''')
-
-class ReleasePhaseTests(unittest.TestCase):
-    def setUp(self):
-        self.api = FakeAPI()
-        self.api.release_bump()
-        self.snapshot = ReleaseSnapshot()
-        self.history = FakeHistory({SHA: (BUMP_PARENT, ["VERSION", catalog_diff.DIFF])})
-        self.api.ci_post(ci_post_run(9001), ci_post_jobs())
-        self.git = mock.Mock(side_effect=AssertionError("unexpected ancestry read"))
-        patch = mock.patch.object(ci_release_gate, "MAIN_PROOF_WATCHER_FIRST_SHA", None)
-        patch.start()
-        self.addCleanup(patch.stop)
-
-    def run_phase(self, phase="tag", dispatch=BUMP_PARENT):
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = ci_release_gate.main(
-                ["gate", "--repo", REPO, "--sha", SHA, "--ref", "refs/heads/main",
-                 "--phase", phase, "--dispatch-sha", dispatch],
-                api=self.api, git=self.git, history=self.history, release_git=self.snapshot)
-        return code, out.getvalue(), err.getvalue()
-
-    def test_tag_requires_parent_identity_and_never_accepts_an_ordinary_pr(self):
-        for dispatch in ("", "not-a-sha", SHA):
-            with self.subTest(dispatch=dispatch):
-                code, out, err = self.run_phase(dispatch=dispatch)
-                self.assertEqual(code, 1, (out, err))
-                self.assertEqual(out, "")
-                self.assertEqual(err, "::error::tag phase requires the phase1 dispatch SHA\n")
-        code, out, err = self.run_phase(dispatch=HEAD)
-        self.assertEqual(code, 1, (out, err))
-        self.assertEqual(out, "")
-        self.assertEqual(err, "::error::release bump parent does not equal "
-                         "the phase1 dispatch SHA\n")
-        self.api.responses[PULLS_API] = json.dumps([pull()])
-        self.api.responses[BUMP_API] = json.dumps(commit(SHA, TREE))
-        code, out, err = self.run_phase()
-        self.assertEqual(code, 1, (out, err))
-        self.assertEqual(out, "")
-        self.assertEqual(err, "::error::release bump requires exactly one valid parent\n")
-        self.api.release_bump()
-        self.api.responses[MAIN_API] = OTHER_HEAD
-        code, out, err = self.run_phase()
-        self.assertEqual(code, 1, (out, err))
-        self.assertEqual(out, "")
-        self.assertEqual(err, f"::error::release sha {SHA} is not current main head {OTHER_HEAD}\n")
-        self.api.responses[MAIN_API] = SHA
-        self.snapshot.ref = OTHER_HEAD
-        code, out, err = self.run_phase()
-        self.assertEqual(code, 1, (out, err))
-        self.assertEqual(out, "")
-        self.assertEqual(err, "::error::release checkout is not the exact dispatch SHA\n")
-
-    def test_tag_refuses_local_parent_disagreement_after_authenticated_api_bump(self):
-        for parents, finding in (
-                ([], "release transition requires a single parent"),
-                ([BUMP_PARENT, HEAD], "release transition requires a single parent"),
-                ([HEAD], "release bump parent does not equal the phase1 dispatch SHA")):
-            with self.subTest(parents=parents):
-                self.snapshot.parent_list = parents
-                code, out, err = self.run_phase()
-                self.assertEqual(code, 1, (out, err))
-                self.assertEqual(out, "")
-                self.assertEqual(err, f"::error::{finding}\n")
-
-    def test_tag_refuses_local_path_disagreement_after_authenticated_api_bump(self):
-        regular = list(self.snapshot.paths)
-        for paths in (
-                regular + [("README.md", "100644", "100644", "M")],
-                regular[:1],
-                [("VERSION", "100644", "000000", "D"), regular[1]],
-                [regular[0], (catalog_diff.DIFF, "100644", "120000", "M")]):
-            with self.subTest(paths=paths):
-                self.snapshot.paths = paths
-                code, out, err = self.run_phase()
-                self.assertEqual(code, 1, (out, err))
-                self.assertEqual(out, "")
-                self.assertEqual(err, "::error::release transition must modify exactly VERSION "
-                                 "and docker/run_failure_codes_diff.json as regular files\n")
-
-    def test_tag_refuses_untrusted_parent_status_creators(self):
-        for context in ("pineforge/parity", "pineforge/verify"):
-            for login, creator_type in (("untrusted-operator", "User"), ("luisleo526", "Bot")):
-                with self.subTest(context=context, login=login, creator_type=creator_type):
-                    newest = status(context)
-                    newest["creator"] = {"login": login, "type": creator_type}
-                    self.api.statuses([newest, *successes()])
-                    code, out, err = self.run_phase()
-                    self.assertEqual(code, 1, (out, err))
-                    self.assertEqual(out, "")
-                    self.assertEqual(err, f"::error::API {STATUSES_API}: {context}: "
-                                     f"refused status creator (login={login!r}, "
-                                     f"type={creator_type!r})\n")
-
-    def test_tag_uses_authenticated_parent_parity_and_own_ci(self):
-        code, out, err = self.run_phase()
-        self.assertEqual(code, 0, (out, err))
-        self.assertIn(f"parent {BUMP_PARENT}", out)
-        self.assertIn(f"ci-post run 9001 for {SHA}", out)
-        self.assertIn((STATUSES_API, True, None), self.api.calls)
-        self.assertNotIn((f"repos/{REPO}/commits/{SHA}/statuses?per_page=100", True, None),
-                         self.api.calls)
-        self.api.statuses([status("pineforge/parity", "failure"), *successes()])
-        code, out, err = self.run_phase()
-        self.assertEqual(code, 1, (out, err))
-        self.assertIn("pineforge/parity=failure", err)
-        self.api.statuses([])
-        code, out, err = self.run_phase()
-        self.assertEqual(code, 1, (out, err))
-        self.assertIn("missing pineforge/parity", err)
-
-    def test_tag_honors_parent_receipt_cutover_without_bump_receipt_or_pr_fallback(self):
-        self.git.side_effect = lambda first, sha: first == sha == BUMP_PARENT
-        with mock.patch.object(ci_release_gate, "MAIN_PROOF_WATCHER_FIRST_SHA", BUMP_PARENT):
-            for receipt in ({"pineforge/parity": "success"}, {}, None,
-                            {"pineforge/parity": "failure"}):
-                with self.subTest(receipt=receipt):
-                    self.api.calls.clear()
-                    with mock.patch.object(ci_release_gate, "read_main_proof",
-                                           return_value=receipt) as reader:
-                        code, out, err = self.run_phase()
-                    self.assertEqual(code, 0 if receipt == {"pineforge/parity": "success"} else 1,
-                                     (out, err))
-                    reader.assert_called_once_with(REPO, BUMP_PARENT)
-                    self.assertNotIn((PARENT_PULLS_API, True, None), self.api.calls)
-                    self.assertNotIn((STATUSES_API, True, None), self.api.calls)
-
-    def test_tag_refuses_missing_red_running_or_other_sha_ci_despite_green_parent_ci(self):
-        self.api.ci_post(ci_post_run(9000, sha=BUMP_PARENT), ci_post_jobs())
-        for variant in ("missing", "red", "running", "other-sha", "one-red-leg"):
-            with self.subTest(variant=variant):
-                run, jobs = ci_post_run(9001), ci_post_jobs()
-                if variant == "red":
-                    run["conclusion"] = "failure"
-                elif variant == "running":
-                    run["status"] = "in_progress"
-                elif variant == "other-sha":
-                    run["head_sha"] = BUMP_PARENT
-                elif variant == "one-red-leg":
-                    jobs[-1]["conclusion"] = "failure"
-                self.api.responses[ci_post_runs_api(SHA)] = runs_page(
-                    [] if variant == "missing" else [run])
-                self.api.responses[ci_post_jobs_api(9001)] = jobs_page(jobs)
-                code, out, err = self.run_phase()
-                self.assertEqual(code, 1, (out, err))
-                self.assertEqual(out, "")
-                self.assertIn("ci-post:", err)
-
-    def test_tag_checks_version_catalog_reset_and_existing_tag_target(self):
-        original = dict(self.snapshot.files)
-        for path, value, reason in (
-                ("VERSION", b"0.9.0\n", "release transition requires a valid forward VERSION"),
-                (catalog_diff.CATALOG, original[(SHA, catalog_diff.CATALOG)] + b"\n",
-                 "release transition requires unchanged catalog bytes versus parent"),
-                (catalog_diff.DIFF, original[(BUMP_PARENT, catalog_diff.DIFF)],
-                 "release transition requires the exact catalog reset for forward VERSION")):
-            with self.subTest(path=path):
-                self.snapshot.files = {**original, (SHA, path): value}
-                code, out, err = self.run_phase()
-                self.assertEqual(code, 1, (out, err))
-                self.assertEqual(out, "")
-                self.assertEqual(err, f"::error::{reason}\n")
-        self.snapshot.files = original
-        self.snapshot.tagged = HEAD
-        code, out, err = self.run_phase()
-        self.assertEqual(code, 1, (out, err))
-        self.assertEqual(out, "")
-        self.assertEqual(err, "::error::release tag v1.1.0 already exists at another commit "
-                         "or before transition\n")
-        self.snapshot.tagged = SHA
-        code, out, err = self.run_phase()
-        self.assertEqual(code, 0, (out, err))
-        self.assertIn(f"ci-post run 9001 for {SHA}", out)
-
-    def test_bump_phase_refuses_rebump_and_tag_only_inputs(self):
-        code, out, err = self.run_phase(phase="bump", dispatch="")
-        self.assertEqual(code, 1, (out, err))
-        self.assertIn("no merged pull request", err)
-        code, out, err = self.run_phase(phase="bump")
-        self.assertEqual(code, 1, (out, err))
-        self.assertIn("dispatch", err)
-
-    def test_bump_phase_checks_the_dispatch_with_its_own_ci(self):
-        self.api = FakeAPI()
-        self.api.ci_post(ci_post_run(9001), ci_post_jobs())
-        code, out, err = self.run_phase(phase="bump", dispatch="")
-        self.assertEqual(code, 0, (out, err))
-        self.assertIn(f"ci-post run 9001 for {SHA}", out)
-
-    def test_bump_plan_consumes_committed_version_bump_override_and_tags(self):
-        for current, bump, override, tags, expected in (
-                ("2.3.4", "patch", "", ("v2.3.3", "v2.3.4", "v4.0.0"),
-                 {"current": "2.3.4", "next": "2.3.5", "tag": "v2.3.5",
-                  "prerelease": "false", "previous": "v2.3.4"}),
-                ("1.0.0", "minor", "", ("v1.0.0", "v1.1.0-rc.2", "not-a-release"),
-                 {"current": "1.0.0", "next": "1.1.0", "tag": "v1.1.0",
-                  "prerelease": "false", "previous": "v1.0.0"}),
-                ("2.3.4", "major", "", ("v2.3.4", "v2.9.0", "v4.0.0"),
-                 {"current": "2.3.4", "next": "3.0.0", "tag": "v3.0.0",
-                  "prerelease": "false", "previous": "v2.9.0"}),
-                ("1.1.0-rc.1", "major", "1.1.0-rc.2", ("v1.0.0", "v1.1.0-rc.1"),
-                 {"current": "1.1.0-rc.1", "next": "1.1.0-rc.2", "tag": "v1.1.0-rc.2",
-                  "prerelease": "true", "previous": "v1.1.0-rc.1"})):
-            with self.subTest(current=current, bump=bump, override=override):
-                snapshot = ReleaseSnapshot(current, tags=tags)
-                fields = ci_release_gate.release_plan(
-                    SHA, "bump", bump, override, "", release_git=snapshot)
-                self.assertEqual(fields, expected)
-
-    def test_plan_cli_appends_parsed_fields_for_bump_and_tag_including_prerelease(self):
-        for phase, version, extra, expected in (
-                ("bump", "2.3.4", ["--bump", "major"],
-                 {"current": "2.3.4", "next": "3.0.0", "tag": "v3.0.0",
-                  "prerelease": "false", "previous": "v1.0.0"}),
-                ("bump", "1.0.0", ["--override", "1.1.0-rc.1"],
-                 {"current": "1.0.0", "next": "1.1.0-rc.1", "tag": "v1.1.0-rc.1",
-                  "prerelease": "true", "previous": "v1.0.0"}),
-                ("tag", "1.1.0", ["--dispatch-sha", BUMP_PARENT],
-                 {"current": "1.1.0", "next": "1.1.0", "tag": "v1.1.0",
-                  "prerelease": "false", "previous": "v1.0.0"}),
-                ("tag", "1.1.0-rc.1", ["--dispatch-sha", BUMP_PARENT],
-                 {"current": "1.1.0-rc.1", "next": "1.1.0-rc.1", "tag": "v1.1.0-rc.1",
-                  "prerelease": "true", "previous": "v1.0.0"})):
-            with self.subTest(phase=phase, version=version), tempfile.TemporaryDirectory() as temp:
-                output = Path(temp) / "github-output"
-                output.write_text("earlier=retained\n", encoding="utf-8")
-                out, err = io.StringIO(), io.StringIO()
-                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                    code = ci_release_gate.main(
-                        ["plan", "--sha", SHA, "--phase", phase,
-                         "--github-output", str(output), *extra],
-                        release_git=ReleaseSnapshot(version))
-                self.assertEqual(code, 0, (out.getvalue(), err.getvalue()))
-                self.assertEqual(err.getvalue(), "")
-                stdout_rows = out.getvalue().splitlines()
-                self.assertEqual(len(stdout_rows), len(expected))
-                self.assertEqual(dict(row.split("=", 1) for row in stdout_rows), expected)
-                output_rows = output.read_text(encoding="utf-8").splitlines()
-                self.assertEqual(output_rows, ["earlier=retained", *stdout_rows])
-                self.assertEqual(dict(row.split("=", 1) for row in output_rows[1:]), expected)
-
-    def test_tag_plan_keeps_committed_version_and_refuses_bump_only_inputs(self):
-        fields = ci_release_gate.release_plan(
-            SHA, "tag", "patch", "", BUMP_PARENT, release_git=self.snapshot)
-        self.assertEqual(fields["next"], "1.1.0")
-        self.assertEqual(fields["tag"], "v1.1.0")
-        self.assertEqual(fields["previous"], "v1.0.0")
-        for bump, override in (("minor", ""), ("patch", "9.0.0")):
-            with self.subTest(bump=bump, override=override):
-                with self.assertRaisesRegex(ci_release_gate.ReleaseGateError, "only to phase bump"):
-                    ci_release_gate.release_plan(
-                        SHA, "tag", bump, override, BUMP_PARENT, release_git=self.snapshot)
-
-
-class ReleaseWriterTests(unittest.TestCase):
-    """Run the actual workflow writer in isolated repos with a local bare origin."""
-
-    def setUp(self):
-        from test_gen_run_failure_catalog_diff import Repo, catalog_bytes, code
-        temporary = tempfile.TemporaryDirectory(prefix="pf-release-writer-")
-        self.addCleanup(temporary.cleanup)
-        self.tmp = Path(temporary.name)
-        self.repo = Repo(self.tmp / "repo")
-        self.repo.path.mkdir()
-        self.repo.git("init", "-q")
-        self.repo.write("VERSION", b"1.0.0\n")
-        for name in ("gen_run_failure_catalog_diff.py", "release_version.py"):
-            self.repo.write("scripts/" + name, (ROOT / "scripts" / name).read_bytes())
-        self.repo.commit("initial release")
-        self.repo.tag("v1.0.0")
-        self.repo.write(catalog_diff.CATALOG, catalog_bytes({"alpha": code("1.1.0")}))
-        result = self.repo.run("--write")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.dispatch = self.repo.commit("catalog change")
-        self.repo.git("init", "--bare", str(self.tmp / "origin.git"))
-        self.repo.git("remote", "add", "origin", str(self.tmp / "origin.git"))
-        self.repo.git("push", "origin", "HEAD:refs/heads/main", "refs/tags/v1.0.0")
-        self.reset = self.tmp / "reset.json"
-        result = self.repo.run("--reset", "--tag", "v1.1.0", "--output", str(self.reset))
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        workflow = (ROOT / ".github/workflows/release.yml").read_text()
-        writer = next(step for step in _steps(_jobs(workflow)["release"])
-                      if "        id: publish\n" in step)
-        self.script = "\n".join(line[10:] for line in writer.split("        run: |\n", 1)[1]
-                                .splitlines()) + "\n"
-
-    def write_phase(self, phase, sha):
-        from test_gen_run_failure_catalog_diff import GIT_ENV
-        return subprocess.run(
-            ["bash", "-c", self.script], cwd=self.repo.path,
-            env={**GIT_ENV, "PHASE": phase, "GITHUB_SHA": sha, "NEXT": "1.1.0",
-                 "TAG": "v1.1.0", "RESET": str(self.reset),
-                 "GIT_AUTHOR_NAME": "PineForge test", "GIT_AUTHOR_EMAIL": "test@example.invalid",
-                 "GIT_COMMITTER_NAME": "PineForge test",
-                 "GIT_COMMITTER_EMAIL": "test@example.invalid",
-                 "GITHUB_OUTPUT": str(self.tmp / "outputs")},
-            capture_output=True, text=True)
-
-    def bump(self):
-        result = self.write_phase("bump", self.dispatch)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        sha = self.repo.git("rev-parse", "HEAD")
-        self.assertNotEqual(sha, self.dispatch)
-        self.assertEqual(self.repo.git("rev-parse", "HEAD^"), self.dispatch)
-        self.assertEqual(self.repo.git("tag", "--list", "v1.1.0"), "")
-        self.assertEqual(self.repo.git("ls-remote", "--refs", "origin", "refs/tags/v1.1.0"), "")
-        self.assertEqual(self.repo.git("ls-remote", "--refs", "origin", "refs/heads/main")
-                         .split()[0], sha)
-        self.assertIn("sha=" + sha, (self.tmp / "outputs").read_text())
-        return sha
-
-    def test_writer_pushes_untagged_bump_then_tags_and_retries_the_same_commit(self):
-        sha = self.bump()
-        for _ in range(2):
-            result = self.write_phase("tag", sha)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual(self.repo.git("rev-parse", "HEAD"), sha)
-            self.assertEqual(self.repo.git("rev-parse", "refs/tags/v1.1.0^{commit}"), sha)
-            self.assertEqual(self.repo.git("ls-remote", "--refs", "origin", "refs/heads/main")
-                             .split()[0], sha)
-            self.assertEqual(
-                self.repo.git("ls-remote", "origin", "refs/tags/v1.1.0^{}"),
-                f"{sha}\trefs/tags/v1.1.0^{{}}")
-
-    def writer_state(self):
-        output = self.tmp / "outputs"
-        return {
-            "head": self.repo.git("rev-parse", "HEAD"),
-            "local_refs": self.repo.git("show-ref"),
-            "index": self.repo.git("ls-files", "--stage"),
-            "worktree": self.repo.git("status", "--porcelain=v1"),
-            "version": (self.repo.path / "VERSION").read_bytes(),
-            "diff": (self.repo.path / catalog_diff.DIFF).read_bytes(),
-            "remote_refs": self.repo.git("ls-remote", "origin"),
-            "output": output.read_bytes() if output.exists() else None,
-        }
-
-    def test_bump_writer_refuses_a_future_tag_only_on_origin_without_writing(self):
-        self.repo.git("tag", "v1.1.0", self.dispatch)
-        self.repo.git("push", "origin", "refs/tags/v1.1.0")
-        self.repo.git("tag", "-d", "v1.1.0")
-        self.assertEqual(self.repo.git("tag", "--list", "v1.1.0"), "")
-        self.assertEqual(self.repo.git("ls-remote", "--refs", "origin", "refs/tags/v1.1.0"),
-                         f"{self.dispatch}\trefs/tags/v1.1.0")
-        before = self.writer_state()
-        result = self.write_phase("bump", self.dispatch)
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertEqual(result.stderr, "::error::release tag v1.1.0 already exists\n")
-        self.assertEqual(self.writer_state(), before)
-
-    def test_bump_writer_refuses_moved_remote_main_without_writing(self):
-        self.repo.write("README.md", b"remote main advanced\n")
-        advanced = self.repo.commit("advance main")
-        self.repo.git("push", "origin", "HEAD:refs/heads/main")
-        self.repo.git("reset", "--hard", self.dispatch)
-        self.assertEqual(self.repo.git("rev-parse", "HEAD"), self.dispatch)
-        self.assertEqual(self.repo.git("ls-remote", "--refs", "origin", "refs/heads/main"),
-                         f"{advanced}\trefs/heads/main")
-        before = self.writer_state()
-        result = self.write_phase("bump", self.dispatch)
-        self.assertEqual((result.returncode, result.stdout, result.stderr), (1, "", ""))
-        self.assertEqual(self.writer_state(), before)
-
-    def test_bump_writer_refuses_local_head_different_from_dispatch_without_writing(self):
-        self.repo.write("README.md", b"local checkout advanced\n")
-        advanced = self.repo.commit("advance checkout")
-        self.assertNotEqual(advanced, self.dispatch)
-        self.assertEqual(self.repo.git("ls-remote", "--refs", "origin", "refs/heads/main"),
-                         f"{self.dispatch}\trefs/heads/main")
-        before = self.writer_state()
-        result = self.write_phase("bump", self.dispatch)
-        self.assertEqual((result.returncode, result.stdout, result.stderr), (1, "", ""))
-        self.assertEqual(self.writer_state(), before)
-
-    def test_writer_refuses_an_existing_wrong_tag_without_moving_main(self):
-        sha = self.bump()
-        self.repo.git("tag", "v1.1.0", self.dispatch)
-        result = self.write_phase("tag", sha)
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(self.repo.git("rev-parse", "HEAD"), sha)
-        self.assertEqual(self.repo.git("ls-remote", "--refs", "origin", "refs/tags/v1.1.0"), "")
 
 
 class GateTests(unittest.TestCase):
@@ -1420,12 +310,8 @@ class GateTests(unittest.TestCase):
         if ci_post:
             # A green receipt now also needs ci-post; refusal rows still stop at main.
             reads.extend([
-                (f"repos/{REPO}/commits/{SHA}", False, None),
                 (ci_post_runs_api(self.post_run["head_sha"]), True, None),
-                (run_metadata_api(self.post_run["id"]), False, None),
-                (ci_post_jobs_api(self.post_run["id"]), True, None),
-                *attempt_reads(self.post_run),
-                (run_metadata_api(self.post_run["id"]), False, None),
+                (ci_post_jobs_api(self.post_run["id"]), False, None),
             ])
         self.assertEqual(self.api.calls, reads,
                          "phase 2 must never read PR heads or their statuses")
@@ -1455,10 +341,10 @@ class GateTests(unittest.TestCase):
         code, stdout, stderr = self.run_gate()
         self.assertEqual(code, 0, stderr)
         self.assertEqual(stderr, "")
-        # Required parity and the exact CI run identify the reviewed tree.
+        # Keep the original evidence text exact and append the newly required proof.
         self.assertEqual(stdout, (
-            f"release gate green: PR #17 head {HEAD}; pineforge/parity=success; tree {TREE}; "
-            "pineforge/verify=success (advisory); "
+            f"release gate green: PR #17 head {HEAD}; pineforge/verify=success; "
+            f"pineforge/parity=success; tree {TREE}; "
             f"ci-post run {self.post_run['id']} for {self.post_run['head_sha']}\n"))
         self.assertIn((MAIN_API, False, ".commit.sha"), self.api.calls)
         self.assertIn((PULLS_API, True, None), self.api.calls)
@@ -1496,49 +382,31 @@ class GateTests(unittest.TestCase):
                 self.assert_refused(f"{context}: missing or malformed status creator: None")
 
     def test_malformed_creator_object_refuses(self):
-        for index, context in enumerate(("pineforge/verify", "pineforge/parity")):
-            for creator in (None, "luisleo526", ["luisleo526", "User"]):
-                with self.subTest(context=context, creator=creator):
-                    self.api = FakeAPI()
-                    rows = successes()
-                    rows[index]["creator"] = creator
-                    self.api.statuses(rows)
-                    self.assert_refused(
-                        f"{context}: missing or malformed status creator: {creator!r}")
+        for creator in (None, "luisleo526", ["luisleo526", "User"]):
+            with self.subTest(creator=creator):
+                self.api = FakeAPI()
+                rows = successes()
+                rows[0]["creator"] = creator
+                self.api.statuses(rows)
+                self.assert_refused(
+                    f"pineforge/verify: missing or malformed status creator: {creator!r}")
 
     def test_missing_or_malformed_creator_fields_refuse_without_inventing_an_identity(self):
-        for index, context in enumerate(("pineforge/verify", "pineforge/parity")):
-            for creator in ({}, {"login": "luisleo526"}, {"type": "User"},
-                            {"login": None, "type": "User"}, {"login": "luisleo526", "type": None},
-                            {"login": 17, "type": "User"},
-                            {"login": "luisleo526", "type": ["User"]}):
-                with self.subTest(context=context, creator=creator):
-                    self.api = FakeAPI()
-                    rows = successes()
-                    rows[index]["creator"] = creator
-                    self.api.statuses(rows)
-                    self.assert_refused(
-                        f"{context}: refused status creator "
-                        f"(login={creator.get('login')!r}, type={creator.get('type')!r})")
-
-    def test_pr_parity_and_exact_ci_accept_missing_or_non_success_advisory_verify(self):
-        """Parity and exact CI evidence admit every advisory verify state."""
-        for state in (None, "success", "pending", "failure", "error"):
-            with self.subTest(verify=state):
+        for creator in ({}, {"login": "luisleo526"}, {"type": "User"},
+                        {"login": None, "type": "User"}, {"login": "luisleo526", "type": None},
+                        {"login": 17, "type": "User"}, {"login": "luisleo526", "type": ["User"]}):
+            with self.subTest(creator=creator):
                 self.api = FakeAPI()
-                rows = [status("pineforge/parity")]
-                if state is not None:
-                    rows.insert(0, status("pineforge/verify", state))
+                rows = successes()
+                rows[0]["creator"] = creator
                 self.api.statuses(rows)
-                code, stdout, stderr = self.run_gate()
-                self.assertEqual(code, 0, (stdout, stderr))
-                self.assertEqual(stderr, "")
-                self.assertIn("pineforge/parity=success", stdout)
-                self.assertIn(f"ci-post run {self.post_run['id']} for {SHA}", stdout)
-                self.assertIn(f"pineforge/verify={state or 'missing'} (advisory)", stdout)
-                self.assertIn((STATUSES_API, True, None), self.api.calls)
-                self.assertIn((ci_post_jobs_api(self.post_run["id"]), True, None),
-                              self.api.calls)
+                self.assert_refused(
+                    "pineforge/verify: refused status creator "
+                    f"(login={creator.get('login')!r}, type={creator.get('type')!r})")
+
+    def test_missing_verify_refuses(self):
+        self.api.statuses([successes()[1]])
+        self.assert_refused("missing pineforge/verify")
 
     def test_missing_parity_refuses(self):
         self.api.statuses([successes()[0]])
@@ -1546,19 +414,20 @@ class GateTests(unittest.TestCase):
 
     def test_pending_refuses(self):
         rows = successes()
-        rows[1]["state"] = "pending"
+        rows[0]["state"] = "pending"
         self.api.statuses(rows)
-        self.assert_refused("pineforge/parity=pending (expected success)")
+        self.assert_refused("pineforge/verify=pending (expected success)")
 
-    def test_verify_lite_alone_cannot_supply_required_parity(self):
-        self.api.statuses([status("pineforge/verify-lite")])
-        self.assert_refused(f"PR #17 head {HEAD}: missing pineforge/parity")
+    def test_lite_verify_cannot_replace_missing_full_verify(self):
+        self.api.statuses([
+            status("pineforge/verify-lite"), successes()[1]])
+        self.assert_refused(f"PR #17 head {HEAD}: missing pineforge/verify")
 
-    def test_verify_lite_with_pending_advisory_verify_cannot_rescue_pending_parity(self):
+    def test_lite_verify_cannot_override_pending_full_verify(self):
         self.api.statuses([
             status("pineforge/verify-lite"),
-            status("pineforge/verify", "pending"), status("pineforge/parity", "pending")])
-        self.assert_refused(f"PR #17 head {HEAD}: pineforge/parity=pending (expected success)")
+            status("pineforge/verify", "pending"), successes()[1]])
+        self.assert_refused(f"PR #17 head {HEAD}: pineforge/verify=pending (expected success)")
 
     def test_lite_parity_cannot_replace_full_parity(self):
         self.api.statuses([
@@ -1573,15 +442,15 @@ class GateTests(unittest.TestCase):
 
     def test_error_state_refuses(self):
         rows = successes()
-        rows[1]["state"] = "error"
+        rows[0]["state"] = "error"
         self.api.statuses(rows)
-        self.assert_refused("pineforge/parity=error (expected success)")
+        self.assert_refused("pineforge/verify=error (expected success)")
 
     def test_statuses_on_a_different_sha_cannot_green_the_matching_head(self):
         wrong_api = f"repos/{REPO}/commits/{OTHER_HEAD}/statuses?per_page=100"
         self.api.responses[wrong_api] = json.dumps(successes())
         self.api.statuses([])
-        self.assert_refused(f"PR #17 head {HEAD}: missing pineforge/parity")
+        self.assert_refused(f"PR #17 head {HEAD}: missing pineforge/verify")
         self.assertIn((STATUSES_API, True, None), self.api.calls)
         self.assertFalse(any(endpoint == wrong_api for endpoint, _, _ in self.api.calls))
 
@@ -1713,7 +582,7 @@ class GateTests(unittest.TestCase):
         self.assert_refused(f"API {STATUSES_API} upstream error 503")
         self.assertEqual(Counter(endpoint for endpoint, _, _ in self.api.calls)[STATUSES_API], 1)
 
-    def test_only_run_metadata_has_a_bounded_second_read_before_admission(self):
+    def test_each_api_read_is_attempted_at_most_once(self):
         endpoints = [MAIN_API, PULLS_API, f"repos/{REPO}/commits/{SHA}",
                      f"repos/{REPO}/commits/{HEAD}", STATUSES_API]
         for failed in [None, *endpoints]:
@@ -1729,12 +598,7 @@ class GateTests(unittest.TestCase):
                     self.assertEqual(code, 0, (stdout, stderr))
                 counts = Counter(endpoint for endpoint, _, _ in self.api.calls)
                 self.assertTrue(counts)
-                doubled = {run_metadata_api(self.post_run["id"])} if failed is None else set()
-                self.assertEqual({endpoint: count for endpoint, count in counts.items()
-                                  if endpoint in doubled},
-                                 {endpoint: 2 for endpoint in doubled})
-                self.assertTrue(all(count == 1 for endpoint, count in counts.items()
-                                    if endpoint not in doubled), counts)
+                self.assertTrue(all(count == 1 for count in counts.values()), counts)
 
     def test_http_headers_are_stripped_for_main_and_all_json_pages(self):
         self.api.responses = {endpoint: http_response(200, raw)
@@ -1808,37 +672,31 @@ class GateTests(unittest.TestCase):
 
     def test_newest_failure_cannot_be_masked_by_an_older_success(self):
         self.api.statuses([
-            status("pineforge/parity", "failure"),
+            status("pineforge/verify", "failure"),
             *successes(),
         ])
-        self.assert_refused("pineforge/parity=failure (expected success)")
+        self.assert_refused("pineforge/verify=failure (expected success)")
 
-    def test_green_fixture_requires_parity_and_accepts_removed_advisory_verify(self):
+    def test_green_fixture_fails_when_either_context_is_removed(self):
         for removed in ("pineforge/verify", "pineforge/parity"):
             with self.subTest(removed=removed):
                 self.api = FakeAPI()
                 self.api.statuses([row for row in green_statuses() if row["context"] != removed])
-                if removed == "pineforge/parity":
-                    self.assert_refused(f"missing {removed}")
-                else:
-                    code, stdout, stderr = self.run_gate()
-                    self.assertEqual(code, 0, (stdout, stderr))
-                    self.assertEqual(stderr, "")
-                    self.assertIn("pineforge/parity=success", stdout)
+                self.assert_refused(f"missing {removed}")
 
     def test_status_pages_preserve_first_occurrence_across_page_boundaries(self):
         self.api.responses[STATUSES_API] = (
-            json.dumps([successes()[1]]) + "\n" + json.dumps([
-                successes()[0], status("pineforge/parity", "failure")]))
+            json.dumps([successes()[0]]) + "\n" + json.dumps([
+                successes()[1], status("pineforge/verify", "failure")]))
         code, stdout, stderr = self.run_gate()
         self.assertEqual(code, 0, stderr)
-        self.assertIn("pineforge/parity=success", stdout)
+        self.assertIn("pineforge/verify=success; pineforge/parity=success", stdout)
 
     def test_failure_on_the_first_page_cannot_be_masked_by_later_success(self):
         self.api.responses[STATUSES_API] = (
-            json.dumps([status("pineforge/parity", "failure")])
+            json.dumps([status("pineforge/verify", "failure")])
             + "\n" + json.dumps(successes()))
-        self.assert_refused("pineforge/parity=failure (expected success)")
+        self.assert_refused("pineforge/verify=failure (expected success)")
 
     def test_valid_first_page_cannot_hide_a_non_json_later_page(self):
         self.api.responses[STATUSES_API] = json.dumps(successes()) + "\nnot JSON"
@@ -1908,12 +766,12 @@ class GateTests(unittest.TestCase):
         # Phase two retains its receipt evidence and now names ci-post too.
         self.assertEqual(stdout, (
             f"release gate green: main-proof receipt for {SHA}; "
-            "pineforge/parity=success; pineforge/verify=success (advisory); "
+            "pineforge/verify=success; pineforge/parity=success; "
             f"ci-post run {self.post_run['id']} for {self.post_run['head_sha']}\n"))
         self.proof.assert_called_once_with(REPO, SHA)
         self.assert_no_pr_fallback(ci_post=True)
 
-    def test_main_proof_requires_parity_and_accepts_verify_lite_without_advisory_verify(self):
+    def test_main_proof_lite_context_cannot_replace_either_full_context(self):
         for missing in ("pineforge/verify", "pineforge/parity"):
             with self.subTest(missing=missing):
                 self.api = FakeAPI()
@@ -1921,20 +779,14 @@ class GateTests(unittest.TestCase):
                            if row["context"] != missing}
                 receipt[missing + "-lite"] = "success"
                 self.enable_watcher(receipt)
-                if missing == "pineforge/parity":
-                    self.assert_refused(f"main-proof receipt for {SHA}: missing {missing}")
-                    self.assert_no_pr_fallback()
-                else:
-                    code, stdout, stderr = self.run_gate()
-                    self.assertEqual(code, 0, (stdout, stderr))
-                    self.assertEqual(stderr, "")
-                    self.assert_no_pr_fallback(ci_post=True)
+                self.assert_refused(f"main-proof receipt for {SHA}: missing {missing}")
+                self.assert_no_pr_fallback()
 
     def test_main_proof_pending_full_context_is_not_rescued_by_lite_success(self):
-        self.enable_watcher({"pineforge/verify": "success", "pineforge/parity-lite": "success",
-                             "pineforge/parity": "pending"})
+        self.enable_watcher({"pineforge/verify": "pending", "pineforge/verify-lite": "success",
+                             "pineforge/parity": "success"})
         self.assert_refused(
-            f"main-proof receipt for {SHA}: pineforge/parity=pending (expected success)")
+            f"main-proof receipt for {SHA}: pineforge/verify=pending (expected success)")
         self.assert_no_pr_fallback()
 
     def test_unreadable_main_proof_never_falls_back(self):
@@ -2055,15 +907,15 @@ class ReleaseBumpTests(unittest.TestCase):
         self.api = FakeAPI()
         self.api.release_bump()
 
-    def assert_bump_green(self, expected_verify="success"):
+    def assert_bump_green(self):
         code, stdout, stderr = self.run_gate()
         self.assertEqual(code, 0, (stdout, stderr))
         self.assertEqual(stderr, "")
         # A valid release bump must now name its own ci-post proof after the parent.
         self.assertEqual(stdout, (
             f"release gate green: release bump {SHA}; parent {BUMP_PARENT}; "
-            f"PR #17 head {HEAD}; pineforge/parity=success; tree {TREE}; "
-            f"pineforge/verify={expected_verify} (advisory); "
+            f"PR #17 head {HEAD}; pineforge/verify=success; "
+            f"pineforge/parity=success; tree {TREE}; "
             f"ci-post run {self.post_run['id']} for {self.post_run['head_sha']}\n"))
 
     def test_bump_on_a_gated_parent_passes(self):
@@ -2074,12 +926,8 @@ class ReleaseBumpTests(unittest.TestCase):
         self.assertIn((STATUSES_API, True, None), self.api.calls)
         self.assertIn((BEFORE_TREE_API, False, None), self.api.calls)
         self.assertIn((AFTER_TREE_API, False, None), self.api.calls)
-        counts = Counter(endpoint for endpoint, _, _ in self.api.calls)
-        doubled = {run_metadata_api(push_run()["id"]), run_metadata_api(self.post_run["id"])}
-        self.assertEqual({endpoint: counts[endpoint] for endpoint in doubled},
-                         {endpoint: 2 for endpoint in doubled})
-        self.assertTrue(all(count == 1 for endpoint, count in counts.items()
-                            if endpoint not in doubled), counts)
+        self.assertTrue(all(count == 1 for count in
+                            Counter(endpoint for endpoint, _, _ in self.api.calls).values()))
         self.git.assert_not_called()
         self.proof.assert_not_called()
 
@@ -2090,7 +938,7 @@ class ReleaseBumpTests(unittest.TestCase):
         self.assert_refused("release bump must modify exactly VERSION and "
                             "docker/run_failure_codes_diff.json")
 
-    def test_non_app_original_push_refuses_even_with_forged_commit_identity(self):
+    def test_human_push_or_rerun_refuses_even_with_forged_commit_identity(self):
         candidate = json.loads(self.api.responses[BUMP_API])
         candidate.update(author={"login": "github-actions[bot]"},
                          committer={"login": "github-actions[bot]"})
@@ -2098,27 +946,16 @@ class ReleaseBumpTests(unittest.TestCase):
             author={"name": "github-actions[bot]"},
             committer={"name": "github-actions[bot]"},
             verification={"verified": True})
-        for actor, trigger, diagnostic in (
-                ("luisleo526", "luisleo526",
-                 "release bump push actor must be pineforge-app[bot]"),
-                ("luisleo526", "pineforge-app[bot]",
-                 "release bump push actor must be pineforge-app[bot]"),
-                ("pineforge-app[bot]", "luisleo526",
-                 "first workflow attempt triggering_actor differs from actor")):
+        for actor, trigger in (("luisleo526", "luisleo526"),
+                               ("luisleo526", "pineforge-app[bot]"),
+                               ("pineforge-app[bot]", "luisleo526")):
             with self.subTest(actor=actor, triggering_actor=trigger):
                 self.reset_bump()
                 self.api.responses[BUMP_API] = json.dumps(candidate)
-                row = push_run(actor=actor, triggering_actor=trigger)
-                self.api.responses[RUNS_API] = runs_page([row])
-                self.api.attempts(row, {1: []})
-                code, out, err = self.run_gate()
-                self.assertEqual(code, 1, (out, err))
-                self.assertIn("::error::", err)
-                self.assertIn(diagnostic, err)
-                self.assertEqual(out, "", "a refusal must never print a green line")
-                self.assertEqual(
-                    err, f"::error::no merged pull request associated with {SHA}; "
-                    f"release bump refused: {diagnostic}\n")
+                self.api.responses[RUNS_API] = runs_page([
+                    push_run(actor=actor, triggering_actor=trigger)])
+                self.assert_refused("release bump push actor must be pineforge-app[bot] "
+                                    "for both actor and triggering_actor")
 
     def test_zero_runs_refuses(self):
         self.api.responses[RUNS_API] = runs_page([])
@@ -2132,9 +969,9 @@ class ReleaseBumpTests(unittest.TestCase):
                 self.api.responses[RUNS_API] = runs_page([row])
                 self.assert_refused(f"no exact-main push workflow run for release bump {SHA}")
 
-    def test_every_matching_push_run_must_have_an_app_original_actor(self):
+    def test_every_matching_push_run_must_have_both_app_actors(self):
         for rows in ([push_run(), push_run(actor="luisleo526")],
-                     [push_run(actor="luisleo526"), push_run()]):
+                     [push_run(triggering_actor="luisleo526"), push_run()]):
             with self.subTest(rows=rows):
                 self.reset_bump()
                 self.api.responses[RUNS_API] = runs_page(rows)
@@ -2308,41 +1145,34 @@ class ReleaseBumpTests(unittest.TestCase):
                  "invalid workflow_runs page"),
                 (runs_page([None]), "invalid workflow run"),
                 (runs_page([{"event": "push"}]), "invalid workflow run"),
-                (runs_page([{**push_run(), "actor": None}]), "invalid workflow actor"),
-                (runs_page([{**push_run(), "triggering_actor": {}}]),
-                 "latest triggering_actor is missing or malformed")):
+                (runs_page([{**push_run(), "actor": None}]), "push actor must be"),
+                (runs_page([{**push_run(), "triggering_actor": {}}]), "push actor must be")):
             with self.subTest(payload=payload):
                 self.reset_bump()
                 self.api.responses[RUNS_API] = payload
                 self.assert_refused(fragment)
 
-    def test_bump_parent_requires_parity_and_accepts_missing_advisory_verify(self):
+    def test_bump_on_an_ungated_parent_refuses(self):
         # Condition (b) mutation control: identity and the two-file diff are green.
         for context in ("pineforge/verify", "pineforge/parity"):
             with self.subTest(context=context):
                 self.reset_bump()
                 self.api.statuses([row for row in successes() if row["context"] != context])
-                if context == "pineforge/parity":
-                    self.assert_refused(f"PR #17 head {HEAD}: missing {context}")
-                else:
-                    self.assert_bump_green(expected_verify="missing")
+                self.assert_refused(f"PR #17 head {HEAD}: missing {context}")
 
     def test_parent_still_requires_trusted_newest_success_and_matching_tree(self):
         for variant, fragment in (
-                ("red", "pineforge/parity=failure (expected success)"),
+                ("red", "pineforge/verify=failure (expected success)"),
                 ("creator", "refused status creator"),
-                ("verify-creator", "pineforge/verify: refused status creator "
-                 "(login='outsider', type='User')"),
                 ("tree", f"no merged pull request head matches release tree {TREE}"),
                 ("ambiguous", "multiple merged PR heads match (#17, #18)")):
             with self.subTest(variant=variant):
                 self.reset_bump()
                 if variant == "red":
-                    self.api.statuses([status("pineforge/parity", "failure"), *successes()])
-                elif variant in ("creator", "verify-creator"):
+                    self.api.statuses([status("pineforge/verify", "failure"), *successes()])
+                elif variant == "creator":
                     rows = successes()
-                    rows[0 if variant == "verify-creator" else 1]["creator"] = {
-                        "login": "outsider", "type": "User"}
+                    rows[0]["creator"] = {"login": "outsider", "type": "User"}
                     self.api.statuses(rows)
                 elif variant == "tree":
                     self.api.responses[f"repos/{REPO}/commits/{HEAD}"] = json.dumps(
@@ -2868,8 +1698,8 @@ class ReleaseRulesetTests(unittest.TestCase):
                                           api=self.api, git=self.git, history=self.history)
                 self.assertEqual(green, (
                     f"release gate green: release bump {SHA}; parent {BUMP_PARENT}; "
-                    f"PR #17 head {HEAD}; pineforge/parity=success; tree {TREE}; "
-                    "pineforge/verify=success (advisory); "
+                    f"PR #17 head {HEAD}; pineforge/verify=success; "
+                    f"pineforge/parity=success; tree {TREE}; "
                     f"ci-post run {self.post_run['id']} for {self.post_run['head_sha']}"))
 
 
@@ -3395,19 +2225,17 @@ class APICommandTests(unittest.TestCase):
 
     def test_gh_adapter_paginates_the_statuses_list(self):
         with mock.patch.object(ci_release_gate.subprocess, "run") as run:
-            raw = b"HTTP/2.0 200\r\nContent-Type: application/json\r\n\r\n[ ]\r\n"
-            run.return_value.stdout = raw
-            self.assertEqual(ci_release_gate.gh_api(STATUSES_API, paginate=True), raw)
+            run.return_value.stdout = "[]\n"
+            self.assertEqual(ci_release_gate.gh_api(STATUSES_API, paginate=True), "[]\n")
         run.assert_called_once_with(["gh", "api", STATUSES_API, "--include", "--paginate"],
-                                    check=True, capture_output=True, text=False)
+                                    check=True, capture_output=True, text=True)
 
     def test_gh_adapter_reads_live_main_sha_with_jq(self):
         with mock.patch.object(ci_release_gate.subprocess, "run") as run:
-            run.return_value.stdout = (SHA + "\r\n").encode("ascii")
-            self.assertEqual(ci_release_gate.gh_api(MAIN_API, jq=".commit.sha"),
-                             (SHA + "\r\n").encode("ascii"))
+            run.return_value.stdout = SHA + "\n"
+            self.assertEqual(ci_release_gate.gh_api(MAIN_API, jq=".commit.sha"), SHA + "\n")
         run.assert_called_once_with(["gh", "api", MAIN_API, "--include", "--jq", ".commit.sha"],
-                                    check=True, capture_output=True, text=False)
+                                    check=True, capture_output=True, text=True)
 
     def test_gh_adapter_does_not_retry_a_failed_read(self):
         failure = subprocess.CalledProcessError(
@@ -3416,7 +2244,7 @@ class APICommandTests(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 ci_release_gate.gh_api(STATUSES_API, paginate=True)
         run.assert_called_once_with(["gh", "api", STATUSES_API, "--include", "--paginate"],
-                                    check=True, capture_output=True, text=False)
+                                    check=True, capture_output=True, text=True)
 
 
 class MainProofSeamTests(unittest.TestCase):
@@ -3436,38 +2264,15 @@ class MainProofSeamTests(unittest.TestCase):
                  for node in ast.walk(main)
                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                  and node.func.attr == "add_parser"]
-        self.assertEqual(modes, ["gate", "plan", "rulesets-probe"])
+        self.assertEqual(modes, ["gate", "rulesets-probe"])
         flags = {}
         for node in ast.walk(main):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "add_argument"):
-                arguments = tuple(ast.literal_eval(argument) for argument in node.args)
-                keywords = {
-                    keyword.arg: (keyword.value.id if isinstance(keyword.value, ast.Name)
-                                  else ast.literal_eval(keyword.value))
-                    for keyword in node.keywords}
-                flags.setdefault(node.func.value.id, []).append((arguments, keywords))
-        # plan's --override selects the release version, never the main-proof cut-over.
-        self.assertEqual(flags, {
-            "check": [
-                (("--repo",), {"required": True}),
-                (("--sha",), {"required": True}),
-                (("--ref",), {"required": True}),
-                (("--phase",), {"choices": ("bump", "tag")}),
-                (("--dispatch-sha",), {"default": ""}),
-                (("--receipt",), {"type": "Path", "help": "write allowlisted decision evidence, including refusal"}),
-                (("--dry-run",), {"choices": ("true", "false"), "default": "false"}),
-            ],
-            "plan": [
-                (("--sha",), {"required": True}),
-                (("--phase",), {"choices": ("bump", "tag"), "required": True}),
-                (("--bump",), {"choices": ("patch", "minor", "major"), "default": "patch"}),
-                (("--override",), {"default": ""}),
-                (("--dispatch-sha",), {"default": ""}),
-                (("--github-output",), {"type": "Path", "required": True}),
-            ],
-            "probe": [(("--repo",), {"required": True})],
-        }, "no subcommand may offer a main-proof cut-over override flag")
+                flags.setdefault(node.func.value.id, []).extend(
+                    ast.literal_eval(argument) for argument in node.args)
+        self.assertEqual(flags, {"check": ["--repo", "--sha", "--ref"], "probe": ["--repo"]},
+                         "neither subcommand may offer a cut-over override flag")
 
     def test_reader_is_not_live_and_defines_no_storage_format(self):
         with self.assertRaisesRegex(NotImplementedError,
@@ -3721,12 +2526,6 @@ class WorkflowPinTests(unittest.TestCase):
         # the actual split workflow for its additional custody/auth surface.
         return hosted_matrix_release_workflow(
             (ROOT / ".github/workflows/release.yml").read_text())
-
-    def split_workflow(self):
-        # The validator admits the two-phase release job only with the split
-        # hosted jobs, so the release-success and tag-phase pins read the
-        # shipped workflow, not the matrix rebuild above.
-        return (ROOT / ".github/workflows/release.yml").read_text()
 
     def test_bookworm_image_is_bound_only_to_the_repository_variable(self):
         workflow = self.workflow()
@@ -4039,25 +2838,12 @@ class WorkflowPinTests(unittest.TestCase):
 
     def assert_release_success_pin(self, workflow):
         jobs = _jobs(workflow)
-        builds = ("prebuilt-x86", "prebuilt-arm")
-        for job in builds:
-            self.assertRegex(jobs[job], r"(?m)^    needs: release$", "job " + job)
-        self.assertRegex(jobs["upload"],
-                         r"(?m)^    needs: \[release, prebuilt-x86, prebuilt-arm\]$",
-                         "job upload")
-        # release_bump_workflow_findings also compares every split job header,
-        # so the build and upload jobs are scanned first and name their own bypass.
-        for job in builds + ("upload", "release"):
+        self.assertRegex(jobs["prebuilt"], r"(?m)^    needs: release$")
+        for job in ("release", "prebuilt"):
             stripped = _without_comments(jobs[job])
-            if job == "release":
-                self.assertEqual(release_bump_workflow_findings(workflow), [])
-                receipts = [step for step in _steps(jobs[job])
-                            if step.splitlines()[0] == "      - name: Keep release gate receipt"]
-                self.assertEqual(len(receipts), 1)
-                stripped = stripped.replace(_without_comments(receipts[0]), "", 1)
-            self.assertNotRegex(stripped, r"\balways\s*\(", "job " + job)
-            self.assertNotRegex(stripped, r"!\s*cancelled\s*\(", "job " + job)
-            self.assertNotRegex(stripped, r"(?m)^\s*continue-on-error\s*:", "job " + job)
+            self.assertNotRegex(stripped, r"\balways\s*\(")
+            self.assertNotRegex(stripped, r"!\s*cancelled\s*\(")
+            self.assertNotRegex(stripped, r"(?m)^\s*continue-on-error\s*:")
 
     def test_ci_release_gate_is_unconditional_and_precedes_every_release_write(self):
         self.assert_gate_pin(self.workflow())
@@ -4301,9 +3087,8 @@ class WorkflowPinTests(unittest.TestCase):
         push = next(step for step in _steps(jobs["release"])
                     if step.startswith("      - name: Write bumped VERSION, commit, tag, push\n"))
         self.assertIn("        id: publish\n", push)
-        self.assertIn('            git push origin "${sha}:refs/heads/main"', push)
-        self.assertIn('            git push origin "refs/tags/${TAG}"', push)
-        self.assertIn('          echo "sha=${sha}" >> "$GITHUB_OUTPUT"', push)
+        self.assertIn('          git push --atomic origin HEAD "${TAG}"\n'
+                      '          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"', push)
 
         steps = _steps(jobs["prebuilt"])
         checkout = next(step for step in steps if "uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0" in step)
@@ -4328,50 +3113,13 @@ class WorkflowPinTests(unittest.TestCase):
         self.assertIn('          test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${SHA}"',
                       script)
 
-    def test_two_release_phases_stop_before_publication_until_tag_phase(self):
-        workflow = self.split_workflow()
-        self.assertIn("      phase:\n", workflow)
-        self.assertIn("        default: bump\n", workflow)
-        self.assertIn('            --phase "${PHASE}" --dispatch-sha "${DISPATCH_SHA}"',
-                      self.gate_block(workflow))
-        jobs = _jobs(workflow)
-        self.assertEqual(sorted(jobs),
-                         ["notify-hub", "prebuilt-arm", "prebuilt-x86", "release", "upload"])
-        tag = "inputs.phase == 'tag'"
-        caller = ("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"
-                  " && github.workflow_ref == format('pineforge-4pass/pineforge-engine/.github/"
-                  "workflows/release.yml@{0}', github.ref) && ")
-        for job, condition in (("prebuilt-x86", caller + tag), ("prebuilt-arm", tag),
-                               ("upload", tag)):
-            self.assertRegex(jobs[job],
-                             r"(?m)^    if: " + re.escape("${{ " + condition + " }}") + "$",
-                             job + " must run only in the tag phase")
-        self.assertRegex(jobs["notify-hub"],
-                         r"(?m)^    if: \$\{\{ inputs.phase == 'tag' && !inputs.dry_run \}\}$")
-        steps = _steps(jobs["release"])
-        for name, condition in (
-                ("Generate release notes", "${{ inputs.phase == 'tag' }}"),
-                ("Create GitHub Release", "${{ inputs.phase == 'tag' && !inputs.dry_run }}")):
-            step = next(step for step in steps if step.startswith("      - name: " + name + "\n"))
-            self.assertEqual([line for line in step.splitlines() if line.startswith("        if:")],
-                             ["        if: " + condition])
-        writer = next(step for step in steps if "        id: publish\n" in step)
-        self.assertIn('if [[ "${PHASE}" == bump ]]; then', writer)
-        self.assertIn('test "$(git rev-parse HEAD^)" = "${GITHUB_SHA}"', writer)
-        self.assertIn('test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${sha}"', writer)
-        self.assertNotIn("git commit --amend", writer)
-
     def test_prebuilt_requires_release_success_without_failure_bypasses(self):
-        self.assert_release_success_pin(self.split_workflow())
+        self.assert_release_success_pin(self.workflow())
 
     def test_prebuilt_failure_bypass_mutations_are_refused(self):
-        workflow = self.split_workflow()
-        # The shipped "no continue-on-error" prose sits above notify-hub. Each
-        # build job and upload must still pass with it: the pin reads keys, not words.
-        prose = [line for line in workflow.splitlines(keepends=True)
-                 if "no continue-on-error" in line]
-        self.assertEqual(len(prose), 1, "the shipped prose must have one source line")
-        self.assertTrue(prose[0].lstrip().startswith("#"))
+        workflow = self.workflow()
+        self.assertIn("no continue-on-error", _jobs(workflow)["prebuilt"])
+        anchor = "  prebuilt:\n    needs: release\n"
         for bypass, message in (
             ("    continue-on-error: true\n",
              r"^Regex matched: '    continue-on-error:'"),
@@ -4379,17 +3127,11 @@ class WorkflowPinTests(unittest.TestCase):
         ):
             with self.subTest(bypass=bypass):
                 self.assert_release_success_pin(workflow)
-                for job, needs in (("prebuilt-x86", "release"), ("prebuilt-arm", "release"),
-                                   ("upload", "[release, prebuilt-x86, prebuilt-arm]")):
-                    anchor = "  " + job + ":\n    needs: " + needs + "\n"
-                    documented = workflow.replace(anchor, anchor + prose[0], 1)
-                    self.assertIn("no continue-on-error", _jobs(documented)[job])
-                    self.assert_release_success_pin(documented)
-                    changed = documented.replace(anchor, anchor + bypass, 1)
-                    self.assertNotEqual(changed, documented, "the mutation must change the input")
-                    self.assertIn(bypass, _jobs(changed)[job])
-                    with self.assertRaisesRegex(AssertionError, message):
-                        self.assert_release_success_pin(changed)
+                changed = workflow.replace(anchor, anchor + bypass, 1)
+                self.assertNotEqual(changed, workflow, "the mutation must change the input")
+                self.assertIn(bypass, _jobs(changed)["prebuilt"])
+                with self.assertRaisesRegex(AssertionError, message):
+                    self.assert_release_success_pin(changed)
 
     def test_pin_fails_when_gate_is_deleted(self):
         workflow = self.workflow()
@@ -4583,23 +3325,19 @@ class CiPostGateTests(unittest.TestCase):
         return code, stdout.getvalue(), stderr.getvalue()
 
     def post_calls(self):
-        # This helper pins proving reads and run order. Receipt controls inspect
-        # the distinct attempt-specific audit reads and their completeness.
         return [call for call in self.api.calls
                 if "/actions/workflows/ci-post.yml/runs?" in call[0]
-                or ("/actions/runs/" in call[0] and "/jobs?" in call[0]
-                    and "/attempts/" not in call[0])]
+                or ("/actions/runs/" in call[0] and "/jobs?" in call[0])]
 
     def assert_post_reads(self, row, *, repo=REPO, newer=(), docs=()):
         # Each examined completed run needs its own jobs read, newest first.
-        # Documentation history is checked tip first; reuse the exact tip's runs.
+        # Skipped docs commits need runs only, tip first, before any proof reads.
         self.assertEqual(self.post_calls(), [
             *[(ci_post_runs_api(sha, repo=repo), True, None) for sha in docs],
-            *([(ci_post_runs_api(row["head_sha"], repo=repo), True, None)]
-              if row["head_sha"] not in docs else []),
-            *[(ci_post_jobs_api(examined["id"], repo=repo), True, None)
+            (ci_post_runs_api(row["head_sha"], repo=repo), True, None),
+            *[(ci_post_jobs_api(examined["id"], repo=repo), False, None)
               for examined in (*newer, row)],
-        ], "history runs, then exact release runs and examined jobs, each read once")
+        ], "docs runs, then proof runs and exactly the examined proof jobs, in order")
 
     def assert_refused(self, reason, *evidence, **kwargs):
         code, stdout, stderr = self.run_gate(**kwargs)
@@ -4625,13 +3363,10 @@ class CiPostGateTests(unittest.TestCase):
         self.assertIn("ci-post", text)
         self.assertRegex(text, rf"\b{row['id']}\b")
         self.assertIn(row["head_sha"], text)
-        self.assertIn(f"ci-post run {row['id']} for {row['head_sha']}", text)
-        if not skipped:
-            self.assertEqual(row["head_sha"], release_sha)
         if skipped:
             self.assertIn(release_sha, text)
             self.assertIn("docs-only", text)
-            self.assertRegex(text, rf"{len(skipped)} docs-only commit(?:\(s\)|s)? checked")
+            self.assertRegex(text, rf"{len(skipped)} docs-only commit")
         if newer_skipped:
             self.assertRegex(text, rf"\b{len(newer_skipped)} newer\b[^\n]*\bskipped\b")
 
@@ -4657,8 +3392,7 @@ class CiPostGateTests(unittest.TestCase):
             for index, sha in enumerate(docs)
         ]
         for row in self.docs_runs:
-            self.api.ci_post_runs(row["head_sha"], [row], {
-                row["id"]: ci_post_jobs()} if row["head_sha"] == SHA else {})
+            self.api.ci_post_runs(row["head_sha"], [row], {})
         commits = [*docs, ancestor["head_sha"]]
         self.history = FakeHistory({
             current: (parent, [f"docs/release-note-{index}.md"])
@@ -4678,7 +3412,7 @@ class CiPostGateTests(unittest.TestCase):
             self.assertIn(row["conclusion"], stderr)
         self.assertEqual(self.post_calls(), [
             (ci_post_runs_api(sha), True, None) for sha in read_shas],
-            "stop at the first refused docs run, without proving jobs or later docs runs")
+            "stop at the first refused docs run, without any docs or proof jobs")
 
     def test_plain_pass_reads_non_vacuous_ci_post_and_names_its_evidence(self):
         """R1/R2/R5/R6: block a PR-only green line with no ci-post reads."""
@@ -4711,8 +3445,7 @@ class CiPostGateTests(unittest.TestCase):
                     f"sha {self.post_run['head_sha']} event {self.post_run['event']}: "
                     f"missing job {original['name']}\n"))
 
-    def test_red_surplus_macos_job_refuses_even_with_a_successful_aggregate_run(self):
-        """Every returned red leg refuses, including a surplus or retired platform."""
+    def test_red_macos_jobs_follow_only_the_aggregate_run_verdict(self):
         for conclusion in ("success", "failure"):
             with self.subTest(run_conclusion=conclusion):
                 self.reset_ci_post()
@@ -4724,10 +3457,16 @@ class CiPostGateTests(unittest.TestCase):
                     for job in jobs if job["name"].startswith("build (ubuntu-24.04, ")]
                 self.assertEqual(len(macos), 2)
                 self.api.ci_post(row, [*jobs, *macos])
-                self.assert_refused(
-                    "newer-run-failed", row["id"], row["head_sha"], row["event"],
-                    macos[0]["name"], "failure")
-                self.assert_post_reads(row)
+                if conclusion == "success":
+                    self.assert_green(row)
+                else:
+                    stderr = self.assert_refused(
+                        "not-success", row["id"], row["head_sha"], row["event"],
+                        f"conclusion {conclusion}")
+                    self.assertEqual(stderr, (
+                        f"::error::ci-post: not-success {row['id']} sha {row['head_sha']} "
+                        f"event {row['event']}: conclusion {conclusion}\n"))
+                    self.assert_post_reads(row)
 
     def test_gate_accepts_injected_history_and_returns_ci_post_evidence(self):
         """R1/R5/R6: block a CLI-only implementation or an unused history seam."""
@@ -4755,8 +3494,8 @@ class CiPostGateTests(unittest.TestCase):
         self.assert_green(row, sha=sha, repo=repo)
         self.assertEqual(self.history.calls, [row["head_sha"]])
 
-    def test_docs_only_tip_with_skipped_builds_uses_green_parent_ci(self):
-        """The shared docs classifier selects the fully built ancestor."""
+    def test_docs_only_tip_uses_built_parent_and_names_both_shas(self):
+        """R1/R3/R5/R6: block judging only the docs tip or hiding the ancestor."""
         ancestor = self.built_ancestor()
         self.history = FakeHistory({
             SHA: (ancestor["head_sha"], ["docs/release-notes.md"]),
@@ -4766,11 +3505,9 @@ class CiPostGateTests(unittest.TestCase):
             {**job, "conclusion": "skipped"} for job in self.jobs])
         self.assert_green(ancestor, skipped=[SHA])
         self.assertEqual(self.history.calls, [SHA, ancestor["head_sha"]])
-        self.assertIn((ci_post_runs_api(ancestor["head_sha"]), True, None),
-                         self.api.calls)
 
-    def test_multiple_docs_commits_classify_ancestry_and_select_built_ancestor(self):
-        """Each docs run stays healthy and the non-doc ancestor supplies full CI."""
+    def test_multiple_docs_commits_use_the_shared_classifiers_full_path_rule(self):
+        """R3/R5/R6: block an extension-only classifier or a one-commit walk."""
         ancestor = self.built_ancestor(OTHER_TREE)
         self.history = FakeHistory({
             SHA: (OTHER_HEAD, ["README.md"]),
@@ -4783,13 +3520,12 @@ class CiPostGateTests(unittest.TestCase):
         self.assertEqual(self.history.calls, [SHA, OTHER_HEAD, ancestor["head_sha"]])
 
     def test_docs_tip_source_parent_red_cannot_reach_older_or_second_parent_green(self):
-        """A failed release build cannot use either parent's CI evidence."""
+        """R1/R3/R4: block skipping a source commit or following a merge's second parent."""
         failed = ci_post_run(self.post_run["id"] + 1, sha=OTHER_HEAD, conclusion="failure")
         older = self.built_ancestor(OTHER_TREE)
         failed_job = self.jobs[2]
         failed_job["conclusion"] = "failure"
         self.api.ci_post(failed, self.jobs)
-        self.api.ci_post(self.post_run, ci_post_jobs())
         candidate = json.loads(self.api.responses[BUMP_API])
         candidate["parents"] = [{"sha": failed["head_sha"]}, {"sha": older["head_sha"]}]
         self.api.responses[BUMP_API] = json.dumps(candidate)
@@ -4965,16 +3701,6 @@ class CiPostGateTests(unittest.TestCase):
         self.assert_refused("no-run", SHA)
         self.assertEqual(self.post_calls(), [(ci_post_runs_api(SHA), True, None)])
 
-    def test_pr_events_cannot_supply_post_merge_proof(self):
-        """Matching branch and SHA alone cannot turn a PR run into release evidence."""
-        for event in ("pull_request", "pull_request_target", "workflow_run"):
-            with self.subTest(event=event):
-                self.reset_ci_post()
-                row = {**self.post_run, "event": event}
-                self.api.ci_post(row, self.jobs)
-                self.assert_refused("no-run", SHA)
-                self.assertEqual(self.post_calls(), [(ci_post_runs_api(SHA), True, None)])
-
     def test_each_required_build_job_skipped_refuses(self):
         """R2/R4: block each of the four matrix cells becoming vacuous green."""
         for index, original in enumerate(ci_post_jobs()):
@@ -5059,25 +3785,11 @@ class CiPostGateTests(unittest.TestCase):
                 self.assert_post_reads(newest)
 
     def test_jobs_total_larger_than_returned_rows_refuses(self):
-        """The advertised count must equal the complete returned population."""
-        for delta in (-1, 1):
-            with self.subTest(delta=delta):
-                self.reset_ci_post()
-                endpoint = ci_post_jobs_api(self.post_run["id"])
-                self.api.responses[endpoint] = jobs_page(self.jobs, total=len(self.jobs) + delta)
-                self.assert_refused("unreadable", endpoint)
-                self.assert_post_reads(self.post_run)
-
-    def test_job_identity_is_valid_and_unique_across_the_returned_population(self):
-        """Matching counts and distinct names cannot hide repeated or malformed IDs."""
-        for value in (None, True, 0, -1, "123", self.jobs[0]["id"]):
-            with self.subTest(job_id=value):
-                self.reset_ci_post()
-                self.jobs[1]["id"] = value
-                self.api.ci_post(self.post_run, self.jobs)
-                self.assert_refused("unreadable", ci_post_jobs_api(self.post_run["id"]),
-                                    "job id")
-                self.assert_post_reads(self.post_run)
+        """R1/R4: block accepting four successes from an incomplete jobs response."""
+        endpoint = ci_post_jobs_api(self.post_run["id"])
+        self.api.responses[endpoint] = jobs_page(self.jobs, total=len(self.jobs) + 1)
+        self.assert_refused("unreadable", endpoint)
+        self.assert_post_reads(self.post_run)
 
     def test_ci_post_rate_limits_name_the_endpoint_and_are_not_retried(self):
         """R4: block retrying or ignoring rate limits on either ci-post read."""
@@ -5095,7 +3807,7 @@ class CiPostGateTests(unittest.TestCase):
                             403, '{"message":"API rate limit exceeded"}'))
                     self.assert_refused("unreadable", endpoint, "rate limited")
                     self.assertEqual(Counter(call[0] for call in self.api.calls)[endpoint], 1)
-                    self.assertEqual(self.api.calls[-1], (endpoint, True, None))
+                    self.assertEqual(self.api.calls[-1], (endpoint, not jobs_read, None))
 
     def test_ci_post_5xx_errors_name_the_endpoint_and_are_not_retried(self):
         """R4: block upstream errors being swallowed or retried on either ci-post read."""
@@ -5108,7 +3820,7 @@ class CiPostGateTests(unittest.TestCase):
                     self.api.responses[endpoint] = http_response(code, "unavailable")
                     self.assert_refused("unreadable", endpoint, f"upstream error {code}")
                     self.assertEqual(Counter(call[0] for call in self.api.calls)[endpoint], 1)
-                    self.assertEqual(self.api.calls[-1], (endpoint, True, None))
+                    self.assertEqual(self.api.calls[-1], (endpoint, not jobs_read, None))
 
     def test_ci_post_transport_empty_and_parse_errors_fail_closed(self):
         """R4: block unreadable runs or jobs silently becoming successful evidence."""
@@ -5124,7 +3836,7 @@ class CiPostGateTests(unittest.TestCase):
                     self.api.responses[endpoint] = response
                     self.assert_refused("unreadable", endpoint, diagnostic)
                     self.assertEqual(Counter(call[0] for call in self.api.calls)[endpoint], 1)
-                    self.assertEqual(self.api.calls[-1], (endpoint, True, None))
+                    self.assertEqual(self.api.calls[-1], (endpoint, not jobs_read, None))
 
     def test_runs_at_or_beyond_1000_limit_refuse_even_with_green_rows(self):
         """R1/R4: block trusting a capped Actions search with matching or larger totals."""
@@ -5195,7 +3907,7 @@ class CiPostGateTests(unittest.TestCase):
         self.assertEqual(self.post_calls(), [(ci_post_runs_api(SHA), True, None)])
 
     def test_twenty_docs_commits_can_reach_a_built_proof(self):
-        """Twenty documentation commits retain history checks and require full ancestor CI."""
+        """R3/R5/R6: block an off-by-one limit refusing the allowed twenty-docs walk."""
         docs, ancestor = self.docs_chain(20)
         self.assert_green(ancestor, skipped=docs)
         self.assertEqual(self.history.calls, [*docs, ancestor["head_sha"]])
@@ -5270,28 +3982,17 @@ class CiPostGateTests(unittest.TestCase):
                 self.assertEqual(self.history.calls, expected)
                 self.assertEqual(self.post_calls(), [])
 
-    def test_receipt_parity_and_exact_ci_accept_missing_or_non_success_advisory_verify(self):
+    def test_phase_two_pass_also_reads_ci_post_without_pr_fallback(self):
         """R1/R5/R6/R7: block the main-proof early return bypassing non-vacuous ci-post."""
-        for state in (None, "success", "pending", "failure", "error"):
-            with self.subTest(verify=state):
-                self.reset_ci_post()
-                self.proof.reset_mock()
-                receipt = {"pineforge/parity": "success"}
-                if state is not None:
-                    receipt["pineforge/verify"] = state
-                self.enable_watcher(receipt)
-                self.assert_green(self.post_run)
-                self.proof.assert_called_once_with(REPO, SHA)
-                self.assertEqual(self.api.calls, [
-                    (MAIN_API, False, ".commit.sha"),
-                    (f"repos/{REPO}/commits/{SHA}", False, None),
-                    (ci_post_runs_api(self.post_run["head_sha"]), True, None),
-                    (run_metadata_api(self.post_run["id"]), False, None),
-                    (ci_post_jobs_api(self.post_run["id"]), True, None),
-                    *attempt_reads(self.post_run),
-                    (run_metadata_api(self.post_run["id"]), False, None),
-                ])
-                self.assertEqual(self.history.calls, [self.post_run["head_sha"]])
+        self.enable_watcher({row["context"]: row["state"] for row in successes()})
+        self.assert_green(self.post_run)
+        self.proof.assert_called_once_with(REPO, SHA)
+        self.assertEqual(self.api.calls, [
+            (MAIN_API, False, ".commit.sha"),
+            (ci_post_runs_api(self.post_run["head_sha"]), True, None),
+            (ci_post_jobs_api(self.post_run["id"]), False, None),
+        ])
+        self.assertEqual(self.history.calls, [self.post_run["head_sha"]])
 
     def test_phase_two_green_receipt_cannot_rescue_red_ci_post(self):
         """R1/R4/R6/R7: block a valid main-proof receipt admitting a failed post-merge run."""
@@ -5304,30 +4005,20 @@ class CiPostGateTests(unittest.TestCase):
         # A phase-two receipt still needs the completed run's jobs to diagnose its failure.
         self.assertEqual(self.api.calls, [
             (MAIN_API, False, ".commit.sha"),
-            (f"repos/{REPO}/commits/{SHA}", False, None),
             (ci_post_runs_api(failed["head_sha"]), True, None),
-            (run_metadata_api(failed["id"]), False, None),
-            (ci_post_jobs_api(failed["id"]), True, None),
-            *attempt_reads(failed),
+            (ci_post_jobs_api(failed["id"]), False, None),
         ])
 
-    def test_bump_parent_advisory_verify_states_still_require_bumps_own_ci_post(self):
+    def test_release_bump_pass_requires_its_own_ci_post_build(self):
         """R1/R5/R6/R7: block the release-bump exemption bypassing post-merge proof."""
-        for state in (None, "success", "pending", "failure", "error"):
-            with self.subTest(verify=state):
-                self.reset_ci_post()
-                self.api.release_bump()
-                rows = [status("pineforge/parity")]
-                if state is not None:
-                    rows.insert(0, status("pineforge/verify", state))
-                self.api.statuses(rows)
-                self.history = FakeHistory({
-                    SHA: (BUMP_PARENT, ["VERSION", "docker/run_failure_codes_diff.json"]),
-                })
-                self.assert_green(self.post_run)
-                self.assertEqual(self.history.calls, [self.post_run["head_sha"]])
-                self.assertIn((RUNS_API, True, None), self.api.calls)
-                self.assertIn((STATUSES_API, True, None), self.api.calls)
+        self.api.release_bump()
+        self.history = FakeHistory({
+            SHA: (BUMP_PARENT, ["VERSION", "docker/run_failure_codes_diff.json"]),
+        })
+        self.assert_green(self.post_run)
+        self.assertEqual(self.history.calls, [self.post_run["head_sha"]])
+        self.assertIn((RUNS_API, True, None), self.api.calls)
+        self.assertIn((STATUSES_API, True, None), self.api.calls)
 
     def test_release_bump_cannot_use_parent_ci_post_when_its_own_run_is_missing(self):
         """R1/R3/R4/R6/R7: block reusing parent CI for a non-documentation release bump."""
@@ -5508,12 +4199,11 @@ class CiPostGateTests(unittest.TestCase):
         self.assert_post_reads(scheduled)
 
     def test_release_sha_docs_only_over_failed_push_refuses_through_walk(self):
-        """A documentation tip with failed builds cannot borrow its parent's proof."""
+        """Walk/rule 3: prove a failed source parent blocks; block docs-tip green rescue."""
         failed = ci_post_run(self.post_run["id"] + 1, sha=OTHER_HEAD, conclusion="failure")
         failed_job = self.jobs[2]
         failed_job["conclusion"] = "failure"
         self.api.ci_post(failed, self.jobs)
-        self.api.ci_post(self.post_run, ci_post_jobs())
         self.history = FakeHistory({
             SHA: (failed["head_sha"], ["docs/release-notes.md"]),
             failed["head_sha"]: (OTHER_TREE, ["src/release_proof.cpp"]),
@@ -5632,20 +4322,19 @@ class CiPostGateTests(unittest.TestCase):
     def test_skipped_newer_run_count_is_separate_from_docs_only_commit_count(self):
         """Green line: prove both counts follow fixtures; block a bare or reused number."""
         docs, ancestor = self.docs_chain(2)
-        proving = ancestor
         newest = [
             ci_post_run(
-                ancestor["id"] + index + 1, sha=proving["head_sha"], event=event,
+                ancestor["id"] + index + 1, sha=ancestor["head_sha"], event=event,
                 conclusion="skipped" if event == "schedule" else "success",
                 created_at=f"2026-10-25T12:0{3 - index}:00Z")
             for index, event in enumerate(("push", "schedule", "workflow_dispatch"))
         ]
         skipped_jobs = [{**job, "conclusion": "skipped"} for job in ci_post_jobs()]
-        self.api.ci_post_runs(proving["head_sha"], [proving, *reversed(newest)], {
-            proving["id"]: ci_post_jobs(),
+        self.api.ci_post_runs(ancestor["head_sha"], [ancestor, *reversed(newest)], {
+            ancestor["id"]: ci_post_jobs(),
             **{row["id"]: skipped_jobs for row in newest},
         })
-        self.assert_green(proving, skipped=docs, newer_skipped=newest)
+        self.assert_green(ancestor, skipped=docs, newer_skipped=newest)
         self.assertEqual(self.history.calls, [*docs, ancestor["head_sha"]])
 
     def test_running_run_after_skipped_newer_run_blocks_older_green_without_jobs(self):
@@ -5667,7 +4356,7 @@ class CiPostGateTests(unittest.TestCase):
                 # Only the completed skipped run has jobs read before the unfinished blocker.
                 self.assertEqual(self.post_calls(), [
                     (ci_post_runs_api(newest["head_sha"]), True, None),
-                    (ci_post_jobs_api(newest["id"]), True, None),
+                    (ci_post_jobs_api(newest["id"]), False, None),
                 ])
 
     def test_red_build_after_skipped_newer_run_blocks_older_green(self):
@@ -5743,29 +4432,20 @@ class CiPostGateTests(unittest.TestCase):
         self.assert_green(proving, newer_skipped=newer)
 
     def test_duplicate_success_and_failure_for_same_matrix_name_refuses(self):
-        """Repeated names refuse even when every copy is successful."""
+        """Rule 3: prove any duplicate failure blocks; block first-match or last-match success."""
         for index, original in enumerate(ci_post_jobs()):
-            for conclusion in ("success", "failure"):
-                for duplicate_first in (False, True):
-                    with self.subTest(job=original["name"], conclusion=conclusion,
-                                      duplicate_first=duplicate_first):
-                        self.reset_ci_post()
-                        duplicate = {
-                            **self.jobs[index], "id": len(self.jobs) + 1,
-                            "conclusion": conclusion}
-                        jobs = ([duplicate, *self.jobs] if duplicate_first
-                                else [*self.jobs, duplicate])
-                        self.api.ci_post(self.post_run, jobs)
-                        if conclusion == "failure":
-                            self.assert_refused(
-                                "newer-run-failed", self.post_run["id"],
-                                self.post_run["head_sha"], self.post_run["event"],
-                                duplicate["name"], conclusion)
-                        else:
-                            self.assert_refused(
-                                "duplicate-job", self.post_run["id"],
-                                self.post_run["head_sha"], duplicate["name"])
-                        self.assert_post_reads(self.post_run)
+            for failed_first in (False, True):
+                with self.subTest(job=original["name"], failed_first=failed_first):
+                    self.reset_ci_post()
+                    failed_job = {
+                        **self.jobs[index], "id": len(self.jobs) + 1, "conclusion": "failure"}
+                    jobs = ([failed_job, *self.jobs] if failed_first
+                            else [*self.jobs, failed_job])
+                    self.api.ci_post(self.post_run, jobs)
+                    self.assert_refused(
+                        "newer-run-failed", self.post_run["id"], self.post_run["head_sha"],
+                        self.post_run["event"], failed_job["name"], failed_job["conclusion"])
+                    self.assert_post_reads(self.post_run)
 
     def test_docs_tip_red_run_blocks_built_green_ancestor(self):
         """F-1/a: prove docs run failure blocks; block release using a green ancestor."""
@@ -5827,12 +4507,17 @@ class CiPostGateTests(unittest.TestCase):
                 self.api.ci_post_runs(docs[0], [older, newest], {})
                 self.assert_docs_red(newest, read_shas=docs)
 
-    def test_docs_tip_success_with_skipped_builds_uses_full_ancestor_proof(self):
-        """A successful docs-only run may use the actual built ancestor."""
+    def test_docs_tip_success_with_four_skipped_builds_needs_no_docs_jobs(self):
+        """F-1/f: prove run-level docs success suffices; block reading its skipped jobs."""
         docs, ancestor = self.docs_chain(1)
         skipped_jobs = [{**job, "conclusion": "skipped"} for job in ci_post_jobs()]
         self.api.ci_post(self.docs_runs[0], skipped_jobs)
-        self.assert_green(ancestor, skipped=docs)
+        code, stdout, stderr = self.run_gate()
+        self.assertEqual(code, 0, (stdout, stderr))
+        self.assertEqual(stderr, "")
+        self.assert_post_reads(ancestor, docs=docs)
+        self.assert_green_evidence(stdout, ancestor, skipped=docs)
+        self.assertRegex(stdout, rf"\b{len(docs)} docs-only commit(?:\(s\)|s)? skipped\b")
 
     def test_docs_tip_newer_red_schedule_blocks_older_green_push(self):
         """F-1/g: prove all events decide docs health; block a push-only green rescue."""
@@ -5867,7 +4552,7 @@ class CiPostGateTests(unittest.TestCase):
                 self.assertEqual(self.post_calls(), [(endpoint, True, None)])
 
     def test_v1_7_0_docs_release_success_cannot_rescue_red_ancestor(self):
-        """Skipped tip builds refuse regardless of an ancestor's failed build details."""
+        """F-1/j: prove a healthy skipped-build tip leaves proof strict; block its rescue."""
         for build_failed in (False, True):
             with self.subTest(build_failed=build_failed):
                 self.reset_ci_post()
@@ -5876,13 +4561,15 @@ class CiPostGateTests(unittest.TestCase):
                 self.api.ci_post(self.docs_runs[0], skipped_jobs)
                 failed = {**ancestor, "conclusion": "failure", "event": "schedule"}
                 failed_jobs = ci_post_jobs()
+                evidence = [failed["id"], failed["head_sha"], failed["event"],
+                            failed["conclusion"]]
                 if build_failed:
                     failed_job = failed_jobs[2]
                     failed_job["conclusion"] = "failure"
+                    evidence.extend([failed_job["name"], failed_job["conclusion"]])
                 self.api.ci_post(failed, failed_jobs)
                 self.assert_refused(
-                    "newer-run-failed" if build_failed else "not-success",
-                    failed["id"], failed["head_sha"], "failure")
+                    "newer-run-failed" if build_failed else "not-success", *evidence)
                 self.assert_post_reads(failed, docs=docs)
 
     def test_phase_two_receipt_cannot_rescue_red_docs_tip(self):
@@ -5895,10 +4582,7 @@ class CiPostGateTests(unittest.TestCase):
         self.proof.assert_called_once_with(REPO, docs[0])
         self.assertEqual(self.api.calls, [
             (MAIN_API, False, ".commit.sha"),
-            (f"repos/{REPO}/commits/{SHA}", False, None),
             (ci_post_runs_api(docs[0]), True, None),
-            (run_metadata_api(failed["id"]), False, None),
-            *attempt_reads(failed),
         ])
 
     def test_release_bump_path_cannot_rescue_docs_tip_without_run(self):
@@ -5925,7 +4609,7 @@ class CiPostGateTests(unittest.TestCase):
                         conclusion="failure" if newest_conclusion == "success" else "success",
                         created_at="2026-10-24T12:00:00Z")
                     rows = [newest, older] if newest_first else [older, newest]
-                    self.api.ci_post_runs(docs[0], rows, {newest["id"]: ci_post_jobs()})
+                    self.api.ci_post_runs(docs[0], rows, {})
                     if newest_conclusion == "success":
                         self.assert_green(ancestor, skipped=docs)
                     else:
@@ -5943,7 +4627,7 @@ class CiPostGateTests(unittest.TestCase):
                                             else "success")}
                     newest = {**older, "id": older["id"] + 1, "conclusion": newest_conclusion}
                     rows = [newest, older] if newest_first else [older, newest]
-                    self.api.ci_post_runs(docs[0], rows, {newest["id"]: ci_post_jobs()})
+                    self.api.ci_post_runs(docs[0], rows, {})
                     if newest_conclusion == "success":
                         self.assert_green(ancestor, skipped=docs)
                     else:
@@ -5958,13 +4642,11 @@ class CiPostGateTests(unittest.TestCase):
             parent, [*paths, "src/lowest_docs_boundary.cpp"])
         skipped_jobs = [{**job, "conclusion": "skipped"} for job in ci_post_jobs()]
         self.api.ci_post(proof, skipped_jobs)
-        self.api.ci_post(self.docs_runs[0], skipped_jobs)
         self.assert_no_full_run(
-            [proof], proof["event"],
-            skipped_jobs[0]["conclusion"], docs=docs[:-1])
+            [proof], proof["event"], skipped_jobs[0]["conclusion"], docs=docs[:-1])
         self.assertEqual(self.history.calls, docs)
 
-    def test_docs_tip_paginated_runs_choose_newest_matching_success_and_read_its_jobs(self):
+    def test_docs_tip_paginated_runs_choose_newest_matching_success_without_jobs(self):
         """F-1/runs: prove docs pages/filtering precede judgment; block first-page red veto."""
         docs, ancestor = self.docs_chain(1)
         newest = self.docs_runs[0]
@@ -6089,13 +4771,17 @@ class CiPostGateTests(unittest.TestCase):
                         failed_job["conclusion"] = "failure"
                     self.api.ci_post(parent, jobs)
                     newer = {**parent, "head_sha": (
-                        docs[0] if on_proof else parent["head_sha"])}
-                    self.api.ci_post_runs(docs[0], [newer, self.docs_runs[0]], {
-                        self.docs_runs[0]["id"]: ci_post_jobs(), newer["id"]: jobs})
+                        ancestor["head_sha"] if on_proof else parent["head_sha"])}
+                    self.api.ci_post_runs(docs[0], [newer, self.docs_runs[0]], {})
                     self.api.ci_post_runs(ancestor["head_sha"], [ancestor, newer], {
                         ancestor["id"]: ci_post_jobs(), newer["id"]: jobs})
                     if on_proof:
-                        self.assert_docs_red(newer, read_shas=docs)
+                        reason = "newer-run-failed" if failed_build else "not-success"
+                        evidence = ((failed_job["name"], failed_job["conclusion"])
+                                    if failed_build else (newer["conclusion"],))
+                        self.assert_refused(
+                            reason, newer["id"], newer["head_sha"], newer["event"], *evidence)
+                        self.assert_post_reads(newer, docs=docs)
                     else:
                         self.assert_green(ancestor, skipped=docs)
                     self.assertNotIn(
@@ -6322,1033 +5008,6 @@ class CiPostGateTests(unittest.TestCase):
                             f"newer-run-failed {newest['id']}", newest["head_sha"],
                             newest["event"], failed_job["name"], failed_job["conclusion"])
                         self.assert_post_reads(newest)
-
-
-class PackagedDocumentationTests(unittest.TestCase):
-    """Derive the artifact inventory from its real install and staging rules."""
-
-    def commands(self, source, name):
-        source = re.sub(r"(?m)#.*$", "", source)
-        starts = list(re.finditer(rf"(?mi)^\s*{name}\s*\(", source))
-        matches = list(re.finditer(rf"(?mi)^\s*{name}\s*\(([^()]*)\)", source))
-        self.assertEqual(len(starts), len(matches), f"unsupported {name} rule")
-        return [shlex.split(match[1]) for match in matches]
-
-    def inventory(self, cmake, workflow, helper):
-        inventory = set()
-
-        def relative(value):
-            for prefix in ("${CMAKE_CURRENT_SOURCE_DIR}/", "/source/", "$workspace/"):
-                value = value.removeprefix(prefix)
-            path = Path(value)
-            self.assertFalse(path.is_absolute() or ".." in path.parts or "$" in value
-                             or "~" in value, f"unsupported packaged path: {value}")
-            self.assertTrue(path.parts, "empty packaged path")
-            self.assertFalse(any(part in (".ssh", ".aws", ".codex", ".config")
-                                 or part.endswith(".env") for part in path.parts),
-                             f"protected packaged path: {value}")
-            return path.as_posix()
-
-        variables = {row[0]: row[1:] for row in self.commands(cmake, "set") if row}
-        libraries = {}
-        for row in self.commands(cmake, "add_library"):
-            if len(row) >= 3 and row[1] in ("STATIC", "SHARED"):
-                libraries.setdefault(row[0], []).extend(row[2:])
-            elif len(row) < 3 or row[1] != "ALIAS":
-                self.fail(f"unsupported library packaging rule: {row}")
-
-        def inputs(values, seen=()):
-            for value in values:
-                variable = re.fullmatch(r"\$\{([A-Za-z0-9_]+)\}", value)
-                if variable:
-                    key = variable[1]
-                    self.assertIn(key, variables, f"unresolved packaged source list: {key}")
-                    self.assertNotIn(key, seen, "cyclic packaged source list")
-                    inputs(variables[key], (*seen, key))
-                else:
-                    inventory.add(relative(value))
-
-        generated = {}
-        for row in self.commands(cmake, "configure_file"):
-            self.assertEqual(row[2:], ["@ONLY"], "unsupported generated header rule")
-            generated[row[1]] = [row[0]]
-        for row in self.commands(cmake, "configure_package_config_file"):
-            self.assertEqual(row[2:], [
-                "INSTALL_DESTINATION", "${CMAKE_INSTALL_LIBDIR}/cmake/PineForge"],
-                "unsupported package config rule")
-            generated[row[1]] = [row[0]]
-        for row in self.commands(cmake, "write_basic_package_version_file"):
-            self.assertEqual(row[1:], [
-                "VERSION", "${PROJECT_VERSION}", "COMPATIBILITY", "SameMajorVersion"],
-                "unsupported package version rule")
-            generated[row[0]] = ["CMakeLists.txt", "VERSION"]
-        includes = self.commands(cmake, "include")
-        for row in includes:
-            self.assertEqual(len(row), 1, "unsupported package include rule")
-            if row[0] not in ("GNUInstallDirs", "CMakePackageConfigHelpers", "FetchContent"):
-                inventory.add(relative("cmake/" + row[0] + ".cmake"))
-
-        for row in self.commands(cmake, "install"):
-            self.assertTrue(row, "unsupported empty install rule")
-            self.assertIn(row[0], ("TARGETS", "DIRECTORY", "FILES", "EXPORT"),
-                          f"unsupported install rule: {row}")
-            if row[0] == "TARGETS":
-                boundary = row.index("EXPORT")
-                self.assertEqual(row[boundary:], [
-                    "EXPORT", "PineForgeTargets",
-                    "LIBRARY", "DESTINATION", "${CMAKE_INSTALL_LIBDIR}",
-                    "ARCHIVE", "DESTINATION", "${CMAKE_INSTALL_LIBDIR}",
-                    "RUNTIME", "DESTINATION", "${CMAKE_INSTALL_BINDIR}",
-                    "INCLUDES", "DESTINATION", "${CMAKE_INSTALL_INCLUDEDIR}"],
-                    "unsupported target install rule")
-                for target in row[1:boundary]:
-                    self.assertIn(target, libraries, "unresolved installed library")
-                    inputs(libraries[target])
-                    inventory.add("lib/" + "lib" + target + (
-                        ".so" if any(r[:2] == [target, "SHARED"]
-                                     for r in self.commands(cmake, "add_library")) else ".a"))
-            elif row[0] == "DIRECTORY":
-                self.assertEqual(row[2:5], [
-                    "DESTINATION", "${CMAKE_INSTALL_INCLUDEDIR}", "FILES_MATCHING"],
-                    "unsupported header directory rule")
-                tail, patterns = row[5:], []
-                while tail:
-                    self.assertGreaterEqual(len(tail), 2, "incomplete header pattern")
-                    self.assertEqual(tail[0], "PATTERN", "unsupported header matching rule")
-                    if len(tail) >= 3 and tail[2] == "EXCLUDE":
-                        # Union both source-layer branches: the full release includes both.
-                        tail = tail[3:]
-                    else:
-                        patterns.append(tail[1])
-                        tail = tail[2:]
-                directory = relative(row[1])
-                cursor = ROOT
-                for component in Path(directory).parts:
-                    cursor /= component
-                    self.assertFalse(cursor.is_symlink(), "symlink packaged header directory")
-                for pattern in patterns:
-                    self.assertRegex(pattern, r"^\*\.[A-Za-z0-9]+$", "unsupported header glob")
-                    paths = sorted((ROOT / directory).rglob(pattern))
-                    self.assertTrue(paths, f"empty packaged header pattern: {pattern}")
-                    self.assertFalse(any(path.is_symlink() for path in paths),
-                                     "symlink packaged header input")
-                    inventory.update(path.relative_to(ROOT).as_posix() for path in paths)
-            elif row[0] == "FILES":
-                boundary = row.index("DESTINATION")
-                self.assertEqual(len(row[boundary:]), 2, "unsupported file install options")
-                for value in row[1:boundary]:
-                    if value.startswith("${CMAKE_CURRENT_BINARY_DIR}/"):
-                        self.assertIn(value, generated, "unresolved generated packaged file")
-                        inputs(generated[value])
-                        inventory.add(relative(value.removeprefix("${CMAKE_CURRENT_BINARY_DIR}/")))
-                    else:
-                        inputs([value])
-            else:
-                self.assertEqual(row[:4], ["EXPORT", "PineForgeTargets", "FILE",
-                                           "PineForgeTargets.cmake"], "unsupported export rule")
-                self.assertEqual(row[4:], [
-                    "NAMESPACE", "PineForge::", "DESTINATION",
-                    "${CMAKE_INSTALL_LIBDIR}/cmake/PineForge"], "unsupported export options")
-                inventory.add(row[3])
-                configurations = set(re.findall(
-                    r"-DCMAKE_BUILD_TYPE=([A-Za-z0-9_]+)", workflow + "\n" + helper))
-                self.assertTrue(configurations, "unresolved exported target configuration")
-                for configuration in configurations:
-                    inventory.add(Path(row[3]).stem + "-" + configuration.lower() + ".cmake")
-                inventory.add("CMakeLists.txt")
-
-        self.assertIn("cmake --install build", workflow, "ARM staging must use the install rules")
-        self.assertIn("cmake --install /output/build", helper,
-                      "x86 staging must use the same install rules")
-        self.assertIn('local stage="/output/stage/', helper, "unresolved x86 staging path")
-        copies = 0
-        for source in (workflow, helper):
-            for line in source.splitlines():
-                staging = any(value in line for value in ("STAGE_DIR", '"$stage', '"${stage}'))
-                if staging and re.match(r"\s*(?:install|rsync|mv|ln|tee|touch)\b", line):
-                    self.fail("unsupported staging packaging command")
-                if re.search(r">\s*['\"]?\$(?:\{STAGE_DIR\}|\{?stage\}?)", line):
-                    self.fail("unsupported staging packaging redirection")
-                if not line.strip().startswith("cp "):
-                    continue
-                values = shlex.split(line.strip())
-                if staging:
-                    self.assertIn(values[-1], ("${STAGE_DIR}/", "$stage/", "${stage}/"),
-                                  "unsupported staging copy destination")
-                    self.assertFalse(any(value.startswith("-") for value in values[1:]),
-                                     "unsupported staging copy options")
-                    inputs(values[1:-1])
-                    copies += 1
-        self.assertGreater(copies, 0, "no packaged root copies found")
-        self.assertTrue(inventory, "empty package inventory")
-        return sorted(inventory)
-
-    def assert_packaged_inputs_require_ci(self, cmake, workflow, helper):
-        paths = self.inventory(cmake, workflow, helper)
-        self.assertIs(ci_release_gate.is_documentation, is_documentation)
-        for path in paths:
-            self.assertFalse(is_documentation(path),
-                             f"packaged input is docs-only: {path}")
-        return paths
-
-    def test_real_packaging_inventory_uses_the_shared_classifier_and_detects_docs_additions(self):
-        cmake = (ROOT / "CMakeLists.txt").read_text()
-        workflow = (ROOT / ".github/workflows/release.yml").read_text()
-        helper = (ROOT / "scripts/build_prebuilt_bookworm.sh").read_text()
-        paths = self.assert_packaged_inputs_require_ci(cmake, workflow, helper)
-        self.assertTrue(any(path.startswith("include/pineforge/") for path in paths))
-        self.assertTrue(any(path.startswith("src/") for path in paths))
-        for changed_cmake, changed_workflow in (
-                (cmake + "\ninstall(FILES README.md DESTINATION share)\n", workflow),
-                (cmake, workflow.replace('cp LICENSE NOTICE VERSION "${STAGE_DIR}/"',
-                                         'cp LICENSE NOTICE VERSION README.md "${STAGE_DIR}/"'))):
-            with self.subTest(added="README.md", cmake=changed_cmake != cmake):
-                with self.assertRaisesRegex(AssertionError, "packaged input is docs-only: README.md"):
-                    self.assert_packaged_inputs_require_ci(changed_cmake, changed_workflow, helper)
-        with self.assertRaisesRegex(AssertionError, "unsupported install rule"):
-            self.inventory(cmake + '\ninstall(CODE "unmodelled")\n', workflow, helper)
-
-
-class ReceiptEvidenceTests(unittest.TestCase):
-    """The CLI's own decision and receipt share one input-sensitive collection."""
-
-    def setUp(self):
-        GateTests.setUp(self)
-        self.row = ci_post_run(8341)
-        self.jobs = ci_post_jobs()
-        self.api.ci_post(self.row, self.jobs)
-        self.history = FakeHistory({SHA: (OTHER_HEAD, ["src/release.cpp"])})
-        temporary = tempfile.TemporaryDirectory(prefix="pf-release-receipt-")
-        self.addCleanup(temporary.cleanup)
-        self.path = Path(temporary.name) / "gate.json"
-
-    def run_receipt(self, *, phase="bump", dispatch="", dry_run="false"):
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = ci_release_gate.main(
-                ["gate", "--repo", REPO, "--sha", SHA, "--ref", "refs/heads/main",
-                 "--phase", phase, "--dispatch-sha", dispatch, "--receipt", str(self.path),
-                 "--dry-run", dry_run],
-                api=self.api, git=self.git, history=self.history,
-                release_git=ReleaseSnapshot())
-        return code, out.getvalue(), err.getvalue()
-
-    def receipt(self):
-        return json.loads(self.path.read_text())
-
-    def test_each_phase_and_dry_run_record_the_same_admitted_identity(self):
-        for phase in ("bump", "tag"):
-            for dry in ("false", "true"):
-                with self.subTest(phase=phase, dry_run=dry):
-                    self.api = FakeAPI()
-                    if phase == "tag":
-                        self.api.release_bump()
-                    self.api.ci_post(self.row, self.jobs)
-                    code, out, err = self.run_receipt(
-                        phase=phase, dispatch=BUMP_PARENT if phase == "tag" else "", dry_run=dry)
-                    self.assertEqual((code, err), (0, ""), out)
-                    data = self.receipt()
-                    self.assertEqual(data["gate"]["outcome"], "admitted")
-                    self.assertEqual(data["phase"], phase)
-                    self.assertEqual(data["dry_run"], dry == "true")
-                    self.assertEqual(data["requested"], {"sha": SHA, "tree": (
-                        OTHER_TREE if phase == "tag" else TREE)})
-                    self.assertEqual(data["observed_main"], SHA)
-                    self.assertEqual(data["required_contexts"], ["pineforge/parity"])
-                    self.assertEqual(data["ci_post"]["proof"]["sha"], SHA)
-                    self.assertEqual(data["ci_post"]["selected_run_id"], self.row["id"])
-                    self.assertEqual(data["ci_post"]["runs"][-1]["proving_jobs"],
-                                     self.jobs)
-                    self.assertTrue(data["ci_post"]["runs"][-1]["history_complete"])
-                    doubled = {(run_metadata_api(self.row["id"]), False, None)}
-                    if phase == "tag":
-                        doubled.add((run_metadata_api(push_run()["id"]), False, None))
-                    counts = Counter(self.api.calls)
-                    self.assertEqual({call: counts[call] for call in doubled},
-                                     {call: 2 for call in doubled})
-                    self.assertTrue(all(count == 1 for call, count in counts.items()
-                                        if call not in doubled), counts)
-
-    def assert_response_bytes(self, response, raw, pages, *, complete=True):
-        self.assertEqual(response["scope"], "gh-api-stdout-bytes/v1")
-        self.assertEqual(response["sha256"], hashlib.sha256(raw).hexdigest())
-        self.assertEqual(response["byte_length"], len(raw))
-        self.assertEqual(response["responses"], [
-            {"number": number, "sha256": hashlib.sha256(page).hexdigest(),
-             "byte_length": len(page)}
-            for number, page in enumerate(pages, 1)])
-        self.assertEqual(response["complete"], complete)
-
-    def assert_decision_binding(self, data):
-        inventory = data["response_inventory"]
-        encoded = json.dumps(inventory, sort_keys=True, separators=(",", ":"),
-                             ensure_ascii=True).encode("utf-8")
-        self.assertEqual(data["gate"]["response_binding"], {
-            "scope": "canonical-response-inventory/v1",
-            "sha256": hashlib.sha256(encoded).hexdigest(), "entries": len(inventory)})
-
-    def test_raw_bytes_bind_every_attempt_and_both_latest_jobs_pages(self):
-        # Constructed transport bytes, not any historical raw capture.
-        self.row["run_attempt"] = 2
-        self.api.ci_post(self.row, self.jobs)
-        self.api.attempts(self.row, {1: self.jobs, 2: self.jobs},
-                          metadata={1: {"conclusion": "failure"}, 2: {}})
-        expected_metadata = {}
-        expected_jobs = {}
-        for attempt in (1, 2):
-            endpoint = attempt_api(self.row["id"], attempt)
-            raw = http_response(200, " \n" + self.api.responses[endpoint] + "\r\n").encode()
-            self.api.responses[endpoint] = raw
-            expected_metadata[attempt] = raw
-            endpoint = attempt_jobs_api(self.row["id"], attempt)
-            page1 = jobs_page(self.jobs[:3], total=len(self.jobs), headers={
-                "Link": f'<https://api.github.com/{endpoint}&page=2>; rel="next"'}).encode()
-            page2 = jobs_page(self.jobs[3:], total=len(self.jobs)).encode()
-            self.api.responses[endpoint] = page1 + page2
-            expected_jobs[attempt] = (page1, page2)
-        latest = ci_post_jobs_api(self.row["id"])
-        page1 = jobs_page(self.jobs[:2], total=len(self.jobs), headers={
-            "Link": f'<https://api.github.com/{latest}&page=2>; rel="next"'}).encode()
-        page2 = jobs_page(self.jobs[2:], total=len(self.jobs)).encode()
-        self.api.responses[latest] = page1 + page2
-        code, out, err = self.run_receipt()
-        self.assertEqual((code, err), (0, ""), out)
-        data = self.receipt()
-        record = data["ci_post"]["runs"][-1]
-        self.assertEqual(record["proving_jobs"], self.jobs)
-        self.assert_response_bytes(record["proving_response"], page1 + page2, [page1, page2])
-        for audit in record["attempt_history"]:
-            attempt = audit["requested_attempt"]
-            raw = expected_metadata[attempt]
-            self.assert_response_bytes(audit["metadata_response"], raw, [raw])
-            pages = expected_jobs[attempt]
-            self.assert_response_bytes(audit["jobs_response"], b"".join(pages), pages)
-            self.assertEqual(audit["jobs_response"]["attempt"], attempt)
-            self.assertEqual(audit["metadata_response"]["attempt"], attempt)
-            self.assertTrue(audit["jobs_complete"])
-        self.assertEqual([row["purpose"] for row in data["response_inventory"]], [
-            "run_initial", "proving_jobs", "attempt_metadata", "attempt_jobs",
-            "attempt_metadata", "attempt_jobs", "run_final"])
-        self.assert_decision_binding(data)
-        changed = json.loads(json.dumps(data))
-        changed["response_inventory"][1]["responses"][1]["sha256"] = "0" * 64
-        with self.assertRaises(AssertionError):
-            self.assert_decision_binding(changed)
-
-    def test_equal_json_semantics_do_not_hide_original_byte_changes(self):
-        first = json.dumps(self.row).encode()
-        second = (" \r\n" + json.dumps(dict(reversed(list(self.row.items()))), indent=2)
-                  + "\n").encode()
-        self.assertEqual(json.loads(first), json.loads(second))
-        self.assertNotEqual(first, second)
-        digests = []
-        for raw in (first, second):
-            self.api = FakeAPI()
-            self.api.ci_post(self.row, self.jobs)
-            self.api.responses[attempt_api(self.row["id"], 1)] = raw
-            code, out, err = self.run_receipt()
-            self.assertEqual((code, err), (0, ""), out)
-            data = self.receipt()
-            response = data["ci_post"]["runs"][-1]["attempt_history"][0]["metadata_response"]
-            self.assert_response_bytes(response, raw, [raw])
-            digests.append(response["sha256"])
-            self.assert_decision_binding(data)
-        self.assertNotEqual(*digests)
-
-    def test_unread_jobs_page_refuses_and_binds_the_incomplete_received_prefix(self):
-        for history in (False, True):
-            with self.subTest(history=history):
-                self.api = FakeAPI()
-                self.api.ci_post(self.row, self.jobs)
-                endpoint = (attempt_jobs_api(self.row["id"], 1) if history
-                            else ci_post_jobs_api(self.row["id"]))
-                raw = jobs_page(self.jobs, headers={
-                    "Link": f'<https://api.github.com/{endpoint}&page=2>; rel="next"'}).encode()
-                self.api.responses[endpoint] = raw
-                code, out, err = self.run_receipt()
-                self.assertEqual((code, out), (1, ""), err)
-                self.assertIn("unread or unlinked next page", err)
-                data = self.receipt()
-                self.assertEqual(data["gate"]["outcome"], "refused")
-                record = data["ci_post"]["runs"][-1]
-                self.assertFalse(record["history_complete"])
-                if history:
-                    audit = record["attempt_history"][-1]
-                    self.assertEqual(audit["requested_attempt"], 1)
-                    self.assertFalse(audit["jobs_complete"])
-                    self.assertIsNone(audit["jobs"])
-                    response = audit["jobs_response"]
-                else:
-                    self.assertFalse(record["proving_jobs_complete"])
-                    self.assertIsNone(record["proving_jobs"])
-                    response = record["proving_response"]
-                self.assert_response_bytes(response, raw, [raw], complete=False)
-                self.assertEqual(self.api.calls[-1][0], endpoint)
-                self.assert_decision_binding(data)
-
-    def test_bound_attempt_metadata_refuses_text_without_original_bytes(self):
-        transport = self.api
-        endpoint = attempt_api(self.row["id"], 1)
-
-        def text_only(endpoint_read, **options):
-            raw = transport(endpoint_read, **options)
-            return str(raw) if endpoint_read == endpoint else raw
-
-        self.api = text_only
-        code, out, err = self.run_receipt()
-        self.assertEqual((code, out), (1, ""), err)
-        self.assertIn("has no original response bytes", err)
-        data = self.receipt()
-        audit = data["ci_post"]["runs"][-1]["attempt_history"][-1]
-        self.assertEqual(audit["requested_attempt"], 1)
-        self.assertFalse(audit["jobs_complete"])
-        self.assertIsNone(audit["metadata_response"]["sha256"])
-        self.assertFalse(audit["metadata_response"]["complete"])
-        self.assertEqual(data["gate"]["outcome"], "refused")
-        self.assert_decision_binding(data)
-
-    def sequence_metadata(self, row, final):
-        initial = http_response(200, json.dumps(row)).encode()
-        responses = iter((initial, final))
-        self.api.responses[run_metadata_api(row["id"])] = lambda: next(responses)
-        return initial
-
-    def test_initial_metadata_mismatch_refuses_before_proving_jobs(self):
-        for payload in (OSError("unreadable initial metadata"),
-                        {**self.row, "run_attempt": 2},
-                        {**self.row, "head_sha": OTHER_HEAD}):
-            with self.subTest(payload=payload):
-                self.api = FakeAPI()
-                self.api.ci_post(self.row, self.jobs)
-                self.api.responses[run_metadata_api(self.row["id"])] = (
-                    payload if isinstance(payload, Exception) else json.dumps(payload).encode())
-                code, out, err = self.run_receipt()
-                self.assertEqual((code, out), (1, ""), err)
-                data = self.receipt()
-                record = data["ci_post"]["runs"][-1]
-                self.assertFalse(record["proving_jobs_complete"])
-                self.assertIsNone(record["proving_jobs"])
-                self.assertFalse(record["run_validation"]["complete"])
-                self.assertEqual(self.api.calls[-1],
-                                 (run_metadata_api(self.row["id"]), False, None))
-                self.assertNotIn((ci_post_jobs_api(self.row["id"]), True, None), self.api.calls)
-                self.assertEqual(data["gate"]["outcome"], "refused")
-                self.assert_decision_binding(data)
-
-    def test_selected_attempt_change_on_uncached_final_read_refuses(self):
-        final = http_response(200, json.dumps({**self.row, "run_attempt": 2})).encode()
-        initial = self.sequence_metadata(self.row, final)
-        code, out, err = self.run_receipt()
-        # Check the policy failure before inspecting any new receipt interface:
-        # R8 admits this same string-compatible transport instead.
-        self.assertEqual((code, out), (1, ""), err)
-        self.assertIn("run attempt changed", err)
-        data = self.receipt()
-        validation = data["run_validations"][0]
-        self.assertEqual((validation["initial_attempt"], validation["final_attempt"]), (1, 2))
-        self.assertEqual(validation["outcome"], "changed")
-        self.assertFalse(validation["complete"])
-        self.assertEqual(data["gate"]["outcome"], "refused")
-        self.assert_response_bytes(validation["initial_response"], initial, [initial])
-        self.assert_response_bytes(validation["final_response"], final, [final])
-        self.assertEqual(Counter(self.api.calls)[
-            (run_metadata_api(self.row["id"]), False, None)], 2)
-        self.assert_decision_binding(data)
-
-    def test_stable_final_metadata_requires_two_real_reads_and_binds_final_bytes(self):
-        final = http_response(200, "\n" + json.dumps(self.row, indent=2) + "\r\n").encode()
-        initial = self.sequence_metadata(self.row, final)
-        code, out, err = self.run_receipt()
-        self.assertEqual((code, err), (0, ""), out)
-        counts = Counter(self.api.calls)
-        metadata_call = (run_metadata_api(self.row["id"]), False, None)
-        self.assertEqual(counts[metadata_call], 2)
-        self.assertEqual(self.api.calls[-1], metadata_call)
-        self.assertTrue(all(count == 1 for call, count in counts.items()
-                            if call != metadata_call), counts)
-        data = self.receipt()
-        self.assertEqual(len(data["run_validations"]), 1)
-        validation = data["run_validations"][0]
-        self.assertEqual((validation["initial_attempt"], validation["final_attempt"]), (1, 1))
-        self.assertEqual(validation["outcome"], "stable")
-        self.assertTrue(validation["complete"])
-        self.assert_response_bytes(validation["initial_response"], initial, [initial])
-        self.assert_response_bytes(validation["final_response"], final, [final])
-        self.assertNotEqual(validation["initial_response"]["sha256"],
-                            validation["final_response"]["sha256"])
-        self.assert_decision_binding(data)
-
-    def test_missing_broken_or_mismatched_final_metadata_refuses_with_identity(self):
-        cases = {
-            "unreadable": OSError("private-transport-diagnostic"),
-            "invalid-json": b'HTTP/2.0 200\r\n\r\n{"broken":',
-            "invalid-utf8": b'HTTP/2.0 200\r\n\r\n"\xff"',
-            "id": {**self.row, "id": self.row["id"] + 1},
-            "sha": {**self.row, "head_sha": OTHER_HEAD},
-            "branch": {**self.row, "head_branch": "other"},
-            "event": {**self.row, "event": "pull_request"},
-            "actor": {**self.row, "actor": {"login": "someone-else"}},
-            "trigger": {**self.row, "triggering_actor": {"login": "someone-else"}},
-            "actor-id": {**self.row, "actor": {**self.row["actor"], "id": 999}},
-            "trigger-type": {**self.row, "triggering_actor": {
-                **self.row["triggering_actor"], "type": "User"}},
-            "created-at": {**self.row, "created_at": "2026-10-24T12:00:00Z"},
-            "updated-at": {**self.row, "updated_at": "2026-10-25T13:00:00Z"},
-            "started-at": {**self.row, "run_started_at": "2026-10-25T13:00:00Z"},
-            "url": {**self.row, "html_url": "https://example.invalid/different-run"},
-            "status": {**self.row, "status": "in_progress"},
-            "conclusion": {**self.row, "conclusion": "failure"},
-            "bool-attempt": {**self.row, "run_attempt": True},
-        }
-        for name, payload in cases.items():
-            with self.subTest(failure=name):
-                self.api = FakeAPI()
-                self.api.ci_post(self.row, self.jobs)
-                final = (http_response(200, json.dumps(payload)).encode()
-                         if isinstance(payload, dict) else payload)
-                self.sequence_metadata(self.row, final)
-                code, out, err = self.run_receipt()
-                self.assertEqual((code, out), (1, ""), err)
-                data = self.receipt()
-                validation = data["run_validations"][0]
-                self.assertEqual(validation["initial_attempt"], 1)
-                self.assertFalse(validation["complete"])
-                self.assertEqual(data["gate"]["outcome"], "refused")
-                self.assertEqual(self.api.calls[-1],
-                                 (run_metadata_api(self.row["id"]), False, None))
-                self.assertEqual(Counter(self.api.calls)[self.api.calls[-1]], 2)
-                response = validation["final_response"]
-                if isinstance(final, bytes):
-                    self.assertEqual(response["sha256"], hashlib.sha256(final).hexdigest())
-                else:
-                    self.assertIsNone(response["sha256"])
-                    self.assertFalse(response["complete"])
-                    self.assertIsNone(validation["final_attempt"])
-                self.assertNotIn("private-transport-diagnostic", self.path.read_text())
-                self.assert_decision_binding(data)
-
-    def test_failed_final_transport_binds_received_stdout_without_copying_secrets(self):
-        secret = "unapproved-raw-authorization-value"
-        raw = http_response(503, json.dumps({"private_source": secret}),
-                            {"Authorization": secret}).encode()
-        failure = subprocess.CalledProcessError(
-            1, ["gh", "api", run_metadata_api(self.row["id"])],
-            output=raw, stderr=secret.encode())
-        self.sequence_metadata(self.row, failure)
-        code, out, err = self.run_receipt()
-        self.assertEqual((code, out), (1, ""), err)
-        data = self.receipt()
-        validation = data["run_validations"][0]
-        self.assertFalse(validation["complete"])
-        self.assertEqual(validation["outcome"], "unreadable")
-        self.assert_response_bytes(validation["final_response"], raw, [raw], complete=False)
-        self.assertEqual(data["gate"]["outcome"], "refused")
-        self.assertNotIn(secret, self.path.read_text())
-        self.assertNotIn("CalledProcessError(", self.path.read_text())
-        self.assert_decision_binding(data)
-
-    def test_all_relied_on_docs_push_and_passed_over_runs_are_revalidated(self):
-        for role in ("docs", "push", "passed-over"):
-            for changed in (False, True):
-                with self.subTest(role=role, changed=changed):
-                    self.api = FakeAPI()
-                    self.api.ci_post(self.row, self.jobs)
-                    self.history = FakeHistory({SHA: (OTHER_HEAD, ["src/release.cpp"])})
-                    phase, dispatch = "bump", ""
-                    if role == "docs":
-                        self.history = FakeHistory({
-                            SHA: (OTHER_HEAD, ["README.md"]),
-                            OTHER_HEAD: (OTHER_TREE, ["src/engine.cpp"])})
-                        target = self.row
-                        self.api.ci_post(self.row, [{**j, "conclusion": "skipped"}
-                                                     for j in self.jobs])
-                        self.api.ci_post(ci_post_run(8342, sha=OTHER_HEAD), self.jobs)
-                    elif role == "push":
-                        self.api.release_bump()
-                        target = push_run()
-                        phase, dispatch = "tag", BUMP_PARENT
-                    else:
-                        target = ci_post_run(9001, created_at="2026-10-25T13:00:00Z")
-                        self.api.ci_post_runs(SHA, [target, self.row], {
-                            target["id"]: [{**j, "conclusion": "skipped"} for j in self.jobs],
-                            self.row["id"]: self.jobs})
-                    final = http_response(200, json.dumps({
-                        **target, "run_attempt": 2 if changed else 1})).encode()
-                    self.sequence_metadata(target, final)
-                    code, out, err = self.run_receipt(phase=phase, dispatch=dispatch)
-                    self.assertEqual((code, out if changed else err),
-                                     (1, "") if changed else (0, ""), (out, err))
-                    data = self.receipt()
-                    self.assertEqual(data["gate"]["outcome"],
-                                     "refused" if changed else "admitted")
-                    validation = next(v for v in data["run_validations"]
-                                      if v["run_id"] == target["id"])
-                    self.assertEqual(validation["final_attempt"], 2 if changed else 1)
-                    self.assertEqual(validation["outcome"], "changed" if changed else "stable")
-                    self.assert_response_bytes(validation["final_response"], final, [final])
-                    self.assertEqual(Counter(self.api.calls)[
-                        (run_metadata_api(target["id"]), False, None)], 2)
-                    if changed:
-                        self.assertIn("run attempt changed", err)
-                    else:
-                        self.assertTrue(all(v["complete"] for v in data["run_validations"]))
-                        doubled = {(run_metadata_api(v["run_id"]), False, None)
-                                   for v in data["run_validations"]}
-                        counts = Counter(self.api.calls)
-                        self.assertEqual({call: counts[call] for call in doubled},
-                                         {call: 2 for call in doubled})
-                        self.assertTrue(all(count == 1 for call, count in counts.items()
-                                            if call not in doubled), counts)
-                        selected = data["ci_post"]["selected_run_id"]
-                        self.assertEqual(self.api.calls[-1],
-                                         (run_metadata_api(selected), False, None))
-                    self.assert_decision_binding(data)
-
-    def test_shared_push_and_proof_identity_is_verified_twice_total(self):
-        self.api.release_bump()
-        self.api.ci_post(self.row, self.jobs)
-        self.api.responses[RUNS_API] = runs_page([self.row])
-        code, out, err = self.run_receipt(phase="tag", dispatch=BUMP_PARENT)
-        self.assertEqual((code, err), (0, ""), out)
-        data = self.receipt()
-        self.assertEqual(len(data["run_validations"]), 1)
-        self.assertEqual(Counter(self.api.calls)[
-            (run_metadata_api(self.row["id"]), False, None)], 2)
-        self.assertEqual(data["push_provenance"][0]["run_validation"],
-                         data["ci_post"]["runs"][-1]["run_validation"])
-        self.assertTrue(data["run_validations"][0]["complete"])
-        self.assert_decision_binding(data)
-
-    def test_advisory_states_and_absence_are_recorded_on_each_parity_path(self):
-        for phase in ("bump", "tag"):
-            for watcher in (False, True):
-                for state in (None, "success", "pending", "failure", "error", "missing"):
-                    with self.subTest(phase=phase, watcher=watcher, state=state):
-                        self.api = FakeAPI()
-                        if phase == "tag":
-                            self.api.release_bump()
-                        self.api.ci_post(self.row, self.jobs)
-                        proof_sha = BUMP_PARENT if phase == "tag" else SHA
-                        contexts = {"pineforge/parity": "success"}
-                        rows = [status("pineforge/parity")]
-                        if state is not None:
-                            contexts["pineforge/verify"] = state
-                            rows.insert(0, {**status("pineforge/verify", state), "id": 401,
-                                            "target_url": "https://example.invalid/verify/401",
-                                            "created_at": "2026-10-25T11:00:00Z"})
-                        self.api.statuses(rows)
-                        with mock.patch.object(ci_release_gate, "MAIN_PROOF_WATCHER_FIRST_SHA",
-                                               proof_sha if watcher else None), \
-                                mock.patch.object(ci_release_gate, "read_main_proof",
-                                                  return_value=contexts) as reader:
-                            self.git.side_effect = None
-                            self.git.return_value = True
-                            code, out, err = self.run_receipt(
-                                phase=phase, dispatch=BUMP_PARENT if phase == "tag" else "")
-                        self.assertEqual((code, err), (0, ""), out)
-                        data = self.receipt()
-                        self.assertEqual(data["gate"]["outcome"], "admitted")
-                        self.assertEqual(data["required_contexts"], ["pineforge/parity"])
-                        advisory = data["advisory_verify"]
-                        self.assertEqual(advisory["presence"], state is not None)
-                        self.assertEqual(advisory["state"], state or "missing")
-                        self.assertEqual(advisory["sha"], proof_sha if watcher else HEAD)
-                        self.assertEqual(advisory["tree"], TREE)
-                        self.assertIn(f"pineforge/verify={state or 'missing'} (advisory)", out)
-                        if watcher:
-                            reader.assert_called_once_with(REPO, proof_sha)
-                            self.assertNotIn((STATUSES_API, True, None), self.api.calls)
-                        else:
-                            reader.assert_not_called()
-                            if state:
-                                self.assertEqual(advisory["status"]["id"], 401)
-                                self.assertEqual(advisory["status"]["creator"]["login"],
-                                                 "luisleo526")
-
-    def test_invalid_advisory_states_refuse_before_output_or_receipt_recording_on_each_path(self):
-        for phase in ("bump", "tag"):
-            for watcher in (False, True):
-                for state in (None, "", True, 1, [], {}, "unknown", "neutral", "SUCCESS",
-                              " success", "success ", "success\n::notice::untrusted-status",
-                              "pending\r::error::untrusted-status",
-                              "failure\r\n::warning::untrusted-status"):
-                    with self.subTest(phase=phase, watcher=watcher, state=state):
-                        self.api = FakeAPI()
-                        if phase == "tag":
-                            self.api.release_bump()
-                        self.api.ci_post(self.row, self.jobs)
-                        self.api.statuses([status("pineforge/verify", state),
-                                           status("pineforge/parity")])
-                        proof_sha = BUMP_PARENT if phase == "tag" else SHA
-                        with mock.patch.object(ci_release_gate, "MAIN_PROOF_WATCHER_FIRST_SHA",
-                                               proof_sha if watcher else None), \
-                                mock.patch.object(ci_release_gate, "read_main_proof",
-                                                  return_value={"pineforge/parity": "success",
-                                                                "pineforge/verify": state}):
-                            self.git.side_effect = None
-                            self.git.return_value = True
-                            code, out, err = self.run_receipt(
-                                phase=phase, dispatch=BUMP_PARENT if phase == "tag" else "")
-                        self.assertEqual((code, out), (1, ""), err)
-                        if not isinstance(state, str) or not state:
-                            diagnostic = (
-                                f"main-proof receipt for {proof_sha}: invalid or empty context map"
-                                if watcher else
-                                f"API {STATUSES_API} returned invalid status state for pineforge/verify")
-                        else:
-                            diagnostic = "invalid advisory status state for pineforge/verify"
-                        self.assertEqual(err, f"::error::{diagnostic}\n")
-                        data = self.receipt()
-                        self.assertEqual(data["gate"]["outcome"], "refused")
-                        self.assertEqual(data["gate"]["reasons"], [{
-                            "kind": "ReleaseGateError",
-                            "check": ("authenticated release bump and parent parity"
-                                      if phase == "tag" else
-                                      "main-proof parity" if watcher else "PR head parity")}])
-                        self.assertIsNone(data["advisory_verify"]["presence"])
-                        self.assertEqual(data["advisory_verify"]["state"], "unread")
-                        self.assertFalse(data["advisory_verify"]["complete"])
-                        self.assertNotIn("untrusted-status", self.path.read_text())
-                        self.assert_decision_binding(data)
-
-    def test_removing_verify_creator_authentication_admits_forged_advisory_records(self):
-        source = Path(ci_release_gate.__file__).read_text()
-        before = ('        if context in (*CONTEXTS, "pineforge/verify"):\n'
-                  '            creator = row.get("creator")\n')
-        after = ('        if context in CONTEXTS:\n'
-                 '            creator = row.get("creator")\n')
-        self.assertEqual(source.count(before), 1, "mutation must have one source target")
-        mutated = source.replace(before, after, 1)
-        self.assertNotEqual(mutated, source)
-        namespace = {"__name__": "ci_release_gate_verify_creator_mutant",
-                     "__file__": ci_release_gate.__file__}
-        exec(compile(mutated, ci_release_gate.__file__, "exec"), namespace)
-        cases = (
-            ("outsider", {"login": "untrusted-operator", "type": "User"},
-             "refused status creator (login='untrusted-operator', type='User')"),
-            ("wrong-type", {"login": "luisleo526", "type": "Bot"},
-             "refused status creator (login='luisleo526', type='Bot')"),
-            ("missing", None, "missing or malformed status creator: None"),
-            ("malformed-object", ["luisleo526", "User"],
-             "missing or malformed status creator: ['luisleo526', 'User']"),
-            ("malformed-field", {"login": "luisleo526", "type": ["User"]},
-             "refused status creator (login='luisleo526', type=['User'])"))
-        for phase in ("bump", "tag"):
-            for state in ("success", "pending", "failure", "error"):
-                for name, creator, diagnostic in cases:
-                    with self.subTest(phase=phase, state=state, creator=name):
-                        self.api = FakeAPI()
-                        if phase == "tag":
-                            self.api.release_bump()
-                        self.api.ci_post(self.row, self.jobs)
-                        newest = status("pineforge/verify", state)
-                        newest["id"] = 401
-                        if name == "missing":
-                            del newest["creator"]
-                        else:
-                            newest["creator"] = creator
-                        # An older authenticated success cannot rescue the newest status.
-                        self.api.statuses([newest, *successes()])
-                        dispatch = BUMP_PARENT if phase == "tag" else ""
-                        code, out, err = self.run_receipt(phase=phase, dispatch=dispatch)
-                        self.assertEqual((code, out), (1, ""), err)
-                        self.assertEqual(err, f"::error::API {STATUSES_API}: pineforge/verify: "
-                                         f"{diagnostic}\n")
-                        self.assertEqual(self.receipt()["gate"]["outcome"], "refused")
-                        out, err = io.StringIO(), io.StringIO()
-                        self.api.calls.clear()
-                        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                            code = namespace["main"](
-                                ["gate", "--repo", REPO, "--sha", SHA, "--ref", "refs/heads/main",
-                                 "--phase", phase, "--dispatch-sha", dispatch,
-                                 "--receipt", str(self.path)],
-                                api=self.api, git=self.git, history=self.history,
-                                release_git=ReleaseSnapshot())
-                        self.assertEqual((code, err.getvalue()), (0, ""), out.getvalue())
-                        prefix = (f"release bump {SHA}; parent {BUMP_PARENT}; "
-                                  if phase == "tag" else "")
-                        self.assertEqual(out.getvalue(), (
-                            f"release gate green: {prefix}PR #17 head {HEAD}; "
-                            f"pineforge/parity=success; tree {TREE}; "
-                            f"pineforge/verify={state} (advisory); "
-                            f"ci-post run {self.row['id']} for {SHA}\n"))
-                        data = self.receipt()
-                        self.assertEqual(data["gate"]["outcome"], "admitted")
-                        self.assertTrue(data["advisory_verify"]["presence"])
-                        self.assertEqual(data["advisory_verify"]["state"], state)
-                        self.assertEqual(data["advisory_verify"]["status"]["id"], 401)
-                        self.assert_decision_binding(data)
-
-    def test_latest_triggering_actor_shape_is_distinct_from_changed_attempt_metadata(self):
-        missing = {key: value for key, value in self.row.items() if key != "triggering_actor"}
-        malformed = [missing, *[
-            {**self.row, "triggering_actor": actor}
-            for actor in (None, {}, [], "release-maintainer", {"login": None},
-                          {"login": 17}, {"login": ""}, {"login": "human\nactor"})]]
-        for row in malformed:
-            with self.subTest(triggering_actor=row.get("triggering_actor")):
-                api = FakeAPI()
-                api.attempts(row, {1: self.jobs})
-                record = {}
-                with self.assertRaises(ci_release_gate.ReleaseGateError) as refused:
-                    ci_release_gate._collect_attempts(api, REPO, row, record)
-                self.assertEqual(str(refused.exception), "ci-post: incomplete attempt history: "
-                                 "latest triggering_actor is missing or malformed")
-                self.assertFalse(record["history_complete"])
-                self.assertEqual(record["attempt_history"], [])
-                self.assertEqual(api.calls, [])
-        api = FakeAPI()
-        api.attempts(self.row, {1: self.jobs})
-        record = {}
-        ci_release_gate._collect_attempts(api, REPO, self.row, record)
-        self.assertTrue(record["history_complete"])
-        api = FakeAPI()
-        api.attempts(self.row, {1: self.jobs},
-                     metadata={1: {"conclusion": "failure"}})
-        record = {}
-        with self.assertRaises(ci_release_gate.ReleaseGateError) as refused:
-            ci_release_gate._collect_attempts(api, REPO, self.row, record)
-        self.assertEqual(str(refused.exception),
-                         "ci-post: incomplete attempt history: latest metadata changed")
-        self.assertFalse(record["history_complete"])
-        self.assertEqual(api.calls[-1], (attempt_api(self.row["id"], 1), False, None))
-
-    def test_unexpected_exceptions_write_sanitized_class_and_checkpoint_refusals(self):
-        secret = "private-unexpected-exception-credential"
-        for error in (KeyError, TypeError, RuntimeError):
-            with self.subTest(error=error.__name__):
-                self.history.responses[SHA] = error(secret)
-                code, out, err = self.run_receipt()
-                self.assertEqual((code, out), (1, ""), err)
-                self.assertEqual(err, f"::error::unexpected {error.__name__} "
-                                 "at ci-post and attempt history\n")
-                data = self.receipt()
-                self.assertEqual(data["gate"]["outcome"], "refused")
-                self.assertEqual(data["gate"]["reasons"], [{
-                    "kind": error.__name__, "check": "ci-post and attempt history"}])
-                self.assertNotIn(secret, self.path.read_text())
-                self.assertNotIn(secret, out + err)
-                self.assert_decision_binding(data)
-                self.history.responses[SHA] = (OTHER_HEAD, ["src/release.cpp"])
-                code, out, err = self.run_receipt()
-                self.assertEqual((code, err), (0, ""), out)
-                data = self.receipt()
-                self.assertEqual(data["gate"]["outcome"], "admitted")
-                self.assertEqual(data["gate"]["reasons"], [])
-                self.assertEqual(data["run_validations"][-1]["outcome"], "stable")
-
-    def test_watcher_enabled_bump_cannot_rebump_an_app_push_without_a_pr(self):
-        self.api.release_bump()
-        self.api.ci_post(self.row, self.jobs)
-        self.git.side_effect = None
-        self.git.return_value = True
-        with mock.patch.object(ci_release_gate, "MAIN_PROOF_WATCHER_FIRST_SHA", SHA), \
-                mock.patch.object(ci_release_gate, "read_main_proof",
-                                  return_value={"pineforge/parity": "success"}):
-            code, out, err = self.run_receipt()
-        self.assertEqual((code, out), (1, ""))
-        self.assertIn("dispatch its existing bump with phase tag", err)
-        self.assertEqual(self.receipt()["gate"]["outcome"], "refused")
-
-    def test_parity_refusal_writes_a_refusal_and_never_prints_green(self):
-        self.api.statuses([status("pineforge/parity", "failure")])
-        code, out, err = self.run_receipt()
-        self.assertEqual((code, out), (1, ""))
-        self.assertIn("pineforge/parity=failure", err)
-        data = self.receipt()
-        self.assertEqual(data["gate"]["outcome"], "refused")
-        self.assertTrue(data["gate"]["reasons"])
-        self.assertEqual(data["contexts"]["pineforge/parity"]["state"], "failure")
-
-    def test_receipt_write_failure_vetoes_green_and_preserves_refusal(self):
-        for parity in ("success", "failure"):
-            with self.subTest(parity=parity):
-                self.api.statuses([status("pineforge/parity", parity)])
-                with mock.patch.object(Path, "write_text", side_effect=PermissionError("disk denied")):
-                    code, out, err = self.run_receipt()
-                self.assertEqual((code, out), (1, ""))
-                self.assertIn("cannot write release gate receipt", err)
-                if parity == "failure":
-                    self.assertIn("pineforge/parity=failure", err)
-
-    def test_exception_details_and_extra_api_fields_never_enter_receipt(self):
-        secret = "private-authorization-value"
-        self.api.responses[STATUSES_API] = OSError(secret)
-        code, out, err = self.run_receipt()
-        self.assertEqual((code, out), (1, ""))
-        advisory = self.receipt()["advisory_verify"]
-        self.assertIsNone(advisory["presence"])
-        self.assertEqual(advisory["state"], "unread")
-        self.assertFalse(advisory["complete"])
-        self.assertNotIn(secret, self.path.read_text())
-        self.api.statuses([{**row, "token": secret, "authorization": secret}
-                           for row in successes()])
-        self.api.ci_post({**self.row, "private_source": secret}, self.jobs)
-        code, out, err = self.run_receipt()
-        self.assertEqual((code, err), (0, ""), out)
-        self.assertNotIn(secret, self.path.read_text())
-
-    def test_synthetic_full_rerun_preserves_failed_and_cancelled_history(self):
-        self.row["run_attempt"] = 3
-        self.row["actor"] = {"login": "release-maintainer"}
-        self.row["triggering_actor"] = {"login": "release-maintainer"}
-        self.api.ci_post(self.row, self.jobs)
-        histories = {
-            attempt: [{**job, "id": 1000 * attempt + job["id"], "run_attempt": attempt,
-                       "started_at": f"2026-10-25T12:0{attempt}:00Z",
-                       "completed_at": f"2026-10-25T12:0{attempt}:30Z",
-                       "steps": [{"number": 1, "name": "build", "status": "completed",
-                                  "conclusion": "success"}],
-                       "conclusion": ("failure" if attempt == 1 else
-                                      "cancelled" if attempt == 2 else "success")}
-                      for job in self.jobs]
-            for attempt in range(1, 4)}
-        self.jobs = histories[3]
-        self.api.responses[ci_post_jobs_api(self.row["id"])] = jobs_page(self.jobs)
-        metadata = {
-            1: {"conclusion": "failure", "triggering_actor": {"login": "release-maintainer"}},
-            2: {"conclusion": "cancelled"},
-            3: {"conclusion": "success"}}
-        self.api.attempts(self.row, histories, metadata=metadata)
-        self.api.responses[f"repos/{REPO}/collaborators/release-maintainer/permission"] = \
-            json.dumps({"permission": "maintain", "user": {"login": "release-maintainer"}})
-        code, out, err = self.run_receipt()
-        self.assertEqual((code, err), (0, ""), out)
-        record = self.receipt()["ci_post"]["runs"][-1]
-        self.assertEqual([a["run"]["conclusion"] for a in record["attempt_history"]],
-                         ["failure", "cancelled", "success"])
-        self.assertEqual(record["carried_associations"], [])
-        self.assertEqual(record["attempt_history"][1]["trigger_permission"]["permission"],
-                         "maintain")
-        self.assertEqual(record["proving_jobs"], self.jobs)
-
-    def test_app_original_push_allows_only_permission_authenticated_maintainer_reruns(self):
-        for permission in ("admin", "maintain", "write", "read", None):
-            with self.subTest(permission=permission):
-                self.api = FakeAPI()
-                self.api.release_bump()
-                self.api.ci_post(self.row, self.jobs)
-                push = {**push_run(), "run_attempt": 2,
-                        "triggering_actor": {"login": "release-maintainer"}}
-                self.api.responses[RUNS_API] = runs_page([push])
-                self.api.attempts(
-                    push, {1: [{**self.jobs[0], "conclusion": "failure"}], 2: self.jobs},
-                    metadata={
-                        1: {"conclusion": "failure",
-                            "triggering_actor": {"login": "pineforge-app[bot]"}},
-                        2: {}})
-                endpoint = f"repos/{REPO}/collaborators/release-maintainer/permission"
-                self.api.responses[endpoint] = (
-                    OSError("permission unreadable") if permission is None else
-                    json.dumps({"permission": permission, "user": {"login": "release-maintainer"}}))
-                code, out, err = self.run_receipt(phase="tag", dispatch=BUMP_PARENT)
-                record = self.receipt()["push_provenance"][0]
-                if permission in ("admin", "maintain", "write"):
-                    self.assertEqual((code, err), (0, ""), out)
-                    self.assertTrue(record["history_complete"])
-                    self.assertEqual(record["attempt_history"][0]["run"]["conclusion"], "failure")
-                    self.assertEqual(record["attempt_history"][1]["trigger_permission"]["permission"],
-                                     permission)
-                else:
-                    self.assertEqual((code, out), (1, ""), err)
-                    self.assertFalse(record["history_complete"])
-                self.assertEqual(Counter(call[0] for call in self.api.calls)[endpoint], 1)
-
-    def test_latest_proving_jobs_never_fill_a_gap_from_green_history(self):
-        self.row["run_attempt"] = 2
-        self.api.ci_post(self.row, self.jobs)
-        self.api.attempts(self.row, {1: self.jobs, 2: self.jobs})
-        self.api.responses[ci_post_jobs_api(self.row["id"])] = jobs_page(self.jobs[:-1])
-        code, out, err = self.run_receipt()
-        self.assertEqual((code, out), (1, ""))
-        self.assertIn("missing job " + self.jobs[-1]["name"], err)
-        record = self.receipt()["ci_post"]["runs"][-1]
-        self.assertEqual(record["proving_jobs"], self.jobs[:-1])
-        self.assertTrue(record["history_complete"])
-        # The same history name is normal; a duplicate in latest is a veto.
-        duplicate = {**self.jobs[-1], "id": 9999}
-        self.api.responses[ci_post_jobs_api(self.row["id"])] = jobs_page([*self.jobs, duplicate])
-        code, out, err = self.run_receipt()
-        self.assertEqual((code, out), (1, ""))
-        self.assertIn("duplicate-job", err)
-
-    def test_gapped_unreadable_and_truncated_history_refuse_as_incomplete(self):
-        for failure in ("gap", "unreadable", "total", "link"):
-            with self.subTest(failure=failure):
-                self.api = FakeAPI()
-                row = {**self.row, "run_attempt": 3}
-                self.api.ci_post(row, self.jobs)
-                self.api.attempts(row, {1: self.jobs, 2: self.jobs, 3: self.jobs})
-                endpoint = attempt_api(row["id"], 2)
-                if failure == "gap":
-                    payload = {**row, "run_attempt": 3}
-                    self.api.responses[endpoint] = json.dumps(payload)
-                elif failure == "unreadable":
-                    self.api.responses[endpoint] = OSError("unreadable attempt")
-                else:
-                    endpoint = attempt_jobs_api(row["id"], 2)
-                    self.api.responses[endpoint] = jobs_page(
-                        self.jobs, total=len(self.jobs) + (failure == "total"),
-                        headers={"Link": f'<https://api.github.com/{endpoint}&page=2>; rel="next"'}
-                        if failure == "link" else None)
-                code, out, err = self.run_receipt()
-                self.assertEqual((code, out), (1, ""), err)
-                record = self.receipt()["ci_post"]["runs"][-1]
-                self.assertFalse(record["history_complete"])
-                self.assertEqual(record["expected_attempts"], [1, 2, 3])
-                self.assertEqual(self.api.calls[-1][0], endpoint)
-                self.assertEqual(record["attempt_history"][-1]["requested_attempt"], 2)
-
-    def test_recorded_carried_rows_keep_api_identity_steps_and_ambiguous_null_history(self):
-        # Only this bounded projection is recorded; metadata below is synthetic.
-        row = {**self.row, "id": 41767951876, "head_sha": "12148f9639cddc953a7508f091941fca820f4659",
-               "run_attempt": 3}
-        self.api.attempts(row, {n: RECORDED_CARRIED_JOBS[f"attempt{n}"]
-                                for n in range(1, 4)})
-        self.api.responses[ci_post_jobs_api(row["id"])] = jobs_page(RECORDED_CARRIED_JOBS["latest"])
-        record = {}
-        ci_release_gate._collect_attempts(self.api, REPO, row, record)
-        latest = ci_release_gate._ci_post_jobs(self.api, REPO, row["id"])
-        links = ci_release_gate._carried_associations(latest, record["attempt_history"])
-        self.assertTrue(record["history_complete"])
-        self.assertEqual(latest, RECORDED_CARRIED_JOBS["latest"])
-        second = record["attempt_history"][1]["jobs"]
-        authz = [j for j in second if j["name"] == "corpus-parity / authz"]
-        self.assertEqual(len(authz), 2)
-        self.assertTrue(any(j["conclusion"] is None for j in authz))
-        preflight = next(j for j in latest if j["name"] == "preflight")
-        link = next(a for a in links if a["proving_job_id"] == preflight["id"])
-        self.assertEqual(link["earliest_matching_api_attempt"], 1)
-        self.assertEqual(link["basis"], "unique name, identical non-null times and steps")
-        self.assertEqual(link["matches"], [
-            {"api_attempt": n, "job_id": next(
-                j["id"] for j in RECORDED_CARRIED_JOBS[f"attempt{n}"]
-                if j["name"] == "preflight")} for n in range(1, 4)])
-        self.assertNotIn("physical_execution_attempt", link)
-        self.assertFalse(any(a["name"] == "corpus-parity / authz" for a in links))
-
-    def test_docs_receipt_keeps_requested_and_built_proof_trees_distinct(self):
-        self.history = FakeHistory({
-            SHA: (OTHER_HEAD, ["README.md"]), OTHER_HEAD: (OTHER_TREE, ["src/engine.cpp"])})
-        ancestor = ci_post_run(8342, sha=OTHER_HEAD)
-        self.api.ci_post(ancestor, self.jobs)
-        self.api.responses[f"repos/{REPO}/commits/{OTHER_HEAD}"] = json.dumps(
-            commit(OTHER_HEAD, OTHER_TREE))
-        self.api.ci_post(self.row, [{**j, "conclusion": "skipped"} for j in self.jobs])
-        code, out, err = self.run_receipt()
-        self.assertEqual((code, err), (0, ""), out)
-        data = self.receipt()
-        self.assertEqual(data["requested"], {"sha": SHA, "tree": TREE})
-        self.assertEqual(data["ci_post"]["proof"], {"sha": OTHER_HEAD, "tree": OTHER_TREE})
-        self.assertEqual(data["docs_chain"][0]["changed_paths"], ["README.md"])
-        self.assertTrue(data["docs_chain"][0]["documentation_only"])
-        self.assertEqual(data["docs_chain"][0]["run"]["id"], self.row["id"])
-        self.api.ci_post({**self.row, "conclusion": "failure"}, self.jobs)
-        code, out, err = self.run_receipt()
-        self.assertEqual((code, out), (1, ""), err)
-        data = self.receipt()
-        self.assertEqual(data["docs_chain"][0]["run"]["conclusion"], "failure")
-        self.assertTrue(data["docs_chain"][0]["audit"]["history_complete"])
 
 
 if __name__ == "__main__":

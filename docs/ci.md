@@ -1849,25 +1849,10 @@ judge the exact pull request head tree.
 
 ### Release guard phases
 
-Release admission requires `pineforge/parity=success`; lite variants never
-satisfy that requirement. `pineforge/verify` remains advisory and its actual
-presence and latest authenticated state are printed and retained in the receipt.
-The existing `lab verify record` producer posts that status. The `ci_verify.py`
-profiles inside ci-post remain separate execution evidence and never supply a
-missing status. On the future main-proof path, the reader's context map supplies
-verify; an absent entry is explicitly `presence=false`, `state=missing`.
-
-Dispatch phase `bump` checks the current main SHA and pushes only the untagged
-two-file VERSION/catalog-reset commit. Wait for that bump's own full ci-post,
-then dispatch phase `tag` on it with `dispatch_sha` equal to its sole parent.
-Tag admission checks both authenticated API trees and the local committed
-transition; tagging reuses that exact bump SHA and never increments VERSION.
-Phase `bump` refuses an existing bump without a merged PR on both the PR and
-future main-proof paths: dispatch that existing bump with phase `tag`.
-Dry runs use the same admission and record their actual dry-run flag.
-
-The **transitional** merged-PR-head path applies before the main watcher.
-The guard reads `repos/{repo}/branches/main` (`.commit.sha`)
+The release guard requires exactly `pineforge/verify` and `pineforge/parity`
+to be `success`; lite variants never satisfy either requirement. Phase 1 is
+the **transitional** merged-PR-head path for main commits that predate the
+main watcher. The guard reads `repos/{repo}/branches/main` (`.commit.sha`)
 and requires the release sha to equal that branch's current head. It requires
 exactly one associated merged PR targeting `main`, with `merge_commit_sha`
 equal to the release sha and a head tree matching the released tree, then
@@ -1877,24 +1862,21 @@ When qualifying merged PRs exist, zero tree matches refuse; multiple matches
 refuse and name every matching PR, with no preference for the newest. A failed
 tree or status check never falls back to a release bump.
 
-The legacy phase-less read-only interface can admit an existing release bump
-without a qualifying merged PR. Explicit phase `tag` additionally binds its
-sole parent to the phase-1 dispatch SHA. Both require all three conditions:
+When there is no qualifying merged PR for the current main sha, phase 1 permits
+one release bump only when all three conditions hold:
 
 1. GitHub's `repos/{repo}/actions/runs?head_sha=<sha>&per_page=100` returns at
    least one run with `event == "push"`, `head_branch == "main"` and
-   `head_sha == <sha>`. Every such run's original `actor.login` must equal
-   the fixed `RELEASE_PUSH_ACTOR`, `pineforge-app[bot]`, the release App used
-   by `release.yml`. A maintainer may trigger a rerun: the gate authenticates
-   that actor's repository `admin`, `maintain` or `write` permission through
-   the collaborator-permission API, without guessing a role from a login.
-   All pages are read; missing HTTP headers, malformed pages,
+   `head_sha == <sha>`. Every such run must have both `actor.login` and
+   `triggering_actor.login` equal to the gate's fixed `RELEASE_PUSH_ACTOR`,
+   `pineforge-app[bot]`, the release App installation token used by
+   `release.yml`. All pages are read; missing HTTP headers, malformed pages,
    an advertised unread Link next page, changing `total_count` or a row count
    different from that total refuse. A matching count never overrides an
    unread next page. Reaching the filtered API's 1000-run limit also refuses,
    because completeness at that boundary cannot be inferred. Zero matching
    runs refuse. A bump pushed seconds
-   ago may not have a post-merge run yet; dispatch tag after that push run exists.
+   ago may not have a post-merge run yet; retry the release once that push run exists.
    At gate time, the guard also reads `repos/{repo}` to confirm main is still
    the default branch, lists `repos/{repo}/rulesets?includes_parents=true&per_page=100`
    with every page, and reads each branch ruleset by id for its conditions,
@@ -1930,9 +1912,8 @@ sole parent to the phase-1 dispatch SHA. Both require all three conditions:
    Empty bodies refuse with `returned an empty payload`; a valid empty JSON
    array is still a complete document.
 2. The bump has exactly one parent, and that parent passes the ordinary
-   merged-PR/tree/parity checks above, including the allowed status creator,
-   or its exact main-proof receipt after the fixed cut-over.
-   This depth is exactly one: a bump on another bump refuses
+   phase-1 merged-PR/tree/full-status checks above, including the allowed
+   status creator. This depth is exactly one: a bump on another bump refuses
    even when its grandparent was gated. A merge commit also refuses.
 3. The complete parent-to-bump file diff is exactly `VERSION` and
    `docker/run_failure_codes_diff.json`, both status `M`, both regular blobs
@@ -1948,69 +1929,7 @@ the App credential by this workflow. Commit author, committer and verification
 metadata provide no push-identity evidence. Condition 3 bounds the content
 changes to the two files whose values the release workflow computes: the next
 version and the reset catalog diff. Preflight pins the exact writer, staging,
-commit and phased push step and the App-token checkout wiring.
-
-The complete default latest jobs API response for the selected exact-SHA run
-is the proving inventory. Required names must all succeed; any red job and any
-duplicate name in that inventory refuse. Every attempt from 1 through the
-actual `run_attempt` is separate audit history, including failed and cancelled
-attempts, duplicate historical names, null conclusions, job IDs, triggering
-actors, timestamps and steps. Attempt-specific metadata supplies attribution;
-complete job pagination and counts are required for each inventory.
-New IDs and a current API attempt number do not establish fresh execution.
-Identical non-null timestamps and steps under a unique name may produce an
-explicit derived carried association, without inventing a physical attempt.
-Missing, unreadable or gapped history refuses and stays marked incomplete.
-There is no deterministic-failure retry waiver.
-
-Each attempt's metadata and paginated jobs, and the latest proving inventory,
-retain SHA256 identities of the original binary `gh api --include` stdout.
-The whole-response digest includes all emitted headers, bodies and separators;
-ordered page digests cover each HTTP header through the byte before the next
-header (the first includes any prefix, the last includes trailing bytes).
-These are CLI response bytes, not wire HTTP bytes or re-encoded JSON. Hashes
-are computed before decoding, stripping or parsing; raw headers and bodies
-are excluded from the receipt. Unframed injected fixtures are one response.
-Each entry names its run, requested attempt, endpoint and purpose; `complete`
-means the response parsed with complete pagination, not policy success.
-Admission and refusal bind the ordered `response_inventory` with a separate
-`canonical-response-inventory/v1` SHA256 over its UTF-8 JSON (`sort_keys=True`,
-`separators=(",", ":")`, `ensure_ascii=True`); this is a manifest digest.
-
-Before collecting a run's jobs, the gate reads its current metadata and
-requires it to match the selected inventory row. Immediately before admission,
-it reads each relied-on run once more through the underlying transport,
-bypassing the collection cache, with the selected proof last. This covers docs,
-passed-over proof candidates and App-push evidence, deduplicated by repository
-and run id. A changed attempt, unreadable response or mismatched run identity,
-actors, status or conclusion refuses with nonzero exit and empty success stdout.
-The receipt keeps initial/final attempts, response digests and incomplete
-validation on refusal. Collection completeness remains relative to the initial
-attempt. This bounded second metadata read is validation, not a retry; all
-other endpoint reads remain one-pass, without retries or sleeps.
-
-Docs-only releases use `ci_docs_only.is_documentation`, the shared merge
-classifier, to walk back to the first non-doc commit's actual full CI proof.
-Each intervening docs SHA still needs its own latest successful ci-post run;
-a red or missing docs run cannot be rescued by an ancestor. Empty changes stop
-the walk; unreadable paths/parents and more than 20 docs commits refuse. The requested
-release SHA/tree, built proof SHA/tree and classified docs chain remain
-distinct in the receipt. A VERSION bump is non-doc and needs its own full run.
-The packaged-input control derives source headers, generated version/config/
-targets, libraries and copied roots from CMake install rules, `release.yml`
-and the x86 staging helper; unsupported rules refuse.
-
-The gate optionally writes `--receipt FILE` from the same collected evidence
-on admission or refusal. Refusal stays nonzero; a receipt write failure also
-fails admission. The workflow always uploads exactly
-`${{ runner.temp }}/release-gate-receipt.json` as
-`release-gate-<phase>-<run_id>-<run_attempt>` for seven days, including dry runs.
-The allowlisted JSON records identities, authenticated parity, actual advisory
-verify, App provenance, proving jobs, complete attempt history and limits.
-Safe refusal reasons name the failed checkpoint and error class; exception
-representations, credentials, private source and authorization headers are excluded.
-Limits are ten candidate proof runs, 100 attempts per run, 10,000 jobs per
-inventory and refusal at the filtered API's 1000-run boundary.
+commit and atomic-push step and the App-token checkout wiring.
 
 The gate needs `bypass_actors` visible on every branch ruleset in the inventory.
 If the release App token cannot see them, the bump is refused.
@@ -2058,10 +1977,8 @@ receipt reader, the cut-over is the watcher's **first recorded main sha**,
 fixed in that constant by a reviewed PR. The release job cannot configure it
 through an environment variable or workflow input. At that sha and every
 descendant, the guard requires a main-proof receipt for the **exact main
-sha** with parity green and does not consult PR-head statuses. Missing,
-unreadable or red parity receipts refuse, with no PR or release-bump fallback.
-Advisory verify is retained from that exact context map, including missing or red.
-Phase `bump` still requires an associated merged PR and refuses a re-bump.
+sha** with both full contexts green and does not consult PR heads. Missing,
+unreadable or non-green receipts refuse, with no PR or release-bump fallback.
 Commits preceding the cut-over retain phase 1; unknown ancestry refuses.
 The reader seam defines normalized context states, not a receipt storage format.
 
@@ -2071,7 +1988,7 @@ sleeping or retrying; empty or unparseable evidence also refuses. An empty JSON
 array is a valid list response; each caller refuses if its required PR or
 context evidence is absent. An empty single-object payload still refuses.
 
-Prebuilt jobs build the SHA emitted by phase `tag` and assert that the release tag still resolves to it before building.
+Prebuilt jobs build the sha emitted after the release job's atomic push and assert that the release tag still resolves to it before building.
 A missing/malformed sha or changed tag fails. Dry runs build `github.sha` and skip the tag assertion because no tag exists.
 A separate tag ruleset forbids updates and deletion of `v*` tags; see "Release tag immutability and recovery" below.
 After packing, x86_64 checks the emitted tarball's SHA-256 sidecar and unpacks those exact bytes in the pinned Bookworm environment before upload.
@@ -2089,7 +2006,7 @@ refused for every workflow, script and token.
 Any recovery that requires deleting or moving a `v*` tag now requires a
 human administrator to explicitly edit ruleset `25591564`; nothing in this
 repository may assume it can re-tag. The workflow's
-["Refuse if tag already exists" step in `release.yml`](../.github/workflows/release.yml#L183)
+["Refuse if tag already exists" step in `release.yml`](../.github/workflows/release.yml#L140)
 also refuses an existing tag before creating one.
 
 #### Allowed status creators
@@ -2139,7 +2056,7 @@ The scanner runs actionlint before its structural text rules.
 The main branch rule table and parser grammar judge the fetched head workflows.
 A workflow change that needs a loosened rule must therefore use two changes.
 
-Rule and table changes land first while existing workflows pass; workflow changes follow, so one PR cannot change both sides of admission; STEP1 is the rules half for the complete current split and planned split+phase contracts, with workflow activation subject to the later composed main change.
+Rule and table changes land first while existing workflows pass; workflow changes follow, so one PR cannot change both sides of admission.
 `gke-pr.yml` admits two independent variants, each with OLD and NEW shapes.
 For arm, OLD omits `build-arm`, so earlier workflow files still pass; defining that job selects all arm NEW checks together.
 Arm NEW requires the exact arm classifier output, fixed Debug job on `ubuntu-24.04-arm`, arm-aware `legs` needs/check and independent `result` check.
