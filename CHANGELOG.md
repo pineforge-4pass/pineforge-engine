@@ -7,9 +7,6 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
-- `ta.pvt` now has no value (`na`) on the first bar of its series, as on
-  TradingView, where the term needs the previous bar's close; it returned 0 on
-  that bar before; every later value is unchanged.
 - A percent-of-equity default quantity above 100 percent is now capped at 100 percent of equity when `margin_long` and `margin_short` are both 0 (#805).
 - With `process_orders_on_close` and the default FIFO close rule, the named `strategy.exit` calls of a reversing `strategy.entry` with an explicit quantity, placed in the same execution after a `strategy.close` of the old position, are now sized from the new entry's own quantity: a percentage exit takes its share of the new entry and an absolute-quantity exit keeps its quantity, instead of being sized from a basis reduced by the old position (#803).
 - Without `process_orders_on_close`, the named `strategy.exit` calls placed with a reversing `strategy.entry` of explicit quantity now take their percentage from the new entry when its size differs from the position it replaces, and a take-profit given as an absolute quantity now fires; before, the percentage was taken from the position being replaced and an absolute-quantity take-profit never fired (#803).
@@ -30,6 +27,9 @@ version number follows semantic versioning over the surfaces the
   call site retains its own appended source history and computes the
   nearest-rank percentile over the requested recent values, within the
   documented historical limit.
+- `ta.pvt` now has no value (`na`) on the first bar of its series, as on
+  TradingView, where the term needs the previous bar's close; it returned 0 on
+  that bar before; every later value is unchanged.
 - An exit given in ticks and without `from_entry` that follows a market entry in
   the same execution now takes effect when that entry fills, as a named exit does.
 - **Strategy modules built against 1.10.x must be rebuilt.** The C++ script
