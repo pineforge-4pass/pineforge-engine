@@ -9,6 +9,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/pending_order_mirror.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
@@ -295,6 +296,95 @@ void run_case(const Scenario& spec) {
     if (failures > before) dump(got);
 }
 
+struct PendingCloseCase {
+    const char* name;
+    double held;
+    double first_close;
+    double second_close;
+    bool percent;
+    double step;
+    bool expected_after_close;
+};
+
+class PendingCloseProbe final : public source::PineStrategyHost {
+public:
+    explicit PendingCloseProbe(const PendingCloseCase& spec) : spec_(spec) {
+        source::PineStrategyConfig config;
+        config.process_orders_on_close = false;
+        config.calc_on_order_fills = false;
+        config.initial_capital = 100000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.margin_long = config.margin_short = 100.0;
+        config.commission_value = 0.0;
+        config.slippage = 0;
+        config.close_entries_rule_any = false;
+        config.pyramiding = 0;
+        configure_pine_strategy(config);
+        syminfo_mintick_ = 0.25;
+        set_syminfo_metadata("qty_step", spec.step);
+        margin_call_enabled_ = false;
+    }
+
+    bool observed = false;
+    void on_source_bar(const Bar&) override {
+        if (bar_index_ == kOldEntryBar)
+            strategy_entry("Long", true, kNaN, kNaN, spec_.held);
+        if (bar_index_ != kSignalBar) return;
+        CHECK(live_position_size() == spec_.held);
+        strategy_close("Long", "first",
+                       spec_.percent ? kNaN : spec_.first_close,
+                       spec_.percent ? spec_.first_close : kNaN, false, 1ULL);
+        if (std::isfinite(spec_.second_close))
+            strategy_close("Long", "second",
+                           spec_.percent ? kNaN : spec_.second_close,
+                           spec_.percent ? spec_.second_close : kNaN, false, 2ULL);
+        strategy_entry("Short", false, kNaN, kNaN, 1.0);
+        int closes = 0;
+        int entries = 0;
+        const int count = observe_pending_count_v1();
+        for (int i = 0; i < count; ++i) {
+            pf_pending_order_v1_t row{};
+            const int result = observe_pending_copy_v1(i, &row);
+            CHECK(result == 0);
+            if (result != 0) continue;
+            if (std::string(row.id) == "__close__Long") {
+                ++closes;
+                const bool first = std::string(row.comment) == "first";
+                CHECK(first || std::string(row.comment) == "second");
+                const double requested = first ? spec_.first_close : spec_.second_close;
+                const double units = spec_.percent ? spec_.held * requested / 100.0
+                                                   : requested;
+                CHECK(row.qty == units);
+                if (spec_.percent) CHECK(row.qty_percent == requested);
+            } else if (std::string(row.id) == "Short") {
+                ++entries;
+                CHECK(row.is_long == 0);
+                CHECK(row.created_after_position_close_in_bar
+                      == static_cast<unsigned>(spec_.expected_after_close));
+            }
+        }
+        CHECK(closes == (std::isfinite(spec_.second_close) ? 2 : 1));
+        CHECK(entries == 1);
+        CHECK(live_position_size() == spec_.held);
+        CHECK(closed_trade_count() == 0);
+        observed = true;
+    }
+
+private:
+    const PendingCloseCase& spec_;
+};
+
+void check_pending_close(const PendingCloseCase& spec) {
+    scenario = spec.name;
+    std::vector<Bar> bars;
+    for (int bar = 0; bar <= kSignalBar; ++bar)
+        bars.push_back(mk(bar, 1.0, 1.0, 1.0, 1.0));
+    PendingCloseProbe probe(spec);
+    probe.run(bars.data(), static_cast<int>(bars.size()));
+    CHECK(probe.last_error().empty());
+    CHECK(probe.observed);
+}
+
 }  // namespace
 
 int main() {
@@ -306,6 +396,20 @@ int main() {
     run_case({"explicit-whole-close-to-short", 3.0, 3.0, 2.0, false});
     // Unchanged shape.
     run_case({"default-whole-close-to-short", 3.0, kNaN, 2.0, false});
+    // derived by arithmetic: the pending entry's flag is 1 exactly when
+    // the sum of same-bar close units, plus the engine's quantity epsilon,
+    // reaches the held opposite position; otherwise it is 0.
+    // 0.1 + 0.7 is one binary64 ULP below 0.8, within that epsilon.
+    check_pending_close({"pending-two-close-ulp", 0.8, 0.1, 0.7, false, 0.1, true});
+    // 1 + 2 = 3.
+    check_pending_close({"pending-two-close-exact", 3.0, 1.0, 2.0, false, 0.25, true});
+    // Each half is 3 * 50 / 100 = 1.5, exactly on the quantity grid.
+    check_pending_close({"pending-two-close-percent", 3.0, 50.0, 50.0, true, 0.25, true});
+    // 0.1 + 0.6 leaves 0.1; one close of 0.25 leaves 0.55. The single close is
+    // on the 0.05 quantity grid, so it is a real close and not one that the
+    // grid would drop.
+    check_pending_close({"pending-two-close-partial", 0.8, 0.1, 0.6, false, 0.1, false});
+    check_pending_close({"pending-one-close-partial", 0.8, 0.25, kNaN, false, 0.05, false});
     std::printf("test_adapter_partial_close_reversal: %d checks, %d failures\n",
                 checks, failures);
     return failures == 0 ? 0 : 1;
