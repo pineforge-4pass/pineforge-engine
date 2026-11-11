@@ -158,11 +158,11 @@ public:
     static size_type resident_cache_bytes(size_type rows);
     // Actual allocation: fixed base + ceil(cache_rows()/256) owning pointers
     // after first read + min(256,cache_rows()-256*p)*kLedgerEntryBytes per page p.
-    // Four-way sets (a final partial set is permitted) use bounded rank
-    // replacement. Writes only fill an existing cache. No rebuild/coexisting
-    // replacement allocation occurs. Retirement may release every hot page.
-    // The fixed base includes the zero-row read workspace. The directory
-    // and allocated entry pages each enter the common cache accounting once.
+    // Placement follows the row count: up to cache_rows() rows, row n owns slot n (one way);
+    // with more rows, four-way sets (a final partial set is permitted) use bounded rank
+    // replacement. A crossing drops the cached rows, keeps the pages. Writes only fill an
+    // existing cache; no rebuild or coexisting allocation. Retirement may release every hot page.
+    // The fixed base (with the zero-row read workspace), directory and entry pages count once.
     size_type cache_resident_bytes() const;
     enum class CacheBypassReason : std::uint32_t { none, allocation_failed };
     struct CacheStats {
