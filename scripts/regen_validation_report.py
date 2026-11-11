@@ -173,8 +173,8 @@ def _emit(rows: list[dict], engine_sha: str, corpus_sha: str,
     if not non_excellent:
         lines.append("_All probes verified at the `excellent` tier — no anomalies surfaced._")
     else:
-        lines.append("Each row points at a probe under `corpus/validation/`; rationale is")
-        lines.append("captured in the probe's `inputs.json` notes field where present.")
+        lines.append("Each row points at a probe under `corpus/validation/`; its reason")
+        lines.append("comes from canonical analysis, using `inputs.json` notes where supplied.")
         lines.append("")
         lines.append("| Tier | Probe | TV | Eng | Count Δ | PnL p90 | Reason |")
         lines.append("|---|---|---:|---:|---:|---:|---|")
@@ -208,6 +208,8 @@ def _emit(rows: list[dict], engine_sha: str, corpus_sha: str,
     lines.append("## Per-Strategy Detail")
     lines.append("")
     lines.append("Sorted by category, then slug. `count Δ` is `|tv-eng|/max(tv,eng)`;")
+    lines.append("the *excellent* tier's trade-count test instead counts unmatched trades,")
+    lines.append("`(TV − Matched) + (Eng − Matched)`, which must be 0 in the canonical gate pools.")
     lines.append("`entry/exit/pnl p90` are 90th-percentile relative deltas across eligible,")
     lines.append("effective metric observations; `p100` is each metric's effective worst delta.")
     lines.append("Observation counts are per metric and can differ from matched trades and")
