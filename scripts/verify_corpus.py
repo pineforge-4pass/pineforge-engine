@@ -1292,7 +1292,16 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     eng_gate_n = len(eng_gate) + n_gate_marks
     gating_matched_n = len(gating_matched) + n_gate_marks
 
+    unmatched_tv = unmatched_engine = None
     count_abs_delta = abs(tv_gate_n - eng_gate_n)
+    # Project the same pairing as the canonical unmatched count: a missing TV
+    # trade and an extra engine trade are two mismatches, even at equal totals.
+    # The existing interior fallback can retain more matches than a gate pool
+    # holds; its unmatched projection is unavailable, so keep its net count.
+    if gating_matched_n <= tv_gate_n and gating_matched_n <= eng_gate_n:
+        unmatched_tv = tv_gate_n - gating_matched_n
+        unmatched_engine = eng_gate_n - gating_matched_n
+        count_abs_delta = unmatched_tv + unmatched_engine
     count_delta = relative_max(tv_gate_n, eng_gate_n)
     # A mark pair's entry is a fill on both sides, so the identity gate
     # sees it with the others: the engine's range-end row must carry an
@@ -1412,7 +1421,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     entry_ok = entry_p90  < thresh["entry"]
     # Count mismatch is a primary reproduction signal. Percent thresholds can
     # hide dozens of missing/extra trades in large strategies, so excellent
-    # requires exact gated TV/engine count parity. Any non-zero absolute count
+    # requires zero unmatched trades in the canonical gate pools. A non-zero count
     # mismatch is an engine/codegen gap unless separately proven as a TV/export
     # anomaly.
     count_ok = count_abs_delta == 0
@@ -1499,7 +1508,15 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         if not notes:
             failures = []
             if not count_ok:
-                failures.append(f"count Δ {count_delta*100:.2f}%")
+                if unmatched_tv is not None and unmatched_engine is not None:
+                    failures.append(
+                        f"{unmatched_tv} TradingView "
+                        f"{'trade' if unmatched_tv == 1 else 'trades'} and "
+                        f"{unmatched_engine} engine "
+                        f"{'trade' if unmatched_engine == 1 else 'trades'} unmatched "
+                        f"({gating_matched_n} of {tv_gate_n} paired)")
+                else:
+                    failures.append(f"count Δ {count_delta*100:.2f}%")
             if not entry_ok:
                 failures.append(f"entry p90 {entry_p90*100:.4f}%")
             if not exit_ok:

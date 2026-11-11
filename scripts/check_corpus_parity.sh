@@ -88,9 +88,14 @@ SUBSET_FILE="${SUBSET_FILE:-scripts/corpus_parity_subset.txt}"
 PY="${PYTHON:-python3}"
 
 # The parity headline this engine is pinned to. Moving it is a deliberate act:
-# it means the corpus gitlink moved, and the commit that moves it carries the
-# evidence. scripts/verify_corpus.py prints this line verbatim.
-EXPECTED_VERIFY="${EXPECTED_VERIFY:-Verified 312 strategies — excellent=311, strong=0, moderate=0, weak=0, minimal=0, anomaly=1, engine_only=0, missing=0}"
+# the commit carries evidence for the corpus pin or grading-rule change.
+# expectation corrected: 311 excellent + 0 strong -> 301 excellent + 10 strong,
+# because absolute counts include unmatched trades on both sides.
+# Relative count deltas still use the difference between the gate totals.
+# Fresh outputs at corpus 8425ca820c4b7272db24d659a64d88e8e05b6407 match the byte baseline.
+# The trade-byte baseline is a separate assertion.
+# scripts/verify_corpus.py prints this line verbatim.
+EXPECTED_VERIFY="${EXPECTED_VERIFY:-Verified 312 strategies — excellent=301, strong=10, moderate=0, weak=0, minimal=0, anomaly=1, engine_only=0, missing=0}"
 
 log()  { printf '\033[1;34m[corpus-parity]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[corpus-parity]\033[0m %s\n' "$*" >&2; }

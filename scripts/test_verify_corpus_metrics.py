@@ -632,6 +632,11 @@ class FragmentConsolidationIdentityTests(unittest.TestCase):
         self.assertIsNotNone(result.bounds)
         self.assertEqual(result.tv_gate_count, 0)
         self.assertEqual(result.eng_gate_count, 0)
+        self.assertGreater(result.gating_matched_count, result.tv_gate_count)
+        # The canonical unmatched projection is unavailable for this existing
+        # interior fallback; retain its net count instead of a negative gross.
+        self.assertEqual(result.count_abs_delta, 0)
+        self.assertEqual(result.count_delta, 0.0)
         self.assertTrue(result.distinct_entry_identity_ok)
         self.assertEqual(result.distinct_entry_mismatches, 0)
         self.assertEqual(result.label, "excellent")
@@ -668,7 +673,9 @@ class FragmentConsolidationIdentityTests(unittest.TestCase):
 
         self.assertEqual(result.tv_count, 2)
         self.assertEqual(result.eng_count, 2)
-        self.assertEqual(result.count_abs_delta, 0)
+        # expectation corrected: 0 -> 2, because the unpaired TV long and
+        # engine short no longer cancel in the absolute count.
+        self.assertEqual(result.count_abs_delta, 2)
         self.assertEqual(result.unmatched_in_window, 1)
         self.assertTrue(result.coverage_ok)
         self.assertFalse(result.distinct_entry_identity_ok)

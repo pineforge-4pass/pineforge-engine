@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """Regression tests for exact trade counts in the real corpus analyzer.
 
-Synthetic CSV fixtures and actual analyzer observations are temporary by
-default. To retain them, invoke this script with --retain-artifacts DIR,
-where DIR is an existing owned directory. Run through unittest discovery
-from scripts; no private corpus or external capture is needed.
+Synthetic and public-corpus CSV fixtures and actual analyzer observations are
+temporary by default. To retain them, invoke this script with
+--retain-artifacts DIR, where DIR is an existing owned directory. Run through
+unittest discovery from scripts; the recorded tapes are included locally.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
+import re
 import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from verify_corpus import MATCH_WINDOW_SECONDS, analyze_strategy
+from verify_corpus import MATCH_WINDOW_SECONDS, analyze_strategy, relative_max
 from test_verify_corpus_trail_profile import TRADE_COLUMNS, TRAIL_STRATEGY
 
 
@@ -269,6 +271,131 @@ class ExactCountBehaviorTests(unittest.TestCase):
         # A nominal-fraction count gate must fail this real analyzer assertion.
         self.assertIs(unequal.count_ok, False)
         self.assertEqual(unequal.tier, "strong")
+
+    def test_recorded_cancelling_mismatches_use_gross_but_relative_count_stays_net(self):
+        fixture_path = _checked_path(
+            Path(__file__).absolute().parent
+            / "fixtures" / "g1_recorded_count_cases.json"
+        )
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(fixture["cases"]), 2)
+        self.assertEqual(
+            {case["probe_id"] for case in fixture["cases"]},
+            {
+                "corpus:corpus/validation/mtf-orbit-trend-01",
+                "corpus:corpus/validation/mtf-triple-tf-macd-hist-confluence-01",
+            },
+        )
+        for case in fixture["cases"]:
+            with self.subTest(probe=case["probe_id"]):
+                strategy = _checked_path(self.run_root / case["name"])
+                strategy.mkdir()
+                for filename, tape in case["tapes"].items():
+                    # Join the archived lines losslessly, including the BOM,
+                    # CRLFs and the presence/absence of a final newline.
+                    data = "\n".join(tape["lines"]).encode("utf-8")
+                    self.assertEqual(
+                        hashlib.sha256(data).hexdigest(), tape["sha256"],
+                        filename,
+                    )
+                    _checked_path(strategy / filename).write_bytes(data)
+                # Keep the public input metadata and the recorded resolved
+                # profile without embedding strategy implementations.
+                _checked_path(strategy / "inputs.json").write_text(
+                    json.dumps({
+                        **case["inputs"],
+                        "parity_profile": case["parity_profile"],
+                    }),
+                    encoding="utf-8",
+                )
+
+                result = analyze_strategy(strategy)
+                row = result.report_row()
+                gate_counts = {
+                    name: getattr(result, name)
+                    for name in (
+                        "tv_gate_count", "eng_gate_count",
+                        "gating_matched_count",
+                    )
+                }
+                _checked_path(strategy / "actual-result.json").write_text(
+                    json.dumps({
+                        "probe_id": case["probe_id"],
+                        "report_row": row,
+                        "gate_counts": gate_counts,
+                    }, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                print(json.dumps({
+                    "probe_id": case["probe_id"], **gate_counts, **row,
+                }, sort_keys=True), flush=True)
+
+                self.assertFalse(result.no_aligned_trades)
+                self.assertEqual(result.profile, case["parity_profile"])
+                recorded = case["recorded"]
+                self.assertEqual(
+                    (result.tv_count, result.eng_count, result.matched_count),
+                    tuple(int(recorded[key]) for key in ("tv", "eng", "matched")),
+                )
+                self.assertEqual(
+                    gate_counts,
+                    {
+                        "tv_gate_count": int(recorded["tvGate"]),
+                        "eng_gate_count": int(recorded["engGate"]),
+                        "gating_matched_count": int(recorded["gatingMatched"]),
+                    },
+                )
+                net = abs(result.tv_gate_count - result.eng_gate_count)
+                self.assertEqual(net, int(recorded["netCount"]))
+                self.assertEqual(
+                    float(f"{result.count_delta * 100:.4f}"),
+                    float(recorded["netCountDelta"].removesuffix("%")),
+                )
+                for metric in ("entry", "exit", "pnl"):
+                    self.assertEqual(
+                        float(f"{getattr(result, metric + '_p90') * 100:.4f}"),
+                        float(recorded[
+                            "net" + metric.title() + "P90"
+                        ].removesuffix("%")),
+                    )
+                    self.assertTrue(getattr(result, metric + "_ok"), metric)
+                self.assertTrue(result.coverage_ok)
+                self.assertTrue(result.distinct_entry_identity_ok)
+
+                # Use the existing structured pairing, exactly as the
+                # workflow's canonical unmatched projection does.
+                unmatched_tv = result.tv_gate_count - result.gating_matched_count
+                unmatched_engine = result.eng_gate_count - result.gating_matched_count
+                self.assertGreaterEqual(unmatched_tv, 0)
+                self.assertGreaterEqual(unmatched_engine, 0)
+                gross = unmatched_tv + unmatched_engine
+                self.assertGreater(gross, net)
+                # OLD NET must fail here on behavior, after the real analyzer
+                # has reproduced the recorded pairing and price/PnL metrics.
+                self.assertEqual(result.count_abs_delta, gross)
+                self.assertEqual(row["count_abs_delta"], gross)
+                self.assertFalse(result.count_ok)
+                self.assertEqual(result.tier, "strong")
+                reason_counts = re.search(
+                    r"(\d+) TradingView trades? and (\d+) engine trades? unmatched",
+                    result.notes,
+                )
+                self.assertIsNotNone(reason_counts, result.notes)
+                self.assertEqual(
+                    tuple(int(value) for value in reason_counts.groups()),
+                    (unmatched_tv, unmatched_engine),
+                )
+                self.assertIn(
+                    f"({result.gating_matched_count} of {result.tv_gate_count} paired)",
+                    result.notes,
+                )
+                self.assertNotIn("count Δ 0.00%", result.notes)
+                self.assertEqual(row["notes"], result.notes)
+                self.assertEqual(
+                    result.count_delta,
+                    relative_max(result.tv_gate_count, result.eng_gate_count),
+                )
+                self.assertEqual(row["count_delta"], result.count_delta)
 
 
 if __name__ == "__main__":
