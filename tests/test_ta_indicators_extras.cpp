@@ -535,7 +535,8 @@ static void test_nvi_pvi() {
 static void test_pvt_wad() {
     std::printf("test_pvt_wad\n");
     ta::PVT pvt;
-    CHECK(near(pvt.compute(100, 50), 0.0));  // first bar (prev_close NA)
+    // expectation corrected: 0.0 -> na, because PVT's term needs a previous close.
+    CHECK(is_na(pvt.compute(100, 50)));  // first bar (prev_close NA)
     // (110-100)/100 * 200 = 20
     CHECK(near(pvt.compute(110, 200), 20.0));
     // recompute returns identical

@@ -338,6 +338,7 @@ set(TEST_SOURCES
     test_exit_path_segment_tiebreak
     test_accounting_reconciliation
     test_ta_volume_state_oracle
+    test_ta_pvt_first_bar
     test_market_structure_fills
     test_handle_reuse_reset
     test_calendar_aggregation_wm
