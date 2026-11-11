@@ -162,7 +162,7 @@ The carried declaration fields are visible in `PineStrategyConfig` at
 | pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2836`). Do not assume this caps strategy.order or use it as an unconditional H. |
 | calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:3017`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:77`. The native point budget is a callback bound, not a total fill bound. |
 | max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:8259`. |
-| first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:888`. Count this source path; a native budget of 8 is not Pine's bound. |
+| first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:945`. Count this source path; a native budget of 8 is not Pine's bound. |
 | process_orders_on_close | Adds a matching opportunity after calculation; projection at `src/source/pine_adapter.cpp:3006`. It does not impose an order/trade count. |
 | default_qty, margin, initial capital | Admission/sizing predicates can tighten a separately proved schedule. They provide no universal positive minimum close quantity or minimum loss, hence no universal T. Margin can create additional reductions. |
 | max_bars_back | Series-history setting, not a run/trade limit. The native mapping explicitly rules it out at `docs/pages/pine-to-native.md:142`. |
@@ -558,7 +558,7 @@ non-command certificates exactly.
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
 writer (`equity_scratch` append at `src/engine_report.cpp:1563`), and capture transfers that writer as `metric_curve`
-instead of copying its prefix (`src/native_execution_consumer.cpp:13350`).
+instead of copying its prefix (`src/native_execution_consumer.cpp:13377`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
 rounding region.
