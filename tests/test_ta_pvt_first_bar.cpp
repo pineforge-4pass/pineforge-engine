@@ -116,6 +116,37 @@ int main() {
         {0.0, 7.0}, {9.0, 2.0}, {12.0, 6.0},
     });
 
+    {
+        std::printf("test_pvt_recompute_changed_inputs\n");
+        const std::vector<Bar> history = {{16.0, 6.0}, {24.0, 9.0}, {18.0, 5.0}};
+        const Bar original = {30.0, 13.0};
+        const Bar replacement = {21.0, 7.0};
+        const std::vector<Bar> following = {{20.0, 11.0}, {20.0, 3.0}, {28.0, 5.0}};
+        auto bars = history;
+        bars.push_back(replacement);
+        bars.insert(bars.end(), following.begin(), following.end());
+        const auto expected = forward_sum(bars);
+        ta::PVT revised;
+        ta::PVT fresh;
+        for (const auto& bar : history) {
+            revised.compute(bar.close, bar.volume);
+            fresh.compute(bar.close, bar.volume);
+        }
+        revised.compute(original.close, original.volume);
+        const double replaced = revised.recompute(replacement.close, replacement.volume);
+        const double advanced = fresh.compute(replacement.close, replacement.volume);
+        CHECK(near(replaced, expected[history.size()]) && "ta.pvt changed recompute must match the independent forward sum");
+        CHECK(near(advanced, expected[history.size()]) && "ta.pvt fresh compute must match the independent forward sum");
+        CHECK(near(replaced, advanced) && "ta.pvt changed recompute must match a fresh compute with the same history");
+
+        std::size_t i = history.size() + 1;
+        for (const auto& bar : following) {
+            CHECK(near(revised.compute(bar.close, bar.volume), expected[i]) && "ta.pvt changed recompute must retain the replacement history");
+            CHECK(near(fresh.compute(bar.close, bar.volume), expected[i]) && "ta.pvt fresh history must match the independent forward sum");
+            ++i;
+        }
+    }
+
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
 }

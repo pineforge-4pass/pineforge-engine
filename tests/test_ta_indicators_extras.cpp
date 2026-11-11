@@ -471,7 +471,8 @@ static void test_rci() {
 static void test_obv() {
     std::printf("test_obv\n");
     ta::OBV obv;
-    CHECK(near(obv.compute(100, 50), 0.0));   // first bar always 0
+    // expectation corrected: 0.0 -> na, because the first bar has no previous close.
+    CHECK(is_na(obv.compute(100, 50)));
     CHECK(near(obv.compute(102, 30), 30.0));  // close up: +volume
     CHECK(near(obv.compute(101, 20), 10.0));  // close down: -volume
     CHECK(near(obv.compute(101, 40), 10.0));  // close flat: unchanged

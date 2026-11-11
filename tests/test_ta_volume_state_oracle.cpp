@@ -188,7 +188,9 @@ static void test_forward_sum_identities() {
         ref_ad += mfm * b.v;
         prev_close = b.c;
 
-        CHECK(near(e_obv, ref_obv, 1e-6));
+        // expectation corrected: 0.0 -> na on the first OBV bar, because
+        // its direction needs a previous close; later bars retain the forward sum.
+        CHECK(first_pvt_bar ? is_na(e_obv) : near(e_obv, ref_obv, 1e-6));
         // expectation corrected: 0.0 -> na on the first PVT bar, because
         // its term needs a previous close; later bars retain the forward sum.
         CHECK(first_pvt_bar ? is_na(e_pvt) : near(e_pvt, ref_pvt, 1e-6));
