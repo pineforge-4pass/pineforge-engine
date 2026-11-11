@@ -216,7 +216,7 @@ other `strategy_create_failed` lines omit it.
 | `pine_matrix_error` | `strategy` | no | `function` (vocab, 15 values), `reason` (vocab, 10 values) | A matrix built-in refused its arguments (an index, a dimension, a size or an empty matrix). |
 | `pine_na_reference` | `strategy` | no | `object` (vocab, 10 values) | The script called a method on an na reference (an array, matrix, map, drawing or object id). |
 | `pine_runtime_limit` | `strategy_limit` | no | `limit` (vocab, 6 values), `max` (integer, optional) | The script reached a TradingView or PineForge resource limit. |
-| `pine_string_error` | `strategy` | no | `reason` (vocab, 2 values) | A string built-in refused its arguments. |
+| `pine_string_error` | `strategy` | no | `reason` (vocab, 4 values) | A string built-in refused its arguments. |
 | `recalc_cap` | `strategy_limit` | no | none | The script's calc_on_order_fills recalculation loop reached its cap. |
 | `recorded_request_missing` | `no_data` | no | none | No recorded series is installed for a request the script reads. |
 | `recorded_request_refused` | `input` | no | `reason` (vocab, 5 values) | A recorded request series was refused. |

@@ -1,5 +1,6 @@
 #include <pineforge/str_utils.hpp>
 #include <pineforge/run_failure.hpp>
+#include "str_utils_internal.hpp"
 #include "timezone.hpp"
 #include <charconv>
 #include <cmath>
@@ -686,6 +687,23 @@ std::string str_format_time(long long timestamp_ms,
 
 // ---------- str.match ----------
 
+namespace {
+
+[[noreturn]] void throw_invalid_regex_pattern() {
+    pine_string_stop("invalid_regex_pattern",
+                     (run_error_bar_prefix()
+                      + "Invalid regex pattern in the 'str.match' function.").c_str());
+}
+
+[[noreturn]] void throw_regex_resource_limit() {
+    pine_string_stop("regex_resource_limit",
+                     (run_error_bar_prefix()
+                      + "A regular expression exceeds the limits of the engine's regular-expression library.")
+                         .c_str());
+}
+
+} // namespace
+
 std::string str_match(const std::string& source,
                            const std::string& regex_pattern) {
     try {
@@ -698,8 +716,11 @@ std::string str_match(const std::string& source,
             }
             return match[0].str();
         }
-    } catch (...) {
-        // regex error
+    } catch (const std::regex_error& error) {
+        if (detail::classify_regex_error(error.code()) == detail::RegexOutcome::resource_limit) {
+            throw_regex_resource_limit();
+        }
+        throw_invalid_regex_pattern();
     }
     return "";
 }
