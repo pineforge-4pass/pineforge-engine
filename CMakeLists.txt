@@ -272,6 +272,12 @@ foreach(_pf_library ${PINEFORGE_LIBRARY_TARGETS})
     # every consumer of either archive links the dynamic loader library; it is
     # empty on platforms that fold it into libc.
     target_link_libraries(${_pf_library} PUBLIC ${CMAKE_DL_LIBS})
+    # Only strategy_reads_trade_history may stay undefined: its null fallback
+    # conservatively retains history, and the existing foreign-image guard
+    # rejects foreign definitions. Every other missing symbol is a link error.
+    if(APPLE)
+        target_link_libraries(${_pf_library} INTERFACE "-Wl,-U,_strategy_reads_trade_history")
+    endif()
     # Clang stops parsing at 256 nested brackets, parentheses and braces
     # (-fbracket-depth), and codegen transpiles Pine whose C++ nests deeper:
     # nested calls, long `+` / `and` chains and nested blocks fail past about
@@ -621,11 +627,3 @@ message(STATUS "  build live runner: ${PINEFORGE_BUILD_LIVE_RUNNER}")
 message(STATUS "  build src layer:   ${PINEFORGE_BUILD_SOURCE_LAYER}")
 message(STATUS "  build bench strat: ${PINEFORGE_BUILD_BENCH_STRATEGIES}")
 message(STATUS "")
-
-# The window-plan shared library links the kernel archive, which keeps a weak
-# reference to the optional capability a generated strategy module may define.
-# macOS refuses an undefined symbol in a shared library, so only this one
-# symbol may stay undefined; every other missing symbol is still a link error.
-if(APPLE)
-    target_link_options(pineforge_window_plan PRIVATE "-Wl,-U,_strategy_reads_trade_history")
-endif()
