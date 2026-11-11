@@ -151,6 +151,15 @@ public:
                                           const std::vector<double>& rates) override;
     uint64_t continuation_hash() const noexcept override;
 
+    // Installed at run begin by an adapter that owns a chart partition.
+    // Empty leaves all nominal calendar and completion paths unchanged.
+    void set_script_period_source(std::shared_ptr<TimeframeAggregator::PeriodSource>,
+                                  const Bar* bars, std::size_t n);
+    std::optional<native_calendar::NativeInterval> script_period_interval(
+            std::int64_t stamp) const {
+        return script_period_.source ? script_interval_at(stamp) : std::nullopt;
+    }
+
     void run_simple(BacktestEngine& engine, const Bar* bars, int n) override;
     void run_tf(BacktestEngine& engine,
                 const Bar* input_bars, int n_input,
@@ -1206,6 +1215,12 @@ private:
     // bars with a daily feed installed. Derived from the installed feed at
     // begin, never folded, as the feed store's own period stamps are not.
     std::vector<std::pair<std::int64_t, std::int64_t>> day_labels_;
+    struct ScriptPeriod {
+        std::shared_ptr<TimeframeAggregator::PeriodSource> source;
+        std::int64_t first_ms = 0;
+        std::int64_t last_ms = 0;
+        std::uint64_t digest = 0;
+    } script_period_;
     void prepare_day_labels(const BacktestEngine& engine, const Bar* input_bars, int n_input);
     // The instant a lookup by `timestamp` reads the calendar at: a label a
     // stamp moved before its bar's calendar open names that bar, so it reads
@@ -2987,7 +3002,9 @@ public:
         unsigned char boundary = 0U;
     };
 
-    explicit ScriptBucketCursor(const NativeRunSpec&);
+    explicit ScriptBucketCursor(const NativeRunSpec&,
+        std::shared_ptr<TimeframeAggregator::PeriodSource> source = {},
+        std::int64_t first_ms = 0, std::int64_t last_ms = 0);
     Flags next(const Bar&);
     void reset();
     std::size_t position() const noexcept { return position_; }
@@ -2999,6 +3016,9 @@ private:
     std::string timezone_;
     std::string session_;
     TimeframeAggregator aggregator_;
+    std::shared_ptr<TimeframeAggregator::PeriodSource> source_;
+    std::int64_t first_ms_ = 0;
+    std::int64_t last_ms_ = 0;
     std::size_t position_ = 0;
     Flags last_{};
 };

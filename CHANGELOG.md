@@ -7,6 +7,7 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- Multi-day charts restart their trading-date grid each year; measured on 24x7 daily input for chart bars, last_bar_index, barstate.islast and the open-trade report row. Streams keep the previous chart path; selected windows on generated N-day chart partitions are refused. Time offsets, exchange calendars and intraday input are not measured against TradingView.
 - A percent-of-equity default quantity above 100 percent is now capped at 100 percent of equity when `margin_long` and `margin_short` are both 0 (#805).
 - With `process_orders_on_close` and the default FIFO close rule, the named `strategy.exit` calls of a reversing `strategy.entry` with an explicit quantity, placed in the same execution after a `strategy.close` of the old position, are now sized from the new entry's own quantity: a percentage exit takes its share of the new entry and an absolute-quantity exit keeps its quantity, instead of being sized from a basis reduced by the old position (#803).
 - Without `process_orders_on_close`, the named `strategy.exit` calls placed with a reversing `strategy.entry` of explicit quantity now take their percentage from the new entry when its size differs from the position it replaces, and a take-profit given as an absolute quantity now fires; before, the percentage was taken from the position being replaced and an absolute-quantity take-profit never fired (#803).

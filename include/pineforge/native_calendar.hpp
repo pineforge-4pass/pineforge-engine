@@ -490,6 +490,20 @@ struct NativeInterval {
     int64_t next_input_open_ms = 0;
 };
 
+// A host-supplied calendar partition. The calendar still resolves eligible
+// trading spans and input successors; the host supplies only adjacent opens.
+// No partition means the existing nominal calendar, including its nD grid.
+struct PeriodBounds {
+    int64_t open_ms = 0;
+    int64_t next_open_ms = 0;
+};
+
+std::optional<NativeInterval> interval_containing(const SessionCalendar& calendar,
+                                                  const Timeframe& script_tf,
+                                                  const Timeframe& input_tf,
+                                                  int64_t ms,
+                                                  const PeriodBounds& partition);
+
 // Uses tf as both the period unit and the input unit.
 std::optional<NativeInterval> interval_containing(const SessionCalendar& calendar,
                                                   const Timeframe& tf,
