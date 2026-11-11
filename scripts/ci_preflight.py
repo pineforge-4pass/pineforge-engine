@@ -2623,9 +2623,12 @@ def workflow_fleet_findings(workflows: dict[str, str]) -> list[str]:
             continue
         events = _events(workflow)
         reachable = routes[name]
+        macos_compile = (name == 'macos-compile.yml'
+                         and reachable == {'pull_request', 'push'}
+                         and not macos_compile_workflow_findings(workflow))
         if events is None:
             findings.append(f'{name} must use readable events for fleet routing')
-        if 'pull_request' in reachable and reachable & POST_EVENTS:
+        if 'pull_request' in reachable and reachable & POST_EVENTS and not macos_compile:
             findings.append(f'{name} must split pull_request and post-merge events into separate workflows')
         runner = POST_RUNNER if reachable & POST_EVENTS else PR_RUNNER
         event_class = 'post-merge events' if reachable & POST_EVENTS else 'pull_request'
@@ -2637,6 +2640,10 @@ def workflow_fleet_findings(workflows: dict[str, str]) -> list[str]:
             # runner_findings pins this exact job's runner and metadata.
             # A PR caller disables the arm64/promotion exceptions through calls.
             if job in fixed_hosted:
+                continue
+            if macos_compile and job == 'compile-macos':
+                # Only this fully validated compile-only job adds a hosted image.
+                # runner_findings still inspects every actual job and its inputs.
                 continue
             uses = _job_values(body, 'uses')
             if uses:
@@ -3049,6 +3056,14 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         if _LARGER_RUNNER_KEY.search(code):
             findings.append(f'{name} must not define a larger_runner key; use the GCP fleet or hosted exceptions')
         jobs = _jobs(workflow)
+        macos_compile = False
+        if name == 'macos-compile.yml':
+            macos_findings = macos_compile_workflow_findings(workflow)
+            if routes[name] != {'pull_request', 'push'}:
+                macos_findings.append(
+                    'macos-compile.yml must be reachable only from its own main PR and main push events')
+            findings += macos_findings
+            macos_compile = not macos_findings
         split_release_form = name == 'release.yml' and _release_split_requested(jobs)
         arm_variant = _gke_pr_arm_variant(name, jobs)
         corpus_variant = _gke_pr_corpus_variant(name, jobs)
@@ -3065,6 +3080,10 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         fixed_hosted = {job: label for job, label in hosted_pins.items()
                         if label == HOSTED_X86_RUNNER or name == 'gke-pr.yml'
                         or (routes[name] & POST_EVENTS and 'pull_request' not in routes[name])}
+        if macos_compile:
+            # Keep STANDARD_RUNNERS and all other post-merge fleet pins unchanged.
+            fixed_hosted = {**fixed_hosted, 'authz': HOSTED_X86_RUNNER,
+                            'compile-macos': 'macos-latest'}
         if _LARGER_RUNNER_LABEL.search(code):
             findings.append(f'{name} must not use larger-runner labels; use the GCP fleet or hosted exceptions')
         fixed_release = (SPLIT_RELEASE_JOB_RUNNERS if split_release_form
@@ -3440,6 +3459,332 @@ def _compiler_cache_restore_with(step: str) -> list[str]:
     """Literal content hashes keep the same cache partition across shards."""
     return [_LITERAL_CACHE_HASH.sub('', line) if _key_value(line, 'key') is not None else line
             for line in _step_block(step, 'with')]
+
+
+# This hosted exception has a closed declaration, like the release forms.
+# These are executable contracts, not a workflow hash or a filename-only pass.
+# Compare every step's raw context: comments in run scalars can expand expressions.
+MACOS_COMPILE_WORKFLOW_HEADER = '''name: macOS compile
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+'''
+MACOS_COMPILE_JOB_HEADER = '''    name: macOS compile (advisory)
+    needs: [authz]
+    if: ${{ needs.authz.result == 'success' }}
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      EIGEN_VERSION: '3.4.0'
+      EIGEN_SHA256: '8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72'
+      EIGEN_PREFIX: ${{ github.workspace }}/.deps/eigen-3.4.0
+    defaults:
+      run:
+        shell: bash
+'''
+MACOS_COMPILE_STEPS = r'''      - name: Checkout the current source head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify and print source and workflow identity
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          actual_sha=$(git rev-parse --verify HEAD)
+          test "$actual_sha" = "$SOURCE_SHA"
+          actual_tree=$(git rev-parse --verify 'HEAD^{tree}')
+          printf 'source HEAD=%s\nsource tree=%s\n' "$actual_sha" "$actual_tree"
+          printf 'workflow ref=%s\nworkflow SHA=%s\nevent SHA=%s\n' "$WORKFLOW_REF" "$WORKFLOW_SHA" "$EVENT_SHA"
+          printf 'run=%s attempt=%s event=%s ref=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_EVENT_NAME" "$GITHUB_REF"
+          shasum -a 256 .github/workflows/macos-compile.yml
+
+      - name: Identify the Darwin host and Apple toolchain
+        id: host
+        env:
+          ACTUAL_OS: ${{ runner.os }}
+          ACTUAL_ARCH: ${{ runner.arch }}
+        run: |
+          set -euo pipefail
+          test "$ACTUAL_OS" = macOS
+          test "$(uname -s)" = Darwin
+          uname -a
+          printf 'runner image=%s version=%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          c_compiler=$(xcrun --find clang)
+          cxx_compiler=$(xcrun --find clang++)
+          identity=$(
+            set -euo pipefail
+            uname -smr
+            sw_vers
+            xcodebuild -version
+            xcrun --show-sdk-path
+            xcrun --show-sdk-version
+            "$c_compiler" --version
+            "$cxx_compiler" --version
+            cmake --version
+            make --version
+            shasum -a 256 "$c_compiler" "$cxx_compiler"
+          )
+          printf '%s\n' "$identity"
+          toolchain=$(printf '%s\n' "$identity" | shasum -a 256)
+          toolchain=${toolchain%% *}
+          configuration=$(shasum -a 256 .github/workflows/macos-compile.yml)
+          configuration=${configuration%% *}
+          [[ "$toolchain" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$configuration" =~ ^[0-9a-f]{64}$ ]]
+          cache_prefix="macos-compile-v1-$ACTUAL_OS-$ACTUAL_ARCH-Debug-$toolchain-eigen-$EIGEN_VERSION-$EIGEN_SHA256-$configuration"
+          {
+            printf 'c-compiler=%s\ncxx-compiler=%s\n' "$c_compiler" "$cxx_compiler"
+            printf 'cache-prefix=%s\n' "$cache_prefix"
+          } >> "$GITHUB_OUTPUT"
+          printf 'cache prefix=%s\n' "$cache_prefix"
+
+      - name: Restore the installed Eigen dependency
+        id: eigen-restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.EIGEN_PREFIX }}
+          key: ${{ steps.host.outputs.cache-prefix }}-install
+
+      - name: Install checksum-verified Eigen headers and CMake package
+        id: eigen-install
+        if: ${{ steps.eigen-restore.outputs.cache-hit != 'true' }}
+        env:
+          C_COMPILER: ${{ steps.host.outputs.c-compiler }}
+          CXX_COMPILER: ${{ steps.host.outputs.cxx-compiler }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/eigen-$EIGEN_VERSION.tar.gz"
+          curl --fail --location --output "$archive" \
+            "https://gitlab.com/libeigen/eigen/-/archive/$EIGEN_VERSION/eigen-$EIGEN_VERSION.tar.gz"
+          printf '%s  %s\n' "$EIGEN_SHA256" "$archive" | shasum -a 256 --check -
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          # Eigen is header-only; its own test suite is outside this installation.
+          set -x
+          cmake -S "$RUNNER_TEMP/eigen-$EIGEN_VERSION" -B "$RUNNER_TEMP/eigen-install-build" \
+            -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER:FILEPATH="$C_COMPILER" \
+            -DCMAKE_CXX_COMPILER:FILEPATH="$CXX_COMPILER" \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_INSTALL_PREFIX:PATH="$EIGEN_PREFIX" \
+            -DBUILD_TESTING:BOOL=OFF \
+            -DEIGEN_BUILD_DOC:BOOL=OFF
+          cmake --install "$RUNNER_TEMP/eigen-install-build" --config Debug
+
+      - name: Verify the installed Eigen dependency
+        id: eigen
+        run: |
+          set -euo pipefail
+          test -s "$EIGEN_PREFIX/include/eigen3/Eigen/Core"
+          macros="$EIGEN_PREFIX/include/eigen3/Eigen/src/Core/util/Macros.h"
+          grep -E '^#define EIGEN_(WORLD|MAJOR|MINOR)_VERSION' "$macros"
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "$macros"
+          eigen_config="$EIGEN_PREFIX/share/eigen3/cmake"
+          test -s "$eigen_config/Eigen3Config.cmake"
+          test -s "$eigen_config/Eigen3ConfigVersion.cmake"
+          test -s "$eigen_config/Eigen3Targets.cmake"
+          printf 'installed Eigen3_DIR=%s\n' "$eigen_config"
+          shasum -a 256 "$eigen_config/Eigen3Config.cmake" "$eigen_config/Eigen3ConfigVersion.cmake" "$eigen_config/Eigen3Targets.cmake"
+
+      - name: Install and identify ccache
+        id: ccache
+        run: |
+          set -euo pipefail
+          brew --version
+          brew install ccache
+          brew list --versions ccache
+          ccache --version
+          identity=$(
+            set -euo pipefail
+            ccache --version
+            brew list --versions ccache
+            shasum -a 256 "$(command -v ccache)"
+          )
+          digest=$(printf '%s\n' "$identity" | shasum -a 256)
+          digest=${digest%% *}
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          printf 'identity=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'ccache identity=%s\n' "$digest"
+
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.host.outputs.cache-prefix }}-ccache-${{ steps.ccache.outputs.identity }}-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-keys: |
+            ${{ steps.host.outputs.cache-prefix }}-ccache-${{ steps.ccache.outputs.identity }}-
+
+      - name: Configure Debug library and test binaries
+        id: configure
+        env:
+          C_COMPILER: ${{ steps.host.outputs.c-compiler }}
+          CXX_COMPILER: ${{ steps.host.outputs.cxx-compiler }}
+        run: |
+          set -euo pipefail
+          set -x
+          cmake -S . -B build -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER:FILEPATH="$C_COMPILER" \
+            -DCMAKE_CXX_COMPILER:FILEPATH="$CXX_COMPILER" \
+            -DCMAKE_C_COMPILER_LAUNCHER:STRING=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER:STRING=ccache \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=ON \
+            -DBUILD_TESTING:BOOL=ON \
+            -DEigen3_DIR:PATH="$EIGEN_PREFIX/share/eigen3/cmake" \
+            -DCMAKE_FIND_PACKAGE_PREFER_CONFIG:BOOL=ON \
+            -DFETCHCONTENT_FULLY_DISCONNECTED:BOOL=ON \
+            -DPINEFORGE_BUILD_TESTS:BOOL=ON \
+            -DPINEFORGE_BUILD_SOURCE_LAYER:BOOL=ON \
+            -DPINEFORGE_BUILD_TUTORIAL:BOOL=ON \
+            -DPINEFORGE_BUILD_LIVE_RUNNER:BOOL=OFF \
+            -DPINEFORGE_BUILD_CORPUS_STRATEGIES:BOOL=OFF \
+            -DPINEFORGE_BUILD_EXAMPLES:BOOL=OFF \
+            -DPINEFORGE_REQUIRE_ABI_RECEIPTS:BOOL=OFF
+          set +x
+          grep -Fx 'BUILD_TESTING:BOOL=ON' build/CMakeCache.txt
+          grep -Fx 'PINEFORGE_BUILD_TESTS:BOOL=ON' build/CMakeCache.txt
+          grep -Fx 'PINEFORGE_BUILD_SOURCE_LAYER:BOOL=ON' build/CMakeCache.txt
+          grep -Fx "Eigen3_DIR:PATH=$EIGEN_PREFIX/share/eigen3/cmake" build/CMakeCache.txt
+          grep -F 'set(CMAKE_C_COMPILER_ID "AppleClang")' build/CMakeFiles/*/CMakeCCompiler.cmake
+          grep -F 'set(CMAKE_CXX_COMPILER_ID "AppleClang")' build/CMakeFiles/*/CMakeCXXCompiler.cmake
+          sed -n '/^CMAKE_.*COMPILER/p; /^CMAKE_.*FLAGS/p; /^CMAKE_GENERATOR:/p; /^CMAKE_BUILD_TYPE:/p; /^BUILD_TESTING:/p; /^PINEFORGE_BUILD_/p; /^PINEFORGE_REQUIRE_ABI_RECEIPTS:/p; /^Eigen3_DIR:/p' build/CMakeCache.txt
+
+      - name: Build the full default ALL graph
+        id: build
+        run: |
+          set -euo pipefail
+          set -x
+          cmake --build build --parallel "$(sysctl -n hw.ncpu)" --verbose
+
+      - name: Require nonempty archives and native test executables
+        id: products
+        run: |
+          set -euo pipefail
+          for archive in build/lib/libpineforge.a build/lib/libpineforge_kernel.a; do
+            test -s "$archive"
+            members=$(ar -t "$archive")
+            test -n "$members"
+            stat -f '%N %z bytes' "$archive"
+            shasum -a 256 "$archive"
+          done
+          for binary in build/bin/test_ta build/bin/test_integration; do
+            test -s "$binary"
+            test -x "$binary"
+            file "$binary"
+            file -b "$binary" | grep -E '^Mach-O .*executable'
+            stat -f '%N %z bytes' "$binary"
+            shasum -a 256 "$binary"
+          done
+          ccache --show-stats
+
+      - name: Save installed Eigen on successful main push
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.eigen-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.EIGEN_PREFIX }}
+          key: ${{ steps.eigen-restore.outputs.cache-primary-key }}
+
+      - name: Save ccache on successful main push
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
+
+      - name: Record advisory compile outcomes
+        if: ${{ always() && needs.authz.result == 'success' }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+          HOST_OUTCOME: ${{ steps.host.outcome }}
+          EIGEN_RESTORE_OUTCOME: ${{ steps.eigen-restore.outcome }}
+          EIGEN_CACHE_HIT: ${{ steps.eigen-restore.outputs.cache-hit }}
+          EIGEN_INSTALL_OUTCOME: ${{ steps.eigen-install.outcome }}
+          EIGEN_OUTCOME: ${{ steps.eigen.outcome }}
+          CCACHE_OUTCOME: ${{ steps.ccache.outcome }}
+          CCACHE_RESTORE_OUTCOME: ${{ steps.ccache-restore.outcome }}
+          CCACHE_CACHE_HIT: ${{ steps.ccache-restore.outputs.cache-hit }}
+          CONFIGURE_OUTCOME: ${{ steps.configure.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          PRODUCTS_OUTCOME: ${{ steps.products.outcome }}
+        run: |
+          set -euo pipefail
+          {
+            printf 'Advisory macOS compile; test executables are built without execution.\n\n'
+            printf 'Job status at summary: %s\n\n' "$JOB_STATUS"
+            printf 'Exact cache hits: Eigen=%s; ccache=%s\n\n' "$EIGEN_CACHE_HIT" "$CCACHE_CACHE_HIT"
+            printf '| Phase | Outcome |\n| --- | --- |\n'
+            printf '| Host and toolchain | %s |\n| Eigen cache restore | %s |\n| Eigen installation | %s |\n| Eigen validation | %s |\n' "$HOST_OUTCOME" "$EIGEN_RESTORE_OUTCOME" "$EIGEN_INSTALL_OUTCOME" "$EIGEN_OUTCOME"
+            printf '| ccache setup | %s |\n| ccache restore | %s |\n' "$CCACHE_OUTCOME" "$CCACHE_RESTORE_OUTCOME"
+            printf '| Configure | %s |\n| Full ALL build | %s |\n| Required outputs | %s |\n' "$CONFIGURE_OUTCOME" "$BUILD_OUTCOME" "$PRODUCTS_OUTCOME"
+          } >> "$GITHUB_STEP_SUMMARY"
+'''
+
+
+def macos_compile_workflow_findings(workflow: str) -> list[str]:
+    """Validate the entire narrow declaration before selecting its hosted pin."""
+    name = 'macos-compile.yml'
+    findings = admit_yaml_findings({f'.github/workflows/{name}': workflow})
+    jobs = _jobs(workflow)
+    headers = _JOB_HEADER.findall(_jobs_text(workflow) or '')
+    if (list(jobs) != ['authz', 'compile-macos'] or len(headers) != len(jobs)
+            or _unparsed(workflow)):
+        findings.append(f'{name} must contain exactly authz and compile-macos jobs')
+    if (_events(workflow) != {'pull_request', 'push'}
+            or _job_block(workflow, 'on') != _job_block(MACOS_COMPILE_WORKFLOW_HEADER, 'on')):
+        findings.append(f'{name} must retain exactly its ordinary main PR and main push triggers')
+    jobs_key = _JOBS_KEY.search(workflow)
+    prefix = workflow[:jobs_key.start()] if jobs_key else workflow
+    if (not jobs_key or _code(prefix) != _code(MACOS_COMPILE_WORKFLOW_HEADER)
+            or _code(workflow[jobs_key.end():]) != _code(_jobs_text(workflow) or '')):
+        findings.append(f'{name} must retain its reviewed workflow header and contents: read permissions')
+    authz = jobs.get('authz', '')
+    authz_steps = _steps(authz)
+    canon = authz_steps[0].rstrip('\n') + '\n' if len(authz_steps) == 1 else ''
+    if (not authz.startswith('\n' + _authz_header(name))
+            or _code(authz) != _code(_authz_header(name)) + ['    steps:'] + _code(canon)
+            or hashlib.sha256(canon.encode('utf-8')).hexdigest() != AUTHZ_STEP_SHA256):
+        findings.append(f'{name} must start with the verbatim canon authz job')
+    body = jobs.get('compile-macos', '')
+    steps = _steps(body)
+    # Account for every job key and every line outside the parsed steps. This
+    # refuses inherited shells/env, alternate steps mappings and keys after steps.
+    if _code(body) != (_code(MACOS_COMPILE_JOB_HEADER) + ['    steps:']
+                       + [line for step in steps for line in _code(step)]):
+        findings.append(f'{name} compile-macos must retain its reviewed header, '
+                        'permissions and authz dependency')
+    reviewed = [step.rstrip('\n') for step in _steps(MACOS_COMPILE_STEPS)]
+    if [step.rstrip('\n') for step in steps] != reviewed:
+        findings.append(f'{name} compile-macos must retain exactly its reviewed ordered compile-only steps')
+    for required in reviewed:
+        step_name, = _step_values(required, 'name')
+        actual = _step_named(steps, '      - name: ' + step_name)
+        if actual.rstrip('\n') != required:
+            findings.append(f'{name} compile-macos must retain step {step_name} '
+                            'with its reviewed command and context')
+    return list(dict.fromkeys(findings))
 
 
 # The release build installs Eigen and refuses any version other than 3.4.0.

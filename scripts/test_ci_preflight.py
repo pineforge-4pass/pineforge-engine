@@ -2318,7 +2318,10 @@ class WorkflowEventFleets(unittest.TestCase):
                 continue
             if not events & post_events:
                 continue
-            self.assertNotIn('pull_request', events, name)
+            if name == 'macos-compile.yml':
+                self.assertEqual(events, {'pull_request', 'push'}, name)
+            else:
+                self.assertNotIn('pull_request', events, name)
             for job, body in _jobs(workflow).items():
                 if ci_preflight._job_values(body, 'uses'):
                     continue  # The graph check below follows every local call.
@@ -2338,9 +2341,11 @@ class WorkflowEventFleets(unittest.TestCase):
                     runner = EXPECTED_LIGHT_GKE_JOBS.get(name, {}).get(job, 'ubuntu-24.04')
                     self.assertEqual(ci_preflight._job_values(body, 'runs-on'), [runner])
                     continue
-                # Every other post-merge job runs on the hosted x86 image.
+                # The dedicated compile workflow adds one literal macOS pin.
+                expected = ('macos-latest' if (name, job) == ('macos-compile.yml', 'compile-macos')
+                            else HOSTED_X86)
                 self.assertEqual(ci_preflight._job_values(body, 'runs-on', unquote=False),
-                                 [HOSTED_X86], f'{name} job {job}')
+                                 [expected], f'{name} job {job}')
         self.assertGreater(checked, 0)
         self.assertEqual(ci_preflight.workflow_fleet_findings(workflows), [])
         for event in ('push', 'schedule', 'workflow_dispatch'):
@@ -2368,7 +2373,8 @@ class WorkflowEventFleets(unittest.TestCase):
             if 'pull_request' not in events:
                 continue
             checked += 1
-            self.assertFalse(events & {'push', 'schedule', 'workflow_dispatch'}, name)
+            expected_post = {'push'} if name == 'macos-compile.yml' else set()
+            self.assertEqual(events & {'push', 'schedule', 'workflow_dispatch'}, expected_post, name)
             self.assertNotIn('gkp-', workflow, name)
             self.assertIsNone(ci_preflight._RETIRED_VM_LABEL.search(workflow), name)
         self.assertGreater(checked, 0)
@@ -5491,7 +5497,10 @@ class PreflightFailures(unittest.TestCase):
         """Keep the 21 admitted sites, including the synthetic isolated release form."""
         workflows = self.workflow_sources(legacy_release=True)
         routes = ci_preflight.workflow_event_routes(workflows)
-        for name, workflow in workflows.items():
+        # This inventory describes fleet sites. Optional hosted contracts stay
+        # in workflow_sources and the full rules, with their own mutation targets.
+        for name in FLEET_JOB_IDS:
+            workflow = workflows[name]
             workflow_fleet = ('main' if name in ci_preflight.RELEASE_JOB_RUNNERS else
                               'post' if routes[name] & {'push', 'schedule', 'workflow_dispatch'} else 'pr')
             for job, body in _jobs(workflow).items():
@@ -13403,6 +13412,631 @@ class GkeSmokeOutputAdmission(unittest.TestCase):
                     with self.subTest(steps=len(ci_preflight._steps(_jobs(workflow)[job])),
                                       job=job, before=before):
                         self.assert_refused(in_job(workflow, job, before, after), finding)
+
+
+class MacosCompileAdmission(unittest.TestCase):
+    """Bind the hosted exception to the real compile-only workflow and its inputs."""
+
+    # Independent input from 6b6bac3a13c1fa5fa29497c121ed2b6f690f5a4d,
+    # .github/workflows/macos-compile.yml. Keep the workflow absent in rule-only
+    # changes; reuse ci.yml's shared authz canon rather than copying it here.
+    # These bytes are not assembled from the validator's reviewed constants.
+    FROZEN_HEADER = '''name: macOS compile
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+'''
+    FROZEN_COMPILE_JOB = r'''
+  compile-macos:
+    name: macOS compile (advisory)
+    needs: [authz]
+    if: ${{ needs.authz.result == 'success' }}
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      EIGEN_VERSION: '3.4.0'
+      EIGEN_SHA256: '8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72'
+      EIGEN_PREFIX: ${{ github.workspace }}/.deps/eigen-3.4.0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout the current source head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify and print source and workflow identity
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          actual_sha=$(git rev-parse --verify HEAD)
+          test "$actual_sha" = "$SOURCE_SHA"
+          actual_tree=$(git rev-parse --verify 'HEAD^{tree}')
+          printf 'source HEAD=%s\nsource tree=%s\n' "$actual_sha" "$actual_tree"
+          printf 'workflow ref=%s\nworkflow SHA=%s\nevent SHA=%s\n' "$WORKFLOW_REF" "$WORKFLOW_SHA" "$EVENT_SHA"
+          printf 'run=%s attempt=%s event=%s ref=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_EVENT_NAME" "$GITHUB_REF"
+          shasum -a 256 .github/workflows/macos-compile.yml
+
+      - name: Identify the Darwin host and Apple toolchain
+        id: host
+        env:
+          ACTUAL_OS: ${{ runner.os }}
+          ACTUAL_ARCH: ${{ runner.arch }}
+        run: |
+          set -euo pipefail
+          test "$ACTUAL_OS" = macOS
+          test "$(uname -s)" = Darwin
+          uname -a
+          printf 'runner image=%s version=%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          c_compiler=$(xcrun --find clang)
+          cxx_compiler=$(xcrun --find clang++)
+          identity=$(
+            set -euo pipefail
+            uname -smr
+            sw_vers
+            xcodebuild -version
+            xcrun --show-sdk-path
+            xcrun --show-sdk-version
+            "$c_compiler" --version
+            "$cxx_compiler" --version
+            cmake --version
+            make --version
+            shasum -a 256 "$c_compiler" "$cxx_compiler"
+          )
+          printf '%s\n' "$identity"
+          toolchain=$(printf '%s\n' "$identity" | shasum -a 256)
+          toolchain=${toolchain%% *}
+          configuration=$(shasum -a 256 .github/workflows/macos-compile.yml)
+          configuration=${configuration%% *}
+          [[ "$toolchain" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$configuration" =~ ^[0-9a-f]{64}$ ]]
+          cache_prefix="macos-compile-v1-$ACTUAL_OS-$ACTUAL_ARCH-Debug-$toolchain-eigen-$EIGEN_VERSION-$EIGEN_SHA256-$configuration"
+          {
+            printf 'c-compiler=%s\ncxx-compiler=%s\n' "$c_compiler" "$cxx_compiler"
+            printf 'cache-prefix=%s\n' "$cache_prefix"
+          } >> "$GITHUB_OUTPUT"
+          printf 'cache prefix=%s\n' "$cache_prefix"
+
+      - name: Restore the installed Eigen dependency
+        id: eigen-restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.EIGEN_PREFIX }}
+          key: ${{ steps.host.outputs.cache-prefix }}-install
+
+      - name: Install checksum-verified Eigen headers and CMake package
+        id: eigen-install
+        if: ${{ steps.eigen-restore.outputs.cache-hit != 'true' }}
+        env:
+          C_COMPILER: ${{ steps.host.outputs.c-compiler }}
+          CXX_COMPILER: ${{ steps.host.outputs.cxx-compiler }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/eigen-$EIGEN_VERSION.tar.gz"
+          curl --fail --location --output "$archive" \
+            "https://gitlab.com/libeigen/eigen/-/archive/$EIGEN_VERSION/eigen-$EIGEN_VERSION.tar.gz"
+          printf '%s  %s\n' "$EIGEN_SHA256" "$archive" | shasum -a 256 --check -
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          # Eigen is header-only; its own test suite is outside this installation.
+          set -x
+          cmake -S "$RUNNER_TEMP/eigen-$EIGEN_VERSION" -B "$RUNNER_TEMP/eigen-install-build" \
+            -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER:FILEPATH="$C_COMPILER" \
+            -DCMAKE_CXX_COMPILER:FILEPATH="$CXX_COMPILER" \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_INSTALL_PREFIX:PATH="$EIGEN_PREFIX" \
+            -DBUILD_TESTING:BOOL=OFF \
+            -DEIGEN_BUILD_DOC:BOOL=OFF
+          cmake --install "$RUNNER_TEMP/eigen-install-build" --config Debug
+
+      - name: Verify the installed Eigen dependency
+        id: eigen
+        run: |
+          set -euo pipefail
+          test -s "$EIGEN_PREFIX/include/eigen3/Eigen/Core"
+          macros="$EIGEN_PREFIX/include/eigen3/Eigen/src/Core/util/Macros.h"
+          grep -E '^#define EIGEN_(WORLD|MAJOR|MINOR)_VERSION' "$macros"
+          grep -Eq '^#define EIGEN_WORLD_VERSION[[:space:]]+3[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MAJOR_VERSION[[:space:]]+4[[:space:]]*$' "$macros"
+          grep -Eq '^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$' "$macros"
+          eigen_config="$EIGEN_PREFIX/share/eigen3/cmake"
+          test -s "$eigen_config/Eigen3Config.cmake"
+          test -s "$eigen_config/Eigen3ConfigVersion.cmake"
+          test -s "$eigen_config/Eigen3Targets.cmake"
+          printf 'installed Eigen3_DIR=%s\n' "$eigen_config"
+          shasum -a 256 "$eigen_config/Eigen3Config.cmake" "$eigen_config/Eigen3ConfigVersion.cmake" "$eigen_config/Eigen3Targets.cmake"
+
+      - name: Install and identify ccache
+        id: ccache
+        run: |
+          set -euo pipefail
+          brew --version
+          brew install ccache
+          brew list --versions ccache
+          ccache --version
+          identity=$(
+            set -euo pipefail
+            ccache --version
+            brew list --versions ccache
+            shasum -a 256 "$(command -v ccache)"
+          )
+          digest=$(printf '%s\n' "$identity" | shasum -a 256)
+          digest=${digest%% *}
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          printf 'identity=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'ccache identity=%s\n' "$digest"
+
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.host.outputs.cache-prefix }}-ccache-${{ steps.ccache.outputs.identity }}-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-keys: |
+            ${{ steps.host.outputs.cache-prefix }}-ccache-${{ steps.ccache.outputs.identity }}-
+
+      - name: Configure Debug library and test binaries
+        id: configure
+        env:
+          C_COMPILER: ${{ steps.host.outputs.c-compiler }}
+          CXX_COMPILER: ${{ steps.host.outputs.cxx-compiler }}
+        run: |
+          set -euo pipefail
+          set -x
+          cmake -S . -B build -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER:FILEPATH="$C_COMPILER" \
+            -DCMAKE_CXX_COMPILER:FILEPATH="$CXX_COMPILER" \
+            -DCMAKE_C_COMPILER_LAUNCHER:STRING=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER:STRING=ccache \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=ON \
+            -DBUILD_TESTING:BOOL=ON \
+            -DEigen3_DIR:PATH="$EIGEN_PREFIX/share/eigen3/cmake" \
+            -DCMAKE_FIND_PACKAGE_PREFER_CONFIG:BOOL=ON \
+            -DFETCHCONTENT_FULLY_DISCONNECTED:BOOL=ON \
+            -DPINEFORGE_BUILD_TESTS:BOOL=ON \
+            -DPINEFORGE_BUILD_SOURCE_LAYER:BOOL=ON \
+            -DPINEFORGE_BUILD_TUTORIAL:BOOL=ON \
+            -DPINEFORGE_BUILD_LIVE_RUNNER:BOOL=OFF \
+            -DPINEFORGE_BUILD_CORPUS_STRATEGIES:BOOL=OFF \
+            -DPINEFORGE_BUILD_EXAMPLES:BOOL=OFF \
+            -DPINEFORGE_REQUIRE_ABI_RECEIPTS:BOOL=OFF
+          set +x
+          grep -Fx 'BUILD_TESTING:BOOL=ON' build/CMakeCache.txt
+          grep -Fx 'PINEFORGE_BUILD_TESTS:BOOL=ON' build/CMakeCache.txt
+          grep -Fx 'PINEFORGE_BUILD_SOURCE_LAYER:BOOL=ON' build/CMakeCache.txt
+          grep -Fx "Eigen3_DIR:PATH=$EIGEN_PREFIX/share/eigen3/cmake" build/CMakeCache.txt
+          grep -F 'set(CMAKE_C_COMPILER_ID "AppleClang")' build/CMakeFiles/*/CMakeCCompiler.cmake
+          grep -F 'set(CMAKE_CXX_COMPILER_ID "AppleClang")' build/CMakeFiles/*/CMakeCXXCompiler.cmake
+          sed -n '/^CMAKE_.*COMPILER/p; /^CMAKE_.*FLAGS/p; /^CMAKE_GENERATOR:/p; /^CMAKE_BUILD_TYPE:/p; /^BUILD_TESTING:/p; /^PINEFORGE_BUILD_/p; /^PINEFORGE_REQUIRE_ABI_RECEIPTS:/p; /^Eigen3_DIR:/p' build/CMakeCache.txt
+
+      - name: Build the full default ALL graph
+        id: build
+        run: |
+          set -euo pipefail
+          set -x
+          cmake --build build --parallel "$(sysctl -n hw.ncpu)" --verbose
+
+      - name: Require nonempty archives and native test executables
+        id: products
+        run: |
+          set -euo pipefail
+          for archive in build/lib/libpineforge.a build/lib/libpineforge_kernel.a; do
+            test -s "$archive"
+            members=$(ar -t "$archive")
+            test -n "$members"
+            stat -f '%N %z bytes' "$archive"
+            shasum -a 256 "$archive"
+          done
+          for binary in build/bin/test_ta build/bin/test_integration; do
+            test -s "$binary"
+            test -x "$binary"
+            file "$binary"
+            file -b "$binary" | grep -E '^Mach-O .*executable'
+            stat -f '%N %z bytes' "$binary"
+            shasum -a 256 "$binary"
+          done
+          ccache --show-stats
+
+      - name: Save installed Eigen on successful main push
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.eigen-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.EIGEN_PREFIX }}
+          key: ${{ steps.eigen-restore.outputs.cache-primary-key }}
+
+      - name: Save ccache on successful main push
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
+
+      - name: Record advisory compile outcomes
+        if: ${{ always() && needs.authz.result == 'success' }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+          HOST_OUTCOME: ${{ steps.host.outcome }}
+          EIGEN_RESTORE_OUTCOME: ${{ steps.eigen-restore.outcome }}
+          EIGEN_CACHE_HIT: ${{ steps.eigen-restore.outputs.cache-hit }}
+          EIGEN_INSTALL_OUTCOME: ${{ steps.eigen-install.outcome }}
+          EIGEN_OUTCOME: ${{ steps.eigen.outcome }}
+          CCACHE_OUTCOME: ${{ steps.ccache.outcome }}
+          CCACHE_RESTORE_OUTCOME: ${{ steps.ccache-restore.outcome }}
+          CCACHE_CACHE_HIT: ${{ steps.ccache-restore.outputs.cache-hit }}
+          CONFIGURE_OUTCOME: ${{ steps.configure.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          PRODUCTS_OUTCOME: ${{ steps.products.outcome }}
+        run: |
+          set -euo pipefail
+          {
+            printf 'Advisory macOS compile; test executables are built without execution.\n\n'
+            printf 'Job status at summary: %s\n\n' "$JOB_STATUS"
+            printf 'Exact cache hits: Eigen=%s; ccache=%s\n\n' "$EIGEN_CACHE_HIT" "$CCACHE_CACHE_HIT"
+            printf '| Phase | Outcome |\n| --- | --- |\n'
+            printf '| Host and toolchain | %s |\n| Eigen cache restore | %s |\n| Eigen installation | %s |\n| Eigen validation | %s |\n' "$HOST_OUTCOME" "$EIGEN_RESTORE_OUTCOME" "$EIGEN_INSTALL_OUTCOME" "$EIGEN_OUTCOME"
+            printf '| ccache setup | %s |\n| ccache restore | %s |\n' "$CCACHE_OUTCOME" "$CCACHE_RESTORE_OUTCOME"
+            printf '| Configure | %s |\n| Full ALL build | %s |\n| Required outputs | %s |\n' "$CONFIGURE_OUTCOME" "$BUILD_OUTCOME" "$PRODUCTS_OUTCOME"
+          } >> "$GITHUB_STEP_SUMMARY"
+'''
+
+    NAME = 'macos-compile.yml'
+    INVENTORY = 'macos-compile.yml must contain exactly authz and compile-macos jobs'
+    TRIGGERS = ('macos-compile.yml must retain exactly its ordinary main PR '
+                'and main push triggers')
+    WORKFLOW_HEADER = ('macos-compile.yml must retain its reviewed workflow header '
+                       'and contents: read permissions')
+    AUTHZ = 'macos-compile.yml must start with the verbatim canon authz job'
+    HEADER = ('macos-compile.yml compile-macos must retain its reviewed header, '
+              'permissions and authz dependency')
+    ORDER = ('macos-compile.yml compile-macos must retain exactly its reviewed '
+             'ordered compile-only steps')
+    STEP = ('macos-compile.yml compile-macos must retain step {} '
+            'with its reviewed command and context')
+
+    def setUp(self):
+        paths = [ROOT / path for path in CI_SOURCES]
+        workflow_paths = sorted(path for path in (ROOT / '.github/workflows').iterdir()
+                                if path.suffix in ('.yml', '.yaml'))
+        announce_compare_fixture_paths(*paths, *workflow_paths)
+        self.sources = [path.read_text(encoding='utf-8') for path in paths]
+        self.workflows = {path.name: path.read_bytes().decode('utf-8') for path in workflow_paths}
+        authz = '  authz:' + _jobs(self.workflows['ci.yml'])['authz'].rstrip('\n') + '\n'
+        frozen = self.FROZEN_HEADER + authz + self.FROZEN_COMPILE_JOB
+        # Prefer the shipped workflow after its separate cutover. In rule-only
+        # checkouts, supply the same pinned input to both real admission entries.
+        self.workflow = self.workflows.setdefault(self.NAME, frozen)
+
+    def findings(self, changed, *, name=NAME, extra=None):
+        workflows = dict(self.workflows)
+        del workflows[self.NAME]
+        workflows[name] = changed
+        workflows.update(extra or {})
+        named = {Path(path).name for path in CI_SOURCES}
+        ordinary = ci_workflow_findings(
+            *self.sources, others={key: text for key, text in workflows.items() if key not in named})
+        fetched = main_admission_data_findings(workflows)
+        return ordinary, fetched
+
+    def assert_refused(self, changed, *messages, name=NAME, extra=None):
+        self.assertTrue(messages, 'a refusal control must name its expected finding')
+        self.assertTrue(changed != self.workflow or name != self.NAME or extra,
+                        'the mutation must change the supplied workflow data')
+        for entry, findings in zip(('ordinary', 'fetched'), self.findings(
+                changed, name=name, extra=extra)):
+            with self.subTest(entry=entry):
+                for message in messages:
+                    self.assertIn(message, findings)
+
+    def step_mutation(self, name, before, after):
+        step = ci_preflight._step_named(
+            ci_preflight._steps(_jobs(self.workflow)['compile-macos']), '      - name: ' + name)
+        self.assertTrue(step, name)
+        self.assertIn(before, step)
+        self.assertNotEqual(before, after)
+        return in_job(self.workflow, 'compile-macos', step, step.replace(before, after, 1))
+
+    def test_frozen_workflow_and_current_repository_pass_both_real_entries(self):
+        self.assertEqual(hashlib.sha256(self.workflow.encode('utf-8')).hexdigest(),
+                         '2140eab2e382850269348118970f4419c69368e1876b783d1edbc128f87b6b71')
+        # The retained MAIN f5 log has the mixed-event and two Ubuntu findings
+        # for these exact bytes. No workflow fixture is weakened to obtain green.
+        self.assertEqual(self.findings(self.workflow), ([], []))
+        self.assertEqual(ci_preflight.workflow_fleet_findings(self.workflows), [])
+        self.assertEqual(ci_preflight.runner_findings(self.workflows), [])
+        without = {name: text for name, text in self.workflows.items() if name != self.NAME}
+        self.assertEqual(main_admission_data_findings(without), [])
+        named = {Path(path).name for path in CI_SOURCES}
+        self.assertEqual(ci_workflow_findings(
+            *self.sources, others={name: text for name, text in without.items() if name not in named}), [])
+
+    def test_filename_alone_or_another_filename_never_grants_the_exception(self):
+        for name in ('other-macos.yml', 'macos-compile.yaml', 'MACOS-compile.yml'):
+            with self.subTest(name=name):
+                self.assert_refused(
+                    self.workflow,
+                    f'{name} must split pull_request and post-merge events into separate workflows',
+                    f'{name} job compile-macos must run on ubuntu-24.04 for post-merge events',
+                    f'{name} job compile-macos must run on ubuntu-24.04', name=name)
+        minimal = ('name: macOS compile\non: [pull_request, push]\npermissions:\n  contents: read\n'
+                   'jobs:\n  compile-macos:\n    runs-on: macos-latest\n'
+                   '    steps:\n      - run: "true"\n')
+        self.assert_refused(minimal, self.INVENTORY, self.TRIGGERS, self.AUTHZ)
+
+    def test_job_inventory_is_closed_including_duplicate_ids(self):
+        for job in ('authz', 'compile-macos'):
+            body = _jobs(self.workflow)[job]
+            with self.subTest(missing=job):
+                self.assert_refused(self.workflow.replace(f'  {job}:' + body, '', 1), self.INVENTORY)
+        for changed in (
+                self.workflow.replace('  compile-macos:\n', '  other-macos:\n', 1),
+                self.workflow + '\n  compile-macos:' + _jobs(self.workflow)['compile-macos'],
+                self.workflow + '\n  authz:' + _jobs(self.workflow)['authz'],
+                self.workflow + '\n  extra:\n    runs-on: macos-latest\n'
+                '    steps:\n      - run: "true"\n'):
+            with self.subTest(tail=changed[-100:]):
+                self.assert_refused(changed, self.INVENTORY)
+
+    def test_event_filters_refuse_broader_refs_prs_and_privileged_events(self):
+        mutations = [
+            ('  push:\n    branches: [main]', '  push:'),
+            ('  push:\n    branches: [main]', '  push:\n    branches: [main, release]'),
+            ('  push:\n    branches: [main]', "  push:\n    branches: ['*']"),
+            ('  push:\n    branches: [main]', '  push:\n    branches: [refs/heads/main]'),
+            ('  push:\n    branches: [main]', '  push:\n    tags: [main]'),
+            ('  pull_request:\n    branches: [main]', '  pull_request:'),
+            ('  pull_request:\n    branches: [main]', '  pull_request:\n    branches: [main, release]'),
+            ('types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]',
+             'types: [opened]'),
+            ('  pull_request:', '  pull_request_target:'),
+        ]
+        mutations += [('  push:\n', '  ' + event + ':\n  push:\n') for event in
+                      ('workflow_dispatch', 'workflow_run', 'workflow_call',
+                       'repository_dispatch', 'schedule')]
+        for before, after in mutations:
+            with self.subTest(trigger=after):
+                self.assertIn(before, self.workflow)
+                self.assert_refused(self.workflow.replace(before, after, 1), self.TRIGGERS)
+
+    def test_reusable_callers_cannot_expand_the_exception_event_routes(self):
+        caller = ('name: caller\non: workflow_dispatch\njobs:\n  compile:\n'
+                  '    uses: ./.github/workflows/macos-compile.yml\n')
+        message = 'macos-compile.yml must be reachable only from its own main PR and main push events'
+        self.assert_refused(self.workflow, message, extra={'caller.yml': caller})
+
+    def test_runner_needs_condition_and_job_context_are_exact(self):
+        mutations = [('    runs-on: macos-latest\n', replacement) for replacement in (
+            '    runs-on: ubuntu-24.04\n',
+            '    runs-on: macos-14\n',
+            "    runs-on: 'macos-latest'\n",
+            '    runs-on: [macos-latest]\n',
+            '    runs-on:\n      - macos-latest\n',
+            '    runs-on: self-hosted\n',
+            '    runs-on: ${{ matrix.runner }}\n'
+            '    strategy:\n      matrix:\n        runner: [macos-latest]\n')]
+        mutations += [
+            ('    needs: [authz]\n', ''),
+            ('    needs: [authz]\n', '    needs: [other]\n'),
+            ("    if: ${{ needs.authz.result == 'success' }}\n", ''),
+            ("    if: ${{ needs.authz.result == 'success' }}", '    if: always()'),
+            ('        shell: bash', '        shell: sh'),
+            ('    steps:\n', '    continue-on-error: true\n    steps:\n'),
+            ('    steps:\n', '    timeout-minutes: 20\n    steps:\n'),
+            ('      HOMEBREW_NO_AUTO_UPDATE:', '      BASH_ENV: /outside\n      HOMEBREW_NO_AUTO_UPDATE:'),
+        ]
+        for before, after in mutations:
+            with self.subTest(context=after):
+                self.assert_refused(
+                    in_job(self.workflow, 'compile-macos', before, after), self.HEADER,
+                    'macos-compile.yml must split pull_request and post-merge events into separate workflows')
+
+    def test_authz_header_and_canon_bytes_cannot_be_bypassed(self):
+        for before, after in (
+                ('    permissions: {}', '    permissions:\n      contents: write'),
+                ('    runs-on: ubuntu-24.04', '    runs-on: macos-latest'),
+                ('    steps:\n', '    if: false\n    steps:\n'),
+                ('    steps:\n', '    continue-on-error: true\n    steps:\n'),
+                ('    steps:\n', '    env:\n      BASH_ENV: /outside\n    steps:\n'),
+                ('exit 1; }', ':; }'),
+                ('OWNER|MEMBER|COLLABORATOR)', 'OWNER|MEMBER|COLLABORATOR|NONE)'),
+                ('ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"', 'ALLOWED_BOTS: "*"')):
+            with self.subTest(authz=after):
+                self.assert_refused(in_job(self.workflow, 'authz', before, after), self.AUTHZ)
+
+    def test_permission_credential_container_and_environment_escalations_are_refused(self):
+        for before, after in (
+                ('permissions:\n  contents: read', 'permissions: write-all'),
+                ('permissions:\n  contents: read', 'permissions:\n  contents: write'),
+                ('permissions:\n  contents: read', 'permissions:\n  contents: read\n  id-token: write'),
+                ('permissions:\n  contents: read', 'permissions:\n  contents: read\n  pull-requests: read'),
+                ('jobs:\n', 'env:\n  TOKEN: ${{ secrets.DEPLOY }}\njobs:\n'),
+                ('jobs:\n', 'defaults:\n  run:\n    shell: sh\njobs:\n'),
+                ('jobs:\n', 'concurrency: macos-compile\njobs:\n')):
+            with self.subTest(workflow_context=after):
+                self.assert_refused(self.workflow.replace(before, after, 1), self.WORKFLOW_HEADER)
+        self.assert_refused(self.workflow + '\nenv:\n  BASH_ENV: /outside\n', self.WORKFLOW_HEADER)
+        for extra in (
+                '    environment: release\n',
+                '    container: alpine\n',
+                '    services:\n      database:\n        image: postgres\n',
+                '    secrets: inherit\n',
+                '    secrets:\n      TOKEN: ${{ secrets.DEPLOY }}\n'):
+            with self.subTest(job_context=extra):
+                self.assert_refused(in_job(self.workflow, 'compile-macos', '    steps:\n',
+                                           extra + '    steps:\n'), self.HEADER)
+        for before, after in (
+                ('      contents: read', '      contents: write'),
+                ('      contents: read', '      contents: read\n      id-token: write'),
+                ('      contents: read', '      contents: read\n      checks: read'),
+                ('      CCACHE_COMPILERCHECK: content', '      CCACHE_COMPILERCHECK: content\n'
+                 '      TOKEN: ${{ secrets.DEPLOY }}')):
+            with self.subTest(scopes=after):
+                self.assert_refused(in_job(self.workflow, 'compile-macos', before, after), self.HEADER)
+        name = 'Verify and print source and workflow identity'
+        for expression in ('${{ secrets.DEPLOY }}', "${{ secrets['DEPLOY'] }}", '${{ toJSON(secrets) }}'):
+            with self.subTest(raw_shell_comment=expression):
+                self.assert_refused(self.step_mutation(
+                    name, '          set -euo pipefail',
+                    '          # ' + expression + '\n          set -euo pipefail'), self.STEP.format(name))
+
+    def test_checkout_must_use_real_pinned_action_and_current_head_without_credentials(self):
+        name = 'Checkout the current source head'
+        for before, after in (
+                ('ref: ${{ github.event.pull_request.head.sha || github.sha }}', 'ref: ${{ github.sha }}'),
+                ('ref: ${{ github.event.pull_request.head.sha || github.sha }}', 'ref: refs/heads/main'),
+                ('repository: ${{ github.repository }}', 'repository: other/engine'),
+                ('11d5960a326750d5838078e36cf38b85af677262', '0' * 40),
+                ('persist-credentials: false', 'persist-credentials: true'),
+                ('        with:\n', '        env:\n          TOKEN: ${{ github.token }}\n        with:\n'),
+                ('        with:\n', '        env:\n          TOKEN: ${{ secrets.DEPLOY }}\n        with:\n')):
+            with self.subTest(checkout=after):
+                self.assert_refused(self.step_mutation(name, before, after), self.STEP.format(name))
+        unpinned = self.step_mutation(name, '@11d5960a326750d5838078e36cf38b85af677262', '@v4')
+        for findings in self.findings(unpinned):
+            self.assertTrue(any('third-party uses' in finding and '40-character' in finding
+                                for finding in findings), findings)
+
+    def test_caches_bind_host_compiler_configuration_dependency_and_main_only_saves(self):
+        mutations = [
+            ('Identify the Darwin host and Apple toolchain',
+             '-Debug-$toolchain-eigen-', '-Debug-eigen-'),
+            ('Identify the Darwin host and Apple toolchain',
+             '-$EIGEN_SHA256-$configuration', '-$EIGEN_SHA256'),
+            ('Restore ccache',
+             '-${{ github.event.pull_request.head.sha || github.sha }}', ''),
+            ('Restore ccache',
+             '${{ steps.host.outputs.cache-prefix }}-ccache-', 'macos-ccache-'),
+            ('Restore the installed Eigen dependency',
+             '${{ steps.host.outputs.cache-prefix }}-install', 'eigen-install'),
+        ]
+        for name in ('Save installed Eigen on successful main push', 'Save ccache on successful main push'):
+            mutations += [(name, before, after) for before, after in (
+                ("success() && ", ''),
+                ("github.event_name == 'push'", "github.event_name == 'pull_request'"),
+                ("github.ref == 'refs/heads/main'", "github.ref == 'refs/heads/release'"),
+                (" && github.ref == 'refs/heads/main'", ''),
+                ('outputs.cache-primary-key', 'outputs.cache-hit'),
+                ('        with:\n', '        continue-on-error: true\n        with:\n'))]
+        for name, before, after in mutations:
+            with self.subTest(cache=name, mutation=after):
+                self.assert_refused(self.step_mutation(name, before, after), self.STEP.format(name))
+        for before, after in (
+                ("EIGEN_VERSION: '3.4.0'", "EIGEN_VERSION: '3.3.9'"),
+                ("EIGEN_SHA256: '8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72'",
+                 "EIGEN_SHA256: '" + '0' * 64 + "'"),
+                ('CCACHE_BASEDIR: ${{ github.workspace }}', 'CCACHE_BASEDIR: /tmp')):
+            with self.subTest(cache_env=after):
+                self.assert_refused(in_job(self.workflow, 'compile-macos', before, after), self.HEADER)
+
+    def test_source_host_compiler_and_eigen_verification_cannot_be_removed(self):
+        for name, before, after in (
+                ('Verify and print source and workflow identity', 'test "$actual_sha" = "$SOURCE_SHA"', 'true'),
+                ('Verify and print source and workflow identity',
+                 'SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}',
+                 'SOURCE_SHA: ${{ github.sha }}'),
+                ('Identify the Darwin host and Apple toolchain', 'test "$ACTUAL_OS" = macOS', 'true'),
+                ('Identify the Darwin host and Apple toolchain', 'test "$(uname -s)" = Darwin', 'true'),
+                ('Identify the Darwin host and Apple toolchain',
+                 'shasum -a 256 "$c_compiler" "$cxx_compiler"', 'true'),
+                ('Install checksum-verified Eigen headers and CMake package', '| shasum -a 256 --check -', '| cat'),
+                ('Verify the installed Eigen dependency',
+                 'test -s "$eigen_config/Eigen3Config.cmake"', 'true'),
+                ('Verify the installed Eigen dependency',
+                 "'^#define EIGEN_MINOR_VERSION[[:space:]]+0[[:space:]]*$'", "'.*'"),
+                ('Install and identify ccache', 'shasum -a 256 "$(command -v ccache)"', 'true')):
+            with self.subTest(identity=name, mutation=after):
+                self.assert_refused(self.step_mutation(name, before, after), self.STEP.format(name))
+
+    def test_debug_configuration_and_all_build_cannot_be_reduced_or_masked(self):
+        name = 'Configure Debug library and test binaries'
+        for before, after in (
+                ('-DCMAKE_BUILD_TYPE=Debug', '-DCMAKE_BUILD_TYPE=Release'),
+                ('-DBUILD_TESTING:BOOL=ON', '-DBUILD_TESTING:BOOL=OFF'),
+                ('-DPINEFORGE_BUILD_TESTS:BOOL=ON', ''),
+                ('-DPINEFORGE_BUILD_SOURCE_LAYER:BOOL=ON', '-DPINEFORGE_BUILD_SOURCE_LAYER:BOOL=OFF'),
+                ('-DPINEFORGE_BUILD_TUTORIAL:BOOL=ON', '-DPINEFORGE_BUILD_TUTORIAL:BOOL=OFF'),
+                ('-DFETCHCONTENT_FULLY_DISCONNECTED:BOOL=ON', '-DFETCHCONTENT_FULLY_DISCONNECTED:BOOL=OFF'),
+                ('grep -Fx \'PINEFORGE_BUILD_TESTS:BOOL=ON\' build/CMakeCache.txt', 'true'),
+                ('set(CMAKE_CXX_COMPILER_ID "AppleClang")', 'set(CMAKE_CXX_COMPILER_ID "Clang")')):
+            with self.subTest(configure=after):
+                self.assert_refused(self.step_mutation(name, before, after), self.STEP.format(name))
+        name = 'Build the full default ALL graph'
+        for before, after in (
+                ('cmake --build build --parallel', 'cmake --build build --target pineforge --parallel'),
+                ('cmake --build build --parallel', 'cmake --build build --target test_ta --parallel'),
+                ('--verbose', '--verbose || true'),
+                ('$(sysctl -n hw.ncpu)', '2'),
+                ('        run: |\n', '        if: false\n        run: |\n'),
+                ('        run: |\n', '        continue-on-error: true\n        run: |\n')):
+            with self.subTest(build=after):
+                self.assert_refused(self.step_mutation(name, before, after), self.STEP.format(name))
+
+    def test_real_archive_and_executable_checks_are_required(self):
+        name = 'Require nonempty archives and native test executables'
+        for before, after in (
+                ('build/lib/libpineforge.a build/lib/libpineforge_kernel.a', 'build/lib/libpineforge.a'),
+                ('test -s "$archive"', 'true'),
+                ('test -n "$members"', 'true'),
+                ('build/bin/test_ta build/bin/test_integration', 'build/bin/test_ta'),
+                ('test -s "$binary"', 'true'),
+                ('test -x "$binary"', 'true'),
+                ('file -b "$binary" | grep -E \'^Mach-O .*executable\'', 'true')):
+            with self.subTest(product=after):
+                self.assert_refused(self.step_mutation(name, before, after), self.STEP.format(name))
+
+    def test_steps_are_closed_ordered_and_never_execute_tests(self):
+        steps = ci_preflight._steps(_jobs(self.workflow)['compile-macos'])
+        self.assertEqual(len(steps), 14)
+        for step in steps:
+            name, = ci_preflight._step_values(step, 'name')
+            with self.subTest(missing_step=name):
+                self.assert_refused(in_job(self.workflow, 'compile-macos', step, ''), self.STEP.format(name))
+        for command in ('ctest --test-dir build', './build/bin/test_ta',
+                        'python3 scripts/test_ci_preflight.py', 'cmake --build build --target test'):
+            with self.subTest(test_execution=command):
+                self.assert_refused(in_job(self.workflow, 'compile-macos', '    steps:\n',
+                                           '    steps:\n      - run: ' + command + '\n'), self.ORDER)
+                name = 'Require nonempty archives and native test executables'
+                self.assert_refused(self.step_mutation(name, '          ccache --show-stats',
+                                                      '          ' + command + '\n          ccache --show-stats'),
+                                    self.STEP.format(name))
+        changed = in_job(self.workflow, 'compile-macos', steps[0] + '\n' + steps[1],
+                         steps[1] + '\n' + steps[0])
+        self.assert_refused(changed, self.ORDER)
+
+    def test_structural_yaml_and_generic_action_pin_checks_still_inspect_mutated_inputs(self):
+        duplicate = in_job(self.workflow, 'compile-macos', '    permissions:\n',
+                           '    permissions: {}\n    permissions:\n')
+        for findings in self.findings(duplicate):
+            self.assertTrue(any("duplicate key 'permissions'" in finding for finding in findings), findings)
+        name = 'Restore ccache'
+        changed = self.step_mutation(name, '@0057852bfaa89a56745cba8c7296529d2fc39830', '@v4')
+        for findings in self.findings(changed):
+            self.assertTrue(any("third-party uses 'actions/cache/restore@v4'" in finding
+                                for finding in findings), findings)
 
 
 if __name__ == '__main__':
