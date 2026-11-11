@@ -88,13 +88,6 @@ Modes:
             nor `from.catalogSha256` is verified against git: only the rebuilt
             catalog against the sha the diff states, and `from.tag` against
             VERSION; the note says so.
-            Before the tag exists, a forward VERSION/reset transition is
-            checked from committed parent and child bytes. Exactly VERSION
-            and the declared --diff path must be modified regular files.
-            The catalog is unchanged, the reset is regenerated exactly, and
-            worktree bytes must match the commit. The --diff location comes
-            from Config, including generic --catalog/--diff use; a transition
-            diff must lie inside --root. This admits source CI only.
   --stamp --to-version X.Y.Z[-rc.N] --previous-tag vA.B.C[-rc.N]
           --output PATH [--chain-output PATH]
             the release. --previous-tag is the release its notes start at
@@ -149,8 +142,6 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from release_version import parse_tags, parse_version, previous_tag
-
 ROOT = Path(__file__).resolve().parents[1]
 PROG = "gen_run_failure_catalog_diff"
 CATALOG = "docker/run_failure_codes.json"
@@ -195,16 +186,6 @@ class Config:
     diff_schema: str
     collections: tuple
 
-    @property
-    def diff_in_git(self) -> str:
-        try:
-            path = self.diff.relative_to(self.root)
-        except ValueError:
-            raise InputError("release transition --diff must lie inside --root") from None
-        if not path.parts or ".." in path.parts:
-            raise InputError("release transition --diff must be a repository file path")
-        return path.as_posix()
-
     def show(self, path: Path) -> str:
         try:
             return path.resolve().relative_to(self.root.resolve()).as_posix()
@@ -225,22 +206,18 @@ class Outcome:
 class Git:
     """The repository's newest release tag and a file's bytes at a tag."""
 
-    def __init__(self, root: Path, ref: str = "HEAD"):
+    def __init__(self, root: Path):
         self.root = root
-        self.ref = ref
-
-    def at(self, ref: str):
-        return Git(self.root, ref)
 
     def _run(self, *argv: str, text: bool = True):
         try:
             return subprocess.run(["git", "-C", str(self.root), *argv], capture_output=True,
                                   text=text, check=False)
-        except (OSError, UnicodeError):
+        except OSError:
             return None
 
     def newest_tag(self) -> str | None:
-        result = self._run("describe", "--tags", "--abbrev=0", "--match", TAG_MATCH, self.ref)
+        result = self._run("describe", "--tags", "--abbrev=0", "--match", TAG_MATCH, "HEAD")
         if result is None or result.returncode != 0:
             return None
         return result.stdout.strip() or None
@@ -248,51 +225,6 @@ class Git:
     def has_tag(self, tag: str) -> bool:
         result = self._run("rev-parse", "--verify", "--quiet", "refs/tags/" + tag)
         return result is not None and result.returncode == 0
-
-    def _text(self, *argv: str) -> str:
-        result = self._run(*argv)
-        if result is None or result.returncode:
-            raise Unreadable(f"git cannot read {' '.join(argv)}")
-        return result.stdout
-
-    def resolve(self, ref: str) -> str:
-        sha = self._text("rev-parse", "--verify", ref + "^{commit}").strip()
-        if re.fullmatch(r"[0-9a-f]{40}", sha) is None:
-            raise Unreadable(f"git returned an invalid commit for {ref}")
-        return sha
-
-    def parents(self) -> list[str]:
-        row = self._text("rev-list", "--parents", "-n", "1", self.ref).split()
-        if (not row or row[0] != self.resolve(self.ref)
-                or any(re.fullmatch(r"[0-9a-f]{40}", sha) is None for sha in row)):
-            raise Unreadable("git returned an unreadable parent list")
-        return row[1:]
-
-    def tags(self) -> list[str]:
-        return self._text("tag", "--list", "v*").splitlines()
-
-    def tag_target(self, tag: str) -> str | None:
-        result = self._run("show-ref", "--verify", "--quiet", "refs/tags/" + tag)
-        if result is not None and result.returncode == 1:
-            return None
-        if result is None or result.returncode:
-            raise Unreadable(f"git cannot establish whether tag {tag} exists")
-        return self.resolve("refs/tags/" + tag)
-
-    def changed_files(self, parent: str) -> list[tuple[str, str, str, str]]:
-        raw = self._text("diff-tree", "-r", "--raw", "--no-abbrev", "--no-commit-id",
-                         "--no-renames", "--no-ext-diff", "-z", parent, self.ref, "--")
-        fields = raw.split("\0")
-        if fields.pop() != "" or len(fields) % 2:
-            raise Unreadable("git returned an unreadable release diff")
-        rows = []
-        for header, path in zip(fields[::2], fields[1::2]):
-            match = re.fullmatch(r":([0-7]{6}) ([0-7]{6}) [0-9a-f]{40} [0-9a-f]{40} ([A-Z])",
-                                 header)
-            if match is None or not path:
-                raise Unreadable("git returned an unreadable release diff entry")
-            rows.append((path, match[1], match[2], match[3]))
-        return rows
 
     def file_at(self, tag: str, path: str) -> bytes | None:
         """`path`'s bytes at `tag`; None when the tag's tree has no such file."""
@@ -718,23 +650,18 @@ def do_write(cfg: Config, git) -> Outcome:
     return outcome
 
 
-def do_check(cfg: Config, git, require_tags: str | None = None, *,
-             _contents: tuple[bytes, str] | None = None,
-             _transition: bool = True) -> Outcome:
+def do_check(cfg: Config, git, require_tags: str | None = None) -> Outcome:
     """--check. `require_tags`, what requires the release tags (see
     tags_requirement), turns a missing or unreadable tag into exit 2 instead
     of the offline path."""
     outcome = Outcome()
     errors = outcome.errors
+    new_bytes = read_bytes(cfg.catalog, cfg)
     shown = cfg.show(cfg.diff)
-    if _contents is None:
-        new_bytes = read_bytes(cfg.catalog, cfg)
-        try:
-            text = cfg.diff.read_text(encoding="utf-8")
-        except OSError as error:
-            raise InputError(f"{shown}: {error.strerror or error}; run --write") from error
-    else:
-        new_bytes, text = _contents
+    try:
+        text = cfg.diff.read_text(encoding="utf-8")
+    except OSError as error:
+        raise InputError(f"{shown}: {error.strerror or error}; run --write") from error
     try:
         diff = json.loads(text)
     except json.JSONDecodeError as error:
@@ -762,47 +689,7 @@ def do_check(cfg: Config, git, require_tags: str | None = None, *,
     tag = git.newest_tag()
     old_bytes = None
     reason = "git names no release tag v* reachable from HEAD (a clone without tags)"
-    future = (is_tag(recorded_tag) and is_tag(tag)
-              and version_key(tag_version(recorded_tag)) > version_key(tag_version(tag)))
-    # A tag on some other commit cannot authenticate a newly written VERSION.
-    # Ordinary commits after a release retain the tagged VERSION and use the
-    # original tagged-catalog path below.
-    wrong_tag_version = False
-    if _transition and tag is not None and recorded_tag == tag:
-        try:
-            tagged_version = git.file_at(tag, "VERSION")
-        except Unreadable:
-            # The original catalog read below decides required-tags refusal
-            # or the unchanged offline reconstruction path.
-            tagged_version = None
-        if tagged_version is not None:
-            try:
-                value = tagged_version.decode("utf-8").strip()
-            except UnicodeError:
-                value = ""
-            if version_key(value) is not None:
-                try:
-                    current_version = (cfg.root / "VERSION").read_text(
-                        encoding="utf-8").strip()
-                except OSError as error:
-                    raise InputError(f"cannot read VERSION: {error}") from error
-                wrong_tag_version = value != current_version
-    if _transition and (future or wrong_tag_version):
-        try:
-            _, version = validate_release_transition(cfg, git)
-            if (new_bytes != git.file_at(git.ref, cfg.catalog_in_git)
-                    or text.encode("utf-8") != git.file_at(git.ref, cfg.diff_in_git)
-                    or read_bytes(cfg.root / "VERSION", cfg)
-                    != git.file_at(git.ref, "VERSION")):
-                raise Finding("untagged release transition must match the committed files")
-            if recorded_tag != "v" + version:
-                raise Finding("untagged release reset must name the forward VERSION")
-        except Finding as error:
-            errors.append(str(error))
-            return outcome
-        old_bytes, tag = new_bytes, recorded_tag
-        outcome.notes.append(f"admitted untagged release transition to {tag}")
-    elif tag is not None:
+    if tag is not None:
         if recorded_tag != tag:
             errors.append(f"from.tag is {recorded_tag!r}, but the newest release tag reachable "
                           f"from HEAD is {tag}: run --write (a release's --reset moves it to "
@@ -853,86 +740,6 @@ def do_check(cfg: Config, git, require_tags: str | None = None, *,
     return outcome
 
 
-def _snapshot_file(git, ref: str, path: str) -> bytes:
-    data = git.file_at(ref, path)
-    if data is None:
-        raise Finding(f"release transition requires {path} at {ref}")
-    return data
-
-
-def release_stamp_diffs(cfg: Config, git, new_bytes: bytes, diff: dict,
-                        to_version: str, previous: str) -> list[tuple[dict, bool]]:
-    """The existing stamp's base/chain and version rules, without writing assets."""
-    base = diff["from"]["tag"]
-    if not is_tag(previous) or version_key(tag_version(previous)) >= version_key(to_version):
-        raise Finding(f"--previous-tag {previous} does not sort below the release {to_version}")
-    if base == previous:
-        diffs = [(diff, True)]
-    elif is_candidate(base) and version_key(tag_version(base)) > version_key(tag_version(previous)):
-        diffs = [(build_diff(git.file_at(previous, cfg.catalog_in_git), new_bytes, previous, cfg),
-                  False), (diff, True)]
-    else:
-        raise Finding(f"the checked-in diff starts at {base}, the newest release tag HEAD reaches, "
-                      f"but --previous-tag is {previous}: merge the previous release first")
-    errors = stamp_findings(diffs, to_version)
-    if errors:
-        raise Finding("; ".join(dict.fromkeys(errors)))
-    return diffs
-
-
-def validate_release_transition(cfg: Config, git, *, expected_parent: str | None = None,
-                                allow_tagged: bool = False) -> tuple[str, str]:
-    """Admit only the committed two-file reset; never borrow runtime evidence."""
-    parents = git.parents()
-    if len(parents) != 1 or parents[0] == git.resolve(git.ref):
-        raise Finding("release transition requires a single parent")
-    parent = parents[0]
-    if expected_parent is not None and parent != expected_parent:
-        raise Finding("release bump parent does not equal the phase1 dispatch SHA")
-    catalog = _snapshot_file(git, git.ref, cfg.catalog_in_git)
-    if _snapshot_file(git, parent, cfg.catalog_in_git) != catalog:
-        raise Finding("release transition requires unchanged catalog bytes versus parent")
-    rows = git.changed_files(parent)
-    diff_path = cfg.diff_in_git
-    if (len(rows) > 2 or any(row[0] not in {"VERSION", diff_path} for row in rows)
-            or any(row[1:] != ("100644", "100644", "M") for row in rows)):
-        raise Finding("release transition must modify exactly VERSION and "
-                      f"{diff_path} as regular files")
-    try:
-        before = _snapshot_file(git, parent, "VERSION").decode("utf-8").strip()
-        version = _snapshot_file(git, git.ref, "VERSION").decode("utf-8").strip()
-    except UnicodeError as error:
-        raise Finding("release transition requires a valid forward VERSION") from error
-    if (version_key(before) is None or version_key(version) is None
-            or version_key(version) <= version_key(before)):
-        raise Finding("release transition requires a valid forward VERSION")
-    if len(rows) != 2 or {row[0] for row in rows} != {"VERSION", diff_path}:
-        raise Finding("release transition must modify exactly VERSION and "
-                      f"{diff_path} as regular files")
-    tag = "v" + version
-    target = git.tag_target(tag)
-    if target is not None and not (allow_tagged and target == git.resolve(git.ref)):
-        raise Finding(f"release tag {tag} already exists at another commit or before transition")
-    parent_diff = _snapshot_file(git, parent, diff_path)
-    try:
-        text = parent_diff.decode("utf-8")
-        diff = json.loads(text)
-    except (UnicodeError, json.JSONDecodeError) as error:
-        raise Finding("release parent catalog diff is unreadable") from error
-    checked = do_check(cfg, git.at(parent), require_tags="release transition",
-                       _contents=(catalog, text), _transition=False)
-    if checked.code():
-        if checked.status:
-            raise InputError("; ".join(checked.errors))
-        raise Finding("; ".join(checked.errors))
-    previous = previous_tag(parse_version(version), parse_tags(git.tags()))
-    release_stamp_diffs(cfg, git, catalog, diff, version, previous)
-    reset = render(build_diff(catalog, catalog, tag, cfg)).encode("utf-8")
-    if _snapshot_file(git, git.ref, diff_path) != reset:
-        raise Finding("release transition requires the exact catalog reset for forward VERSION")
-    return parent, version
-
-
 def stamp_findings(diffs: list, to_version: str) -> list:
     """What forbids stamping each of `diffs`, a (diff, exact) pair, as release
     `to_version`: a removal, then the minor-release rule as ONE line for them
@@ -968,24 +775,6 @@ def do_stamp(cfg: Config, git, to_version: str, previous_tag: str, output: Path,
     # A release reads its tags: the offline path never stamps.
     outcome = do_check(cfg, git, require_tags="--stamp")
     if outcome.status or outcome.errors or not cfg.diff.is_file():
-        return outcome
-    # Before phase 2 tags, HEAD already contains the reset. Rebuild the assets
-    # from its checked parent diff, retaining the original stamp constraints.
-    head_diff = json.loads(cfg.diff.read_text(encoding="utf-8"))
-    if (head_diff.get("from", {}).get("tag") == "v" + to_version
-            and git.newest_tag() != "v" + to_version):
-        parent, version = validate_release_transition(cfg, git)
-        if version != to_version:
-            raise Finding("pending release VERSION differs from --to-version")
-        new_bytes = _snapshot_file(git, git.ref, cfg.catalog_in_git)
-        diff = json.loads(_snapshot_file(git, parent, DIFF).decode("utf-8"))
-        diffs = release_stamp_diffs(cfg, git, new_bytes, diff, to_version, previous_tag)
-        if len(diffs) == 2 and chain_output is None:
-            raise InputError("name --chain-output for the candidate chain step")
-        outcome = Outcome()
-        for (stamp, _), path in zip(diffs, (output, chain_output)):
-            write_text(path, render(stamped_copy(stamp, to_version)))
-            outcome.notes.append(f"wrote {cfg.show(path)}: {stamp['from']['tag']} -> {to_version}")
         return outcome
     outcome.notes = [note for note in outcome.notes if not note.endswith("... OK")]
     errors = outcome.errors
