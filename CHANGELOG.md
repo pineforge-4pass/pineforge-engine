@@ -27,9 +27,9 @@ version number follows semantic versioning over the surfaces the
   call site retains its own appended source history and computes the
   nearest-rank percentile over the requested recent values, within the
   documented historical limit.
-- `ta.pvt` now has no value (`na`) on the first bar of its series, as on
-  TradingView, where the term needs the previous bar's close; it returned 0 on
-  that bar before; every later value is unchanged.
+- `ta.pvt` and `ta.obv` now have no value (`na`) on the first bar of their
+  series, as on TradingView, where each term needs the previous bar's close;
+  they returned 0 on that bar before; every later value is unchanged.
 - An exit given in ticks and without `from_entry` that follows a market entry in
   the same execution now takes effect when that entry fills, as a named exit does.
 - **Strategy modules built against 1.10.x must be rebuilt.** The C++ script
