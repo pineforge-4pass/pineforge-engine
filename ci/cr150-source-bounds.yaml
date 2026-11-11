@@ -107,7 +107,12 @@ ceilings:
   # temporaries of the three setter refusal messages in the engine header, and
   # the message string and its temporary in the timezone refusal. Each builds
   # one short message, once, when a value is refused: 1415 -> 1418.
-  unreviewed: 1418
+  # Three more unreviewed groups: the failure arguments, the rule text and the
+  # message text that the refusal of a script timeframe the input timeframe
+  # cannot build assembles in src/source/pine_adapter.cpp (each is built once,
+  # on the refusal path). None is bounded in the gate's sense: no fixed input
+  # is declared for them: 1418 -> 1421.
+  unreviewed: 1421
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -920,6 +925,7 @@ entries:
   - {id: "U0802", file: "src/source/pine_adapter.cpp", symbol: "after_close", ops: ["decl", "grow"], container: "std::vector<PendingEntry>", owner: "source-layer", phase: "bar", state: "pending-flat-memory", inventory: "P08", grows_with: ["live-orders"], line: 24540}
   - {id: "U0803", file: "src/source/pine_adapter.cpp", symbol: "ages", ops: ["decl", "grow"], container: "std::vector<std::size_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 6387}
   - {id: "U0804", file: "src/source/pine_adapter.cpp", symbol: "anchored_relative_legs_", ops: ["grow"], container: "unresolved by the index: anchored_relative_legs_.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 14280}
+  - {id: "U1738", file: "src/source/pine_adapter.cpp", symbol: "args", ops: ["decl", "grow"], container: "RunFailureArgs", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 30756}
   - {id: "U0805", file: "src/source/pine_adapter.cpp", symbol: "armed", ops: ["assign", "decl", "grow"], container: "std::vector<GlobalExit>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 4896}
   - {id: "U0806", file: "src/source/pine_adapter.cpp", symbol: "askable_origins", ops: ["grow"], container: "unresolved by the index: askable_origins.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 3661}
   - {id: "U0807", file: "src/source/pine_adapter.cpp", symbol: "behind", ops: ["decl", "grow"], container: "std::vector<native_order::RequestHandle>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 25504}
@@ -1053,6 +1059,7 @@ entries:
   - {id: "U0945", file: "src/source/pine_adapter.cpp", symbol: "roster", ops: ["grow"], container: "unresolved by the index: roster.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 23435}
   - {id: "U1626", file: "src/source/pine_adapter.cpp", symbol: "roster_roots", ops: ["assign", "decl", "grow"], container: "std::vector<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1116}
   - {id: "U0946", file: "src/source/pine_adapter.cpp", symbol: "rows", ops: ["assign", "decl", "grow"], container: "std::vector<Ranked>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 940}
+  - {id: "U1739", file: "src/source/pine_adapter.cpp", symbol: "rule", ops: ["assign", "decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 30739}
   - {id: "U0947", file: "src/source/pine_adapter.cpp", symbol: "same_bar_defaults", ops: ["decl", "grow"], container: "std::vector<std::pair<std::uint64_t, native_order::RequestHandle>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 14751}
   - {id: "U0948", file: "src/source/pine_adapter.cpp", symbol: "seen", ops: ["decl", "grow"], container: "std::unordered_set<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 22115}
   - {id: "U0949", file: "src/source/pine_adapter.cpp", symbol: "selected", ops: ["assign", "decl", "grow"], container: "std::vector<std::uint64_t>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 1321}
@@ -1075,6 +1082,7 @@ entries:
   - {id: "U0967", file: "src/source/pine_adapter.cpp", symbol: "superseded_siblings", ops: ["decl", "grow"], container: "std::vector<native_order::RequestHandle>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 8309}
   - {id: "U0968", file: "src/source/pine_adapter.cpp", symbol: "taken", ops: ["assign", "decl", "grow"], container: "std::vector<std::pair<double, double>>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 17744}
   - {id: "U0969", file: "src/source/pine_adapter.cpp", symbol: "terminal_review_handles", ops: ["decl", "grow"], container: "std::vector<native_order::RequestHandle>", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 22144}
+  - {id: "U1740", file: "src/source/pine_adapter.cpp", symbol: "text", ops: ["append", "assign", "decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 6540}
   - {id: "U0970", file: "src/source/pine_adapter.cpp", symbol: "throttled_reopen_rearm_", ops: ["grow"], container: "unresolved by the index: throttled_reopen_rearm_.push_back(...)", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 16456}
   - {id: "U0971", file: "src/source/pine_adapter.cpp", symbol: "timezone", ops: ["assign", "decl"], container: "std::string", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 2737}
   - {id: "U0972", file: "src/source/pine_adapter.cpp", symbol: "tombstones", ops: ["decl", "subscript"], container: "std::map<const PlacementTable*,              std::map<std::uint64_t, std::unique", owner: "source-layer", phase: "unclassified", state: "unreviewed", line: 933}

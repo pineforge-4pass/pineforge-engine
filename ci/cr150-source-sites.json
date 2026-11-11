@@ -32904,6 +32904,17 @@
   },
   {
    "file": "src/source/pine_adapter.cpp",
+   "symbol": "text",
+   "scope": [
+    ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
+    "void PineExecutionAdapter :: cancel_exit_orders_for_full_close ( const SourceId & from_entry ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "text = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
    "symbol": "matches",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
@@ -41268,6 +41279,118 @@
    "cls": "grow",
    "spelling": "old_ . emplace ( . . . )",
    "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "rule",
+   "scope": [
+    "namespace pineforge :: source #9",
+    "namespace #1",
+    "void throw_timeframe_refusal ( const NativeRunSpec & spec , NativeRunSpecValidation validation ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "rule",
+   "scope": [
+    "namespace pineforge :: source #9",
+    "namespace #1",
+    "void throw_timeframe_refusal ( const NativeRunSpec & spec , NativeRunSpecValidation validation ) #1",
+    "switch ( native_calendar :: compatibility ( * source , * script ) . pairing ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "rule = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "rule",
+   "scope": [
+    "namespace pineforge :: source #9",
+    "namespace #1",
+    "void throw_timeframe_refusal ( const NativeRunSpec & spec , NativeRunSpecValidation validation ) #1",
+    "switch ( native_calendar :: compatibility ( * source , * script ) . pairing ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "rule = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: source #9",
+    "namespace #1",
+    "void throw_timeframe_refusal ( const NativeRunSpec & spec , NativeRunSpecValidation validation ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "RunFailureArgs",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "text",
+   "scope": [
+    "namespace pineforge :: source #9",
+    "namespace #1",
+    "void throw_timeframe_refusal ( const NativeRunSpec & spec , NativeRunSpecValidation validation ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge :: source #9",
+    "namespace #1",
+    "void throw_timeframe_refusal ( const NativeRunSpec & spec , NativeRunSpecValidation validation ) #1",
+    "if ( lower ! = nullptr ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "args . emplace_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "text",
+   "scope": [
+    "namespace pineforge :: source #9",
+    "namespace #1",
+    "void throw_timeframe_refusal ( const NativeRunSpec & spec , NativeRunSpecValidation validation ) #1",
+    "if ( lower ! = nullptr ) #1"
+   ],
+   "cls": "append",
+   "spelling": "text + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "text",
+   "scope": [
+    "namespace pineforge :: source #9",
+    "namespace #1",
+    "void throw_timeframe_refusal ( const NativeRunSpec & spec , NativeRunSpecValidation validation ) #1"
+   ],
+   "cls": "append",
+   "spelling": "text + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_adapter.cpp",
+   "symbol": "text",
+   "scope": [
+    "namespace pineforge :: source #9",
+    "namespace #1",
+    "void throw_timeframe_refusal ( const NativeRunSpec & spec , NativeRunSpecValidation validation ) #1"
+   ],
+   "cls": "append",
+   "spelling": "text + = . . .",
+   "ordinal": 2
   },
   {
    "file": "src/source/pine_aux_security.cpp",
