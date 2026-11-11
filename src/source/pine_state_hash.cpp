@@ -805,6 +805,9 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.b(risk_.max_intraday_loss_percent); f.d(risk_.max_position_size); f.b(risk_.halted);
     f.d(risk_.observed_peak_equity); f.d(risk_.observed_max_drawdown);
     f.i(risk_.intraday_block_day); f.b(risk_.intraday_cancel_pending);
+    // Decision state of the max-drawdown rule, folded only under a drawdown
+    // limit, so every run without one keeps its digest.
+    if (risk_.max_drawdown > 0.0) f.d(risk_.fill_peak_equity);
     hash_short_seed_plan(f, short_seed_);
     hash_short_seed_plan(f, pending_short_seed_.plan);
     f.u(pending_short_seed_.expected_open_epoch); f.b(pending_short_seed_.ready);

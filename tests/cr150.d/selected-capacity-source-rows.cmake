@@ -1,0 +1,3 @@
+list(APPEND TEST_SOURCES test_selected_capacity_source_rows)
+pineforge_add_unit_test(test_selected_capacity_source_rows)
+set_tests_properties(test_selected_capacity_source_rows PROPERTIES LABELS "selected_capacity")
