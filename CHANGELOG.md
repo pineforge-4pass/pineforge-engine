@@ -29,8 +29,8 @@ version number follows semantic versioning over the surfaces the
   read through `strategy_state_query_status_v1`.
 - Non-positive or NaN `mintick` or `pointvalue` values in `--syminfo`, and
   `path_order` modes outside 0, 1 and 2, now produce typed refusals instead of
-  being ignored or reset to AUTO. Invalid point values use the existing symbol
-  metadata error.
+  being ignored or reset to AUTO. An invalid `mintick` is refused as `symbol_feeds_refused` with reason
+  `syminfo_mintick_invalid`; an invalid point value uses the existing symbol metadata error, `symbol_metadata_rejected` with field `point_value`.
 - A percent-of-equity default quantity above 100 percent is now capped at 100 percent of equity when `margin_long` and `margin_short` are both 0 (#805).
 - With `process_orders_on_close` and the default FIFO close rule, the named `strategy.exit` calls of a reversing `strategy.entry` with an explicit quantity, placed in the same execution after a `strategy.close` of the old position, are now sized from the new entry's own quantity: a percentage exit takes its share of the new entry and an absolute-quantity exit keeps its quantity, instead of being sized from a basis reduced by the old position (#803).
 - Without `process_orders_on_close`, the named `strategy.exit` calls placed with a reversing `strategy.entry` of explicit quantity now take their percentage from the new entry when its size differs from the position it replaces, and a take-profit given as an absolute quantity now fires; before, the percentage was taken from the position being replaced and an absolute-quantity take-profit never fired (#803).
