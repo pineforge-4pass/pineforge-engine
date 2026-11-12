@@ -1671,7 +1671,7 @@ the rule gives 9.9 + 9.89).
 | P5 | **Test asymmetry:** 430 adapter test files vs 14 native when this plan was written (on this tree 486 `tests/*.cpp` name `source::PineStrategyHost`, 128 `NativeStrategyHost`) | native-only tests in every lane (§3.1 b) | O |
 | P6 | **Stream vs batch.** The stream refuses monthly input, mixed modes, in-session gaps, security feeds and source setters, and tick input under an FX curve (any non-empty curve until the FX stream audit) (`native-engine.md`, "Stream limitations (current)") | L5 and L6 must state which refusals are generic and which are deliberate source limits | S |
 | P7 | **C ABI variant growth** | §2.iii hardening rules | S |
-| P8 | **Unverified in the inputs:** whether `execution::LifecycleEffects` (execution.hpp:136-139) is ever non-empty from the Pine path, else `PlacementSnapshot::legs` (pine_adapter.hpp:385) is the only live lifecycle (O); the `strategy.risk.allow_entry_in` setter chain beyond `set_pine_risk_direction` pine_strategy_host.cpp:1245 → `set_risk_direction` pine_adapter.cpp:27365 (O); what the ABI receipts pin (F); the probe corpus itself lives outside this tree (F) | verify inside the lane that touches each | F O |
+| P8 | **Unverified in the inputs:** whether `execution::LifecycleEffects` (execution.hpp:136-139) is ever non-empty from the Pine path, else `PlacementSnapshot::legs` (pine_adapter.hpp:385) is the only live lifecycle (O); the `strategy.risk.allow_entry_in` setter chain beyond `set_pine_risk_direction` pine_strategy_host.cpp:1245 → `set_risk_direction` pine_adapter.cpp:27365 (O); what the ABI receipts pin (F); the probe corpus itself lives outside this tree (F) | verify inside the work item that touches each | F O |
 
 ### 4.3 Open design questions (supervisor level)
 
