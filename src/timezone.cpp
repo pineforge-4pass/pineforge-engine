@@ -79,7 +79,9 @@ const std::string& resolve_script_timezone(const std::string& timezone, const ch
             return timezone;
         }
     }
-    if (!native_calendar::timezone_accepted(timezone)) {
+    // A failed lookup propagates before any memo write; only an absent or
+    // invalid zone name is diagnosed as an incorrect argument.
+    if (!native_calendar::timezone_lookup_accepted(timezone)) {
         const std::string english = std::string("Incorrect `timezone` value for the ") + function
             + "() function: \"" + timezone
             + "\". The value must be a string in either UTC/GMT notation "

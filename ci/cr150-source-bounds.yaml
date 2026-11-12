@@ -107,7 +107,11 @@ ceilings:
   # temporaries of the three setter refusal messages in the engine header, and
   # the message string and its temporary in the timezone refusal. Each builds
   # one short message, once, when a value is refused: 1415 -> 1418.
-  unreviewed: 1418
+  # One more unreviewed group on a failure path: the message string of the
+  # timezone database lookup refusal in the native calendar (its declaration,
+  # assignment and appends). It builds one short message, once, when a lookup
+  # fails: 1418 -> 1419.
+  unreviewed: 1419
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -729,6 +733,7 @@ entries:
   - {id: "U0599", file: "src/native_calendar.cpp", symbol: "input", ops: ["grow"], container: "unresolved by the index: input.assign(...)", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1167}
   - {id: "U0600", file: "src/native_calendar.cpp", symbol: "literal", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1414}
   - {id: "U0601", file: "src/native_calendar.cpp", symbol: "merge_spans", ops: ["decl"], container: "std::vector<EpochSpan>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 346}
+  - {id: "U1853", file: "src/native_calendar.cpp", symbol: "message", ops: ["append", "assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 819}
   - {id: "U0602", file: "src/native_calendar.cpp", symbol: "n", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 141}
   - {id: "U0603", file: "src/native_calendar.cpp", symbol: "norm", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1169}
   - {id: "U0604", file: "src/native_calendar.cpp", symbol: "out", ops: ["assign", "decl", "grow"], container: "std::vector<EpochSpan>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 72}
