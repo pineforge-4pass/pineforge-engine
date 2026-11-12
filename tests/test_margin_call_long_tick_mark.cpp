@@ -27,7 +27,7 @@ struct Call {
 class LongBook final : public source::PineStrategyHost {
 public:
     LongBook(double capital, double tick, double quantity, double fee = 0.0,
-             double share = 100.0)
+             double share = 100.0, int pyramiding = 1)
         : quantity_(quantity), tick_(tick) {
         attach_pine_execution_adapter();
         set_syminfo_mintick(tick);
@@ -39,15 +39,17 @@ public:
         config_.commission_value = fee;
         config_.margin_long = 100.0;
         config_.margin_short = 100.0;
-        config_.pyramiding = 1;
+        config_.pyramiding = pyramiding;
         configure_pine_strategy(config_);
     }
 
     void on_source_bar(const Bar&) override {
         if (pine_bar_index() == 0)
             strategy_entry("L", true, nan, nan, quantity_);
-        if (pine_bar_index() == close_bar)
-            strategy_close_all();
+        if (pine_bar_index() == close_bar) {
+            if (close_entry) strategy_close("L");
+            else strategy_close_all();
+        }
         if (pine_bar_index() == 3)
             position_at_bar_3 = physical_position().signed_units;
         if (pine_bar_index() == 1) {
@@ -63,6 +65,8 @@ public:
             reader.set_staged_configuration(staged);
             equity_at_fill = reader.source_margin_money(
                 position_avg_price(), 0).equity;
+            if (std::isfinite(requirement_mark))
+                requirement = adapter_.source_margin_money(requirement_mark, 0);
         }
     }
 
@@ -77,9 +81,12 @@ public:
     }
 
     int close_bar = 2;
+    bool close_entry = false;
     double entered = 0.0;
     double position_at_bar_3 = nan;
     double equity_at_fill = nan;
+    double requirement_mark = nan;
+    source::PineExecutionAdapter::SourceMarginMoney requirement;
 
 private:
     source::PineStrategyConfig config_;
@@ -377,6 +384,152 @@ void close_point_call_after_script() {
     expect_calls(book, {{2, 2.0, 1.0}});
     assert(std::abs(book.position_at_bar_3 - (-1.0)) < 1e-10);
 }
+
+void walk_call_then_close() {
+    // Rule-derived; TradingView's export 3 shows the same shape: an open sale,
+    // then a fresh shortfall sold at the same bar's close after the script.
+    // r10 below rounds half-up to ten significant digits; equity is unrounded.
+    // T=36744.079716, F=1, E=36744.079816, lot=.000001, tick=.01,
+    // margin=100, fee=0: cash=E-T*F=.0001. Fill: required=r10(T*F)
+    // =36744.07972 < E, so no call. Bar 2's open is nearer its low:
+    // |125-125|=0 < |300.10-125|=175.10; walk=125,125,300.10,300.05.
+    // Point 0: T*125=4593009.9645, required=r10(...)=4593009.965,
+    // equity=.0001+4593009.9645=4593009.9646, deficit=.0004.
+    // cover=floor(.0004/125/lot)*lot=3*lot; sale=4*cover=12*lot=.000012.
+    // R=T-.000012=36744.079704; cash=.0001+.000012*125=.0016.
+    // Same-price re-check and point 1: R*125=4593009.963 exactly,
+    // required=4593009.963, equity=.0016+4593009.963=4593009.9646,
+    // deficit=-.0016: no call, cover=0, sale=0, nothing owed.
+    // Point 2: R*300.10=11026898.3191704, required=11026898.32,
+    // equity=.0016+11026898.3191704=11026898.3207704,
+    // deficit=-.0007704: no call, cover=0, sale=0.
+    // Point 3 (AFTER the script): R*300.05=11025061.1151852,
+    // required=11025061.12, equity=.0016+11025061.1151852=11025061.1167852,
+    // deficit=.0032148. Since 10*300.05*lot=.0030005 < .0032148
+    // < 11*300.05*lot=.00330055, cover=10*lot, sale=40*lot=.000040.
+    // R2=R-.000040=36744.079664; cash=.0016+.000040*300.05=.013602.
+    // Same-price re-check: R2*300.05=11025061.1031832,
+    // required=11025061.10, equity=.013602+11025061.1031832=11025061.1167852,
+    // deficit=-.0167852: no call, cover=0, sale=0, nothing owed.
+    // All four bar 3 marks are also 300.05: that same covered book means
+    // no call there. Skipping point 3 instead leaves R and cash=.0016,
+    // so bar 3's open finds the .0032148 deficit and sells .000040 there.
+    LongBook book(36744.079816, 0.01, 36744.079716);
+    // No carried close_all at bar 3's open: it would end the walk first.
+    book.close_bar = 3;
+    const std::vector<Bar> bars = {
+        bar(0, 1.0, 1.0, 1.0, 1.0),
+        bar(1, 1.0, 1.0, 1.0, 1.0),
+        bar(2, 125.0, 300.10, 125.0, 300.05),
+        bar(3, 300.05, 300.05, 300.05, 300.05)};
+    book.run(bars.data(), static_cast<int>(bars.size()));
+    const double open_cover = std::floor(0.0004 / bars[2].open / lot) * lot;
+    const double close_cover = std::floor(0.0032148 / bars[2].close / lot) * lot;
+    expect_calls(book, {{2, bars[2].open, 4.0 * open_cover},
+                       {2, bars[2].close, 4.0 * close_cover}});
+}
+
+double signal_units(double capital, double close) {
+    const auto r10 = [](double value) {
+        const double scale = std::pow(10.0, 9.0 - std::floor(std::log10(value)));
+        return std::floor(value * scale + 0.5) / scale;
+    };
+    const double signal_price = std::floor(close + 0.5);
+    return std::floor(r10(capital) / r10(signal_price) / lot) * lot;
+}
+
+void expect_export(double capital, std::int64_t first_day, std::vector<Bar> bars,
+                   const std::vector<Call>& calls, double entry_price,
+                   double exit_price, double remaining, int places) {
+    for (std::size_t i = 0; i < bars.size(); ++i)
+        bars[i].timestamp = (first_day + static_cast<std::int64_t>(i)) * 86'400'000;
+    LongBook book(capital, 1.0, nan, 0.0, 100.0, 0);
+    book.close_bar = 3;
+    book.close_entry = true;
+    book.run(bars.data(), static_cast<int>(bars.size()));
+    const double units = signal_units(capital, bars.front().close);
+    // Less than half a lot, allowing binary representation at this scale.
+    assert(std::abs(book.entered - units) < lot / 2.0);
+    expect_calls(book, calls);
+    assert(book.trade_count() == static_cast<int>(calls.size()) + 1);
+    for (int i = 0; i < book.trade_count(); ++i) {
+        assert(book.closed_trade_entry_bar_index(i) == 1);
+        assert(book.closed_trade_entry_price(i) == entry_price);
+    }
+    const int last = book.trade_count() - 1;
+    assert(book.closed_trade_exit_comment(last) != "Margin call");
+    assert(book.closed_trade_exit_bar_index(last) == 4);
+    assert(book.closed_trade_exit_price(last) == exit_price);
+    const double scale = std::pow(10.0, places);
+    assert(std::floor(book.closed_trade_size(last) * scale + 0.5) / scale == remaining);
+}
+
+void export1_one_call_above_ten_digits() {
+    // TradingView's List of Trades for this script: one call, then the whole close.
+    expect_export(9579831952.43, 16381, { // 2014-11-07 UTC
+        bar(0, 349.99, 352.15, 340.40, 342.16),
+        bar(1, 342.16, 347.75, 340.60, 345.39),
+        bar(2, 346.19, 366.35, 343.40, 364.77),
+        bar(3, 365.37, 377.77, 357.30, 366.43),
+        bar(4, 366.43, 371.52, 360.28, 370.65)},
+        {{2, 343.0, 0.000372}}, 342.0, 366.0, 28011204.5376, 4);
+}
+
+void export2_extreme_then_close() {
+    // TradingView's List of Trades for this script: high and close calls on one bar.
+    expect_export(1017605642.17, 17034, { // 2016-08-21 UTC
+        bar(0, 577.70, 583.99, 576.01, 577.55),
+        bar(1, 577.55, 585.95, 572.50, 582.78),
+        bar(2, 582.78, 584.99, 576.00, 580.23),
+        bar(3, 580.27, 582.10, 575.40, 577.58),
+        bar(4, 577.65, 578.75, 571.16, 575.71)},
+        {{2, 585.0, 0.000468}, {2, 580.0, 0.000264}},
+        578.0, 578.0, 1760563.39373, 5);
+}
+
+void export3_open_sale_then_close() {
+    // TradingView's List of Trades for this script: owed open sale and fresh close call.
+    expect_export(3141592653.17, 16570, { // 2015-05-15 UTC
+        bar(0, 237.12, 239.28, 235.12, 237.37),
+        bar(1, 237.39, 237.40, 234.00, 235.66),
+        bar(2, 235.43, 237.00, 234.15, 235.97),
+        bar(3, 235.69, 236.94, 231.44, 232.87),
+        bar(4, 233.03, 234.24, 230.86, 231.40)},
+        {{1, 236.0, 0.000548}, {2, 235.0, 0.000548}, {2, 236.0, 0.000560}},
+        237.0, 233.0, 13255665.2009, 4);
+}
+
+double requirement_at(double units, double mark) {
+    LongBook book(units + 100.0, 1.0, units);
+    book.requirement_mark = mark;
+    const std::vector<Bar> bars = {
+        bar(0, 1.0, 1.0, 1.0, 1.0), bar(1, 1.0, 1.0, 1.0, 1.0)};
+    book.run(bars.data(), static_cast<int>(bars.size()));
+    assert(book.entered == units);
+    assert(book.requirement.valid && book.requirement.long_tick_book);
+    expect_calls(book, {});
+    return book.requirement.required;
+}
+
+void requirement_below_ten_digits() {
+    // The lot count exceeds the exact-count limit, selecting binary rounding.
+    assert(requirement_at(9999999999.4, 1.0) == 9999999999.0);
+}
+
+void requirement_above_ten_digits() {
+    assert(requirement_at(12345678904.99, 1.0) == 12345678905.0);
+}
+
+void requirement_unit_half() {
+    assert(requirement_at(10000000000.5, 1.0) == 10000000001.0);
+}
+
+void requirement_decimal_above_ten_digits() {
+    // Exact lot and tick counts give 12345678904.99 before unit rounding.
+    const double required = requirement_at(123456789.0499, 100.0);
+    assert(required == 12345678905.0);
+    assert(required == requirement_at(12345678904.99, 1.0));
+}
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -404,6 +557,14 @@ int main(int argc, char* argv[]) {
         {"covered_on_tick_explicit_quantity", [] { covered_on_tick(false); }},
         {"covered_on_tick_default_quantity", [] { covered_on_tick(true); }},
         {"close_point_call_after_script", close_point_call_after_script},
+        {"walk_call_then_close", walk_call_then_close},
+        {"export1_one_call_above_ten_digits", export1_one_call_above_ten_digits},
+        {"export2_extreme_then_close", export2_extreme_then_close},
+        {"export3_open_sale_then_close", export3_open_sale_then_close},
+        {"requirement_below_ten_digits", requirement_below_ten_digits},
+        {"requirement_above_ten_digits", requirement_above_ten_digits},
+        {"requirement_unit_half", requirement_unit_half},
+        {"requirement_decimal_above_ten_digits", requirement_decimal_above_ten_digits},
     };
     if (argc == 1) {
         for (const auto& row : rows)

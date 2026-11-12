@@ -650,6 +650,13 @@ double source_money_round(double value) noexcept {
     return value < 0.0 ? -rounded : rounded;
 }
 
+// Round half up to ten significant digits, never coarser than one currency unit.
+double source_money_round_unit_capped(double value) noexcept {
+    if (!std::isfinite(value) || std::abs(value) < 10000000000.0)
+        return source_money_round(value);
+    return std::round(value);
+}
+
 // TV's market band is inclusive against its tick-index product, not a strict
 // decimal-price test: band-{reversal,flat}-equal admits 3865.5, whereas
 // fractional-fill-band and band-flat-residue refuse the 3386.68 tick product
@@ -722,10 +729,20 @@ std::optional<double> decimal_long_margin_requirement(
         significand /= 10;
         ++exponent;
     }
-    // Powers through 10^22 are exact binary64 integers. The significand
-    // has at most ten digits, so one division (or multiplication) returns
-    // the correctly rounded double of the rounded decimal requirement.
+    // Keep the original ten-digit exponent guard before applying the cap,
+    // so unsupported decimal scales still leave the caller on its binary path.
     if (exponent < -22 || exponent > 22) return std::nullopt;
+    if (exponent > 0) {
+        // Keep every integer digit; discard only fractional decimal places.
+        exponent = *lot_exponent + *tick_exponent;
+        divisor = 1;
+        while (exponent < 0) {
+            divisor *= 10;
+            ++exponent;
+        }
+        significand = product / divisor;
+        if (divisor > 1 && product % divisor >= divisor / 2) ++significand;
+    }
     double scale = 1.0;
     for (int i = 0; i < std::abs(exponent); ++i) scale *= 10.0;
     return exponent < 0 ? static_cast<double>(significand) / scale
@@ -18345,7 +18362,9 @@ PineExecutionAdapter::SourceMarginMoney PineExecutionAdapter::source_margin_mone
         if (std::isfinite(lot_value) && lot_value < 1.0) {
             // ab9714be pine_fills.cpp:11491-11499: a sub-unit lot puts the
             // requirement on TradingView's ten-significant-digit money ladder.
-            money.required = source_money_round(money.exact_required);
+            money.required = money.long_tick_book
+                ? source_money_round_unit_capped(money.exact_required)
+                : source_money_round(money.exact_required);
             if (money.long_tick_book) {
                 if (const auto rounded = decimal_long_margin_requirement(
                         money.held, *staged_.quantity_grid, mark_price,
@@ -25056,8 +25075,10 @@ void PineExecutionAdapter::on_bar_close_policy(
     // The native callback frame remains current after the source script
     // returns. Reproduce the legacy once-per-script-bar margin checkpoint at
     // the adverse path extreme, unless the earlier open/path policy already
-    // applied a margin slice on this script bar.
-    if (last_margin_call_script_bar_ == context.script_bar_open_ms) return;
+    // applied a margin slice on this script bar. A qualifying long resumes
+    // its walk at the next unchecked point, including this bar's close.
+    if (last_margin_call_script_bar_ == context.script_bar_open_ms
+        && !(long_tick_margin_active_ && long_tick_margin_scope())) return;
     {
         auto closes = same_bar_close_alls(context);
         const double placed = detail::run_position(require_host()).signed_units;
