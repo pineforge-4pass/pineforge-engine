@@ -411,6 +411,11 @@ std::string run_error_bar_prefix() {
     return "Error on bar " + std::to_string(context.bar_index) + ": ";
 }
 
+std::int64_t run_error_bar_index() noexcept {
+    const ta::BarContext& context = ta::bar_context();
+    return context.installed ? context.bar_index : -1;
+}
+
 RunFailureValue classify_run_failure(const std::exception& error) noexcept {
     const auto quota = detail::run_quota_failure();
     if (quota.code != RunFailureCode::none) return quota;

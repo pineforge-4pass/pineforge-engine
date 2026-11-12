@@ -1235,7 +1235,10 @@ class RealTree(unittest.TestCase):
         # buffer, its record window and its stored message): 54 + 3 = 57.
         # The run-error bar prefix function adds two groups (its declaration in
         # the installed header and in its source): 57 + 2 = 59.
-        self.assertEqual(c['OPEN'], 1356 + 59 + 184)
+        # The setter refusal messages (three number-to-text temporaries in the
+        # engine header) and the timezone refusal (its message string and that
+        # string's temporary) add three groups: 59 + 3 = 62.
+        self.assertEqual(c['OPEN'], 1356 + 62 + 184)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')
