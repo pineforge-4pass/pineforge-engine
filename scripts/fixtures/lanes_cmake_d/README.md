@@ -1,4 +1,4 @@
-# CR-150 fenced CMake controls
+# Fenced CMake controls
 
 The `lane-*.cmake` and `tail-*.cmake` files copy the real lane inputs supplied
 with the core-cr150-cmkd2 brief, based on
@@ -78,13 +78,13 @@ cases directly require their own fenced input to succeed.
 | `test_fence_markers_in_bracket_comments_are_not_boundaries` | Ignore marker and command text in bracket comments while accepting the real fenced write. |
 
 For lab comparison, save the base checker outside the tree under test and
-set `PF_CR150_CMAKE_D_CHECKER` to its absolute path when running
-`python3 -B scripts/test_check_cr150_cmake_d.py FenceControls`: all 41 new
+set `PF_LANES_CMAKE_D_CHECKER` to its absolute path when running
+`python3 -B scripts/test_check_lanes_cmake_d.py FenceControls`: all 41 new
 methods must fail on that base checker (subtests can report multiple failures).
 Unset the override and run the full controls and checker; both must pass,
 followed by the brief's preflight, release, debug, and docs verification.
 
-Supervisor commit split: first `scripts/test_check_cr150_cmake_d.py` plus this
-fixture directory, then `scripts/check_cr150_cmake_d.py`, then
-`tests/cr150.d/README.md`. No new Python script or registration wiring is
-needed; `test_cr150_cmake_d_controls` already invokes the extended controls.
+Supervisor commit split: first `scripts/test_check_lanes_cmake_d.py` plus this
+fixture directory, then `scripts/check_lanes_cmake_d.py`, then
+`tests/lanes.d/README.md`. No new Python script or registration wiring is
+needed; `test_lanes_cmake_d_controls` already invokes the extended controls.

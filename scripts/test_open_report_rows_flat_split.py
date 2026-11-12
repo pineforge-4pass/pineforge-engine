@@ -13,7 +13,7 @@ PREFIX = 'test_open_report_rows_flat'
 SOURCE_FILES = (
     ROOT / 'tests/test_open_report_rows_flat.cpp',
     ROOT / 'tests/CMakeLists.txt',
-    ROOT / 'tests/cr150.d/core-cr150-o1w-tradeout.cmake',
+    ROOT / 'tests/lanes.d/core-cr150-o1w-tradeout.cmake',
 )
 
 

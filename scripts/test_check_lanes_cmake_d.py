@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Property and fenced-tail controls for the real CR-150 CMake checker.
+"""Property and fenced-tail controls for the real lane CMake checker.
 
 Each case copies the checker into a temporary repository and invokes its
-normal entry point. PF_CR150_CMAKE_D_CHECKER can name the previous checker
+normal entry point. PF_LANES_CMAKE_D_CHECKER can name the previous checker
 for lab fail-before evidence. Each fence refusal first checks a legal fenced
 write, so the old blanket tail refusal cannot satisfy the negative controls.
 """
@@ -16,28 +16,28 @@ import sys
 import tempfile
 import unittest
 
-import check_cr150_cmake_d
+import check_lanes_cmake_d
 import ci_preflight
 
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECKER = Path(os.environ.get(
-    'PF_CR150_CMAKE_D_CHECKER', ROOT / 'scripts' / 'check_cr150_cmake_d.py'))
+    'PF_LANES_CMAKE_D_CHECKER', ROOT / 'scripts' / 'check_lanes_cmake_d.py'))
 REGISTRATION = ('add_test(NAME test_lane_property COMMAND ${Python3_EXECUTABLE} '
-                '-B ${PROJECT_SOURCE_DIR}/scripts/check_cr150_cmake_d.py)\n')
-FIXTURES = ROOT / 'scripts' / 'fixtures' / 'cr150_cmake_d'
-INCLUDE_LOOP = '''# CR-150: sorted per-lane registrations.
-file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
-list(SORT CR150_LANE_CMAKE)
-foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)
-    include("${cr150_lane_file}")
+                '-B ${PROJECT_SOURCE_DIR}/scripts/check_lanes_cmake_d.py)\n')
+FIXTURES = ROOT / 'scripts' / 'fixtures' / 'lanes_cmake_d'
+INCLUDE_LOOP = '''# Sorted per-lane registrations.
+file(GLOB LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/lanes.d/*.cmake")
+list(SORT LANE_CMAKE)
+foreach(lane_file IN LISTS LANE_CMAKE)
+    include("${lane_file}")
 endforeach()
 '''
 
 
 def declared_inputs(paths) -> None:
     paths = [Path(os.path.abspath(path)) for path in paths]
-    print('CR-150 checker control inputs:\n' + '\n'.join(map(str, paths)), flush=True)
+    print('Lane checker control inputs:\n' + '\n'.join(map(str, paths)), flush=True)
     protected = tuple(Path.home() / name for name in (
         '.config/zsh/keys', '.ssh', '.aws', '.codex', '.config/pineforge'))
 
@@ -53,19 +53,19 @@ def declared_inputs(paths) -> None:
 
 class CMakeControls(unittest.TestCase):
     def setUp(self) -> None:
-        declared_inputs([CHECKER, ROOT / 'tests' / 'cr150.d' / 'README.md',
+        declared_inputs([CHECKER, ROOT / 'tests' / 'lanes.d' / 'README.md',
                          *sorted(FIXTURES.glob('*.cmake'))])
-        temporary = tempfile.TemporaryDirectory(prefix='cr150-cmake-properties-')
+        temporary = tempfile.TemporaryDirectory(prefix='cmake-properties-')
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         scripts = self.root / 'scripts'
         scripts.mkdir()
-        self.checker = scripts / 'check_cr150_cmake_d.py'
+        self.checker = scripts / 'check_lanes_cmake_d.py'
         shutil.copyfile(CHECKER, self.checker)
-        lanes = self.root / 'tests' / 'cr150.d'
+        lanes = self.root / 'tests' / 'lanes.d'
         lanes.mkdir(parents=True)
         self.lane = lanes / 'property-control.cmake'
-        shutil.copyfile(ROOT / 'tests' / 'cr150.d' / 'README.md', lanes / 'README.md')
+        shutil.copyfile(ROOT / 'tests' / 'lanes.d' / 'README.md', lanes / 'README.md')
         self.cmake = self.root / 'tests' / 'CMakeLists.txt'
         self.cmake.write_text(INCLUDE_LOOP)
 
@@ -204,7 +204,7 @@ class LanePropertyControls(CMakeControls):
                     f'{keys[1]} 77 {keys[2]} TRUE '
                     f'{keys[3]} [=[setup; teardown]=])')
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-                self.assertIn('CR-150 CMake lane directory is valid', result.stdout)
+                self.assertIn('CMake lane directory is valid', result.stdout)
 
     def test_missing_property_pair_is_refused(self) -> None:
         self.assert_refused('set_tests_properties(test_lane_property PROPERTIES)',
@@ -237,7 +237,7 @@ ENVIRONMENT # literal label text, with a ) and an (
 set_target_properties(literal PROPERTIES FOO bar)
 ]=] RUN_SERIAL TRUE)''')
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn('CR-150 CMake lane directory is valid', result.stdout)
+        self.assertIn('CMake lane directory is valid', result.stdout)
 
     def test_unquoted_expansion_cannot_inject_property_keys(self) -> None:
         self.assert_refused(
@@ -248,7 +248,7 @@ set_target_properties(literal PROPERTIES FOO bar)
         result = self.run_check(
             'set_tests_properties(test_lane_property PROPERTIES LABELS "${lane_properties}")')
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn('CR-150 CMake lane directory is valid', result.stdout)
+        self.assertIn('CMake lane directory is valid', result.stdout)
 
     def test_foreign_test_properties_are_refused_in_a_lane_file(self) -> None:
         self.cmake.write_text(
@@ -289,9 +289,9 @@ class ModuleProfileControls(CMakeControls):
         self.lane.write_text(row)
         self.cmake.write_text(
             INCLUDE_LOOP
-            + '# --- CR-150 property-control begin ---\n'
+            + '# --- lane property-control begin ---\n'
             + module + extra
-            + '# --- CR-150 property-control end ---\n')
+            + '# --- lane property-control end ---\n')
         return self.run_checker()
 
     def assert_module_refused(self, row: str, module: str, extra: str = '') -> None:
@@ -449,8 +449,8 @@ class ModuleProfileControls(CMakeControls):
                 self.lane.write_text(REGISTRATION)
                 self.cmake.write_text(
                     prefix + INCLUDE_LOOP
-                    + '# --- CR-150 property-control begin ---\n'
-                    + statement + '# --- CR-150 property-control end ---\n')
+                    + '# --- lane property-control begin ---\n'
+                    + statement + '# --- lane property-control end ---\n')
                 result = self.run_checker()
                 output = result.stdout + result.stderr
                 self.assertEqual(1, result.returncode, output)
@@ -540,8 +540,8 @@ class TimeoutControls(CMakeControls):
         elif location == 'fence':
             self.lane.write_text(self.ROW)
             self.cmake.write_text(
-                INCLUDE_LOOP + '# --- CR-150 property-control begin ---\n'
-                + statement + '\n# --- CR-150 property-control end ---\n')
+                INCLUDE_LOOP + '# --- lane property-control begin ---\n'
+                + statement + '\n# --- lane property-control end ---\n')
         else:
             self.lane.write_text(REGISTRATION)
             self.cmake.write_text(self.ROW + statement + '\n' + INCLUDE_LOOP)
@@ -624,9 +624,9 @@ class FenceControls(CMakeControls):
         (self.lane.parent / f'{lane}.cmake').write_text(text)
 
     def fence(self, body: str, lane: str = OWNER) -> str:
-        return (f'# --- CR-150 {lane} begin ---\n'
+        return (f'# --- lane {lane} begin ---\n'
                 f'{body}'
-                f'# --- CR-150 {lane} end ---\n')
+                f'# --- lane {lane} end ---\n')
 
     def real_lane(self, name: str) -> None:
         self.write_lane(f'core-cr150-{name}', (FIXTURES / f'lane-{name}.cmake').read_text())
@@ -641,7 +641,7 @@ class FenceControls(CMakeControls):
         self.cmake.write_text(INCLUDE_LOOP + tail)
         result = self.run_checker()
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn('CR-150 CMake lane directory is valid', result.stdout)
+        self.assertIn('CMake lane directory is valid', result.stdout)
 
     def assert_tail_refused(self, tail: str, reason: str, *, before: str = '') -> None:
         # This positive half makes every new negative control fail on the
@@ -657,24 +657,24 @@ class FenceControls(CMakeControls):
 
     def test_fence_before_include_loop_is_refused(self) -> None:
         self.assert_tail_refused(
-            '', 'fence must follow the CR-150 include block',
+            '', 'fence must follow the lane include block',
             before=self.fence('target_compile_definitions(test_owner PRIVATE OWNER=1)\n'))
 
     def test_unfenced_statement_after_loop_is_refused(self) -> None:
         self.assert_tail_refused(
             'target_compile_definitions(test_owner PRIVATE OWNER=1)\n',
-            'unfenced statement after the CR-150 include block')
+            'unfenced statement after the lane include block')
 
     def test_begin_without_end_is_refused(self) -> None:
         self.assert_tail_refused(
-            f'# --- CR-150 {self.OWNER} begin ---\n'
+            f'# --- lane {self.OWNER} begin ---\n'
             'target_compile_definitions(test_owner PRIVATE OWNER=1)\n',
             'missing end fence')
 
     def test_mismatched_fence_names_are_refused(self) -> None:
         self.assert_tail_refused(
-            f'# --- CR-150 {self.OWNER} begin ---\n'
-            f'# --- CR-150 {self.OTHER} end ---\n',
+            f'# --- lane {self.OWNER} begin ---\n'
+            f'# --- lane {self.OTHER} end ---\n',
             'does not match begin fence')
 
     def test_fence_without_lane_file_is_refused(self) -> None:
@@ -682,7 +682,7 @@ class FenceControls(CMakeControls):
         # file. Do not install the empty lane-l17a input as an ownership grant.
         self.real_lane('l6b1')
         self.assert_tail_refused(self.real_tail('l17a'),
-                                 'fence has no lane file tests/cr150.d/core-cr150-l17a.cmake')
+                                 'fence has no lane file tests/lanes.d/core-cr150-l17a.cmake')
 
     def test_foreign_target_writes_are_refused(self) -> None:
         statements = (
@@ -739,11 +739,11 @@ class FenceControls(CMakeControls):
 
     def test_duplicate_fence_is_refused(self) -> None:
         self.assert_tail_refused(self.fence('') + self.fence(''),
-                                 'duplicate CR-150 fence')
+                                 'duplicate lane fence')
 
     def test_nested_fences_are_refused(self) -> None:
         self.assert_tail_refused(self.fence(self.fence('', self.OTHER)),
-                                 'nested CR-150 fence')
+                                 'nested lane fence')
 
     def test_set_property_global_is_refused(self) -> None:
         self.assert_tail_refused(
@@ -804,7 +804,7 @@ class FenceControls(CMakeControls):
                      self.fence('') + write):
             with self.subTest(tail=tail):
                 self.assert_tail_refused(
-                    tail, 'unfenced statement after the CR-150 include block')
+                    tail, 'unfenced statement after the lane include block')
 
     def test_canonical_fast_registration_after_final_fence_is_accepted(self) -> None:
         registration = ci_preflight.FAST_TEST_REGISTRATION
@@ -821,7 +821,7 @@ class FenceControls(CMakeControls):
         self.assert_tail_passes(tail)
         self.assert_tail_refused(
             tail + 'set_tests_properties(test_ta PROPERTIES LABELS "cr999")\n',
-            'unfenced statement after the CR-150 include block')
+            'unfenced statement after the lane include block')
 
     def test_statement_before_fast_registration_is_refused(self) -> None:
         self.assert_tail_passes(self.fence('') + ci_preflight.FAST_TEST_REGISTRATION)
@@ -829,7 +829,7 @@ class FenceControls(CMakeControls):
             self.fence('') +
             'set_tests_properties(test_ta PROPERTIES SKIP_RETURN_CODE 77)\n' +
             ci_preflight.FAST_TEST_REGISTRATION,
-            'unfenced statement after the CR-150 include block')
+            'unfenced statement after the lane include block')
 
     def test_changed_fast_registration_is_refused(self) -> None:
         registration = ci_preflight.FAST_TEST_REGISTRATION
@@ -838,11 +838,11 @@ class FenceControls(CMakeControls):
         self.assertNotEqual(registration, changed)
         self.assert_tail_refused(
             self.fence('') + changed,
-            'unfenced statement after the CR-150 include block')
+            'unfenced statement after the lane include block')
 
     def test_fast_registration_constant_matches_preflight(self) -> None:
         self.assertEqual(ci_preflight.FAST_TEST_REGISTRATION,
-                         check_cr150_cmake_d.FAST_TEST_REGISTRATION)
+                         check_lanes_cmake_d.FAST_TEST_REGISTRATION)
 
     def test_variable_and_generator_expression_write_names_are_refused(self) -> None:
         for target in ('${destination}', '"${destination}"', '$<TARGET_FILE:test_other>',
@@ -924,9 +924,9 @@ class FenceControls(CMakeControls):
             'target_compile_definitions(test_owner PRIVATE OWNER=1)\n'))
         for original, replacement, reason in (
                 ('CONFIGURE_DEPENDS ', '', 'does not use CONFIGURE_DEPENDS'),
-                ('list(SORT CR150_LANE_CMAKE)', 'list(REVERSE CR150_LANE_CMAKE)', 'is not sorted'),
-                ('IN LISTS CR150_LANE_CMAKE', 'IN ITEMS other.cmake', 'does not use CR150_LANE_CMAKE'),
-                ('include("${cr150_lane_file}")', 'include("other.cmake")', 'does not include each lane file')):
+                ('list(SORT LANE_CMAKE)', 'list(REVERSE LANE_CMAKE)', 'is not sorted'),
+                ('IN LISTS LANE_CMAKE', 'IN ITEMS other.cmake', 'does not use LANE_CMAKE'),
+                ('include("${lane_file}")', 'include("other.cmake")', 'does not include each lane file')):
             with self.subTest(replacement=replacement):
                 self.cmake.write_text(INCLUDE_LOOP.replace(original, replacement) + self.fence(
                     'target_compile_definitions(test_owner PRIVATE OWNER=1)\n'))
@@ -999,16 +999,16 @@ endif()
             with self.subTest(opening=opening):
                 self.assert_tail_passes(self.fence(
                     'set_property(TEST test_owner PROPERTY ENVIRONMENT ' + opening + '''
-# --- CR-150 absent begin ---
+# --- lane absent begin ---
 add_compile_options(literal text)
-# --- CR-150 absent end ---
+# --- lane absent end ---
 ''' + closing + ')\n'))
 
     def test_fence_markers_in_bracket_comments_are_not_boundaries(self) -> None:
         self.assert_tail_passes(self.fence('''#[=[
-# --- CR-150 absent begin ---
+# --- lane absent begin ---
 add_compile_options(comment text)
-# --- CR-150 absent end ---
+# --- lane absent end ---
 ]=]
 target_compile_definitions(test_owner PRIVATE OWNER=1)
 '''))

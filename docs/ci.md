@@ -1428,7 +1428,7 @@ parity subset keep their existing selections.
 **The slow-label inventory also includes rows with direct labels:**
 The timing list contains 43 names, and 51 additional names are pinned for
 direct `LABELS` names across 40 assignment sites in `tests/CMakeLists.txt` and
-`tests/cr150.d/*.cmake`, making 94 distinct pinned slow names.
+`tests/lanes.d/*.cmake`, making 94 distinct pinned slow names.
 `PINNED_SLOW_TEST_ROWS` includes `test_cr559_map_capacity_cli` and bounds the discovered exclusion by those names,
 independent of the registered count; each profile may register a subset.
 

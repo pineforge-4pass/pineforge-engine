@@ -369,7 +369,7 @@ link of `CommandScratchStore`, which they declare and do not define.
 | Randomized differential walk against a sorted model | `differential_random_walk` | no store to open |
 
 The store fixture is registered unconditionally in
-`tests/cr150.d/core-cr150-o1c.cmake`, together with the backing fixture and the
+`tests/lanes.d/core-cr150-o1c.cmake`, together with the backing fixture and the
 guard, and runs against the reference definition below.
 
 The store fixture checks every expected value against an independent sorted

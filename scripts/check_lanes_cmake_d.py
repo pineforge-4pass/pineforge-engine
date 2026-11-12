@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the CR-150 per-lane CMake registration directory."""
+"""Check the per-lane CMake registration directory."""
 from __future__ import annotations
 
 import re
@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CMAKE = ROOT / "tests" / "CMakeLists.txt"
-LANE_DIR = ROOT / "tests" / "cr150.d"
+LANE_DIR = ROOT / "tests" / "lanes.d"
 README = LANE_DIR / "README.md"
 FAST_TEST_REGISTRATION = '''foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
@@ -444,7 +444,7 @@ def _fence_markers(text: str) -> list[FenceMarker]:
     markers: list[FenceMarker] = []
     for match in FENCE_COMMENT_OR_ARGUMENT_RE.finditer(text):
         marker = re.fullmatch(
-            r"# --- CR-150 (\S+) (begin|end) ---[ \t]*", match.group(0))
+            r"# --- lane (\S+) (begin|end) ---[ \t]*", match.group(0))
         if marker is None:
             continue
         line_start = text.rfind("\n", 0, match.start()) + 1
@@ -460,7 +460,7 @@ def _no_unfenced_statements(text: str, start: int, end: int) -> None:
     if _without_comments(text[start:end], bracket_comments=True).strip():
         line = text.count("\n", 0, start) + 1
         raise CheckFailure(
-            f"{CMAKE}:{line}: unfenced statement after the CR-150 include block")
+            f"{CMAKE}:{line}: unfenced statement after the lane include block")
 
 
 def _fences(text: str, markers: list[FenceMarker]) -> list[Fence]:
@@ -472,13 +472,13 @@ def _fences(text: str, markers: list[FenceMarker]) -> list[Fence]:
     for marker in markers:
         if marker.edge == "begin":
             if active is not None:
-                raise CheckFailure(f"{CMAKE}:{marker.line}: nested CR-150 fence")
+                raise CheckFailure(f"{CMAKE}:{marker.line}: nested lane fence")
             _no_unfenced_statements(text, previous_end, marker.start)
             if marker.lane in seen:
-                raise CheckFailure(f"{CMAKE}:{marker.line}: duplicate CR-150 fence for {marker.lane}")
+                raise CheckFailure(f"{CMAKE}:{marker.line}: duplicate lane fence for {marker.lane}")
             if marker.lane not in lane_names:
                 raise CheckFailure(
-                    f"{CMAKE}:{marker.line}: fence has no lane file tests/cr150.d/{marker.lane}.cmake")
+                    f"{CMAKE}:{marker.line}: fence has no lane file tests/lanes.d/{marker.lane}.cmake")
             seen.add(marker.lane)
             active = marker
         else:
@@ -506,29 +506,29 @@ def _fences(text: str, markers: list[FenceMarker]) -> list[Fence]:
 def _check_include_loop(statements: list[Statement], fenced: bool) -> None:
     if len(statements) < 5:
         if fenced:
-            raise CheckFailure(f"{CMAKE}: fence must follow the CR-150 include block")
-        raise CheckFailure(f"{CMAKE}: CR-150 include block is missing")
+            raise CheckFailure(f"{CMAKE}: fence must follow the lane include block")
+        raise CheckFailure(f"{CMAKE}: lane include block is missing")
     tail = statements[-5:]
     expected = ["file", "list", "foreach", "include", "endforeach"]
     if [statement.name.lower() for statement in tail] != expected:
         line = statements[-1].line if statements else 1
         if fenced and not any(statement.name.lower() == "file" and
-                              "CR150_LANE_CMAKE" in _words(statement.body)
+                              "LANE_CMAKE" in _words(statement.body)
                               for statement in statements):
-            raise CheckFailure(f"{CMAKE}:{line}: fence must follow the CR-150 include block")
+            raise CheckFailure(f"{CMAKE}:{line}: fence must follow the lane include block")
         raise CheckFailure(
-            f"{CMAKE}:{line}: CR-150 include block is not the last statement; "
-            "unfenced statement after the CR-150 include block")
+            f"{CMAKE}:{line}: lane include block is not the last statement; "
+            "unfenced statement after the lane include block")
     file_body, list_body, foreach_body, include_body, _ = [statement.body for statement in tail]
     file_words = _words(file_body)
-    if (len(file_words) != 4 or file_words[:3] != ["GLOB", "CR150_LANE_CMAKE", "CONFIGURE_DEPENDS"] or
-            file_words[3] != "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake"):
-        raise CheckFailure(f"{CMAKE}:{tail[0].line}: file(GLOB ...) does not use CONFIGURE_DEPENDS for cr150.d/*.cmake")
-    if _words(list_body) != ["SORT", "CR150_LANE_CMAKE"]:
-        raise CheckFailure(f"{CMAKE}:{tail[1].line}: CR150_LANE_CMAKE is not sorted")
-    if _words(foreach_body) != ["cr150_lane_file", "IN", "LISTS", "CR150_LANE_CMAKE"]:
-        raise CheckFailure(f"{CMAKE}:{tail[2].line}: include loop does not use CR150_LANE_CMAKE")
-    if _words(include_body) != ["${cr150_lane_file}"]:
+    if (len(file_words) != 4 or file_words[:3] != ["GLOB", "LANE_CMAKE", "CONFIGURE_DEPENDS"] or
+            file_words[3] != "${CMAKE_CURRENT_SOURCE_DIR}/lanes.d/*.cmake"):
+        raise CheckFailure(f"{CMAKE}:{tail[0].line}: file(GLOB ...) does not use CONFIGURE_DEPENDS for lanes.d/*.cmake")
+    if _words(list_body) != ["SORT", "LANE_CMAKE"]:
+        raise CheckFailure(f"{CMAKE}:{tail[1].line}: LANE_CMAKE is not sorted")
+    if _words(foreach_body) != ["lane_file", "IN", "LISTS", "LANE_CMAKE"]:
+        raise CheckFailure(f"{CMAKE}:{tail[2].line}: include loop does not use LANE_CMAKE")
+    if _words(include_body) != ["${lane_file}"]:
         raise CheckFailure(f"{CMAKE}:{tail[3].line}: include loop does not include each lane file")
 
 
@@ -1013,9 +1013,9 @@ def main() -> int:
             _check_lane(path, owners)
         _check_registration_timeouts()
     except CheckFailure as error:
-        print(f"check_cr150_cmake_d: {error}", file=sys.stderr)
+        print(f"check_lanes_cmake_d: {error}", file=sys.stderr)
         return 1
-    print("check_cr150_cmake_d: CR-150 CMake lane directory is valid")
+    print("check_lanes_cmake_d: CMake lane directory is valid")
     return 0
 
 
