@@ -27,6 +27,7 @@ struct AggregatedBar {
 /// Day-based:    "D","1D" => 86400
 /// Week-based:   "W","1W" => 604800
 /// Month-based:  "M","1M" => -1 (calendar-based, not fixed seconds)
+/// Day counts whose seconds do not fit int also return -1 (calendar-only).
 int tf_to_seconds(const std::string& tf);
 
 /// Extract the numeric multiplier from a TF string (e.g. "15" -> 15, "D" -> 1).
@@ -511,6 +512,9 @@ public:
         virtual void observe_owned_storage(OwnedStorage& out) const {
             out.incomplete(OwnedStorageUnsupported::opaque_type);
         }
+        // Older stamp-only sources remain valid for security aggregation.
+        // A chart partition additionally supplies its adjacent opens.
+        virtual bool period_bounds(int64_t, int64_t&, int64_t&) { return false; }
     };
 
     /// Install a DAY partition from `source`: each period's group open is its

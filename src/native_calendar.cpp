@@ -1641,6 +1641,42 @@ std::optional<int64_t> period_key(const SessionCalendar& calendar, const Timefra
 std::optional<NativeInterval> interval_containing(const SessionCalendar& calendar,
                                                   const Timeframe& script_tf,
                                                   const Timeframe& input_tf,
+                                                  int64_t ms,
+                                                  const PeriodBounds& partition) {
+    if (!calendar.valid() || !script_tf.valid() || !input_tf.valid()) return std::nullopt;
+    const int64_t open = partition.open_ms;
+    const int64_t next = partition.next_open_ms;
+    if (open > ms || next <= ms) return std::nullopt;
+    auto cycle = session_day_containing(calendar, open);
+    if (!cycle) return std::nullopt;
+    int64_t eligible = open;
+    int64_t close = open;
+    bool traded = false;
+    // Walk session cycles, keeping only one day. Neither the calendar nor
+    // the partition retains a table proportional to the requested range.
+    while (cycle->origin_ms < next) {
+        for (const auto& span : cycle->spans) {
+            const int64_t first = std::max(open, span.start_ms);
+            const int64_t last = std::min(next, span.end_ms);
+            if (first >= last) continue;
+            if (!traded) eligible = first;
+            close = std::max(close, last);
+            traded = true;
+        }
+        const int64_t successor = cycle->next_origin_ms;
+        if (successor >= next) break;
+        if (successor <= cycle->origin_ms) return std::nullopt;
+        cycle = session_day_containing(calendar, successor);
+        if (!cycle) return std::nullopt;
+    }
+    const auto next_input = first_tradable_open(calendar, input_tf, close);
+    if (!next_input) return std::nullopt;
+    return NativeInterval{open, eligible, close, next, *next_input};
+}
+
+std::optional<NativeInterval> interval_containing(const SessionCalendar& calendar,
+                                                  const Timeframe& script_tf,
+                                                  const Timeframe& input_tf,
                                                   int64_t ms) {
     if (!calendar.valid() || !script_tf.valid() || !input_tf.valid()) return std::nullopt;
     auto core = core_containing(calendar, script_tf, ms);
