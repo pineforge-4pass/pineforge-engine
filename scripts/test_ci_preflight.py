@@ -13376,6 +13376,7 @@ class GkeSmokeOutputAdmission(unittest.TestCase):
 '''
     LAYOUT = 'gke-pr.yml {} must retain exactly its four smoke steps and optional pinned final output collector'
     COLLECTOR_FINDING = 'gke-pr.yml {} must retain the pinned always-upload PR smoke output collector'
+    SHIPPED_RETENTION = 'gke-pr.yml {} must ship the pinned final PR smoke output collector'
 
     def setUp(self):
         path = ROOT / '.github/workflows/gke-pr.yml'
@@ -13400,6 +13401,24 @@ class GkeSmokeOutputAdmission(unittest.TestCase):
         self.assertIn(finding, gke_admit_workflow_findings(changed))
         self.assertIn(finding, main_admission_data_findings({'gke-pr.yml': changed}))
 
+    def assert_shipped_retention(self, workflow):
+        """Pin the shipped collectors while admission still accepts four steps."""
+        jobs = _jobs(workflow)
+        for job in ('build', 'build-debug'):
+            steps = ci_preflight._steps(jobs.get(job, ''))
+            finding = self.SHIPPED_RETENTION.format(job)
+            self.assertEqual(len(steps), 5, finding)
+            self.assertEqual(steps[-1].rstrip('\n'), self.COLLECTOR.rstrip('\n'), finding)
+
+    def test_shipped_workflow_retains_both_final_collectors(self):
+        self.assert_shipped_retention(self.shipped)
+        for job in ('build', 'build-debug'):
+            with self.subTest(missing_collector=job):
+                changed = in_job(self.shipped, job, self.COLLECTOR.rstrip('\n'), '')
+                self.assertNotEqual(changed, self.shipped)
+                with self.assertRaisesRegex(AssertionError, re.escape(self.SHIPPED_RETENTION.format(job))):
+                    self.assert_shipped_retention(changed)
+
     def test_exact_four_or_five_steps_are_admitted_independently_in_both_jobs(self):
         self.assertEqual(gke_admit_workflow_findings(self.shipped), [])
         self.assertEqual(main_admission_data_findings({'gke-pr.yml': self.shipped}), [])
@@ -13410,7 +13429,8 @@ class GkeSmokeOutputAdmission(unittest.TestCase):
                 self.assertEqual(main_admission_data_findings({'gke-pr.yml': workflow}), [])
 
     def test_each_collector_field_and_extra_execution_key_is_binding(self):
-        workflow = self.with_collectors()
+        workflow = self.shipped
+        self.assert_shipped_retention(workflow)
         for job in ('build', 'build-debug'):
             for before, after in (
                     ('Retain PR smoke test output', 'Upload logs'),
@@ -13434,10 +13454,13 @@ class GkeSmokeOutputAdmission(unittest.TestCase):
                     collector = self.COLLECTOR.rstrip('\n')
                     changed = in_job(workflow, job, collector, collector.replace(before, after, 1))
                     self.assertNotEqual(changed, workflow)
+                    with self.assertRaisesRegex(AssertionError, re.escape(self.SHIPPED_RETENTION.format(job))):
+                        self.assert_shipped_retention(changed)
                     self.assert_refused(changed, self.COLLECTOR_FINDING.format(job))
 
     def test_collector_position_extra_steps_and_missing_producers_are_refused(self):
-        workflow = self.with_collectors()
+        workflow = self.shipped
+        self.assert_shipped_retention(workflow)
         for job in ('build', 'build-debug'):
             old_steps = ci_preflight._steps(_jobs(self.original)[job])
             for step in old_steps:
@@ -13455,7 +13478,11 @@ class GkeSmokeOutputAdmission(unittest.TestCase):
                 with self.subTest(job=job, collector_position=position):
                     moved = body.replace(collector, '', 1)
                     moved = moved.replace(steps[position], collector + '\n' + steps[position], 1)
-                    self.assert_refused(in_job(workflow, job, body, moved), self.LAYOUT.format(job))
+                    changed = in_job(workflow, job, body, moved)
+                    self.assertNotEqual(changed, workflow)
+                    with self.assertRaisesRegex(AssertionError, re.escape(self.SHIPPED_RETENTION.format(job))):
+                        self.assert_shipped_retention(changed)
+                    self.assert_refused(changed, self.LAYOUT.format(job))
             for before, after in (
                     (collector, collector + '\n' + collector),
                     (collector, collector + '\n      - run: true'),
