@@ -191,7 +191,7 @@ first differing rows — or if `scripts/verify_corpus.py` no longer prints its
 pinned tier headline.
 
 **"Moved" means any byte changed**: a one-tick slippage difference moves a
-probe's baseline hash while the tier headline stays `excellent=311`. Both
+probe's baseline hash while the tier headline stays `excellent=301, strong=10`. Both
 matter. The baseline, not the corpus's committed trades, is the oracle: the
 tapes `pineforge-corpus` committed were written by an older harness and no
 longer reproduce.

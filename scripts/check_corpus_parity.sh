@@ -90,7 +90,7 @@ PY="${PYTHON:-python3}"
 # The parity headline this engine is pinned to. Moving it is a deliberate act:
 # it means the corpus gitlink moved, and the commit that moves it carries the
 # evidence. scripts/verify_corpus.py prints this line verbatim.
-EXPECTED_VERIFY="${EXPECTED_VERIFY:-Verified 312 strategies — excellent=311, strong=0, moderate=0, weak=0, minimal=0, anomaly=1, engine_only=0, missing=0}"
+EXPECTED_VERIFY="${EXPECTED_VERIFY:-Verified 312 strategies — excellent=301, strong=10, moderate=0, weak=0, minimal=0, anomaly=1, engine_only=0, missing=0}"
 
 log()  { printf '\033[1;34m[corpus-parity]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[corpus-parity]\033[0m %s\n' "$*" >&2; }

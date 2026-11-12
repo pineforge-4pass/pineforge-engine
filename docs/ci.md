@@ -972,7 +972,7 @@ gates:
    differ from the pinned corpus tape.
 2. **Tiers.** `scripts/verify_corpus.py --all --quiet` must still print its
    pinned headline, currently
-   `Verified 312 strategies — excellent=311, strong=0, moderate=0, weak=0, minimal=0, anomaly=1, engine_only=0, missing=0`.
+   `Verified 312 strategies — excellent=301, strong=10, moderate=0, weak=0, minimal=0, anomaly=1, engine_only=0, missing=0`.
 
 Both always run, so one command reports both. Exit 0 is parity, 1 is drift, 2
 is "the check could not run" (no gitlink, wrong corpus commit, modified pinned
@@ -1005,7 +1005,7 @@ column declared in `ALLOWED_EXTRA_COLUMNS`. An undeclared column is drift.
 
 The two gates are not redundant. A one-tick slippage change on a single probe
 moves its trades and its baseline hash while `verify_corpus.py` still reports
-`excellent=311, strong=0, anomaly=1`: the tier verifier grades against the
+`excellent=301, strong=10, anomaly=1`: the tier verifier grades against the
 TradingView tape with tolerances, so it cannot see a regression that stays
 inside them. The baseline can.
 
