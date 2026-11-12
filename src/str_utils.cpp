@@ -672,7 +672,8 @@ std::string time_format_pattern(const std::string& format, const std::tm& fields
 
 std::string str_format_time(long long timestamp_ms,
                                  const std::string& format,
-                                 const std::string& timezone) {
+                                 const std::string& timezone_in) {
+    const std::string& timezone = tz_util::resolve_script_timezone(timezone_in, "format_time");
     time_t secs = static_cast<time_t>(timestamp_ms / 1000);
     struct tm tm_buf;
     if (!timezone.empty() && timezone != "UTC" && timezone != "Etc/UTC") {
