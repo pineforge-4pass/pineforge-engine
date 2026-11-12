@@ -8416,6 +8416,16 @@
   },
   {
    "file": "include/pineforge/run_failure.hpp",
+   "symbol": "run_error_bar_prefix",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/run_failure.hpp",
    "symbol": "<temp:Base>",
    "scope": [
     "namespace pineforge #1",
@@ -27345,6 +27355,27 @@
    "cls": "grow",
    "spelling": "json . push_back ( . . . )",
    "ordinal": 2
+  },
+  {
+   "file": "src/run_failure.cpp",
+   "symbol": "run_error_bar_prefix",
+   "scope": [
+    "namespace pineforge #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/run_failure.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "std :: string run_error_bar_prefix ( ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
   },
   {
    "file": "src/run_failure.cpp",
