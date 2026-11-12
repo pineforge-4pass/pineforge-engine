@@ -1233,7 +1233,14 @@ class RealTree(unittest.TestCase):
         # retained scalar group form 54 distinct groups after the merge.
         # The selected-capacity Source stage adds three groups (its chunk
         # buffer, its record window and its stored message): 54 + 3 = 57.
-        self.assertEqual(c['OPEN'], 1356 + 57 + 184)
+        # The run-error bar prefix function adds two groups (its declaration in
+        # the installed header and in its source): 57 + 2 = 59.
+        # The setter refusal messages (three number-to-text temporaries in the
+        # engine header) and the timezone refusal (its message string and that
+        # string's temporary) add three groups: 59 + 3 = 62.
+        # The timezone database lookup refusal (its message string in the
+        # native calendar) adds one group: 62 + 1 = 63.
+        self.assertEqual(c['OPEN'], 1356 + 63 + 184)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')
