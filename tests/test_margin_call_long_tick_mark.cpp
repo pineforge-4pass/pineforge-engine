@@ -15,6 +15,9 @@ constexpr double lot = 0.000001;
 constexpr double nan = std::numeric_limits<double>::quiet_NaN();
 
 Bar bar(int index, double o, double h, double l, double c) {
+    // The engine refuses a bar whose low is above its body or whose high is
+    // below it, before any bar runs: fail here, by name, never clamp.
+    assert(l <= o && l <= c && h >= o && h >= c);
     return {o, h, l, c, 1.0, (index + 1) * std::int64_t{86'400'000}};
 }
 
