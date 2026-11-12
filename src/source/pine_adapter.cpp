@@ -11613,11 +11613,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             || !std::isnan(trail_points) || !std::isnan(trail_price));
     require_cohort_ticket(cohort_candidate ? &from_entry : nullptr);
     reroute_fixed_entries_before_request();
-    // Reserve explicit exit units on the entry grid. A quantity that floors
-    // to zero is omitted so the existing percentage sizing applies.
+    // Reserve explicit exit units on the entry grid. Below one step, only the
+    // measured qty_percent 100 (or none) falls back to percentage sizing.
     if (finite_positive(qty) && staged_.quantity_grid) {
         const double floored = explicit_entry_quantity_floor(qty, staged_.quantity_grid);
-        qty = floored > 0.0 ? floored : kNaN;
+        if (floored > 0.0 || !(qty_percent < 100.0)) qty = floored > 0.0 ? floored : kNaN;
     }
     if (!from_entry.empty()) {
         const auto token = named_entry_cancel_tokens_.find(from_entry);
