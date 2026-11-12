@@ -167,6 +167,7 @@ void owed_sale(bool next_point_calls) {
 
 void owed_sale_sized_at_close() {
     // T=99999.000048, F=.1, E=9999.9000055, tick=.1, lot=.000001.
+    // r10 rounds half up to ten significant digits.
     // This explicit quantity is a margin-100 long. At the signal's
     // tick-rounded F=.1, required=T*F=9999.9000048 and
     // r10(required)=9999.900005 < E. pine_adapter.cpp:7938-7939 forms
@@ -182,45 +183,82 @@ void owed_sale_sized_at_close() {
     // Cash after the fill is C0=E-T*F=.0000007, and the fill assertion
     // below requires entered=T and equity_at_fill=9999.9000055.
     //
-    // At the check P=2, T*P=199998.000096,
-    // required=r10(T*P)=199998.0001, and equity=C0+T*P
-    // =199998.0000967. The shortfall is .0000033. Its check-sized
-    // quotient is .0000033 / 2 / lot = 1.65 lots (at least .2 from an
-    // integer), so floor=1 lot and the first sale is .000004. Its cash is
-    // .000004*2=.000008, leaving C1=.0000087 and
-    // R1=T-.000004=99999.000044.
-    // The same-price re-check has required=r10(R1*2)=199998.0001 and
-    // equity=C1+R1*2=199998.0000967, so the same .0000033 shortfall is
-    // owed.
+    // Bars 0 and 1 are flat at .11, tick .1: bar 0's close is the signal,
+    // bar 1's open fills at F=.1 (pine_adapter.cpp:26963-26967 checks the
+    // fill at its price). Every check before bar 2 is at P=.1, where
+    // required=r10(T*.1)=9999.900005 against equity=E=9999.9000055 is
+    // covered by .0000005, so nothing is sold.
     //
-    // The open 2.01 is nearer the high 3.01 than the low .91, so P=3 is
-    // next. There, required=r10(R1*3)=r10(299997.000132)=299997.0001
-    // and equity=C1+R1*3=299997.0001407, so only the owed sale executes.
-    // The owed sale is sized from the bar close C=round_tick(.21)=.2:
-    // .0000033 / .2 / lot = 16.5 lots (at least .2 from an integer),
-    // floor=16 lots, so it is .000064, distinct from the .000004
-    // check-sized sale. Cash becomes
-    // C2=C1+.000064*3=.0002007 and R2=R1-.000064=99998.999980.
-    // The same P=3 re-check then has required=r10(R2*3)
-    // =r10(299996.999940)=299996.9999 and equity
-    // C2+R2*3=299997.0001407.
-    // The remaining waypoints are P=.9 and P=.2: their requirements and
-    // equities are respectively
-    // r10(R2*.9)=r10(89999.099982)=89999.09998 versus
-    // C2+R2*.9=89999.1001827, and
-    // r10(R2*.2)=r10(19999.799996)=19999.80000 versus
-    // C2+R2*.2=19999.8001967. The scheduled close executes at bar 3's
-    // repeated P=.2, so no other call occurs.
+    // Why the call is made at the high and not at the open: the open's
+    // check is taken on a copy of the bar whose four prices are its open
+    // (pine_adapter.cpp:23513-23517), so a sale owed after an open call is
+    // sized at the open's own tick, the check's price, and could not tell
+    // the close from the check. Only the points after the open see the whole
+    // bar: the two inside it, before the script (24934-24938; end=3 at
+    // 19403-19404), and the close, after the script (25086;
+    // through_close_point defaults to true at pine_adapter.hpp:2340-2342,
+    // end=4). So the open and the low stay covered and the call is at the
+    // high.
+    //
+    // Bar 2 is (open .21, high 2.01, low .21, close .21), a valid bar: every
+    // price is finite and positive, low <= min(open, close) and high >=
+    // max(open, close), so the series is accepted
+    // (pine_strategy_host.cpp:358-361). The Auto path takes the high first
+    // only if |high-open| < |open-low| (native_execution_consumer.cpp:541);
+    // here 1.80 < 0 is false, so the path is open, low, high, close
+    // (pine_adapter.cpp:19399-19401): .21, .21, 2.01, .21, marked on the
+    // tick as .2, .2, 2, .2 (18336-18342).
+    //
+    // Open P=.2: T*P=19999.8000096, required=r10(T*P)=19999.80001 (five
+    // decimals, .80000|96 rounds up), equity=C0+T*P=.0000007+19999.8000096
+    // =19999.8000103: covered by .0000003. Low P=.2: the same book and
+    // price, covered.
+    // High P=2: T*P=199998.000096, required=r10(T*P)=199998.0001,
+    // equity=C0+T*P=199998.0000967, shortfall=.0000033. Its check-sized
+    // quotient is .0000033 / 2 / lot = 1.65 lots (.35 from an integer), so
+    // floor=1 lot and the first sale is 4 lots = .000004 at 2. Its cash is
+    // .000004*2=.000008, leaving C1=.0000087 and R1=T-.000004
+    // =99999.000044.
+    // The one re-check at the same P=2 has R1*2=199998.000088,
+    // required=r10(R1*2)=199998.0001 and equity=C1+R1*2=199998.0000967, so
+    // the same .0000033 is owed. It is divided by the bar close's tick,
+    // round_tick(.21)=.2 (pine_adapter.cpp:19423-19426): .0000033 / .2 / lot
+    // = 16.5 lots (.5 from an integer), floor=16 lots, so 64 lots = .000064
+    // are owed, not the 4 lots the check's price gives.
+    // Close P=.2, after the script, on R1: R1*.2=19999.8000088,
+    // required=r10(R1*.2)=19999.80001 (.80000|88 rounds up), equity=C1+R1*.2
+    // =.0000087+19999.8000088=19999.8000175: covered by .0000075, so the
+    // close has no call of its own and the owed 64 lots are sold at .2
+    // (19410-19414). Cash becomes C2=C1+.000064*.2=.0000087+.0000128
+    // =.0000215 and R2=R1-.000064=99998.99998. The re-check at .2:
+    // R2*.2=19999.799996, required=r10(R2*.2)=19999.8 (.79999|6 rounds up),
+    // equity=C2+R2*.2=19999.8000175: covered, nothing is owed.
+    // The whole close is placed on bar 3, after that sale: placed on bar 2
+    // it would be resized to the book before a call at the close
+    // (pine_adapter.cpp:25087-25089). Bars 3 and 4 are flat, all four points
+    // one price, so their path order cannot matter. Bar 3 is covered at
+    // every point on R2, as just above; its script places the close, and
+    // bar 4's open executes it before bar 4 can call the book
+    // (pine_adapter.cpp:19387-19398), so no other call occurs.
     LongBook book(9999.9000055, 0.1, 99999.000048);
+    book.close_bar = 3;
     const std::vector<Bar> bars = {
         bar(0, 0.11, 0.11, 0.11, 0.11),
         bar(1, 0.11, 0.11, 0.11, 0.11),
-        bar(2, 2.01, 3.01, 0.91, 0.21),
-        bar(3, 0.21, 0.21, 0.21, 0.21)};
+        bar(2, 0.21, 2.01, 0.21, 0.21),
+        bar(3, 0.21, 0.21, 0.21, 0.21),
+        bar(4, 0.21, 0.21, 0.21, 0.21)};
     book.run(bars.data(), static_cast<int>(bars.size()));
     assert(book.entered == 99999.000048);
     assert(std::abs(book.equity_at_fill - 9999.9000055) < 1e-9);
-    expect_calls(book, {{2, 2.0, 0.000004}, {2, 3.0, 0.000064}});
+    // A series the engine refuses runs no bar: run() returns normally and the
+    // refusal is only stored as last_error() (native_execution_consumer.cpp:
+    // 1944 stores it at 1386; the begin refusal does not write
+    // last_run_status()), while the book keeps its defaults (entered 0,
+    // position_at_bar_3 NaN).
+    assert(book.last_error().empty());
+    assert(!std::isnan(book.position_at_bar_3));
+    expect_calls(book, {{2, 2.0, 0.000004}, {2, 0.2, 0.000064}});
 }
 
 void one_unit() {
