@@ -415,6 +415,14 @@ public:
 
     std::int64_t last_stamp() const override { return last_stamp_; }
 
+    bool period_bounds(std::int64_t ms, std::int64_t& open, std::int64_t& next) override {
+        bool last = false;
+        if (!stamp_at(ms, open, last) || last) return false;
+        const auto after = std::upper_bound(recent_.begin(), recent_.end(), ms);
+        next = after == recent_.end() ? next_ : *after;
+        return next > ms;
+    }
+
     std::size_t stamps_held() const override { return recent_.size() + (has_next_ ? 1u : 0u); }
 
     void observe_owned_storage(OwnedStorage& out) const noexcept override {
@@ -688,6 +696,14 @@ public:
     }
 
     std::int64_t last_stamp() const override { return last_stamp_; }
+
+    bool period_bounds(std::int64_t ms, std::int64_t& open, std::int64_t& next) override {
+        bool last = false;
+        if (!stamp_at(ms, open, last) || last) return false;
+        const auto after = std::upper_bound(recent_.begin(), recent_.end(), ms);
+        next = after == recent_.end() ? next_ : *after;
+        return next > ms;
+    }
 
     std::size_t stamps_held() const override { return recent_.size() + (has_next_ ? 1u : 0u); }
 

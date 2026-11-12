@@ -6,6 +6,7 @@
 #include <pineforge/run_failure.hpp>
 #include <pineforge/detail/run_quota.hpp>
 #include <pineforge/owned_storage.hpp>
+#include <pineforge/ta.hpp>
 
 #include "native_execution_consumer.hpp"
 
@@ -402,6 +403,17 @@ RunFailureClass run_failure_code_class(RunFailureCode code) noexcept {
 bool run_failure_code_retryable(RunFailureCode code) noexcept {
     const RegistryCode* row = registry_row(code);
     return row != nullptr && row->retryable;
+}
+
+std::string run_error_bar_prefix() {
+    const ta::BarContext& context = ta::bar_context();
+    if (!context.installed) return "Error before the first bar: ";
+    return "Error on bar " + std::to_string(context.bar_index) + ": ";
+}
+
+std::int64_t run_error_bar_index() noexcept {
+    const ta::BarContext& context = ta::bar_context();
+    return context.installed ? context.bar_index : -1;
 }
 
 RunFailureValue classify_run_failure(const std::exception& error) noexcept {

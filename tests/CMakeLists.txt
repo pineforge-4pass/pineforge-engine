@@ -106,9 +106,11 @@ set(TEST_SOURCES
     test_report_terminal_quote
     test_adapter_margin_relower
     test_adapter_risk_relower
+    test_adapter_drawdown_fill_halt
     test_adapter_range_end_relower
     test_native_margin_kernel_r5
     test_adapter_brackets_relower
+    test_adapter_named_exit_after_reversing_close
     test_exit_without_from_entry_same_execution
     test_adapter_grid_relower
     test_adapter_htf_relower
@@ -377,6 +379,7 @@ set(TEST_SOURCES
     test_market_admission_commission
     test_explicit_qty_fill_admission
     test_market_entry_affordability
+    test_percent_equity_cap_margins_off
     test_percent_equity_affordability
     test_stop_tick_rounding
     test_coof_chart_tick_touch
@@ -8489,6 +8492,33 @@ if(PINEFORGE_ENABLE_COVERAGE)
 endif()
 add_test(NAME test_o1_live_limit_backing COMMAND test_o1_live_limit_backing)
 # --- CR-150 o1-live-limit-policy end ---
+# --- CR-150 selected-admit-helper begin ---
+if(TARGET pineforge_selected_admit_test_identity)
+    add_test(NAME test_selected_admit_stages
+        COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/test_selected_admit_stages.py
+            --work-dir ${CMAKE_CURRENT_BINARY_DIR})
+    set_property(TEST test_selected_admit_stages APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_SELECTED_ADMIT_HELPER=$<TARGET_FILE:pineforge_selected_admit_test_identity>"
+        "PINEFORGE_SELECTED_ADMIT_EXPECT_GIT_SHA=${PINEFORGE_SELECTED_ADMIT_TEST_GIT_SHA}")
+    add_test(NAME test_selected_admit_manifest
+        COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/test_selected_admit_manifest.py
+            --parent-build ${CMAKE_BINARY_DIR} --work-dir ${CMAKE_CURRENT_BINARY_DIR}
+            --expected-stages "[\"source\",\"selected\"]")
+    add_test(NAME test_selected_admit_imports
+        COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/test_selected_admit_imports.py)
+    set_property(TEST test_selected_admit_imports APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_SELECTED_ADMIT_HELPER=$<TARGET_FILE:pineforge_selected_admit_test_identity>")
+    add_test(NAME test_selected_admit_calendar
+        COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/test_selected_admit_calendar.py
+            --work-dir ${CMAKE_CURRENT_BINARY_DIR})
+    set_property(TEST test_selected_admit_calendar APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_SELECTED_ADMIT_HELPER=$<TARGET_FILE:pineforge_selected_admit_test_identity>"
+        "PINEFORGE_SELECTED_ADMIT_EXPECT_GIT_SHA=${PINEFORGE_SELECTED_ADMIT_TEST_GIT_SHA}")
+    set_tests_properties(test_selected_admit_stages test_selected_admit_manifest
+        test_selected_admit_imports test_selected_admit_calendar PROPERTIES LABELS "selected_admit_helper")
+    set_tests_properties(test_selected_admit_manifest PROPERTIES RUN_SERIAL TRUE)
+endif()
+# --- CR-150 selected-admit-helper end ---
 
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))

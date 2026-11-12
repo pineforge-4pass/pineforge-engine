@@ -1,0 +1,6 @@
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_str_match_resource_failure)
+    pineforge_add_unit_test(test_str_match_resource_failure)
+    list(APPEND TEST_SOURCES test_regex_error_classification)
+    pineforge_add_unit_test(test_regex_error_classification)
+endif()

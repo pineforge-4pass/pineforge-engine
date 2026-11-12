@@ -1,4 +1,5 @@
 #include <pineforge/native_calendar.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include "native_calendar_memo.hpp"
 #include "timezone.hpp"
@@ -14,7 +15,9 @@
 #include <fcntl.h>
 #include <limits>
 #include <limits.h>
+#include <new>
 #include <sys/stat.h>
+#include <system_error>
 #include <unistd.h>
 #include <utility>
 
@@ -798,13 +801,65 @@ bool tz_iana_name_chars(std::string_view name) {
     return true;
 }
 
-bool tzdir_realpath_dir(const char* path, std::string& out) {
+struct TzLookupFailure {
+    const char* call = nullptr;
+    int error = 0;
+    const char* directory = nullptr;
+};
+
+bool tz_name_absent(int error) {
+    return error == ENOENT || error == ENOTDIR || error == ELOOP
+        || error == ENAMETOOLONG || error == EISDIR;
+}
+
+[[noreturn]] void tz_raise_lookup_failure(const TzLookupFailure& failure) {
+    if (failure.error == ENOMEM) {
+        throw coded<std::bad_alloc>(RunFailureCode::out_of_memory, {}, std::bad_alloc{});
+    }
+    std::string message;
+    if (failure.directory != nullptr) {
+        message = "timezone database directory could not be resolved: ";
+        message += failure.directory;
+        message += " (";
+        message += failure.call;
+        message += " failed)";
+    } else {
+        message = failure.call;
+        message += "(timezone) failed";
+    }
+    throw coded<std::system_error>(
+        RunFailureCode::engine_unclassified_error, {},
+        std::system_error(failure.error, std::generic_category(), message));
+}
+
+bool tzdir_realpath_dir(const char* path, std::string& out,
+                       TzLookupFailure* failure = nullptr) {
     if (path == nullptr || path[0] == '\0') return false;
     char buf[PATH_MAX];
-    if (::realpath(path, buf) == nullptr) return false;
+    char* resolved = nullptr;
+    unsigned attempt = 0;
+    do {
+        resolved = ::realpath(path, buf);
+    } while (resolved == nullptr && errno == EINTR && ++attempt < (failure ? 3u : 1u));
+    if (resolved == nullptr) {
+        if (failure) *failure = {"realpath", errno, path};
+        return false;
+    }
     struct stat st {};
-    if (::stat(buf, &st) != 0 || !S_ISDIR(st.st_mode)) return false;
+    int status = 0;
+    attempt = 0;
+    do {
+        status = ::stat(buf, &st);
+    } while (status != 0 && errno == EINTR && ++attempt < (failure ? 3u : 1u));
+    if (status != 0 || !S_ISDIR(st.st_mode)) {
+        if (failure) {
+            *failure = {status != 0 ? "stat" : "directory check",
+                        status != 0 ? errno : ENOTDIR, path};
+        }
+        return false;
+    }
     out.assign(buf);
+    if (failure) *failure = {};
     return true;
 }
 
@@ -814,22 +869,23 @@ bool tzdir_realpath_dir(const char* path, std::string& out) {
 // nonempty (relative included) and the compile-time default only when TZDIR
 // is unset or empty; a missing/non-directory TZDIR is fail-closed so names
 // are not accepted from a tree libc will not read.
-std::string tzdir_canonical() {
+std::string tzdir_canonical(TzLookupFailure* failure = nullptr) {
     std::string out;
 #if defined(__APPLE__)
-    if (tzdir_realpath_dir("/var/db/timezone/zoneinfo", out)) return out;
-    if (tzdir_realpath_dir("/usr/share/zoneinfo", out)) return out;
+    if (tzdir_realpath_dir("/var/db/timezone/zoneinfo", out, failure)) return out;
+    if (failure && !tz_name_absent(failure->error)) return {};
+    if (tzdir_realpath_dir("/usr/share/zoneinfo", out, failure)) return out;
     return {};
 #elif defined(__GLIBC__)
     const char* env = std::getenv("TZDIR");
     if (env != nullptr && env[0] != '\0') {
-        if (tzdir_realpath_dir(env, out)) return out;
+        if (tzdir_realpath_dir(env, out, failure)) return out;
         return {};
     }
-    if (tzdir_realpath_dir("/usr/share/zoneinfo", out)) return out;
+    if (tzdir_realpath_dir("/usr/share/zoneinfo", out, failure)) return out;
     return {};
 #else
-    if (tzdir_realpath_dir("/usr/share/zoneinfo", out)) return out;
+    if (tzdir_realpath_dir("/usr/share/zoneinfo", out, failure)) return out;
     return {};
 #endif
 }
@@ -902,28 +958,68 @@ std::optional<std::uint64_t> tz_resource_digest(const std::vector<std::string>& 
     return h;
 }
 
-std::optional<std::string> tz_file_actual_path(std::string_view name) {
+// With a failure record, distinguish found, absent and lookup failed. Without
+// one, observational descriptor and optional acceleration callers retain one
+// attempt per interrupted call and nullopt for failures. Both modes accumulate
+// partial headers. Argument validation requests typed failures.
+std::optional<std::string> tz_file_actual_path(std::string_view name,
+                                             TzLookupFailure* failure = nullptr) {
     if (!tz_iana_name_chars(name)) return std::nullopt;
-    const std::string dir = tzdir_canonical();
+    const std::string dir = tzdir_canonical(failure);
     if (dir.empty()) return std::nullopt;
     std::string full = dir;
     full.push_back('/');
     full.append(name.begin(), name.end());
     char resolved[PATH_MAX];
-    if (::realpath(full.c_str(), resolved) == nullptr) return std::nullopt;
+    char* actual = nullptr;
+    unsigned attempt = 0;
+    do {
+        actual = ::realpath(full.c_str(), resolved);
+    } while (actual == nullptr && errno == EINTR && ++attempt < (failure ? 3u : 1u));
+    if (actual == nullptr) {
+        const int error = errno;
+        if (failure && !tz_name_absent(error)) *failure = {"realpath", error, nullptr};
+        return std::nullopt;
+    }
     const std::string res(resolved);
     if (res != dir && res.rfind(dir + "/", 0) != 0) return std::nullopt;
-    const int fd = ::open(res.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return std::nullopt;
+    int fd = -1;
+    attempt = 0;
+    do {
+        fd = ::open(res.c_str(), O_RDONLY | O_CLOEXEC);
+    } while (fd < 0 && errno == EINTR && ++attempt < (failure ? 3u : 1u));
+    if (fd < 0) {
+        const int error = errno;
+        if (failure && !tz_name_absent(error)) *failure = {"open", error, nullptr};
+        return std::nullopt;
+    }
     char mag[4] = {};
-    const ssize_t n = ::read(fd, mag, 4);
+    std::size_t size = 0;
+    do {
+        ssize_t n = 0;
+        attempt = 0;
+        do {
+            n = ::read(fd, mag + size, sizeof mag - size);
+        } while (n < 0 && errno == EINTR && ++attempt < (failure ? 3u : 1u));
+        if (n < 0) {
+            const int error = errno;
+            ::close(fd);
+            if (failure && !tz_name_absent(error)) *failure = {"read", error, nullptr};
+            return std::nullopt;
+        }
+        if (n == 0) break;
+        size += static_cast<std::size_t>(n);
+    } while (size < sizeof mag);
     ::close(fd);
-    if (n != 4 || std::memcmp(mag, "TZif", 4) != 0) return std::nullopt;
+    if (size != sizeof mag || std::memcmp(mag, "TZif", sizeof mag) != 0) return std::nullopt;
     return res;
 }
 
-bool tz_file_is_tzif(std::string_view name) {
-    return tz_file_actual_path(name).has_value();
+bool tz_file_is_tzif(std::string_view name, bool report_failure = false) {
+    TzLookupFailure failure;
+    const auto path = tz_file_actual_path(name, report_failure ? &failure : nullptr);
+    if (failure.call != nullptr) tz_raise_lookup_failure(failure);
+    return path.has_value();
 }
 
 bool posix_consume_name(std::string_view s, std::size_t& p) {
@@ -1062,7 +1158,7 @@ bool tz_slash_is_file_path(std::string_view tz) {
         && (comma == std::string_view::npos || slash < comma);
 }
 
-TzClass timezone_classify(std::string_view tz) {
+TzClass timezone_classify(std::string_view tz, bool report_failure = false) {
     TzClass out;
     if (tz.empty()) {
         out.kind = TzClass::Utc;
@@ -1079,7 +1175,7 @@ TzClass timezone_classify(std::string_view tz) {
     }
     if (tz[0] == ':') {
         const std::string_view file = tz.substr(1);
-        if (file.empty() || !tz_file_is_tzif(file)) return out;
+        if (file.empty() || !tz_file_is_tzif(file, report_failure)) return out;
         out.kind = TzClass::Tzfile;
         out.tzfile_name = file;
         return out;
@@ -1087,12 +1183,15 @@ TzClass timezone_classify(std::string_view tz) {
     // POSIX DST rule times use '/' (M3.2.0/2). A slash before any comma is a
     // tzfile path (America/New_York, US/Eastern), not a POSIX spec.
     if (tz_slash_is_file_path(tz)) {
-        if (!tz_file_is_tzif(tz)) return out;
+        if (!tz_file_is_tzif(tz, report_failure)) return out;
         out.kind = TzClass::Tzfile;
         out.tzfile_name = tz;
         return out;
     }
-    if (tz_file_is_tzif(tz)) {
+    // A bare name may also be a complete POSIX definition: its acceptance
+    // cannot depend on whether the optional file lookup could be carried out.
+    TzLookupFailure failure;
+    if (tz_file_actual_path(tz, report_failure ? &failure : nullptr)) {
         out.kind = TzClass::Tzfile;
         out.tzfile_name = tz;
         return out;
@@ -1101,6 +1200,7 @@ TzClass timezone_classify(std::string_view tz) {
         out.kind = TzClass::Posix;
         return out;
     }
+    if (failure.call != nullptr) tz_raise_lookup_failure(failure);
     return out;
 }
 
@@ -1136,6 +1236,12 @@ int parse_hhmm(std::string_view s, bool allow_2400) {
 
 bool timezone_accepted(std::string_view timezone) {
     return timezone_spec_accepted(timezone);
+}
+
+// Internal throwing form for argument validation. Keep the installed native
+// predicate's observational false result and its callers' refusal contracts.
+bool timezone_lookup_accepted(std::string_view timezone) {
+    return timezone_classify(timezone, true).kind != TzClass::Reject;
 }
 
 bool TimezoneIdentityDescriptor::valid() const noexcept {
@@ -1530,6 +1636,42 @@ std::optional<int64_t> period_key(const SessionCalendar& calendar, const Timefra
     auto core = core_containing(calendar, tf, ms);
     if (!core) return std::nullopt;
     return core->open_ms;
+}
+
+std::optional<NativeInterval> interval_containing(const SessionCalendar& calendar,
+                                                  const Timeframe& script_tf,
+                                                  const Timeframe& input_tf,
+                                                  int64_t ms,
+                                                  const PeriodBounds& partition) {
+    if (!calendar.valid() || !script_tf.valid() || !input_tf.valid()) return std::nullopt;
+    const int64_t open = partition.open_ms;
+    const int64_t next = partition.next_open_ms;
+    if (open > ms || next <= ms) return std::nullopt;
+    auto cycle = session_day_containing(calendar, open);
+    if (!cycle) return std::nullopt;
+    int64_t eligible = open;
+    int64_t close = open;
+    bool traded = false;
+    // Walk session cycles, keeping only one day. Neither the calendar nor
+    // the partition retains a table proportional to the requested range.
+    while (cycle->origin_ms < next) {
+        for (const auto& span : cycle->spans) {
+            const int64_t first = std::max(open, span.start_ms);
+            const int64_t last = std::min(next, span.end_ms);
+            if (first >= last) continue;
+            if (!traded) eligible = first;
+            close = std::max(close, last);
+            traded = true;
+        }
+        const int64_t successor = cycle->next_origin_ms;
+        if (successor >= next) break;
+        if (successor <= cycle->origin_ms) return std::nullopt;
+        cycle = session_day_containing(calendar, successor);
+        if (!cycle) return std::nullopt;
+    }
+    const auto next_input = first_tradable_open(calendar, input_tf, close);
+    if (!next_input) return std::nullopt;
+    return NativeInterval{open, eligible, close, next, *next_input};
 }
 
 std::optional<NativeInterval> interval_containing(const SessionCalendar& calendar,

@@ -468,9 +468,9 @@ byte-identical** to the spec. Conflicting values are a preflight refusal:
 spec fields.
 
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
-overload (`engine.hpp:2154`) is **not** refused as a source mutation: it
+overload (`engine.hpp:2155`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`src/native_execution_consumer.hpp:162`), which admits the begin, checks the
+(`src/native_execution_consumer.hpp:171`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
@@ -638,13 +638,13 @@ a host reacts to its own execution and may submit again. A request born there,
 mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
 that segment — the birth is admitted at the current cursor and the geometric
 search then sees only the unconsumed suffix (`born_on_remaining_path`,
-`native_execution_consumer.cpp:6928-6932`). Requests accepted before the
+`native_execution_consumer.cpp:7004-7008`). Requests accepted before the
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:8637`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:8713`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:8519`), the
+`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:8566`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
@@ -1496,7 +1496,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:18462-18495`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:18540-18573`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -2081,10 +2081,10 @@ host that marks its own equity keeps this default and owns the whole series.
 
 **The scalar extremes are not part of that bargain.** `max_drawdown_`,
 `max_runup_` and `max_contracts_held_all_` / `_long_` / `_short_` — read back
-through `max_drawdown_percent()` (`engine.hpp:1847`), `max_runup_percent()`
-(`engine.hpp:1267`) and `max_contracts_held_all/long/short()`
+through `max_drawdown_percent()` (`engine.hpp:1848`), `max_runup_percent()`
+(`engine.hpp:1268`) and `max_contracts_held_all/long/short()`
 (`max_contracts_held_all` `engine.hpp:2226-2228`) — are a property of the RUN: what it drew down, what
-it ran up, the most it ever held. The kernel folds them (`update_equity_extremes`, `engine.hpp:1657`) at every script
+it ran up, the most it ever held. The kernel folds them (`update_equity_extremes`, `engine.hpp:1658`) at every script
 calculation under `HostRecorded` and `KernelRecorded`. Under
 `KernelRecordedAtHostMarks`, it folds them at the host-mark callbacks instead, so
 the host controls the cadence. A `HostRecorded` host reads them truthfully without
@@ -2106,13 +2106,13 @@ drawdown/run-up walk, and metrics computed over a real series.
 The per-bar **broker-state hash** is a row of that same report, so
 `KernelRecorded` records it too. It stays behind the recording switch it
 always had — `set_broker_state_hash_recording(true)`
-(`engine.hpp:2553`; C: `strategy_set_broker_state_hash_recording`), off by
+(`engine.hpp:2567`; C: `strategy_set_broker_state_hash_recording`), off by
 default, set while no run is active — because each row is a full
 `broker_state_hash()` over the lots and the closed rows (since v19 a row costs
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:9548`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:9634`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -2238,8 +2238,8 @@ bare host's own rows get theirs: the margin model's liquidation books
 under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
-`closed_trade_close_cause(i)` (`engine.hpp:2224`) is the C++ read and
-`strategy_closed_trade_close_cause` (`pineforge.h:1569`) the C one, with the
+`closed_trade_close_cause(i)` (`engine.hpp:2225`) is the C++ read and
+`strategy_closed_trade_close_cause` (`pineforge.h:1571`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
 INTRADAY_FILL_CAP, `6` RANGE_END. A row closed at the end of the run
@@ -2270,11 +2270,11 @@ struct RegimeHost : pineforge::NativeStrategyHost {
 };
 ```
 
-- `hash_host_extension` (`engine.hpp:577`, protected virtual on
+- `hash_host_extension` (`engine.hpp:578`, protected virtual on
   `BacktestEngine`) is called exactly once per hash, last, after the kernel's
   fold. What it writes is part of the scalar `broker_state_hash()`, of every
   per-bar row a `KernelRecorded` run records, and of `stream_state_hash()`.
-- `BrokerStateHashSink` (`engine.hpp:519`) is a complete public type: FNV-1a
+- `BrokerStateHashSink` (`engine.hpp:520`) is a complete public type: FNV-1a
   over a canonical byte spelling — `d` (a double; `-0.0` folds as `0.0`, every
   NaN as one quiet NaN), `i`, `u`, `b`, `s` (length, then bytes), `bytes`.
 - An override **replaces** the default. A host that overrides nothing folds
@@ -3057,7 +3057,7 @@ each feed's key, sha256 and bar count in the run provenance.
 
 A host that wants only the running aggregate — no series instance, no
 `gaps`/`lookahead` rule, nothing folded into the continuation identity —
-aggregates the input itself. `TimeframeAggregator` (`timeframe.hpp:348`) is
+aggregates the input itself. `TimeframeAggregator` (`timeframe.hpp:349`) is
 public and engine-free; feed it from `on_native_input`, which runs once per
 accepted confirmed input bar before that bar is aggregated or matched
 (`on_native_input` `native_host.hpp:895`). Include
@@ -3086,14 +3086,14 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`ScriptBucketCursor` `native_execution_consumer.cpp:14438`). What it does
+(`ScriptBucketCursor` `native_execution_consumer.cpp:14559`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
 series' place in the run's continuous identity. Prefer `subscriptions` unless
 you want none of those.
 
-`set_native_security_feed` (`engine.hpp:2085`) is the host ingress for
+`set_native_security_feed` (`engine.hpp:2086`) is the host ingress for
 `authoritative_bars` installed before a run — see *Authoritative bars* above —
 and not a way to register a series: registration is
 `NativeRunSpec::subscriptions` or `declare_timeframe_subscriptions`. In-run the
@@ -4554,7 +4554,7 @@ Nor is there a build-level one. The two source sets are disjoint:
 `PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:91`) holds all six
 `src/compat/pine/` units and all fourteen `src/source/` ones, and
 `PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:118`) holds the kernel's own
-forty-five, which are what `add_library` (`CMakeLists.txt:181`) compiles into
+forty-five, which are what `add_library` (`CMakeLists.txt:185`) compiles into
 `pineforge_kernel`. `libpineforge.a` still carries both sets when
 `PINEFORGE_BUILD_SOURCE_LAYER` is ON, which is the default; the kernel archive
 exists either way. The installed-header closure is clean too, which the

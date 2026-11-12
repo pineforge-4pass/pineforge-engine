@@ -835,7 +835,9 @@
      "kind": "vocab",
      "values": [
       "substring_out_of_range",
-      "format_index_overflow"
+      "format_index_overflow",
+      "invalid_regex_pattern",
+      "regex_resource_limit"
      ]
     }
    },
@@ -843,10 +845,46 @@
    "description": "A string built-in refused its arguments.",
    "english": [
     "basic_string::substr: __pos (which is {pos}) > this->size() (which is {size})",
-    "stoul"
+    "stoul",
+    "Invalid regex pattern in the 'str.match' function.",
+    "A regular expression exceeds the limits of the engine's regular-expression library."
    ],
    "retryable": false,
    "since": "1.4.0"
+  },
+  "pine_timezone_error": {
+   "args": {
+    "bar_index": {
+     "kind": "integer"
+    },
+    "function": {
+     "kind": "vocab",
+     "values": [
+      "time",
+      "time_close",
+      "timestamp",
+      "hour",
+      "minute",
+      "second",
+      "dayofmonth",
+      "dayofweek",
+      "month",
+      "year",
+      "weekofyear",
+      "format_time"
+     ]
+    },
+    "zone": {
+     "kind": "string"
+    }
+   },
+   "class": "strategy",
+   "description": "A timezone argument is not accepted by the calendar. TradingView runtime error RE10133. bar_index is the bar being executed, and -1 when the stop is raised before the first bar (the message then begins \"Error before the first bar: \" instead of \"Error on bar N: \").",
+   "english": [
+    "Error on bar {bar_index}: Incorrect `timezone` value for the {function}() function: \"{zone}\". The value must be a string in either UTC/GMT notation (e.g. \"UTC-5\", \"GMT+0530\") or an IANA time zone database name (e.g. \"America/New_York\")."
+   ],
+   "retryable": false,
+   "since": "1.12.0"
   },
   "recalc_cap": {
    "args": {},
