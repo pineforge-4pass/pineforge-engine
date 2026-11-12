@@ -758,9 +758,12 @@ void source::PineStrategyHost::on_native_run_begin() {
     } catch (const checked_settings::LatchedSettingsFailure& error) {
         rethrow_latched_setting(error);
     } catch (const std::exception& error) {
-        if (adapter_.stream_mode_) throw;
+        const auto failure = classify_run_failure(error);
+        // An unsupported selected chart must fail the admitted generation at
+        // begin, before the native driver can consume input or capture results.
+        if (adapter_.stream_mode_ || failure.code == RunFailureCode::window_mode_unsupported) throw;
         source_prepare_failed_ = true;
-        note_run_failure(*this, std::string(error.what()), classify_run_failure(error));
+        note_run_failure(*this, std::string(error.what()), failure);
     } catch (...) {
         if (adapter_.stream_mode_)
             throw coded<std::runtime_error>(RunFailureCode::engine_unclassified_error, {},
@@ -3480,6 +3483,8 @@ int64_t source::PineStrategyHost::chart_time_close() const {
 }
 
 int64_t source::PineStrategyHost::chart_bar_close_ms(int64_t stamp) const {
+    if (const auto interval = detail::run_consumer(*this).script_period_interval(stamp))
+        return interval->last_traded_close_ms;
     if (calendar_period_for(script_tf_) != CalendarPeriod::NONE) {
         return pine_time_close(stamp, script_tf_, "", "", script_tf_,
                                syminfo_.timezone, syminfo_.session);
@@ -3531,6 +3536,8 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     // A chart bar's own open (the input's stamp) and close, as the chart's
     // time and time_close read them (chart_time_close).
     const auto chart_open_of = [&](std::int64_t input_ms) -> std::int64_t {
+        if (const auto interval = detail::run_consumer(*this).script_period_interval(input_ms))
+            return interval->open_ms;
         return input_is_chart ? input_ms
                               : pine_time(input_ms, script_tf_, "", "", script_tf_, sym_tz,
                                           sym_session);
@@ -3548,6 +3555,8 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
         && (!daily_chart || (calendar_period_for(script_tf_) == CalendarPeriod::DAY
                              && script_tf_seconds_ == 86400));
     const auto chart_close_of = [&](std::int64_t open_ms) -> std::int64_t {
+        if (const auto interval = detail::run_consumer(*this).script_period_interval(open_ms))
+            return interval->last_traded_close_ms;
         if (const auto* day = calendar_chart ? symbol_calendar_day(open_ms) : nullptr) {
             return daily_chart || chart_step_ms <= 0 ? day->second
                                                      : std::min(open_ms + chart_step_ms, day->second);
@@ -3558,6 +3567,8 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
                                  open_ms, script_tf_, sym_session, sym_tz, script_tf_);
     };
     const auto chart_slot_of = [&](std::int64_t ms) -> std::int64_t {
+        if (const auto interval = detail::run_consumer(*this).script_period_interval(ms))
+            return interval->open_ms;
         return pine_time(ms, script_tf_, "", "", script_tf_, sym_tz, sym_session);
     };
     // The first chart bar opening at or after `at`: the retained input's, else
@@ -3668,12 +3679,22 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     const bool calendar_days = session.empty() && tf_period == CalendarPeriod::DAY
         && tf_to_seconds(tf.empty() ? script_tf_ : tf) == 86400;
     const auto calendar_open_of = [&](std::int64_t ms) -> std::int64_t {
+        if (session.empty() && (tz.empty() || tz == sym_tz)
+            && (tf.empty() || tf == script_tf_)) {
+            if (const auto interval = detail::run_consumer(*this).script_period_interval(ms))
+                return interval->open_ms;
+        }
         if (calendar_days) {
             if (const auto* day = symbol_calendar_day(ms)) return day->first;
         }
         return pine_time(ms, tf, session, tz, script_tf_, sym_tz, sym_session);
     };
     const auto tf_close_of = [&](std::int64_t open_ms) -> std::int64_t {
+        if (session.empty() && (tz.empty() || tz == sym_tz)
+            && (tf.empty() || tf == script_tf_)) {
+            if (const auto interval = detail::run_consumer(*this).script_period_interval(open_ms))
+                return interval->last_traded_close_ms;
+        }
         if (calendar_days) {
             if (const auto* day = symbol_calendar_day(open_ms)) return day->second;
         }
