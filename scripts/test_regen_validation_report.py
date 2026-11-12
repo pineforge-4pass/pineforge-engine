@@ -232,6 +232,7 @@ class ValidationReportTests(unittest.TestCase):
                 ("profile", profile), ("aggregation", "p90"),
                 ("percentile", "90%"), ("scope", "per_probe"),
                 ("count_rule", "exact"), ("comparison", "<"),
+                ("count_basis", "unmatched_both_sides"),
             ):
                 self.assertIn(f"{key}={value}", policy)
             for metric, fraction in thresholds.items():

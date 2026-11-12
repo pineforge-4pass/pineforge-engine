@@ -258,7 +258,7 @@ def detail_block(name: str, group: str, tv_raw: int, grades: list[Grade]) -> str
             f"- **{g.engine}** {_LABEL_EMOJI.get(r.label, '🔴')} **{r.label}**  "
             f"(emitted {g.emitted}; in window engine {r.eng_gate_count} / TV {r.tv_gate_count}; "
             f"matched {r.gating_matched_count}; coverage {r.coverage * 100:.1f}%)\n"
-            f"    - count delta: `{pct(r.count_delta)}` (abs {r.count_abs_delta})\n"
+            f"    - count delta: `{pct(r.count_delta)}` (unmatched {r.count_abs_delta})\n"
             f"    - entry p90:   `{pct(r.entry_p90)}`\n"
             f"    - exit  p90:   `{pct(r.exit_p90)}`\n"
             f"    - PnL   p90:   `{pct(r.pnl_p90)}`"
@@ -385,7 +385,7 @@ def main() -> int:
             continue
         gate_counts: dict[str, int] = {}
         tallies += [f"## {engine}: non-excellent rows\n",
-                    "| Strategy | Group | Tier | Failing gates / reason | count Δ (abs) | entry p90 | "
+                    "| Strategy | Group | Tier | Failing gates / reason | count Δ (unmatched) | entry p90 | "
                     "exit p90 | PnL p90 | coverage |",
                     "|---|---|---|---|---:|---:|---:|---:|---:|"]
         for (name, group, _tv, _gs), g in bad:

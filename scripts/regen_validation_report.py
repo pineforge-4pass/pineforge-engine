@@ -96,7 +96,7 @@ def _fmt_policy(row: dict) -> str:
         return "not recorded"
     fields = [
         f"{key}={policy.get(key, 'not recorded')}"
-        for key in ("profile", "aggregation", "scope", "count_rule", "comparison")
+        for key in ("profile", "aggregation", "scope", "count_rule", "count_basis", "comparison")
     ]
     percentile = policy.get("percentile")
     if (

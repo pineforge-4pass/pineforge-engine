@@ -287,6 +287,9 @@ class GradingPolicyReportTests(unittest.TestCase):
         # The profile's nominal count fraction does not replace the exact
         # count gate required for excellent.
         self.assertEqual(policy["count_rule"], "exact")
+        # The receipt names what the count counts: unmatched trades on both
+        # sides, not the difference of the two totals.
+        self.assertEqual(policy.get("count_basis"), "unmatched_both_sides")
         self.assertEqual(
             row["metric_observations"],
             {

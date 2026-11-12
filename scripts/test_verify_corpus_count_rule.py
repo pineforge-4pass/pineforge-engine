@@ -257,6 +257,7 @@ class ExactCountBehaviorTests(unittest.TestCase):
         )
         policy = row["grading_policy"]
         self.assertEqual(policy["count_rule"], "exact")
+        self.assertEqual(policy.get("count_basis"), "unmatched_both_sides")
         self.assertEqual(policy["profile"], result.profile)
         self.assertGreater(policy["thresholds"]["count"], 0.0)
         for metric in ("entry", "exit", "pnl"):

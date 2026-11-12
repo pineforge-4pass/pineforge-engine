@@ -1277,6 +1277,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         "scope": "per_probe",
         "comparison": "<",
         "count_rule": "exact",
+        "count_basis": "unmatched_both_sides",
     }
     grade_percentile = grading_policy["percentile"]
 
@@ -1518,15 +1519,12 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         if not notes:
             failures = []
             if not count_ok:
-                if unmatched_tv is not None and unmatched_engine is not None:
-                    failures.append(
-                        f"{unmatched_tv} TradingView "
-                        f"{'trade' if unmatched_tv == 1 else 'trades'} and "
-                        f"{unmatched_engine} engine "
-                        f"{'trade' if unmatched_engine == 1 else 'trades'} unmatched "
-                        f"({gating_matched_n} of {tv_gate_n} paired)")
-                else:
-                    failures.append(f"count Δ {count_delta*100:.2f}%")
+                failures.append(
+                    f"{unmatched_tv} TradingView "
+                    f"{'trade' if unmatched_tv == 1 else 'trades'} and "
+                    f"{unmatched_engine} engine "
+                    f"{'trade' if unmatched_engine == 1 else 'trades'} unmatched "
+                    f"({gating_matched_n} of {tv_gate_n} paired)")
             if not entry_ok:
                 failures.append(f"entry p90 {entry_p90*100:.4f}%")
             if not exit_ok:
