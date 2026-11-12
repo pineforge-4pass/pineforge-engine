@@ -1090,7 +1090,9 @@ PF_API int strategy_set_scratch_tables_v1(pf_strategy_t s,
 
 /** Request cooperative abort of the run in progress (see c_abi.cpp). */
 PF_API void strategy_request_abort(pf_strategy_t s);
-/** 0 = completed, 1 = NOT_COMPLETED (aborted), -1 = @p s is NULL. */
+/** 1 = NOT_COMPLETED (failed/aborted run or void setter failure); -1 = NULL handle.
+ *  A zero status alone does not establish success: also read
+ *  #strategy_get_last_error and #strategy_get_last_error_code after every start. */
 PF_API int  strategy_last_run_status(pf_strategy_t s);
 /** Live-runtime tail semantics (spec §3.1): the LAST bar of the array fed to
  *  every subsequent run() is a still-forming bar, not the chart's rightmost
@@ -1179,8 +1181,8 @@ PF_API void strategy_set_probe_suppress_tail_logic(pf_strategy_t s, int on);
  *      shape.
  *  The values are #pf_native_path_order_t's (<pineforge/native_c_api.h>):
  *  #PF_NATIVE_PATH_ORDER_AUTO, #PF_NATIVE_PATH_ORDER_HIGH_FIRST and
- *  #PF_NATIVE_PATH_ORDER_LOW_FIRST. Any other @p mode is clamped to AUTO:
- *  this setter answers nothing, so it cannot refuse one.
+ *  #PF_NATIVE_PATH_ORDER_LOW_FIRST. Other modes record setting_rejected; inspect
+ *  #strategy_last_run_status, #strategy_get_last_error and #strategy_get_last_error_code.
  *  A live probe runs the SAME forming bar under BOTH forced orders and emits
  *  only the fills that agree between the two -- a fill that depends on which
  *  leg TradingView's own (unobservable, still-forming) bar will resolve to
@@ -1322,8 +1324,8 @@ typedef int32_t pf_state_query_status_v1_t;
  *  report_terminal_quote_time_ms and report_terminal_quote_close, whatever the
  *  value, nor a clear of the quote. In C++ the host throws
  *  pineforge::SelectedWindowQueryAfterSeal before any store; the C export
- *  #strategy_set_syminfo_metadata keeps its void signature and swallows every
- *  exception, so a caller learns of the refusal from this status:
+ *  #strategy_set_syminfo_metadata keeps its void signature and silently drops
+ *  that named refusal, so a caller learns of it from this status:
  *  #PF_STATE_QUERY_SELECTED_WINDOW_AFTER_SEAL_V1 means a quote-key write stored
  *  nothing. Like the state queries, the refusal records, replaces and clears no
  *  #strategy_get_last_error or its code, latches no run failure and leaves the
@@ -1659,7 +1661,7 @@ PF_API int strategy_set_syminfo_string(pf_strategy_t s, const char* key,
 
 /** Set the instrument tick size (``syminfo.mintick``, default 0.01). Drives the
  *  directional stop-entry snap and ``slippage = N*mintick`` economics. Set
- *  per-instrument (e.g. 0.25 for ES, 0.00001 for FX). Non-positive ignored.
+ *  per-instrument (e.g. 0.25 for ES, 0.00001 for FX). Non-positive and NaN values record a typed refusal.
  *  Call before #run_backtest / #run_backtest_full. */
 PF_API void strategy_set_syminfo_mintick(pf_strategy_t s, double mintick);
 
@@ -1668,7 +1670,7 @@ PF_API void strategy_set_syminfo_mintick(pf_strategy_t s, double mintick);
  *  PnL and MFE/MAE, open profit / mark-to-market equity (and the drawdown /
  *  runup extremes), percent-of-equity and cash position sizing, percent
  *  commission notionals, and the margin admission check. Set per-instrument
- *  (e.g. 50 for ES). Non-positive ignored. Call before #run_backtest / #run_backtest_full. */
+ *  (e.g. 50 for ES). Non-positive and NaN values record a typed refusal. Call before #run_backtest / #run_backtest_full. */
 PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue);
 
 /** Inject a fundamental/exchange metadata value by Pine member name (e.g.
@@ -1841,12 +1843,17 @@ PF_API int strategy_set_recorded_series(pf_strategy_t s, const char* key,
 #endif
 
 /** Returns the error message captured by the most recent #run_backtest /
- *  #run_backtest_full call on this strategy.
+ *  #run_backtest_full call or recorded setter failure on this strategy.
  *
- *  Returns an empty string when the run completed normally, or `NULL`
+ *  Returns an empty string when no error text was recorded, or `NULL`
  *  only when `s` itself is `NULL`. The pointer is owned by the engine
- *  and remains valid until the next #run_backtest / #run_backtest_full call (which clears
- *  the captured error before it begins).
+ *  and remains valid until an operation replaces or clears the error.
+ *  A void setter failure during setup survives the next refused run start;
+ *  the following start clears it before proceeding normally.
+ *  The failed setter did not apply its value, so retrying the start without
+ *  reapplying the setter uses the previous value.
+ *  The recorded text begins "Error before the first bar: " (or
+ *  "Error on bar N: " when a bar is being executed).
  *
  *  The runtime catches every `std::exception` derivative inside the
  *  engine's run loop so the C ABI never unwinds a C++ exception across
