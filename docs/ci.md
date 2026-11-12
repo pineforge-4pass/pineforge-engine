@@ -79,6 +79,12 @@ executables, including `test_abi_layout_probe`, whose size and offset pins
 apply on Linux x86_64 with GNU libstdc++. Configure refuses missing, disabled,
 skippable, private-fixture or `slow` rows. The target rebuilds those executables
 with their library.
+On a pull request, hosted x86 runs CTest only in the `build` and `build-debug`
+jobs of `gke-pr.yml`, and there only as `ctest --test-dir build -L '^fast$'`
+over the rows that `PINEFORGE_PR_FAST_TESTS` names, so a CTest row outside that
+list does not run on hosted x86; the maintainers' full `ci_verify.py` run on
+their x86-64 build hosts is the only full x86 test gate before merge, and the
+required `pineforge/verify` status carries it.
 PR proof legs build cold; trusted post workflows also build cold and contain
 no Actions cache restore or save.
 
