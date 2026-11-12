@@ -1336,12 +1336,15 @@ source::PineStrategyHost::BarTime source::PineStrategyHost::fixture_chart_time(
         || chart_timezone_ == "Etc/UTC") {
         (void)utc();
     } else {
+        bool local = false;
         try {
             tz_util::ScopedTimezone guard(chart_timezone_);
-            if (::localtime_r(&seconds, &tm) == nullptr) (void)utc();
-        } catch (...) {
-            (void)utc();
+            local = ::localtime_r(&seconds, &tm) != nullptr;
+        } catch (const std::exception& error) {
+            if (tz_util::timezone_failure_is_resource(error)) throw;
+        } catch (...) {  // Non-standard errors retain the UTC fallback.
         }
+        if (!local) (void)utc();
     }
     BarTime result;
     result.year = tm.tm_year + 1900;

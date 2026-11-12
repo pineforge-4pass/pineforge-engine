@@ -8,15 +8,91 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "7e903f977be655901c877a3550008aeee19b7f69a9ecfad986ca6f0d9129c3be"
+    "catalogSha256": "c42c7305aee58908b46b98768480d23f8346e1d010cfc32b6f83d594950408b4"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
     "after": "pineforge-run-failure-catalog/v1"
   },
   "metadataChanges": [],
-  "added": [],
-  "changed": [],
+  "added": [
+    {
+      "code": "pine_timezone_error",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "bar_index": {
+            "kind": "integer"
+          },
+          "function": {
+            "kind": "vocab",
+            "values": [
+              "time",
+              "time_close",
+              "timestamp",
+              "hour",
+              "minute",
+              "second",
+              "dayofmonth",
+              "dayofweek",
+              "month",
+              "year",
+              "weekofyear",
+              "format_time"
+            ]
+          },
+          "zone": {
+            "kind": "string"
+          }
+        },
+        "class": "strategy",
+        "description": "A timezone argument is not accepted by the calendar. TradingView runtime error RE10133. bar_index is the bar being executed, and -1 when the stop is raised before the first bar (the message then begins \"Error before the first bar: \" instead of \"Error on bar N: \").",
+        "english": [
+          "Error on bar {bar_index}: Incorrect `timezone` value for the {function}() function: \"{zone}\". The value must be a string in either UTC/GMT notation (e.g. \"UTC-5\", \"GMT+0530\") or an IANA time zone database name (e.g. \"America/New_York\")."
+        ],
+        "retryable": false,
+        "since": "1.12.0"
+      }
+    }
+  ],
+  "changed": [
+    {
+      "code": "pine_string_error",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.reason.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "substring_out_of_range",
+            "format_index_overflow"
+          ],
+          "after": [
+            "substring_out_of_range",
+            "format_index_overflow",
+            "invalid_regex_pattern",
+            "regex_resource_limit"
+          ]
+        },
+        {
+          "path": "english",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "basic_string::substr: __pos (which is {pos}) > this->size() (which is {size})",
+            "stoul"
+          ],
+          "after": [
+            "basic_string::substr: __pos (which is {pos}) > this->size() (which is {size})",
+            "stoul",
+            "Invalid regex pattern in the 'str.match' function.",
+            "A regular expression exceeds the limits of the engine's regular-expression library."
+          ]
+        }
+      ]
+    }
+  ],
   "removed": [],
   "deprecated": []
 }

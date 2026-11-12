@@ -369,6 +369,14 @@ public:
     // engine_unclassified_error; no failure reads "". Error paths only.
     static void note_failure_record(BacktestEngine& engine, std::string text,
                                     RunFailureValue value);
+    // Record and latch an idle void-setter refusal; preserve durable/in-flight
+    // and unconsumed first causes. The next begin consumes the latch and keeps
+    // the record; a later admitted begin clears it. The failed value was not
+    // applied: retrying the start without reapplying it uses the previous value.
+    // The recorded text begins "Error before the first bar: " (or
+    // "Error on bar N: " when a bar is being executed).
+    static void latch_void_setter_refusal(BacktestEngine& engine,
+                                         const std::exception* error) noexcept;
     static void clear_failure_record(BacktestEngine& engine) noexcept;
     static const char* failure_code_of(const BacktestEngine& engine) noexcept;
     static const char* failure_args_of(const BacktestEngine& engine) noexcept;
@@ -1159,6 +1167,10 @@ private:
         std::string text;
     };
     mutable RunFailureRecord run_failure_;
+    // Presentation/setup transport only, never broker or continuation state.
+    // Cleared when prepare_public_begin refuses the next attempt, leaving its
+    // status, code and text available until the following run's normal reset.
+    bool setup_failure_pending_ = false;
     void store_rendered(BacktestEngine& engine, const char* text, RunFailureValue value) const;
     // The running spec while the run runs (cache_running_policy), else the
     // lifecycle probe: inline, so the per-point reads of the spec below cost

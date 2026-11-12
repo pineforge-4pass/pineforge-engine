@@ -53,6 +53,7 @@
 #include <pineforge/report_sink_writer.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/runtime_context.hpp>
+#include <pineforge/run_failure.hpp>
 // Generated script lifecycle users must be rebuilt against this runtime.
 // These internal C++ capabilities change no public C POD or C signature.
 #define PINEFORGE_HAS_TRADE_HISTORY_POLICY_V1 1
@@ -653,7 +654,7 @@ protected:
     int64_t last_bar_time_ = 0;
     int last_bar_index_ = 0;
     // Forced intrabar path order (ABI v4 live-runtime surface, task 4): 0
-    // AUTO, 1 HIGH_FIRST, 2 LOW_FIRST. Any other value is clamped to AUTO by
+    // AUTO, 1 HIGH_FIRST, 2 LOW_FIRST. Any other value is refused by
     // set_path_order() -- this member is always one of {0,1,2}. Persistent
     // configuration -- reset_run_state() does not touch it. See
     // set_path_order(). No kernel path reads it: native-bound source hosts
@@ -2389,11 +2390,20 @@ public:
     // harness sets a non-default instrument.
     void set_syminfo_mintick(double m) {
         guard_native_mutation("set_syminfo_mintick");
-        if (m > 0.0) { syminfo_.mintick = m; syminfo_mintick_ = m; }
+        if (!(m > 0.0))
+            throw coded<std::invalid_argument>(RunFailureCode::symbol_metadata_rejected,
+                {{"field", "price_tick"}},
+                "price tick must be positive, got " + std::to_string(m));
+        syminfo_.mintick = m;
+        syminfo_mintick_ = m;
     }
     void set_syminfo_pointvalue(double pv) {
         guard_native_mutation("set_syminfo_pointvalue");
-        if (pv > 0.0) { syminfo_.pointvalue = pv; }
+        if (!(pv > 0.0))
+            throw coded<std::invalid_argument>(RunFailureCode::symbol_metadata_rejected,
+                {{"field", "point_value"}},
+                "point value must be positive, got " + std::to_string(pv));
+        syminfo_.pointvalue = pv;
     }
 
     virtual void set_syminfo_metadata(const std::string& key, double value);
@@ -2422,8 +2432,8 @@ public:
     // Force this run's intrabar path order (ABI v4 live-runtime surface,
     // task 4): 0 AUTO (the unchanged |H-O| vs |O-L| rule), 1 HIGH_FIRST
     // (O -> H -> L -> C), 2 LOW_FIRST (O -> L -> H -> C). Any other value is
-    // clamped to AUTO. A live probe runs the SAME forming bar under both
-    // forced orders and keeps only the fills that agree between the two --
+    // refused with a typed setting error. A live probe runs the SAME forming
+    // bar under both forced orders and keeps only the fills that agree between the two --
     // a fill that depends on which leg TradingView's own still-forming bar
     // will resolve to is path-dependent and must be suppressed rather than
     // guessed.
@@ -2437,7 +2447,11 @@ public:
     // before this flag existed.
     void set_path_order(int mode) {
         guard_native_mutation("set_path_order");
-        path_order_mode_ = (mode == 1 || mode == 2) ? mode : 0;
+        if (mode < 0 || mode > 2)
+            throw coded<std::invalid_argument>(RunFailureCode::setting_rejected,
+                {{"input", "path_order"}, {"reason", "invalid_enum_option"}},
+                "path_order must be 0, 1 or 2, got " + std::to_string(mode));
+        path_order_mode_ = mode;
     }
 
     // Live runtime G1 (spec §3.4): a deterministic, order-independent

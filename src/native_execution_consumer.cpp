@@ -27,6 +27,7 @@
 #include <limits>
 #include <new>
 #include <stdexcept>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -1381,6 +1382,7 @@ void NativeExecutionConsumer::fail(BacktestEngine& engine, NativeFailure failure
 
 void NativeExecutionConsumer::store_rendered(BacktestEngine& engine, const char* text,
                                              RunFailureValue value) const {
+    if (setup_failure_pending_) return;
     engine.last_error_ = text ? text : "";
     run_failure_.code = value.code;
     run_failure_.args = std::move(value.args);
@@ -1404,6 +1406,7 @@ void NativeExecutionConsumer::render_unclassified(BacktestEngine& engine,
 }
 
 void NativeExecutionConsumer::clear_rendered(BacktestEngine& engine) const noexcept {
+    if (setup_failure_pending_) return;
     engine.last_error_.clear();
     run_failure_.code = RunFailureCode::none;
     run_failure_.args.reset();
@@ -1413,16 +1416,56 @@ void NativeExecutionConsumer::clear_rendered(BacktestEngine& engine) const noexc
 void NativeExecutionConsumer::note_failure_record(BacktestEngine& engine, std::string text,
                                                   RunFailureValue value) {
     NativeExecutionConsumer& consumer = bound(engine);
+    if (consumer.setup_failure_pending_) return;
     engine.last_error_ = std::move(text);
     consumer.run_failure_.code = value.code;
     consumer.run_failure_.args = std::move(value.args);
     consumer.run_failure_.text = engine.last_error_;
 }
 
+void NativeExecutionConsumer::latch_void_setter_refusal(
+        BacktestEngine& engine, const std::exception* error) noexcept {
+    try {
+        NativeExecutionConsumer& consumer = bound(engine);
+        // Preserve a durable/in-flight run's cause or an unconsumed setup cause.
+        // A prior admission refusal or consumed setup record is replaceable.
+        if (consumer.failed() || consumer.in_attempt_call_
+            || std::holds_alternative<NativeRunning>(consumer.state_)
+            || consumer.setup_failure_pending_) return;
+        const auto value = error ? classify_run_failure(*error)
+            : RunFailureValue{RunFailureCode::engine_unclassified_error, nullptr};
+        engine.last_run_status_ = 1;
+        consumer.setup_failure_pending_ = true;
+        auto& record = consumer.run_failure_;
+        record.code = value.code;
+        record.args = value.args;
+        try {
+            engine.last_error_ = run_error_bar_prefix()
+                + (error ? error->what() : "unknown C++ exception");
+            record.text = engine.last_error_;
+        } catch (...) {
+            // Prefix rendering can be the allocation that failed. Keep this
+            // fallback unprefixed so its short text fits the small-string buffer.
+            engine.last_error_.clear();
+            record.text.clear();
+            engine.last_error_ = "setter failed";
+            record.text = engine.last_error_;
+        }
+    } catch (...) {
+        engine.last_run_status_ = 1;
+    }
+}
+
+void native_latch_void_setter_refusal(
+        BacktestEngine* engine, const std::exception* error) noexcept {
+    NativeExecutionConsumer::latch_void_setter_refusal(*engine, error);
+}
+
 void NativeExecutionConsumer::clear_failure_record(BacktestEngine& engine) noexcept {
-    engine.last_error_.clear();
     if (auto* consumer = engine.execution_consumer_slot_.ptr.get()) {
         static_cast<NativeExecutionConsumer*>(consumer)->clear_rendered(engine);
+    } else {
+        engine.last_error_.clear();
     }
 }
 
@@ -1845,6 +1888,11 @@ bool NativeExecutionConsumer::prepare_public_begin(
                                             : "native begin is forbidden while running";
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
         render(engine, text);
+        return false;
+    }
+    if (setup_failure_pending_) {
+        setup_failure_pending_ = false;
+        engine.last_run_status_ = 1;
         return false;
     }
     cache_policy_attempt_ = cache_policy_config_;
@@ -4685,6 +4733,18 @@ std::optional<std::int64_t> NativeExecutionConsumer::risk_day(
             return native_calendar::session_day_ordinal(*risk_day_calendar_, timestamp_ms);
         }
         return native_calendar::session_day_ordinal(calendar_, timestamp_ms);
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::length_error& error) {
+        // Calendar strings and spans exhausting their capacity are resource
+        // failures, not an instant the calendar cannot key.
+        throw coded<std::length_error>(RunFailureCode::out_of_memory, {}, error);
+    } catch (const std::system_error& error) {
+        if (error.code() == std::errc::not_enough_memory
+            || error.code() == std::errc::resource_unavailable_try_again) {
+            throw coded<std::system_error>(RunFailureCode::out_of_memory, {}, error);
+        }
+        return std::nullopt;
     } catch (...) {
         // A day the calendar cannot key is not a new day: the ledger keeps
         // the one it is on rather than inventing an ordinal.
@@ -9090,6 +9150,16 @@ NativeExecutionConsumer::SessionPoint NativeExecutionConsumer::session_point_res
         } else {
             point = {session_day_memo_->in_session_at(ms), session_day_memo_->ordinal};
         }
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::length_error& error) {
+        throw coded<std::length_error>(RunFailureCode::out_of_memory, {}, error);
+    } catch (const std::system_error& error) {
+        if (error.code() == std::errc::not_enough_memory
+            || error.code() == std::errc::resource_unavailable_try_again) {
+            throw coded<std::system_error>(RunFailureCode::out_of_memory, {}, error);
+        }
+        return {};
     } catch (...) {
         // Not held: the next ask resolves it again, as every ask used to.
         return {};
