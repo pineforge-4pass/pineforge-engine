@@ -1925,6 +1925,7 @@ bool NativeExecutionConsumer::prepare_public_begin(
     }
     interval_cache_.clear();
     day_labels_.clear();
+    script_period_ = {};
     begin_bars_ = args.bars;
     begin_n_ = args.n;
     begin_is_stream_ = run_is_stream_ = args.is_stream;
@@ -2213,6 +2214,12 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.s(kNativeConsumerSemanticVersion);
     f.s(kNativeDriverSemanticVersion);
     f.s(kNativeCalendarSemanticVersion);
+    if (script_period_.source) {
+        f.s("script-period-partition/v1");
+        f.i(script_period_.first_ms);
+        f.i(script_period_.last_ms);
+        f.u(script_period_.digest);
+    }
     // An explicit creation policy changes future callbacks. The unlimited
     // default adds no bytes to the historical continuation fold.
     if (map_pair_limit_ != 0) {
@@ -2627,9 +2634,18 @@ NativeExecutionConsumer::script_interval_resolved(std::int64_t timestamp) const 
     if (cache.script_prior.held && cache.script_prior.ts == timestamp) {
         interval = cache.script_prior.interval;
     } else {
-        interval = native_calendar::interval_containing(
-            calendar_, script_tf_, day_label_origin(timestamp), calendar_memo_);
-        if (!interval && legacy_tolerant_slot_labels()) interval = timestamp_partition(timestamp);
+        if (script_period_.source) {
+            native_calendar::PeriodBounds bounds;
+            if (script_period_.source->period_bounds(
+                    timestamp, bounds.open_ms, bounds.next_open_ms))
+                interval = native_calendar::interval_containing(
+                    calendar_, script_tf_, input_tf_, timestamp, bounds);
+        } else {
+            interval = native_calendar::interval_containing(
+                calendar_, script_tf_, day_label_origin(timestamp), calendar_memo_);
+        }
+        if (!interval && !script_period_.source && legacy_tolerant_slot_labels())
+            interval = timestamp_partition(timestamp);
         // A D bar the installed daily feed dates is labelled by its stamp
         // (prepare_day_labels), and a lookup by that label is the bar's own
         // (day_label_origin); its span, closes and successors stay the
@@ -9706,7 +9722,8 @@ bool NativeExecutionConsumer::script_bucket_completions(
     if (!spec) return false;
     completes.assign(n, 0U);
     boundary_completes.assign(n, 0U);
-    ScriptBucketCursor cursor(*spec);
+    ScriptBucketCursor cursor(*spec, script_period_.source,
+                              script_period_.first_ms, script_period_.last_ms);
     for (std::size_t i = 0; i < n; ++i) {
         const auto flags = cursor.next(bars[i]);
         completes[i] = flags.complete;
@@ -9799,6 +9816,14 @@ bool NativeExecutionConsumer::seal_stale_script(BacktestEngine& engine,
 
 void NativeExecutionConsumer::seal_script(BacktestEngine& engine, NativeCompletionKind kind) {
     if (!script_.has_data || script_.sealed) return;
+    // An installed chart partition returns bars beginning inside its input
+    // range. A leading bucket whose open precedes that range is not a chart
+    // bar and consumes no script index.
+    if (script_period_.source && script_.interval.open_ms < script_period_.first_ms) {
+        script_.sealed = true;
+        script_.has_data = false;
+        return;
+    }
     NativeCoordinate base;
     base.interval_index = script_.script_index;
     base.input_interval_index = script_.first_index;
@@ -9827,9 +9852,11 @@ bool NativeExecutionConsumer::final_script_session_closed() const noexcept {
     // traded input. Its last contributor reaches the script interval's
     // last-traded close; a feed that merely stops mid-interval does not.
     return script_.has_data && !script_.sealed && last_accepted_input_
-        && script_.interval.last_traded_close_ms > script_.interval.eligible_open_ms
-        && last_accepted_input_->last_traded_close_ms
-            >= script_.interval.last_traded_close_ms;
+        && ((!run_is_stream_ && script_period_.source
+             && script_.interval.open_ms >= script_period_.first_ms)
+            || (script_.interval.last_traded_close_ms > script_.interval.eligible_open_ms
+                && last_accepted_input_->last_traded_close_ms
+                    >= script_.interval.last_traded_close_ms));
 }
 
 // The selected window's consumption counts (declared with the seal helpers).
@@ -14505,22 +14532,65 @@ void NativeExecutionConsumer::fill_streamed_report(
     *out = local;
 }
 
-ScriptBucketCursor::ScriptBucketCursor(const NativeRunSpec& spec)
+void NativeExecutionConsumer::set_script_period_source(
+        std::shared_ptr<TimeframeAggregator::PeriodSource> source,
+        const Bar* bars, std::size_t n) {
+    script_period_ = {};
+    interval_cache_.clear();
+    if (!source || !bars || n == 0) return;
+    // Hash the partition's decisions once, without storing them or folding
+    // mutable generator/cache positions. Its borrowed OHLCV stays with the
+    // run. No bytes are added to the continuation of an ordinary calendar.
+    StateFold fold;
+    for (std::size_t i = 0; i < n; ++i) {
+        std::int64_t open = 0;
+        std::int64_t next = 0;
+        if (!source->period_bounds(bars[i].timestamp, open, next))
+            throw std::logic_error("chart period partition does not cover its input");
+        fold.i(open);
+        fold.i(next);
+    }
+    script_period_.source = std::move(source);
+    script_period_.first_ms = bars[0].timestamp;
+    script_period_.last_ms = run_is_stream_ ? 0 : bars[n - 1].timestamp;
+    script_period_.digest = fold.h;
+}
+
+ScriptBucketCursor::ScriptBucketCursor(const NativeRunSpec& spec,
+        std::shared_ptr<TimeframeAggregator::PeriodSource> source,
+        std::int64_t first_ms, std::int64_t last_ms)
     : script_tf_(spec.script_tf), input_tf_(spec.input_tf), timezone_(spec.timezone),
-      session_(spec.session), aggregator_(script_tf_, input_tf_, timezone_, session_) {}
+      session_(spec.session), aggregator_(script_tf_, input_tf_, timezone_, session_),
+      source_(std::move(source)), first_ms_(first_ms), last_ms_(last_ms) {
+    if (source_) aggregator_.set_native_period_source(source_);
+}
 
 ScriptBucketCursor::Flags ScriptBucketCursor::next(const Bar& bar) {
-    const AggregatedBar aggregate = aggregator_.feed(bar);
+    // With a generated partition, use its next-period comparison rather
+    // than the nominal one-day close projection of a DAY aggregator.
+    const auto next_ms = source_
+        ? bar.timestamp + static_cast<std::int64_t>(tf_to_seconds(input_tf_)) * 1000
+        : 0;
+    const AggregatedBar aggregate = aggregator_.feed(bar, next_ms);
     last_.complete = aggregate.is_complete ? 1U : 0U;
     last_.boundary = aggregate.is_complete
-        && tf_change(aggregate.bar.timestamp, bar.timestamp, script_tf_, timezone_, session_)
+        && (source_ ? aggregator_.period_changes(aggregate.bar.timestamp, bar.timestamp)
+                    : tf_change(aggregate.bar.timestamp, bar.timestamp,
+                                script_tf_, timezone_, session_))
             ? 1U : 0U;
+    if (source_) {
+        if (aggregate.bar.timestamp < first_ms_) last_ = {0U, 0U};
+        if (bar.timestamp == last_ms_
+            && aggregator_.bucket_open_ms(bar.timestamp) >= first_ms_)
+            last_.complete = 1U;
+    }
     ++position_;
     return last_;
 }
 
 void ScriptBucketCursor::reset() {
     aggregator_ = TimeframeAggregator(script_tf_, input_tf_, timezone_, session_);
+    if (source_) aggregator_.set_native_period_source(source_);
     position_ = 0;
     last_ = Flags{};
 }

@@ -5,6 +5,7 @@
 #include <pineforge/selected_window.h>
 #include <pineforge/native_module.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/session_time.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/ta.hpp>
 
@@ -69,6 +70,35 @@ public:
         if (callbacks == 0 && clean_first_bar_allocation != nullptr)
             *clean_first_bar_allocation = fail_alloc::attempts();
         const double quantity = get_syminfo_metadata(metadata_key);
+        if (callbacks == 0)
+            (void)submit({native_order::Transact{quantity}, "entry", ""});
+        if (callbacks == 2)
+            (void)submit({native_order::Transact{-quantity}, "exit", ""});
+        ++callbacks;
+    }
+};
+
+class DefaultValueHost : public Host {
+public:
+    const std::string& symbol_timezone() const { return syminfo_.timezone; }
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override { ++callbacks; }
+};
+
+class TypedRefusalHost : public DefaultValueHost {
+    coded<std::runtime_error> refusal_{
+        RunFailureValue{RunFailureCode::strategy_runtime_error, nullptr}, "setter refused"};
+public:
+    void set_syminfo_metadata(const std::string&, double) override { throw refusal_; }
+};
+
+class TimezoneSizingHost : public Host {
+public:
+    void on_native_bar(const Bar& bar, const NativeDecisionContext&) override {
+        if (callbacks == 0 && clean_first_bar_allocation != nullptr)
+            *clean_first_bar_allocation = fail_alloc::attempts();
+        // A dropped timezone changes the trade size even on a full-day session.
+        const double quantity = get_syminfo_metadata(metadata_key)
+            * (1.0 + local_hour(bar.timestamp, syminfo_.timezone));
         if (callbacks == 0)
             (void)submit({native_order::Transact{quantity}, "entry", ""});
         if (callbacks == 2)
@@ -536,6 +566,274 @@ void differential_sweep() {
                 completed_indexes.size(), clean.attempts, ranges.c_str());
 }
 
+void allocation_span_controls() {
+    void* blocks[5]{};
+    fail_alloc::arm_span(2, 2);
+    for (auto& block : blocks) block = ::operator new(1, std::nothrow);
+    const auto attempts = fail_alloc::attempts();
+    const bool fired = fail_alloc::disarm();
+    CHECK(attempts == 5 && fired);
+    CHECK(blocks[0] != nullptr && blocks[1] == nullptr && blocks[2] == nullptr
+          && blocks[3] != nullptr && blocks[4] != nullptr);
+    for (void* block : blocks) ::operator delete(block);
+
+    fail_alloc::arm_span(1, 3);
+    CHECK(::operator new(1, std::nothrow) == nullptr);
+    CHECK(fail_alloc::disarm());
+    void* after_disarm = ::operator new(1, std::nothrow);
+    CHECK(after_disarm != nullptr);
+    ::operator delete(after_disarm);
+    for (const auto span : {std::pair<std::size_t, std::size_t>{0, 2}, {1, 0}}) {
+        fail_alloc::arm_span(span.first, span.second);
+        void* block = ::operator new(1, std::nothrow);
+        CHECK(fail_alloc::attempts() == 1);
+        CHECK(!fail_alloc::disarm() && block != nullptr);
+        ::operator delete(block);
+    }
+}
+
+void check_constructed_consumer(pf_strategy_t strategy) {
+    pf_selected_window_config_v1 window{};
+    window.struct_size = static_cast<std::uint32_t>(sizeof window);
+    window.version = 1;
+    window.start_ms = 1736121600000LL;
+    window.end_ms = 1736121840000LL;
+    fail_alloc::arm(1);
+    const int result = strategy_set_selected_window_v1(strategy, &window);
+    const auto attempts = fail_alloc::attempts();
+    const bool fired = fail_alloc::disarm();
+    // With a consumer already present this descriptor stores without new.
+    // Only a missing consumer can return the allocation refusal -4 here.
+    CHECK(result != -4);
+    CHECK(result == 0);
+    CHECK(!fired && attempts == 0);
+    CHECK(strategy_set_selected_window_v1(strategy, nullptr) == 0);
+}
+
+template <typename H>
+void check_fresh_host_consumer() {
+    H host;
+    check_constructed_consumer(static_cast<BacktestEngine*>(&host));
+}
+
+void constructed_handles_have_consumers() {
+    check_fresh_host_consumer<Host>();
+    check_fresh_host_consumer<DefaultValueHost>();
+    check_fresh_host_consumer<TypedRefusalHost>();
+    check_fresh_host_consumer<TimezoneSizingHost>();
+    check_fresh_host_consumer<SourceHost>();
+    check_fresh_host_consumer<AdmissionHost>();
+    check_fresh_host_consumer<RenderingFailureHost>();
+    check_fresh_host_consumer<DurableFailureHost>();
+    check_fresh_host_consumer<SelectedQuoteHost>();
+}
+
+void check_failure_reads_without_allocation(pf_strategy_t strategy, const char* code) {
+    fail_alloc::arm_span(1, 3);
+    CHECK(strategy_last_run_status(strategy) == 1);
+    check_failure(strategy, code);
+    CHECK(std::strcmp(strategy_get_last_error_args(strategy), "{}") == 0);
+    const auto read_attempts = fail_alloc::attempts();
+    const bool read_fired = fail_alloc::disarm();
+    CHECK(read_attempts == 0 && !read_fired);
+}
+
+void setter_failure_survives_rendering_failure() {
+    native_module::Module<DefaultValueHost> clean;
+    Report expected;
+    run(clean, expected);
+    CHECK(strategy_last_run_status(handle(clean)) == 0);
+    CHECK(clean.callbacks == 4 && expected.value.input_bars_processed == 4);
+    CHECK(clean.symbol_timezone() == "UTC");
+
+    native_module::Module<DefaultValueHost> host;
+    const auto strategy = handle(host);
+    check_constructed_consumer(strategy);
+    fail_alloc::arm_span(1, 2);
+    strategy_set_syminfo_timezone(strategy, kTestTimezone);
+    const auto attempts = fail_alloc::attempts();
+    const bool fired = fail_alloc::disarm();
+    // Exactly two attempts exhaust the armed span: the setter's long string
+    // temporary and then the latch's first-bar-prefix rendering allocation.
+    // The constructed handle already owns its consumer.
+    CHECK(fired && attempts == 2);
+    check_failure_reads_without_allocation(strategy, "out_of_memory");
+    CHECK(std::strcmp(strategy_get_last_error(strategy), "setter failed") == 0);
+    const std::string text = strategy_get_last_error(strategy);
+    CHECK(host.symbol_timezone() == "UTC");
+    clear_run_failure(host);
+    note_run_failure(host, std::string("later"),
+                     RunFailureValue{RunFailureCode::engine_invariant, nullptr});
+    CHECK(text == strategy_get_last_error(strategy));
+
+    Report refused;
+    run(host, refused);
+    CHECK(strategy_last_run_status(strategy) == 1);
+    check_failure(strategy, "out_of_memory");
+    CHECK(text == strategy_get_last_error(strategy));
+    CHECK(host.callbacks == 0);
+    expect_no_sequence_report("setter and rendering allocation failures", host, refused);
+
+    Report following;
+    run(host, following);
+    CHECK(strategy_last_run_status(strategy) == 0);
+    CHECK(strategy_get_last_error(strategy)[0] == '\0');
+    CHECK(strategy_get_last_error_code(strategy)[0] == '\0');
+    CHECK(host.callbacks == 4 && following.value.input_bars_processed == 4);
+    CHECK(host.symbol_timezone() == "UTC");
+    CHECK(report_bytes(following.value) == report_bytes(expected.value));
+}
+
+void rendering_failure_keeps_setter_code() {
+    native_module::Module<TypedRefusalHost> host;
+    const auto strategy = handle(host);
+    check_constructed_consumer(strategy);
+    // The prebuilt exception and the short key need no allocation. The
+    // allocation after the setter throws belongs to prefix rendering.
+    fail_alloc::arm(1);
+    strategy_set_syminfo_metadata(strategy, "x", 1.0);
+    const auto attempts = fail_alloc::attempts();
+    const bool fired = fail_alloc::disarm();
+    CHECK(fired && attempts == 1);
+    check_failure_reads_without_allocation(strategy, "strategy_runtime_error");
+    CHECK(std::strcmp(strategy_get_last_error(strategy), "setter failed") == 0);
+    Report refused;
+    run(host, refused);
+    CHECK(strategy_last_run_status(strategy) == 1);
+    check_failure(strategy, "strategy_runtime_error");
+    CHECK(host.callbacks == 0);
+    expect_no_sequence_report("setter code after rendering failure", host, refused);
+}
+
+struct SpanOutcome : Outcome {
+    std::size_t delivered_refusals = 0;
+    std::size_t configure_allocation = 0;
+};
+
+SpanOutcome complete_span_run(std::size_t first, std::size_t span) {
+    native_module::Module<TimezoneSizingHost> host;
+    Report report;
+    SpanOutcome out;
+    if (first == 0) host.clean_first_bar_allocation = &out.first_bar_allocation;
+    // Construction is outside the operation; every setter, preparation,
+    // callback and report allocation is swept without sampling.
+    fail_alloc::arm_span(first, span);
+    configure(handle(host));
+    if (first == 0) out.configure_allocation = fail_alloc::attempts();
+    run(host, report);
+    if (first == 0) host.clean_first_bar_allocation = nullptr;
+    out.attempts = fail_alloc::attempts();
+    out.fired = fail_alloc::disarm();
+    out.delivered_refusals = fail_alloc::refusals();
+    out.status = strategy_last_run_status(handle(host));
+    out.code = strategy_get_last_error_code(handle(host));
+    out.text = strategy_get_last_error(handle(host));
+    // Match the harness: failure publishes no report, including partial rows.
+    if (!out.failed()) {
+        CHECK(report.value.trades_len == 1);
+        CHECK(report.value.input_bars_processed == 4);
+        out.bytes = report_bytes(report.value);
+    }
+    return out;
+}
+
+void consecutive_failure_differential_sweep(std::size_t span) {
+    // Measured spans 2/3: Release 490 and Debug 492 indexes, no completions;
+    // the byte comparison was exercised by the single-failure sweep.
+    // Second refusals reach diagnostics in src/native_execution_consumer.cpp: configure_spec
+    // calls store_rendered's string copy; begin_ready builds a RunFailureArgs vector.
+    CHECK(!complete_span_run(0, span).failed());
+    const SpanOutcome clean = complete_span_run(0, span);
+    CHECK(clean.status == 0 && !clean.failed());
+    CHECK(!clean.bytes.empty() && clean.attempts > 0);
+    const std::size_t first_bar_allocation = clean.first_bar_allocation;
+    CHECK(first_bar_allocation > 0 && first_bar_allocation < clean.attempts);
+    CHECK(clean.configure_allocation > 0);
+    CHECK(clean.configure_allocation <= first_bar_allocation);
+    std::printf("consecutive_failure_differential_sweep: span %zu configure() ends at "
+                "run allocation %zu\n", span, clean.configure_allocation);
+    std::printf("consecutive_failure_differential_sweep: span %zu, the first clean "
+                "bar callback follows run allocation %zu\n", span, first_bar_allocation);
+    std::size_t out_of_memory_failures = 0;
+    std::size_t typed_setup_refusals = 0;
+    std::map<std::string, std::size_t> setup_phase_codes;
+    std::vector<std::size_t> completed_indexes;
+    std::vector<std::size_t> refusal_counts(span, 0);
+    for (std::size_t first = 1; first <= clean.attempts; ++first) {
+        allocation_index = first;
+        const SpanOutcome observed = complete_span_run(first, span);
+        CHECK(observed.fired);
+        CHECK(observed.delivered_refusals >= 1);
+        CHECK(observed.delivered_refusals <= span);
+        if (observed.delivered_refusals >= 1 && observed.delivered_refusals <= span)
+            ++refusal_counts[observed.delivered_refusals - 1];
+        if (observed.failed()) {
+            if (first <= first_bar_allocation) {
+                ++setup_phase_codes[observed.code];
+                bool named_setup_code = false;
+                for (const char* code : kSetupPhaseCodes)
+                    named_setup_code = named_setup_code || observed.code == code;
+                if (!named_setup_code || observed.text.empty()) {
+                    std::fprintf(stderr,
+                        "FAIL line %d allocation %zu span %zu: expected a typed setup "
+                        "refusal; observed status=%d code='%s' text='%s'\n",
+                        __LINE__, first, span, observed.status, observed.code.c_str(),
+                        observed.text.c_str());
+                }
+                CHECK(!observed.code.empty());
+                CHECK(named_setup_code);
+                if (!observed.code.empty() && !observed.text.empty()) ++typed_setup_refusals;
+            } else {
+                if (observed.code != "out_of_memory" || observed.text.empty()) {
+                    std::fprintf(stderr,
+                        "FAIL line %d allocation %zu span %zu: expected out_of_memory "
+                        "after the first clean bar boundary %zu; observed status=%d "
+                        "code='%s' text='%s'\n", __LINE__, first, span,
+                        first_bar_allocation, observed.status, observed.code.c_str(),
+                        observed.text.c_str());
+                }
+                CHECK(observed.code == "out_of_memory");
+                if (observed.code == "out_of_memory" && !observed.text.empty())
+                    ++out_of_memory_failures;
+            }
+            CHECK(!observed.text.empty());
+            CHECK(observed.bytes.empty());
+        } else {
+            completed_indexes.push_back(first);
+            CHECK(observed.status == 0);
+            CHECK(observed.bytes == clean.bytes);
+        }
+    }
+    allocation_index = 0;
+    std::size_t refusal_indexes = 0;
+    for (const auto count : refusal_counts) refusal_indexes += count;
+    CHECK(refusal_indexes == clean.attempts);
+    CHECK(out_of_memory_failures > 0);
+    std::printf("consecutive_failure_differential_sweep: span %zu swept all %zu run "
+                "allocations, %zu out_of_memory failures, %zu typed setup refusals\n",
+                span, clean.attempts, out_of_memory_failures, typed_setup_refusals);
+    std::string code_counts;
+    for (const auto& entry : setup_phase_codes) {
+        if (!code_counts.empty()) code_counts += ",";
+        code_counts += entry.first + "=" + std::to_string(entry.second);
+    }
+    std::printf("consecutive_failure_differential_sweep: span %zu setup-phase codes: %s\n",
+                span, code_counts.c_str());
+    const std::string ranges = compact_allocation_ranges(completed_indexes);
+    std::printf("consecutive_failure_differential_sweep: span %zu, %zu of %zu injected "
+                "runs completed, at allocation indexes: %s\n",
+                span, completed_indexes.size(), clean.attempts, ranges.c_str());
+    if (span == 3) {
+        std::printf("consecutive_failure_differential_sweep: span %zu delivered refusals: "
+                    "exactly 1=%zu, exactly 2=%zu, exactly 3=%zu\n",
+                    span, refusal_counts[0], refusal_counts[1], refusal_counts[2]);
+    } else {
+        std::printf("consecutive_failure_differential_sweep: span %zu delivered refusals: "
+                    "exactly 1=%zu, exactly 2=%zu\n",
+                    span, refusal_counts[0], refusal_counts[1]);
+    }
+}
+
 void invalid_values() {
     struct NumericCase {
         void (*setter)(pf_strategy_t, double);
@@ -843,6 +1141,12 @@ void void_setter_prefix_controls() {
 
 int main() {
     try {
+        allocation_span_controls();
+        constructed_handles_have_consumers();
+        setter_failure_survives_rendering_failure();
+        rendering_failure_keeps_setter_code();
+        consecutive_failure_differential_sweep(2);
+        consecutive_failure_differential_sweep(3);
         sweep_setter<Host>(strategy_set_syminfo_timezone, kTestTimezone);
         sweep_setter<Host>(strategy_set_syminfo_session, session);
         sweep_setter<Host>(metadata_setter, metadata_key);
