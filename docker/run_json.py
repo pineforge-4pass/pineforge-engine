@@ -3406,6 +3406,9 @@ def apply_syminfo(lib, strat, syminfo_path):
     syminfo_unreadable{reason: io|not_json|not_object|value_type}; a library
     without the setter a key needs is strategy_library_incompatible{reason:
     setter_missing, missing}.
+    Non-positive or NaN mintick is symbol_feeds_refused{reason:
+    syminfo_mintick_invalid}, as for --symbol-feeds. Non-positive or NaN
+    pointvalue is symbol_metadata_rejected{field: point_value}.
     series_origin_ms is a positive JSON integer declaring the reference series'
     first bar open. Absent/null applies nothing; malformed values are
     syminfo_unreadable{reason: value_type}.
@@ -3476,6 +3479,12 @@ def apply_syminfo(lib, strat, syminfo_path):
         except (TypeError, ValueError, OverflowError):
             raise unreadable(f"syminfo.{key} must be {kind}, got {json.dumps(si[key])[:80]}",
                              "value_type") from None
+        if key in ("mintick", "pointvalue") and not value > 0.0:
+            message = f"syminfo.{key} must be positive, got {json.dumps(si[key])[:80]}"
+            if key == "mintick":
+                raise SyminfoError(message, "symbol_feeds_refused",
+                                   {"reason": "syminfo_mintick_invalid"})
+            raise SyminfoError(message, "symbol_metadata_rejected", {"field": "point_value"})
         calls.append((setter(name, key), value))
     for call in calls:
         call[0](strat, *call[1:])

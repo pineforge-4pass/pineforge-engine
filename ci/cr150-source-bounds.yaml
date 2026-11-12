@@ -103,7 +103,11 @@ ceilings:
   # Two more unreviewed groups: the declarations of the run-error bar prefix
   # function, in the installed header and in its source. Each call returns one
   # short string and nothing retains it: 1413 -> 1415.
-  unreviewed: 1415
+  # Three more unreviewed groups on failure paths: the number-to-text
+  # temporaries of the three setter refusal messages in the engine header, and
+  # the message string and its temporary in the timezone refusal. Each builds
+  # one short message, once, when a value is refused: 1415 -> 1418.
+  unreviewed: 1418
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -228,6 +232,7 @@ entries:
   - {id: "U0082", file: "include/pineforge/engine.hpp", symbol: "security_eval_states_", ops: ["decl"], container: "std::vector<SecurityEvalState>", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 1484}
   - {id: "U0083", file: "include/pineforge/engine.hpp", symbol: "security_input_tf_", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 1487}
   - {id: "U0084", file: "include/pineforge/engine.hpp", symbol: "session", ops: ["assign", "decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 483}
+  - {id: "U1850", file: "include/pineforge/engine.hpp", symbol: "std::to_string", ops: ["temp"], container: "unresolved by the index: std::to_string(...)", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 2396}
   - {id: "U0085", file: "include/pineforge/engine.hpp", symbol: "stream_order_actions_", ops: ["decl"], container: "std::vector<StreamOrderAction>", owner: "engine-core", phase: "bar", state: "pending-flat-memory", inventory: "E17", grows_with: ["unproved-bound"], line: 1452}
   - {id: "U0086", file: "include/pineforge/engine.hpp", symbol: "syminfo_metadata_", ops: ["decl"], container: "std::unordered_map<std::string, double>", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 676}
   - {id: "U0087", file: "include/pineforge/engine.hpp", symbol: "tf", ops: ["decl"], container: "std::string", owner: "engine-core", phase: "unclassified", state: "unreviewed", line: 1457}
@@ -1279,7 +1284,9 @@ entries:
   - {id: "U1507", file: "src/timeframe.cpp", symbol: "starts", ops: ["decl"], container: "std::vector<int>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", note: "CR150-CX 10-26 (c171d), class: scratch of one call. Local in SessionDaySchedule::parse_many (more than 8 windows only): sized by the number of windows in ONE session string, an input value; freed on return; nothing is retained across bars. Bound not argued, so OPEN.", line: 1930}
   - {id: "U1183", file: "src/timeframe.cpp", symbol: "trade_instants", ops: ["decl"], container: "std::vector<int64_t>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1770}
   - {id: "U1184", file: "src/timeframe.cpp", symbol: "tz", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", note: "Partition setup copies the caller timezone into one p.tz string in the explicit-cache overload. Payload length follows the input string, with no proved byte cap; other timezone declarations stay inventoried.", line: 200}
+  - {id: "U1851", file: "src/timezone.cpp", symbol: "<temp:string>", ops: ["temp"], container: "unresolved by the index: std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 83}
   - {id: "U1186", file: "src/timezone.cpp", symbol: "body", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 71}
+  - {id: "U1852", file: "src/timezone.cpp", symbol: "english", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 83}
   - {id: "U1188", file: "src/timezone.cpp", symbol: "hour_s", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 72}
   - {id: "U1189", file: "src/timezone.cpp", symbol: "minute_s", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 73}
   - {id: "U1190", file: "src/timezone.cpp", symbol: "normalize_timezone_for_posix", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 50}

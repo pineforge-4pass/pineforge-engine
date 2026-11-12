@@ -4171,6 +4171,45 @@
   },
   {
    "file": "include/pineforge/engine.hpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #2",
+    "class BacktestEngine #1",
+    "void set_syminfo_mintick ( double m ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/engine.hpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #2",
+    "class BacktestEngine #1",
+    "void set_syminfo_pointvalue ( double pv ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/engine.hpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #2",
+    "class BacktestEngine #1",
+    "void set_path_order ( int mode ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "include/pineforge/engine.hpp",
    "symbol": "message",
    "scope": [
     "namespace pineforge #1",
@@ -13665,7 +13704,7 @@
    "scope": [
     "extern #1",
     "PF_API void strategy_set_chart_timezone ( pf_strategy_t s , const char * tz ) #1",
-    "pf_cabi_void ( [ & ] #1"
+    "pf_cabi_void ( s , [ & ] #1"
    ],
    "cls": "temp",
    "spelling": "std :: string",
@@ -13677,7 +13716,7 @@
    "scope": [
     "extern #1",
     "PF_API void strategy_set_chart_timezone ( pf_strategy_t s , const char * tz ) #1",
-    "pf_cabi_void ( [ & ] #1"
+    "pf_cabi_void ( s , [ & ] #1"
    ],
    "cls": "temp",
    "spelling": "std :: string",
@@ -13689,7 +13728,7 @@
    "scope": [
     "extern #1",
     "PF_API void strategy_set_syminfo_timezone ( pf_strategy_t s , const char * tz ) #1",
-    "pf_cabi_void ( [ & ] #1"
+    "pf_cabi_void ( s , [ & ] #1"
    ],
    "cls": "temp",
    "spelling": "std :: string",
@@ -13701,7 +13740,7 @@
    "scope": [
     "extern #1",
     "PF_API void strategy_set_syminfo_session ( pf_strategy_t s , const char * session ) #1",
-    "pf_cabi_void ( [ & ] #1"
+    "pf_cabi_void ( s , [ & ] #1"
    ],
    "cls": "temp",
    "spelling": "std :: string",
@@ -13713,7 +13752,7 @@
    "scope": [
     "extern #1",
     "PF_API void strategy_set_syminfo_type ( pf_strategy_t s , const char * type ) #1",
-    "pf_cabi_void ( [ & ] #1"
+    "pf_cabi_void ( s , [ & ] #1"
    ],
    "cls": "temp",
    "spelling": "std :: string",
@@ -13749,7 +13788,7 @@
    "scope": [
     "extern #1",
     "PF_API void strategy_set_syminfo_metadata ( pf_strategy_t s , const char * key , double value ) #1",
-    "pf_cabi_void ( [ & ] #1"
+    "pf_cabi_void ( s , [ & ] #1"
    ],
    "cls": "temp",
    "spelling": "std :: string",
@@ -18702,6 +18741,62 @@
     "namespace pineforge #1",
     "inline namespace engine_script_run_v20 #1",
     "void NativeExecutionConsumer :: note_failure_record ( BacktestEngine & engine , std :: string text , RunFailureValue value ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "text = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "last_error_",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: latch_void_setter_refusal ( BacktestEngine & engine , const std :: exception * error ) noexcept #1",
+    "try #1",
+    "try #1"
+   ],
+   "cls": "assign",
+   "spelling": "last_error_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "text",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: latch_void_setter_refusal ( BacktestEngine & engine , const std :: exception * error ) noexcept #1",
+    "try #1",
+    "try #1"
+   ],
+   "cls": "assign",
+   "spelling": "text = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "last_error_",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: latch_void_setter_refusal ( BacktestEngine & engine , const std :: exception * error ) noexcept #1",
+    "try #1",
+    "catch ( . . . ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "last_error_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "text",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: latch_void_setter_refusal ( BacktestEngine & engine , const std :: exception * error ) noexcept #1",
+    "try #1",
+    "catch ( . . . ) #1"
    ],
    "cls": "assign",
    "spelling": "text = . . .",
@@ -29097,10 +29192,21 @@
   },
   {
    "file": "src/session_time.cpp",
+   "symbol": "tz",
+   "scope": [
+    "namespace pineforge #1",
+    "bool passes_session_filter ( const std :: string & session , const std :: string & tz_in , int64_t bar_ms ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "tz = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/session_time.cpp",
    "symbol": "windows",
    "scope": [
     "namespace pineforge #1",
-    "bool passes_session_filter ( const std :: string & session , const std :: string & tz , int64_t bar_ms ) #1"
+    "bool passes_session_filter ( const std :: string & session , const std :: string & tz_in , int64_t bar_ms ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -29111,7 +29217,7 @@
    "symbol": "day_filter",
    "scope": [
     "namespace pineforge #1",
-    "bool passes_session_filter ( const std :: string & session , const std :: string & tz , int64_t bar_ms ) #1"
+    "bool passes_session_filter ( const std :: string & session , const std :: string & tz_in , int64_t bar_ms ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: unordered_set < int >",
@@ -29122,7 +29228,7 @@
    "symbol": "body",
    "scope": [
     "namespace pineforge #1",
-    "bool passes_session_filter ( const std :: string & session , const std :: string & tz , int64_t bar_ms ) #1"
+    "bool passes_session_filter ( const std :: string & session , const std :: string & tz_in , int64_t bar_ms ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -29133,7 +29239,7 @@
    "symbol": "body",
    "scope": [
     "namespace pineforge #1",
-    "bool passes_session_filter ( const std :: string & session , const std :: string & tz , int64_t bar_ms ) #1"
+    "bool passes_session_filter ( const std :: string & session , const std :: string & tz_in , int64_t bar_ms ) #1"
    ],
    "cls": "assign",
    "spelling": "body = . . .",
@@ -29185,10 +29291,21 @@
   },
   {
    "file": "src/session_time.cpp",
+   "symbol": "tz",
+   "scope": [
+    "namespace pineforge #1",
+    "bool session_in_premarket ( const std :: string & session , const std :: string & tz_in , int64_t bar_ms ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "tz = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/session_time.cpp",
    "symbol": "windows",
    "scope": [
     "namespace pineforge #1",
-    "bool session_in_premarket ( const std :: string & session , const std :: string & tz , int64_t bar_ms ) #1"
+    "bool session_in_premarket ( const std :: string & session , const std :: string & tz_in , int64_t bar_ms ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -29199,7 +29316,7 @@
    "symbol": "day_filter",
    "scope": [
     "namespace pineforge #1",
-    "bool session_in_premarket ( const std :: string & session , const std :: string & tz , int64_t bar_ms ) #1"
+    "bool session_in_premarket ( const std :: string & session , const std :: string & tz_in , int64_t bar_ms ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: unordered_set < int >",
@@ -29207,10 +29324,21 @@
   },
   {
    "file": "src/session_time.cpp",
+   "symbol": "tz",
+   "scope": [
+    "namespace pineforge #1",
+    "bool session_in_postmarket ( const std :: string & session , const std :: string & tz_in , int64_t bar_ms ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "tz = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/session_time.cpp",
    "symbol": "windows",
    "scope": [
     "namespace pineforge #1",
-    "bool session_in_postmarket ( const std :: string & session , const std :: string & tz , int64_t bar_ms ) #1"
+    "bool session_in_postmarket ( const std :: string & session , const std :: string & tz_in , int64_t bar_ms ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -29221,10 +29349,43 @@
    "symbol": "day_filter",
    "scope": [
     "namespace pineforge #1",
-    "bool session_in_postmarket ( const std :: string & session , const std :: string & tz , int64_t bar_ms ) #1"
+    "bool session_in_postmarket ( const std :: string & session , const std :: string & tz_in , int64_t bar_ms ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: unordered_set < int >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/session_time.cpp",
+   "symbol": "tz",
+   "scope": [
+    "namespace pineforge #1",
+    "bool session_in_market ( const std :: string & session , const std :: string & tz_in , int64_t bar_ms , const std :: string & chart_tf ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "tz = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/session_time.cpp",
+   "symbol": "tz",
+   "scope": [
+    "namespace pineforge #1",
+    "bool session_in_premarket ( const std :: string & session , const std :: string & tz_in , int64_t bar_ms , const std :: string & chart_tf ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "tz = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/session_time.cpp",
+   "symbol": "tz",
+   "scope": [
+    "namespace pineforge #1",
+    "bool session_in_postmarket ( const std :: string & session , const std :: string & tz_in , int64_t bar_ms , const std :: string & chart_tf ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "tz = . . .",
    "ordinal": 1
   },
   {
@@ -36886,7 +37047,7 @@
    "symbol": "timezone",
    "scope": [
     ":: pineforge :: source :: detail :: PositionTailDiagnostics :: pineforge :: source :: detail :: PositionTailNoDiagnostics namespace pineforge :: source #1",
-    "std :: int64_t PineExecutionAdapter :: chart_day_key ( std :: int64_t timestamp_ms ) const noexcept #1"
+    "std :: int64_t PineExecutionAdapter :: chart_day_key ( std :: int64_t timestamp_ms ) const #1"
    ],
    "cls": "assign",
    "spelling": "timezone = . . .",
@@ -46644,6 +46805,32 @@
    ],
    "cls": "grow",
    "spelling": "heap_close . resize ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timezone.cpp",
+   "symbol": "english",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace tz_util #1",
+    "const std :: string & resolve_script_timezone ( const std :: string & timezone , const char * function ) #1",
+    "if ( ! native_calendar :: timezone_accepted ( timezone ) ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/timezone.cpp",
+   "symbol": "<temp:string>",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace tz_util #1",
+    "const std :: string & resolve_script_timezone ( const std :: string & timezone , const char * function ) #1",
+    "if ( ! native_calendar :: timezone_accepted ( timezone ) ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: string",
    "ordinal": 1
   },
   {

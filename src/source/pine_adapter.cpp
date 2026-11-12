@@ -18138,7 +18138,7 @@ constexpr std::int64_t kChartDayCivilSpan = std::int64_t{1} << 40;
 // localtime_r under a chart timezone, gmtime_r on a UTC chart, each falling
 // back to gmtime_r as it always did.
 [[gnu::noinline]] std::int64_t libc_chart_day_key(const std::string& timezone, bool utc_chart,
-                                                  std::time_t seconds) noexcept {
+                                                  std::time_t seconds) {
     std::tm fields{};
     const auto utc = [&]() {
         return ::gmtime_r(&seconds, &fields) != nullptr;
@@ -18146,17 +18146,17 @@ constexpr std::int64_t kChartDayCivilSpan = std::int64_t{1} << 40;
     if (utc_chart) {
         if (!utc()) return std::numeric_limits<std::int64_t>::min();
     } else {
+        bool local = false;
         try {
             tz_util::ScopedTimezone guard(timezone);
-            if (::localtime_r(&seconds, &fields) == nullptr) {
-                if (!utc()) return std::numeric_limits<std::int64_t>::min();
-            }
-        } catch (...) {
-            // A malformed staged timezone must not turn a source-policy
-            // read into an unhashable partial state.  The run-spec validator
-            // owns rejection; preserve the legacy UTC fallback meanwhile.
-            if (!utc()) return std::numeric_limits<std::int64_t>::min();
+            local = ::localtime_r(&seconds, &fields) != nullptr;
+        } catch (const std::exception& error) {
+            if (tz_util::timezone_failure_is_resource(error)) throw;
+        } catch (...) {  // Non-standard errors retain the UTC fallback.
         }
+        // The run-spec validator owns name rejection. Preserve the legacy
+        // UTC fallback for other failures, while resource failures end the run.
+        if (!local && !utc()) return std::numeric_limits<std::int64_t>::min();
     }
     return static_cast<std::int64_t>(fields.tm_mday) * 100
         + static_cast<std::int64_t>(fields.tm_mon + 1);
@@ -18164,7 +18164,7 @@ constexpr std::int64_t kChartDayCivilSpan = std::int64_t{1} << 40;
 
 }  // namespace
 
-std::int64_t PineExecutionAdapter::chart_day_key(std::int64_t timestamp_ms) const noexcept {
+std::int64_t PineExecutionAdapter::chart_day_key(std::int64_t timestamp_ms) const {
     const std::time_t seconds = static_cast<std::time_t>(timestamp_ms / 1000);
     const std::string& timezone = staged_.chart_timezone;
     const bool utc_chart = timezone.empty() || timezone == "UTC" || timezone == "Etc/UTC";
