@@ -9,10 +9,10 @@ The current PR admission and post-merge trigger map is:
 | `gke-pr / preflight`, `gke-pr / build-x86-gcc133` | Hosted preflight, tiered by the main classifier; native x86 GNU 13.3.0 full Release build | Hosted github-only preflight; native x86 GNU 13.3.0 full Release build | Not triggered |
 | `gke-pr / build`, `build-debug`, parity subset | Hosted proof legs for code changes | Skipped | Not triggered |
 | `gke-pr / result` | Hosted result with a second classification read and required x86 build | Hosted result with a second classification read and required x86 build | Not triggered |
-| `ci-post.yml` proof jobs | Not triggered | Not triggered | Complete Release, Debug, native, kernel and parity profiles plus the required x86 build |
-| `corpus-parity.yml` | Not triggered | Not triggered | Full parity and its post-merge subset |
+| `ci-post.yml` proof jobs | Not triggered | Not triggered | Release and Debug smoke on amd64 and arm64, an ASan and UBSan smoke, the parity subset and the required x86 build; the full profiles run in the lab's verify (see "Where the full suites run") |
+| `corpus-parity.yml` | Not triggered | Not triggered | The post-merge subset; the full parity is the lab's `parity` step, and a manual dispatch can still run it |
 | `docs.yml` | Documentation build except `.github/**`-only changes | Skipped by its path filter | Documentation build on its own trigger |
-| `gke-pr / build-arm` | Hosted arm64 Debug build and tests when `arm_relevant=true` | Skipped | Not triggered |
+| `gke-pr / build-arm` | Hosted arm64 Debug smoke (the PR smoke target and the `fast` label) when `arm_relevant=true` | Skipped | Not triggered |
 
 The admission workflow is defined on `main` and runs on hosted `ubuntu-24.04`
 runners with no runner-group allowlist entry. Its proof legs use the same hosted
@@ -21,12 +21,49 @@ failure, cancellation, disagreement or an unanswered class. The native x86 GNU 1
 
 The nightly CI schedule is 01:30 UTC. The existing docs-only classification
 still skips the existing code proof jobs on a documentation-only PR or main push; the native x86 build remains required. Both
-preflight tiers together retain the original full stage inventory; the slow
-tier still runs on a docs-only main push. Scheduled and manual runs execute
-every profile. `ci.yml` retains authorization and draft event handling;
+preflight tiers together retain the original full stage inventory; GitHub CI runs
+the fast tier, and the lab's `preflight` step runs both. Scheduled and manual runs execute
+the same smoke legs as a push. `ci.yml` retains authorization and draft event handling;
 `gke-pr` owns admission, classification, preflight and proof legs. Docs-only
 and GitHub-only changes still run preflight, while only the proof legs skip.
 Failed, cancelled or unclassified work is red in the hosted result.
+
+## Where the full suites run
+
+Every CI round, post-merge included, takes 15 minutes or less. On GitHub's
+standard 4-vCPU runners a full profile rebuilds the engine from a cold compiler
+cache, and that build alone took 11-40 minutes per leg in post-merge run
+43205609467 (123.5 minutes end to end), so no shard count fits. `ci-post.yml` and `gke-pr.yml` therefore run smoke legs: the PR smoke target
+(`pineforge_pr_smoke`) and the `fast` CTest label for Release and Debug on
+`ubuntu-24.04` and `ubuntu-24.04-arm`, and an ASan and UBSan smoke on `ubuntu-24.04`.
+The full suites run in the lab's verify, which every engine merge already requires
+on the exact head tree (the `pineforge/verify` status):
+
+| Suite that left GitHub CI | Lab verify step | Note |
+| --- | --- | --- |
+| x86 Release full profile | `release` | |
+| x86 Debug full profile | `debug` | |
+| Sanitizers full profile (ASan and UBSan) | `sanitizers` | |
+| Kernel-only profile | `kernel` | |
+| Slow preflight tier | `preflight` | The lab runs `scripts/ci_preflight.py` with tier `all`, which keeps every slow stage. |
+| Full corpus parity | `parity` | The same `scripts/check_corpus_parity.sh`, full mode. |
+| arm64 Release and Debug full profiles | Not covered | See the interim rule below. |
+| `native` profile | Not covered | See the interim rule below. |
+| `live-sanitizers` and `live-tsan` profiles | Not covered | See the interim rule below. |
+
+The lab requires the steps a pull request's diff can fail: a change under `src/` or
+`include/` gets the full set, a workflow-only change gets `preflight` and `docs`,
+and a test-only change gets the build profiles without the parity steps.
+
+Until the lab runs the five uncovered suites, the maintainers run each of them once
+on the exact head, on an arm64 Linux host, before any merge that touches `src/` or
+`include/` and before any release tag.
+
+A release tag needs a green `ci-post.yml` run (the smoke legs) on its commit and
+the lab's verify evidence for its tree. Sections below that describe the
+post-merge shard matrices, their leg aggregates, `preflight-slow`, the
+`native-live.yml` call and the scheduled full corpus parity record the CI before
+this change.
 
 `rerun-preempted.yml` retries only failed jobs of completed, failed `CI post-merge`
 push/schedule runs on `main`, including called native jobs. Every failed job must
@@ -198,8 +235,8 @@ source-only header trees, and compile the native public roots and examples;
 the preflight source guard rejects those includes before a build.
 
 CI uses Ubuntu 24.04 amd64 and arm64 cells and selects Python 3.12 explicitly.
-The amd64 post build shards use the hosted `ubuntu-24.04` image and the two arm64 post cells use
-`ubuntu-24.04-arm`; each runs directly on that image. All three build jobs refuse an OS mismatch.
+The amd64 post smoke legs use the hosted `ubuntu-24.04` image and the two arm64 post smoke legs use
+`ubuntu-24.04-arm`; each runs directly on that image. Both smoke jobs refuse a machine mismatch.
 Hosted pins cover every PR and post job outside `release.yml`; the existing hosted release cell keeps `ubuntu-22.04-arm`.
 The runner-loss controller has its own exact hosted `ubuntu-24.04` pin.
 CMake uses the same interpreter as the
@@ -1633,7 +1670,7 @@ runs, and this page does not claim either target as met.
 ## Runners and time limits
 
 Release jobs run on hosted `ubuntu-24.04`, with the ARM artifact build on `ubuntu-22.04-arm`; verification uses `ubuntu-24.04` for x86 and `ubuntu-24.04-arm` for arm64.
-The four amd64 post legs, arm64 cells, preflight, parity and native verification use the pinned hosted images; their aggregates use the hosted x86 image. Promotion's `promote-guard` and docs-post/probe `authz` each use one `ubuntu-24.04` instance in separate roots; their image must include `gh` for permission lookups.
+The post smoke legs, the sanitizer smoke, preflight and the parity subset use the pinned hosted images; the aggregate uses the hosted x86 image. Promotion's `promote-guard` and docs-post/probe `authz` each use one `ubuntu-24.04` instance in separate roots; their image must include `gh` for permission lookups.
 The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers are unsharded. Each runner label remains a literal, checked per job or pinned native profile row:
 
 | Workflow | Events/callers | Inline jobs' `runs-on` |
@@ -1642,9 +1679,9 @@ The native matrix is exactly `1..4` with `--ctest-shard I/4`; live sanitizers ar
 | `gke-pr.yml` | `pull_request_target` to `main` | All jobs hosted: x86 `ubuntu-24.04` for admission, result, preflight, native x86 Release `build-x86-gcc133`, Release `build`, Debug and the parity subset; arm64 `ubuntu-24.04-arm` |
 | `docs.yml` | `pull_request`, except `.github/**`-only diffs | `authz` and `build`: hosted `ubuntu-24.04` |
 | `rerun-preempted.yml` | `workflow_run`: completed `CI post-merge` push/schedule runs on `main` | `rerun`: hosted `ubuntu-24.04` |
-| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | All jobs hosted: x86 `ubuntu-24.04` for the seven light jobs, native x86 Release `build-x86-gcc133`, Release, Debug, sanitizers, kernel and the preflight tiers; arm64 `ubuntu-24.04-arm` |
-| `corpus-parity.yml` | Schedule, dispatch, post CI callers | `authz`, full parity and subset: `ubuntu-24.04` |
-| `native-live.yml` | Dispatch and post CI callers on `main` | `authz`, both aggregates and the native shards: `ubuntu-24.04`; `matrix.runner`: live-sanitizers and live-tsan both `ubuntu-24.04` |
+| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | All jobs hosted: x86 `ubuntu-24.04` for the three light jobs, native x86 Release `build-x86-gcc133`, preflight, the amd64 smoke and the sanitizer smoke; arm64 `ubuntu-24.04-arm` for the arm64 smoke |
+| `corpus-parity.yml` | Dispatch, post CI callers | `authz`, full parity and subset: `ubuntu-24.04` |
+| `native-live.yml` | Dispatch | `authz`, both aggregates and the native shards: `ubuntu-24.04`; `matrix.runner`: live-sanitizers and live-tsan both `ubuntu-24.04` |
 | `docs-post.yml` | Push to `main`, dispatch | `authz` and credentialed `build`: `ubuntu-24.04` |
 | `release.yml` | Dispatch from `main`; the toolchain caller additionally checks its ref | `release`, `prebuilt-x86`, `upload` and `notify-hub`: hosted `ubuntu-24.04`; `prebuilt-arm`: hosted `ubuntu-22.04-arm` |
 | `prebuilt-hosted-diagnostic.yml` | Same-repository PRs to `main` | `observe`: hosted `ubuntu-24.04`, read-only host observations |
@@ -1660,11 +1697,11 @@ Fork PRs on hosted runners run without our secrets, so the VM-only fork-refusal 
 Pinned verification jobs carry no deployment secrets, effective id-token permissions or environment and declare no job container or services; pull_request workflows cannot name `gke-*` or `gkp-*` routing. All current workflow jobs use hosted images and need no runner-group entry. The exact legacy isolated and hosted-matrix release forms remain admitted for rollback; restoring a protected route also requires its live group membership and committed mirror entry.
 Retired GCP main/post labels and paid larger-runner labels remain refused.
 
-The four full build checks are `build (ubuntu-24.04, Release)`,
+The four post build checks are `build (ubuntu-24.04, Release)`,
 `build (ubuntu-24.04, Debug)`, `build (ubuntu-24.04-arm, Release)` and
-`build (ubuntu-24.04-arm, Debug)`. Release uses four `build` shards, Debug two
-`build-debug` shards, and kernel two shards; sanitizers uses four, all on the pinned hosted images.
-Every shard builds the full tree and runs `--ctest-shard I/N` at the runner's core count. Each build refuses an OS mismatch before checkout.
+`build (ubuntu-24.04-arm, Debug)`. Each is one smoke leg of `smoke` or
+`smoke-arm`; `sanitizers` is one more smoke leg, all on the pinned hosted images.
+Every leg builds `pineforge_pr_smoke` and runs the `fast` label at the runner's core count. `smoke` and `smoke-arm` refuse a machine mismatch before checkout.
 Each leg aggregate retains its old check name and requires its own matrix's success. The two arm64 cells share `build-arm` on `ubuntu-24.04-arm`. All three build jobs use the same verification steps and profiles.
 Shard jobs and leg aggregates skip together only on classified docs-only changes.
 Trusted post workflows and PR proof legs build cold; no trusted job restores an Actions cache.

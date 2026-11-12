@@ -29,13 +29,13 @@ from ci_docs_only import is_documentation
 
 
 CONTEXTS = ("pineforge/verify", "pineforge/parity")
-# ci-post.yml's amd64 leg aggregates and arm shard names; the workflow pin test
-# expands their displayed names independently and checks this required-name tuple.
-CI_POST_BUILD_JOBS = (
-    *(f"build (ubuntu-24.04, {build_type})" for build_type in ("Debug", "Release")),
-    *(f"build-shard (ubuntu-24.04-arm, {build_type}, {shard}/4)"
-      for build_type in ("Debug", "Release") for shard in range(1, 5)),
-)
+# ci-post.yml's smoke matrix: one leg per hosted platform and build type. The full
+# profiles run in the lab's verify (pineforge/verify, CONTEXTS above), not in
+# ci-post. The workflow pin test expands the displayed names independently and
+# checks this required-name tuple.
+CI_POST_BUILD_JOBS = tuple(
+    f"build ({platform}, {build_type})"
+    for platform in ("ubuntu-24.04", "ubuntu-24.04-arm") for build_type in ("Debug", "Release"))
 CI_POST_FAILURES = ("failure", "cancelled", "timed_out")
 CI_POST_RUN_LIMIT = 10
 DOCS_ONLY_WALK_LIMIT = 20
