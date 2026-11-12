@@ -628,7 +628,7 @@ PF_API const char* strategy_get_last_error_args(pf_strategy_t s) {
 PF_API const char* strategy_get_run_warnings(pf_strategy_t s) {
     if (!s) return nullptr;
     const char* result = "[{\"args\":{},\"code\":\"run_warnings_unavailable\"}]";
-    pf_cabi_void([&] {
+    pf_cabi_void(nullptr, [&] {  // a read-only getter: records nothing on the handle
         result = pineforge::native_run_warnings(
             static_cast<const pineforge::BacktestEngine*>(s));
     });
