@@ -127,6 +127,9 @@ Their retryability and typed arguments are listed below.
 The 1.12.0 addition is `pine_timezone_error` (class `strategy`), the refusal
 of a timezone argument that the calendar does not accept. Its retryability and
 typed arguments are listed below.
+A timezone database lookup that cannot be carried out raises `out_of_memory`
+for a memory failure or `engine_unclassified_error` for another host failure,
+including a missing database directory.
 
 The run-quota additions are `run_descriptor_limit_exceeded` (74),
 `run_quota_configuration_invalid` (78), and `run_resource_quota_exceeded`
