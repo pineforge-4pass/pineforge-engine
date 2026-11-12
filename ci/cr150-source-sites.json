@@ -14024,6 +14024,79 @@
    "ordinal": 1
   },
   {
+   "file": "src/canonical_json.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge :: internal :: canonical_json #1",
+    "inline void append_json_string ( std :: string & out , const std :: string & text ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/canonical_json.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge :: internal :: canonical_json #1",
+    "inline void append_json_string ( std :: string & out , const std :: string & text ) #1",
+    ") #1",
+    "if ( c = = || c = = ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/canonical_json.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge :: internal :: canonical_json #1",
+    "inline void append_json_string ( std :: string & out , const std :: string & text ) #1",
+    ") #1",
+    "if ( c = = || c = = ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . push_back ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/canonical_json.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge :: internal :: canonical_json #1",
+    "inline void append_json_string ( std :: string & out , const std :: string & text ) #1",
+    ") #1",
+    "else #1",
+    "else #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . append ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/canonical_json.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge :: internal :: canonical_json #1",
+    "inline void append_json_string ( std :: string & out , const std :: string & text ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . push_back ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/canonical_json.hpp",
+   "symbol": "out",
+   "scope": [
+    "namespace pineforge :: internal :: canonical_json #1",
+    "inline bool append_json_number ( std :: string & out , double value ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "out . append ( . . . )",
+   "ordinal": 1
+  },
+  {
    "file": "src/command_scratch_cache.cpp",
    "symbol": "reset",
    "scope": [
@@ -17740,12 +17813,150 @@
   },
   {
    "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1",
+    "if ( failure . directory ! = nullptr ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "message = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1",
+    "if ( failure . directory ! = nullptr ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1",
+    "if ( failure . directory ! = nullptr ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1",
+    "if ( failure . directory ! = nullptr ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 3
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1",
+    "if ( failure . directory ! = nullptr ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 4
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1",
+    "else #1"
+   ],
+   "cls": "assign",
+   "spelling": "message = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1",
+    "else #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "resolved",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "bool tzdir_realpath_dir ( const char * path , std :: string & out , TzLookupFailure * failure = nullptr ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "resolved = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "resolved",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "bool tzdir_realpath_dir ( const char * path , std :: string & out , TzLookupFailure * failure = nullptr ) #1",
+    "do #1"
+   ],
+   "cls": "assign",
+   "spelling": "resolved = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
    "symbol": "out",
    "scope": [
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "bool tzdir_realpath_dir ( const char * path , std :: string & out ) #1"
+    "bool tzdir_realpath_dir ( const char * path , std :: string & out , TzLookupFailure * failure = nullptr ) #1"
    ],
    "cls": "grow",
    "spelling": "out . assign ( . . . )",
@@ -17770,7 +17981,7 @@
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "std :: string tzdir_canonical ( ) #1"
+    "std :: string tzdir_canonical ( TzLookupFailure * failure = nullptr ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -17838,7 +18049,7 @@
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name ) #1"
+    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name , TzLookupFailure * failure = nullptr ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -17851,7 +18062,7 @@
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name ) #1"
+    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name , TzLookupFailure * failure = nullptr ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -17864,7 +18075,7 @@
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name ) #1"
+    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name , TzLookupFailure * failure = nullptr ) #1"
    ],
    "cls": "grow",
    "spelling": "full . push_back ( . . . )",
@@ -17877,7 +18088,7 @@
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name ) #1"
+    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name , TzLookupFailure * failure = nullptr ) #1"
    ],
    "cls": "grow",
    "spelling": "full . append ( . . . )",
@@ -17890,7 +18101,7 @@
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name ) #1"
+    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name , TzLookupFailure * failure = nullptr ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -17903,7 +18114,23 @@
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name ) #1"
+    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name , TzLookupFailure * failure = nullptr ) #1",
+    "do #3"
+   ],
+   "cls": "assign",
+   "spelling": "n = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "n",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name , TzLookupFailure * failure = nullptr ) #1",
+    "do #3",
+    "do #1"
    ],
    "cls": "assign",
    "spelling": "n = . . .",
@@ -18701,6 +18928,18 @@
   },
   {
    "file": "src/native_execution_consumer.cpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: store_rendered ( BacktestEngine & engine , const char * text , RunFailureValue value ) const #1"
+   ],
+   "cls": "assign",
+   "spelling": "code = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
    "symbol": "text",
    "scope": [
     "namespace pineforge #1",
@@ -18709,6 +18948,18 @@
    ],
    "cls": "assign",
    "spelling": "text = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: clear_rendered ( BacktestEngine & engine ) const noexcept #1"
+   ],
+   "cls": "assign",
+   "spelling": "code = . . .",
    "ordinal": 1
   },
   {
@@ -18736,6 +18987,18 @@
   },
   {
    "file": "src/native_execution_consumer.cpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: note_failure_record ( BacktestEngine & engine , std :: string text , RunFailureValue value ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "code = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
    "symbol": "text",
    "scope": [
     "namespace pineforge #1",
@@ -18748,6 +19011,19 @@
   },
   {
    "file": "src/native_execution_consumer.cpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: latch_void_setter_refusal ( BacktestEngine & engine , const std :: exception * error ) noexcept #1",
+    "try #1"
+   ],
+   "cls": "assign",
+   "spelling": "code = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
    "symbol": "last_error_",
    "scope": [
     "namespace pineforge #1",
@@ -18800,6 +19076,142 @@
    ],
    "cls": "assign",
    "spelling": "text = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "args_json",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "run_warning_records_",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: record_run_warning ( int sec_id , std :: string code , std :: string args_json ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "run_warning_records_ . try_emplace ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "json",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: finish_run_warnings ( ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "json",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: finish_run_warnings ( ) #1",
+    "for ( const auto & record : run_warning_records_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "json . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "json",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: finish_run_warnings ( ) #1",
+    "for ( const auto & record : run_warning_records_ ) #1"
+   ],
+   "cls": "append",
+   "spelling": "json + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "json",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: finish_run_warnings ( ) #1",
+    "for ( const auto & record : run_warning_records_ ) #1"
+   ],
+   "cls": "append",
+   "spelling": "json + = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "json",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: finish_run_warnings ( ) #1",
+    "for ( const auto & record : run_warning_records_ ) #1"
+   ],
+   "cls": "append",
+   "spelling": "json + = . . .",
+   "ordinal": 3
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "json",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: finish_run_warnings ( ) #1",
+    "for ( const auto & record : run_warning_records_ ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "json . push_back ( . . . )",
+   "ordinal": 2
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "json",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: finish_run_warnings ( ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "json . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: close_open_epoch_at_exit ( BacktestEngine & engine , bool unwinding , bool allow_live ) noexcept #1",
+    "if ( ! failed ( ) && run_failure_ . code = = RunFailureCode :: none && engine . last_error_ . empty ( ) ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "code = . . .",
    "ordinal": 1
   },
   {
@@ -18813,6 +19225,18 @@
    ],
    "cls": "assign",
    "spelling": "text = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: refuse_source_mutation ( const char * operation ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "code = . . .",
    "ordinal": 1
   },
   {
@@ -19083,6 +19507,18 @@
   },
   {
    "file": "src/native_execution_consumer.cpp",
+   "symbol": "run_warnings_json_",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "bool NativeExecutionConsumer :: begin_ready ( BacktestEngine & engine , NativeRunPhase phase , int64_t initial_floor_ms ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "run_warnings_json_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
    "symbol": "<temp:vector>",
    "scope": [
     "namespace pineforge #1",
@@ -19130,6 +19566,18 @@
    ],
    "cls": "assign",
    "spelling": "state_ = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "bool NativeExecutionConsumer :: preflight_bars ( BacktestEngine & engine , const Bar * bars , int n , bool stream , bool preserve_status ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "code = . . .",
    "ordinal": 1
   },
   {
@@ -19393,6 +19841,57 @@
    "cls": "assign",
    "spelling": "held = . . .",
    "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: fail_preparation ( BacktestEngine & engine , const native_order :: PreparationError & error , NativeFailureOperation operation ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "code = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: fail_preparation ( BacktestEngine & engine , const native_order :: PreparationError & error , NativeFailureOperation operation ) #1",
+    "switch ( error . code ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "code = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: fail_preparation ( BacktestEngine & engine , const native_order :: PreparationError & error , NativeFailureOperation operation ) #1",
+    "switch ( error . code ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "code = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/native_execution_consumer.cpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "void NativeExecutionConsumer :: fail_preparation ( BacktestEngine & engine , const native_order :: PreparationError & error , NativeFailureOperation operation ) #1",
+    "switch ( error . code ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "code = . . .",
+   "ordinal": 3
   },
   {
    "file": "src/native_execution_consumer.cpp",
@@ -21391,6 +21890,30 @@
   },
   {
    "file": "src/native_execution_consumer.hpp",
+   "symbol": "run_warning_records_",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "class NativeExecutionConsumer final : public IExecutionConsumer #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: map < std :: pair < int , std :: string > , std :: string >",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.hpp",
+   "symbol": "run_warnings_json_",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "class NativeExecutionConsumer final : public IExecutionConsumer #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.hpp",
    "symbol": "working_requests",
    "scope": [
     "namespace pineforge #1",
@@ -21416,6 +21939,30 @@
   {
    "file": "src/native_execution_consumer.hpp",
    "symbol": "text",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "class NativeExecutionConsumer final : public IExecutionConsumer #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.hpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "class NativeExecutionConsumer final : public IExecutionConsumer #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.hpp",
+   "symbol": "args_json",
    "scope": [
     "namespace pineforge #1",
     "inline namespace engine_script_run_v20 #1",
@@ -21541,6 +22088,18 @@
   },
   {
    "file": "src/native_execution_consumer.hpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "class NativeExecutionConsumer final : public IExecutionConsumer #1"
+   ],
+   "cls": "assign",
+   "spelling": "code = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.hpp",
    "symbol": "args",
    "scope": [
     "namespace pineforge #1",
@@ -21549,6 +22108,19 @@
    ],
    "cls": "assign",
    "spelling": "args = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.hpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "class NativeExecutionConsumer final : public IExecutionConsumer #1",
+    "struct RunFailureRecord #1"
+   ],
+   "cls": "assign",
+   "spelling": "code = . . .",
    "ordinal": 1
   },
   {
@@ -21601,6 +22173,18 @@
    "cls": "decl",
    "spelling": "std :: vector < std :: pair < int64_t , int64_t > >",
    "ordinal": 1
+  },
+  {
+   "file": "src/native_execution_consumer.hpp",
+   "symbol": "code",
+   "scope": [
+    "namespace pineforge #1",
+    "inline namespace engine_script_run_v20 #1",
+    "class NativeExecutionConsumer final : public IExecutionConsumer #1"
+   ],
+   "cls": "assign",
+   "spelling": "code = . . .",
+   "ordinal": 2
   },
   {
    "file": "src/native_execution_consumer.hpp",
@@ -27112,85 +27696,6 @@
    ],
    "cls": "temp",
    "spelling": "RunFailureArgs",
-   "ordinal": 1
-  },
-  {
-   "file": "src/run_failure.cpp",
-   "symbol": "out",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace #1",
-    "void append_json_string ( std :: string & out , const std :: string & text ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "out . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/run_failure.cpp",
-   "symbol": "out",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace #1",
-    "void append_json_string ( std :: string & out , const std :: string & text ) #1",
-    ") #1",
-    "if ( c = = || c = = ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "out . push_back ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/run_failure.cpp",
-   "symbol": "out",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace #1",
-    "void append_json_string ( std :: string & out , const std :: string & text ) #1",
-    ") #1",
-    "if ( c = = || c = = ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "out . push_back ( . . . )",
-   "ordinal": 2
-  },
-  {
-   "file": "src/run_failure.cpp",
-   "symbol": "out",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace #1",
-    "void append_json_string ( std :: string & out , const std :: string & text ) #1",
-    ") #1",
-    "else #1",
-    "else #1"
-   ],
-   "cls": "grow",
-   "spelling": "out . append ( . . . )",
-   "ordinal": 1
-  },
-  {
-   "file": "src/run_failure.cpp",
-   "symbol": "out",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace #1",
-    "void append_json_string ( std :: string & out , const std :: string & text ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "out . push_back ( . . . )",
-   "ordinal": 2
-  },
-  {
-   "file": "src/run_failure.cpp",
-   "symbol": "out",
-   "scope": [
-    "namespace pineforge #1",
-    "namespace #1",
-    "bool append_json_number ( std :: string & out , double value ) #1"
-   ],
-   "cls": "grow",
-   "spelling": "out . append ( . . . )",
    "ordinal": 1
   },
   {
@@ -44059,6 +44564,90 @@
   },
   {
    "file": "src/source/pine_strategy_host.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "template < typename SecurityStates > void capture_security_timeframe_warnings ( BacktestEngine & host , const std :: string & input_tf , const SecurityStates & states , const std :: map < int , source :: PineSecurityEvalState > & pine_states ) noexcept #1",
+    "try #1",
+    "for ( const auto & state : states ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_strategy_host.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "template < typename SecurityStates > void capture_security_timeframe_warnings ( BacktestEngine & host , const std :: string & input_tf , const SecurityStates & states , const std :: map < int , source :: PineSecurityEvalState > & pine_states ) noexcept #1",
+    "try #1",
+    "for ( const auto & state : states ) #1"
+   ],
+   "cls": "append",
+   "spelling": "args + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_strategy_host.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "template < typename SecurityStates > void capture_security_timeframe_warnings ( BacktestEngine & host , const std :: string & input_tf , const SecurityStates & states , const std :: map < int , source :: PineSecurityEvalState > & pine_states ) noexcept #1",
+    "try #1",
+    "for ( const auto & state : states ) #1"
+   ],
+   "cls": "append",
+   "spelling": "args + = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/source/pine_strategy_host.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "template < typename SecurityStates > void capture_security_timeframe_warnings ( BacktestEngine & host , const std :: string & input_tf , const SecurityStates & states , const std :: map < int , source :: PineSecurityEvalState > & pine_states ) noexcept #1",
+    "try #1",
+    "for ( const auto & state : states ) #1"
+   ],
+   "cls": "append",
+   "spelling": "args + = . . .",
+   "ordinal": 3
+  },
+  {
+   "file": "src/source/pine_strategy_host.cpp",
+   "symbol": "std::to_string",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "template < typename SecurityStates > void capture_security_timeframe_warnings ( BacktestEngine & host , const std :: string & input_tf , const SecurityStates & states , const std :: map < int , source :: PineSecurityEvalState > & pine_states ) noexcept #1",
+    "try #1",
+    "for ( const auto & state : states ) #1"
+   ],
+   "cls": "temp",
+   "spelling": "std :: to_string ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_strategy_host.cpp",
+   "symbol": "args",
+   "scope": [
+    "namespace pineforge #1",
+    "namespace #2",
+    "template < typename SecurityStates > void capture_security_timeframe_warnings ( BacktestEngine & host , const std :: string & input_tf , const SecurityStates & states , const std :: map < int , source :: PineSecurityEvalState > & pine_states ) noexcept #1",
+    "try #1",
+    "for ( const auto & state : states ) #1"
+   ],
+   "cls": "grow",
+   "spelling": "args . push_back ( . . . )",
+   "ordinal": 1
+  },
+  {
+   "file": "src/source/pine_strategy_host.cpp",
    "symbol": "security_input_tf_",
    "scope": [
     "namespace pineforge #1",
@@ -46937,7 +47526,7 @@
     "namespace pineforge #1",
     "namespace tz_util #1",
     "const std :: string & resolve_script_timezone ( const std :: string & timezone , const char * function ) #1",
-    "if ( ! native_calendar :: timezone_accepted ( timezone ) ) #1"
+    "if ( ! native_calendar :: timezone_lookup_accepted ( timezone ) ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -46950,7 +47539,7 @@
     "namespace pineforge #1",
     "namespace tz_util #1",
     "const std :: string & resolve_script_timezone ( const std :: string & timezone , const char * function ) #1",
-    "if ( ! native_calendar :: timezone_accepted ( timezone ) ) #1"
+    "if ( ! native_calendar :: timezone_lookup_accepted ( timezone ) ) #1"
    ],
    "cls": "temp",
    "spelling": "std :: string",

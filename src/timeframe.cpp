@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
+#include <limits>
 
 namespace pineforge {
 
@@ -107,6 +108,10 @@ int tf_to_seconds(const std::string& tf) {
         // "D" or "1D" or "2D" etc.
         if (tf.size() == 1) return 86400;
         int n = timeframe_count(tf.substr(0, tf.size() - 1));
+        // A duration that cannot fit this legacy int API is calendar-only,
+        // like M. Its parsed day count still drives the generated partition;
+        // this is not a limit on the number of dates a bucket can hold.
+        if (n > std::numeric_limits<int>::max() / 86400) return -1;
         return n * 86400;
     }
 
@@ -135,8 +140,13 @@ int tf_ratio(const std::string& input_tf, const std::string& target_tf) {
     int input_s = tf_to_seconds(input_tf);
     int target_s = tf_to_seconds(target_tf);
 
-    // If target is calendar-based (monthly), return -1
-    if (target_s < 0) return -1;
+    // Calendar-only durations include a day count too large for the legacy
+    // seconds API. Equal day literals still pass their input bars through.
+    if (target_s < 0) {
+        if (input_tf == target_tf
+            && calendar_period_for(target_tf) == CalendarPeriod::DAY) return 1;
+        return -1;
+    }
 
     // If input is calendar-based, that's unusual but treat as error
     if (input_s <= 0) return -2;

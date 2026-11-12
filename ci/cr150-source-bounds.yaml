@@ -107,11 +107,15 @@ ceilings:
   # temporaries of the three setter refusal messages in the engine header, and
   # the message string and its temporary in the timezone refusal. Each builds
   # one short message, once, when a value is refused: 1415 -> 1418.
+  # One more unreviewed group on a failure path: the message string of the
+  # timezone database lookup refusal in the native calendar (its declaration,
+  # assignment and appends). It builds one short message, once, when a lookup
+  # fails: 1418 -> 1419.
   # Three more unreviewed groups: the failure arguments, the rule text and the
   # message text that the refusal of a script timeframe the input timeframe
   # cannot build assembles in src/source/pine_adapter.cpp (each is built once,
   # on the refusal path). None is bounded in the gate's sense: no fixed input
-  # is declared for them: 1418 -> 1421.
+  # is declared for them: 1419 -> 1422.
   # Ten more unreviewed groups for the per-site run warning of a requested
   # timeframe that is not a multiple of the chart timeframe: the native
   # execution consumer's warning records, the strings that render a warning and
@@ -119,8 +123,8 @@ ceilings:
   # in the gate's sense: no fixed input is declared for them. The failure-
   # argument JSON appenders moved from src/run_failure.cpp to
   # src/canonical_json.hpp, so their entry (U0746) now names the new file; the
-  # count does not change: 1421 -> 1431.
-  unreviewed: 1431
+  # count does not change: 1422 -> 1432.
+  unreviewed: 1432
   pending-flat-memory: 184
 owners:
   - {name: "generated-cpp", globs: ["tutorial/**"]}
@@ -743,6 +747,7 @@ entries:
   - {id: "U0599", file: "src/native_calendar.cpp", symbol: "input", ops: ["grow"], container: "unresolved by the index: input.assign(...)", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1167}
   - {id: "U0600", file: "src/native_calendar.cpp", symbol: "literal", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1414}
   - {id: "U0601", file: "src/native_calendar.cpp", symbol: "merge_spans", ops: ["decl"], container: "std::vector<EpochSpan>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 346}
+  - {id: "U1853", file: "src/native_calendar.cpp", symbol: "message", ops: ["append", "assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 819}
   - {id: "U0602", file: "src/native_calendar.cpp", symbol: "n", ops: ["assign", "decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 141}
   - {id: "U0603", file: "src/native_calendar.cpp", symbol: "norm", ops: ["decl"], container: "std::string", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 1169}
   - {id: "U0604", file: "src/native_calendar.cpp", symbol: "out", ops: ["assign", "decl", "grow"], container: "std::vector<EpochSpan>", owner: "calendar-time", phase: "unclassified", state: "unreviewed", line: 72}

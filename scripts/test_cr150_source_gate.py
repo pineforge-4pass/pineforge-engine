@@ -1238,13 +1238,15 @@ class RealTree(unittest.TestCase):
         # The setter refusal messages (three number-to-text temporaries in the
         # engine header) and the timezone refusal (its message string and that
         # string's temporary) add three groups: 59 + 3 = 62.
+        # The timezone database lookup refusal (its message string in the
+        # native calendar) adds one group: 62 + 1 = 63.
         # The refusal of a script timeframe the input timeframe cannot build
         # adds three groups (its failure arguments, its rule text and its
-        # message text): 62 + 3 = 65.
+        # message text): 63 + 3 = 66.
         # The per-site run warning of a requested timeframe adds ten groups (the
         # native execution consumer's warning records and their strings, and the
-        # host's argument text): 65 + 10 = 75.
-        self.assertEqual(c['OPEN'], 1356 + 75 + 184)
+        # host's argument text): 66 + 10 = 76.
+        self.assertEqual(c['OPEN'], 1356 + 76 + 184)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')
