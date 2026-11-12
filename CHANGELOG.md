@@ -7,6 +7,7 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- In the bounded scratch profile, the fixed limit of 4,096 order ids active at once (placed and not yet closed or cancelled) is gone. The run's own `U`, the cohort-id maximum of the scratch manifest (65,536 by default, raised with `strategy_set_scratch_tables_v1`), bounds every order id of the run, closed or live, so a run that needs more ids than `U`, active or not, stops with `scratch_capacity_exceeded` and `resource=cohort_ids_total`. A run with more than 4,096 active ids used to stop with `resource=cohort_orders_live` even when `U` allowed them.
 - Multi-day charts restart their trading-date grid each year; measured on 24x7 daily input for chart bars, last_bar_index, barstate.islast and the open-trade report row. Streams keep the previous chart path; selected windows on generated N-day chart partitions are refused. Time offsets, exchange calendars and intraday input are not measured against TradingView.
 - `str.match` no longer reports "no match" after a memory failure; the failure now reaches `out_of_memory`.
   A pattern over the limits of the engine's regular-expression library stops the run with `pine_string_error` and reason `regex_resource_limit`, which is not retryable.

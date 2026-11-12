@@ -279,6 +279,7 @@ public:
             resident_by_key_ = std::move(other.resident_by_key_);
             held_ = std::move(other.held_);
             work_ = std::exchange(other.work_, {});
+            cohort_live_limit_ = std::exchange(other.cohort_live_limit_, 0);
             spill_threshold_ = std::exchange(other.spill_threshold_, kSpillFloor);
             spill_interval_ = std::exchange(other.spill_interval_, kSpillFloor);
             calls_since_spill_ = std::exchange(other.calls_since_spill_, 0);
@@ -294,8 +295,13 @@ public:
 
     void set_store(ScratchStore store) noexcept { index_.set_store(store); }
     void set_directory(const std::string& directory) { index_.set_directory(directory); }
+    // The live limit of a bounded cohort table is the run's own U, the most
+    // order ids the host allowed in its scratch manifest. The limit is set only
+    // after the index accepted the binding, so a refused bind changes nothing.
     void bind_scratch(const std::shared_ptr<ScratchSlab>& slab, ScratchResource resource) {
         index_.bind_scratch(slab, resource);
+        cohort_live_limit_ = slab && resource == ScratchResource::cohort
+            ? slab->manifest().U : 0;
     }
     // A ticket anticipates making this id live, including a retired id that
     // is about to reopen. It is read-only even when a dirty empty row awaits
@@ -320,7 +326,7 @@ public:
                 if (prior++ < current && other == key) repeated = true;
             });
             if (!repeated) {
-                if (extra == kMaxResidentCohorts) require_live_growth(extra + 1);
+                if (extra == cohort_live_limit_) require_live_growth(extra + 1);
                 ++extra;
             }
         });
@@ -522,24 +528,27 @@ public:
 private:
     void require_live_growth(std::size_t extra) const {
         if (extra == 0 || !index_.bounded_cohorts()) return;
-        if (resident_.size() <= kMaxResidentCohorts
-            && extra <= kMaxResidentCohorts - resident_.size()) return;
+        const auto limit = cohort_live_limit_;
+        const auto resident = static_cast<std::uint64_t>(resident_.size());
+        const auto requested = static_cast<std::uint64_t>(extra);
+        if (resident <= limit && requested <= limit - resident) return;
         // Admission's O(R) dry pass must finish before spill can write any
         // bytes. It is at most one such pass per spill, never a per-ticket
         // scan: callers batch the ticket's extra rows before reaching here.
         // Counting physical rows here would falsely refuse deferred empties
         // (including empty rows pinned by an enclosing iterator).
-        std::size_t live = 0;
+        std::uint64_t live = 0;
         for (const auto& row : resident_) {
             ++work_.rows_visited_by_capacity;
             if (!row.second.owner->second.spillable()) ++live;
         }
-        if (live > kMaxResidentCohorts || extra > kMaxResidentCohorts - live)
+        if (live > limit || requested > limit - live)
             throw ScratchCapacityError(ScratchResource::cohort_orders_live,
-                scratch_resident_cohort_limit_message(kMaxResidentCohorts));
+                scratch_resident_cohort_limit_message(limit));
     }
     void spill_before_admission(std::size_t extra) const {
-        if (extra != 0 && index_.bounded_cohorts() && resident_.size() >= kMaxResidentCohorts)
+        if (extra != 0 && index_.bounded_cohorts()
+            && static_cast<std::uint64_t>(resident_.size()) >= cohort_live_limit_)
             spill(); // The read-only ticket has already proved this can fit.
     }
     void insert_resident(Offset at, const std::shared_ptr<Row>& row) const {
@@ -611,6 +620,7 @@ private:
     mutable ResidentKeys resident_by_key_; // One borrowed key per resident row.
     mutable Held held_;
     mutable WorkCounters work_{};
+    std::uint64_t cohort_live_limit_ = 0; // The bound manifest's U; 0 unless bounded cohorts.
     mutable std::size_t spill_threshold_ = kSpillFloor, spill_interval_ = kSpillFloor;
     mutable std::size_t calls_since_spill_ = 0;
     std::size_t fixture_spill_interval_ = 0;

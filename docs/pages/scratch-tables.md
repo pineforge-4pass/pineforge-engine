@@ -244,8 +244,11 @@ Capacity resources are `layout`, `sequence_data`, `sequence_index`,
 `exit_rank`, `successor_roots`, `cohort_ids_total`, and `cohort_orders_live`.
 q names remain in the wire vocabulary. `cohort_ids_total` identifies the
 historical distinct-ID count or aggregate ID-byte budget (`U/B_U`, default
-65,536 IDs / 4,194,304 bytes); `cohort_orders_live` identifies the separate
-4,096 live-order-ID cap. `cohort` remains for the 64-byte single-ID refusal,
+65,536 IDs / 4,194,304 bytes); `cohort_orders_live` stays in the vocabulary as
+the cohort table's own check on live rows. The run's `U` bounds every order ID of
+the run, closed or live (65,536 by default, raised with
+`strategy_set_scratch_tables_v1`), so a run that needs more IDs, active or not,
+stops with `cohort_ids_total`. `cohort` remains for the 64-byte single-ID refusal,
 generic cohort-region capacity and a nonzero generic Store live-object policy.
 The former capped default is now 0 (unbounded); native Store limits are exact, and finite refusals omit the approved-maximum clause.
 The parameter is native-embedder/tests only; scripts need recompilation with new headers for the default.

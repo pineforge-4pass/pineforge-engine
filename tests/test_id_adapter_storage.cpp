@@ -912,6 +912,12 @@ void close_selection_lookup_growth_and_equivalence() {
     require(unchecked[1] > 3 * unchecked[0], "the disabled fixture retains the quadratic witness");
 }
 
+// The cap probe's run holds exactly this many order ids. It is the U of that
+// run's manifest, and U bounds every order id of a run, closed or live.
+constexpr int kCapProbeIds = 4096;
+static_assert(kCapProbeIds == 4096,
+              "the refusal text in DenseHost::on_source_bar spells this limit");
+
 class DenseHost final : public pineforge::source::PineStrategyHost {
 public:
     explicit DenseHost(bool jailed = false, bool cap_probe = false, int period = 0)
@@ -929,6 +935,23 @@ public:
             descriptor.struct_size = static_cast<std::uint32_t>(sizeof descriptor);
             descriptor.version = 1;
             descriptor.backend = PF_SCRATCH_TABLE_BOUNDED_MEMORY;
+            if (cap_probe) {
+                // Only the cap probe sets an explicit manifest; every other
+                // host keeps the default one. A nonzero maximum makes the whole
+                // manifest explicit, zeros included, so the other maxima are the
+                // default tier's and only the order-id count and its byte budget
+                // differ (the longest id is 64 bytes).
+                const auto tier = pineforge::detail::default_scratch_manifest();
+                descriptor.K_e = tier.K_e;
+                descriptor.B_e = tier.B_e;
+                descriptor.K_c = tier.K_c;
+                descriptor.B_c = tier.B_c;
+                descriptor.V = tier.V;
+                descriptor.B_V = tier.B_V;
+                descriptor.R = tier.R;
+                descriptor.U = static_cast<std::uint64_t>(kCapProbeIds);
+                descriptor.B_U = 64 * static_cast<std::uint64_t>(kCapProbeIds);
+            }
             require(set_scratch_tables_v1(&descriptor) == 0, "select jailed cohort table");
         }
     }
@@ -936,7 +959,7 @@ public:
         const auto i = pine_bar_index();
         const auto na = std::numeric_limits<double>::quiet_NaN();
         auto& table = adapter_.*access(Cohorts{});
-        if (cap_probe_ && i == 4096) {
+        if (cap_probe_ && i == kCapProbeIds) {
             const auto logical = table.size();
             const auto resident = table.resident_size();
             const auto slab = scratch_tables_for_run();
@@ -948,10 +971,13 @@ public:
             const auto before_hash = broker_state_hash_projection();
             try { (adapter_.*access(CohortFor{}))("refused-before-kernel"); }
             catch (const pineforge::detail::ScratchCapacityError& error) {
-                refused = std::string(error.what()) == "more than 4,096 order ids active at once (placed and not yet closed or cancelled); close or cancel orders sooner, or reuse ids";
+                // The run holds U ids, so the id after the last one is a new id
+                // beyond U. The table checks the id count before it checks live
+                // rows, so the id-count resource and text name the refusal.
+                refused = std::string(error.what()) == "more than 4,096 distinct order ids in one run; reuse ids, e.g. build the id from a modulo of bar_index";
                 const auto failure = pineforge::classify_run_failure(error);
                 require(failure.code == pineforge::RunFailureCode::scratch_capacity_exceeded
-                        && failure.args && *failure.args == "{\"resource\":\"cohort_orders_live\"}",
+                        && failure.args && *failure.args == "{\"resource\":\"cohort_ids_total\"}",
                         "adapter cap refusal retains typed resource");
             }
             require(refused && broker_state_hash_projection() == before_hash
@@ -1155,7 +1181,7 @@ void dense_operation_growth_and_instrumentation(bool jailed) {
 
 void adapter_cap_rollback() {
     auto bars = chart();
-    bars.resize(4097, bars.back());
+    bars.resize(static_cast<std::size_t>(kCapProbeIds) + 1, bars.back());
     for (std::size_t i = 0; i < bars.size(); ++i)
         bars[i].timestamp = 1736121600000LL + static_cast<std::int64_t>(i) * 60000;
     DenseHost capped(true, true);

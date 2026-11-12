@@ -448,24 +448,41 @@ void capacity_text(const char* resource, const std::string& expected, F&& operat
     require(caught, "capacity text must come from a real refusal");
 }
 
-void resident_cap_is_active_only_and_read_only() {
+// True when the ticket is admitted, false when it is refused for capacity.
+template<class F>
+bool admitted(F&& operation) {
+    try { operation(); }
+    catch (const detail::ScratchCapacityError&) { return false; }
+    return true;
+}
+
+// A run's U bounds every order id of the run, closed or live. A table that
+// holds U ids refuses a new id whatever the mix of closed and live rows, and
+// closing a row makes no room for a new id. An id the table already holds needs
+// no new id, so the ticket of a closed id that reopens is admitted. A refused
+// ticket changes nothing.
+void full_table_refuses_new_ids_read_only_and_admits_held_ids() {
+    constexpr std::size_t closed_ids = 5000, live_ids = 4096;
+    static_assert(closed_ids + live_ids == 9096, "the refusal text below spells U");
     auto manifest = detail::default_scratch_manifest(0);
+    manifest.U = closed_ids + live_ids; // The ids placed below fill the table exactly.
     auto slab = std::make_shared<ScratchSlab>(manifest);
     LiveTable table;
     table.bind_scratch(slab, ScratchResource::cohort);
-    for (std::size_t i = 0; i < 5000; ++i) {
+    for (std::size_t i = 0; i < closed_ids; ++i) {
         const auto key = "closed-" + std::to_string(i);
         table.require_insert(key);
         const auto placed = table.emplace(key, LiveFacts{value(i), true}).first;
         placed->second.live = false;
     }
     table.spill();
-    require(table.size() == 5000 && table.resident_size() == 0,
+    require(table.size() == closed_ids && table.resident_size() == 0,
             "5000 promptly closed cohorts are admitted");
-    for (std::size_t i = 0; i < 4096; ++i)
+    for (std::size_t i = 0; i < live_ids; ++i)
         table.emplace("live-" + std::to_string(i), LiveFacts{value(i), true});
-    // Keep a dirty, spillable row beside a full active population. A refused
-    // ticket must not first spill it and thereby change index bytes.
+    require(table.size() == manifest.U, "closed and live ids fill the table to exactly U");
+    // Keep a dirty, spillable row beside a full population. A refused ticket
+    // must not first spill it and thereby change index bytes.
     {
         const auto closed = table.find("closed-0");
         closed->second.row = value(9999);
@@ -476,37 +493,64 @@ void resident_cap_is_active_only_and_read_only() {
     const auto keys = live_keys(table);
     const auto logical = table.size();
     const auto resident = table.resident_size();
+    // The table holds U ids, closed and live: a new id is refused by the id count.
     const std::string text =
-        "more than 4,096 order ids active at once (placed and not yet closed or cancelled); "
-        "close or cancel orders sooner, or reuse ids";
-    capacity_text("cohort_orders_live", text, [&] { table.require_insert("one-too-many"); });
-    capacity_text("cohort_orders_live", text, [&] {
+        "more than 9,096 distinct order ids in one run; reuse ids, e.g. build the id from a modulo of bar_index";
+    capacity_text("cohort_ids_total", text, [&] { table.require_insert("one-too-many"); });
+    capacity_text("cohort_ids_total", text, [&] {
         table.emplace("one-too-many", LiveFacts{value(5001), true});
     });
-    const std::array<std::string, 3> workset{{"live-0", "closed-1", "closed-1"}};
-    capacity_text("cohort_orders_live", text, [&] {
+    // A live id, a new id and a repeated id: the new id decides.
+    const std::array<std::string, 3> workset{{"live-0", "one-too-many", "one-too-many"}};
+    capacity_text("cohort_ids_total", text, [&] {
         table.require_inserts([&](auto&& visit) {
             for (const auto& key : workset) visit(key);
         });
     });
+    // Ids the table already holds need no new id. A closed id that reopens,
+    // alone or in a workset beside a live id and a repeat, is admitted.
+    const std::array<std::string, 3> held{{"live-0", "closed-1", "closed-1"}};
+    require(admitted([&] { table.require_insert("closed-1"); }),
+            "the ticket of a closed id that reopens is admitted at a full table");
+    require(admitted([&] {
+        table.require_inserts([&](auto&& visit) {
+            for (const auto& key : held) visit(key);
+        });
+    }), "a workset of held ids, one closed id repeated, is admitted at a full table");
     require(snapshot(*slab) == before && live_keys(table) == keys
             && resident_hash(table) == before_hash
             && table.size() == logical && table.resident_size() == resident,
-            "resident refusal preserves dirty rows, logical state and every index byte");
+            "resident tickets preserve dirty rows, logical state and every index byte");
     // Loading a retired, still empty row consumes no active slot.
     require(table.find("closed-2")->second.spillable(), "retired reads do not spend active slots");
     const auto duplicate = table.emplace("closed-2", LiveFacts{value(123), true});
     require(!duplicate.second && duplicate.first->second.spillable()
             && duplicate.first->second.row == value(2), "duplicate ignores the incoming live value");
+    // Closing a live row makes no room for a new id: the closed id still counts
+    // toward U. The closed id itself is admitted again, without a new id.
+    require(live_keys(table).size() == live_ids, "the live rows are the live ids placed");
     table.find_resident("live-0")->second.live = false;
-    table.require_insert("replacement");
-    table.emplace("replacement", LiveFacts{value(7000), true});
-    require(live_keys(table).size() == 4096, "closed row frees one active slot");
+    require(live_keys(table).size() == live_ids - 1, "one live row is closed");
+    const auto closed_bytes = snapshot(*slab);
+    const auto closed_hash = resident_hash(table);
+    capacity_text("cohort_ids_total", text, [&] { table.require_insert("replacement"); });
+    capacity_text("cohort_ids_total", text, [&] {
+        table.emplace("replacement", LiveFacts{value(7000), true});
+    });
+    require(snapshot(*slab) == closed_bytes && resident_hash(table) == closed_hash
+            && table.size() == manifest.U,
+            "refusing a new id after a close changes nothing, and the closed id still counts toward U");
+    require(admitted([&] { table.require_insert("live-0"); }),
+            "the ticket of the id just closed is admitted at a full table");
+    table.find("live-0")->second.live = true;
+    require(live_keys(table).size() == live_ids && table.size() == manifest.U,
+            "the closed id reopens into the live slot it left, without a new id");
 
+    // A table bound to no manifest has no limit: it holds more rows than U.
     LiveTable unjailed;
-    for (std::size_t i = 0; i < 5000; ++i)
+    for (std::size_t i = 0; i <= manifest.U; ++i)
         unjailed.emplace(std::to_string(i), LiveFacts{value(i), true});
-    require(unjailed.resident_size() == 5000, "ordinary disk profile has no resident cap");
+    require(unjailed.resident_size() == manifest.U + 1, "ordinary disk profile has no resident cap");
 }
 
 void cohort_and_rank_refusal_text_uses_manifest() {
@@ -554,7 +598,7 @@ int main() {
         complete_borrowed_workset_is_one_read_only_ticket();
         resident_lookup_and_implicit_spill_work();
         insertion_order_after_restore_and_spill_equivalence();
-        resident_cap_is_active_only_and_read_only();
+        full_table_refuses_new_ids_read_only_and_admits_held_ids();
         cohort_and_rank_refusal_text_uses_manifest();
         std::puts("test_disk_id_table_ram: packed trees, orders and capacity tickets");
         return 0;
