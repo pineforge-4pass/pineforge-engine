@@ -17740,12 +17740,150 @@
   },
   {
    "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1"
+   ],
+   "cls": "decl",
+   "spelling": "std :: string",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1",
+    "if ( failure . directory ! = nullptr ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "message = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1",
+    "if ( failure . directory ! = nullptr ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1",
+    "if ( failure . directory ! = nullptr ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 2
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1",
+    "if ( failure . directory ! = nullptr ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 3
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1",
+    "if ( failure . directory ! = nullptr ) #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 4
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1",
+    "else #1"
+   ],
+   "cls": "assign",
+   "spelling": "message = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "message",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "[ [ noreturn ] ] void tz_raise_lookup_failure ( const TzLookupFailure & failure ) #1",
+    "else #1"
+   ],
+   "cls": "append",
+   "spelling": "message + = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "resolved",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "bool tzdir_realpath_dir ( const char * path , std :: string & out , TzLookupFailure * failure = nullptr ) #1"
+   ],
+   "cls": "assign",
+   "spelling": "resolved = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "resolved",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "bool tzdir_realpath_dir ( const char * path , std :: string & out , TzLookupFailure * failure = nullptr ) #1",
+    "do #1"
+   ],
+   "cls": "assign",
+   "spelling": "resolved = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
    "symbol": "out",
    "scope": [
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "bool tzdir_realpath_dir ( const char * path , std :: string & out ) #1"
+    "bool tzdir_realpath_dir ( const char * path , std :: string & out , TzLookupFailure * failure = nullptr ) #1"
    ],
    "cls": "grow",
    "spelling": "out . assign ( . . . )",
@@ -17770,7 +17908,7 @@
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "std :: string tzdir_canonical ( ) #1"
+    "std :: string tzdir_canonical ( TzLookupFailure * failure = nullptr ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -17838,7 +17976,7 @@
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name ) #1"
+    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name , TzLookupFailure * failure = nullptr ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -17851,7 +17989,7 @@
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name ) #1"
+    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name , TzLookupFailure * failure = nullptr ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -17864,7 +18002,7 @@
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name ) #1"
+    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name , TzLookupFailure * failure = nullptr ) #1"
    ],
    "cls": "grow",
    "spelling": "full . push_back ( . . . )",
@@ -17877,7 +18015,7 @@
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name ) #1"
+    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name , TzLookupFailure * failure = nullptr ) #1"
    ],
    "cls": "grow",
    "spelling": "full . append ( . . . )",
@@ -17890,7 +18028,7 @@
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name ) #1"
+    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name , TzLookupFailure * failure = nullptr ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -17903,7 +18041,23 @@
     "namespace pineforge :: native_calendar #1",
     "inline namespace native_calendar_v2 #1",
     "namespace #1",
-    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name ) #1"
+    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name , TzLookupFailure * failure = nullptr ) #1",
+    "do #3"
+   ],
+   "cls": "assign",
+   "spelling": "n = . . .",
+   "ordinal": 1
+  },
+  {
+   "file": "src/native_calendar.cpp",
+   "symbol": "n",
+   "scope": [
+    "namespace pineforge :: native_calendar #1",
+    "inline namespace native_calendar_v2 #1",
+    "namespace #1",
+    "std :: optional < std :: string > tz_file_actual_path ( std :: string_view name , TzLookupFailure * failure = nullptr ) #1",
+    "do #3",
+    "do #1"
    ],
    "cls": "assign",
    "spelling": "n = . . .",
@@ -46814,7 +46968,7 @@
     "namespace pineforge #1",
     "namespace tz_util #1",
     "const std :: string & resolve_script_timezone ( const std :: string & timezone , const char * function ) #1",
-    "if ( ! native_calendar :: timezone_accepted ( timezone ) ) #1"
+    "if ( ! native_calendar :: timezone_lookup_accepted ( timezone ) ) #1"
    ],
    "cls": "decl",
    "spelling": "std :: string",
@@ -46827,7 +46981,7 @@
     "namespace pineforge #1",
     "namespace tz_util #1",
     "const std :: string & resolve_script_timezone ( const std :: string & timezone , const char * function ) #1",
-    "if ( ! native_calendar :: timezone_accepted ( timezone ) ) #1"
+    "if ( ! native_calendar :: timezone_lookup_accepted ( timezone ) ) #1"
    ],
    "cls": "temp",
    "spelling": "std :: string",

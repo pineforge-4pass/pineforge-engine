@@ -3,8 +3,16 @@
 #include <exception>
 #include <mutex>
 #include <string>
+#include <string_view>
 
 namespace pineforge {
+
+namespace native_calendar {
+inline namespace native_calendar_v2 {
+// Internal throwing form, deliberately absent from the installed headers.
+bool timezone_lookup_accepted(std::string_view timezone);
+}
+}
 
 namespace tz_util {
 

@@ -14,6 +14,7 @@ version number follows semantic versioning over the surfaces the
   Patterns the engine's regular-expression library does not support also stop the run now, with the same error. On the Linux build these include lookbehind, named groups, inline flags such as `(?i)`, comment groups, atomic groups, conditionals, `\p{...}` classes and `{,n}` repeats; lookahead, lazy quantifiers, back-references, POSIX classes and `\b` are accepted.
 - A memory failure during a session-calendar lookup now fails the run with a typed error instead of reading the bar as out of session.
 - A failed `setenv` or a memory failure during a timezone switch now fails the run instead of continuing in the previous zone or in UTC.
+- A timezone database lookup that fails because no file descriptors or memory are available, an input/output error occurs, or the database is missing now fails the run with an engine error instead of reporting an incorrect timezone name.
 - A timezone name written in a script that the engine does not accept now raises `pine_timezone_error` with the function and zone instead of silently reading UTC. This addition to the public failure catalog requires a minor release. The message is TradingView's text with the engine's bar prefix, `Error on bar N: `, or `Error before the first bar: ` when no bar is being executed, and the arguments carry `bar_index`.
 - The void C setters for instrument and run settings now record exceptions on
   the handle, including allocation failures and changes refused by the engine.
