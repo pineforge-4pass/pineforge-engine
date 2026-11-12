@@ -166,19 +166,30 @@ void owed_sale(bool next_point_calls) {
 }
 
 void owed_sale_sized_at_close() {
-    // T=99999.000048, F=.1, E=9999.9000055, tick=.1, lot=.000001.
-    // At the check P=2, required=199998.0001 and equity=199998.0000967,
-    // so the shortfall is .0000033. The first sale is
-    // floor(.0000033 / 2 / lot) * lot = .000001, hence 4 lots=.000004.
-    // The same-price re-check leaves the .0000033 shortfall owed. The bar
-    // close .11 rounds to C=.1. If the owed sale were sized at the check,
-    // it would again be .000004. The close-sized rule is
-    // floor(.0000033 / .1 / lot) * lot = .000033, hence 4 lots=.000132;
-    // the one-unit fallback is unused because the floor is 33 lots.
+    // T=99999.000048, F=.1, E=9999.90000546, tick=.1, lot=.000001.
+    // At the check P=2, required=199998.0001 and equity=199998.00009666,
+    // so the shortfall is .00000334. The first sale is
+    // floor(.00000334 / 2 / lot) * lot = floor(1.67) lots = .000001,
+    // hence 4 lots=.000004. The same-price re-check leaves the .00000334
+    // shortfall owed. The bar close .11 rounds to C=.1. If the owed sale
+    // were sized at the check, it would again be .000004. The close-sized
+    // rule is floor(.00000334 / .1 / lot) * lot
+    // = floor(33.4) lots = .000033, hence 4 lots=.000132; the one-unit
+    // fallback is unused because the floor is 33 lots.
     // The open 2.01 is nearer the high 3.01 than the low .91, so the next
     // waypoint is P=3, where the reduced book is covered and the owed sale
-    // must execute before the script closes the position.
-    LongBook book(9999.9000055, 0.1, 99999.000048);
+    // must execute before the script closes the position. After the first
+    // sale, R=99999.000044 and at P=3 its requirement is
+    // r10(299997.000132)=299997.0001, while equity is the cash left after
+    // the entry (.00000066) plus the first sale (.000008) plus R*3 =
+    // 299997.00014066, so the owed sale executes there. After that sale,
+    // R2=99998.999912; at P=3, r10(299996.999736)=299996.9997,
+    // below the unchanged equity. The remaining low and close are P=.9 and
+    // P=.1: requirements are r10(89999.0999208)=89999.09992 and
+    // r10(9999.8999912)=9999.899991, against equities (cash .00040466 after
+    // both sales plus R2*P) 89999.10032546 and 9999.90039586, so no
+    // further call occurs.
+    LongBook book(9999.90000546, 0.1, 99999.000048);
     const std::vector<Bar> bars = {
         bar(0, 0.11, 0.11, 0.11, 0.11),
         bar(1, 0.11, 0.11, 0.11, 0.11),
@@ -563,14 +574,18 @@ void export3_open_sale_then_close() {
 }
 
 double requirement_at(double units, double mark, double quantity_step,
-                      double tick, int pyramiding, bool expect_long_tick_book) {
+                      double tick, int pyramiding, bool expect_long_tick_book,
+                      double entered_tolerance = 0.0) {
     LongBook book(units + 100.0, tick, units, 0.0, 100.0, pyramiding, 0,
                   quantity_step);
     book.requirement_mark = mark;
     const std::vector<Bar> bars = {
         bar(0, 1.0, 1.0, 1.0, 1.0), bar(1, 1.0, 1.0, 1.0, 1.0)};
     book.run(bars.data(), static_cast<int>(bars.size()));
-    assert(book.entered == units);
+    if (entered_tolerance > 0.0)
+        assert(std::abs(book.entered - units) <= entered_tolerance);
+    else
+        assert(book.entered == units);
     assert(book.requirement.valid);
     if (expect_long_tick_book)
         assert(book.requirement.long_tick_book);
@@ -586,6 +601,23 @@ void requirement_below_ten_digits() {
     // products.
     assert(requirement_at(9999999999.5, 1.0, 0.5, 1.0, 2, false)
         == 10000000000.0);
+}
+
+void requirement_binary_rounding_selected() {
+    // Exact product: 9999999999.4 * 1.0 = 9999999999.4. The .000001
+    // quantity count is 9,999,999,999,400,000, above 2^53 =
+    // 9,007,199,254,740,991, so the decimal count guard rejects it and
+    // binary rounding is selected. The ten-significant-digit result is
+    // 9999999999.0 (the product is below 1e10), GREEN on both the pre-fix
+    // and fixed products. At this magnitude a binary64 step is larger than
+    // a half-lot comparison can resolve, so entered uses four upward
+    // nextafter steps as its tolerance; every other row keeps exact entry
+    // equality.
+    const double units = 9999999999.4;
+    const double entered_tolerance = 4.0 * (std::nextafter(
+        units, std::numeric_limits<double>::infinity()) - units);
+    assert(requirement_at(units, 1.0, 0.000001, 1.0, 1, true,
+                          entered_tolerance) == 9999999999.0);
 }
 
 void requirement_above_ten_digits() {
@@ -616,6 +648,52 @@ void requirement_decimal_above_ten_digits() {
     const double required = requirement_at(
         100000000094.0, 0.1, 0.1, 0.1, 1, true);
     assert(required == 10000000009.0);
+}
+
+void requirement_long_tick_units_digit() {
+    // Exact decimal-grid product: 100000000010 units / .1 lot =
+    // 1,000,000,000,100 lots, times .1/.1 = 1 tick, so the product is
+    // 10000000001.0. Both counts are below 2^53 and .1*1.0=.1 is below
+    // one, so this is a pyramiding-1 long-tick book. Ten significant digits
+    // would give 10000000000.0 by the pre-fix step-10 rule; the one-currency-
+    // unit cap gives 10000000001.0. The cap call is std::round(value), which
+    // is half away from zero; the decimal path's count call is
+    // std::round(value / step), followed by the same half-away-from-zero
+    // remainder decision. RED at stage A, GREEN at the head.
+    assert(requirement_at(100000000010.0, 0.1, 0.1, 0.1, 1, true)
+        == 10000000001.0);
+}
+
+void requirement_long_tick_half_unit() {
+    // Exact decimal-grid product: 100000000005 units / .1 lot =
+    // 1,000,000,000,050 lots, times .1/.1 = 1 tick, so the product is
+    // 10000000000.5. Both counts are below 2^53 and .1*1.0=.1 is below
+    // one, so this is a pyramiding-1 long-tick book. Ten significant digits
+    // would give 10000000000.0 by the pre-fix step-10 rule; the one-currency-
+    // unit cap rounds the .5 half away from zero to 10000000001.0. The cap
+    // call is std::round(value), and the decimal path uses
+    // std::round(value / step) for counts plus an integer remainder >= half
+    // for the same half-away-from-zero result. RED at stage A, GREEN at the
+    // head.
+    assert(requirement_at(100000000005.0, 0.1, 0.1, 0.1, 1, true)
+        == 10000000001.0);
+}
+
+void requirement_cross_path_equal() {
+    // The decimal long-tick path uses .1 x 100000000015 units:
+    // 100000000015/.1 = 1,000,000,000,150 lots and .1/.1 = 1 tick,
+    // both below 2^53, giving the exact product 10000000001.5. The general
+    // ladder uses 10000000001.5 units at mark 1.0, with .5 lots and 1.0
+    // ticks; its exact product is the same. The pre-fix step-10 result for
+    // both is 10000000000.0; half-away-from-zero one-unit capping gives
+    // 10000000002.0. RED at stage A, GREEN at the head.
+    const double decimal_required = requirement_at(
+        100000000015.0, 0.1, 0.1, 0.1, 1, true);
+    const double general_required = requirement_at(
+        10000000001.5, 1.0, 0.5, 1.0, 2, false);
+    assert(decimal_required == 10000000002.0);
+    assert(general_required == 10000000002.0);
+    assert(decimal_required == general_required);
 }
 
 void rule_derived_shared_requirement() {
@@ -742,9 +820,13 @@ int main(int argc, char* argv[]) {
         {"export2_extreme_then_close", export2_extreme_then_close},
         {"export3_open_sale_then_close", export3_open_sale_then_close},
         {"requirement_below_ten_digits", requirement_below_ten_digits},
+        {"requirement_binary_rounding_selected", requirement_binary_rounding_selected},
         {"requirement_above_ten_digits", requirement_above_ten_digits},
         {"requirement_unit_half", requirement_unit_half},
         {"requirement_decimal_above_ten_digits", requirement_decimal_above_ten_digits},
+        {"requirement_long_tick_units_digit", requirement_long_tick_units_digit},
+        {"requirement_long_tick_half_unit", requirement_long_tick_half_unit},
+        {"requirement_cross_path_equal", requirement_cross_path_equal},
         {"rule_derived_shared_requirement", rule_derived_shared_requirement},
         {"rule_derived_slipped_long_requirement", rule_derived_slipped_long_requirement},
         {"rule_derived_long_residual", rule_derived_long_residual},
