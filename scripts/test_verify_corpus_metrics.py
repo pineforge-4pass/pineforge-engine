@@ -668,7 +668,10 @@ class FragmentConsolidationIdentityTests(unittest.TestCase):
 
         self.assertEqual(result.tv_count, 2)
         self.assertEqual(result.eng_count, 2)
-        self.assertEqual(result.count_abs_delta, 0)
+        # The gross count: TradingView holds two longs and the engine a long
+        # and a short at the same time; the analyzer makes one pair, so each
+        # side keeps one unmatched trade. The net count saw 2 against 2: 0.
+        self.assertEqual(result.count_abs_delta, 2)
         self.assertEqual(result.unmatched_in_window, 1)
         self.assertTrue(result.coverage_ok)
         self.assertFalse(result.distinct_entry_identity_ok)
