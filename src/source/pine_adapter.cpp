@@ -19420,8 +19420,10 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
             // Exactly one check at the same price on the reduced book.
             // Its sale waits for the next waypoint, whose own call supersedes
             // it; it is never executed recursively at this print.
-            long_tick_margin_owed_units_ = source_margin_units(
-                source_margin_money(money.mark, context.sub_bar_open_ms), false);
+            auto owed_money = source_margin_money(money.mark, context.sub_bar_open_ms);
+            owed_money.unit_margin = nearest_tick(bar.close, staged_.syminfo.mintick)
+                * owed_money.scale;
+            long_tick_margin_owed_units_ = source_margin_units(owed_money, false);
         }
         return called;
     }

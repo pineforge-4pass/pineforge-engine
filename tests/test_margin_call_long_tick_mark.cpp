@@ -26,6 +26,14 @@ struct Call {
 
 class LongBook final : public source::PineStrategyHost {
 public:
+    // The export rows read the closed trades from outside the book.
+    using source::PineStrategyHost::closed_trade_entry_bar_index;
+    using source::PineStrategyHost::closed_trade_entry_price;
+    using source::PineStrategyHost::closed_trade_exit_bar_index;
+    using source::PineStrategyHost::closed_trade_exit_comment;
+    using source::PineStrategyHost::closed_trade_exit_price;
+    using source::PineStrategyHost::closed_trade_size;
+
     LongBook(double capital, double tick, double quantity, double fee = 0.0,
              double share = 100.0, int pyramiding = 1, int slippage = 0)
         : quantity_(quantity), tick_(tick) {
@@ -479,6 +487,30 @@ void export1_one_call_above_ten_digits() {
         {{2, 343.0, 0.000372}}, 342.0, 366.0, 28011204.5376, 4);
 }
 
+void pair_below_owed_sale_at_close() {
+    // TradingView's List of Trades for this script.
+    expect_export(9999999999.00, 16381, { // 2014-11-07 UTC
+        bar(0, 349.99, 352.15, 340.40, 342.16),
+        bar(1, 342.16, 347.75, 340.60, 345.39),
+        bar(2, 346.19, 366.35, 343.40, 364.77),
+        bar(3, 365.37, 377.77, 357.30, 366.43),
+        bar(4, 366.43, 371.52, 360.28, 370.65)},
+        {{1, 341.0, 0.000924}, {1, 348.0, 0.000912}},
+        342.0, 366.0, 29239766.0771, 4);
+}
+
+void pair_above_owed_sale_at_close() {
+    // TradingView's List of Trades for this script.
+    expect_export(10000000000.01, 16381, { // 2014-11-07 UTC
+        bar(0, 349.99, 352.15, 340.40, 342.16),
+        bar(1, 342.16, 347.75, 340.60, 345.39),
+        bar(2, 346.19, 366.35, 343.40, 364.77),
+        bar(3, 365.37, 377.77, 357.30, 366.43),
+        bar(4, 366.43, 371.52, 360.28, 370.65)},
+        {{1, 341.0, 0.00084}, {1, 348.0, 0.000832}},
+        342.0, 366.0, 29239766.0802, 4);
+}
+
 void export2_extreme_then_close() {
     // TradingView's List of Trades for this script: high and close calls on one bar.
     expect_export(1017605642.17, 17034, { // 2016-08-21 UTC
@@ -653,6 +685,8 @@ int main(int argc, char* argv[]) {
         {"close_point_call_after_script", close_point_call_after_script},
         {"walk_call_then_close", walk_call_then_close},
         {"export1_one_call_above_ten_digits", export1_one_call_above_ten_digits},
+        {"pair_below_owed_sale_at_close", pair_below_owed_sale_at_close},
+        {"pair_above_owed_sale_at_close", pair_above_owed_sale_at_close},
         {"export2_extreme_then_close", export2_extreme_then_close},
         {"export3_open_sale_then_close", export3_open_sale_then_close},
         {"requirement_below_ten_digits", requirement_below_ten_digits},
