@@ -72,6 +72,11 @@ std::string str_format_time(long long timestamp_ms,
                             const std::string& format,
                             const std::string& timezone);
 
+// Return the first capture group if present, otherwise the full match.
+// No match returns empty text. An invalid or unsupported pattern throws
+// pine_string_error with reason invalid_regex_pattern. Allocation failures
+// propagate unchanged and reach out_of_memory; regular-expression library
+// limits throw pine_string_error with reason regex_resource_limit, not retryable.
 std::string str_match(const std::string& source,
                       const std::string& regex_pattern);
 

@@ -7,6 +7,11 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- `str.match` no longer reports "no match" after a memory failure; the failure now reaches `out_of_memory`.
+  A pattern over the limits of the engine's regular-expression library stops the run with `pine_string_error` and reason `regex_resource_limit`, which is not retryable.
+  An invalid regular expression now stops the run with a typed error, as TradingView does; it used to return an empty string. The message is TradingView's text with the engine's bar prefix, `Error on bar N: `, or `Error before the first bar: ` when no bar is being executed.
+  Patterns the engine's regular-expression library does not support also stop the run now, with the same error. On the Linux build these include lookbehind, named groups, inline flags such as `(?i)`, comment groups, atomic groups, conditionals, `\p{...}` classes and `{,n}` repeats; lookahead, lazy quantifiers, back-references, POSIX classes and `\b` are accepted.
+- A memory failure during a session-calendar lookup now fails the run with a typed error instead of reading the bar as out of session.
 - A percent-of-equity default quantity above 100 percent is now capped at 100 percent of equity when `margin_long` and `margin_short` are both 0 (#805).
 - With `process_orders_on_close` and the default FIFO close rule, the named `strategy.exit` calls of a reversing `strategy.entry` with an explicit quantity, placed in the same execution after a `strategy.close` of the old position, are now sized from the new entry's own quantity: a percentage exit takes its share of the new entry and an absolute-quantity exit keeps its quantity, instead of being sized from a basis reduced by the old position (#803).
 - Without `process_orders_on_close`, the named `strategy.exit` calls placed with a reversing `strategy.entry` of explicit quantity now take their percentage from the new entry when its size differs from the position it replaces, and a take-profit given as an absolute quantity now fires; before, the percentage was taken from the position being replaced and an absolute-quantity take-profit never fired (#803).

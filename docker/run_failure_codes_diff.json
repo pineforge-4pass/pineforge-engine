@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "7e903f977be655901c877a3550008aeee19b7f69a9ecfad986ca6f0d9129c3be"
+    "catalogSha256": "440a8f9899a8bdbdff8a3e0f7e1c236854d469cbb05f7af542b0d392646330ab"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -16,7 +16,44 @@
   },
   "metadataChanges": [],
   "added": [],
-  "changed": [],
+  "changed": [
+    {
+      "code": "pine_string_error",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.reason.values",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "substring_out_of_range",
+            "format_index_overflow"
+          ],
+          "after": [
+            "substring_out_of_range",
+            "format_index_overflow",
+            "invalid_regex_pattern",
+            "regex_resource_limit"
+          ]
+        },
+        {
+          "path": "english",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": [
+            "basic_string::substr: __pos (which is {pos}) > this->size() (which is {size})",
+            "stoul"
+          ],
+          "after": [
+            "basic_string::substr: __pos (which is {pos}) > this->size() (which is {size})",
+            "stoul",
+            "Invalid regex pattern in the 'str.match' function.",
+            "A regular expression exceeds the limits of the engine's regular-expression library."
+          ]
+        }
+      ]
+    }
+  ],
   "removed": [],
   "deprecated": []
 }
