@@ -27,6 +27,7 @@
 #include <limits>
 #include <new>
 #include <stdexcept>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -4669,6 +4670,18 @@ std::optional<std::int64_t> NativeExecutionConsumer::risk_day(
             return native_calendar::session_day_ordinal(*risk_day_calendar_, timestamp_ms);
         }
         return native_calendar::session_day_ordinal(calendar_, timestamp_ms);
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::length_error& error) {
+        // Calendar strings and spans exhausting their capacity are resource
+        // failures, not an instant the calendar cannot key.
+        throw coded<std::length_error>(RunFailureCode::out_of_memory, {}, error);
+    } catch (const std::system_error& error) {
+        if (error.code() == std::errc::not_enough_memory
+            || error.code() == std::errc::resource_unavailable_try_again) {
+            throw coded<std::system_error>(RunFailureCode::out_of_memory, {}, error);
+        }
+        return std::nullopt;
     } catch (...) {
         // A day the calendar cannot key is not a new day: the ledger keeps
         // the one it is on rather than inventing an ordinal.
@@ -9074,6 +9087,16 @@ NativeExecutionConsumer::SessionPoint NativeExecutionConsumer::session_point_res
         } else {
             point = {session_day_memo_->in_session_at(ms), session_day_memo_->ordinal};
         }
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::length_error& error) {
+        throw coded<std::length_error>(RunFailureCode::out_of_memory, {}, error);
+    } catch (const std::system_error& error) {
+        if (error.code() == std::errc::not_enough_memory
+            || error.code() == std::errc::resource_unavailable_try_again) {
+            throw coded<std::system_error>(RunFailureCode::out_of_memory, {}, error);
+        }
+        return {};
     } catch (...) {
         // Not held: the next ask resolves it again, as every ask used to.
         return {};
